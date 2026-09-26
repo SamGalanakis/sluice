@@ -1,0 +1,6 @@
+{
+  "name": "jev.ask",
+  "doc": "Ask Jev (TypeSafe System One) several typed questions about one state in a single call. questions maps your ids to {type: choice|score|noul, instructions, criteria}; answers come back under the same ids. Needs TYPESAFE_API_KEY.",
+  "inputs": {"state": "Any", "questions": "Any", "model": "string?"},
+  "outputs": {"answers": "Any", "model": "string", "usage": "Any"}
+}

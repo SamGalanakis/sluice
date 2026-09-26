@@ -1,0 +1,6 @@
+{
+  "name": "jev.score",
+  "doc": "Rate a state on ordered levels (2 to 10, lowest first) with Jev. score is the probability-weighted level index and can land between levels. Needs TYPESAFE_API_KEY.",
+  "inputs": {"state": "Any", "instructions": "Any", "levels": "Any[]", "model": "string?"},
+  "outputs": {"score": "float", "probabilities": "Any", "confidence": "float", "legend": "Any", "model": "string"}
+}

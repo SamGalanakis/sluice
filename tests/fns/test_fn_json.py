@@ -113,19 +113,18 @@ EXPECTED = {
                 "confident": "boolean"
             }
         ],
-        "decide.jev": [
-            {
-                "question": "string",
-                "context": "Any?",
-                "options": "string[]",
-                "threshold": "float?"
-            },
-            {
-                "choice": "string",
-                "p": "float",
-                "confident": "boolean"
-            }
-        ]
+        "jev.ask": [{"state": "Any", "questions": "Any", "model": "string?"},
+                    {"answers": "Any", "model": "string", "usage": "Any"}],
+        "jev.choice": [{"state": "Any", "instructions": "Any", "options": "Any",
+                        "min_confidence": "float?", "model": "string?"},
+                       {"choice": "string", "probabilities": "Any", "confidence": "float",
+                        "confident": "boolean", "model": "string"}],
+        "jev.score": [{"state": "Any", "instructions": "Any", "levels": "Any[]", "model": "string?"},
+                      {"score": "float", "probabilities": "Any", "confidence": "float",
+                       "legend": "Any", "model": "string"}],
+        "jev.noul": [{"state": "Any", "instructions": "Any", "yes": "Any?", "no": "Any?",
+                      "model": "string?"},
+                     {"noul": "float", "model": "string"}],
     },
     "git": {
         "git.worktree": [
