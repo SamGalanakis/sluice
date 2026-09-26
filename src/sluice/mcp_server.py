@@ -1,13 +1,13 @@
-"""The MCP server (SPEC §8): tools, docs for agents, and the live project pages.
+"""The MCP server (SPEC §8): tools, docs for agents, and the dashboard's routes.
 
 Built on the official `mcp` SDK (v2 calls FastMCP `MCPServer`); `sluice serve` serves it over
 streamable HTTP next to the runner, and `sluice tool` calls the same tools in-process.
 """
 
 import functools
-import html
 import inspect
 import json
+import threading
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,12 +16,11 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
-from starlette.requests import Request
-from starlette.responses import HTMLResponse, Response
 
 from . import calls, runner, views
 from . import log as L
 from . import verify as verify_mod
+from .dashboard import Dashboard
 from .errors import BadRequest, NotFound, SluiceError
 from .store import Store
 
@@ -92,7 +91,10 @@ class _Server(MCPServer):
             return _error(BadRequest(str(e)))
 
 
-def build_server(store: Store) -> MCPServer:
+def build_server(store: Store, stop: threading.Event | None = None,
+                 interval: float = 1.0) -> MCPServer:
+    """The MCP server with the dashboard's routes; `stop` ends the dashboard's streams and
+    `interval` is how often they poll for changes (seconds)."""
     mcp = _Server("sluice", instructions=doc_page("instructions"))
 
     def tool(fn):
@@ -399,23 +401,5 @@ def build_server(store: Store) -> MCPServer:
         """
         return store.status(project)
 
-    async def page(render, *args) -> Response:
-        try:
-            return HTMLResponse(await anyio.to_thread.run_sync(render, *args))
-        except SluiceError as e:
-            return HTMLResponse(views.layout("not found", f"<p>{html.escape(e.message)}</p>"),
-                                status_code=404)
-
-    @mcp.custom_route("/", methods=["GET"])
-    async def index_page(request: Request) -> Response:
-        return await page(views.index, store)
-
-    @mcp.custom_route("/projects/{name}", methods=["GET"])
-    async def project_page(request: Request) -> Response:
-        return await page(views.render, store, request.path_params["name"], "html", 3)
-
-    @mcp.custom_route("/fns", methods=["GET"])
-    async def fns_page(request: Request) -> Response:
-        return await page(views.fns_page, store, request.query_params.get("project") or None)
-
+    Dashboard(store, stop, interval).add_routes(mcp)
     return mcp

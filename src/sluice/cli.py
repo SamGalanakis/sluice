@@ -37,8 +37,13 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
     store.listeners.append(runner.wake)
     thread = threading.Thread(target=runner.run_forever, name="sluice-runner", daemon=True)
     thread.start()
+    stopping = threading.Event()  # ends the dashboard's streams, so shutdown need not wait
 
     class Server(uvicorn.Server):
+        def handle_exit(self, sig, frame):
+            stopping.set()
+            super().handle_exit(sig, frame)
+
         @contextlib.contextmanager
         def capture_signals(self):
             # Shut down on SIGINT/SIGTERM without re-raising the signal afterwards, so the
@@ -53,10 +58,12 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
 
     print(f"sluice: MCP at http://{host}:{port}/mcp, dashboard at http://{host}:{port}/",
           file=sys.stderr, flush=True)
-    app = build_server(store).streamable_http_app(host=host)
+    app = build_server(store, stopping).streamable_http_app(host=host)
     try:
-        Server(uvicorn.Config(app, host=host, port=port, log_level="warning")).run()
+        Server(uvicorn.Config(app, host=host, port=port, log_level="warning",
+                              timeout_graceful_shutdown=5)).run()
     finally:
+        stopping.set()
         runner.stop()
         thread.join(timeout=30)
     return 0

@@ -24,6 +24,11 @@ its failure. An orchestrator decides what happens after a failure.
   `log_wait` (or the `thread.wait` step) waits for one.
 - `verify` checks functions, projects, plans and state and says where each problem is.
 
+- `sluice serve` also serves a read-only **dashboard**: projects, each plan as a live Mermaid
+  diagram with its steps and history, the functions, and a paged, filterable **log viewer**
+  (`/projects/<name>/log`, `/log`). Pages work without JavaScript; with it,
+  [Datastar](https://data-star.dev) streams only the parts that changed.
+
 See [SPEC.md](SPEC.md) for the contract and `src/sluice/docs` for the pages agents read.
 
 ```sh

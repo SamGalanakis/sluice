@@ -330,10 +330,10 @@ to the current revision under the lock) and required on `plan_patch`.
 pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe every argument.
 Validation errors carry the path and what was expected.
 
-**Views.** A read-only dashboard: nothing in it creates or edits anything. Plain
-server-rendered HTML with inline CSS (light and dark via `prefers-color-scheme`, usable at
-phone width), a top nav (Projects · Functions), every value HTML-escaped; the only external
-asset is mermaid from cdn.jsdelivr.net.
+**Views.** A read-only dashboard: nothing in it creates or edits anything. Server-rendered HTML
+with inline CSS (light and dark via `prefers-color-scheme`, usable at phone width), a top nav
+(Projects · Functions · Log), every value HTML-escaped (plans and logs are untrusted). The only
+external assets are Datastar v1.0.4 and mermaid, both from cdn.jsdelivr.net.
 - Mermaid (`flowchart LR`): plan inputs as rounded nodes, steps as boxes labelled
   `id / fn / status` (a scattered step shows `done/total`), plan outputs as rounded nodes, an edge
   per source ref labelled with the output name, one colour class per status (pending grey,
@@ -341,16 +341,42 @@ asset is mermaid from cdn.jsdelivr.net.
   shows as stale).
 - `GET /`: every project with its description, step counts by status, plan rev and last change
   (the later of the last log record and the last state write), each linking to its page.
-- `GET /projects/<name>`: the Mermaid diagram, plan input and output values, a steps table
-  (fn, status, started, finished, first line of error) whose rows expand (`<details>`) to the
-  step's bindings, run inputs, outputs, full error and stderr tail, and the last 20 history
-  records (rev, time, author, what: kind plus step, input or op count, reason). It refreshes every 3 s by fetching itself and
-  swapping the content (open rows stay open).
+- `GET /projects/<name>`: step counts and links (log, functions), the Mermaid diagram, plan input
+  and output values, a steps table (fn, status, started, finished, first line of error) whose
+  rows expand (`<details>`) to the step's bindings, run inputs, outputs, full error and stderr
+  tail, the last 20 history records (rev, time, author, what: kind plus step, input or op
+  count, reason) and the last 10 log records.
+- `GET /projects/<name>/log` (and `GET /log` for the home log): the log viewer. Newest first, 50
+  records per page; `?before=<seq>` shows the 50 matching records below that seq, `?after=<seq>`
+  the 50 above it, with newest / newer / older links. Filters are query parameters, so a URL is
+  shareable: `kind` (repeated or comma-separated; exact kinds or the `step`/`plan` groups) and
+  `thread` (comma-separated), the §6b filter `log_read` uses. A row shows seq, time, kind and a
+  one-line summary (`s2 succeeded → stale`, `rev 7 by orch: reason (2 ops)`, `questions from
+  e2e: body…`, `<call> <fn> <status>`) and expands to the full record as JSON. Unknown kinds or a
+  bad seq are a 400 page.
 - `GET /fns?project=<name>` (project optional): every function that context sees, grouped by
   scope, with doc and typed inputs and outputs (`string[]`, `enum(a|b)`, `{field: type}`,
   `T?`); a function with a problem (e.g. a collision) is shown in red with the verify message.
+
+**Live updates.** Every page renders completely on first load and works without JavaScript
+(the log filter is a plain GET form). The index, project and log pages then open one Datastar
+SSE stream each (`GET /stream`, `/projects/<name>/stream`, `/projects/<name>/log/stream`,
+`/log/stream`). The index and project pages carry a `ver` signal, a hash of the stats (mtime,
+size) of the files they read (`project.json`, `plan.json`, `state.json`, `log.jsonl`). The
+server polls those stats about once a second off the event loop (never blocking the runner or
+the MCP tools); when they change it re-renders the page's parts (each an element with an id:
+summary, diagram source, inputs, outputs, steps, history, recent log) and sends a
+`datastar-patch-elements` event for each part that differs, then the new `ver`. An idle page
+receives nothing; a client whose `ver` is not current (e.g. reconnecting) first gets every part.
+Parts are morphed, so an expanded row stays open; the diagram's source element is replaced and
+its `data-init` re-renders the Mermaid SVG into the view, keeping the old drawing until the new
+one is ready. On the log page, changing the filter updates the `kinds`/`thread` signals and
+reconnects the stream, which sends the new table and rewrites the address bar to the filter's
+query string; on the newest page, new matching records are prepended as they are appended.
+Streams end when the server shuts down; the client reconnects with backoff.
+
 `plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML
-document (no nav, no refresh), from the same renderer.
+document (no nav, no links, no log, no stream), from the same renderer.
 
 | Tool | Args | Returns |
 |---|---|---|

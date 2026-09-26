@@ -8,6 +8,7 @@ dependencies = [
     "mcp>=1.10",
     "jsonpatch>=1.33",
     "uvicorn>=0.30",
+    "datastar-py>=1.0.2",
 ]
 
 [project.scripts]

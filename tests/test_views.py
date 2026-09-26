@@ -60,16 +60,21 @@ def test_the_project_page(store):
                   "run_ids": ["r1"]},
             "c": {"status": "failed", "error": "exit code 1\ntraceback <here>"}}})
     store.set_input("v", "n", 1, "me", "why not")
-    page = views.render(store, "v", "html", live=3)
-    assert "setInterval" in page and "3000" in page and '<nav>' in page
+    page = views.project_page(store, "v", ver="abc")
+    assert '<nav>' in page and views.DATASTAR_JS in page
+    assert '<body data-signals="{&quot;ver&quot;: &quot;abc&quot;}">' in page
+    assert "data-init=\"@get('/projects/v/stream', {retry: 'always'" in page
     assert "cdn.jsdelivr.net/npm/mermaid" in page
     assert '<pre class="mermaid">\nflowchart LR' in page
+    assert '<pre id="plan-src" hidden data-view="plan-diagram" ' in page
+    assert '<a href="/projects/v/log">' in page and '<div id="recent">' in page
     assert "the v project" in page
     assert ('<td class="s-succeeded">succeeded</td><td>T1</td><td>T2</td><td class="bad"></td>'
             in page)
     assert '<td class="s-failed">failed</td><td></td><td></td><td class="bad">exit code 1</td>' \
         in page
-    step_a = page[page.index('<details id="step-a">'):page.index("</details>")]
+    step_a = page[page.index('<details id="step-a" data-preserve-attr="open">'):
+                  page.index("</details>")]
     assert "bindings" in step_a and "&quot;source&quot;: &quot;n&quot;" in step_a
     assert "inputs</div><pre>{\n  &quot;a&quot;: 1," in step_a
     assert "outputs</div><pre>{\n  &quot;sum&quot;: 2\n}" in step_a
@@ -82,7 +87,9 @@ def test_the_project_page(store):
     assert "<td>2</td>" in history and "<td>plan.edit (1 ops)</td>" in history  # newest first
     assert history.index("plan.input") < history.index("plan.edit")
     standalone = views.render(store, "v", "html")
-    assert "setInterval" not in standalone and "<nav>" not in standalone
+    assert "<nav>" not in standalone and "datastar" not in standalone
+    assert 'id="plan-src"' not in standalone and "/log" not in standalone
+    assert '<pre class="mermaid">\nflowchart LR' in standalone
 
 
 def test_values_are_escaped(store):
@@ -93,13 +100,19 @@ def test_values_are_escaped(store):
         store.write_state("v", {"inputs": {}, "steps": {
             "a": {"status": "failed", "error": "<script>alert(1)</script>",
                   "outputs": {"value": "<script>alert(2)</script>"}}}})
-    for page in (views.render(store, "v", "html", live=3), views.index(store)):
+    store.append("v", {"kind": "message", "thread": "t", "from": "<i>me</i>",
+                        "body": "<script>alert(3)</script>"})
+    for page in (views.project_page(store, "v", ver="x"), views.index(store, ver="x"),
+                 views.log_page(store, "v", views.LogQuery())):
         assert "<script>alert" not in page and "<b>bold" not in page
         assert "<script>x" not in page
     page = views.render(store, "v", "html")
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
     assert "&lt;script&gt;alert(2)&lt;/script&gt;" in page
     assert "&lt;b&gt;bold&lt;/b&gt;" in page
+    log = views.log_page(store, "v", views.LogQuery())
+    assert "t from &lt;i&gt;me&lt;/i&gt;: &lt;script&gt;alert(3)&lt;/script&gt;" in log
+    assert "&quot;body&quot;: &quot;&lt;script&gt;alert(3)&lt;/script&gt;&quot;" in log
 
 
 def test_the_project_index(store):
