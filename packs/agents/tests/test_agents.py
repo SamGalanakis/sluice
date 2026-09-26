@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-AGENTS = Path(__file__).resolve().parents[2] / "src" / "sluice" / "fns"
+AGENTS = Path(__file__).resolve().parents[1]
 
 requires_live = pytest.mark.skipif(
     os.environ.get("SLUICE_LIVE") != "1", reason="set SLUICE_LIVE=1 to run live tests")

@@ -125,14 +125,15 @@ def test_a_project_fn_colliding_with_a_global_one_blocks_that_project(store, run
 
 def test_a_broken_global_fn_is_left_out_but_blocks_no_project(store, runner):
     create(store, "p", {"a": step("core.echo", value=1)})
-    write_fn(store.home / "fns", "git.head", {"path": "string"}, {"sha": "string"})
+    write_fn(store.home / "fns", "thread.post",
+             {"thread": "string", "body": "string", "from": "string"}, {"seq": "int"})
     problems = store.registry().problems
-    assert [p["where"] for p in problems] == ["fns/git.head/fn.json"]
-    assert problems[0]["message"].startswith("fn git.head collides with the builtin fn at ")
+    assert [p["where"] for p in problems] == ["fns/thread.post/fn.json"]
+    assert problems[0]["message"].startswith("fn thread.post collides with the builtin fn at ")
     assert store.registry("p").problems == problems  # still reported (verify, fn_list)
-    heads = [e for e in store.registry().listing() if e["name"] == "git.head"]
-    assert [(e["scope"], "error" in e) for e in heads] == [("builtin", False), ("global", True)]
-    assert store.fn("git.head").scope == "builtin"  # the colliding global one is left out
+    posts = [e for e in store.registry().listing() if e["name"] == "thread.post"]
+    assert [(e["scope"], "error" in e) for e in posts] == [("builtin", False), ("global", True)]
+    assert store.fn("thread.post").scope == "builtin"  # the colliding global one is left out
     store.usable_registry()  # global problems never block
     assert store.patch("p", 2, [], "t", "not blocked") == 3
     runner.tick()
@@ -186,7 +187,7 @@ def test_fn_save_refuses_a_colliding_name(store):
     with pytest.raises(BadRequest, match="fn test.add would collide with the global fn"):
         store.fn_save({**fn, "name": "test.add"}, main, project="p")
     with pytest.raises(BadRequest, match="with the builtin fn"):
-        store.fn_save({**fn, "name": "git.head"}, main)
+        store.fn_save({**fn, "name": "thread.wait"}, main)
     with pytest.raises(BadRequest, match="with the global fn"):  # in a config fn_dir
         store.fn_save({**fn, "name": "test.add"}, main)
     store.fn_save(fn, main, project="p")

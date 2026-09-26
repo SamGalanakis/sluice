@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-GIT = Path(__file__).resolve().parents[2] / "src" / "sluice" / "fns"
+GIT = Path(__file__).resolve().parents[1]
 
 
 def read_calls(path):

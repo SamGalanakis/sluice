@@ -135,7 +135,8 @@ def test_the_functions_page_groups_by_scope_and_shows_collisions(store):
     sections = {m[0]: m[1] for m in re.findall(r"<h2>([^<]+)</h2>(.*?)(?=<h2>|</main>)", page,
                                                re.DOTALL)}
     assert set(sections) == {"Built-in", "Global", "Project (v)"}
-    assert "<b>core.echo</b>" in sections["Built-in"] and "<b>git.head</b>" in sections["Built-in"]
+    assert "<b>core.echo</b>" in sections["Built-in"] \
+        and "<b>thread.post</b>" in sections["Built-in"]
     assert "<b>mine.fn</b>" in sections["Global"] and "<b>test.add</b>" in sections["Global"]
     assert "xs: <code>string[]</code>" in sections["Global"]
     assert "pick: <code>enum(a|b)</code>" in sections["Global"]

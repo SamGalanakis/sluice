@@ -4,8 +4,14 @@
 # ///
 """jev.score: rate a state on ordered levels."""
 
+import sys
+from pathlib import Path
+
 from sluice.fn import run
-from sluice.fns._lib.jev import one
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _jev.client import one
 
 
 def main(inp, ctx):

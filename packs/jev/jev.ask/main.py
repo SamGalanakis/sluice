@@ -4,8 +4,14 @@
 # ///
 """jev.ask: several typed questions about one state in one Jev call."""
 
+import sys
+from pathlib import Path
+
 from sluice.fn import run
-from sluice.fns._lib.jev import ask
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _jev.client import ask
 
 
 def main(inp, ctx):

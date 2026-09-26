@@ -95,7 +95,7 @@ async def test_fn_tools(store):
         fns = {f["name"]: f for f in await ok(c, "fn_list")}
         assert fns["test.add"] == {"name": "test.add", "doc": "Add two ints.", "scope": "global",
                                    "inputs": {"a": "int", "b": "int"}, "outputs": {"sum": "int"}}
-        assert fns["test.boom"]["doc"] == "" and fns["git.head"]["scope"] == "builtin"
+        assert fns["test.boom"]["doc"] == "" and fns["thread.post"]["scope"] == "builtin"
         got = await ok(c, "fn_get", name="core.collect")
         assert got["inputs"] == {"items": "Any[]"} and got["scope"] == "builtin"
         assert got["path"].endswith("fns/core.collect")

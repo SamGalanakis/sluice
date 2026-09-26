@@ -4,7 +4,8 @@
 `fn_call("git.head", {"path": "/repo"}, wait=30)` →
 `{"call": "20260926-120000-a1b2c3", "status": "succeeded", "outputs": {"branch": "main", "sha": "..."}}`.
 For long functions use `wait=0` and poll `call_status(call)`. Pass `project` to run it with that
-project's functions and `.env`.
+project's functions and `.env`. (`git.head` comes from the `git` pack — install it first, see
+`docs("fns")`. The `agent.*` functions below come from the `agents` pack.)
 
 ## Parallel work, then a summary (fan-out, fan-in)
 `project_create("health", "Add health checks to the API and UI")`, then `plan_patch("health",
@@ -56,5 +57,5 @@ Declare a plan input (e.g. `"approved": "boolean"`) and have later steps read it
 someone calls `plan_set_input(project, "approved", true)`.
 
 ## Something is off
-`verify("fixes")` → `{"ok": false, "problems": [{"where": "projects/fixes/fns/git.head/fn.json",
-"message": "fn git.head collides with the builtin fn at ..."}]}`: rename or remove that function.
+`verify("fixes")` → `{"ok": false, "problems": [{"where": "projects/fixes/fns/thread.post/fn.json",
+"message": "fn thread.post collides with the builtin fn at ..."}]}`: rename or remove that function.

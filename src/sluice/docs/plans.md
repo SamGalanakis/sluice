@@ -2,7 +2,9 @@
 
 Each project has exactly one plan: JSON with typed `inputs`, named `outputs` and `steps`. A new
 project starts with `{"inputs": {}, "outputs": {}, "steps": {}}`. Each step runs one function
-(`run`) and binds each of the function's inputs (`in`).
+(`run`) and binds each of the function's inputs (`in`). The `agent.*` functions below come from
+the `agents` pack and `git.head` from the `git` pack — install a pack before using it (see
+`docs("fns")`).
 
 ```json
 {

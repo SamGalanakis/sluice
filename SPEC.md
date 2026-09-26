@@ -395,13 +395,25 @@ same code path). It prints JSON results (text for `docs` and `plan_view`); a too
 stderr as the error JSON with exit 1, and a result with `"ok": false` (`verify` with problems)
 also exits 1.
 
-## 10. Built-in fns in this repo
+## 10. Built-in fns and first-party packs
 
-`src/sluice/fns/` holds the built-ins plus these families: `agent.*`/`decide.*` (run Devin, Codex,
-Claude, the review agent, decisions), `jev.*` (Jev, TypeSafe's System One model: `jev.ask`,
-`jev.choice`, `jev.score`, `jev.noul`; needs `TYPESAFE_API_KEY`) and `git.*`/`gh.pr` (worktrees,
-merge, rebase, push, pull requests), and `thread.*` (below). Shared helper code for fns lives
-in `src/sluice/fns/_lib/`. Their `fn.json` files are the reference for their types.
+`src/sluice/fns/` holds only what sluice itself needs: `core.*` (§6) and `thread.*` (below),
+plus shared helper code for built-in fns in `src/sluice/fns/_lib/`. Their `fn.json` files are
+the reference for their types.
+
+Every other fn in this repo is a **first-party pack** under `packs/`, not loaded by default:
+
+- `packs/agents/`: `agent.devin`, `agent.codex`, `agent.claude`, `agent.run`, `agent.review`,
+  `decide.llm` (run Devin, Codex, Claude, the review agent, decisions)
+- `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
+  `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)
+- `packs/jev/`: `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` (Jev, TypeSafe's System One
+  model; needs `TYPESAFE_API_KEY`), with its shared client in `packs/jev/_jev/`
+
+A pack is installed by copying `packs/<pack>/*` into `SLUICE_HOME/fns/` (or a project's `fns/`),
+or by adding the pack's absolute path to `config.fn_dirs`; its fns then load in the global (or
+project) scope. Packs are self-contained: a fn finds its helpers relative to its own directory,
+so a copy anywhere works (see `packs/README.md`).
 
 **Threads** (`thread.*`, plain functions, no engine support): a thread is the project's log
 filtered to `message` records with that `thread` name (the project comes from `SLUICE_PROJECT`;

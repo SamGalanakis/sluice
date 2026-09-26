@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[2]
-FNS = REPO / "src" / "sluice" / "fns"
+REPO = Path(__file__).resolve().parents[3]
+FNS = Path(__file__).resolve().parents[1]
 
 
 def _key():

@@ -9,6 +9,9 @@ its failure. An orchestrator decides what happens after a failure.
 - A **function** is `fn.json` (typed `inputs` and `outputs`) plus a `main.py` run with `uv`.
   Scopes: built-in (`src/sluice/fns`), global (`$SLUICE_HOME/fns` and `config.fn_dirs`) and
   project. Names never collide across scopes; `fn_save` writes a new one after checking it.
+- Optional **packs** live in [`packs/`](packs/README.md): agents, git and jev functions that
+  are not loaded by default — copy one into `$SLUICE_HOME/fns/` (or a project's `fns/`), or
+  point `config.fn_dirs` at it, to install it.
 - Plans are local JSON (CWL-like `inputs`, `outputs`, `steps`). Every edit goes through typed MCP
   tools at the current revision and is appended to a log.
 - Each project has one append-only **log** (`log.jsonl`): every edit, manual value, step status

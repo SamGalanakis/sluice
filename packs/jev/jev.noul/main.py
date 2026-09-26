@@ -4,8 +4,14 @@
 # ///
 """jev.noul: probability that the answer to a yes/no question is yes."""
 
+import sys
+from pathlib import Path
+
 from sluice.fn import run
-from sluice.fns._lib.jev import one
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _jev.client import one
 
 
 def main(inp, ctx):
