@@ -1,10 +1,13 @@
 """The dashboard's HTTP routes (SPEC §8 Views): pages, and one Datastar SSE stream per page.
 
 A page renders completely on first load (usable without JavaScript) and carries the version of
-what it shows (`ver`, from the stats of the files it reads). Its stream polls those stats every
-`interval` seconds off the event loop; when they change it re-renders the page's parts and
-sends a `datastar-patch-elements` event for each part that differs from what the client has,
-then the new `ver` (so a reconnecting client resumes from there). An idle page gets nothing.
+what it shows (`ver`, from the stats of the files it reads, including the stderr.log of every
+running step's current run, so a progress line moves while an agent works). Its stream polls
+those stats every `interval` seconds off the event loop; when they change it re-renders the
+page's parts and sends a `datastar-patch-elements` event for each part that differs from what
+the client has, then the new `ver` (so a reconnecting client resumes from there). An idle page
+gets nothing. A step's detail (the project page's drawer, or its own page) streams the same way
+under the `sver` signal, versioned by the project and that step's runs.
 The log page's stream sends the table when the filter signals changed, and on the newest page
 prepends new matching records. The inbox page streams its items the same way, and its answer
 route is the dashboard's one write: it calls the same Store.inbox_answer as the MCP tool.
@@ -31,13 +34,14 @@ from . import log as L
 from . import views
 from .errors import BadRequest, NotFound, SluiceError
 from .store import Store
+from .util import read_json
 
 PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE, I.FILE)
 STATIC = Path(__file__).resolve().parent / "static"
-STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json"}
+STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json",
+                "board.js": "text/javascript"}
 AUTHOR = "dashboard"
 HTTP_STATUS = {"not_found": 404, "conflict": 409}
-REPLACED = {"plan-src"}  # replaced, not morphed, so its data-init re-renders the diagram
 
 
 def _stat(path: Path) -> tuple[int, int] | None:
@@ -58,20 +62,41 @@ def index_ver(store: Store) -> str:
                     for n in store.project_names()])
 
 
+def _running_stderr(store: Store, project: str) -> list[Path]:
+    """The stderr.log of every running step's runs (cheap: state.json is small)."""
+    try:
+        steps = read_json(store.project_dir(project) / "state.json").get("steps") or {}
+    except (OSError, ValueError, AttributeError):
+        return []
+    out = []
+    for e in steps.values():
+        if isinstance(e, dict) and e.get("status") == "running":
+            out += [store.runs_dir(project) / r / "stderr.log" for r in e.get("run_ids") or []
+                    if isinstance(r, str) and L.RUN_ID_RE.match(r)]
+    return out
+
+
 def project_ver(store: Store, project: str) -> str:
-    """The version of what the project page shows: the stats of the files it reads, and of
-    every inbox (for the nav's badge)."""
+    """The version of what the project page shows: the stats of the files it reads, of every
+    inbox (for the nav's badge) and of the running steps' stderr (their progress lines)."""
     d = store.project_dir(project)
     inboxes = [_stat(store.project_dir(n) / I.FILE) for n in store.project_names()]
-    return _digest([[_stat(d / f) for f in PROJECT_FILES], inboxes])
+    return _digest([[_stat(d / f) for f in PROJECT_FILES], inboxes,
+                    [_stat(p) for p in _running_stderr(store, project)]])
+
+
+def step_ver(store: Store, project: str, sid: str) -> str:
+    """The version of a step's detail: the project's, and the stderr of that step's runs."""
+    runs = views.step_run_dirs(store, project, sid)
+    return _digest([project_ver(store, project), [_stat(r / "stderr.log") for r in runs]])
 
 
 def log_ver(store: Store, project: str | None) -> str:
     return _digest(_stat(store.log_dir(project) / L.FILE))
 
 
-def _patch(pid: str, html: str) -> str:
-    return SSE.patch_elements(html, mode=ElementPatchMode.REPLACE if pid in REPLACED else None)
+def _patch(html: str) -> str:
+    return SSE.patch_elements(html)
 
 
 async def _signals(request: Request) -> dict[str, Any]:
@@ -97,17 +122,18 @@ class Dashboard:
         return not self.stop.is_set()
 
     async def _parts_stream(self, client_ver: Any, ver: Callable[[], str],
-                            parts: Callable[[], dict[str, str]]) -> AsyncIterator[str]:
+                            parts: Callable[[], dict[str, str]],
+                            signal: str = "ver") -> AsyncIterator[str]:
         """Patch the parts that changed whenever `ver()` moves on (all of them at once when
-        the client's version is not the current one)."""
+        the client's version is not the current one), then set the `signal` to it."""
         run = anyio.to_thread.run_sync
         try:
             cur = await run(ver)
             last = await run(parts)
             if client_ver != cur:
-                for pid, html in last.items():
-                    yield _patch(pid, html)
-                yield SSE.patch_signals({"ver": cur})
+                for html in last.values():
+                    yield _patch(html)
+                yield SSE.patch_signals({signal: cur})
             while await self._tick():
                 new_ver = await run(ver)
                 if new_ver == cur:
@@ -115,9 +141,9 @@ class Dashboard:
                 cur, new = new_ver, await run(parts)
                 for pid, html in new.items():
                     if last.get(pid) != html:
-                        yield _patch(pid, html)
+                        yield _patch(html)
                 last = new
-                yield SSE.patch_signals({"ver": cur})
+                yield SSE.patch_signals({signal: cur})
         except (SluiceError, OSError, ValueError):  # e.g. the project is gone: end the stream
             return
 
@@ -197,6 +223,24 @@ class Dashboard:
         return DatastarResponse(self._parts_stream(
             signals.get("ver"), lambda: project_ver(self.store, name),
             lambda: views.project_parts(self.store, name)))
+
+    def _step(self, name: str, sid: str) -> str:
+        return views.step_page(self.store, name, sid, step_ver(self.store, name, sid))
+
+    async def step(self, request: Request) -> Response:
+        return await self._page(self._step, request.path_params["name"],
+                                request.path_params["sid"])
+
+    async def step_stream(self, request: Request) -> Response:
+        name, sid = request.path_params["name"], request.path_params["sid"]
+        try:
+            await anyio.to_thread.run_sync(views.step_parts, self.store, name, sid)
+        except SluiceError as err:
+            return Response(err.message, status_code=404)
+        signals = await _signals(request)
+        return DatastarResponse(self._parts_stream(
+            signals.get("sver"), lambda: step_ver(self.store, name, sid),
+            lambda: views.step_parts(self.store, name, sid), signal="sver"))
 
     def _log(self, project: str | None, params: dict[str, list[str]]) -> str:
         return views.log_page(self.store, project, views.LogQuery.parse(params))
@@ -288,6 +332,8 @@ class Dashboard:
         for path, handler in (("/", self.index), ("/stream", self.index_stream),
                               ("/projects/{name}", self.project),
                               ("/projects/{name}/stream", self.project_stream),
+                              ("/projects/{name}/steps/{sid}", self.step),
+                              ("/projects/{name}/steps/{sid}/stream", self.step_stream),
                               ("/projects/{name}/log", self.log),
                               ("/projects/{name}/log/stream", self.log_stream),
                               ("/log", self.log), ("/log/stream", self.log_stream),
