@@ -24,8 +24,11 @@ its failure. An orchestrator decides what happens after a failure.
   `log_wait` (or the `thread.wait` step) waits for one.
 - `verify` checks functions, projects, plans and state and says where each problem is.
 
-- `sluice serve` also serves a **dashboard**: projects, each plan as a live Mermaid
-  diagram with its steps and history, the functions, a paged, filterable **log viewer**
+- `sluice serve` also serves a **dashboard** for the person supervising the agents: what needs
+  you first (inbox items, missing inputs, failed steps, unanswered messages), then each plan
+  as a live board of step cards by dependency (what each block does, its live progress line,
+  what it produced, how long, what it cost); a card opens the step's prompt, inputs, outputs,
+  stderr, thread and runs. Also the functions, a paged, filterable **log viewer**
   (`/projects/<name>/log`, `/log`) and the **Inbox**. Pages work without JavaScript; with it,
   [Datastar](https://data-star.dev) streams only the parts that changed.
 

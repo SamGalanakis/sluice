@@ -164,4 +164,4 @@ def test_status_and_views_show_stale_steps(store, runner):
     assert "  classDef stale " in text and "a / test.add / stale" in text
     assert text.count(" stale\n") >= 2  # both steps carry the stale class
     page = views.render(store, "p", "html")
-    assert '<td class="s-stale">stale</td>' in page
+    assert page.count('class="node card is-stale"') == 2 and "Its inputs changed" in page

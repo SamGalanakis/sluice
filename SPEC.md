@@ -170,7 +170,8 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   "..."}` (both keys only; no type form has just these keys, so the two never clash). A step
   may carry `"doc": "..."` next to `run`, `in` and `scatter`. Docs are optional strings that say
   what a value or a step is for; `status` returns them (`input_docs`, a step's `doc`), the
-  Mermaid view puts a step's doc on a second line of its label, the dashboard shows both, and an
+  Mermaid view puts a step's doc on a second line of its label, the dashboard shows a step's doc
+  as its card's title and an input's doc on its node, and an
   inbox item posted for an input without a body takes that input's doc as its body (§8a).
 - **Step inputs** (`in`): `{"default": <json>}` a literal; `{"source": "<ref>"}` one value;
   `{"source": ["<ref>", ...]}` fan-in: an array of the values, in order. A ref is a plan input
@@ -393,53 +394,92 @@ pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe eve
 Validation errors carry the path and what was expected.
 
 **Views.** A dashboard that only reads, with one exception: answering an inbox item (§8a).
-Server-rendered HTML with inline CSS (light and dark via `prefers-color-scheme`, usable at phone
-width), a top nav (Projects · Functions · Log · Inbox), every value HTML-escaped (plans, logs
-and inbox items are untrusted). The Inbox link carries the count of open items across all
-projects as the dashboard's one red badge (none when nothing waits). The only external assets
-come from cdn.jsdelivr.net: Datastar v1.0.4, mermaid, and, on inbox pages,
+Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
+`prefers-color-scheme`, usable at phone width, keyboard reachable), a top nav (Projects ·
+Functions · Log · Inbox), every value HTML-escaped (plans, logs, run output and inbox items are
+untrusted). The Inbox link carries the count of open items across all projects as the
+dashboard's one red badge (none when nothing waits); nothing else is red. A step's status is a
+drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
+hand, circular arrow stale, cross failed) with its word for assistive technology, never colour
+alone. The only external assets come from cdn.jsdelivr.net: Datastar v1.0.4, the Inter font
+(`@fontsource-variable/inter@5.3.0`; the system sans without it), and, on inbox pages,
 `@openuidev/lang-core@0.3.0/+esm` (jsDelivr's ESM build; it imports `zod@4.6.5` from the same
 CDN). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
 raw HTML escaped, unsafe link schemes refused).
-- Mermaid (`flowchart LR`): plan inputs as rounded nodes, steps as boxes labelled
+- Mermaid (`flowchart LR`, `plan_view`'s text format for agents; the dashboard does not use it):
+  plan inputs as rounded nodes, steps as boxes labelled
   `id / fn / status` (a scattered step shows `done/total`; a step's doc, one line of at most 60
   characters, below it), plan outputs as rounded nodes, an edge
   per source ref labelled with the output name, one colour class per status (pending grey,
   running blue, succeeded green, failed red, stale amber, manual outlined; a stale manual step
   shows as stale).
-- `GET /`: every project with its description, step counts by status, plan rev and last change
-  (the later of the last log record and the last state write), each linking to its page.
-- `GET /projects/<name>`: step counts and links (log, functions, inbox), the Mermaid diagram,
-  plan input values (with their docs) and output values, a steps table (fn, status, started,
-  finished, first line of error; a step's doc under its id) whose
-  rows expand (`<details>`) to the step's bindings, run inputs, outputs, full error and stderr
-  tail, the last 20 history records (rev, time, author, what: kind plus step, input or op
-  count, reason) and the last 10 log records.
+- **Needs you**: what waits on a person, most actionable first: open inbox items ("Answer"),
+  plan inputs that hold up a step with no value and no open item asking for them ("Input"),
+  failed steps ("Failed", with the first line of the error) and messages addressed to anyone
+  but a step of the plan (the orchestrator, a person) that no later message on the same thread
+  from that addressee answers ("Message"). Shown only when something waits; its count is not
+  red.
+- `GET /`: the compact "Needs you" lines (one per project: what kinds wait, how many), then
+  one row per project: name, description (two lines), a progress bar by status with "n of m"
+  succeeded, what is running now (each running step's title and running time) or why nothing
+  is, and the last activity (the later of the last log record and the last state write).
+- `GET /projects/<name>`: the name, description, one summary line (succeeded of total, running,
+  stale, failed, total `cost_usd`, last activity) and links (log, plan history: the log
+  filtered to the history kinds, inbox, functions); the "Needs you" lines; then the **board**:
+  the plan as HTML cards laid out on the server in columns by dependency depth (plan inputs
+  first, plan outputs last), each column ordered and placed by the mean height of what feeds
+  it, an edge per handoff drawn as inline SVG (an edge that spans columns runs through a thin
+  slot in each column it crosses, never under a card). A card shows its status glyph, its title
+  (the step's doc, else its id), one line (a running step's last non-empty stderr line of its
+  current run; a failed step's error; a succeeded step's first text output, else `name:
+  value`; a pending step's missing plan inputs; "its inputs changed" when stale), then what runs
+  it (for an `agent.*` fn its engine and a bound `model`, else the fn), `done of total` for a
+  scattered step, "stale" or "set by hand", its cost (an output `cost_usd`) and how long it ran
+  (live while running). Built-ins that run inline (`core.*`) are slim chips. Plan input and
+  output nodes show their values ("not set" otherwise). Hovering or focusing a card traces it:
+  its edges light up and name their ports (`output → input`), the rest dims. The board scrolls
+  sideways inside itself (never the page) and opens at the leftmost running, failed or stale
+  step; at phone width the cards stack in the same order and the edges are left out. A card
+  links to the step's page; with JavaScript it opens the step in a drawer instead (the address
+  becomes `#step:<id>`, so Back and a shared link work; Escape closes it).
+- `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own):
+  its title, then id, fn, status, time and cost; its error; its progress (the tail of the
+  current run's stderr, while running); its outputs with their declared types and docs (while
+  running, what the agent has submitted so far); the messages on its `step-<id>` thread; its
+  prompt in full (the binding named `prompt`, `spec`, `task`, `instructions` or `brief`); its
+  other bindings, each with where it comes from (a plan input, a step's output, linked, or
+  set in the plan), its type and its value (the run's own `input.json`, else what the binding
+  resolves to now); the stderr of a finished run (folded); and its attempts from the log
+  (started, outcome, duration). Ids and plumbing live here, not on the board.
 - `GET /projects/<name>/log` (and `GET /log` for the home log): the log viewer. Newest first, 50
   records per page; `?before=<seq>` shows the 50 matching records below that seq, `?after=<seq>`
   the 50 above it, with newest / newer / older links. Filters are query parameters, so a URL is
   shareable: `kind` (repeated or comma-separated; exact kinds or the `step`/`plan` groups) and
   `thread` (comma-separated), the §6b filter `log_read` uses. A row shows seq, time, kind and a
   one-line summary (`s2 succeeded → stale`, `rev 7 by orch: reason (2 ops)`, `questions from
-  e2e: body…`, `<call> <fn> <status>`) and expands to the full record as JSON. Unknown kinds or a
+  e2e: body…`, `<call> <fn> <status>`, `logic submitted interface, branch`) and expands to the full record as JSON. Unknown kinds or a
   bad seq are a 400 page.
 - `GET /fns?project=<name>` (project optional): every function that context sees, grouped by
   scope, with doc and typed inputs and outputs (`string[]`, `enum(a|b)`, `{field: type}`,
   `T?`); a function with a problem (e.g. a collision) is shown in red with the verify message.
 
 **Live updates.** Every page renders completely on first load and works without JavaScript
-(the log filter is a plain GET form). The index, project and log pages then open one Datastar
-SSE stream each (`GET /stream`, `/projects/<name>/stream`, `/projects/<name>/log/stream`,
-`/log/stream`). The index and project pages carry a `ver` signal, a hash of the stats (mtime,
-size) of the files they read (`project.json`, `plan.json`, `state.json`, `log.jsonl`). The
-server polls those stats about once a second off the event loop (never blocking the runner or
-the MCP tools); when they change it re-renders the page's parts (each an element with an id:
-summary, diagram source, inputs, outputs, steps, history, recent log) and sends a
-`datastar-patch-elements` event for each part that differs, then the new `ver`. An idle page
-receives nothing; a client whose `ver` is not current (e.g. reconnecting) first gets every part.
-Parts are morphed, so an expanded row stays open; the diagram's source element is replaced and
-its `data-init` re-renders the Mermaid SVG into the view, keeping the old drawing until the new
-one is ready. On the log page, changing the filter updates the `kinds`/`thread` signals and
+(the log filter is a plain GET form; a card is a link to its step's page). The index, project
+and log pages then open one Datastar SSE stream each (`GET /stream`, `/projects/<name>/stream`,
+`/projects/<name>/log/stream`, `/log/stream`), and a step's detail one of its own
+(`/projects/<name>/steps/<id>/stream`, under the `sver` signal; the drawer ends the previous
+one when it shows another step). The index and project pages carry a `ver` signal, a hash of
+the stats (mtime, size) of the files they read (`project.json`, `plan.json`, `state.json`,
+`log.jsonl`, `inbox.json`) and, on the project page, of the `stderr.log` of every running
+step's runs, so a progress line moves while an agent works; a step's version adds the step and
+the stderr of its runs. The server polls those stats about once a second off the event loop
+(never blocking the runner or the MCP tools); when they change it re-renders the page's parts
+(each an element with an id: the project page's summary, needs, graph and nav badge) and sends
+a `datastar-patch-elements` event for each part that differs, then the new version. An idle
+page receives nothing; a client whose version is not current (e.g. reconnecting) first gets
+every part. Parts are morphed, so an expanded disclosure stays open. `/static/board.js` keeps
+relative and running times current, opens and closes the drawer, traces cards, flips a glyph
+whose status changes, and scrolls the board to the live frontier. On the log page, changing the filter updates the `kinds`/`thread` signals and
 reconnects the stream, which sends the new table and rewrites the address bar to the filter's
 query string; on the newest page, new matching records are prepended as they are appended.
 Streams end when the server shuts down; the client reconnects with backoff.
@@ -463,10 +503,12 @@ Streams end when the server shuts down; the client reconnects with backoff.
   author `dashboard`. Refusals map to 404 (`not_found`), 409 (`conflict`: already answered or
   closed) and 400 (`invalid`, `bad_request`); JSON gets the error payload, a form an HTML page. A
   request whose `Origin` is not this host is refused (403).
-- `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary.
+- `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
+  `GET /static/board.js`: the board's script.
 
 `plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML
-document (no nav, no links, no log, no stream), from the same renderer.
+document from the same renderer: the summary and the board (cards without links), then every
+step's detail in a disclosure (no nav, no drawer, no stream, no script).
 
 | Tool | Args | Returns |
 |---|---|---|

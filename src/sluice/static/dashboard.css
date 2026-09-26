@@ -94,7 +94,7 @@ nav.top { display: flex; align-items: center; gap: 4px; height: 48px; padding: 0
 nav.top a { padding: 6px 10px; border-radius: 8px; text-decoration: none;
             color: var(--muted-foreground); font-weight: 500; }
 nav.top a:hover { color: var(--foreground); background: var(--muted); }
-nav.top a[aria-current="page"] { color: var(--foreground); background: var(--secondary); }
+nav.top a[aria-current="page"], .at-inbox #nav-inbox { color: var(--foreground); background: var(--secondary); }
 nav.top a.brand { color: var(--foreground); font-weight: 650; margin-right: 8px;
                   padding-left: 0; background: none; letter-spacing: -0.01em; }
 .badge { display: inline-block; min-width: 18px; margin-left: 4px; padding: 0 5px;
@@ -187,7 +187,8 @@ a.card:hover, a.chip:hover { border-color: var(--border-strong); }
 .io b { color: var(--foreground); font-weight: 500; }
 .input .v, .output .v { font-size: 12.5px; line-height: 18px; white-space: nowrap;
                         overflow: hidden; text-overflow: ellipsis; }
-.v.unset { color: var(--status-attention); }
+.input .v.unset { color: var(--status-attention); }
+.output .v.unset { color: var(--muted-foreground); }
 
 /* ---- the step drawer and page -------------------------------------------------------- */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 20; width: min(680px, 100vw);

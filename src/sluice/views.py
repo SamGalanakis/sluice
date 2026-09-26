@@ -274,12 +274,11 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
         cur = ' aria-current="page"'
         links = "".join(f'<a href="{href}"{cur if href == here else ""}>{text}</a>'
                         for href, text in NAV)
-        inbox_link = nav_inbox(inbox)
-        if here == "/inbox":
-            inbox_link = inbox_link.replace('href="/inbox"', 'href="/inbox" aria-current="page"')
-        top = (f'<nav class="top"><a class="brand" href="/">sluice</a>{links}{inbox_link}'
-               f"</nav>")
+        top = (f'<nav class="top"><a class="brand" href="/">sluice</a>{links}'
+               f"{nav_inbox(inbox)}</nav>")
     body_attrs = f' data-signals="{_signals(signals)}"' if signals else ""
+    if here == "/inbox":  # the Inbox link is a streamed part: its current state lives here
+        body_attrs += ' class="at-inbox"'
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
     return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
@@ -298,8 +297,8 @@ def not_found(message: str) -> str:
     return layout("not found", f'<p class="lead">{e(message)}</p>')
 
 
-def _label(text: str, extra: str = "") -> str:
-    return f'<h2 class="label"{extra}>{text}</h2>'
+def _label(text: str) -> str:
+    return f'<h3 class="label">{text}</h3>'
 
 
 # ---- a project's blocks -----------------------------------------------------------------
@@ -316,8 +315,9 @@ class Block:
     raw: dict[str, Any]
     entry: dict[str, Any]
     glue: bool  # a built-in that runs inline (core.*): a slim chip on the board
-    fn_inputs: dict[str, str]
-    fn_outputs: dict[str, str]
+    fn_inputs: dict[str, str]  # its fn's inputs, then any extra ones it binds (open fns)
+    fn_outputs: dict[str, str]  # its declared outputs first (open fns), then its fn's
+    output_docs: dict[str, str] = dataclasses.field(default_factory=dict)
 
     @property
     def status(self) -> str:
@@ -353,10 +353,7 @@ class Block:
 
     @property
     def outputs(self) -> dict[str, str]:
-        """Output name → type: the step's declared `outputs`, else its fn's."""
-        declared = self.raw.get("outputs")
-        if isinstance(declared, dict) and declared:
-            return {k: type_text(v) for k, v in declared.items()}
+        """Output name → type: what the step declares, then what its fn returns."""
         return dict(self.fn_outputs)
 
     @property
@@ -413,10 +410,6 @@ class Board:
         return sum(costs) if costs else None
 
 
-def _type_str(t: Any) -> str:
-    return str(t)
-
-
 def load_board(store: Store, project: str) -> Board:
     info = store.project(project)
     doc, plan = store.plan(project)
@@ -425,11 +418,14 @@ def load_board(store: Store, project: str) -> Board:
     blocks = {}
     for sid, step in plan.steps.items():
         raw = raw_steps.get(sid) if isinstance(raw_steps.get(sid), dict) else {}
+        declared = step.declared
+        extra = step.extra
         blocks[sid] = Block(
             sid, step.fn.name, step.doc or "", raw,
             state["steps"].get(sid, {"status": "pending"}), step.fn.native,
-            {k: _type_str(v) for k, v in step.fn.inputs.items()},
-            {k: _type_str(v) for k, v in step.fn.outputs.items()})
+            {k: str(v) for k, v in {**step.fn.inputs, **extra}.items()},
+            {k: str(v) for k, v in {**declared, **step.fn.outputs}.items()},
+            dict(step.output_docs))
     return Board(project, info, doc, plan, state, blocks)
 
 
@@ -465,7 +461,8 @@ def output_summary(block: Block) -> str:
     outs = block.entry.get("outputs")
     if not isinstance(outs, dict):
         return ""
-    names = [n for n in (*TEXT_OUTPUTS, *block.outputs, *outs) if n in outs and n != "cost_usd"]
+    names = [n for n in (*TEXT_OUTPUTS, *block.outputs, *outs)
+             if n in outs and n not in ("cost_usd", "session")]
     for n in dict.fromkeys(names):
         v = outs[n]
         if isinstance(v, str) and v.strip():
@@ -1067,13 +1064,26 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
                 '<p class="quiet">Nothing written to stderr yet.</p>')
     outs = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else None
     declared = b.outputs
+    title = "Outputs"
+    if outs is None and b.status == "running" and b.run_ids:
+        d = _run_dir(store, project, b.run_ids[-1])
+        try:  # what the agent has submitted so far (step_submit), before the fn exits
+            got = read_json(d / "submitted.json") if d else None
+        except (OSError, ValueError):
+            got = None
+        if isinstance(got, dict):
+            outs, title = got, "Outputs submitted so far"
+            raw = b.raw.get("outputs")
+            declared = {n: t for n, t in declared.items()
+                        if isinstance(raw, dict) and n in raw}  # only what the step declares
     if outs is not None:
         rows = []
         for n in dict.fromkeys([*declared, *outs]):
             t = f' <span class="type">{e(declared[n])}</span>' if n in declared else ""
+            doc = f'<p class="meta">{e(b.output_docs[n])}</p>' if b.output_docs.get(n) else ""
             v = _value(outs[n]) if n in outs else '<span class="quiet">none</span>'
-            rows.append(f"<dt>{e(n)}{t}</dt><dd>{v}</dd>")
-        section("Outputs", f'<dl class="kv">{"".join(rows)}</dl>')
+            rows.append(f"<dt>{e(n)}{t}</dt><dd>{doc}{v}</dd>")
+        section(title, f'<dl class="kv">{"".join(rows)}</dl>')
     elif declared:
         names = ", ".join(f"{e(n)} <span class=\"type inline\">{e(t)}</span>"
                           for n, t in declared.items())
@@ -1126,7 +1136,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         ok, v = resolved(n)
         where = _source(project, b, n, live)
         val = _value(v) if ok else '<span class="quiet">no value yet</span>'
-        rows.append(f'<dt>{e(n)}{f" <span class=type>{e(t)}</span>" if t else ""}</dt>'
+        rows.append(f'<dt>{e(n)}{f' <span class="type">{e(t)}</span>' if t else ""}</dt>'
                     f'<dd><p class="meta">{where}</p>{val}</dd>')
     if rows:
         section("Inputs", f'<dl class="kv">{"".join(rows)}</dl>')
@@ -1250,6 +1260,10 @@ def log_summary(rec: dict[str, Any]) -> str:
     if kind == "step.output":
         forced = " (forced)" if rec.get("force") else ""
         return e(f"{rec.get('step')} set by hand{forced} · {by}")
+    if kind == "step.submit":
+        outs = rec.get("outputs")
+        names = ", ".join(map(str, outs)) if isinstance(outs, dict) and outs else "nothing"
+        return e(f"{rec.get('step')} submitted {names}")
     if kind == "step.retry":
         return e(f"{rec.get('step')} retried · {by}")
     if kind == "call":

@@ -1,3 +1,7 @@
+"""The dashboard's views (SPEC §8): the Mermaid text plan_view gives agents, the board of step
+cards and its layout, a step's detail, the "Needs you" lines, the index, and escaping."""
+
+import html
 import re
 
 from sluice import views
@@ -6,6 +10,10 @@ from tests.conftest import create, write_fn
 
 def d(x):
     return {"default": x}
+
+
+def src(ref):
+    return {"source": ref}
 
 
 def test_mermaid_shows_inputs_steps_outputs_edges_and_status_classes(store):
@@ -46,101 +54,282 @@ def test_mermaid_shows_inputs_steps_outputs_edges_and_status_classes(store):
         assert f"  classDef {cls} " in text
 
 
-def test_the_project_page(store):
-    create(store, "v", {"a": {"run": "test.add", "in": {"a": {"source": "n"}, "b": d(1)}},
-                        "c": {"run": "test.boom", "in": {}}},
-           inputs={"n": "int"}, outputs={"total": {"source": "a/sum"}})
-    run_dir = store.runs_dir("v") / "r1"
-    run_dir.mkdir(parents=True)
-    (run_dir / "input.json").write_text('{"a": 1, "b": 1}')
-    (run_dir / "stderr.log").write_text("adding 1 + 1\n")
+# ---- the board ----------------------------------------------------------------------------
+
+
+def card(page, sid):
+    """The card of a step on the board: its element, up to the next node."""
+    m = re.search(rf'<(a|div) class="node (card|chip) [^"]*" id="n-{sid}".*?</\1>', page,
+                  re.DOTALL)
+    assert m, f"no card for {sid}"
+    return m[0]
+
+
+def pos(page, key):
+    m = re.search(rf'data-node="{re.escape(key)}"[^>]*style="--x:(\d+)px;--y:(\d+)px', page)
+    assert m, f"no node {key}"
+    return int(m[1]), int(m[2])
+
+
+def board_project(store):
+    create(store, "v", {
+        "a": {"run": "test.add", "in": {"a": src("n"), "b": d(1)}, "doc": "Add one to n"},
+        "fmt": {"run": "core.format", "in": {"template": d("{0}"), "values": src(["a/sum"])}},
+        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(2)}},
+        "c": {"run": "test.boom", "in": {}},
+        "late": {"run": "test.add", "in": {"a": src("a/sum"), "b": src("b/sum")}},
+        "each": {"run": "test.window", "scatter": "tag",
+                 "in": {"seconds": d(0), "tag": src(["a/sum"])}},
+    }, inputs={"n": "int"}, outputs={"total": src("b/sum")})
+    run = store.runs_dir("v") / "r1"
+    run.mkdir(parents=True)
+    (run / "input.json").write_text('{"seconds": 0, "tag": 2}')
+    (run / "stderr.log").write_text("starting\nhalfway there\n\n")
     with store.lock("v"):
         store.write_state("v", {"inputs": {"n": 1}, "steps": {
-            "a": {"status": "succeeded", "outputs": {"sum": 2}, "started": "T1", "finished": "T2",
-                  "run_ids": ["r1"]},
-            "c": {"status": "failed", "error": "exit code 1\ntraceback <here>"}}})
-    store.set_input("v", "n", 1, "me", "why not")
+            "a": {"status": "succeeded", "outputs": {"sum": 2}, "started": "2026-01-01T10:00:00Z",
+                  "finished": "2026-01-01T10:12:04Z"},
+            "fmt": {"status": "succeeded", "outputs": {"text": "2"}},
+            "b": {"status": "succeeded", "outputs": {"sum": 4}, "manual": True},
+            "c": {"status": "failed", "error": "exit code 1\ntraceback <here>"},
+            "each": {"status": "running", "done": 1, "total": 3, "run_ids": ["r1"],
+                     "started": "2026-01-01T10:12:05Z"},
+            "late": {"status": "stale", "outputs": {"sum": 6}}}})
+
+
+def test_the_board_shows_each_step_as_a_card(store):
+    board_project(store)
     page = views.project_page(store, "v", ver="abc")
-    assert '<nav>' in page and views.DATASTAR_JS in page
-    assert '<body data-signals="{&quot;ver&quot;: &quot;abc&quot;}">' in page
+    a = card(page, "a")
+    assert a.startswith('<a class="node card is-succeeded" id="n-a" data-node="s:a" '
+                        'href="/projects/v/steps/a" data-step="a"')
+    assert '<span class="vh">succeeded</span>' in a  # the glyph's word, for assistive tech
+    assert '<span class="ttl">Add one to n</span>' in a  # the doc is the title
+    assert '<span class="ln ln-output">sum: 2</span>' in a and "test.add" in a
+    assert '<span class="dur">12m 4s</span>' in a
+    assert '<span class="ttl">b</span>' in card(page, "b")  # no doc: the id
+    assert "set by hand" in card(page, "b") and "is-manual" in card(page, "b")
+    c = card(page, "c")
+    assert "is-failed" in c and '<span class="ln ln-error">exit code 1…</span>' in c
+    each = card(page, "each")
+    assert "is-running" in each and "1 of 3" in each
+    assert '<span class="ln ln-progress">halfway there</span>' in each  # last stderr line
+    assert 'data-since="2026-01-01T10:12:05Z"' in each  # its running time stays current
+    assert "is-stale" in card(page, "late") and "Its inputs changed" in card(page, "late")
+    assert card(page, "fmt").startswith('<a class="node chip is-succeeded"')  # glue: a chip
+    # plan inputs and outputs are nodes too, with their values
+    assert re.search(r'data-node="i:n"[^>]*><span class="io">Input <b>n</b></span>'
+                     r'<span class="v">1</span>', page)
+    assert re.search(r'data-node="o:total"[^>]*><span class="io">Output <b>total</b></span>'
+                     r'<span class="v">4</span>', page)
+    # the page: its summary, the drawer that shows a step, and the live stream
+    assert "3 of 6 succeeded · 1 running · 1 stale · 1 failed" in page
+    assert 'id="drawer"' in page
+    assert "'/projects/v/steps/' + encodeURIComponent($step)" in html.unescape(page)
     assert "data-init=\"@get('/projects/v/stream', {retry: 'always'" in page
-    assert "cdn.jsdelivr.net/npm/mermaid" in page
-    assert '<pre class="mermaid">\nflowchart LR' in page
-    assert '<pre id="plan-src" hidden data-view="plan-diagram" ' in page
-    assert '<a href="/projects/v/log">' in page and '<div id="recent">' in page
-    assert "the v project" in page
-    assert ('<td class="s-succeeded">succeeded</td><td>T1</td><td>T2</td><td class="bad"></td>'
-            in page)
-    assert '<td class="s-failed">failed</td><td></td><td></td><td class="bad">exit code 1</td>' \
-        in page
-    step_a = page[page.index('<details id="step-a" data-preserve-attr="open">'):
-                  page.index("</details>")]
-    assert "bindings" in step_a and "&quot;source&quot;: &quot;n&quot;" in step_a
-    assert "inputs</div><pre>{\n  &quot;a&quot;: 1," in step_a
-    assert "outputs</div><pre>{\n  &quot;sum&quot;: 2\n}" in step_a
-    assert "stderr (tail)</div><pre>adding 1 + 1</pre>" in step_a
-    assert "traceback &lt;here&gt;" in page  # the full error, escaped, inside the details
-    assert "<tr><td>n</td><td><code>1</code></td></tr>" in page
-    assert "<tr><td>total</td><td><code>2</code></td></tr>" in page
-    history = page[page.index("<h2>History</h2>"):]
-    assert "<td>plan.input n</td><td>why not</td>" in history
-    assert "<td>2</td>" in history and "<td>plan.edit (1 ops)</td>" in history  # newest first
-    assert history.index("plan.input") < history.index("plan.edit")
-    standalone = views.render(store, "v", "html")
-    assert "<nav>" not in standalone and "datastar" not in standalone
-    assert 'id="plan-src"' not in standalone and "/log" not in standalone
-    assert '<pre class="mermaid">\nflowchart LR' in standalone
+    assert '<script type="module" src="/static/board.js">' in page
+    assert "mermaid" not in page
 
 
-
-def test_an_empty_plan_shows_a_placeholder_not_mermaid_source(store):
-    create(store, "v", {})
+def test_the_board_lays_steps_out_by_dependency_depth(store):
+    board_project(store)
     page = views.project_page(store, "v", ver="abc")
-    diagram = page[page.index('<div id="plan-diagram"'):]
-    assert diagram.startswith('<div id="plan-diagram" class="diagram"><p class="muted">No steps')
-    assert '<pre class="mermaid">' not in page
-    assert '<pre id="plan-src" hidden data-empty data-view="plan-diagram" ' in page
-    assert "No steps yet." in views.DIAGRAM_JS and "data-empty" in views.DIAGRAM_JS
-    assert ".diagram pre.mermaid:not([data-processed]){visibility:hidden}" in views.CSS
+    xs = {k: pos(page, k)[0] for k in ("i:n", "s:a", "s:fmt", "s:b", "s:c", "s:each",
+                                       "s:late", "o:total")}
+    assert xs["i:n"] < xs["s:a"] == xs["s:c"] < xs["s:b"] == xs["s:fmt"] == xs["s:each"]
+    assert xs["s:b"] < xs["s:late"] < xs["o:total"]
+    # a chain lines up: b sits level with a, the step that feeds it first
+    assert pos(page, "s:a")[1] <= pos(page, "s:b")[1]
+    # an edge per handoff, named by its ports (shown when a block is traced)
+    edges = set(re.findall(r'<path data-from="([^"]+)" data-to="([^"]+)"', page))
+    assert edges == {("i:n", "s:a"), ("s:a", "s:fmt"), ("s:a", "s:b"), ("s:a", "s:each"),
+                     ("s:a", "s:late"), ("s:b", "s:late"), ("s:b", "o:total")}
+    names = {(f, t): n for f, t, n in re.findall(
+        r'<text data-from="([^"]+)" data-to="([^"]+)"[^>]*>([^<]*)</text>', page)}
+    assert names[("i:n", "s:a")] == "n → a" and names[("s:a", "s:fmt")] == "sum → values"
+    # a:sum → late crosses a column: it runs through a gap (a dummy slot), not under a card
+    late = re.search(r'<path data-from="s:a" data-to="s:late" d="([^"]+)"', page)[1]
+    assert late.count("C") == 2 and "L" in late
+    # nothing at all yet: a placeholder that says how steps arrive
+    create(store, "empty", {})
+    empty = views.project_page(store, "empty", ver="x")
+    assert "No steps yet." in empty and 'class="plane"' not in empty
 
 
-def test_values_are_escaped(store):
-    create(store, "v", {"a": {"run": "core.echo", "in": {"value": d("<script>x</script>")}}},
-           outputs={"out": {"source": "a/value"}})
-    store.update_project("v", "<b>bold</b>")
+def test_the_standalone_page_is_the_board_and_every_step_in_a_disclosure(store):
+    board_project(store)
+    page = views.render(store, "v", "html")
+    assert "<nav" not in page and "datastar" not in page and 'id="drawer"' not in page
+    assert '<div class="node card is-succeeded" id="n-a"' in page and "href=" not in card(page, "a")
+    assert page.count('<details class="std"') == 6
+    assert "traceback &lt;here&gt;" in page  # the full error, in c's detail
+
+
+def test_a_steps_detail(store):
+    create(store, "v", {
+        "make": {"run": "test.add", "in": {"a": src("n"), "b": d(1)}},
+        "agent": {"run": "test.open", "doc": "Write <the> thing",
+                  "in": {"prompt": d("Do <b>it</b>\nthen stop"), "made": src("make/sum")},
+                  "outputs": {"answer": {"type": "string", "doc": "What it found"}}},
+    }, inputs={"n": "int"})
+    run = store.runs_dir("v") / "r1"
+    run.mkdir(parents=True)
+    (run / "input.json").write_text('{"prompt": "Do <b>it</b>\\nthen stop", "made": 2}')
+    (run / "stderr.log").write_text("step one\n<script>alert(1)</script>\n")
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {"n": 1}, "steps": {
+            "make": {"status": "succeeded", "outputs": {"sum": 2}},
+            "agent": {"status": "succeeded", "run_ids": ["r1"],
+                      "started": "2026-01-01T10:00:00Z", "finished": "2026-01-01T10:01:30Z",
+                      "outputs": {"answer": "<i>42</i>", "ports": {}, "extra": {},
+                                  "results": [], "cost_usd": 0.1234567}}}})
+    store.append("v", {"kind": "step.status", "step": "agent", "from": "pending",
+                       "to": "running"},
+                 {"kind": "step.status", "step": "agent", "from": "running", "to": "failed",
+                  "error": "exit code 2"},
+                 {"kind": "step.status", "step": "agent", "from": "pending", "to": "running"},
+                 {"kind": "step.status", "step": "agent", "from": "running",
+                  "to": "succeeded"},
+                 {"kind": "message", "thread": "step-agent", "from": "agent",
+                  "to": "orchestrator", "body": "Which <file>?"},
+                 {"kind": "message", "thread": "other", "from": "x", "body": "not here"})
+    html = views.step_detail(store, "v", "agent")
+    head = html[:html.index("</header>")]
+    assert "<h2>Write &lt;the&gt; thing</h2>" in head
+    assert "<code>agent</code> · test.open · succeeded · 1m 30s · $0.12" in head  # ids here
+    sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
+    assert sections == ["Outputs", "Messages", "Prompt", "Inputs", "Stderr", "Runs"]
+    assert ('<dt>answer <span class="type">string</span></dt><dd><p class="meta">What it '
+            'found</p><span class="v">&lt;i&gt;42&lt;/i&gt;</span></dd>') in html
+    assert '<code class="v">0.123457</code>' in html
+    assert '<div class="prompt">Do &lt;b&gt;it&lt;/b&gt;\nthen stop</div>' in html
+    assert ('<dt>made <span class="type">int</span></dt><dd><p class="meta">from <a href="/projects/v/steps/make" '
+            'data-step="make">make/sum</a></p><code class="v">2</code></dd>') in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html and "<script>" not in html
+    assert "agent → orchestrator" in html and "Which &lt;file&gt;?" in html
+    assert "not here" not in html
+    runs = html[html.index("Runs</h3>"):]
+    assert runs.index("succeeded") < runs.index("failed")  # newest first
+    assert "exit code 2" in runs
+    assert "<i>" not in html and "<b>it" not in html
+
+
+def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
+    create(store, "v", {"agent": {"run": "test.open", "in": {},
+                                  "outputs": {"answer": "string"}}})
+    run = store.runs_dir("v") / "r1"
+    run.mkdir(parents=True)
+    (run / "stderr.log").write_text("thinking\n")
+    (run / "submitted.json").write_text('{"answer": "so far"}')
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {"agent": {
+            "status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"}}})
+    html = views.step_detail(store, "v", "agent")
+    assert '<h3 class="label">Progress</h3><pre class="tail">thinking</pre>' in html
+    outputs = html[html.index("Outputs submitted so far"):]
+    assert "<dt>answer" in outputs and "so far" in outputs and "<dt>ports" not in outputs
+
+
+# ---- what needs a person ------------------------------------------------------------------
+
+
+def test_needs_you_lists_answers_inputs_failures_and_unanswered_messages(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": src("who"), "b": d(1)}},
+                        "c": {"run": "test.boom", "in": {}, "doc": "Break <it>"}},
+           inputs={"who": {"type": "int", "doc": "Who <b>counts</b>"}})
     with store.lock("v"):
         store.write_state("v", {"inputs": {}, "steps": {
-            "a": {"status": "failed", "error": "<script>alert(1)</script>",
-                  "outputs": {"value": "<script>alert(2)</script>"}}}})
-    store.append("v", {"kind": "message", "thread": "t", "from": "<i>me</i>",
-                        "body": "<script>alert(3)</script>"})
-    for page in (views.project_page(store, "v", ver="x"), views.index(store, ver="x"),
-                 views.log_page(store, "v", views.LogQuery())):
-        assert "<script>alert" not in page and "<b>bold" not in page
-        assert "<script>x" not in page
-    page = views.render(store, "v", "html")
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
-    assert "&lt;script&gt;alert(2)&lt;/script&gt;" in page
-    assert "&lt;b&gt;bold&lt;/b&gt;" in page
-    log = views.log_page(store, "v", views.LogQuery())
-    assert "t from &lt;i&gt;me&lt;/i&gt;: &lt;script&gt;alert(3)&lt;/script&gt;" in log
-    assert "&quot;body&quot;: &quot;&lt;script&gt;alert(3)&lt;/script&gt;&quot;" in log
+            "c": {"status": "failed", "error": "exit code 1\nmore", "finished":
+                  "2026-01-01T10:00:00Z"}}})
+    store.inbox_post("v", "Pick <one>")
+    store.append("v", {"kind": "message", "thread": "step-c", "from": "c", "to": "orchestrator",
+                       "body": "Help <please>"},
+                 {"kind": "message", "thread": "t", "from": "c", "to": "sam", "body": "done?"},
+                 {"kind": "message", "thread": "t", "from": "sam", "body": "yes"},
+                 {"kind": "message", "thread": "step-a", "from": "orchestrator", "to": "a",
+                  "body": "for the step, not for you"})
+    items = views.needs(store, "v")
+    assert [i["kind"] for i in items] == ["Answer", "Input", "Failed", "Message"]
+    assert "Pick &lt;one&gt;" in items[0]["text"] and items[0]["href"] == \
+        "/projects/v/inbox#item-v-i1"
+    assert "<b>who</b> has no value — Who &lt;b&gt;counts&lt;/b&gt;" in items[1]["text"]
+    assert items[2]["step"] == "c" and items[2]["href"] == "/projects/v/steps/c"
+    assert "Break &lt;it&gt;: " in items[2]["text"] and "exit code 1…" in items[2]["text"]
+    assert items[3]["step"] == "c" and "c → orchestrator: Help &lt;please&gt;" in \
+        items[3]["text"]
+    band = views.needs_band(items)
+    assert '<h2 class="label attn" id="needs-h">Needs you (4)</h2>' in band
+    assert 'class="badge"' not in band  # the one red badge stays the nav's
+    create(store, "calm", {})
+    assert views.needs(store, "calm") == [] and views.needs_band([]) == ""
+
+
+# ---- the index ----------------------------------------------------------------------------
 
 
 def test_the_project_index(store):
-    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
-                        "b": {"run": "test.boom", "in": {}}})
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)},
+                              "doc": "Add <them>"},
+                        "b": {"run": "test.boom", "in": {}},
+                        "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
     store.create_project("w", "second")
     with store.lock("v"):
-        store.write_state("v", {"inputs": {}, "steps": {"a": {"status": "succeeded"},
-                                                        "b": {"status": "failed"}}})
-    page = views.index(store)
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a": {"status": "running", "started": "2026-01-01T10:00:00Z"},
+            "b": {"status": "failed"}, "c": {"status": "succeeded"}}})
+    page = views.index(store, ver="x")
     assert '<a href="/projects/v">v</a>' in page and '<a href="/projects/w">w</a>' in page
-    assert "the v project" in page and "second" in page
-    assert '<span class="s-succeeded">1 succeeded</span>, <span class="s-failed">1 failed</span>' \
-        in page
-    assert re.search(r'<td class="muted">\d{4}-\d\d-\d\dT[\d:]+Z</td>', page)
-    assert '<a href="/fns">Functions</a>' in page
+    assert '<p class="about">the v project</p>' in page and "second" in page
+    assert '<span class="bar" role="img" aria-label="1 succeeded, 1 running, 1 failed">' in page
+    assert '<span class="meta">1 of 3</span>' in page
+    assert '<a href="/projects/v#step:a">' in page and "Add &lt;them&gt;" in page
+    assert "No steps yet." in page  # w
+    needs = page[page.index('<div id="needs">'):page.index('<div id="projects">')]
+    assert '<span class="k">v</span><span class="t">1 failed step</span>' in needs
+    assert re.search(r'<time datetime="\d{4}-\d\d-\d\dT[\d:]+Z"', page)
+    assert '<a href="/fns">Functions</a>' in page and '<a href="/" aria-current="page">' in page
+
+
+def test_values_are_escaped(store):
+    create(store, "v", {"a": {"run": "core.echo", "in": {"value": d("<script>x</script>")},
+                              "doc": "<script>doc</script>"},
+                        "p": {"run": "test.window", "in": {"seconds": d(0)}}},
+           outputs={"out": {"source": "a/value"}})
+    store.update_project("v", "<b>bold</b>")
+    run = store.runs_dir("v") / "r1"
+    run.mkdir(parents=True)
+    (run / "stderr.log").write_text("<script>progress</script>\n")
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a": {"status": "succeeded", "outputs": {"value": "<script>alert(2)</script>"}},
+            "p": {"status": "running", "run_ids": ["r1"]}}})
+    store.append("v", {"kind": "message", "thread": "t", "from": "<i>me</i>", "to": "<u>you</u>",
+                       "body": "<script>alert(3)</script>"})
+    pages = [views.project_page(store, "v", ver="x"), views.index(store, ver="x"),
+             views.log_page(store, "v", views.LogQuery()), views.render(store, "v", "html"),
+             views.step_detail(store, "v", "a")]
+    for page in pages:
+        assert "<script>alert" not in page and "<b>bold" not in page
+        assert "<script>x" not in page and "<script>doc" not in page
+        assert "<script>progress" not in page and "<i>me" not in page
+    assert "&lt;script&gt;progress&lt;/script&gt;" in pages[0]
+    assert "&lt;script&gt;doc&lt;/script&gt;" in pages[0]
+    assert "&lt;script&gt;alert(3)&lt;/script&gt;" in pages[0]  # the unanswered message
+    assert "&lt;b&gt;bold&lt;/b&gt;" in pages[3]
+    log = pages[2]
+    assert "t from &lt;i&gt;me&lt;/i&gt; → &lt;u&gt;you&lt;/u&gt;: &lt;script&gt;alert(3)" in log
+    assert "&quot;body&quot;: &quot;&lt;script&gt;alert(3)&lt;/script&gt;&quot;" in log
+
+
+# ---- small parts --------------------------------------------------------------------------
+
+
+def test_durations_and_log_summaries():
+    assert [views.dur(s) for s in (0.4, 7.25, 42, 724, 3900, 90061)] == \
+        ["0.4s", "7.2s", "42s", "12m 4s", "1h 5m", "1d 1h 1m"]
+    rec = {"kind": "step.submit", "step": "logic", "run": "r1",
+           "outputs": {"interface": "x", "branch": "y"}}
+    assert views.log_summary(rec) == "logic submitted interface, branch"
 
 
 def test_types_render_readably():
@@ -168,7 +357,7 @@ def test_the_functions_page_groups_by_scope_and_shows_collisions(store):
     assert "&lt;i&gt;mine&lt;/i&gt;" in sections["Global"]
     project = sections["Project (v)"]
     assert "<b>v.local</b>" in project
-    clash = project[project.index('<div class="card problem">'):]
+    clash = project[project.index('<div class="fn problem">'):]
     assert "<b>test.add</b>" in clash and "fn test.add collides with the global fn" in clash
     plain = views.fns_page(store)
     assert "Project (" not in plain and "v.local" not in plain

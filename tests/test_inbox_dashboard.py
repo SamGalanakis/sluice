@@ -1,6 +1,7 @@
 """The dashboard's inbox (SPEC §8): its pages, the badge, the answer route (the dashboard's one
 write, through the same Store.inbox_answer as the MCP tool), and the OpenUI vocabulary shared
-by the renderer and the agent docs; with a Chromium, the renderer itself."""
+by the renderer and the agent docs; with a Chromium, the renderer itself and the board's step
+drawer."""
 
 import json
 import re
@@ -287,3 +288,28 @@ def test_the_doc_examples_render_and_their_buttons_answer(store, port, chrome):
         "action": "ship", "params": {},
         "values": {"version": "1.4.0", "notes": "Retries failed charges.", "notify": True}}
     assert [i["id"] for i in store.inbox("p")] == [broken]
+
+
+# ---- the board in a browser----------------------------------------------------------------------
+
+
+def test_a_card_opens_the_step_drawer_and_escape_closes_it(store, port, chrome):
+    one, two = {"default": 1}, {"default": 2}
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": one, "b": two}, "doc": "First"},
+                        "b": {"run": "test.add", "in": {"a": {"source": "a/sum"}, "b": two},
+                              "doc": "Second"}})
+    chrome.open(f"http://127.0.0.1:{port}/projects/p")
+    chrome.wait("!!window.sluiceStream && !!document.querySelector('#n-a')")
+    chrome.eval("document.querySelector('#n-a').click()")
+    assert chrome.wait("document.querySelector('#step-detail h2')?.textContent") == "First"
+    assert chrome.eval("location.hash") == "#step:a"
+    assert chrome.eval("document.querySelector('#n-a').classList.contains('open')")
+    # tracing: focusing b lights the edge from a
+    chrome.eval("document.querySelector('#n-b').focus()")
+    assert chrome.eval("document.querySelector('path[data-from=\"s:a\"][data-to=\"s:b\"]')"
+                       ".classList.contains('on')")
+    chrome.eval("document.querySelector('#n-b').click()")
+    chrome.wait("document.querySelector('#step-detail h2')?.textContent === 'Second'")
+    chrome.eval("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))")
+    chrome.wait("getComputedStyle(document.getElementById('drawer')).display === 'none'")
+    assert chrome.eval("location.hash") == ""

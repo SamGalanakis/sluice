@@ -86,9 +86,10 @@ def project_ver(store: Store, project: str) -> str:
 
 
 def step_ver(store: Store, project: str, sid: str) -> str:
-    """The version of a step's detail: the project's, and the stderr of that step's runs."""
+    """The version of a step's detail: the step, the project's version, and the stderr of the
+    step's runs (the step is part of it: the drawer's `sver` moves on when it shows another)."""
     runs = views.step_run_dirs(store, project, sid)
-    return _digest([project_ver(store, project), [_stat(r / "stderr.log") for r in runs]])
+    return _digest([sid, project_ver(store, project), [_stat(r / "stderr.log") for r in runs]])
 
 
 def log_ver(store: Store, project: str | None) -> str:

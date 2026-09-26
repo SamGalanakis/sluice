@@ -60,9 +60,11 @@ def test_the_project_page_shows_the_docs(store, port):
     create(store, "p", {"s": echo("who", "Echo <i>it</i>")},
            inputs={"who": {"type": "string", "doc": "Who <b>signs</b> off"}})
     page = get(port, "/projects/p")[1]
-    assert "<th>doc</th>" in page
-    assert '<td class="muted">Who &lt;b&gt;signs&lt;/b&gt; off</td>' in page
-    assert '<div class="muted">Echo &lt;i&gt;it&lt;/i&gt;</div>' in page
+    # the input's doc on its node and on its "Needs you" line; the step's doc is its title
+    assert 'data-node="i:who" title="Who &lt;b&gt;signs&lt;/b&gt; off"' in page
+    assert "<b>who</b> has no value — Who &lt;b&gt;signs&lt;/b&gt; off" in page
+    assert '<span class="ttl">Echo &lt;i&gt;it&lt;/i&gt;</span>' in page
+    assert "<i>it" not in page and "<b>signs" not in page
 
 
 def test_an_input_item_without_a_body_takes_the_input_doc(store):

@@ -144,7 +144,7 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
     view = sluice.tool("plan_view", project="demo")
     assert view.stdout.startswith("flowchart LR\n")
     page = sluice.tool("plan_view", project="demo", format="html")
-    assert '<pre class="mermaid">' in page.stdout
+    assert '<div class="plane"' in page.stdout and "<nav" not in page.stdout
     missing = sluice.tool("step_retry", project="demo", step="zz", check=False)
     assert json.loads(missing.stderr)["error"] == "not_found"
 
