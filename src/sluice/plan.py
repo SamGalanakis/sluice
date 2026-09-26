@@ -10,7 +10,8 @@ from . import types as T
 from .registry import Fn, Registry
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-DOC_KEYS = {"id", "label", "inputs", "outputs", "steps"}
+DOC_KEYS = {"inputs", "outputs", "steps"}
+EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
 STEP_KEYS = {"run", "in", "scatter"}
 
 
@@ -162,16 +163,15 @@ def _ids(section: Any, path: str, errs: list[str]) -> dict[str, Any]:
 
 
 def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
-    """Validate a plan (without rev) per SPEC §5. Returns (every error with a path, plan)."""
+    """Validate a plan (without rev) per SPEC §5. Returns (every error with a path, plan).
+
+    Each error reads `<path>: <message>`, e.g. `steps.a.in.x: required input is not bound`.
+    """
     plan = Plan({}, {}, {})
     if not isinstance(doc, dict):
         return ["plan: expected an object"], plan
     errs = [("rev: maintained by the store" if k == "rev" else f"{k}: unknown key")
             for k in doc if k not in DOC_KEYS]
-    if not isinstance(doc.get("id"), str) or not ID_RE.match(doc["id"]):
-        errs.append(f"id: plan ids match {ID_RE.pattern}, got {doc.get('id')!r}")
-    if not isinstance(doc.get("label", ""), str):
-        errs.append("label: expected a string")
     for name, form in _ids(doc.get("inputs", {}), "inputs", errs).items():
         try:
             plan.inputs[name] = T.parse(form, f"inputs.{name}")

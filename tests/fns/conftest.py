@@ -33,7 +33,7 @@ def call_fn(tmp_path):
             **os.environ,
             "PYTHONPATH": str(SRC),
             "SLUICE_HOME": str(tmp_path / "sluice-home"),
-            "SLUICE_PLAN": "test-plan",
+            "SLUICE_PROJECT": "test-project",
             "SLUICE_STEP": "test-step",
             "SLUICE_RUN_ID": "test-run",
             "SLUICE_RUN_DIR": str(run_dir),

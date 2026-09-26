@@ -1,17 +1,17 @@
 import pytest
 
 from sluice import plan as P
-from sluice.registry import BUILTIN_DIR, Registry
+from sluice.registry import BUILTIN_DIR, Registry, load
 from tests.conftest import TESTPACK
 
 
 @pytest.fixture(scope="module")
 def reg() -> Registry:
-    return Registry.load([BUILTIN_DIR, TESTPACK])
+    return load({"builtin": [BUILTIN_DIR], "global": [TESTPACK]})
 
 
 def v(doc, reg):
-    return P.validate({"id": "p", **doc}, reg)[0]
+    return P.validate(doc, reg)[0]
 
 
 def add(a, b):
@@ -22,7 +22,7 @@ ONE = {"default": 1}
 
 
 def test_a_valid_plan(reg):
-    doc = {"label": "t", "inputs": {"n": "int", "words": "string[]", "note": "string?"},
+    doc = {"inputs": {"n": "int", "words": "string[]", "note": "string?"},
            "outputs": {"total": {"source": "b/sum"}, "first": {"source": "split/parts.0"}},
            "steps": {
                "a": add({"source": "n"}, ONE),
@@ -34,7 +34,7 @@ def test_a_valid_plan(reg):
                         "in": {"items": {"source": ["a/sum", "each/end", "note"]}}},
                "first": {"run": "core.echo", "in": {"value": {"source": "each/start.0"}}},
            }}
-    errs, plan = P.validate({"id": "p", **doc}, reg)
+    errs, plan = P.validate(doc, reg)
     assert errs == []
     assert plan.steps["b"].deps == ["a"]
     assert plan.steps["gate"].deps == ["a", "each"]
@@ -43,7 +43,8 @@ def test_a_valid_plan(reg):
 
 @pytest.mark.parametrize("doc, error", [
     # ids and shape
-    ({"id": "Bad", "steps": {}}, "id: plan ids match"),
+    ({"id": "p", "steps": {}}, "id: unknown key"),
+    ({"label": "x", "steps": {}}, "label: unknown key"),
     ({"steps": {"B!": add(ONE, ONE)}}, "steps.B!: ids match"),
     ({"inputs": {"X": "int"}, "steps": {}}, "inputs.X: ids match"),
     ({"inputs": {"x": "nope"}, "steps": {}}, "inputs.x: unknown type 'nope'"),

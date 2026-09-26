@@ -4,30 +4,48 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 
 import pytest
 
+from sluice import cli
 from tests.conftest import write_config
 
-PLAN = {"label": "cli", "inputs": {"n": "int"}, "outputs": {"total": {"source": "b/sum"}},
+PLAN = {"inputs": {"n": "int"}, "outputs": {"total": {"source": "b/sum"}},
         "steps": {"a": {"run": "test.add", "in": {"a": {"source": "n"}, "b": {"default": 2}}},
                   "b": {"run": "test.add", "in": {"a": {"source": "a/sum"}, "b": {"default": 1}}},
                   "boom": {"run": "test.boom", "in": {}}}}
 
 
+@dataclass
+class Result:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
 @pytest.fixture
-def sluice(tmp_path):
+def sluice(tmp_path, monkeypatch, capsys):
+    """`sluice <args>` run in-process (the same main() the console script calls)."""
     home = tmp_path / "home"
+    monkeypatch.setenv("SLUICE_HOME", str(home))
 
     def run(*args, check=True):
-        p = subprocess.run([sys.executable, "-m", "sluice.cli", *args], capture_output=True,
-                           text=True, timeout=120, check=False, cwd=tmp_path,
-                           env={**os.environ, "SLUICE_HOME": str(home)})
+        capsys.readouterr()
+        try:
+            code = cli.main(list(args))
+        except SystemExit as e:  # argparse
+            code = e.code
+        out, err = capsys.readouterr()
+        p = Result(code, out, err)
         if check:
             assert p.returncode == 0, p.stderr
         return p
 
-    run.home, run.tmp = home, tmp_path
+    def tool(tool_name, check=True, **args):
+        return run("tool", tool_name, json.dumps(args), check=check)
+
+    run.home, run.tmp, run.tool = home, tmp_path, tool
     return run
 
 
@@ -35,74 +53,95 @@ def json_out(p):
     return json.loads(p.stdout)
 
 
-def test_init_writes_the_default_config_once(sluice):
-    assert "config.json" in sluice("init").stdout
+def test_the_first_run_writes_the_default_config_and_lists_the_tools(sluice):
+    listing = sluice("tool").stdout
     assert json.loads((sluice.home / "config.json").read_text()) == {
         "fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8}
-    assert sluice("init", check=False).returncode == 1
+    names = [line.split()[0] for line in listing.splitlines()]
+    assert {"projects_list", "plan_patch", "fn_call", "verify", "status"} <= set(names)
+    assert any(line.startswith("verify ") and "Check functions" in line
+               for line in listing.splitlines())
+    for gone in ("init", "plan", "status", "fn"):
+        assert sluice(gone, check=False).returncode == 2
 
 
-def test_plans_manual_values_and_the_loop(sluice):
+def test_tool_errors_and_bad_arguments_exit_1(sluice):
+    missing = sluice.tool("status", project="zz", check=False)
+    assert missing.returncode == 1 and json.loads(missing.stderr)["error"] == "not_found"
+    unknown = sluice.tool("no_such_tool", check=False)
+    assert unknown.returncode == 1 and json.loads(unknown.stderr)["error"] == "bad_request"
+    bad = sluice("tool", "status", "{not json", check=False)
+    assert bad.returncode == 1 and "not JSON" in json.loads(bad.stderr)["message"]
+    wrong = sluice("tool", "status", "[1]", check=False)
+    assert wrong.returncode == 1 and "JSON object" in json.loads(wrong.stderr)["message"]
+    args = sluice.tool("plan_patch", project="p", check=False)
+    assert args.returncode == 1 and "Field required" in json.loads(args.stderr)["message"]
+
+
+def test_verify_exits_non_zero_on_problems(sluice):
     write_config(sluice.home)
-    (sluice.tmp / "plan.json").write_text(json.dumps(PLAN))
-    assert json_out(sluice("plan", "create", "demo", "plan.json")) == {"rev": 1}
-    assert json_out(sluice("plan", "show", "demo"))["steps"]["a"]["run"] == "test.add"
-    ops = [{"op": "replace", "path": "/label", "value": "renamed"}]
-    assert json_out(sluice("plan", "patch", "demo", "--rev", "1", "--reason", "rename",
-                           json.dumps(ops))) == {"rev": 2}
-    stale = sluice("plan", "patch", "demo", "--rev", "1", "--reason", "x", "[]", check=False)
+    assert json_out(sluice.tool("project_create", name="p")) == {"name": "p"}
+    assert json_out(sluice.tool("verify")) == {"ok": True, "problems": []}
+    (sluice.home / "projects" / "p" / ".env").write_text("oops\n")
+    p = sluice.tool("verify", project="p", check=False)
+    assert p.returncode == 1 and json_out(p)["problems"] == [
+        {"where": "projects/p/.env:1", "message": "not a KEY=value line"}]
+
+
+def test_a_direct_fn_call_needs_no_runner(sluice):
+    write_config(sluice.home)
+    res = json_out(sluice.tool("fn_call", name="test.add", inputs={"a": 1, "b": 2},
+                               direct=True))
+    assert res["status"] == "succeeded" and res["outputs"] == {"sum": 3}
+    queued = json_out(sluice.tool("fn_call", name="core.echo", inputs={"value": 1}))
+    assert queued["status"] == "pending"  # no runner is up
+    bad = sluice.tool("fn_call", name="test.add", inputs={"a": "x", "b": 1}, check=False)
+    assert json.loads(bad.stderr)["errors"] == ['inputs.a: expected int, got "x"']
+
+
+def test_a_project_through_the_tools_and_the_loop(sluice):
+    write_config(sluice.home)
+    sluice.tool("project_create", name="demo", description="cli")
+    ops = [{"op": "replace", "path": f"/{k}", "value": v} for k, v in PLAN.items()]
+    assert json_out(sluice.tool("plan_patch", project="demo", rev=1, reason="plan",
+                                ops=ops)) == {"rev": 2}
+    assert json_out(sluice.tool("plan_get", project="demo"))["plan"] == PLAN
+    stale = sluice.tool("plan_patch", project="demo", rev=1, reason="x", ops=[], check=False)
     assert stale.returncode == 1 and json.loads(stale.stderr)["current_rev"] == 2
-    bad = sluice("set-input", "demo", "n", '"x"', check=False)
+    bad = sluice.tool("plan_set_input", project="demo", name="n", value="x", check=False)
     assert json.loads(bad.stderr)["errors"] == ['inputs.n: expected int, got "x"']
-    assert json_out(sluice("set-input", "demo", "n", "4", "--reason", "go")) == {"ok": True}
+    assert json_out(sluice.tool("plan_set_input", project="demo", name="n", value=4,
+                                reason="go")) == {"ok": True}
 
     loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"], cwd=sluice.tmp,
                             env={**os.environ, "SLUICE_HOME": str(sluice.home)})
     try:
         deadline = time.time() + 30
         while time.time() < deadline:
-            s = json_out(sluice("status", "demo", "--json"))
+            s = json_out(sluice.tool("status", project="demo"))
             if {x["id"]: x["status"] for x in s["steps"]} == {
                     "a": "succeeded", "b": "succeeded", "boom": "failed"}:
                 break
             time.sleep(0.3)
         assert s["outputs"] == {"total": 7}
-        assert json_out(sluice("set-output", "demo", "boom", '{"done": true}')) == {"ok": True}
-        assert json_out(sluice("retry", "demo", "boom", "--reason", "run it")) == {"ok": True}
+        queued = json_out(sluice.tool("fn_call", name="test.add", inputs={"a": 1, "b": 1},
+                                      project="demo", wait=20))
+        assert queued["status"] == "succeeded" and queued["outputs"] == {"sum": 2}
+        assert json_out(sluice.tool("step_set_output", project="demo", step="boom",
+                                    outputs={"done": True})) == {"ok": True}
+        assert json_out(sluice.tool("step_retry", project="demo", step="boom",
+                                    reason="run it")) == {"ok": True}
     finally:
         loop.send_signal(signal.SIGTERM)
         assert loop.wait(timeout=20) == 0
 
-    table = sluice("status", "demo").stdout
-    assert "plan demo  rev 2" in table and "inputs: n=4" in table and "outputs: total=7" in table
-    assert "b                test.add         succeeded" in table
-    history = sluice("plan", "history", "demo").stdout.splitlines()
-    assert history[0].startswith("rev 1") and "1 op(s)" in history[0]
-    assert "plan_set_input" in history[2] and "step_set_output" in history[3]
-    assert "step_retry" in history[4] and history[4].endswith("run it")
-    assert sluice("view", "demo").stdout.startswith("flowchart LR\n")
-    sluice("view", "demo", "--html", "demo.html")
-    assert "<pre class=\"mermaid\">" in (sluice.tmp / "demo.html").read_text()
-    missing = sluice("retry", "demo", "zz", check=False)
+    history = json_out(sluice.tool("plan_history", project="demo"))
+    assert [h.get("action") for h in history] == [
+        None, None, "plan_set_input", "step_set_output", "step_retry"]
+    assert history[-1]["reason"] == "run it"
+    view = sluice.tool("plan_view", project="demo")
+    assert view.stdout.startswith("flowchart LR\n")
+    page = sluice.tool("plan_view", project="demo", format="html")
+    assert '<pre class="mermaid">' in page.stdout
+    missing = sluice.tool("step_retry", project="demo", step="zz", check=False)
     assert json.loads(missing.stderr)["error"] == "not_found"
-
-
-def test_fn_commands(sluice):
-    write_config(sluice.home)
-    listing = sluice("fn", "list").stdout
-    assert "test.add           (a: int, b: int) -> (sum: int)" in listing
-    assert "Add two ints." in listing and "git.head" in listing
-    assert json_out(sluice("fn", "show", "core.echo"))["name"] == "core.echo"
-    assert sluice("fn", "show", "no.such", check=False).returncode == 1
-    called = json_out(sluice("fn", "call", "core.echo", '{"value": 1}'))
-    assert called["status"] == "pending" and called["plan"].startswith("call-")
-    bad = sluice("fn", "call", "test.add", '{"a": "x", "b": 1}', check=False)
-    assert json.loads(bad.stderr)["errors"] == ['inputs.a: expected int, got "x"']
-
-
-def test_a_broken_fn_dir_is_reported(sluice, tmp_path):
-    (tmp_path / "fns" / "x").mkdir(parents=True)
-    (tmp_path / "fns" / "x" / "fn.json").write_text("{not json")
-    write_config(sluice.home, fn_dirs=[str(tmp_path / "fns")])
-    p = sluice("fn", "list", check=False)
-    assert p.returncode == 1 and "cannot load fns" in p.stderr and "bad JSON" in p.stderr

@@ -1,13 +1,25 @@
 # Functions
 
-Call `fn_list` to see what exists and `fn_get(name)` for one function's full definition.
-`fn_call(name, inputs, wait)` runs a single function without writing a plan.
+`fn_list(project)` shows what a project can use and `fn_get(name, project)` one function's full
+definition. `fn_call(name, inputs, project, wait)` runs a single function without touching the
+plan; poll `call_status(call, project)` if it outlives `wait`.
 
-## Writing a new function
-A function is a directory with `fn.json` and `main.py`, placed in a directory listed in the
-sluice config `fn_dirs` (then `fn_list` shows it).
+## Scopes
+- **builtin**: shipped with sluice (`core.*`, `agent.*`, `git.*`, `jev.*`, ...).
+- **global**: `$SLUICE_HOME/fns/` and the dirs in the config's `fn_dirs`; every project sees them.
+- **project**: the project's own `fns/`; only that project sees them.
 
-`fn.json`:
+Names never collide: a global function may not reuse a built-in name, and a project function may
+not reuse a built-in or global one. Two projects may each have a function of the same name. A
+project with a colliding (or broken) function refuses plan edits and runs until it is fixed;
+`verify` and `fn_list` (`error`) show it.
+
+## Writing a function
+`fn_save(fn, main_py, project)` checks the fn.json and writes `fns/<name>/fn.json` and `main.py`
+into the project (leave out `project` for a global function). Saving the same name again in the
+same scope replaces it.
+
+`fn`:
 ```json
 {
   "name": "text.upper",
@@ -17,7 +29,7 @@ sluice config `fn_dirs` (then `fn_list` shows it).
 }
 ```
 
-`main.py` (run with `uv`; declare third-party packages in the PEP 723 block):
+`main_py` (run with `uv`; declare third-party packages in the PEP 723 block):
 ```python
 # /// script
 # requires-python = ">=3.12"
@@ -33,9 +45,13 @@ if __name__ == "__main__":
     run(main)                               # run(main, retries=3, backoff=60) retries Transient
 ```
 
+- The name is dotted lowercase (`area.verb`); `inputs` and `outputs` map names to types
+  (`docs("types")`).
 - `inp` holds the inputs by name (missing optional inputs are `None`). Return every output.
 - `sh(argv, cwd=...)` runs a command and raises on a non-zero exit.
 - Raise `Transient` for failures worth retrying (rate limits, capacity); `run(main, retries=N)`
   retries them. Any other exception fails the step with its traceback.
-- `ctx` has `plan`, `step`, `run_id`, `run_dir` (scratch space), `attempt`.
+- `ctx` has `project`, `step`, `run_id`, `run_dir` (scratch space), `attempt`.
+- Secrets come from the environment: `$SLUICE_HOME/.env`, then the project's `.env` (project
+  values win). Never put them in plans.
 - Output types are checked after the function exits; a mismatch fails the step.

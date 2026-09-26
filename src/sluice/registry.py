@@ -1,25 +1,28 @@
-"""The fn registry (SPEC §2, §4): fn dirs from the package's fns/ plus config.fn_dirs."""
+"""Functions and their scopes (SPEC §2, §4): built-in, global and project fn dirs.
+
+A scope is scanned into entries (one per fn dir, loaded or not); a Registry combines the scopes a
+project sees in lookup order and records every problem: a bad fn.json, a name that does not match
+its directory, or a name that collides with one in an earlier scope (or the same scope).
+"""
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from . import types as T
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "fns"
-NATIVE = {"core.echo", "core.collect", "core.format"}  # run inline; no main.py
+NATIVE = {"core.echo", "core.collect", "core.format"}  # built-ins run inline; no main.py
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 KEYS = {"name", "doc", "inputs", "outputs"}
+SCOPES = ("builtin", "global", "project")
 
-
-class RegistryError(Exception):
-    def __init__(self, errors: list[str]):
-        super().__init__("; ".join(errors))
-        self.errors = errors
+Show = Callable[[Path], str]
 
 
 @dataclass
@@ -30,49 +33,131 @@ class Fn:
     outputs: dict[str, T.Type]
     raw: dict[str, Any]
     dir: Path
+    scope: str = "global"
 
     @property
     def native(self) -> bool:
-        return self.name in NATIVE
+        return self.scope == "builtin" and self.name in NATIVE
 
     def summary(self) -> dict[str, Any]:
         return {"name": self.name, "doc": self.doc, "inputs": self.raw["inputs"],
-                "outputs": self.raw["outputs"]}
+                "outputs": self.raw["outputs"], "scope": self.scope}
 
 
-def parse_fn(raw: Any, fn_dir: Path) -> Fn:
-    """Validate one fn.json. Raises RegistryError with every problem found."""
-    where = str(fn_dir / "fn.json")
+@dataclass
+class Entry:
+    """One fn dir of a scope: its fn when it loaded and does not collide, else its errors."""
+
+    name: str  # the fn.json name when it is a string, else the directory name
+    scope: str
+    dir: Path
+    fn: Fn | None
+    errors: list[str] = field(default_factory=list)
+
+    def summary(self) -> dict[str, Any]:
+        if self.fn is not None and not self.errors:
+            return self.fn.summary()
+        out: dict[str, Any] = {"name": self.name, "scope": self.scope}
+        if self.fn is not None:
+            out.update(self.fn.summary())
+        return {**out, "error": "; ".join(self.errors)}
+
+
+def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
+             check_dir: bool = True) -> tuple[Fn | None, list[str]]:
+    """Validate one fn.json (SPEC §4, §6a). Returns (fn or None, every problem found)."""
     if not isinstance(raw, dict):
-        raise RegistryError([f"{where}: expected an object"])
-    errs = [f"{where}: unknown key {k!r}" for k in raw if k not in KEYS]
+        return None, ["expected an object {name, doc?, inputs, outputs}"]
+    errs = [f"unknown key {k!r}" for k in raw if k not in KEYS]
     name = raw.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
-        errs.append(f"{where}: name must be dotted lowercase like 'git.head', got {name!r}")
+        errs.append(f"name must be dotted lowercase like 'git.head', got {name!r}")
+    elif check_dir and fn_dir.name != name:
+        errs.append(f"name {name} does not match its directory {fn_dir.name}")
     if not isinstance(raw.get("doc", ""), str):
-        errs.append(f"{where}: doc must be a string")
+        errs.append("doc must be a string")
     ports: dict[str, dict[str, T.Type]] = {}
     for key in ("inputs", "outputs"):
         spec = raw.get(key)
         if not isinstance(spec, dict):
-            errs.append(f"{where}: {key} is required, an object of name -> type")
+            errs.append(f"{key} is required, an object of name -> type")
             continue
         ports[key] = {}
         for port, form in spec.items():
             try:
                 ports[key][port] = T.parse(form, f"{key}.{port}")
             except T.TypeSyntaxError as e:
-                errs.append(f"{where}: {e}")
-    if name not in NATIVE and not (fn_dir / "main.py").is_file():
-        errs.append(f"{where}: main.py is missing")
+                errs.append(str(e))
+    if check_dir and not (scope == "builtin" and name in NATIVE) \
+            and not (fn_dir / "main.py").is_file():
+        errs.append("main.py is missing")
     if errs:
-        raise RegistryError(errs)
-    return Fn(name, raw.get("doc", ""), ports["inputs"], ports["outputs"], raw, fn_dir)
+        return None, errs
+    return Fn(name, raw.get("doc", ""), ports["inputs"], ports["outputs"], raw, fn_dir,
+              scope), []
+
+
+def fingerprint(dirs: Iterable[Path]) -> tuple:
+    """What a scan depends on: every fn.json and main.py with its mtime and size."""
+    out = []
+    for d in dirs:
+        out.append((str(d), d.is_dir()))
+        for f in sorted([*d.glob("*/fn.json"), *d.glob("*/main.py")]):
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            out.append((str(f), st.st_mtime_ns, st.st_size))
+    return tuple(out)
+
+
+def scan(scope: str, dirs: Iterable[Path], show: Show,
+         missing_ok: Iterable[Path] = ()) -> tuple[list[Entry], list[dict[str, str]]]:
+    """Every fn dir (an immediate subdirectory holding fn.json) of a scope, in order.
+
+    Returns (entries, problems of the dirs themselves, e.g. a configured dir that is missing).
+    """
+    entries: list[Entry] = []
+    problems: list[dict[str, str]] = []
+    optional = set(missing_ok)
+    for d in dict.fromkeys(dirs):
+        if not d.is_dir():
+            if d not in optional:
+                problems.append({"where": show(d), "message": "fn directory does not exist"})
+            continue
+        for fn_json in sorted(d.glob("*/fn.json")):
+            try:
+                raw = json.loads(fn_json.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                entries.append(Entry(fn_json.parent.name, scope, fn_json.parent, None,
+                                     [f"bad JSON: {e}"]))
+                continue
+            fn, errs = parse_fn(raw, fn_json.parent, scope)
+            name = raw.get("name") if isinstance(raw, dict) else None
+            entries.append(Entry(name if isinstance(name, str) else fn_json.parent.name, scope,
+                                 fn_json.parent, fn, errs))
+    return entries, problems
 
 
 class Registry:
-    def __init__(self, fns: dict[str, Fn]):
-        self.fns = fns
+    """The functions one project (or the global context) sees, in lookup order."""
+
+    def __init__(self, entries: list[Entry], dir_problems: list[dict[str, str]], show: Show,
+                 key: Any = None):
+        self.entries = [replace(e, errors=list(e.errors)) for e in entries]  # scans are cached
+        self.key = key
+        self.fns: dict[str, Fn] = {}
+        self.problems = list(dir_problems)
+        for e in self.entries:
+            if e.fn is not None and not e.errors:
+                other = self.fns.get(e.name)
+                if other is None:
+                    self.fns[e.name] = e.fn
+                    continue
+                e.errors.append(f"fn {e.name} collides with the {other.scope} fn at "
+                                f"{show(other.dir)}")
+            self.problems.extend({"where": show(e.dir / "fn.json"), "message": m}
+                                 for m in e.errors)
 
     def get(self, name: str) -> Fn | None:
         return self.fns.get(name)
@@ -80,30 +165,17 @@ class Registry:
     def names(self) -> list[str]:
         return sorted(self.fns)
 
-    @classmethod
-    def load(cls, dirs: list[str | Path]) -> Registry:
-        """Load every immediate subdirectory holding fn.json, in each dir. Collects errors."""
-        fns: dict[str, Fn] = {}
-        errs: list[str] = []
-        for d in dict.fromkeys(Path(x).resolve() for x in dirs):
-            if not d.is_dir():
-                errs.append(f"{d}: fn directory does not exist")
-                continue
-            for fn_json in sorted(d.glob("*/fn.json")):
-                try:
-                    fn = parse_fn(json.loads(fn_json.read_text(encoding="utf-8")),
-                                  fn_json.parent)
-                except json.JSONDecodeError as e:
-                    errs.append(f"{fn_json}: bad JSON: {e}")
-                    continue
-                except RegistryError as e:
-                    errs.extend(e.errors)
-                    continue
-                if fn.name in fns:
-                    errs.append(f"{fn_json}: duplicate fn name {fn.name} "
-                                f"(also in {fns[fn.name].dir})")
-                    continue
-                fns[fn.name] = fn
-        if errs:
-            raise RegistryError(errs)
-        return cls(fns)
+    def listing(self) -> list[dict[str, Any]]:
+        """fn_list: every fn dir in lookup order; ones with problems carry `error`."""
+        return [e.summary() for e in self.entries]
+
+
+def load(scopes: dict[str, list[Path]], show: Show = str) -> Registry:
+    """A registry from explicit scope dirs, e.g. {"builtin": [BUILTIN_DIR], "global": [...]}."""
+    entries: list[Entry] = []
+    problems: list[dict[str, str]] = []
+    for scope in SCOPES:
+        found, probs = scan(scope, [Path(d).resolve() for d in scopes.get(scope, [])], show)
+        entries += found
+        problems += probs
+    return Registry(entries, problems, show)

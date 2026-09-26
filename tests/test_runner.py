@@ -25,8 +25,8 @@ def overlap(a, b) -> bool:
     return a["start"] < b["end"] and b["start"] < a["end"]
 
 
-def outputs(store, pid, sid):
-    return store.read_state(pid)["steps"][sid]["outputs"]
+def outputs(store, project, sid):
+    return store.read_state(project)["steps"][sid]["outputs"]
 
 
 def test_a_chain_runs_in_order_with_run_files(store, runner):
@@ -40,7 +40,7 @@ def test_a_chain_runs_in_order_with_run_files(store, runner):
     a = steps["a"]
     assert a["started"] <= a["finished"] and a["error"] is None
     [run_id] = a["run_ids"]
-    run_dir = store.runs_dir / run_id
+    run_dir = store.runs_dir("p") / run_id
     assert json.loads((run_dir / "input.json").read_text()) == {"a": 1, "b": 2}
     assert json.loads((run_dir / "output.json").read_text()) == {"sum": 3}
     assert "adding 1 + 2" in (run_dir / "stderr.log").read_text()
@@ -51,11 +51,11 @@ def test_the_process_contract(store, runner):
     settle(runner, store, "p")
     out = outputs(store, "p", "e")
     [run_id] = store.read_state("p")["steps"]["e"]["run_ids"]
-    run_dir = str(store.runs_dir / run_id)
+    run_dir = str(store.runs_dir("p") / run_id)
     assert out["input"] == {"x": [1, "two"]} and out["cwd"] == run_dir and out["step"] == "e"
     env = out["env"]
     assert env["SLUICE_HOME"] == str(store.home)
-    assert (env["SLUICE_PLAN"], env["SLUICE_STEP"], env["SLUICE_RUN_ID"]) == ("p", "e", run_id)
+    assert (env["SLUICE_PROJECT"], env["SLUICE_STEP"], env["SLUICE_RUN_ID"]) == ("p", "e", run_id)
     assert env["SLUICE_RUN_DIR"] == run_dir
     assert env["SLUICE_FN_DIR"].endswith("testpack/test.env")
 
@@ -145,7 +145,7 @@ def test_plan_inputs_and_manual_outputs_unblock_steps(store, runner):
     assert statuses(store, "p")["a"] == "succeeded"  # a manual step is never run
 
 
-def test_max_parallel_limits_processes_across_plans(tmp_path):
+def test_max_parallel_limits_processes_across_projects(tmp_path):
     home = tmp_path / "home"
     write_config(home, max_parallel=1)
     store = Store(home)
@@ -174,7 +174,7 @@ def test_a_new_runner_marks_leftover_running_steps_failed(store, runner):
 def test_removed_steps_are_dropped_and_new_ones_picked_up(store, runner):
     create(store, "p", {"a": add(d(1), d(1)), "b": add(d(2), d(2))})
     settle(runner, store, "p")
-    store.patch("p", 1, [{"op": "remove", "path": "/steps/a"},
+    store.patch("p", 2, [{"op": "remove", "path": "/steps/a"},
                          {"op": "add", "path": "/steps/c", "value": add(src("b/sum"), d(1))}],
                 "test", "reshape")
     steps = settle(runner, store, "p")
@@ -205,11 +205,28 @@ def test_core_format_fills_from_an_array_or_a_record(store, runner):
     assert steps["bad"]["error"] == "core.format: KeyError: 'missing'"
 
 
-def test_fn_processes_get_the_home_dotenv(store, runner):
+def test_fn_processes_get_the_home_then_the_project_dotenv(store, runner):
     (store.home / ".env").write_text("# secrets\nTEST_TOKEN=abc123\nexport TEST_QUOTED=\"a b\"\n"
-                                     "\nnot a line\nSLUICE_STEP=cannot-override\n")
+                                     "\nnot a line\nSLUICE_STEP=cannot-override\n"
+                                     "TEST_SHARED=home\n")
     create(store, "p", {"e": {"run": "test.env", "in": {}}})
+    create(store, "q", {"e": {"run": "test.env", "in": {}}})
+    (store.project_dir("p") / ".env").write_text("TEST_SHARED=project-p\nTEST_ONLY_P=1\n")
     settle(runner, store, "p")
+    settle(runner, store, "q")
     env = outputs(store, "p", "e")["env"]
     assert env["TEST_TOKEN"] == "abc123" and env["TEST_QUOTED"] == "a b"
     assert env["SLUICE_STEP"] == "e"
+    assert env["TEST_SHARED"] == "project-p" and env["TEST_ONLY_P"] == "1"
+    other = outputs(store, "q", "e")["env"]
+    assert other["TEST_SHARED"] == "home" and "TEST_ONLY_P" not in other
+    assert other["SLUICE_PROJECT"] == "q"
+
+
+def test_values_of_removed_plan_inputs_are_dropped(store, runner):
+    create(store, "p", {}, inputs={"n": "int", "m": "int"})
+    store.set_input("p", "n", 1, "test", "x")
+    store.set_input("p", "m", 2, "test", "x")
+    store.patch("p", 2, [{"op": "remove", "path": "/inputs/m"}], "test", "drop m")
+    runner.tick()
+    assert store.read_state("p")["inputs"] == {"n": 1}

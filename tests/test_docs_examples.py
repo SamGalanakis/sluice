@@ -7,7 +7,7 @@ import pytest
 
 from sluice import plan as P
 from sluice.mcp_server import DOCS
-from sluice.registry import BUILTIN_DIR, Registry
+from sluice.registry import BUILTIN_DIR, load
 
 BLOCK = re.compile(r"```json\n(.*?)```", re.DOTALL)
 
@@ -22,7 +22,7 @@ def plans():
 
 @pytest.mark.parametrize("doc", list(plans()))
 def test_doc_plans_validate(doc):
-    errs, _ = P.validate({"id": "doc", **doc}, Registry.load([BUILTIN_DIR]))
+    errs, _ = P.validate(doc, load({"builtin": [BUILTIN_DIR]}))
     assert errs == []
 
 

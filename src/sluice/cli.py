@@ -1,57 +1,29 @@
-"""The `sluice` command line (SPEC §9). Works directly on SLUICE_HOME through the store."""
+"""The `sluice` command line (SPEC §9): `serve`, `loop`, and `tool` to call any MCP tool
+in-process through the same server object `serve` exposes."""
 
 from __future__ import annotations
 
 import argparse
 import contextlib
 import json
-import os
 import signal
 import sys
 import threading
-import time
-from pathlib import Path
 from typing import Any
 
-from .errors import BadRequest, NotFound, SluiceError
-from .registry import RegistryError
+from .errors import SluiceError
 from .runner import Runner
 from .store import DEFAULT_CONFIG, Store, default_home
 from .util import atomic_write_json
 
-AUTHOR = "cli"
-LOG_FIELDS = ("rev", "at", "author", "reason", "action")
 
-
-def _print(obj: Any) -> None:
-    print(json.dumps(obj, indent=2, ensure_ascii=False))
-
-
-def _json(arg: str) -> Any:
-    """A JSON argument: a path to a file, '-' for stdin, or inline JSON."""
-    try:
-        if arg == "-":
-            return json.load(sys.stdin)
-        if os.path.isfile(arg):
-            return json.loads(Path(arg).read_text(encoding="utf-8"))
-        return json.loads(arg)
-    except (OSError, json.JSONDecodeError) as e:
-        raise BadRequest(f"{arg}: not a JSON file or JSON text: {e}") from e
-
-
-def _types(ports: dict[str, Any]) -> str:
-    return ", ".join(f"{k}: {v if isinstance(v, str) else json.dumps(v)}"
-                     for k, v in ports.items())
-
-
-def cmd_init(a: argparse.Namespace) -> int:
+def ensure_home(quiet: bool = False) -> None:
+    """A first run creates SLUICE_HOME with the default config.json."""
     path = default_home() / "config.json"
-    if path.exists():
-        print(f"{path} already exists", file=sys.stderr)
-        return 1
-    atomic_write_json(path, DEFAULT_CONFIG)
-    print(f"wrote {path}")
-    return 0
+    if not path.exists():
+        atomic_write_json(path, DEFAULT_CONFIG)
+        if not quiet:
+            print(f"sluice: wrote {path}", file=sys.stderr, flush=True)
 
 
 def cmd_serve(a: argparse.Namespace, store: Store) -> int:
@@ -79,7 +51,8 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
                 for s, h in prev.items():
                     signal.signal(s, h)
 
-    print(f"sluice: MCP at http://{host}:{port}/mcp", file=sys.stderr, flush=True)
+    print(f"sluice: MCP at http://{host}:{port}/mcp, dashboard at http://{host}:{port}/",
+          file=sys.stderr, flush=True)
     app = build_server(store).streamable_http_app(host=host)
     try:
         Server(uvicorn.Config(app, host=host, port=port, log_level="warning")).run()
@@ -97,150 +70,68 @@ def cmd_loop(a: argparse.Namespace, store: Store) -> int:
     return 0
 
 
-def cmd_fn(a: argparse.Namespace, store: Store) -> int:
-    if a.fn_cmd == "list":
-        for name in store.registry.names():
-            fn = store.registry.fns[name]
-            print(f"{name:<18} ({_types(fn.raw['inputs'])}) -> ({_types(fn.raw['outputs'])})")
-            if fn.doc:
-                print(f"{'':<18} {fn.doc}")
-    elif a.fn_cmd == "show":
-        fn = store.registry.get(a.name)
-        if fn is None:
-            raise NotFound(f"no fn {a.name!r}")
-        _print(fn.raw)
-    else:
-        pid = store.create_call(a.name, _json(a.inputs), AUTHOR)
-        deadline = time.time() + a.wait
-        res = store.call_result(pid)
-        while res["status"] not in ("succeeded", "failed") and time.time() < deadline:
-            time.sleep(0.2)
-            res = store.call_result(pid)
-        _print(res)
-    return 0
+def cmd_tool(a: argparse.Namespace, store: Store) -> int:
+    """List the tools, or call one: prints its result (JSON, or text for docs/plan_view).
+    Exits 1 on a tool error (printed to stderr) or a result with "ok": false (verify)."""
+    import anyio
 
+    from .mcp_server import build_server
 
-def cmd_plan(a: argparse.Namespace, store: Store) -> int:
-    if a.plan_cmd == "create":
-        _print({"rev": store.create(a.id, _json(a.file), AUTHOR, a.reason)})
-    elif a.plan_cmd == "show":
-        _print(store.get(a.id))
-    elif a.plan_cmd == "patch":
-        _print({"rev": store.patch(a.id, a.rev, _json(a.ops), AUTHOR, a.reason)})
-    else:
-        for e in store.history(a.id):
-            args = {k: v for k, v in e.items() if k not in LOG_FIELDS}
-            what = (f"{len(e['ops'])} op(s)" if "ops" in e
-                    else f"{e['action']} {json.dumps(args)}")
-            print(f"rev {e['rev']:<3} {e['at']} {e['author']:<8} {what}  {e['reason']}")
-    return 0
-
-
-def cmd_status(a: argparse.Namespace, store: Store) -> int:
-    s = store.status(a.id)
-    if a.json:
-        _print(s)
+    server = build_server(store)
+    if a.name is None:
+        for t in anyio.run(server.list_tools):
+            first = (t.description or "").strip().splitlines()[0]
+            print(f"{t.name:<16} {first}")
         return 0
-    print(f"plan {a.id}  rev {s['rev']}")
-    for kind in ("inputs", "outputs"):
-        if s[kind]:
-            print(f"  {kind}: " + ", ".join(f"{k}={json.dumps(v)}" for k, v in s[kind].items()))
-    for st in s["steps"]:
-        if st.get("error"):
-            detail = st["error"].splitlines()[0]
-        else:
-            detail = json.dumps(st["outputs"]) if "outputs" in st else ""
-        status = st["status"] + (" (manual)" if st["manual"] else "")
-        print(f"  {st['id']:<16} {st['run']:<16} {status:<19} {detail[:70]}")
-    return 0
-
-
-def cmd_view(a: argparse.Namespace, store: Store) -> int:
-    from . import views
-
-    if a.html:
-        Path(a.html).write_text(views.render(store, a.id, "html"), encoding="utf-8")
-        print(f"wrote {a.html}")
-    else:
-        print(views.render(store, a.id, "mermaid"), end="")
-    return 0
+    try:
+        args = json.loads(a.args)
+    except json.JSONDecodeError as e:
+        print(json.dumps({"error": "bad_request", "message": f"args: not JSON: {e}"}),
+              file=sys.stderr)
+        return 1
+    if not isinstance(args, dict):
+        print(json.dumps({"error": "bad_request", "message": "args: expected a JSON object"}),
+              file=sys.stderr)
+        return 1
+    res = anyio.run(server.call_tool, a.name, args)
+    text = res.content[0].text if res.content else ""
+    if res.is_error:
+        print(text, file=sys.stderr)
+        return 1
+    if res.structured_content is None:
+        print(text, end="" if text.endswith("\n") else "\n")
+        return 0
+    value: Any = json.loads(text)
+    print(json.dumps(value, indent=2, ensure_ascii=False))
+    return 1 if isinstance(value, dict) and value.get("ok") is False else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="sluice", description="Run typed plans of fns.")
+    p = argparse.ArgumentParser(
+        prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
+        "tools: `sluice serve` exposes them, `sluice tool` calls them from the shell.")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("init", help="write a default config.json")
-    s = sub.add_parser("serve", help="runner + MCP server")
+    s = sub.add_parser("serve", help="runner + MCP server (+ project pages)")
     s.add_argument("--host")
     s.add_argument("--port", type=int)
     sub.add_parser("loop", help="runner only")
-
-    fn = sub.add_parser("fn", help="list, show and call fns").add_subparsers(
-        dest="fn_cmd", required=True)
-    fn.add_parser("list")
-    fn.add_parser("show").add_argument("name")
-    s = fn.add_parser("call", help="run one fn as a one-step plan (a runner must be running)")
-    s.add_argument("name")
-    s.add_argument("inputs", help="JSON inputs: inline, a file, or '-'")
-    s.add_argument("--wait", type=float, default=0.0, help="seconds to wait for the result")
-
-    plan = sub.add_parser("plan", help="create, show, patch plans").add_subparsers(
-        dest="plan_cmd", required=True)
-    s = plan.add_parser("create")
-    s.add_argument("id")
-    s.add_argument("file", help="plan JSON: a file, '-' or inline")
-    s.add_argument("--reason", default="created from the CLI")
-    plan.add_parser("show").add_argument("id")
-    s = plan.add_parser("patch")
-    s.add_argument("id")
-    s.add_argument("ops", help="JSON Patch: a file, '-' or inline")
-    s.add_argument("--rev", type=int, required=True)
-    s.add_argument("--reason", required=True)
-    plan.add_parser("history").add_argument("id")
-
-    for name, arg, help_ in (("set-input", "name", "set a plan input"),
-                             ("set-output", "step", "mark a step succeeded by hand")):
-        s = sub.add_parser(name, help=help_)
-        s.add_argument("plan")
-        s.add_argument(arg)
-        s.add_argument("value", help="JSON: inline, a file, or '-'")
-        s.add_argument("--reason", default="")
-    s = sub.add_parser("retry", help="set a failed or manual step back to pending")
-    s.add_argument("plan")
-    s.add_argument("step")
-    s.add_argument("--reason", default="")
-    s = sub.add_parser("status", help="inputs, outputs and step statuses of a plan")
-    s.add_argument("id")
-    s.add_argument("--json", action="store_true")
-    s = sub.add_parser("view", help="the plan as Mermaid, or as an HTML page")
-    s.add_argument("id")
-    s.add_argument("--html", metavar="FILE", help="write the HTML page to FILE")
+    s = sub.add_parser("tool", help="list the MCP tools, or call one in-process",
+                       description="Without a name, list the tools. With one, call it with a "
+                       "JSON object of arguments and print the result. Exit 1 on an error or "
+                       'an "ok": false result.')
+    s.add_argument("name", nargs="?")
+    s.add_argument("args", nargs="?", default="{}", help="JSON object of arguments")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     try:
-        if a.cmd == "init":
-            return cmd_init(a)
+        ensure_home(quiet=a.cmd == "tool")  # tool output stays pure JSON
         store = Store()
-        if a.cmd == "set-input":
-            store.set_input(a.plan, a.name, _json(a.value), AUTHOR, a.reason)
-        elif a.cmd == "set-output":
-            store.set_output(a.plan, a.step, _json(a.value), AUTHOR, a.reason)
-        elif a.cmd == "retry":
-            store.retry(a.plan, a.step, AUTHOR, a.reason)
-        else:
-            handlers = {"serve": cmd_serve, "loop": cmd_loop, "fn": cmd_fn, "plan": cmd_plan,
-                        "status": cmd_status, "view": cmd_view}
-            return handlers[a.cmd](a, store)
-        _print({"ok": True})
-        return 0
+        return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool}[a.cmd](a, store)
     except SluiceError as e:
         print(json.dumps(e.payload(), indent=2), file=sys.stderr)
-        return 1
-    except RegistryError as e:
-        print("sluice: cannot load fns:\n  " + "\n  ".join(e.errors), file=sys.stderr)
         return 1
 
 

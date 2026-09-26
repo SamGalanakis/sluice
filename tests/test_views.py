@@ -1,7 +1,7 @@
 import re
 
 from sluice import views
-from tests.conftest import create
+from tests.conftest import create, write_fn
 
 
 def d(x):
@@ -46,22 +46,103 @@ def test_mermaid_shows_inputs_steps_outputs_edges_and_status_classes(store):
         assert f"  classDef {cls} " in text
 
 
-def test_the_html_page(store):
+def test_the_project_page(store):
     create(store, "v", {"a": {"run": "test.add", "in": {"a": {"source": "n"}, "b": d(1)}},
                         "c": {"run": "test.boom", "in": {}}},
            inputs={"n": "int"}, outputs={"total": {"source": "a/sum"}})
+    run_dir = store.runs_dir("v") / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "input.json").write_text('{"a": 1, "b": 1}')
+    (run_dir / "stderr.log").write_text("adding 1 + 1\n")
     with store.lock("v"):
         store.write_state("v", {"inputs": {"n": 1}, "steps": {
-            "a": {"status": "succeeded", "outputs": {"sum": 2}, "started": "T1", "finished": "T2"},
+            "a": {"status": "succeeded", "outputs": {"sum": 2}, "started": "T1", "finished": "T2",
+                  "run_ids": ["r1"]},
             "c": {"status": "failed", "error": "exit code 1\ntraceback <here>"}}})
-    page = views.render(store, "v", "html", refresh=3)
-    assert '<meta http-equiv="refresh" content="3">' in page
+    store.set_input("v", "n", 1, "me", "why not")
+    page = views.render(store, "v", "html", live=3)
+    assert "setInterval" in page and "3000" in page and '<nav>' in page
     assert "cdn.jsdelivr.net/npm/mermaid" in page
     assert '<pre class="mermaid">\nflowchart LR' in page
-    assert ("<tr><td>a</td><td>test.add</td><td>succeeded</td><td>T1</td><td>T2</td><td></td></tr>"
+    assert "the v project" in page
+    assert ('<td class="s-succeeded">succeeded</td><td>T1</td><td>T2</td><td class="bad"></td>'
             in page)
-    assert "<td>c</td><td>test.boom</td><td>failed</td><td></td><td></td><td>exit code 1</td>" in page
-    assert "traceback" not in page  # only the first line of the error
+    assert '<td class="s-failed">failed</td><td></td><td></td><td class="bad">exit code 1</td>' \
+        in page
+    step_a = page[page.index('<details id="step-a">'):page.index("</details>")]
+    assert "bindings" in step_a and "&quot;source&quot;: &quot;n&quot;" in step_a
+    assert "inputs</div><pre>{\n  &quot;a&quot;: 1," in step_a
+    assert "outputs</div><pre>{\n  &quot;sum&quot;: 2\n}" in step_a
+    assert "stderr (tail)</div><pre>adding 1 + 1</pre>" in step_a
+    assert "traceback &lt;here&gt;" in page  # the full error, escaped, inside the details
     assert "<tr><td>n</td><td><code>1</code></td></tr>" in page
     assert "<tr><td>total</td><td><code>2</code></td></tr>" in page
-    assert "refresh" not in views.render(store, "v", "html")
+    history = page[page.index("<h2>History</h2>"):]
+    assert "<td>plan_set_input</td><td>why not</td>" in history
+    assert "<td>2</td>" in history and "<td>1 op(s)</td>" in history  # newest first
+    assert history.index("plan_set_input") < history.index("op(s)")
+    standalone = views.render(store, "v", "html")
+    assert "setInterval" not in standalone and "<nav>" not in standalone
+
+
+def test_values_are_escaped(store):
+    create(store, "v", {"a": {"run": "core.echo", "in": {"value": d("<script>x</script>")}}},
+           outputs={"out": {"source": "a/value"}})
+    store.update_project("v", "<b>bold</b>")
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a": {"status": "failed", "error": "<script>alert(1)</script>",
+                  "outputs": {"value": "<script>alert(2)</script>"}}}})
+    for page in (views.render(store, "v", "html", live=3), views.index(store)):
+        assert "<script>alert" not in page and "<b>bold" not in page
+        assert "<script>x" not in page
+    page = views.render(store, "v", "html")
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "&lt;script&gt;alert(2)&lt;/script&gt;" in page
+    assert "&lt;b&gt;bold&lt;/b&gt;" in page
+
+
+def test_the_project_index(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.boom", "in": {}}})
+    store.create_project("w", "second")
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {"a": {"status": "succeeded"},
+                                                        "b": {"status": "failed"}}})
+    page = views.index(store)
+    assert '<a href="/projects/v">v</a>' in page and '<a href="/projects/w">w</a>' in page
+    assert "the v project" in page and "second" in page
+    assert '<span class="s-succeeded">1 succeeded</span>, <span class="s-failed">1 failed</span>' \
+        in page
+    assert re.search(r'<td class="muted">\d{4}-\d\d-\d\dT[\d:]+Z</td>', page)
+    assert '<a href="/fns">Functions</a>' in page
+
+
+def test_types_render_readably():
+    assert views.type_text("string[]") == "string[]"
+    assert views.type_text(["null", {"type": "enum", "symbols": ["a", "b"]}]) == "enum(a|b)?"
+    assert views.type_text({"type": "array", "items": {"type": "record", "fields": {
+        "f": "int", "g": "string?"}}}) == "{f: int, g: string?}[]"
+
+
+def test_the_functions_page_groups_by_scope_and_shows_collisions(store):
+    create(store, "v", {})
+    write_fn(store.home / "fns", "mine.fn", {"xs": "string[]"},
+             {"pick": {"type": "enum", "symbols": ["a", "b"]}}, spec={"doc": "<i>mine</i>"})
+    write_fn(store.project_dir("v") / "fns", "test.add", {"a": "int"}, {"sum": "int"})
+    write_fn(store.project_dir("v") / "fns", "v.local")
+    page = views.fns_page(store, "v")
+    sections = {m[0]: m[1] for m in re.findall(r"<h2>([^<]+)</h2>(.*?)(?=<h2>|</main>)", page,
+                                               re.DOTALL)}
+    assert set(sections) == {"Built-in", "Global", "Project (v)"}
+    assert "<b>core.echo</b>" in sections["Built-in"] and "<b>git.head</b>" in sections["Built-in"]
+    assert "<b>mine.fn</b>" in sections["Global"] and "<b>test.add</b>" in sections["Global"]
+    assert "xs: <code>string[]</code>" in sections["Global"]
+    assert "pick: <code>enum(a|b)</code>" in sections["Global"]
+    assert "&lt;i&gt;mine&lt;/i&gt;" in sections["Global"]
+    project = sections["Project (v)"]
+    assert "<b>v.local</b>" in project
+    clash = project[project.index('<div class="card problem">'):]
+    assert "<b>test.add</b>" in clash and "fn test.add collides with the global fn" in clash
+    plain = views.fns_page(store)
+    assert "Project (" not in plain and "v.local" not in plain

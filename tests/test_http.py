@@ -4,6 +4,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import anyio
@@ -31,15 +32,18 @@ def wait_for_port(port: int, proc: subprocess.Popen, timeout: float = 20.0) -> N
 
 async def drive(url: str) -> None:
     async with Client(url) as c:
-        r = await c.call_tool("plan_create", {"plan": "web", "reason": "smoke", "doc": {
-            "outputs": {"total": {"source": "b/sum"}},
-            "steps": {"a": {"run": "test.add", "in": {"a": {"default": 1}, "b": {"default": 2}}},
-                      "b": {"run": "test.add", "in": {"a": {"source": "a/sum"},
-                                                      "b": {"default": 3}}}}}})
-        assert json.loads(r.content[0].text) == {"rev": 1}
+        r = await c.call_tool("project_create", {"name": "web", "description": "smoke"})
+        assert json.loads(r.content[0].text) == {"name": "web"}
+        steps = {"a": {"run": "test.add", "in": {"a": {"default": 1}, "b": {"default": 2}}},
+                 "b": {"run": "test.add", "in": {"a": {"source": "a/sum"},
+                                                 "b": {"default": 3}}}}
+        r = await c.call_tool("plan_patch", {"project": "web", "rev": 1, "reason": "smoke", "ops": [
+            {"op": "replace", "path": "/steps", "value": steps},
+            {"op": "replace", "path": "/outputs", "value": {"total": {"source": "b/sum"}}}]})
+        assert json.loads(r.content[0].text) == {"rev": 2}
         deadline = time.time() + 30
         while time.time() < deadline:
-            r = await c.call_tool("status", {"plan": "web"})
+            r = await c.call_tool("status", {"project": "web"})
             status = json.loads(r.content[0].text)
             if all(s["status"] == "succeeded" for s in status["steps"]):
                 break
@@ -47,7 +51,15 @@ async def drive(url: str) -> None:
         assert status["outputs"] == {"total": 6}
 
 
-def test_sluice_serve_over_streamable_http(home):
+def get(port: int, path: str) -> tuple[int, str]:
+    try:
+        r = urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+    return r.status, r.read().decode()
+
+
+def test_sluice_serve_over_streamable_http_and_the_dashboard(home):
     port = free_port()
     env = {**os.environ, "SLUICE_HOME": str(home)}
     proc = subprocess.Popen([sys.executable, "-m", "sluice.cli", "serve", "--port", str(port)],
@@ -55,11 +67,15 @@ def test_sluice_serve_over_streamable_http(home):
     try:
         wait_for_port(port, proc)
         anyio.run(drive, f"http://127.0.0.1:{port}/mcp")
-        index = urllib.request.urlopen(f"http://127.0.0.1:{port}/plans", timeout=10)
-        assert index.status == 200 and b'href="/plans/web"' in index.read()
-        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/plans/web", timeout=10)
-        body = page.read().decode()
-        assert page.status == 200 and '<pre class="mermaid">' in body and "refresh" in body
+        code, index = get(port, "/")
+        assert code == 200 and 'href="/projects/web"' in index and "smoke" in index
+        code, page = get(port, "/projects/web")
+        assert code == 200 and '<pre class="mermaid">' in page and "setInterval" in page
+        assert "<h2>Steps</h2>" in page and "<h2>History</h2>" in page
+        code, fns = get(port, "/fns?project=web")
+        assert code == 200 and "<h2>Built-in</h2>" in fns and "<b>test.add</b>" in fns
+        assert get(port, "/projects/nope")[0] == 404
+        assert get(port, "/fns?project=nope")[0] == 404
     finally:
         proc.terminate()
         code = proc.wait(timeout=30)

@@ -1,10 +1,11 @@
-"""The MCP server (SPEC §8): tools, docs for agents, and the live plan pages.
+"""The MCP server (SPEC §8): tools, docs for agents, and the live project pages.
 
 Built on the official `mcp` SDK (v2 calls FastMCP `MCPServer`); `sluice serve` serves it over
-streamable HTTP next to the runner.
+streamable HTTP next to the runner, and `sluice tool` calls the same tools in-process.
 """
 
 import functools
+import html
 import inspect
 import json
 from pathlib import Path
@@ -18,7 +19,8 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
-from . import views
+from . import calls, runner, views
+from . import verify as verify_mod
 from .errors import BadRequest, NotFound, SluiceError
 from .store import Store
 
@@ -111,187 +113,248 @@ def build_server(store: Store) -> MCPServer:
         return doc_topics() if topic is None else doc_page(topic)
 
     @tool
-    def fn_list() -> Any:
-        """List every function: [{name, doc, inputs, outputs}], types as declared in fn.json."""
-        return [store.registry.fns[n].summary() for n in store.registry.names()]
+    def projects_list() -> Any:
+        """List projects: [{name, description, rev, counts}]; counts maps step status -> number
+        of steps in the project's plan."""
+        return store.projects()
 
     @tool
-    def fn_get(name: str) -> Any:
-        """Return one function's full fn.json.
+    def project_create(name: str, description: str = "") -> Any:
+        """Create a project with an empty plan (rev 1). Returns {name}.
+
+        Args:
+            name: lowercase letters, digits, - and _ (starting with a letter or digit).
+            description: what the project is for; put any context an orchestrator needs here.
+        """
+        return store.create_project(name, description, AUTHOR)
+
+    @tool
+    def project_update(name: str, description: str) -> Any:
+        """Replace a project's description. Returns {name}.
+
+        Args:
+            name: the project.
+            description: the new description.
+        """
+        return store.update_project(name, description)
+
+    @tool
+    def fn_list(project: str | None = None) -> Any:
+        """List the functions a project sees (built-in, global, then the project's own; without
+        a project: built-in and global): [{name, doc, inputs, outputs, scope}]. A function with a
+        problem (bad fn.json, name collision) carries `error`; see verify.
+
+        Args:
+            project: the project whose functions to list.
+        """
+        return store.registry(project).listing()
+
+    @tool
+    def fn_get(name: str, project: str | None = None) -> Any:
+        """Return one function's fn.json plus its `scope` and `path` (its directory).
 
         Args:
             name: the function name, e.g. "git.head".
+            project: look it up as this project sees it (project functions included).
         """
-        fn = store.registry.get(name)
-        if fn is None:
-            raise NotFound(f"no fn {name!r}")
-        return fn.raw
+        fn = store.fn(name, project)
+        return {**fn.raw, "scope": fn.scope, "path": str(fn.dir)}
 
     @tool
-    async def fn_call(name: str, inputs: dict[str, Any], wait: float = 0) -> Any:
-        """Run one function as a one-step plan named call-<timestamp>-<hex>.
+    def fn_save(fn: dict[str, Any], main_py: str, project: str | None = None) -> Any:
+        """Create or replace a function: writes fns/<name>/fn.json and main.py into the project
+        (or, without one, the global fns dir). Returns {scope, path}. Read docs("fns") first.
 
-        Returns {plan, status, outputs?, error?}. If the call has not finished within `wait`
-        seconds, status is "pending" or "running": poll status(plan) later.
+        Args:
+            fn: the fn.json: {name, doc?, inputs: {name: type}, outputs: {name: type}}. Checked
+                before anything is written; the name may not collide with a built-in or global
+                function (nor, for a global function, with any project's own).
+            main_py: the Python source of main.py (a uv script calling sluice.fn.run).
+            project: the project that owns it; leave out for a global function.
+        """
+        return store.fn_save(fn, main_py, project)
+
+    @tool
+    async def fn_call(name: str, inputs: dict[str, Any], project: str | None = None,
+                      wait: float = 0, direct: bool = False) -> Any:
+        """Run one function outside the plan. Returns {call, status, outputs?, error?}; status
+        is pending, running, succeeded or failed. Poll call_status(call) for a slow one.
 
         Args:
             name: the function to run.
             inputs: an object keyed by the function's input names; checked against its types
                 before anything runs (an `invalid` error lists every mismatch with its path).
+            project: run it in this project (its functions and .env); leave out for none.
             wait: seconds to wait for the result (default 0: return at once).
+            direct: run it here and now, to the end, instead of queueing it for the runner
+                (for use without a runner, e.g. from the command line); ignores `wait`.
         """
-        pid = await anyio.to_thread.run_sync(store.create_call, name, inputs, AUTHOR)
+        call = await anyio.to_thread.run_sync(calls.create, store, name, inputs, project,
+                                              direct)
+        store.notify()
+        if direct:
+            return await anyio.to_thread.run_sync(runner.run_call_direct, store, call, project)
         deadline = anyio.current_time() + wait
         while True:
-            res = await anyio.to_thread.run_sync(store.call_result, pid)
-            if res["status"] in ("succeeded", "failed") or anyio.current_time() >= deadline:
+            res = await anyio.to_thread.run_sync(calls.status, store, call, project)
+            res.pop("stderr_tail", None)
+            if res["status"] in calls.DONE or anyio.current_time() >= deadline:
                 return res
             await anyio.sleep(0.1)
 
     @tool
-    def plans_list(include_calls: bool = False) -> Any:
-        """List plans: [{id, label, rev, counts}] where counts maps step status -> number.
+    def call_status(call: str, project: str | None = None) -> Any:
+        """Return {call, status, outputs?, error?, stderr_tail?} for a fn_call.
 
         Args:
-            include_calls: also list the one-step plans made by fn_call (default false).
+            call: the id fn_call returned.
+            project: the project it ran in, if any.
         """
-        return store.plans(include_calls)
+        return calls.status(store, call, project)
 
     @tool
-    def plan_create(plan: str, doc: dict[str, Any], reason: str) -> Any:
-        """Create a plan. Returns {rev} (1). Read docs("plans") for the document shape.
+    def plan_get(project: str) -> Any:
+        """Return {rev, plan}: the project's plan (without rev) and its revision.
 
         Args:
-            plan: the new plan's id (lowercase letters, digits, - and _).
-            doc: the plan: {label?, inputs?: {name: type}, outputs?: {name: {"source": ref}},
-                steps: {id: {run, in, scatter?}}}. It is validated; an `invalid` error lists
-                every problem with its path.
-            reason: why, recorded in the plan's history.
+            project: the project.
         """
-        return {"rev": store.create(plan, doc, AUTHOR, reason)}
+        cur = store.get(project)
+        return {"rev": cur["rev"], "plan": {k: v for k, v in cur.items() if k != "rev"}}
 
     @tool
-    def plan_get(plan: str) -> Any:
-        """Return {rev, doc}: the current plan document (without rev) and its revision.
-
-        Args:
-            plan: the plan id.
-        """
-        cur = store.get(plan)
-        return {"rev": cur["rev"], "doc": {k: v for k, v in cur.items() if k != "rev"}}
-
-    @tool
-    def plan_patch(plan: str, rev: int, ops: list[dict[str, Any]], reason: str,
+    def plan_patch(project: str, rev: int, ops: list[dict[str, Any]], reason: str,
                    author: str = AUTHOR) -> Any:
-        """Edit a plan with RFC 6902 JSON Patch ops. Returns {rev}.
+        """Edit a project's plan with RFC 6902 JSON Patch ops. Returns {rev}.
 
         Args:
-            plan: the plan id.
+            project: the project.
             rev: the revision you read; if the plan moved on you get `conflict` with
                 current_rev, so re-read and retry.
-            ops: JSON Patch operations against the document without rev, e.g.
-                [{"op": "add", "path": "/steps/x", "value": {...}}].
+            ops: JSON Patch operations against the plan without rev, e.g.
+                [{"op": "add", "path": "/steps/x", "value": {...}}]. The result is validated;
+                an `invalid` error lists every problem with its path.
             reason: why, recorded in the plan's history.
             author: who is editing (default "mcp").
         """
-        return {"rev": store.patch(plan, rev, ops, author, reason)}
+        return {"rev": store.patch(project, rev, ops, author, reason)}
 
     @tool
-    def plan_history(plan: str, since_rev: int | None = None) -> Any:
+    def plan_history(project: str, since_rev: int | None = None) -> Any:
         """Return the plan's log: edits {rev, at, author, reason, ops} and manual values
         {rev, at, author, reason, action, ...}.
 
         Args:
-            plan: the plan id.
+            project: the project.
             since_rev: only entries after this revision.
         """
-        return store.history(plan, since_rev)
+        return store.history(project, since_rev)
 
     @tool
-    def plan_set_input(plan: str, name: str, value: Any, reason: str = "") -> Any:
-        """Set a declared plan input; steps reading it can then start. Returns {ok}.
+    def plan_set_input(project: str, name: str, value: Any, reason: str = "") -> Any:
+        """Set a declared plan input; steps reading it can then start. A later change only
+        affects steps that have not started. Returns {ok}.
 
         Args:
-            plan: the plan id.
+            project: the project.
             name: the plan input's name.
             value: its value, checked against the input's type.
             reason: why, recorded in the plan's history.
         """
-        store.set_input(plan, name, value, AUTHOR, reason)
+        store.set_input(project, name, value, AUTHOR, reason)
         return {"ok": True}
 
     @tool
-    def step_set_input(plan: str, step: str, input: str, value: Any, reason: str = "",
+    def step_set_input(project: str, step: str, input: str, value: Any, reason: str = "",
                        rev: int | None = None) -> Any:
         """Pin one step input to a literal ({"default": value}); an edit. Returns {rev}.
 
         Args:
-            plan: the plan id.
+            project: the project.
             step: the step id.
             input: the step's input name.
             value: the literal, checked against the input's type.
             reason: why, recorded in the plan's history.
             rev: the revision you read (default: the current one).
         """
-        return {"rev": store.set_step_input(plan, step, input, value, AUTHOR, reason, rev)}
+        return {"rev": store.set_step_input(project, step, input, value, AUTHOR, reason, rev)}
 
     @tool
-    def step_set_output(plan: str, step: str, outputs: dict[str, Any], reason: str = "") -> Any:
+    def step_set_output(project: str, step: str, outputs: dict[str, Any],
+                        reason: str = "") -> Any:
         """Mark a step succeeded with outputs you supply (manual: true); it is not run unless
         retried. Returns {ok}.
 
         Args:
-            plan: the plan id.
+            project: the project.
             step: a step that is not running.
             outputs: every output of its function, type-checked (arrays for a scattered step).
             reason: why, recorded in the plan's history.
         """
-        store.set_output(plan, step, outputs, AUTHOR, reason)
+        store.set_output(project, step, outputs, AUTHOR, reason)
         return {"ok": True}
 
     @tool
-    def step_retry(plan: str, step: str, reason: str = "") -> Any:
+    def step_retry(project: str, step: str, reason: str = "") -> Any:
         """Set a failed (or manually set) step back to pending so it runs again. Returns {ok}.
 
         Args:
-            plan: the plan id.
+            project: the project.
             step: the step id.
             reason: why, recorded in the plan's history.
         """
-        store.retry(plan, step, AUTHOR, reason)
+        store.retry(project, step, AUTHOR, reason)
         return {"ok": True}
 
     @tool
-    def plan_view(plan: str, format: Literal["mermaid", "html"] = "mermaid") -> Any:
+    def verify(project: str | None = None) -> Any:
+        """Check functions (fn.json shape and types, name collisions), project.json, .env
+        files, the plan and state.json. Returns {ok, problems: [{where, message}]}; changes
+        nothing.
+
+        Args:
+            project: check this project (and the built-in and global functions it sees);
+                leave out to check everything.
+        """
+        return verify_mod.verify(store, project)
+
+    @tool
+    def plan_view(project: str, format: Literal["mermaid", "html"] = "mermaid") -> Any:
         """Draw the plan with each step's status: a Mermaid flowchart or a standalone HTML page.
 
         Args:
-            plan: the plan id.
+            project: the project.
             format: "mermaid" (default) or "html".
         """
-        return views.render(store, plan, format)
+        return views.render(store, project, format)
 
     @tool
-    def status(plan: str) -> Any:
+    def status(project: str) -> Any:
         """Return {rev, inputs, outputs, steps: [{id, run, status, started, finished,
         outputs?, error?, manual}]}. inputs and outputs map names to values (null if unset).
 
         Args:
-            plan: the plan id.
+            project: the project.
         """
-        return store.status(plan)
+        return store.status(project)
 
-    @mcp.custom_route("/plans", methods=["GET"])
-    async def plans_page(request: Request) -> Response:
-        return HTMLResponse(await anyio.to_thread.run_sync(views.index, store))
-
-    @mcp.custom_route("/plans/{pid}", methods=["GET"])
-    async def plan_page(request: Request) -> Response:
+    async def page(render, *args) -> Response:
         try:
-            text = await anyio.to_thread.run_sync(views.render, store,
-                                                  request.path_params["pid"], "html", 3)
+            return HTMLResponse(await anyio.to_thread.run_sync(render, *args))
         except SluiceError as e:
-            return HTMLResponse(f"<p>{e.message}</p>", status_code=404)
-        return HTMLResponse(text)
+            return HTMLResponse(views.layout("not found", f"<p>{html.escape(e.message)}</p>"),
+                                status_code=404)
+
+    @mcp.custom_route("/", methods=["GET"])
+    async def index_page(request: Request) -> Response:
+        return await page(views.index, store)
+
+    @mcp.custom_route("/projects/{name}", methods=["GET"])
+    async def project_page(request: Request) -> Response:
+        return await page(views.render, store, request.path_params["name"], "html", 3)
+
+    @mcp.custom_route("/fns", methods=["GET"])
+    async def fns_page(request: Request) -> Response:
+        return await page(views.fns_page, store, request.query_params.get("project") or None)
 
     return mcp

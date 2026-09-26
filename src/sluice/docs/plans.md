@@ -1,12 +1,11 @@
 # Plans
 
-A plan is JSON with typed `inputs`, named `outputs` and `steps`. Each step runs one function
+Each project has exactly one plan: JSON with typed `inputs`, named `outputs` and `steps`. A new
+project starts with `{"inputs": {}, "outputs": {}, "steps": {}}`. Each step runs one function
 (`run`) and binds each of the function's inputs (`in`).
 
 ```json
 {
-  "id": "release-2",
-  "label": "Release 2",
   "inputs":  {"repo": "string", "tasks": "string[]"},
   "outputs": {"notes": {"source": "notes/final"}},
   "steps": {
@@ -41,9 +40,9 @@ A plan is JSON with typed `inputs`, named `outputs` and `steps`. Each step runs 
 A step starts once every plan input and step it reads has a value / has succeeded. A failed step
 blocks everything downstream until you act.
 
-## Ids
-Plan ids, step ids, plan input and output names: lowercase letters, digits, `-`, `_`; start
-with a letter or digit.
+## Names
+Project names, step ids, plan input and output names: lowercase letters, digits, `-`, `_`;
+start with a letter or digit.
 
 ## Editing
 Every edit carries the plan's current `rev` (from `plan_get` or `status`). If someone edited in
@@ -51,7 +50,8 @@ between you get `conflict` with `current_rev`: re-read and retry. `plan_patch` t
 JSON Patch ops against the plan without `rev`:
 
 ```json
-[{"op": "add", "path": "/steps/lint", "value": {"run": "git.head", "in": {"path": {"source": "repo"}}}},
+[{"op": "add", "path": "/inputs/repo", "value": "string"},
+ {"op": "add", "path": "/steps/head", "value": {"run": "git.head", "in": {"path": {"source": "repo"}}}},
  {"op": "replace", "path": "/steps/notes/in/engine", "value": {"default": "codex"}},
  {"op": "remove", "path": "/steps/old-step"}]
 ```
@@ -60,15 +60,16 @@ You cannot remove or change a running step. Every edit needs a short `reason`; i
 plan's history (`plan_history`).
 
 ## Manual values
-- `plan_set_input(plan, name, value)`: provide a plan input the plan is waiting on.
-- `step_set_input(plan, step, input, value)`: pin a literal on one step input (an edit).
-- `step_set_output(plan, step, outputs)`: mark a step succeeded with outputs you supply (you did
-  the work, or you know the result). Type-checked against the function's outputs; for a
+- `plan_set_input(project, name, value)`: provide a plan input the plan is waiting on. Changing
+  it later only affects steps that have not started.
+- `step_set_input(project, step, input, value)`: pin a literal on one step input (an edit).
+- `step_set_output(project, step, outputs)`: mark a step succeeded with outputs you supply (you
+  did the work, or you know the result). Type-checked against the function's outputs; for a
   scattered step, each output is an array.
-- `step_retry(plan, step)`: run a failed (or manually set) step again.
+- `step_retry(project, step)`: run a failed (or manually set) step again.
 
 ## Validation errors
-Every edit is checked: functions exist, required inputs are bound, refs point at real inputs or
-outputs, types fit, no cycles. Errors are a list with paths, e.g.
+Every edit is checked: functions exist (as the project sees them), required inputs are bound,
+refs point at real inputs or outputs, types fit, no cycles. Errors are a list with paths, e.g.
 `steps.notes.in.cwd: repo is int, which does not fit string: int is not string`. Fix each path
-and resend.
+and resend. `verify(project)` runs the same checks plus function and state checks.
