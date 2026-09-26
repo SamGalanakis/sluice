@@ -188,3 +188,18 @@ def test_built_ins_finish_inline_in_one_tick(store, runner):
     runner.tick()
     assert statuses(store, "p") == dict.fromkeys("abc", "succeeded")
     assert outputs(store, "p", "c") == {"items": [1, 1]}
+
+
+def test_core_format_fills_from_an_array_or_a_record(store, runner):
+    create(store, "p", {
+        "a": add(d(1), d(2)),
+        "pos": {"run": "core.format", "in": {"template": d("{0} and {1}"),
+                                             "values": src(["a/sum", "a"])}},
+        "named": {"run": "core.format", "in": {"template": d("sum={s} all={all}"),
+                                               "values": d({"s": "x", "all": [1, "y"]})}},
+        "bad": {"run": "core.format", "in": {"template": d("{missing}"), "values": d({})}},
+    }, inputs={"a": "Any?"})
+    steps = settle(runner, store, "p")
+    assert steps["pos"]["outputs"] == {"text": "3 and null"}
+    assert steps["named"]["outputs"] == {"text": 'sum=x all=[1, "y"]'}
+    assert steps["bad"]["error"] == "core.format: KeyError: 'missing'"

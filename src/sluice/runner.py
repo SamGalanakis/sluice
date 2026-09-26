@@ -24,8 +24,23 @@ from .store import Store
 from .util import atomic_write_json, canonical, now_iso, tail_text
 
 SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
+
+
+def _format(inp: dict[str, Any]) -> dict[str, Any]:
+    def show(v: Any) -> str:
+        return v if isinstance(v, str) else json.dumps(v)
+
+    values = inp["values"]
+    if isinstance(values, list):
+        return {"text": inp["template"].format(*map(show, values))}
+    if isinstance(values, dict):
+        return {"text": inp["template"].format(**{k: show(v) for k, v in values.items()})}
+    return {"text": inp["template"].format(show(values))}
+
+
 NATIVE = {"core.echo": lambda inp: {"value": inp["value"]},
-          "core.collect": lambda inp: {"items": inp["items"]}}
+          "core.collect": lambda inp: {"items": inp["items"]},
+          "core.format": _format}
 RESTARTED = "runner restarted"
 
 
@@ -164,8 +179,15 @@ class Runner:
                 where = f"run {i}: " if step.scatter else ""
                 return _finish(e, error=f"{where}inputs do not match the fn: " + "; ".join(errs))
         a = Active(step, runs)
+        if step.scatter:
+            e.update(done=0, total=len(runs))
         if step.fn.native:
-            a.results = {i: NATIVE[step.fn.name](run) for i, run in enumerate(runs)}
+            try:
+                a.results = {i: NATIVE[step.fn.name](run) for i, run in enumerate(runs)}
+            except (KeyError, IndexError, ValueError, TypeError) as ex:
+                return _finish(e, error=f"{step.fn.name}: {type(ex).__name__}: {ex}")
+            if step.scatter:
+                e["done"] = len(runs)
         if len(a.results) == len(runs):
             return _finish(e, outputs=a.outputs())
         self.active[(pid, step.id)] = a
@@ -221,6 +243,8 @@ class Runner:
                 del self.active[(pid, sid)]
                 return _finish(e, error=f"run {i}: {err}" if a.step.scatter else err)
             a.results[i] = outputs
+            if a.step.scatter:
+                e["done"] = len(a.results)
         if len(a.results) == len(a.inputs):
             del self.active[(pid, sid)]
             _finish(e, outputs=a.outputs())

@@ -11,7 +11,7 @@ from typing import Any
 from . import types as T
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "fns"
-NATIVE = {"core.echo", "core.collect"}  # run inline by the runner; no main.py
+NATIVE = {"core.echo", "core.collect", "core.format"}  # run inline; no main.py
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 KEYS = {"name", "doc", "inputs", "outputs"}
 

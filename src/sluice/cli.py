@@ -155,6 +155,17 @@ def cmd_status(a: argparse.Namespace, store: Store) -> int:
     return 0
 
 
+def cmd_view(a: argparse.Namespace, store: Store) -> int:
+    from . import views
+
+    if a.html:
+        Path(a.html).write_text(views.render(store, a.id, "html"), encoding="utf-8")
+        print(f"wrote {a.html}")
+    else:
+        print(views.render(store, a.id, "mermaid"), end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="sluice", description="Run typed plans of fns.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -201,6 +212,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("status", help="inputs, outputs and step statuses of a plan")
     s.add_argument("id")
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("view", help="the plan as Mermaid, or as an HTML page")
+    s.add_argument("id")
+    s.add_argument("--html", metavar="FILE", help="write the HTML page to FILE")
     return p
 
 
@@ -218,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
             store.retry(a.plan, a.step, AUTHOR, a.reason)
         else:
             handlers = {"serve": cmd_serve, "loop": cmd_loop, "fn": cmd_fn, "plan": cmd_plan,
-                        "status": cmd_status}
+                        "status": cmd_status, "view": cmd_view}
             return handlers[a.cmd](a, store)
         _print({"ok": True})
         return 0

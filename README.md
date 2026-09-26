@@ -1,20 +1,18 @@
 # sluice
 
-A controlled firehose for agent work. Orchestrators (agents or humans) edit a **plan**: a graph
-of typed function calls. A **runner** executes it: it starts ready nodes, supervises their
-processes, records results, and escalates only what a rule cannot settle to an **inbox**.
+Orchestrators (agents or humans) edit a **plan**: a graph of typed function calls. A **runner**
+executes it: it starts a step once everything it reads is available and records its outputs or
+its failure. An orchestrator decides what happens after a failure.
 
-- Everything is a function: `fn.json` (typed inputs and outputs) plus a `main.py` run with `uv`,
-  or a composite graph of other functions.
-- Plans are local JSON files. Every edit goes through typed tools (MCP or CLI) with the current
-  revision and is appended to a log.
-- The core knows nothing about git or any project. Packs supply functions: the built-in packs are
-  `agents` and `git`, shipped inside the package (`src/sluice/packs`).
+- A function is `fn.json` (typed `inputs` and `outputs`) plus a `main.py` run with `uv`. The
+  built-in ones live in `src/sluice/fns`; `config.fn_dirs` adds more.
+- Plans are local JSON (CWL-like `inputs`, `outputs`, `steps`). Every edit goes through typed
+  tools (MCP or CLI) at the current revision and is appended to a log.
 
-See [SPEC.md](SPEC.md) for the full contract.
+See [SPEC.md](SPEC.md) for the contract and `src/sluice/docs` for the pages agents read.
 
 ```sh
 uv sync
 uv run sluice init
-uv run sluice serve        # runner + MCP at http://127.0.0.1:7420/mcp
+uv run sluice serve        # runner + MCP at http://127.0.0.1:7420/mcp, plan pages at /plans
 ```

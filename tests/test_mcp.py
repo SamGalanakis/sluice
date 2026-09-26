@@ -9,9 +9,9 @@ from mcp import Client
 from sluice.mcp_server import build_server
 from sluice.runner import Runner
 
-TOOLS = {"fn_list", "fn_get", "fn_call", "plans_list", "plan_create", "plan_get", "plan_patch",
-         "plan_history", "plan_set_input", "step_set_input", "step_set_output", "step_retry",
-         "status"}
+TOOLS = {"docs", "fn_list", "fn_get", "fn_call", "plans_list", "plan_create", "plan_get",
+         "plan_patch", "plan_history", "plan_set_input", "step_set_input", "step_set_output",
+         "step_retry", "plan_view", "status"}
 
 
 def d(x):
@@ -164,3 +164,30 @@ async def test_status_manual_outputs_and_retry(live):
             "ok": True}
         await until(c, "p", lambda st: st["boom"] == "failed")
         assert (await fail(c, "status", plan="zz"))["error"] == "not_found"
+
+
+async def test_docs_for_agents(store):
+    server = build_server(store)
+    async with Client(server) as c:
+        index = await ok(c, "docs")
+        assert index["plans"] == "Plans" and index["types"] == "Types" and "examples" in index
+        page = await c.call_tool("docs", {"topic": "types"})
+        assert page.content[0].text.startswith("# Types\n")
+        assert (await fail(c, "docs", topic="nope"))["error"] == "not_found"
+        uris = {str(r.uri) for r in (await c.list_resources()).resources}
+        assert {"sluice://docs/plans", "sluice://docs/types"} <= uris
+        res = await c.read_resource("sluice://docs/plans")
+        assert res.contents[0].text.startswith("# Plans")
+        tools = {t.name: t.description for t in (await c.list_tools()).tools}
+        assert "rev: the revision you read" in tools["plan_patch"]
+    assert server.instructions.startswith("sluice runs plans")
+
+
+async def test_plan_view(store):
+    async with Client(build_server(store)) as c:
+        await ok(c, "plan_create", plan="p", reason="x", doc={"steps": {"a": add(d(1), d(1))}})
+        mermaid = await c.call_tool("plan_view", {"plan": "p"})
+        assert mermaid.content[0].text.startswith("flowchart LR\n")
+        page = await c.call_tool("plan_view", {"plan": "p", "format": "html"})
+        assert page.content[0].text.startswith("<!doctype html>")
+        assert (await fail(c, "plan_view", plan="p", format="png"))["error"] == "bad_request"

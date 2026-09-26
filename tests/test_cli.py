@@ -80,6 +80,9 @@ def test_plans_manual_values_and_the_loop(sluice):
     assert history[0].startswith("rev 1") and "1 op(s)" in history[0]
     assert "plan_set_input" in history[2] and "step_set_output" in history[3]
     assert "step_retry" in history[4] and history[4].endswith("run it")
+    assert sluice("view", "demo").stdout.startswith("flowchart LR\n")
+    sluice("view", "demo", "--html", "demo.html")
+    assert "<pre class=\"mermaid\">" in (sluice.tmp / "demo.html").read_text()
     missing = sluice("retry", "demo", "zz", check=False)
     assert json.loads(missing.stderr)["error"] == "not_found"
 

@@ -4,6 +4,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 import anyio
 from mcp import Client
@@ -54,6 +55,11 @@ def test_sluice_serve_over_streamable_http(home):
     try:
         wait_for_port(port, proc)
         anyio.run(drive, f"http://127.0.0.1:{port}/mcp")
+        index = urllib.request.urlopen(f"http://127.0.0.1:{port}/plans", timeout=10)
+        assert index.status == 200 and b'href="/plans/web"' in index.read()
+        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/plans/web", timeout=10)
+        body = page.read().decode()
+        assert page.status == 200 and '<pre class="mermaid">' in body and "refresh" in body
     finally:
         proc.terminate()
         code = proc.wait(timeout=30)

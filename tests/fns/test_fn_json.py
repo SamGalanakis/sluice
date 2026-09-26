@@ -11,6 +11,7 @@ EXPECTED = {
     "core": {
         "core.echo": [{"value": "Any"}, {"value": "Any"}],
         "core.collect": [{"items": "Any[]"}, {"items": "Any[]"}],
+        "core.format": [{"template": "string", "values": "Any"}, {"text": "string"}],
     },
     "agents": {
         "agent.devin": [
