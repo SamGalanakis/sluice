@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from . import types as T
@@ -14,7 +14,8 @@ from .util import canonical
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
-STEP_KEYS = {"run", "in", "scatter"}
+STEP_KEYS = {"run", "in", "scatter", "doc"}
+INPUT_KEYS = {"type", "doc"}  # the object form of a plan input: {"type": T, "doc": "..."}
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class Step:
     fn: Fn
     sources: dict[str, Source]
     scatter: str | None
+    doc: str = ""
 
     @property
     def reads(self) -> list[Ref]:
@@ -64,6 +66,27 @@ class Plan:
     inputs: dict[str, T.Type]
     outputs: dict[str, Ref]
     steps: dict[str, Step]
+    input_docs: dict[str, str] = field(default_factory=dict)  # only inputs that have one
+
+
+def parse_input(form: Any, path: str, errs: list[str]) -> tuple[T.Type | None, str]:
+    """A plan input declaration: a type, or `{"type": T, "doc": "..."}` (CWL's object form; no
+    type form has only these keys). Returns (its type, its doc)."""
+    doc = ""
+    if isinstance(form, dict) and form.keys() <= INPUT_KEYS:
+        if "type" not in form:
+            errs.append(f"{path}.type: required")
+            return None, ""
+        doc = form.get("doc", "")
+        if not isinstance(doc, str):
+            errs.append(f"{path}.doc: expected a string")
+            doc = ""
+        form, path = form["type"], f"{path}.type"
+    try:
+        return T.parse(form, path), doc
+    except T.TypeSyntaxError as e:
+        errs.append(str(e))
+        return None, doc
 
 
 def parse_ref(text: Any) -> tuple[Ref | None, str]:
@@ -175,18 +198,23 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
     errs = [("rev: maintained by the store" if k == "rev" else f"{k}: unknown key")
             for k in doc if k not in DOC_KEYS]
     for name, form in _ids(doc.get("inputs", {}), "inputs", errs).items():
-        try:
-            plan.inputs[name] = T.parse(form, f"inputs.{name}")
-        except T.TypeSyntaxError as e:
-            errs.append(str(e))
+        t, text = parse_input(form, f"inputs.{name}", errs)
+        if t is not None:
+            plan.inputs[name] = t
+            if text:
+                plan.input_docs[name] = text
     if "steps" not in doc:
         errs.append("steps: required, an object of id -> step")
     for sid, raw in _ids(doc.get("steps", {}), "steps", errs).items():
         p = f"steps.{sid}"
         if not isinstance(raw, dict):
-            errs.append(f"{p}: a step is {{run, in, scatter?}}")
+            errs.append(f"{p}: a step is {{run, in, scatter?, doc?}}")
             continue
         errs.extend(f"{p}.{k}: unknown key" for k in raw if k not in STEP_KEYS)
+        text = raw.get("doc", "")
+        if not isinstance(text, str):
+            errs.append(f"{p}.doc: expected a string")
+            text = ""
         fn = registry.get(raw["run"]) if isinstance(raw.get("run"), str) else None
         if fn is None:
             errs.append(f"{p}.run: unknown fn {raw.get('run')!r}")
@@ -205,7 +233,7 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
         if scatter is not None and scatter not in ins:
             errs.append(f"{p}.scatter: {scatter!r} is not a bound input of the step")
             scatter = None
-        plan.steps[sid] = Step(sid, fn, sources, scatter)
+        plan.steps[sid] = Step(sid, fn, sources, scatter, text)
     for name, raw in _ids(doc.get("outputs", {}), "outputs", errs).items():
         src = parse_source(raw, f"outputs.{name}", errs)
         if src is None or len(src.refs) != 1 or src.fan_in:

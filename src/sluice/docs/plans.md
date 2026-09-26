@@ -22,6 +22,24 @@ the `agents` pack and `git.head` from the `git` pack — install a pack before u
 }
 ```
 
+## Docs
+Say what an input or a step is for with an optional `doc`. A plan input takes the object form
+`{"type": <type>, "doc": "..."}` instead of a bare type; a step takes `"doc"` next to `run`:
+
+```json
+{"inputs": {"repo": {"type": "string", "doc": "Absolute path of the checkout to work in"},
+            "approved": {"type": "boolean", "doc": "Whether the owner accepts the change"}},
+ "outputs": {},
+ "steps": {"head": {"run": "core.echo", "doc": "Pass the repo on once approved",
+                    "in": {"value": {"source": "repo"}}},
+           "gate": {"run": "core.echo", "in": {"value": {"source": "approved"}}}}}
+```
+
+`status` returns them (`input_docs`, and `doc` on a step), the diagram and the dashboard show
+them, and an inbox item that asks for an input (`inbox_post(..., input="approved")`) without a
+body shows that input's doc. The dashboard's Inbox also lists every required input that holds up
+a step and has no value yet, with its doc.
+
 ## Binding a step input
 - `{"default": <json>}`: a literal value.
 - `{"source": "repo"}`: a plan input.

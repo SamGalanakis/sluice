@@ -70,8 +70,17 @@ def _q(text: str) -> str:
     return '"' + text.replace('"', "#quot;") + '"'
 
 
-def step_label(sid: str, run: str, entry: dict[str, Any]) -> str:
-    return f"{sid} / {run} / {_status(entry)}"
+def _mermaid_text(text: str, width: int = 60) -> str:
+    """Free text (a step's doc) safe inside a quoted Mermaid label: one line, no markup."""
+    line = " ".join(text.split())
+    line = line if len(line) <= width else line[:width - 1] + "…"
+    return line.replace("#", "#35;").replace("<", "#lt;").replace(">", "#gt;")
+
+
+def step_label(sid: str, run: str, entry: dict[str, Any], doc: str = "") -> str:
+    """`id / fn / status`, then the step's doc on a second line."""
+    label = f"{sid} / {run} / {_status(entry)}"
+    return label + (f"<br/>{_mermaid_text(doc)}" if doc else "")
 
 
 def _status(entry: dict[str, Any]) -> str:
@@ -90,7 +99,8 @@ def mermaid(plan: Plan, state: dict[str, Any]) -> str:
         lines.append(f"  {ids['in', n]}([{_q(n)}])")
     for sid, step in plan.steps.items():
         entry = state["steps"].get(sid, {"status": "pending"})
-        lines.append(f"  {ids['step', sid]}[{_q(step_label(sid, step.fn.name, entry))}]")
+        label = step_label(sid, step.fn.name, entry, step.doc)
+        lines.append(f"  {ids['step', sid]}[{_q(label)}]")
     for n in plan.outputs:
         lines.append(f"  {ids['out', n]}([{_q(n)}])")
 
@@ -238,10 +248,14 @@ def _json(value: Any) -> str:
     return e(json.dumps(value, indent=2, ensure_ascii=False))
 
 
-def _values_table(values: dict[str, Any]) -> str:
+def _values_table(values: dict[str, Any], docs: Mapping[str, str] | None = None) -> str:
+    """name → value rows; with `docs` (plan inputs), a doc column too."""
+    docs = docs or {}
     rows = "".join(f"<tr><td>{e(k)}</td><td><code>{e(json.dumps(v, ensure_ascii=False))}"
-                   f"</code></td></tr>" for k, v in values.items())
-    return (f'<div class="scroll"><table><tr><th>name</th><th>value</th></tr>{rows}</table>'
+                   f"</code></td>" + (f'<td class="muted">{e(docs.get(k, ""))}</td>'
+                                      if docs else "") + "</tr>" for k, v in values.items())
+    head = "<th>name</th><th>value</th>" + ("<th>doc</th>" if docs else "")
+    return (f'<div class="scroll"><table><tr>{head}</tr>{rows}</table>'
             f"</div>" if rows else '<p class="muted">none</p>')
 
 
@@ -329,9 +343,10 @@ def _steps(store: Store, project: str, doc: dict[str, Any], plan: Plan,
             parts.append(f'<div>error</div><pre class="bad">{e(entry["error"])}</pre>')
         if tail:
             parts.append(f"<div>stderr (tail)</div><pre>{e(tail)}</pre>")
+        note = f'<div class="muted">{e(step.doc)}</div>' if step.doc else ""
         rows.append(
             f'<tr><td><details id="step-{e(sid)}" data-preserve-attr="open"><summary>{e(sid)}'
-            f'</summary>{"".join(parts)}</details></td><td>{e(step.fn.name)}</td>'
+            f'</summary>{"".join(parts)}</details>{note}</td><td>{e(step.fn.name)}</td>'
             f'<td class="s-{e(entry["status"])}">{e(status)}</td>'
             f'<td>{e(entry.get("started") or "")}</td><td>{e(entry.get("finished") or "")}</td>'
             f'<td class="bad">{e(err[0]) if err else ""}</td></tr>')
@@ -385,7 +400,7 @@ def _project(store: Store, project: str, live: bool) -> tuple[dict[str, str], st
         parts["plan-src"] = (f'<pre id="plan-src" hidden data-view="plan-diagram" '
                              f'data-init="window.sluiceDiagram?.(el)">\n{source}</pre>')
     parts.update({
-        "inputs": _part("inputs", _values_table(inputs)),
+        "inputs": _part("inputs", _values_table(inputs, plan.input_docs)),
         "outputs": _part("outputs", _values_table(outputs)),
         "steps": _part("steps", _steps(store, project, doc, plan, state)),
         "history": _part("history", _history(store, project)),
@@ -739,15 +754,32 @@ def _item(item: dict[str, Any], back: str, all_projects: bool) -> str:
     return f'<article class="card item" id="item-{e(p)}-{e(iid)}">{"".join(out)}</article>'
 
 
+def _waiting(store: Store, project: str | None) -> str:
+    """Unset plan inputs that hold up a step (and no open item asks for): read-only, since a
+    value comes through an inbox item or plan_set_input."""
+    rows = [f'<tr><td><a href="/projects/{e(w["project"])}">{e(w["project"])}</a></td>'
+            f'<td><code>{e(w["name"])}</code></td><td><code>{e(w["type"])}</code></td>'
+            f'<td>{e(w.get("doc", ""))}</td><td>{e(", ".join(w["steps"]))}</td></tr>'
+            for w in store.waiting_inputs(project)]
+    if not rows:
+        return ""
+    return ('<h2>Waiting on a person <small class="muted">plan inputs with no value; set one '
+            "with plan_set_input, or post an item with its input</small></h2>"
+            '<div class="scroll"><table><tr><th>project</th><th>input</th><th>type</th>'
+            f'<th>doc</th><th>steps waiting</th></tr>{"".join(rows)}</table></div>')
+
+
 def inbox_parts(store: Store, project: str | None, status: str) -> dict[str, str]:
-    """The inbox page's parts: its items (open ones oldest first, the rest newest first) and
-    the nav badge."""
+    """The inbox page's parts: its items (open ones oldest first, the rest newest first), on
+    the open view the plan inputs waiting on a person, and the nav badge."""
     items = store.inbox(project, status)
     items = items if status == "open" else items[::-1]
     back = inbox_base(project) + ("" if status == "open" else f"?status={status}")
     empty = {"open": "Nothing is waiting on you."}.get(status, f"No {status} items.")
     body = "".join(_item(i, back, project is None) for i in items) \
         or f'<p class="muted">{e(empty)}</p>'
+    if status == "open":
+        body += _waiting(store, project)
     return {"inbox-items": _part("inbox-items", body), "nav-inbox": nav_inbox(open_count(store))}
 
 

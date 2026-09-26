@@ -13,6 +13,9 @@ structure, not by name.
 | `{"type": "enum", "symbols": ["a", "b"]}` | one of these strings |
 | `{"type": "record", "fields": {"f": T}}` | object with these fields |
 
+A plan input may also be declared as `{"type": <type>, "doc": "what it is for"}`; the type
+inside is any of the forms above.
+
 An output fits an input when: either is `Any`; same primitive, or `int` into `float`; an enum
 into a `string` or a larger enum; arrays of fitting items; a record that has every required field
 of the input record with fitting types (extra fields are fine). An optional value does not fit a

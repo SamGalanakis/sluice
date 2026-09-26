@@ -23,7 +23,8 @@ With `input` (a declared plan input; anything else is refused at post), the answ
 input, exactly as `plan_set_input` would (same type check, a `plan.input` record whose reason
 names the item), so the steps waiting on it start. The value is the first of `values.value` (a
 field named `value`), `params.value` (a button's value) and `text`. A value that does not fit
-the input's type refuses the answer and the item stays open.
+the input's type refuses the answer and the item stays open. Without a `body`, the item shows
+the input's `doc` (`docs("plans")`), so a well-documented input needs only a title.
 
 ## In a plan: `inbox.ask`
 `inbox.ask` `{title, body?, ui?}` → `{answer}` posts an item (`from` = the step) and waits for

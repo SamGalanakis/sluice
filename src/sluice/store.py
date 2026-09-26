@@ -319,9 +319,12 @@ class Store:
             row = {"id": sid, "run": step.fn.name, "status": e["status"],
                    "started": e.get("started"), "finished": e.get("finished")}
             row.update({k: e[k] for k in ("outputs", "error") if e.get(k) is not None})
+            row.update({"doc": step.doc} if step.doc else {})
             steps.append({**row, "manual": bool(e.get("manual"))})
-        return {"rev": doc["rev"], "inputs": {n: state["inputs"].get(n) for n in plan.inputs},
-                "outputs": outputs, "steps": steps}
+        out = {"rev": doc["rev"], "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}
+        if plan.input_docs:
+            out["input_docs"] = dict(plan.input_docs)
+        return {**out, "outputs": outputs, "steps": steps}
 
     # ---- manual values (SPEC §6) ----
 
@@ -437,17 +440,45 @@ class Store:
                    ui: str | None = None, input: str | None = None,
                    sender: str | None = None) -> dict[str, Any]:
         """Post an open item. With `input`, answering it sets that plan input, so the plan
-        must declare it."""
+        must declare it; without a body, the item's body is that input's doc."""
         if not isinstance(title, str) or not title.strip():
             raise BadRequest("title: expected a non-empty string")
         with self.lock(project):
             self.project(project)
-            if input is not None and input not in self.plan(project)[1].inputs:
-                raise NotFound(f"the plan of project {project} has no input {input!r}")
+            if input is not None:
+                plan = self.plan(project)[1]
+                if input not in plan.inputs:
+                    raise NotFound(f"the plan of project {project} has no input {input!r}")
+                body = plan.input_docs.get(input) if body is None else body
             item = I.post(self.project_dir(project), self.log_cap(), title, body, ui, input,
                           sender)
         self.notify()
         return item
+
+    def waiting_inputs(self, project: str | None = None) -> list[dict[str, Any]]:
+        """Plan inputs that hold up a step and have no value yet, nor an open inbox item that
+        would set them: [{project, name, type, doc?, steps}] (the steps reading it that have not
+        run). What the Inbox page shows as waiting on a person."""
+        out = []
+        for name in [project] if project else self.project_names():
+            try:
+                _, plan = self.plan(name)
+            except (InvalidPlan, NotFound):  # a broken plan waits on its fix, shown elsewhere
+                continue
+            state = self.read_state(name)
+            asked = {i.get("input") for i in I.items(self.project_dir(name))
+                     if i["status"] == "open"}
+            for n, t in plan.inputs.items():
+                if n in state["inputs"] or n in asked or isinstance(t, T.Optional):
+                    continue
+                steps = [s.id for s in plan.steps.values() if any(
+                    r.step is None and r.name == n for r in s.reads) and state["steps"].get(
+                    s.id, {"status": "pending"})["status"] == "pending"]
+                if steps:
+                    row = {"project": name, "name": n, "type": str(t), "steps": steps}
+                    out.append({**row, **({"doc": plan.input_docs[n]}
+                                          if n in plan.input_docs else {})})
+        return out
 
     def _open_item(self, project: str, item_id: str) -> dict[str, Any]:
         """The item, refusing an unknown one (NotFound) or one that is not open (NotOpen).

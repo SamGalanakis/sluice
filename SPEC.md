@@ -149,6 +149,12 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
 
 - Project names, step ids, plan input and output names match `^[a-z0-9][a-z0-9_-]*$`. The plan's
   `rev` is store-maintained and returned by `plan_get`/`status`.
+- **Docs.** A plan input is declared by its type, or, as in CWL, by `{"type": <type>, "doc":
+  "..."}` (both keys only; no type form has just these keys, so the two never clash). A step
+  may carry `"doc": "..."` next to `run`, `in` and `scatter`. Docs are optional strings that say
+  what a value or a step is for; `status` returns them (`input_docs`, a step's `doc`), the
+  Mermaid view puts a step's doc on a second line of its label, the dashboard shows both, and an
+  inbox item posted for an input without a body takes that input's doc as its body (§8a).
 - **Step inputs** (`in`): `{"default": <json>}` a literal; `{"source": "<ref>"}` one value;
   `{"source": ["<ref>", ...]}` fan-in: an array of the values, in order. A ref is a plan input
   name (`repo`) or `<step>/<output>`, optionally followed by `.<field or index>...` to reach
@@ -163,7 +169,8 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   report them.
 - A step is **ready** when every plan input and step it reads has a value / has `succeeded`.
 
-**Validation** (every edit must pass; all errors returned with paths): ids valid; every `run`
+**Validation** (every edit must pass; all errors returned with paths): ids valid; docs are
+strings and an input's object form has a `type`; every `run`
 exists (in the project's lookup order); every required fn input bound, no unknown inputs; every ref names a declared plan input
 or an existing step and one of its fn's outputs (fields navigated through record types, anything
 under `Any` allowed; a scattered step's outputs are arrays); `fits` holds for each source (for a
@@ -348,14 +355,16 @@ come from cdn.jsdelivr.net: Datastar v1.0.4, mermaid, and, on inbox pages,
 CDN). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
 raw HTML escaped, unsafe link schemes refused).
 - Mermaid (`flowchart LR`): plan inputs as rounded nodes, steps as boxes labelled
-  `id / fn / status` (a scattered step shows `done/total`), plan outputs as rounded nodes, an edge
+  `id / fn / status` (a scattered step shows `done/total`; a step's doc, one line of at most 60
+  characters, below it), plan outputs as rounded nodes, an edge
   per source ref labelled with the output name, one colour class per status (pending grey,
   running blue, succeeded green, failed red, stale amber, manual outlined; a stale manual step
   shows as stale).
 - `GET /`: every project with its description, step counts by status, plan rev and last change
   (the later of the last log record and the last state write), each linking to its page.
-- `GET /projects/<name>`: step counts and links (log, functions), the Mermaid diagram, plan input
-  and output values, a steps table (fn, status, started, finished, first line of error) whose
+- `GET /projects/<name>`: step counts and links (log, functions, inbox), the Mermaid diagram,
+  plan input values (with their docs) and output values, a steps table (fn, status, started,
+  finished, first line of error; a step's doc under its id) whose
   rows expand (`<details>`) to the step's bindings, run inputs, outputs, full error and stderr
   tail, the last 20 history records (rev, time, author, what: kind plus step, input or op
   count, reason) and the last 10 log records.
@@ -394,7 +403,11 @@ Streams end when the server shuts down; the client reconnects with backoff.
   An open item has an answer box that works without JavaScript (a form POST of `text`, then a
   303 back); with it, `/static/inbox.js` draws the item's `ui` (§8a) above the box, and folds
   the box away when the program has buttons. An answered item shows its answer, a closed one
-  its reason. The page streams like the index (`/inbox/stream`, `/projects/<name>/inbox/stream`,
+  its reason. Below the open items, a read-only "Waiting on a person" table lists the plan
+  inputs that hold up a step: required, no value, read by a step that has not run, and no open
+  item names them (project, input, type, doc, the steps waiting). A value for one comes through
+  an inbox item or `plan_set_input`; the table has no write of its own. The page streams like
+  the index (`/inbox/stream`, `/projects/<name>/inbox/stream`,
   parts: the items and the nav badge); each open item's answer area carries
   `data-ignore-morph`, so a patch never resets what a person is typing.
 - `POST /projects/<name>/inbox/<id>/answer`: the only write. A JSON body is the answer object;
@@ -430,7 +443,7 @@ document (no nav, no links, no log, no stream), from the same renderer.
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty) |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
-| `status` | `project` | `{rev, inputs: {name: value or null}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, manual}]}` (status: pending, running, succeeded, failed or stale) |
+| `status` | `project` | `{rev, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
 | `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
@@ -453,7 +466,8 @@ else). With `input`, answering sets that plan input through `plan_set_input`'s o
 check, `plan.input` record by the answering author, reason `inbox item <id>: <title>`) before
 the item is marked answered; the value is the first present of `values.value`, `params.value`
 and `text`. None present, or a value that does not fit, refuses the answer (`invalid`) and the
-item stays open. `inbox_post` refuses an `input` the plan does not declare.
+item stays open. `inbox_post` refuses an `input` the plan does not declare; without a `body`,
+the item's body is that input's doc (§5), if it has one.
 
 **The ui.** `ui` is OpenUI Lang (openui.com), drawn in the browser by a small vanilla-DOM
 renderer (`src/sluice/static/inbox.js`, no build step) around lang-core's parser. The vocabulary
