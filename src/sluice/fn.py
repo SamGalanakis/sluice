@@ -1,4 +1,4 @@
-"""Helper for writing sluice functions (SPEC §8). Standard library only.
+"""Helper for writing sluice functions (SPEC §7). Standard library only.
 
 A fn's main.py looks like:
 
@@ -18,18 +18,21 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-TRANSIENT_EXIT = 75
 _TAIL = 2000
 
 
 class Transient(Exception):
-    """Raise for failures worth retrying (capacity, rate limits, flaky infra). Exits 75."""
+    """Raise for failures worth retrying (capacity, rate limits, flaky infra).
+
+    run(main, retries=N) calls main again up to N times after a Transient; past that the fn fails.
+    """
 
 
 class ShError(Exception):
@@ -44,23 +47,12 @@ class Context:
     node: str
     run_id: str
     run_dir: Path
-    attempt: int
-    idempotency_key: str
     home: Path
     fn_dir: Path
-    _spawn_nodes: dict[str, Any] = field(default_factory=dict)
-    _spawn_reasons: list[str] = field(default_factory=list)
+    attempt: int = 1
 
     def log(self, msg: str) -> None:
         print(msg, file=sys.stderr, flush=True)
-
-    def spawn(self, nodes: dict[str, Any], reason: str) -> None:
-        """Ask the runner to add these nodes to the plan when this fn succeeds."""
-        clash = set(nodes) & set(self._spawn_nodes)
-        if clash:
-            raise ValueError(f"spawn ids used twice: {sorted(clash)}")
-        self._spawn_nodes.update(nodes)
-        self._spawn_reasons.append(reason)
 
 
 def _context() -> Context:
@@ -71,8 +63,6 @@ def _context() -> Context:
         node=env.get("SLUICE_NODE", ""),
         run_id=env.get("SLUICE_RUN_ID", ""),
         run_dir=run_dir,
-        attempt=int(env.get("SLUICE_ATTEMPT", "1")),
-        idempotency_key=env.get("SLUICE_IDEMPOTENCY_KEY", ""),
         home=Path(env.get("SLUICE_HOME", str(Path.home() / ".sluice"))),
         fn_dir=Path(env.get("SLUICE_FN_DIR", ".")),
     )
@@ -85,26 +75,39 @@ def _write_json(path: Path, obj: Any) -> None:
         os.replace(tmp, path)
 
 
-def run(main: Callable[[dict[str, Any], Context], dict[str, Any]]) -> None:
-    """Read the input from stdin, call main(inp, ctx), write the output, exit."""
+def run(
+    main: Callable[[dict[str, Any], Context], dict[str, Any]],
+    retries: int = 0,
+    backoff: float = 30.0,
+) -> None:
+    """Read the input from stdin, call main(inp, ctx), print the output as JSON, exit.
+
+    On Transient, sleep `backoff` seconds (env SLUICE_BACKOFF overrides) and call main again,
+    up to `retries` more times (ctx.attempt counts from 1). Any other exception, or running out
+    of retries, exits 1.
+    """
     ctx = _context()
+    backoff = float(os.environ.get("SLUICE_BACKOFF", backoff))  # tests set 0
     raw = sys.stdin.read()
     inp = json.loads(raw) if raw.strip() else {}
     real_stdout = sys.stdout
     try:
-        with contextlib.redirect_stdout(sys.stderr):
-            out = main(inp, ctx)
+        while True:
+            try:
+                with contextlib.redirect_stdout(sys.stderr):
+                    out = main(inp, ctx)
+                break
+            except Transient as e:
+                if ctx.attempt > retries:
+                    raise
+                print(f"transient (attempt {ctx.attempt}): {e}; retrying in {backoff}s",
+                      file=sys.stderr, flush=True)
+                time.sleep(backoff)
+                ctx.attempt += 1
         if out is None:
             out = {}
         if not isinstance(out, dict):
             raise TypeError(f"main must return a dict, got {type(out).__name__}")
-        if ctx._spawn_nodes:
-            out = {**out, "_spawn": {"reason": "; ".join(ctx._spawn_reasons),
-                                     "nodes": ctx._spawn_nodes}}
-    except Transient as e:
-        print(f"transient: {e}", file=sys.stderr, flush=True)
-        _write_json(ctx.run_dir / "error.json", {"type": "Transient", "message": str(e)})
-        sys.exit(TRANSIENT_EXIT)
     except Exception as e:  # noqa: BLE001 - every failure is reported, then exits 1
         traceback.print_exc(file=sys.stderr)
         _write_json(ctx.run_dir / "error.json", {"type": type(e).__name__, "message": str(e)})

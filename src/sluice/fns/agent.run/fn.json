@@ -1,0 +1,21 @@
+{
+  "name": "agent.run",
+  "description": "Run a spec on the agent engine named in the input.",
+  "in": {
+    "engine": [
+      "devin",
+      "codex",
+      "claude"
+    ],
+    "cwd": "string",
+    "spec": "string",
+    "model": "string?",
+    "resume": "string?",
+    "report_path": "string?"
+  },
+  "out": {
+    "final": "string",
+    "report": "string?",
+    "session": "string?"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "git.rebase",
+  "description": "Rebase a worktree onto a ref; conflicts abort and are returned as data.",
+  "in": {
+    "path": "string",
+    "onto": "string"
+  },
+  "out": {
+    "ok": "bool",
+    "sha": "string",
+    "conflicts": {
+      "list": "string"
+    }
+  }
+}
