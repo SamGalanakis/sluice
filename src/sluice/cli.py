@@ -1,5 +1,5 @@
-"""The `sluice` command line (SPEC §9): `serve`, `loop`, and `tool` to call any MCP tool
-in-process through the same server object `serve` exposes."""
+"""The `sluice` command line (SPEC §9): `serve`, `loop`, `tool` to call any MCP tool
+in-process through the same server object `serve` exposes, and `watch` to follow a log."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import sys
 import threading
 from typing import Any
 
-from .errors import SluiceError
+from .errors import BadRequest, SluiceError
 from .runner import Runner
 from .store import DEFAULT_CONFIG, Store, default_home
 from .util import atomic_write_json
@@ -106,6 +106,24 @@ def cmd_tool(a: argparse.Namespace, store: Store) -> int:
     return 1 if isinstance(value, dict) and value.get("ok") is False else 0
 
 
+def cmd_watch(a: argparse.Namespace, store: Store) -> int:
+    """Follow the project's (or the home's) log, one JSON line per matching record."""
+    from . import log as L
+    from .watch import follow
+
+    if a.project is not None:
+        store.project(a.project)
+    kinds = [k for k in (a.kinds or "").split(",") if k]
+    threads = [t for t in (a.threads or "").split(",") if t]
+    errs = L.check_kinds(kinds)
+    if errs:
+        raise BadRequest("; ".join(errs))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    with contextlib.suppress(KeyboardInterrupt, BrokenPipeError):
+        follow(store.log_dir(a.project), sys.stdout, kinds, threads, a.since_seq)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
@@ -121,15 +139,24 @@ def build_parser() -> argparse.ArgumentParser:
                        'an "ok": false result.')
     s.add_argument("name", nargs="?")
     s.add_argument("args", nargs="?", default="{}", help="JSON object of arguments")
+    s = sub.add_parser("watch", help="print new log records as JSON lines, until killed",
+                       description="Follow a project's log (or, without -p, the home log) and "
+                       "print each new matching record as one JSON line. Never exits; reads "
+                       "files only, so it needs no runner.")
+    s.add_argument("-p", "--project")
+    s.add_argument("--kinds", help="comma-separated kinds, e.g. step.status,message")
+    s.add_argument("--threads", help="comma-separated thread names (messages on these only)")
+    s.add_argument("--since-seq", type=int, help="start after this seq (default: from now)")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     try:
-        ensure_home(quiet=a.cmd == "tool")  # tool output stays pure JSON
+        ensure_home(quiet=a.cmd in ("tool", "watch"))  # their output stays pure JSON
         store = Store()
-        return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool}[a.cmd](a, store)
+        return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool,
+                "watch": cmd_watch}[a.cmd](a, store)
     except SluiceError as e:
         print(json.dumps(e.payload(), indent=2), file=sys.stderr)
         return 1
