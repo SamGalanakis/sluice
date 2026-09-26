@@ -1,13 +1,13 @@
 {
   "name": "agent.claude",
-  "description": "Run a Claude session on a prompt in a working directory.",
-  "in": {
+  "doc": "Run a Claude session on a prompt in a working directory.",
+  "inputs": {
     "cwd": "string",
     "prompt": "string",
     "model": "string?",
     "session": "string?"
   },
-  "out": {
+  "outputs": {
     "result": "string",
     "session": "string",
     "cost_usd": "float?"

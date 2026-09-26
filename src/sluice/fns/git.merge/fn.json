@@ -1,18 +1,16 @@
 {
   "name": "git.merge",
-  "description": "Merge source into target in a temporary worktree; conflicts are data, not failures.",
-  "in": {
+  "doc": "Merge source into target in a temporary worktree; conflicts are data, not failures.",
+  "inputs": {
     "repo": "string",
     "source": "string",
     "target": "string",
     "message": "string?",
-    "push": "bool?"
+    "push": "boolean?"
   },
-  "out": {
-    "merged": "bool",
+  "outputs": {
+    "merged": "boolean",
     "sha": "string?",
-    "conflicts": {
-      "list": "string"
-    }
+    "conflicts": "string[]"
   }
 }

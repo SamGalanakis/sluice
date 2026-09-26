@@ -1,85 +1,213 @@
-"""Every fn.json in packs/agents and packs/git must match SPEC section 11."""
+"""Every built-in fn.json declares exactly the agreed inputs and outputs (CWL type spellings)."""
 
 import json
 from pathlib import Path
 
 FNS = Path(__file__).resolve().parents[2] / "src" / "sluice" / "fns"
 
-ALLOWED_KEYS = {"name", "description", "in", "out"}
-
-AGENT_IO = ({"cwd": "string", "spec": "string", "log": "string?",
-             "resume": "string?", "report_path": "string?"},
-            {"log": "string", "final": "string", "report": "string?"})
-
-DECIDE_IO = ({"question": "string", "context": "any?",
-              "options": {"list": "string"}, "threshold": "float?"},
-             {"choice": "string", "p": "float", "confident": "bool"})
+ALLOWED_KEYS = {"name", "doc", "inputs", "outputs"}
 
 EXPECTED = {
     "agents": {
-        "agent.devin": AGENT_IO,
-        "agent.codex": (
-            {"cwd": "string", "spec": "string",
-             "model": {"optional": ["sol", "astra"]}, "log": "string?",
-             "resume": "string?", "report_path": "string?"},
-            AGENT_IO[1],
-        ),
-        "agent.claude": (
-            {"cwd": "string", "prompt": "string", "model": "string?",
-             "session": "string?"},
-            {"result": "string", "session": "string", "cost_usd": "float?"},
-        ),
-        "agent.run": (
-            {"engine": ["devin", "codex", "claude"], "cwd": "string",
-             "spec": "string", "model": "string?", "resume": "string?",
-             "report_path": "string?"},
-            {"final": "string", "report": "string?", "session": "string?"},
-        ),
-        "agent.review": (
-            {"cwd": "string", "base": "string", "standards": "string",
-             "notes": "string?"},
-            {"summary": "string", "sha": "string", "commits": "int"},
-        ),
-        "decide.llm": DECIDE_IO,
-        "decide.jev": DECIDE_IO,
+        "agent.devin": [
+            {
+                "cwd": "string",
+                "spec": "string",
+                "log": "string?",
+                "resume": "string?",
+                "report_path": "string?"
+            },
+            {
+                "log": "string",
+                "final": "string",
+                "report": "string?"
+            }
+        ],
+        "agent.codex": [
+            {
+                "cwd": "string",
+                "spec": "string",
+                "model": [
+                    "null",
+                    {
+                        "type": "enum",
+                        "symbols": [
+                            "sol",
+                            "astra"
+                        ]
+                    }
+                ],
+                "log": "string?",
+                "resume": "string?",
+                "report_path": "string?"
+            },
+            {
+                "log": "string",
+                "final": "string",
+                "report": "string?"
+            }
+        ],
+        "agent.claude": [
+            {
+                "cwd": "string",
+                "prompt": "string",
+                "model": "string?",
+                "session": "string?"
+            },
+            {
+                "result": "string",
+                "session": "string",
+                "cost_usd": "float?"
+            }
+        ],
+        "agent.run": [
+            {
+                "engine": {
+                    "type": "enum",
+                    "symbols": [
+                        "devin",
+                        "codex",
+                        "claude"
+                    ]
+                },
+                "cwd": "string",
+                "spec": "string",
+                "model": "string?",
+                "resume": "string?",
+                "report_path": "string?"
+            },
+            {
+                "final": "string",
+                "report": "string?",
+                "session": "string?"
+            }
+        ],
+        "agent.review": [
+            {
+                "cwd": "string",
+                "base": "string",
+                "standards": "string",
+                "notes": "string?"
+            },
+            {
+                "summary": "string",
+                "sha": "string",
+                "commits": "int"
+            }
+        ],
+        "decide.llm": [
+            {
+                "question": "string",
+                "context": "Any?",
+                "options": "string[]",
+                "threshold": "float?"
+            },
+            {
+                "choice": "string",
+                "p": "float",
+                "confident": "boolean"
+            }
+        ],
+        "decide.jev": [
+            {
+                "question": "string",
+                "context": "Any?",
+                "options": "string[]",
+                "threshold": "float?"
+            },
+            {
+                "choice": "string",
+                "p": "float",
+                "confident": "boolean"
+            }
+        ]
     },
     "git": {
-        "git.worktree": (
-            {"repo": "string", "base": "string", "branch": "string",
-             "path": "string?"},
-            {"path": "string", "branch": "string", "sha": "string"},
-        ),
-        "git.worktree_rm": (
-            {"repo": "string", "path": "string", "force": "bool?"},
-            {"removed": "bool"},
-        ),
-        "git.head": (
-            {"path": "string"},
-            {"branch": "string", "sha": "string"},
-        ),
-        "git.merge": (
-            {"repo": "string", "source": "string", "target": "string",
-             "message": "string?", "push": "bool?"},
-            {"merged": "bool", "sha": "string?",
-             "conflicts": {"list": "string"}},
-        ),
-        "git.rebase": (
-            {"path": "string", "onto": "string"},
-            {"ok": "bool", "sha": "string",
-             "conflicts": {"list": "string"}},
-        ),
-        "git.push": (
-            {"path": "string", "branch": "string", "remote": "string?",
-             "force_with_lease": "bool?"},
-            {"sha": "string"},
-        ),
-        "gh.pr": (
-            {"path": "string", "base": "string", "head": "string",
-             "title": "string", "body": "string", "draft": "bool?"},
-            {"number": "int", "url": "string"},
-        ),
-    },
+        "git.worktree": [
+            {
+                "repo": "string",
+                "base": "string",
+                "branch": "string",
+                "path": "string?"
+            },
+            {
+                "path": "string",
+                "branch": "string",
+                "sha": "string"
+            }
+        ],
+        "git.worktree_rm": [
+            {
+                "repo": "string",
+                "path": "string",
+                "force": "boolean?"
+            },
+            {
+                "removed": "boolean"
+            }
+        ],
+        "git.head": [
+            {
+                "path": "string"
+            },
+            {
+                "branch": "string",
+                "sha": "string"
+            }
+        ],
+        "git.merge": [
+            {
+                "repo": "string",
+                "source": "string",
+                "target": "string",
+                "message": "string?",
+                "push": "boolean?"
+            },
+            {
+                "merged": "boolean",
+                "sha": "string?",
+                "conflicts": "string[]"
+            }
+        ],
+        "git.rebase": [
+            {
+                "path": "string",
+                "onto": "string"
+            },
+            {
+                "ok": "boolean",
+                "sha": "string",
+                "conflicts": "string[]"
+            }
+        ],
+        "git.push": [
+            {
+                "path": "string",
+                "branch": "string",
+                "remote": "string?",
+                "force_with_lease": "boolean?"
+            },
+            {
+                "sha": "string"
+            }
+        ],
+        "gh.pr": [
+            {
+                "path": "string",
+                "base": "string",
+                "head": "string",
+                "title": "string",
+                "body": "string",
+                "draft": "boolean?"
+            },
+            {
+                "number": "int",
+                "url": "string"
+            }
+        ]
+    }
 }
+
 
 def _all_fns():
     found = []
@@ -99,9 +227,10 @@ def test_every_expected_fn_exists():
 def test_fn_json_matches_spec():
     for pack, name, path in _all_fns():
         doc = json.loads(path.read_text())
-        assert {"name", "in", "out"} <= doc.keys() <= ALLOWED_KEYS, f"{path}: keys {sorted(doc)}"
+        keys = doc.keys()
+        assert {"name", "inputs", "outputs"} <= keys <= ALLOWED_KEYS, f"{path}: keys {sorted(doc)}"
         assert doc["name"] == name
-        assert isinstance(doc.get("description", ""), str)
+        assert isinstance(doc.get("doc", ""), str)
         exp_in, exp_out = EXPECTED[pack][name]
-        assert doc["in"] == exp_in, f"{name} in: {doc['in']}"
-        assert doc["out"] == exp_out, f"{name} out: {doc['out']}"
+        assert doc["inputs"] == exp_in, f"{name} inputs: {doc['inputs']}"
+        assert doc["outputs"] == exp_out, f"{name} outputs: {doc['outputs']}"

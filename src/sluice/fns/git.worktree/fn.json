@@ -1,13 +1,13 @@
 {
   "name": "git.worktree",
-  "description": "Add a git worktree on a new or existing branch.",
-  "in": {
+  "doc": "Add a git worktree on a new or existing branch.",
+  "inputs": {
     "repo": "string",
     "base": "string",
     "branch": "string",
     "path": "string?"
   },
-  "out": {
+  "outputs": {
     "path": "string",
     "branch": "string",
     "sha": "string"

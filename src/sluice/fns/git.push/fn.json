@@ -1,13 +1,13 @@
 {
   "name": "git.push",
-  "description": "Push HEAD to a branch on a remote, optionally with --force-with-lease.",
-  "in": {
+  "doc": "Push HEAD to a branch on a remote, optionally with --force-with-lease.",
+  "inputs": {
     "path": "string",
     "branch": "string",
     "remote": "string?",
-    "force_with_lease": "bool?"
+    "force_with_lease": "boolean?"
   },
-  "out": {
+  "outputs": {
     "sha": "string"
   }
 }

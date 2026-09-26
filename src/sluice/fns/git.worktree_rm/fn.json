@@ -1,12 +1,12 @@
 {
   "name": "git.worktree_rm",
-  "description": "Remove a git worktree; reports whether the path was a worktree.",
-  "in": {
+  "doc": "Remove a git worktree; reports whether the path was a worktree.",
+  "inputs": {
     "repo": "string",
     "path": "string",
-    "force": "bool?"
+    "force": "boolean?"
   },
-  "out": {
-    "removed": "bool"
+  "outputs": {
+    "removed": "boolean"
   }
 }

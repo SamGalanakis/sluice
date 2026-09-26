@@ -1,17 +1,15 @@
 {
   "name": "decide.jev",
-  "description": "Pick one of the given options by calling the Jev decision service.",
-  "in": {
+  "doc": "Pick one of the given options by calling the Jev decision service.",
+  "inputs": {
     "question": "string",
-    "context": "any?",
-    "options": {
-      "list": "string"
-    },
+    "context": "Any?",
+    "options": "string[]",
     "threshold": "float?"
   },
-  "out": {
+  "outputs": {
     "choice": "string",
     "p": "float",
-    "confident": "bool"
+    "confident": "boolean"
   }
 }

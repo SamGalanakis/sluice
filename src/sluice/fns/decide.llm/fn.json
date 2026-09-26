@@ -1,17 +1,15 @@
 {
   "name": "decide.llm",
-  "description": "Pick one of the given options by asking a small claude model.",
-  "in": {
+  "doc": "Pick one of the given options by asking a small claude model.",
+  "inputs": {
     "question": "string",
-    "context": "any?",
-    "options": {
-      "list": "string"
-    },
+    "context": "Any?",
+    "options": "string[]",
     "threshold": "float?"
   },
-  "out": {
+  "outputs": {
     "choice": "string",
     "p": "float",
-    "confident": "bool"
+    "confident": "boolean"
   }
 }

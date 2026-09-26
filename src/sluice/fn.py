@@ -44,7 +44,7 @@ class ShError(Exception):
 @dataclass
 class Context:
     plan: str
-    node: str
+    step: str
     run_id: str
     run_dir: Path
     home: Path
@@ -60,7 +60,7 @@ def _context() -> Context:
     run_dir = Path(env.get("SLUICE_RUN_DIR", "."))
     return Context(
         plan=env.get("SLUICE_PLAN", ""),
-        node=env.get("SLUICE_NODE", ""),
+        step=env.get("SLUICE_STEP", ""),
         run_id=env.get("SLUICE_RUN_ID", ""),
         run_dir=run_dir,
         home=Path(env.get("SLUICE_HOME", str(Path.home() / ".sluice"))),
