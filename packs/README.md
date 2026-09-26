@@ -11,6 +11,10 @@ home or project actually needs.
 
 Each `fn.json` is the reference for that function's typed inputs and outputs.
 
+The agents pack is a starting point: which engine runs which kind of work is up to each
+project. To route, copy (or wrap) `agent.run` into the project's own `fns/` under a name of
+its own and pick the engines there.
+
 ## Installing
 
 Copy a pack's contents into a functions directory — the whole pack, including any `_`-prefixed
