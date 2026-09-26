@@ -29,7 +29,8 @@ config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port"
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 .env                        global secrets (KEY=value lines)
 fns/                        global user functions
-calls/<call_id>/            one-off fn_call runs without a project
+calls/<call_id>/            one-off fn_call runs without a project: call.json, input.json,
+                            output.json, stderr.log
 projects/<name>/
   project.json              {"name", "description"}
   plan.json                 the project's plan (snapshot of the log)
@@ -47,10 +48,18 @@ projects/<name>/
 project sees built-in + global + its own functions. **Names never collide:** a global function may
 not reuse a built-in name, and a project function may not reuse a built-in or global name (or
 another name in the same scope). A collision is an error of the later scope: the offending
-project (or global dir) reports it from `verify` and `fn_list`, its plan edits and runs are
-refused until it is fixed, and `fn_save` refuses to create one. Two projects may each have a
-function of the same name. A fn dir is any immediate subdirectory containing `fn.json`;
-anything else (e.g. `_lib/`) is ignored.
+project (or global dir) reports it from `verify` and `fn_list` (an entry with `error`), and
+`fn_save` refuses to create one. Lookup still resolves a colliding name to the earlier scope's
+function. Two projects may each have a function of the same name. A fn dir is any immediate
+subdirectory containing `fn.json` whose `name` matches the directory; anything else (e.g.
+`_lib/`) is ignored.
+
+**Function problems block.** While any function a project sees has a problem (a collision, or
+a fn.json that fails the §6a checks), that project refuses plan edits, manual values, `fn_call`
+and new runs (`invalid`, listing the problems); steps already running finish. A problem in the
+global scope blocks every project and project-less calls. Reads (`status`, `plan_get`,
+`plan_history`, views, `fn_list`, `verify`) keep working. Functions are rescanned when a
+`fn.json` or `main.py` changes, so a fix (or `fn_save`) needs no restart.
 
 Writes are atomic (`<file>.tmp` then `os.replace`); read-modify-write holds `fcntl.flock`.
 
@@ -95,7 +104,8 @@ object keyed by input name (unbound optional inputs are `null`); env `SLUICE_HOM
 `SLUICE_PROJECT`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
 `PYTHONPATH` containing sluice's `src` dir, plus every `KEY=value` line of `SLUICE_HOME/.env` and
 then the project's `.env` (project values win). Secrets live there, never in plans. cwd = the run
-dir. `SLUICE_PROJECT` names the project (empty for a call without one). The fn writes one JSON object keyed
+dir. `SLUICE_PROJECT` names the project (empty for a call without one); for a call,
+`SLUICE_STEP` is empty and `SLUICE_RUN_ID` is the call id. The fn writes one JSON object keyed
 by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
 fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
 (`run(main, retries=N)`, §7).
@@ -162,16 +172,21 @@ scattered step also records `done` and `total` runs. A step waiting for a proces
 `pending`; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
 
 Loop (every ~1 s, and right after an in-process edit), over all projects:
-1. New steps get `pending`. State entries of steps removed from the plan are dropped.
+1. New steps get `pending`. State entries of steps removed from the plan, and values of plan
+   inputs removed from it, are dropped.
 2. Finished processes: exit 0 with valid outputs → `succeeded` with `outputs`; otherwise
    `failed` with `error` (exit code or type errors, plus the stderr tail). A scattered step
    collects its runs as they finish.
 3. Start ready `pending` steps, at most `max_parallel` processes across all projects. Built-in fns
    run inline.
 4. Write `state.json` if anything changed.
+5. Calls (`calls/` in the home and in each project): start `pending` ones within the same
+   `max_parallel` budget, and record finished ones in `call.json` (`status`, `started`,
+   `finished`, `outputs`, `error`).
 
-On startup, steps left `running` by a previous runner are marked `failed` with
-`error: "runner restarted"`.
+On startup, steps and calls left `running` by a previous runner are marked `failed` with
+`error: "runner restarted"`. A `direct` call (§8 `fn_call`) is run by the process that made it,
+never by the runner.
 
 **Manual values** (recorded in state and in `plan.log.jsonl` as author/reason entries without
 ops, `{"rev", "at", "author", "reason", "action": "<tool name>", ...its arguments}`, so the
@@ -196,15 +211,20 @@ history shows who set what):
 ## 6a. Verify
 
 `verify(project?)` checks everything and returns every problem it finds, each with a location
-(`project`, `fn`, file path or plan path) and a message; it changes nothing. Without a project it
-checks the global scope and every project. It covers:
+and a message; it changes nothing. `where` is a file path (relative to `SLUICE_HOME` when inside
+it, e.g. `projects/p/fns/x.y/fn.json`), followed by `#<path in the document>` for JSON
+(`projects/p/plan.json#steps.a.run`, `projects/p/state.json#inputs.n`) or `:<line>` for `.env`
+files. Without a project it checks the built-in and global scopes and every directory under
+`projects/`; with one, the built-in and global scopes and that project. It covers:
 - every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, nothing else), the name
   matching its directory, every type parsing, `main.py` present for non-built-ins;
 - name collisions across scopes (see §2);
-- `project.json` shape, `.env` files parsing as `KEY=value` lines;
+- `project.json` shape (`name` equal to its directory, optional string `description`), `.env`
+  files parsing as `KEY=value` lines (blank lines, `#` comments and `export ` allowed);
 - the plan: full validation (§5) against the project's functions;
-- `state.json` agreeing with the plan (no state for unknown steps, outputs of succeeded steps
-  passing their fn's output types, plan input values passing their types).
+- `state.json` agreeing with the plan (no state for unknown steps or undeclared plan inputs,
+  valid statuses, outputs of succeeded steps passing their fn's output types, plan input values
+  passing their types).
 
 `{"ok": bool, "problems": [{"where", "message"}]}`. CLI `sluice verify [-p P]` prints them and exits
 non-zero when there are any.
@@ -225,7 +245,7 @@ if __name__ == "__main__":
     run(main)            # run(main, retries=3, backoff=600) retries on Transient
 ```
 
-`run(main, retries=0, backoff=30)` reads stdin, calls `main(inp, ctx)` (`ctx`: `plan`, `step`,
+`run(main, retries=0, backoff=30)` reads stdin, calls `main(inp, ctx)` (`ctx`: `project`, `step`,
 `run_id`, `run_dir`, `home`, `fn_dir`, `attempt`, `log(msg)`) with stdout redirected to stderr,
 prints the result as JSON. On `Transient` it sleeps `backoff` s (env `SLUICE_BACKOFF` overrides)
 and calls `main` again, up to `retries` times; any other exception, or running out of retries,
@@ -246,15 +266,26 @@ to the current revision under the lock) and required on `plan_patch`.
 pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe every argument.
 Validation errors carry the path and what was expected.
 
-**Views.** One renderer turns a plan plus its state into a picture:
+**Views.** A read-only dashboard: nothing in it creates or edits anything. Plain
+server-rendered HTML with inline CSS (light and dark via `prefers-color-scheme`, usable at
+phone width), a top nav (Projects · Functions), every value HTML-escaped; the only external
+asset is mermaid from cdn.jsdelivr.net.
 - Mermaid (`flowchart LR`): plan inputs as rounded nodes, steps as boxes labelled
   `id / fn / status` (a scattered step shows `done/total`), plan outputs as rounded nodes, an edge
   per source ref labelled with the output name, one colour class per status (pending grey,
   running blue, succeeded green, failed red, manual outlined).
-- HTML: a standalone page with that Mermaid diagram (mermaid from cdn.jsdelivr.net), a table of
-  steps (status, started, finished, error first line), and the plan's input and output values.
-`plan_view(plan, format)` returns either as text. `sluice serve` also serves the HTML live at
-`GET /projects` (an index) and `GET /projects/<name>` (refreshes every 3 s).
+- `GET /`: every project with its description, step counts by status, plan rev and last change
+  (the later of the last plan.log entry and the last state write), each linking to its page.
+- `GET /projects/<name>`: the Mermaid diagram, plan input and output values, a steps table
+  (fn, status, started, finished, first line of error) whose rows expand (`<details>`) to the
+  step's bindings, run inputs, outputs, full error and stderr tail, and the last 20 plan.log
+  entries (rev, time, author, action, reason). It refreshes every 3 s by fetching itself and
+  swapping the content (open rows stay open).
+- `GET /fns?project=<name>` (project optional): every function that context sees, grouped by
+  scope, with doc and typed inputs and outputs (`string[]`, `enum(a|b)`, `{field: type}`,
+  `T?`); a function with a problem (e.g. a collision) is shown in red with the verify message.
+`plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML
+document (no nav, no refresh), from the same renderer.
 
 | Tool | Args | Returns |
 |---|---|---|
@@ -262,10 +293,10 @@ Validation errors carry the path and what was expected.
 | `projects_list` | – | `[{name, description, rev, counts}]` |
 | `project_create` | `name, description?` | `{name}` (with an empty plan) |
 | `project_update` | `name, description` | `{name}` |
-| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope}]` (`scope`: project, global or builtin) |
+| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, error?}]` in lookup order (`scope`: builtin, global or project); `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
-| `fn_call` | `name, inputs, project?, wait?` | runs one fn outside the plan (under `calls/`); `{call, status, outputs?, error?}`, waiting up to `wait` s |
+| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (under `calls/`) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s. `direct: true` runs it in the calling process to the end instead (no runner needed) |
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` |
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?` | `{rev}` |
@@ -280,18 +311,20 @@ Validation errors carry the path and what was expected.
 
 ## 9. CLI
 
+MCP is the interface; the CLI only starts it and reaches the same tools from a shell:
+
 ```
-sluice init | serve | loop
-sluice project list | create <name> [--description D] | show <name>
-sluice fn list [-p P] | show <name> [-p P] | call <name> '<json>' [-p P]   (runs it directly, no runner needed)
-sluice plan show -p P | patch -p P --rev N --reason R <ops.json> | history -p P
-sluice set-input -p P <name> '<json>'
-sluice set-output -p P <step> '<json>'
-sluice retry -p P <step>
-sluice status -p P
-sluice verify [-p P]
-sluice view -p P [--html out.html]      Mermaid to stdout, or write the HTML page
+sluice serve [--host H] [--port P]    runner + MCP server + dashboard
+sluice loop                           runner only
+sluice tool                           list the MCP tools with one-line descriptions
+sluice tool <name> '<json args>'      call that tool in-process and print its result
 ```
+
+Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
+builds the same MCP server object `serve` exposes and calls its tool (same argument validation,
+same code path). It prints JSON results (text for `docs` and `plan_view`); a tool error goes to
+stderr as the error JSON with exit 1, and a result with `"ok": false` (`verify` with problems)
+also exits 1.
 
 ## 10. Built-in fns in this repo
 
