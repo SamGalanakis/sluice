@@ -373,20 +373,38 @@ def test_claude_streams_progress_while_it_runs(call_fn, fake_bin, tmp_path):
     assert "rate limit" not in err and "clean" not in lines
 
 
-def test_claude_model_and_session(call_fn, fake_bin, tmp_path):
+def test_claude_always_runs_opus_and_resumes_a_session(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_claude(
         tmp_path, fake_bin, events=[result_event("r", "s-9", None)])
     code, out, err = call_fn(
         AGENTS / "agent.claude",
-        {"cwd": str(tmp_path), "prompt": "p", "model": "sonnet",
-         "session": "s-9"},
+        {"cwd": str(tmp_path), "prompt": "p", "session": "s-9"},
         path=bin_dir,
     )
     assert code == 0, err
     argv = read_argv(argv_file)
-    assert argv[argv.index("--model") + 1] == "sonnet"
+    assert argv[argv.index("--model") + 1] == "opus"
     assert argv[-2:] == ["--resume", "s-9"]
     assert out["cost_usd"] is None
+
+
+def test_claude_refuses_a_model_input(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s", None)])
+    code, out, err = call_fn(
+        AGENTS / "agent.claude",
+        {"cwd": str(tmp_path), "prompt": "p", "model": "sonnet"}, path=bin_dir)
+    assert code == 1 and out is None
+    assert "always runs Opus" in err and not argv_file.exists()
+
+
+def test_run_claude_engine_refuses_a_model(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s", None)])
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "s", "model": "sonnet"},
+        path=bin_dir)
+    assert code == 1 and out is None
+    assert "always runs Opus" in err and not argv_file.exists()
 
 
 def test_claude_transient(call_fn, fake_bin, tmp_path):

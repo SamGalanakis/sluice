@@ -176,9 +176,11 @@ def claude(prompt, model, cwd, session=None):
 
 
 def main(inp, ctx):
+    if "model" in inp:  # an open fn would otherwise take it as an extra input
+        raise ValueError("agent.claude always runs Opus; remove the model input")
     data = claude(
         _with_step_notes(inp["prompt"], inp, ctx, inp.get("listen")),
-        inp.get("model") or "opus", inp["cwd"], inp.get("session"))
+        "opus", inp["cwd"], inp.get("session"))
     return {
         "result": data["result"],
         "session": data["session_id"],

@@ -236,7 +236,9 @@ def claude(prompt, model, cwd, session=None):
 
 
 def _claude(inp):
-    data = claude(inp["spec"], inp.get("model") or "opus", inp["cwd"], inp.get("session"))
+    if inp.get("model"):
+        raise ValueError("the claude engine always runs Opus; model is for codex and devin")
+    data = claude(inp["spec"], "opus", inp["cwd"], inp.get("session"))
     return {"final": data["result"], "session": data["session_id"]}
 
 

@@ -1,11 +1,10 @@
 {
   "name": "agent.claude",
-  "doc": "Run a Claude session on a prompt in a working directory.",
+  "doc": "Run a Claude session on a prompt in a working directory. Always runs Opus.",
   "open": true,
   "inputs": {
     "cwd": "string",
     "prompt": "string",
-    "model": "string?",
     "session": "string?",
     "listen": "boolean?"
   },

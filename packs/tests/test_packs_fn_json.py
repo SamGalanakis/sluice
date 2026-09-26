@@ -56,7 +56,6 @@ EXPECTED = {
             {
                 "cwd": "string",
                 "prompt": "string",
-                "model": "string?",
                 "session": "string?",
                 "listen": "boolean?"
             },
