@@ -1,0 +1,21 @@
+{
+  "name": "gh.pr",
+  "version": 1,
+  "description": "Create a GitHub PR for head into base, or update the existing open PR.",
+  "in": {
+    "path": "string",
+    "base": "string",
+    "head": "string",
+    "title": "string",
+    "body": "string",
+    "draft": "bool?"
+  },
+  "out": {
+    "number": "int",
+    "url": "string"
+  },
+  "effects": true,
+  "timeout": "10m",
+  "slots": {"default": 1},
+  "retry": {"transient": 2, "backoff": "30s"}
+}

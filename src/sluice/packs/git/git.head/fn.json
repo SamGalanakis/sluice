@@ -1,0 +1,16 @@
+{
+  "name": "git.head",
+  "version": 1,
+  "description": "Report the current branch and commit of a worktree.",
+  "in": {
+    "path": "string"
+  },
+  "out": {
+    "branch": "string",
+    "sha": "string"
+  },
+  "effects": false,
+  "timeout": "10m",
+  "slots": {"default": 1},
+  "retry": {"transient": 2, "backoff": "30s"}
+}
