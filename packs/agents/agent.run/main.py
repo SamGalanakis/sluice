@@ -40,7 +40,7 @@ def _devin(inp, ctx):
     session_file = Path(str(log) + ".session")
     return {
         "final": final_file.read_text() if final_file.exists() else "",
-        "session": session_file.read_text() if session_file.exists() else None,
+        "session": session_file.read_text().strip() if session_file.exists() else None,
     }
 
 
@@ -69,7 +69,7 @@ def _codex(inp, ctx):
     session_file = Path(str(log) + ".session")
     return {
         "final": log.read_text()[-4000:] if log.exists() else "",
-        "session": session_file.read_text() if session_file.exists() else None,
+        "session": session_file.read_text().strip() if session_file.exists() else None,
     }
 
 

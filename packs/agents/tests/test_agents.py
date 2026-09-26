@@ -525,7 +525,7 @@ def test_run_devin(call_fn, fake_bin, tmp_path):
     run_dir = call_fn.run_dirs[-1]
     assert code == 0, err
     assert out == {"final": "devin finished\n", "report": None,
-                   "session": "sess-abc\n"}
+                   "session": "sess-abc"}
     assert read_argv(argv_file) == [
         "--cd", str(cwd),
         "--spec", str(run_dir / "spec.md"),
@@ -554,7 +554,7 @@ def test_run_codex(call_fn, fake_bin, tmp_path):
     run_dir = call_fn.run_dirs[-1]
     assert code == 0, err
     assert out == {"final": "codex log output\n", "report": None,
-                   "session": "sess-codex\n"}
+                   "session": "sess-codex"}
     argv = read_argv(argv_file)
     assert argv[:4] == [
         "--cd", str(tmp_path), "--spec", str(run_dir / "spec.md")]
