@@ -8,7 +8,8 @@ import os
 import re
 from pathlib import Path
 
-from sluice.fn import ShError, Transient, run, sh
+from sluice.fn import ShError, Transient, run, sh_stream
+from sluice.log import last_seq
 
 DEFAULT_BIN = str(Path.home() / ".codex" / "bin" / "codex-harness-run")
 TRANSIENT_MARKERS = ("rate limit", "429", "capacity")
@@ -19,17 +20,20 @@ def _with_step_thread(text, ctx, listen):
     if listen is False or not (ctx.project and ctx.step):
         return text
     thread = "step-" + re.sub(r"[^a-z0-9_-]", "-", ctx.step.lower())
+    since = last_seq(ctx.home / "projects" / ctx.project)
     read = (f'{{"project": "{ctx.project}", "threads": ["{thread}"], '
-            f'"since_seq": <last>}}')
+            f'"since_seq": {since}}}')
     post = (f'{{"name": "thread.post", "project": "{ctx.project}", "direct": true, '
             f'"inputs": {{"thread": "{thread}", "from": "{ctx.step}", '
             f'"to": "orchestrator", "body": "..."}}}}')
     return text + (
         f"\n\nMessages for you arrive on sluice thread `{thread}` of project "
-        f"`{ctx.project}`. At each natural checkpoint run `sluice tool log_read "
-        f"'{read}'` and follow instructions addressed to you. If you hit a question "
-        f"you cannot settle within your task, post it with `sluice tool fn_call "
-        f"'{post}'` and continue with anything not blocked by it."
+        f"`{ctx.project}`. At natural pauses (between sub-tasks) check it with "
+        f"`sluice tool log_read '{read}'`, and next time pass the `last_seq` it returns "
+        f"as `since_seq`. Follow instructions addressed to you; ignore records not on "
+        f"your thread. If you hit a question you cannot settle within your task, post "
+        f"it with `sluice tool fn_call '{post}'` and continue with anything not blocked "
+        f"by it."
     )
 
 
@@ -49,7 +53,7 @@ def main(inp, ctx):
     if inp.get("resume"):
         argv += ["--resume", inp["resume"]]
     try:
-        sh(argv)
+        sh_stream(argv, follow=log)  # the harness writes its progress to the log
     except ShError as e:
         tail = log.read_text()[-3000:] if log.exists() else (e.stdout + e.stderr)[-3000:]
         if any(m in tail for m in TRANSIENT_MARKERS):

@@ -332,6 +332,10 @@ prints the result as JSON. On `Transient` it sleeps `backoff` s (env `SLUICE_BAC
 and calls `main` again, up to `retries` times; any other exception, or running out of retries,
 prints the traceback and exits 1. `sh(argv, cwd=None, check=True, env=None, timeout=None,
 input=None)` runs a command and raises `ShError` on a non-zero exit when `check`.
+`sh_stream(argv, on_line=echo_line, cwd=None, check=True, env=None, follow=None)` does the same
+but calls `on_line(line, source)` for each line as it arrives (`source` `stdout`, `stderr`, or
+`follow` for lines appended to the file `follow`); the default echoes each line to stderr, cut
+to 200 chars, so a long-running tool shows live progress in the run's `stderr.log`.
 
 ## 8. MCP server
 

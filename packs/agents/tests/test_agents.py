@@ -25,6 +25,14 @@ def read_argv(path):
     return [a.decode() for a in path.read_bytes().split(b"\0") if a]
 
 
+def seen_then_touch(marker, text):
+    """A call_fn watch: create `marker` once `text` shows up in the fn's stderr."""
+    def watch(stderr):
+        if text in stderr:
+            marker.touch()
+    return watch
+
+
 def init_repo(path):
     path.mkdir(parents=True, exist_ok=True)
 
@@ -42,8 +50,17 @@ def init_repo(path):
     return SimpleNamespace(path=path, git=g)
 
 
+def _progress_then_wait(wait_for, name):
+    """Fake-harness lines: one on stdout, one appended to its log, then wait (up to 10 s,
+    else exit 3) for `wait_for` to exist."""
+    return (f"echo '{name}-harness: starting'\n"
+            f"echo '{name}: step one' >> \"$log\"\n"
+            f"i=0; while [ ! -e '{wait_for}' ]; do i=$((i+1)); "
+            "[ $i -gt 200 ] && exit 3; sleep 0.05; done\n")
+
+
 def make_devin(tmp_path, fake_bin, *, code=0, log_body="devin log output\n",
-               final_body="devin finished\n", with_session=True):
+               final_body="devin finished\n", with_session=True, wait_for=None):
     argv_file = tmp_path / "devin.argv"
     spec_copy = tmp_path / "devin.spec.copy"
     script = (
@@ -58,8 +75,10 @@ def make_devin(tmp_path, fake_bin, *, code=0, log_body="devin log output\n",
         "  esac\n"
         "done\n"
         f'cp "$spec" "{spec_copy}"\n'
-        f"printf '{log_body}' > \"$log\"\n"
     )
+    if wait_for:
+        script += _progress_then_wait(wait_for, "devin")
+    script += f"printf '{log_body}' >> \"$log\"\n"
     if with_session:
         script += 'echo "sess-abc" > "$log.session"\n'
     if final_body is not None:
@@ -143,8 +162,22 @@ def test_devin_hard_failure(call_fn, fake_bin, tmp_path):
     assert out is None
 
 
+def test_devin_streams_the_harness_and_its_log_while_it_runs(call_fn, fake_bin, tmp_path):
+    marker = tmp_path / "seen"
+    bin_dir, _, _ = make_devin(tmp_path, fake_bin, wait_for=marker)
+    code, out, err = call_fn(
+        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
+        path=bin_dir, watch=seen_then_touch(marker, "devin: step one"))
+    assert code == 0, err
+    assert out["final"] == "devin finished\n"
+    assert out["log"] == str(call_fn.run_dirs[-1] / "devin.log")
+    lines = err.splitlines()
+    assert "devin-harness: starting" in lines
+    assert lines.index("devin: step one") < lines.index("devin log output")
+
+
 def make_codex(tmp_path, fake_bin, *, code=0, log_body="codex log output\n",
-               big_log=False):
+               big_log=False, wait_for=None):
     argv_file = tmp_path / "codex.argv"
     script = (
         "#!/bin/sh\n"
@@ -159,13 +192,15 @@ def make_codex(tmp_path, fake_bin, *, code=0, log_body="codex log output\n",
         "done\n"
         'echo "sess-codex" > "$log.session"\n'
     )
+    if wait_for:
+        script += _progress_then_wait(wait_for, "codex")
     if big_log:
         script += (
             "head -c 4200 /dev/zero | tr '\\0' 'x' > \"$log\"\n"
             "printf 'ENDTAIL\\n' >> \"$log\"\n"
         )
     else:
-        script += f"printf '{log_body}' > \"$log\"\n"
+        script += f"printf '{log_body}' >> \"$log\"\n"
     script += f"exit {code}\n"
     bin_dir = fake_bin("codex-harness-run", script)
     return bin_dir, argv_file
@@ -215,7 +250,52 @@ def test_codex_transient(call_fn, fake_bin, tmp_path):
     assert out is None
 
 
-def make_claude(tmp_path, fake_bin, *, code=0, stdout_obj=None, stderr_text=""):
+def test_codex_streams_its_log_while_it_runs(call_fn, fake_bin, tmp_path):
+    marker = tmp_path / "seen"
+    bin_dir, _ = make_codex(tmp_path, fake_bin, wait_for=marker)
+    code, out, err = call_fn(
+        AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s"},
+        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
+        watch=seen_then_touch(marker, "codex: step one"))
+    assert code == 0, err
+    assert out["final"] == "codex: step one\ncodex log output\n"
+    lines = err.splitlines()
+    assert "codex-harness: starting" in lines and "codex log output" in lines
+
+
+def result_event(result="did it", session="s-1", cost=0.02, **extra):
+    return {"type": "result", "subtype": "success", "is_error": False, "num_turns": 2,
+            "result": result, "session_id": session, "total_cost_usd": cost, **extra}
+
+
+def claude_stream(result_ev=None):
+    """stream-json events of a short session: text, three tool calls (one fails), the end."""
+    def assistant(*content):
+        return {"type": "assistant", "parent_tool_use_id": None,
+                "message": {"role": "assistant", "content": list(content)}}
+
+    return [
+        {"type": "system", "subtype": "init", "session_id": "s-1", "model": "fake-model"},
+        {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning"}},
+        assistant({"type": "thinking", "thinking": ""},
+                  {"type": "text", "text": "Looking at\nthe repo first."}),
+        assistant({"type": "tool_use", "name": "Bash",
+                   "input": {"command": "git status " + "x" * 200, "description": "d"}}),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "clean", "is_error": False}]}},
+        assistant({"type": "tool_use", "name": "Read", "input": {"file_path": "/w/a.py"}}),
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": [{"type": "text", "text": "no such file"}],
+             "is_error": True}]}},
+        result_ev or result_event(),
+    ]
+
+
+def make_claude(tmp_path, fake_bin, *, code=0, stdout_obj=None, events=None,
+                stderr_text="", wait_for=None):
+    """A fake claude: prints `stdout_obj` as one JSON object (--output-format json), or
+    `events` one per line (stream-json). With `wait_for`, it stops after the fourth event
+    until that file exists (exit 3 after 10 s)."""
     argv_file = tmp_path / "claude.argv"
     script = (
         "#!/bin/sh\n"
@@ -225,16 +305,18 @@ def make_claude(tmp_path, fake_bin, *, code=0, stdout_obj=None, stderr_text=""):
         script += f"printf '{stderr_text}' >&2\n"
     if stdout_obj is not None:
         script += f"printf '%s' '{json.dumps(stdout_obj)}'\n"
+    for i, ev in enumerate(events or []):
+        script += f"printf '%s\\n' '{json.dumps(ev)}'\nsleep 0.02\n"
+        if wait_for and i == 3:
+            script += (f"i=0; while [ ! -e '{wait_for}' ]; do i=$((i+1)); "
+                       "[ $i -gt 200 ] && exit 3; sleep 0.05; done\n")
     script += f"exit {code}\n"
     bin_dir = fake_bin("claude", script)
     return bin_dir, argv_file
 
 
 def test_claude_success(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(
-        tmp_path, fake_bin,
-        stdout_obj={"result": "did it", "session_id": "s-1",
-                    "total_cost_usd": 0.02})
+    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=claude_stream())
     code, out, err = call_fn(
         AGENTS / "agent.claude",
         {"cwd": str(tmp_path), "prompt": "do the thing"},
@@ -247,15 +329,35 @@ def test_claude_success(call_fn, fake_bin, tmp_path):
     assert argv[1].startswith("do the thing")
     assert argv[2:] == [
         "--model", "opus",
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
     ]
 
 
+def test_claude_streams_progress_while_it_runs(call_fn, fake_bin, tmp_path):
+    """Each event becomes a short stderr line as it arrives: the fake stops mid-session until
+    the test has seen the tool call line in the fn's stderr."""
+    marker = tmp_path / "seen"
+    bin_dir, _ = make_claude(tmp_path, fake_bin, events=claude_stream(), wait_for=marker)
+    code, out, err = call_fn(
+        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+        path=bin_dir, watch=seen_then_touch(marker, "tool Bash git status"))
+    assert code == 0, err
+    assert out == {"result": "did it", "session": "s-1", "cost_usd": 0.02}
+    lines = err.splitlines()
+    assert "session s-1 model fake-model" in lines
+    assert "Looking at the repo first." in lines
+    assert "tool Bash git status " + "x" * 89 in lines  # the command, cut to 100 chars
+    assert "tool Read /w/a.py" in lines
+    assert "tool error no such file" in lines
+    assert "done: 2 turns, $0.0200" in lines
+    assert "rate limit" not in err and "clean" not in lines
+
+
 def test_claude_model_and_session(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_claude(
-        tmp_path, fake_bin,
-        stdout_obj={"result": "r", "session_id": "s-9", "total_cost_usd": None})
+        tmp_path, fake_bin, events=[result_event("r", "s-9", None)])
     code, out, err = call_fn(
         AGENTS / "agent.claude",
         {"cwd": str(tmp_path), "prompt": "p", "model": "sonnet",
@@ -280,14 +382,31 @@ def test_claude_transient(call_fn, fake_bin, tmp_path):
     assert out is None
 
 
+def test_claude_transient_from_the_stream(call_fn, fake_bin, tmp_path):
+    """An API error reported only in the result event is recognised too."""
+    failed = result_event("API Error: 529 overloaded", subtype="error_during_execution",
+                          is_error=True, api_error_status=529)
+    bin_dir, _ = make_claude(tmp_path, fake_bin, code=1, events=[failed])
+    code, out, err = call_fn(
+        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"}, path=bin_dir)
+    assert code == 1, err
+    assert "transient (attempt 1)" in err
+    assert "error error_during_execution: API Error: 529 overloaded" in err
+    assert out is None
+
+
 def test_claude_hard_failure(call_fn, fake_bin, tmp_path):
+    """A rate-limit warning that still allowed the request does not make a failure
+    transient."""
     bin_dir, _ = make_claude(
-        tmp_path, fake_bin, code=1, stderr_text="Error: auth failed\\n")
-    code, out, _err = call_fn(
+        tmp_path, fake_bin, code=1, stderr_text="Error: auth failed\\n",
+        events=claude_stream()[:2])
+    code, out, err = call_fn(
         AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
         path=bin_dir)
     assert code == 1
     assert out is None
+    assert "transient" not in err and "Error: auth failed" in err
 
 
 def test_review(call_fn, fake_bin, tmp_path):
@@ -308,8 +427,7 @@ def test_review(call_fn, fake_bin, tmp_path):
         'echo "z" >> f.txt\n'
         "git add f.txt\n"
         'git -c user.email=r@e -c user.name=R commit -q -m "Fix f.txt"\n'
-        "printf '%s' "
-        '\'{"result":"fixed it","session_id":"rs","total_cost_usd":0.01}\'\n'
+        f"printf '%s\\n' '{json.dumps(result_event('fixed it', 'rs', 0.01))}'\n"
     )
     bin_dir = fake_bin("claude", script)
     code, out, err = call_fn(
@@ -502,9 +620,7 @@ def test_run_codex(call_fn, fake_bin, tmp_path):
 
 def test_run_claude(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_claude(
-        tmp_path, fake_bin,
-        stdout_obj={"result": "done", "session_id": "s-42",
-                    "total_cost_usd": 0.01})
+        tmp_path, fake_bin, events=claude_stream(result_event("done", "s-42", 0.01)))
     report = tmp_path / "rep.md"
     report.write_text("REP")
     code, out, err = call_fn(
@@ -515,12 +631,14 @@ def test_run_claude(call_fn, fake_bin, tmp_path):
     )
     assert code == 0, err
     assert out == {"final": "done", "report": "REP", "session": "s-42"}
+    assert "tool Read /w/a.py" in err.splitlines()
     argv = read_argv(argv_file)
     assert argv[0] == "-p"
     assert argv[1].startswith("the prompt")
     assert argv[2:] == [
         "--model", "opus",
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
     ]
 
@@ -537,8 +655,7 @@ def test_run_resume(call_fn, fake_bin, tmp_path):
     assert read_argv(devin_argv)[-2:] == ["--resume", "sess-9"]
 
     _, claude_argv = make_claude(
-        tmp_path, fake_bin,
-        stdout_obj={"result": "x", "session_id": "sess-7"})
+        tmp_path, fake_bin, events=[result_event("x", "sess-7")])
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "s",
@@ -589,7 +706,12 @@ def spec_of(call_fn):
 
 
 def test_step_thread_devin(call_fn, fake_bin, tmp_path):
-    """Running as a plan step, the spec gains the step-thread section."""
+    """Running as a plan step, the spec gains the step-thread section, reading from the
+    project log's last seq when the fn started."""
+    project = tmp_path / "sluice-home" / "projects" / "test-project"
+    project.mkdir(parents=True)
+    (project / "log.jsonl").write_text("".join(
+        json.dumps({"seq": n, "at": "t", "kind": "step.status"}) + "\n" for n in range(1, 43)))
     bin_dir, _, spec_copy = make_devin(tmp_path, fake_bin)
     code, _out, err = call_fn(
         AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "do it"},
@@ -598,7 +720,8 @@ def test_step_thread_devin(call_fn, fake_bin, tmp_path):
     spec = spec_copy.read_text()
     assert spec.startswith("do it")
     assert "sluice thread `step-test-step` of project `test-project`" in spec
-    assert '"threads": ["step-test-step"]' in spec
+    assert '"threads": ["step-test-step"], "since_seq": 42}' in spec
+    assert "<last>" not in spec
     assert '"project": "test-project"' in spec
     assert '"name": "thread.post"' in spec
     assert '"from": "test-step"' in spec
@@ -639,20 +762,19 @@ def test_step_thread_codex(call_fn, fake_bin, tmp_path):
 
 
 def test_step_thread_claude(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(
-        tmp_path, fake_bin, stdout_obj={"result": "r", "session_id": "s"})
+    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
     code, _out, err = call_fn(
         AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
         path=bin_dir)
     assert code == 0, err
-    argv = read_argv(argv_file)
-    assert "sluice thread `step-test-step`" in argv[argv.index("-p") + 1]
+    prompt = read_argv(argv_file)[1]
+    assert "sluice thread `step-test-step`" in prompt
+    assert '"since_seq": 0}' in prompt  # no log yet
 
 
 def test_step_thread_run(call_fn, fake_bin, tmp_path):
     """agent.run appends the section once, whatever the engine."""
-    bin_dir, argv_file = make_claude(
-        tmp_path, fake_bin, stdout_obj={"result": "r", "session_id": "s"})
+    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "s"},

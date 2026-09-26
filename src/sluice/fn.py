@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -136,3 +137,93 @@ def sh(
     if check and p.returncode != 0:
         raise ShError(argv, p.returncode, p.stdout, p.stderr)
     return p
+
+
+def echo_line(line: str, source: str) -> None:
+    """sh_stream's default on_line: the line on stderr, on one line, cut to 200 chars."""
+    line = " ".join(line.split())
+    if line:
+        print(line[:200], file=sys.stderr, flush=True)
+
+
+def _follow(path: Path, pos: int, done: threading.Event,
+            on_line: Callable[[str], None]) -> None:
+    """Pass each line appended to `path` after byte `pos` to on_line until `done`, then the
+    rest. Starts over when the file is truncated or replaced."""
+    buf = b""
+    while True:
+        finished = done.is_set()
+        with contextlib.suppress(OSError):
+            size = path.stat().st_size
+            if size < pos:
+                pos, buf = 0, b""
+            if size > pos:
+                with open(path, "rb") as f:
+                    f.seek(pos)
+                    data = f.read(size - pos)
+                pos += len(data)
+                *lines, buf = (buf + data).split(b"\n")
+                for line in lines:
+                    on_line(line.decode(errors="replace"))
+        if finished:
+            if buf:
+                on_line(buf.decode(errors="replace"))
+            return
+        done.wait(0.2)
+
+
+def sh_stream(
+    argv: list[str],
+    on_line: Callable[[str, str], None] = echo_line,
+    cwd: str | Path | None = None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+    follow: str | Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command like sh(), but call on_line(line, source) for each line as it arrives:
+    source "stdout" or "stderr", or "follow" for a line appended to the file `follow` (a tool
+    that logs to a file). The default echoes each line to stderr. stdin is /dev/null. Returns
+    the full stdout and stderr; raises ShError on a non-zero exit when `check`."""
+    print(f"$ {' '.join(argv)}" + (f"  (in {cwd})" if cwd else ""), file=sys.stderr, flush=True)
+    full_env = {**os.environ, **env} if env else None
+    lock = threading.Lock()
+    out: dict[str, list[str]] = {"stdout": [], "stderr": []}
+
+    def emit(line: str, source: str) -> None:
+        with lock:
+            on_line(line.rstrip("\r\n"), source)
+
+    def pump(stream: Any, source: str) -> None:
+        for line in stream:
+            out[source].append(line)
+            emit(line, source)
+
+    if follow is not None:  # where the file ends before the command can write to it
+        follow = Path(follow)
+        start = follow.stat().st_size if follow.exists() else 0
+    p = subprocess.Popen(argv, cwd=cwd, env=full_env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         errors="replace", bufsize=1)
+    done = threading.Event()
+    threads = [threading.Thread(target=pump, args=(p.stderr, "stderr"), daemon=True)]
+    if follow is not None:
+        threads.append(threading.Thread(
+            target=_follow, args=(follow, start, done, lambda s: emit(s, "follow")),
+            daemon=True))
+    for t in threads:
+        t.start()
+    try:
+        pump(p.stdout, "stdout")
+        code = p.wait()
+    except BaseException:
+        p.kill()
+        p.wait()
+        raise
+    finally:
+        done.set()
+        for t in threads:
+            t.join()
+    res = subprocess.CompletedProcess(argv, code, "".join(out["stdout"]), "".join(out["stderr"]))
+    if check and code != 0:
+        raise ShError(argv, code, res.stdout, res.stderr)
+    return res
