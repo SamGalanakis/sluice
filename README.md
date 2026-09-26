@@ -8,8 +8,8 @@ processes, records results, and escalates only what a rule cannot settle to an *
   or a composite graph of other functions.
 - Plans are local JSON files. Every edit goes through typed tools (MCP or CLI) with the current
   revision and is appended to a log.
-- The core knows nothing about git or any project. Packs supply functions: `packs/agents`,
-  `packs/git`, `packs/lash`.
+- The core knows nothing about git or any project. Packs supply functions: the built-in packs are
+  `agents` and `git`, shipped inside the package (`src/sluice/packs`).
 
 See [SPEC.md](SPEC.md) for the full contract.
 

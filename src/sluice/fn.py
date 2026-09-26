@@ -19,9 +19,10 @@ import os
 import subprocess
 import sys
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 TRANSIENT_EXIT = 75
 _TAIL = 2000

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 PACKS = Path(__file__).resolve().parent
-REPO = PACKS.parent
+SRC = PACKS.parents[1]  # the directory that contains the sluice package
 
 
 def pytest_configure(config):
@@ -31,7 +31,7 @@ def call_fn(tmp_path):
         run_dirs.append(run_dir)
         e = {
             **os.environ,
-            "PYTHONPATH": str(REPO / "src"),
+            "PYTHONPATH": str(SRC),
             "SLUICE_HOME": str(tmp_path / "sluice-home"),
             "SLUICE_PLAN": "test-plan",
             "SLUICE_NODE": "test-node",
