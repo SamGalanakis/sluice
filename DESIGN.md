@@ -155,10 +155,11 @@ is 11px meta in muted ink, sentence case. Nothing is uppercase; no kickers or ey
 
 ## Layout
 
-The board is laid out on the server: columns by dependency depth (plan inputs first, outputs
-last), 248px card columns and 188px chip-only columns with 56px gaps, each column placed by the
+The board is laid out on the server: columns by dependency depth (plan outputs last; plan inputs
+are a two-line strip above), 248px card columns and 188px chip-only columns with 56px gaps, each column placed by the
 mean height of what feeds it, edges as inline SVG through thin slots so they never run under a
-card. It scrolls sideways inside itself and opens at the live frontier; the page never scrolls
+card. It scrolls sideways inside itself and opens at its left edge, scrolling only when the
+live frontier is off-screen; the page never scrolls
 sideways. Text blocks hold a 72-75ch measure; the needs list and index hold 960px. Below 720px
 the board stacks in the same order without edges, and the step drawer becomes a full-screen
 sheet over the scrim.
@@ -182,8 +183,8 @@ work.
   (engine or fn, cost, stale or set by hand) with the duration pinned right. Running cards take
   an active-blue border, failed a full-ink one, stale an amber one; pending titles dim.
 - **Glue chip** (188x34): inline built-ins (`core.*`); glyph + one-line title, no border.
-- **Input / output node**: dashed, "Input **name**" in meta, the value on one line; an unset
-  input reads amber, an unset output muted.
+- **Output node**: dashed, "Output **name**" in meta, the value on one line (muted when unset).
+- **Inputs strip**: `name = value` pairs in one clamped line above the board; unset reads amber.
 
 ### Buttons
 Primary is green on its own ink; others are card-coloured with an input hairline.

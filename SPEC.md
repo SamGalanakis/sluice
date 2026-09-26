@@ -423,11 +423,11 @@ raw HTML escaped, unsafe link schemes refused).
   one row per project: name, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
-- `GET /projects/<name>`: the name, description, one summary line (succeeded of total, running,
+- `GET /projects/<name>`: the name, description (two lines, then "Show more"), one summary line (succeeded of total, running,
   stale, failed, total `cost_usd`, last activity) and links (log, plan history: the log
   filtered to the history kinds, inbox, functions); the "Needs you" lines; then the **board**:
-  the plan as HTML cards laid out on the server in columns by dependency depth (plan inputs
-  first, plan outputs last), each column ordered and placed by the mean height of what feeds
+  the plan as HTML cards laid out on the server in columns by dependency depth (plan outputs
+  last; the plan inputs are a clamped strip above it, `name = value`, a doc in its title), each column ordered and placed by the mean height of what feeds
   it, an edge per handoff drawn as inline SVG (an edge that spans columns runs through a thin
   slot in each column it crosses, never under a card). A card shows its status glyph, its title
   (the step's doc, else its id), one line (a running step's last non-empty stderr line of its
@@ -435,11 +435,11 @@ raw HTML escaped, unsafe link schemes refused).
   value`; a pending step's missing plan inputs; "its inputs changed" when stale), then what runs
   it (for an `agent.*` fn its engine and a bound `model`, else the fn), `done of total` for a
   scattered step, "stale" or "set by hand", its cost (an output `cost_usd`) and how long it ran
-  (live while running). Built-ins that run inline (`core.*`) are slim chips. Plan input and
-  output nodes show their values ("not set" otherwise). Hovering or focusing a card traces it:
+  (live while running). Built-ins that run inline (`core.*`) are slim chips. Plan output nodes show their
+  values ("not set" otherwise). Hovering or focusing a card traces it:
   its edges light up and name their ports (`output → input`), the rest dims. The board scrolls
-  sideways inside itself (never the page) and opens at the leftmost running, failed or stale
-  step; at phone width the cards stack in the same order and the edges are left out. A card
+  sideways inside itself (never the page) and opens at its left edge, scrolling only to bring the leftmost running, failed or
+  stale step into view when it is off-screen; at phone width the cards stack in the same order and the edges are left out. A card
   links to the step's page; with JavaScript it opens the step in a drawer instead (the address
   becomes `#step:<id>`, so Back and a shared link work; Escape closes it).
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own):
