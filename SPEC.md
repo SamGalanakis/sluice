@@ -430,29 +430,23 @@ raw HTML escaped, unsafe link schemes refused).
   is, and the last activity (the later of the last log record and the last state write).
 - `GET /projects/<name>`: the name and its tabs (History is the log filtered to the history
   kinds; Functions the functions as the project sees them), the description (two lines, then
-  "Show more"), one summary line (succeeded of total, running, stale, failed, total
-  `cost_usd`, last activity) with the Archive switch (an archived project says so), the plan
-  inputs folded ("Plan inputs: names", an unset one marked; inside, each doc and value), the
-  "Needs you" lines, the **Result** (the plan's outputs that have a value; a long text folds
-  to its first lines, markdown rendered), then the **board**: one row per dependency depth, top
-  to bottom, inside the page's column (up to four cards side by side; more wrap within the
-  row). The server lays out the rows, so the order reads without JavaScript; `board.js` draws
-  an edge per handoff from the bottom of a card to the top of the one it feeds, with an
-  arrowhead, several edges on one side of a card spread along it (from the plane's
-  `data-edges`: `[from, to, "output → input"]`). A card shows its status glyph, the step's id
-  as its title and how long it ran (live while running), its doc (two lines), then what it
-  says now: a running step's last non-empty stderr line of its current run; a failed step's
-  error; a succeeded step's outputs as `name value` rows (its declared outputs when it
-  declares any, else its fn's, never `session` or `cost_usd`; up to four; an inbox answer as
-  the value chosen, markdown as its first line of words); a pending step's missing plan
-  inputs; "its inputs changed" when stale; then what runs it (for an `agent.*` fn its engine
-  and a bound `model`, else the fn), `done of total` for a scattered step, "stale" or "set by
-  hand" and its cost. Built-ins that run inline (`core.*`) are small chips (id and fn, the doc
-  in their title). Hovering or focusing a card traces it: its edges light up and name their
-  ports, the rest dims; the arrow keys move between cards. At phone width the cards stack one
-  per line and the edges are left out. A card links to the step's page; with JavaScript it
-  opens the step in a drawer instead (the address becomes `#step:<id>`, so Back and a shared
-  link work; Escape closes it).
+  "Show more"; an archived project says so), the "Needs you" lines, then the **board**: one
+  row per dependency depth, top to bottom, inside the page's column, each step a compact
+  bubble: its status glyph, its id and, small, how long it ran (live while running) and
+  `done/total` for a scattered step; its tooltip is its doc and what it says now (a running
+  step's last non-empty stderr line, a failed step's error, why a pending step waits, "its
+  inputs changed" when stale). Everything else is one click away in the step's detail.
+  Built-ins that run inline (`core.*`) are dashed bubbles. The server lays out the rows, so
+  the order reads without JavaScript; `board.js` draws an edge per handoff from the bottom of a
+  bubble to the top of the one it feeds, with an arrowhead, several edges on one side spread
+  along it (from the plane's `data-edges`: `[from, to, "output → input"]`). Hovering or
+  focusing a bubble traces it: its edges light up and name their ports, the rest dims; the
+  arrow keys move between bubbles. A bubble links to the step's page; with JavaScript it opens
+  the step in a drawer instead (the address becomes `#step:<id>`, so Back and a shared link
+  work; Escape closes it). Under the board: the **Result** (the plan's outputs that have a
+  value; a long text folds to its first lines, markdown rendered), the plan's inputs (name,
+  value, doc), and one line (succeeded of total, running, stale, failed, total `cost_usd`,
+  last activity) with the Archive switch.
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own):
   its id, its doc, then fn, status, time, cost (as money) and session; its error; its progress (the tail of the
   current run's stderr, while running); its outputs with their declared types and docs (while

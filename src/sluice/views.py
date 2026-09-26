@@ -617,7 +617,6 @@ def needs_band(items: list[dict[str, str]], link_steps: bool = True) -> str:
 
 ROW_MAX = 4  # cards side by side in one row; more wrap onto another line of the same row
 RUN_FACTS = ("session", "cost_usd")  # what a run says about itself, not what it produced
-OUT_ROWS = 4  # outputs a card shows
 
 
 def depths(board: Board) -> dict[str, int]:
@@ -661,76 +660,25 @@ def answer_text(value: Any) -> str | None:
     return str(value["action"])
 
 
-def first_line(text: str) -> str:
-    """The first line of prose that says something, without markdown's markers."""
-    for line in text.splitlines():
-        line = line.strip().lstrip("#>-*• ").replace("**", "").replace("`", "").strip()
-        if line:
-            return _line(line, 200)
-    return ""
-
-
-def show_value(value: Any) -> str:
-    """A value in one short line of plain text, as a card shows it."""
-    if (chosen := answer_text(value)) is not None:
-        return chosen
-    if isinstance(value, str):
-        return first_line(value)
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    return _short(value, 120)
-
-
-def produced(block: Block) -> list[tuple[str, Any]]:
-    """What a finished step handed on: its declared outputs when it declares any, else its
-    fn's outputs; never the run's own facts (session, cost)."""
-    outs = block.entry.get("outputs")
-    if not isinstance(outs, dict):
-        return []
-    raw = block.raw.get("outputs")
-    declared = [n for n in (raw if isinstance(raw, dict) else {}) if n in outs]
-    names = declared or [n for n in (*block.outputs, *outs) if n in outs]
-    return [(n, outs[n]) for n in dict.fromkeys(names) if n not in RUN_FACTS]
-
-
-def _outputs_dl(items: list[tuple[str, Any]]) -> str:
-    rows = "".join(f'<div><dt>{e(n)}</dt><dd>{e(show_value(v))}</dd></div>'
-                   for n, v in items[:OUT_ROWS])
-    more = f'<p class="more-outs">and {len(items) - OUT_ROWS} more</p>' \
-        if len(items) > OUT_ROWS else ""
-    return f'<dl class="outs">{rows}</dl>{more}'
-
-
 def _card(store: Store, board: Board, b: Block, live: bool) -> str:
+    """A step on the board: a compact bubble with its status glyph, its id and, small, how long
+    it ran (and `done of total` for a scattered step). Everything else is one click away in the
+    drawer; the doc and what it says now (progress, error) are its tooltip."""
     tag = "a" if live else "div"
     href = f' href="{e(step_href(board.project, b.sid))}" data-step="{e(b.sid)}"' if live else ""
-    attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}" id="n-{e(b.sid)}" '
-             f'data-node="s:{e(b.sid)}"{href}')
-    if b.glue:
-        title = f' title="{e(" ".join(b.doc.split()))}"' if b.doc.strip() else ""
-        return (f'<{tag} {attrs}{title}>{glyph(b.mark)}<span class="sid">{e(b.sid)}</span>'
-                f'<span class="fnname">{e(b.fn)}</span></{tag}>')
     kind, text = block_line(store, board, b)
-    if b.status == "succeeded" and produced(b):
-        body = _outputs_dl(produced(b))
-    elif text:
-        body = f'<span class="ln ln-{kind}">{e(text)}</span>'
-    else:
-        body = ""
-    meta = [e(b.engine)]
+    now = text if kind != "output" else ""  # what it produced is in the drawer
+    tip = " — ".join(t for t in (" ".join(b.doc.split()), now) if t)
+    title = f' title="{e(tip)}"' if tip else ""
+    attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}" id="n-{e(b.sid)}" '
+             f'data-node="s:{e(b.sid)}"{href}{title}')
+    small = []
     if "total" in b.entry:
-        meta.append(f"{int(b.entry.get('done') or 0)} of {int(b.entry['total'])}")
-    if b.status == "stale":
-        meta.append('<span class="attn">stale</span>')
-    if b.mark == "manual":
-        meta.append("set by hand")
-    if b.cost is not None:
-        meta.append(e(_money(b.cost)))
-    doc = f'<span class="doc">{e(" ".join(b.doc.split()))}</span>' if b.doc.strip() else ""
-    return (f'<{tag} {attrs}><span class="hd">{glyph(b.mark)}<span class="sid">{e(b.sid)}'
-            f'</span><span class="dur">{_elapsed(b)}</span></span>{doc}'
-            f'<span class="body">{body}</span>'
-            f'<span class="meta">{" · ".join(meta)}</span></{tag}>')
+        small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
+    if _elapsed(b):
+        small.append(_elapsed(b))
+    tail = f'<span class="dur">{" · ".join(small)}</span>' if small else ""
+    return f'<{tag} {attrs}>{glyph(b.mark)}<span class="sid">{e(b.sid)}</span>{tail}</{tag}>'
 
 
 def board_html(store: Store, board: Board, live: bool = True) -> str:
@@ -763,8 +711,8 @@ def result_panel(board: Board) -> str:
             rows.append(f"<div><dt>{e(name)}</dt><dd>{_result_value(v)}</dd></div>")
     if not rows:
         return ""
-    return (f'<section class="result" aria-labelledby="result-h"><h2 id="result-h">Result</h2>'
-            f'<dl class="kv">{"".join(rows)}</dl></section>')
+    return (f'<div class="result"><h2 class="label">Result</h2>'
+            f'<dl class="kv">{"".join(rows)}</dl></div>')
 
 
 def _result_value(value: Any) -> str:
@@ -777,25 +725,22 @@ def _result_value(value: Any) -> str:
 
 
 def inputs_strip(board: Board) -> str:
-    """The plan inputs, folded: their names in the summary, `name = value` inside."""
+    """The plan inputs: name, value, and the doc under it."""
     if not board.plan.inputs:
         return ""
-    rows, names = [], []
+    rows = []
     for name, t in board.plan.inputs.items():
         doc = board.plan.input_docs.get(name, "")
         if name in board.state["inputs"]:
             v = _value(board.state["inputs"][name])
-            names.append(e(name))
         elif isinstance(t, T.Optional):
             v = '<span class="quiet">null</span>'
-            names.append(e(name))
         else:
             v = '<span class="attn">not set</span>'
-            names.append(f'{e(name)} <span class="attn">(not set)</span>')
         about = f'<p class="meta">{e(doc)}</p>' if doc else ""
-        rows.append(f"<div><dt>{e(name)}</dt><dd>{about}{v}</dd></div>")
-    return (f'<details class="inputs" data-preserve-attr="open"><summary>Plan inputs: '
-            f'{", ".join(names)}</summary><dl class="kv">{"".join(rows)}</dl></details>')
+        rows.append(f"<div><dt>{e(name)}</dt><dd>{v}{about}</dd></div>")
+    return (f'<div class="inputs"><h2 class="label">Inputs</h2>'
+            f'<dl class="kv">{"".join(rows)}</dl></div>')
 
 
 def _about(text: str) -> str:
@@ -957,11 +902,13 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     line = f'<p class="meta sum">{_summary_line(board, last_change(store, project))}</p>'
     if live:
         line = f'<div class="sumline">{line}{_archive_form(project, archived)}</div>'
-    head = note + _about(about) + line + inputs_strip(board)
-    parts = {"summary": _part("summary", head),
+    # the head is the project: its description. What the plan took, produced and cost, and the
+    # archive switch, sit under the board.
+    about_plan = (result_panel(board) + inputs_strip(board) + line)
+    parts = {"summary": _part("summary", note + _about(about)),
              "needs": _part("needs", needs_band(needs(store, project)) if live else ""),
-             "result": _part("result", result_panel(board)),
-             "graph": _part("graph", board_html(store, board, live))}
+             "graph": _part("graph", board_html(store, board, live)),
+             "result": _part("result", about_plan, "section", "plan-facts")}
     if live:
         parts["nav-inbox"] = nav_inbox(open_count(store))
     return parts
@@ -993,7 +940,7 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     live = ver is not None
     p = _project(store, project, live)
     body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}{p["needs"]}'
-            f'{p["result"]}{p["graph"]}')
+            f'{p["graph"]}{p["result"]}')
     if live:
         body += _drawer(project)
     else:

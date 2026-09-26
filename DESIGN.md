@@ -165,8 +165,9 @@ is 13px meta in muted ink, sentence case. Nothing is uppercase; no kickers or ey
 The plan reads top to bottom, inside the column: one row per dependency depth, up to four cards
 side by side (more wrap within the row), 44px between rows for the edges, cards in a row of
 equal height. The server lays out the rows; board.js draws the edges between measured cards
-(bottom centre to top centre, spread when several share a side, an arrowhead at the end). A
-finished plan leads with its Result above the board. Text blocks hold a 72-75ch measure.
+(bottom centre to top centre, spread when several share a side, an arrowhead at the end). The
+head of a project page is its name and description only; what the plan took, produced and cost
+follows the board. Text blocks hold a 72-75ch measure.
 
 ### Named Rules
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
@@ -176,9 +177,9 @@ the same edges (the wordmark on the left edge, Inbox ending on the right), so na
 lists, tables and cards share one left edge at every width. Nothing makes the page scroll
 sideways.
 
-**The Result First Rule.** What a plan produced outranks how it got there: the plan's outputs
-sit above the board, a long text folded to its first lines, and every card says what it handed
-on (its typed outputs), not what its agent chatted.
+**The One Click Rule.** The board is names and states: compact bubbles you can take in at a
+glance. Everything else (outputs, prompts, costs, shas) is one click away in the drawer, or
+under the board for the plan as a whole.
 
 Below 720px the board stacks one card per line without edges, and the step drawer becomes a
 full-screen sheet over the scrim.
@@ -197,18 +198,14 @@ work.
 ## Components
 
 ### Cards / Containers
-- **Work card**: glyph, the step id (15px semibold) and the duration pinned right; the doc (two
-  lines, muted); then what it says now: progress in mono while running, the error when failed,
-  its outputs as `name value` rows when done (declared outputs first, never session or cost;
-  an inbox answer as the value chosen); then meta (engine or fn, cost, stale or set by hand).
-  Running cards take an active-blue border, failed a full-ink one, stale an amber one; pending
-  ids dim.
-- **Glue chip**: inline built-ins (`core.*`); glyph, id and fn in a dashed pill, sized to its
-  content, the doc in its title.
-- **Result**: a card-coloured panel above the board, `name value` rows; long text folds to
-  132px under a fade with "Show all".
-- **Plan inputs**: folded, "Plan inputs: names" (an unset one marked amber); inside, each name,
-  doc and value.
+- **Step bubble**: a pill with the status glyph, the step id (14.5px, 550) and, in 12px meta,
+  its time (and `done/total` when scattered). Nothing else: the doc and what it says now are
+  its tooltip, and everything it took and produced is in the drawer. Running bubbles take an
+  active-blue border, failed a full-ink one, stale an amber one; pending ids dim. Glue steps
+  (`core.*`) are dashed and muted.
+- **Under the board**: the Result (`name value` rows; long text folds to 132px under a fade with
+  "Show all"), the plan inputs (name, value, doc), then one meta line of counts, cost and last
+  activity with the Archive switch.
 
 ### Buttons
 Primary is green on its own ink; others are card-coloured with an input hairline.

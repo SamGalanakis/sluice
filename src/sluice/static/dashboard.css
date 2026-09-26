@@ -179,16 +179,12 @@ details.about > summary::after { content: "Show more"; font-size: 13px;
                                  text-decoration: underline; text-underline-offset: 3px;
                                  text-decoration-color: var(--border-strong); }
 details.about[open] > summary::after { content: "Show less"; }
-details.inputs { font-size: 13px; margin-top: 2px; }
-details.inputs > summary { color: var(--muted-foreground); overflow: hidden;
-                           text-overflow: ellipsis; white-space: nowrap; }
-details.inputs[open] > summary { margin-bottom: 10px; }
-details.inputs dl.kv { font-size: 14px; padding: 12px 14px; background: var(--card);
-                       border: 1px solid var(--border); border-radius: var(--radius); }
-.result { margin: 8px 0 24px; padding: 16px 18px; background: var(--card);
-          border: 1px solid var(--border); border-radius: var(--radius); }
-.result h2 { margin: 0 0 12px; font-size: 15px; }
-.result dl.kv > div { display: contents; }
+.plan-facts { display: grid; gap: 22px; margin-top: 36px; padding-top: 20px;
+              border-top: 1px solid var(--border); }
+.plan-facts:empty { display: none; }
+.plan-facts .label { margin: 0 0 8px; }
+.plan-facts dl.kv { font-size: 14px; }
+.plan-facts dd .meta { margin-top: 2px; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p, .md ul, .md ol { margin: 0 0 10px; }
@@ -208,15 +204,14 @@ details.fold > summary::after { content: "Show all"; display: inline-block; marg
 details.fold[open] > summary::after { content: "Show less"; }
 
 /* ---- the board: rows by dependency depth, inside the column ---------------------------
-   The server puts each depth in a row (`--n` cards side by side, up to four; more wrap);
-   board.js draws the edges from `data-edges` into the SVG under the cards. */
+   Each depth is a row of compact bubbles, centred; board.js draws the edges from
+   `data-edges` into the SVG under them. Details live in the drawer, one click away. */
 #graph { margin-top: 8px; }
-.board { position: relative; }
+.board { position: relative; padding: 8px 0 16px; }
 .plane { position: relative; }
-.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 44px; position: relative;
+.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 40px; position: relative;
         z-index: 1; }
-.row { display: grid; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); gap: 16px;
-       align-items: stretch; }
+.row { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 14px; }
 .edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible;
          pointer-events: none; z-index: 0; }
 .wires path { fill: none; stroke: var(--edge); stroke-width: 1.5;
@@ -229,47 +224,22 @@ details.fold[open] > summary::after { content: "Show less"; }
 .plane.tracing .wires path.on { opacity: 1; stroke: var(--foreground); stroke-width: 2; }
 .plane.tracing .names text.on { opacity: 1; }
 .plane.tracing .node:not(.near) { opacity: .45; }
-.node { color: inherit; text-decoration: none; transition: opacity 150ms, border-color 150ms; }
-.card { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px 12px;
-        background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-        min-height: 120px; }
-a.card:hover, a.chip:hover { border-color: var(--border-strong); }
-.card .hd { display: flex; align-items: center; gap: 8px; }
-.card .hd .g { margin-top: 0; }
-.sid { font-weight: 600; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-       white-space: nowrap; }
-.card .dur { margin-left: auto; font-size: 13px; }
-.card .doc { color: var(--muted-foreground); font-size: 14px; line-height: 20px;
-             display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-             line-clamp: 2; overflow: hidden; }
-.card .body { display: block; min-width: 0; }
-.card .ln { display: block; font-size: 14px; line-height: 20px; white-space: nowrap;
-            overflow: hidden; text-overflow: ellipsis; }
-.card .ln-progress { font-family: var(--font-mono); font-size: 13px;
-                     color: var(--status-active); }
-.card .ln-error { color: var(--foreground); font-weight: 500; }
-.card .ln-note { color: var(--muted-foreground); }
-dl.outs { margin: 2px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr);
-          gap: 3px 10px; font-size: 14px; line-height: 20px; }
-dl.outs > div { display: contents; }
-dl.outs dt { color: var(--muted-foreground); }
-dl.outs dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-             white-space: nowrap; }
-.more-outs { font-size: 13px; color: var(--muted-foreground); }
-.card .meta { margin-top: auto; padding-top: 4px; white-space: nowrap; overflow: hidden;
-              text-overflow: ellipsis; }
-.is-pending .sid { color: color-mix(in oklch, var(--foreground) 70%, var(--card)); }
-.card.is-running { border-color: color-mix(in oklch, var(--status-active) 60%, transparent); }
-.card.is-failed { border-color: var(--foreground); border-width: 1.5px; }
-.card.is-stale { border-color: color-mix(in oklch, var(--status-attention) 55%, transparent); }
+.node { display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+        padding: 7px 14px 7px 10px; border-radius: 999px; color: inherit;
+        text-decoration: none; background: var(--card); border: 1px solid var(--border);
+        transition: opacity 150ms, border-color 150ms, background 150ms; }
+.node .g { margin-top: 0; }
+a.node:hover { border-color: var(--border-strong); background: var(--secondary); }
+.sid { font-weight: 550; font-size: 14.5px; line-height: 20px; min-width: 0; overflow: hidden;
+       text-overflow: ellipsis; white-space: nowrap; }
+.node .dur { font-size: 12px; line-height: 16px; }
+.is-pending .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
+.node.is-running { border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
+.node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground); }
+.node.is-stale { border-color: color-mix(in oklch, var(--status-attention) 60%, transparent); }
 .node.open { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
-.chip { display: flex; align-items: center; gap: 8px; padding: 8px 12px; align-self: center;
-        justify-self: center; max-width: 100%;
-        border: 1px dashed var(--border-strong); border-radius: var(--radius); font-size: 14px;
-        color: var(--muted-foreground); }
-.chip .g { margin-top: 0; }
-.chip .sid { font-size: 14px; font-weight: 500; color: var(--foreground); }
-.chip .fnname { font-size: 13px; }
+.chip { border-style: dashed; border-color: var(--border-strong); background: transparent; }
+.chip .sid { font-weight: 500; font-size: 13.5px; color: var(--muted-foreground); }
 
 /* ---- the step drawer and page -------------------------------------------------------- */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 20; width: min(680px, 100vw);
@@ -442,11 +412,8 @@ main > .phead + * { margin-top: 0; }
   main { padding: 16px 0 40px; }
   h1 { font-size: 22px; line-height: 28px; }
   nav.top a.brand { margin-right: 4px; }
-  .rows { gap: 10px; }
-  .row { grid-template-columns: 1fr; gap: 10px; }
-  .edges { display: none; }
-  .card { min-height: 0; }
-  .chip { align-self: stretch; }
+  .rows { gap: 28px; }
+  .row { gap: 8px 10px; }
   .needs .k { width: 60px; }
   .needs a { flex-wrap: wrap; row-gap: 0; }
   .needs .t { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical;

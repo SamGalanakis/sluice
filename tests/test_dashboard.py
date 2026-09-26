@@ -215,7 +215,7 @@ def test_a_running_steps_stderr_moves_its_progress_line(store, port):
 
     sent = patches(stream(port, "/projects/p/stream", {"ver": ver}, action=later(write)))
     [graph] = [p for p in sent if p.startswith('elements <div id="graph">')]
-    assert '<span class="ln ln-progress">second &lt;b&gt;line&lt;/b&gt;</span>' in graph
+    assert 'title="second &lt;b&gt;line&lt;/b&gt;"' in graph  # the bubble's tooltip
     # the step's own stream (the drawer, or its page) follows the same file
     sver = signals_of(get(port, "/projects/p/steps/a")[1])["sver"]
     assert stream(port, "/projects/p/steps/a/stream", {"sver": sver}, seconds=0.8) == []

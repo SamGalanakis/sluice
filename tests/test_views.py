@@ -99,36 +99,34 @@ def board_project(store):
             "late": {"status": "stale", "outputs": {"sum": 6}}}})
 
 
-def test_the_board_shows_each_step_as_a_card(store):
+def test_the_board_shows_each_step_as_a_bubble(store):
     board_project(store)
     page = views.project_page(store, "v", ver="abc")
     a = card(page, "a")
     assert a.startswith('<a class="node card is-succeeded" id="n-a" data-node="s:a" '
-                        'href="/projects/v/steps/a" data-step="a">')
+                        'href="/projects/v/steps/a" data-step="a" title="Add one to n">')
     assert '<span class="vh">succeeded</span>' in a  # the glyph's word, for assistive tech
-    assert '<span class="sid">a</span>' in a  # the id is the title, the doc under it
-    assert '<span class="doc">Add one to n</span>' in a
-    assert '<dl class="outs"><div><dt>sum</dt><dd>2</dd></div></dl>' in a  # what it handed on
-    assert '<span class="dur">12m 4s</span>' in a and "test.add" in a
-    assert '<span class="doc">' not in card(page, "b")  # no doc: the id alone
-    assert "set by hand" in card(page, "b") and "is-manual" in card(page, "b")
-    c = card(page, "c")
-    assert "is-failed" in c and '<span class="ln ln-error">exit code 1…</span>' in c
-    each = card(page, "each")
-    assert "is-running" in each and "1 of 3" in each
-    assert '<span class="ln ln-progress">halfway there</span>' in each  # last stderr line
+    assert '<span class="sid">a</span><span class="dur">12m 4s</span>' in a
+    # just the name and, small, its time: outputs, engine and cost are in the drawer
+    assert "sum" not in a and "test.add" not in a and "$" not in a
+    assert "title=" not in card(page, "b").split(">", 1)[0]  # no doc, nothing to say
+    assert "is-manual" in card(page, "b")
+    c = card(page, "c")  # failed: its error is the tooltip
+    assert "is-failed" in c and 'title="exit code 1…"' in c
+    each = card(page, "each")  # running: its progress is the tooltip, done/total beside it
+    assert "is-running" in each and 'title="halfway there"' in each and "1/3" in each
     assert 'data-since="2026-01-01T10:12:05Z"' in each  # its running time stays current
     assert "is-stale" in card(page, "late") and "Its inputs changed" in card(page, "late")
-    fmt = card(page, "fmt")  # glue: a chip with its id and fn
-    assert fmt.startswith('<a class="node chip is-succeeded"') and "core.format" in fmt
-    # plan inputs fold above the board; the plan's outputs are the Result, not board nodes
-    assert "<summary>Plan inputs: n</summary>" in page and 'data-node="i:' not in page
-    result = page[page.index('<section class="result"'):page.index("</section>",
-                                                                    page.index('class="result"'))]
-    assert "<dt>total</dt><dd><code class=\"v\">4</code></dd>" in result
-    assert 'data-node="o:' not in page
-    # the page: its summary, the drawer that shows a step, and the live stream
-    assert "3 of 6 succeeded · 1 running · 1 stale · 1 failed" in page
+    assert card(page, "fmt").startswith('<a class="node chip is-succeeded"')  # glue: dashed
+    # the head is the project; the plan's result, its inputs, counts and cost follow the
+    # board (plan inputs and outputs are not board nodes)
+    facts = page[page.index('<section id="result" class="plan-facts">'):]
+    assert page.index('id="graph"') < page.index('id="result"')
+    assert "<dt>total</dt><dd><code class=\"v\">4</code></dd>" in facts
+    assert "<dt>n</dt><dd><code class=\"v\">1</code></dd>" in facts
+    assert 'data-node="o:' not in page and 'data-node="i:' not in page
+    # the page: its counts, the drawer that shows a step, and the live stream
+    assert "3 of 6 succeeded · 1 running · 1 stale · 1 failed" in facts
     assert 'id="drawer"' in page
     assert "'/projects/v/steps/' + encodeURIComponent($step)" in html.unescape(page)
     assert "data-init=\"@get('/projects/v/stream', {retry: 'always'" in page
@@ -158,12 +156,12 @@ def test_the_board_lays_steps_out_in_rows_by_dependency_depth(store):
     assert "No steps yet." in empty and 'class="plane"' not in empty
 
 
-def test_answers_show_what_was_chosen_and_markdown_shows_its_words():
+def test_answers_show_what_was_chosen_and_markdown_is_rendered():
     ans = {"action": "choose", "params": {}, "values": {"value": "Retro NES", "notes": ""}}
-    assert views.show_value(ans) == "Retro NES"
-    assert views.show_value({"action": "answer", "text": "yes"}) == "yes"
-    assert views.show_value("## Recheck\n\n**Fixes** hold") == "Recheck"
-    assert views.show_value(True) == "yes"
+    assert views.answer_text(ans) == "Retro NES"
+    assert views.answer_text({"action": "answer", "text": "yes"}) == "yes"
+    assert views.answer_text("not an answer") is None
+    assert views._value(ans) == '<span class="v">Retro NES</span>'
     assert '<div class="v long md"><h2>Recheck</h2>' in views._value("## Recheck\n\nok")
     assert views._value("two\nlines").startswith('<div class="v long text">')
 
@@ -257,12 +255,11 @@ def test_long_descriptions_fold_and_inputs_show_their_docs(store):
     page = views.project_page(store, "v", ver="x")
     assert '<details class="about" data-preserve-attr="open"><summary><span class="clamp">' \
         "A long description." in page
-    # plan inputs fold: their names (an unset one marked), then name, doc and value inside
-    assert ('<summary>Plan inputs: who <span class="attn">(not set)</span>, k</summary>'
-            in page)
-    assert ('<dt>who</dt><dd><p class="meta">Who &lt;b&gt;counts&lt;/b&gt;</p><span class="attn">'
-            'not set</span></dd>') in page
+    # plan inputs sit under the board: name, value (an unset one marked), doc
+    assert ('<dt>who</dt><dd><span class="attn">not set</span><p class="meta">Who &lt;b&gt;'
+            'counts&lt;/b&gt;</p></dd>') in page
     assert '<dt>k</dt><dd><code class="v">3</code></dd>' in page
+    assert page.index('id="graph"') < page.index('<h2 class="label">Inputs</h2>')
 
 
 def test_needs_you_lists_answers_inputs_failures_and_unanswered_messages(store):
