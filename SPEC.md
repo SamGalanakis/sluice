@@ -166,6 +166,9 @@ ops, so the history shows who set what):
 **Built-in fns** (in `src/sluice/fns/`, run inline):
 - `core.echo`: inputs `{"value": "Any"}`, outputs `{"value": "Any"}`.
 - `core.collect`: inputs `{"items": "Any[]"}`, outputs `{"items": "Any[]"}`. The fan-in join.
+- `core.format`: inputs `{"template": "string", "values": "Any"}`, outputs `{"text": "string"}`.
+  Python `str.format`: an array fills `{0}`, `{1}`...; a record fills `{name}`. Non-string values are
+  rendered as JSON. Builds prompts from upstream outputs.
 
 ## 7. Helper library `sluice.fn` (stdlib only)
 
@@ -200,6 +203,7 @@ to the current revision under the lock) and required on `plan_patch`.
 
 | Tool | Args | Returns |
 |---|---|---|
+| `docs` | `topic?` | the index, or one page as markdown |
 | `fn_list` | – | `[{name, doc, inputs, outputs}]` |
 | `fn_get` | `name` | the fn.json |
 | `fn_call` | `name, inputs, wait?` | runs one fn as a one-step plan (`call-<ts>-<short>`); `{plan, status, outputs?, error?}`, waiting up to `wait` s |
