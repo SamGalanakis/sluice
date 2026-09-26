@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-26T22:21:17Z",
+  "title": "Design System: sluice dashboard",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Primary green",
+        "canonical": "oklch(0.48 0.12 158)"
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Canvas",
+        "canonical": "oklch(0.975 0.008 190)"
+      },
+      "status-attention": {
+        "role": "status",
+        "displayName": "Attention amber"
+      },
+      "badge": {
+        "role": "status",
+        "displayName": "The one red (open-inbox count)"
+      }
+    },
+    "typographyMeta": {
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "What a run says about itself: times, costs, counts, labels."
+      }
+    },
+    "shadows": [
+      {
+        "name": "lift",
+        "value": "0 1px 2px oklch(0.23 0.018 220 / 6%), 0 12px 32px oklch(0.23 0.018 220 / 12%)",
+        "purpose": "The step drawer only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "flip",
+        "value": "220ms cubic-bezier(.2,.8,.2,1)",
+        "purpose": "A glyph whose status changed."
+      },
+      {
+        "name": "fade",
+        "value": "150ms",
+        "purpose": "Tracing dims and lights edges and cards."
+      },
+      {
+        "name": "spin",
+        "value": "1.1s linear infinite",
+        "purpose": "The running glyph."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stack",
+        "value": "720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Work card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "One step on the board.",
+      "html": "<a class=\"ds-card\"><span class=\"ds-hd\"><span class=\"ds-g\"></span><span>Lane B: the UI on top of the interface</span></span><span class=\"ds-ln\">Canvas UI with preview and overlays</span><span class=\"ds-meta\"><span>claude \u00b7 sonnet \u00b7 $0.60</span><span>3m 26s</span></span></a>",
+      "css": ".ds-card{display:flex;flex-direction:column;gap:3px;width:248px;height:112px;padding:10px 12px;background:#fff;border:1px solid rgba(20,20,40,.1);border-radius:.625rem;font:14px/20px Inter,system-ui,sans-serif;color:#1d2a30;text-decoration:none}.ds-hd{display:flex;gap:8px;font-weight:500}.ds-g{width:14px;height:14px;border-radius:50%;background:#2b9a55;margin-top:3px;flex:none}.ds-ln{padding-left:22px;font-size:12.5px;color:#5c7176;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-meta{margin-top:auto;padding-left:22px;display:flex;justify-content:space-between;font-size:11px;color:#5c7176}"
+    },
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Answer an inbox item.",
+      "html": "<button class=\"ds-btn\">Answer</button>",
+      "css": ".ds-btn{background:oklch(0.48 0.12 158);color:oklch(0.985 0.006 175);border:0;border-radius:8px;padding:5px 12px;font:500 14px Inter,system-ui,sans-serif}"
+    },
+    {
+      "name": "Inbox badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "The dashboard's one red.",
+      "html": "<span class=\"ds-badge\">2</span>",
+      "css": ".ds-badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:oklch(0.55 0.22 27);color:#fff;font:600 11px/18px Inter,system-ui,sans-serif;text-align:center}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The plan is the page",
+    "overview": "A calm, server-drawn board of the blocks of work for one person supervising many agents; kin to hirsel. Ids and plumbing live in the step drawer.",
+    "keyCharacteristics": [
+      "One thing per slot",
+      "Needs you first",
+      "Shape carries status",
+      "One red"
+    ],
+    "rules": [
+      {
+        "name": "The One Red Rule",
+        "body": "Red is the open-inbox count and nothing else.",
+        "section": "colors"
+      },
+      {
+        "name": "The Shape Carries It Rule",
+        "body": "Each status has its own glyph; colour repeats it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Meta Voice Rule",
+        "body": "Run facts are 11px muted meta, sentence case, never uppercase.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Put ids and plumbing in the drawer",
+      "Keep the board working without JavaScript"
+    ],
+    "donts": [
+      "Spend red on failures",
+      "Repeat the same information in two places"
+    ]
+  }
+}

@@ -89,8 +89,13 @@ def test_every_page_renders(store, port):
     assert code == 200 and '<a href="/projects/p">p</a>' in index
     assert "@get('/stream'" in index and '<div id="projects">' in index
     code, page = get(port, "/projects/p")
-    assert code == 200 and '<div id="steps">' in page and "@get('/projects/p/stream'" in page
-    assert '<a href="/projects/p/log">' in page and "q from t: hello" in page
+    assert code == 200 and '<div id="graph">' in page and "@get('/projects/p/stream'" in page
+    assert '<a href="/projects/p/log">Log</a>' in page and 'data-step="a"' in page
+    code, step = get(port, "/projects/p/steps/a")
+    assert code == 200 and '<div id="step-detail">' in step and "<code>a</code>" in step
+    assert "@get('/projects/p/steps/a/stream'" in step and '"sver"' in html.unescape(step)
+    assert get(port, "/projects/p/steps/nope")[0] == 404
+    assert get(port, "/projects/p/steps/nope/stream")[0] == 404
     code, fns = get(port, "/fns?project=p")
     assert code == 200 and "<b>test.add</b>" in fns and '<a href="/log">Log</a>' in fns
     code, log = get(port, "/projects/p/log")
@@ -178,24 +183,51 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
         with store.lock("p"):
             store.write_state("p", {"inputs": {}, "steps": {
                 "a": {"status": "failed", "error": "<script>alert(1)</script>"}}})
-        store.append("p", message("q", "<script>alert(2)</script>"))
 
     events = stream(port, "/projects/p/stream", {"ver": ver}, action=later(fail))
     sent = patches(events)
-    steps = next(p for p in sent if p.startswith('elements <div id="steps">'))
-    assert '<td class="s-failed">failed</td>' in steps
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in steps and "<script>alert" not in steps
-    diagram = next(p for p in sent if 'id="plan-src"' in p)
-    assert diagram.startswith("mode replace\n") and "a / test.add / failed" in diagram
-    recent = next(p for p in sent if p.startswith('elements <div id="recent">'))
-    assert "&lt;script&gt;alert(2)&lt;/script&gt;" in recent and "<script>alert" not in recent
-    assert not any(p.startswith('elements <div id="inputs">') for p in sent)  # unchanged
+    graph = next(p for p in sent if p.startswith('elements <div id="graph">'))
+    assert 'class="node card is-failed" id="n-a"' in graph
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in graph and "<script>alert" not in graph
+    needs = next(p for p in sent if p.startswith('elements <div id="needs">'))
+    assert "Failed" in needs and "<script>alert" not in needs
     new_ver = [ev for ev in events if ev["event"] == "datastar-patch-signals"][-1]["data"]
     assert new_ver != [f'signals {{"ver":"{ver}"}}'] and new_ver[0].startswith('signals {"ver"')
     # a client with an old version gets every part at once, then nothing more
     stale = stream(port, "/projects/p/stream", {"ver": ver}, seconds=0.8)
-    assert len(patches(stale)) == 8  # summary, diagram, inputs, outputs, steps, history,
-    #                                   recent log and the nav badge
+    assert len(patches(stale)) == 4  # summary, needs, graph and the nav badge
+
+
+def test_a_running_steps_stderr_moves_its_progress_line(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    run = store.runs_dir("p") / "r1"
+    run.mkdir(parents=True)
+    log = run / "stderr.log"
+    log.write_text("first\n")
+    with store.lock("p"):
+        store.write_state("p", {"inputs": {}, "steps": {"a": {
+            "status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"}}})
+    ver = signals_of(get(port, "/projects/p")[1])["ver"]
+
+    def write():
+        with log.open("a") as f:
+            f.write("second <b>line</b>\n")
+
+    sent = patches(stream(port, "/projects/p/stream", {"ver": ver}, action=later(write)))
+    [graph] = [p for p in sent if p.startswith('elements <div id="graph">')]
+    assert '<span class="ln ln-progress">second &lt;b&gt;line&lt;/b&gt;</span>' in graph
+    # the step's own stream (the drawer, or its page) follows the same file
+    sver = signals_of(get(port, "/projects/p/steps/a")[1])["sver"]
+    assert stream(port, "/projects/p/steps/a/stream", {"sver": sver}, seconds=0.8) == []
+
+    def more():
+        with log.open("a") as f:
+            f.write("third\n")
+
+    events = stream(port, "/projects/p/steps/a/stream", {"sver": sver}, action=later(more))
+    [detail] = patches(events)
+    assert detail.startswith('elements <div id="step-detail">') and "third" in detail
+    assert events[-1]["data"][0].startswith('signals {"sver"')
 
 
 def test_the_index_stream_shows_a_new_project(store, port):
@@ -246,3 +278,4 @@ def test_the_log_stream_sends_the_table_when_the_filter_changes(store, port):
     events = stream(port, "/projects/p/log/stream", older,
                     action=later(lambda: store.append("p", message("r", "late"))))
     assert len(patches(events)) == 1 and "late" not in patches(events)[0]
+
