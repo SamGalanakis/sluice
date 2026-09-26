@@ -19,9 +19,10 @@ import os
 import subprocess
 import sys
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 TRANSIENT_EXIT = 75
 _TAIL = 2000
@@ -125,7 +126,7 @@ def sh(
     print(f"$ {' '.join(argv)}" + (f"  (in {cwd})" if cwd else ""), file=sys.stderr, flush=True)
     full_env = {**os.environ, **env} if env else None
     p = subprocess.run(argv, cwd=cwd, env=full_env, timeout=timeout, input=input,
-                       text=True, capture_output=True)
+                       text=True, capture_output=True, check=False)
     for stream in (p.stdout, p.stderr):
         if stream.strip():
             print(stream[-_TAIL:].rstrip(), file=sys.stderr, flush=True)
