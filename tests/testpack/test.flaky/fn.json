@@ -1,3 +1,0 @@
-{"name": "test.flaky", "version": 1, "description": "Transient until attempt succeed_on.",
- "in": {"succeed_on": "int"}, "out": {"attempt": "int"},
- "retry": {"transient": 2, "backoff": "1s"}}

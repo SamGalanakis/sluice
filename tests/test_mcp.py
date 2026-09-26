@@ -9,32 +9,29 @@ from mcp import Client
 from sluice.mcp_server import build_server
 from sluice.runner import Runner
 
-TOOLS = {"plans_list", "plan_create", "plan_get", "plan_patch", "plan_validate", "plan_history",
-         "plan_at", "plan_revert", "node_add", "status", "node_get", "node_retry", "node_skip",
-         "node_cancel", "dry_run", "events_tail", "inbox_list", "inbox_resolve", "fn_list",
-         "fn_get", "fn_call", "fn_result"}
+TOOLS = {"fn_list", "fn_get", "fn_call", "plans_list", "plan_create", "plan_get", "plan_patch",
+         "plan_history", "plan_set_input", "step_set_input", "step_set_output", "step_retry",
+         "status"}
 
 
-def v(x):
-    return {"value": x}
+def d(x):
+    return {"default": x}
 
 
 def add(a, b):
-    return {"fn": "test.add", "in": {"a": v(a), "b": v(b)}}
+    return {"run": "test.add", "in": {"a": a, "b": b}}
 
 
 @pytest.fixture
 def live(store):
-    """The store with a runner loop in a background thread, woken by in-process edits."""
+    """The store with a runner loop in a thread, woken right after in-process edits."""
     runner = Runner(store)
     store.listeners.append(runner.wake)
-    t = threading.Thread(target=runner.run_forever, daemon=True)
+    t = threading.Thread(target=runner.run_forever, kwargs={"interval": 0.2}, daemon=True)
     t.start()
     yield store
     runner.stop()
     t.join(10)
-    for p in list(runner.procs.values()):
-        p.kill()
 
 
 async def call(c, tool, **args):
@@ -54,192 +51,116 @@ async def fail(c, tool, **args):
     return data
 
 
-async def until_status(c, plan, pred, timeout=20.0):
+async def until(c, plan, pred, timeout=20.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         s = await ok(c, "status", plan=plan)
-        by = {n["id"]: n["status"] for n in s["nodes"]}
-        if pred(by):
+        if pred({x["id"]: x["status"] for x in s["steps"]}):
             return s
         await anyio.sleep(0.1)
-    raise AssertionError(f"timed out: {by}")
+    raise AssertionError(f"timed out: {s}")
 
 
-async def test_every_tool_is_listed(store):
+async def test_the_tool_set(store):
     async with Client(build_server(store)) as c:
-        tools = await c.list_tools()
-    assert {t.name for t in tools.tools} == TOOLS
-    assert all(t.description for t in tools.tools)
+        tools = (await c.list_tools()).tools
+    assert {t.name for t in tools} == TOOLS and all(t.description for t in tools)
 
 
-async def test_plan_editing_tools_and_error_payloads(store):
-    async with Client(build_server(store)) as c:
-        assert await ok(c, "plan_create", plan="p", doc={"title": "t", "nodes": {"a": add(1, 2)}},
-                        reason="start") == {"rev": 1}
-        got = await ok(c, "plan_get", plan="p")
-        assert got["rev"] == 1 and got["doc"]["nodes"]["a"]["fn"] == "test.add"
-        assert "rev" not in got["doc"]
-        assert (await ok(c, "plan_get", plan="p", path="/nodes/a/in/b")) == {"rev": 1,
-                                                                             "doc": v(2)}
-        assert (await fail(c, "plan_get", plan="p", path="/nodes/zz"))["error"] == "not_found"
-        assert (await fail(c, "plan_get", plan="nope"))["error"] == "not_found"
-        dup = await fail(c, "plan_create", plan="p", doc={"nodes": {}}, reason="again")
-        assert dup["error"] == "bad_request"
-
-        assert await ok(c, "plan_patch", plan="p", rev=1, reason="grow", author="orch",
-                        ops=[{"op": "add", "path": "/nodes/b", "value": add(3, 4)}]) == {"rev": 2}
-        conflict = await fail(c, "plan_patch", plan="p", rev=1, reason="stale",
-                              ops=[{"op": "remove", "path": "/nodes/b"}])
-        assert conflict == {"error": "conflict", "message": "plan is at rev 2", "current_rev": 2}
-        invalid = await fail(c, "plan_patch", plan="p", rev=2, reason="bad",
-                             ops=[{"op": "add", "path": "/nodes/c",
-                                   "value": {"fn": "test.add", "in": {"a": {"from": "zz.sum"}}}}])
-        assert invalid["error"] == "invalid"
-        assert invalid["errors"] == ["nodes.c.in.a: unknown node zz",
-                                     "nodes.c.in.b: required input port is not bound"]
-
-        good = await ok(c, "plan_validate", plan="p", doc={"nodes": {"x": add(1, 1)}})
-        assert good == {"ok": True, "errors": []}
-        bad = await ok(c, "plan_validate", plan="p", doc={"nodes": {"x": {"fn": "no.such"}}})
-        assert bad == {"ok": False, "errors": ["nodes.x.fn: unknown fn no.such"]}
-        assert (await ok(c, "plan_get", plan="p"))["rev"] == 2
-
-        assert await ok(c, "node_add", plan="p", rev=2, id="c", node=add(5, 6),
-                        reason="one more") == {"rev": 3}
-        exists = await fail(c, "node_add", plan="p", rev=3, id="c", node=add(5, 6), reason="x")
-        assert exists["errors"] == ["nodes.c: a node with this id already exists"]
-
-        hist = await ok(c, "plan_history", plan="p")
-        assert [(h["rev"], h["author"]) for h in hist] == [(1, "mcp"), (2, "orch"), (3, "mcp")]
-        assert [h["rev"] for h in await ok(c, "plan_history", plan="p", since_rev=2)] == [3]
-        at1 = await ok(c, "plan_at", plan="p", rev=1)
-        assert set(at1["doc"]["nodes"]) == {"a"}
-        assert await ok(c, "plan_revert", plan="p", rev=3, to_rev=1, reason="undo") == {"rev": 4}
-        assert set((await ok(c, "plan_get", plan="p"))["doc"]["nodes"]) == {"a"}
-
-        plans = await ok(c, "plans_list")
-        assert plans == [{"id": "p", "title": "t", "rev": 4, "paused": False,
-                          "counts": {"pending": 1}}]
-        bad_args = await fail(c, "plan_patch", plan="p")
-        assert bad_args["error"] == "bad_request" and "rev: Field required" in bad_args["message"]
-
-
-async def test_runtime_tools(live):
-    store = live
-    async with Client(build_server(store)) as c:
-        await ok(c, "plan_create", plan="p", reason="go", doc={"nodes": {
-            "a": add(1, 2),
-            "boom": {"fn": "test.boom"},
-            "ask": {"fn": "core.ask", "in": {"question": v("which?"), "to": v("human")}},
-            "use": {"fn": "core.echo", "in": {"value": {"from": "ask.answer"}}},
-            "nap": {"fn": "test.sleep", "in": {"seconds": v(30)}},
-            "later": {"fn": "core.echo", "in": {"value": v(1)}, "after": ["boom"]},
-        }})
-        s = await until_status(c, "p", lambda b: b["a"] == "succeeded" and b["boom"] == "failed"
-                               and b["ask"] == "waiting" and b["nap"] == "running")
-        assert s["rev"] == 1 and s["state_rev"] >= 1
-        row = next(n for n in s["nodes"] if n["id"] == "boom")
-        assert row["fn"] == "test.boom" and row["attempt"] == 1 and "boom" in row["error"]
-        assert set(s["counts"]) >= {"succeeded", "failed", "waiting", "running", "pending"}
-        assert s["ready"] == []
-
-        dry = await ok(c, "dry_run", plan="p")
-        assert {"id": "later", "reason": "dependency boom failed"} in dry["blocked"]
-        assert {"id": "use", "reason": "waiting for ask (waiting)"} in dry["blocked"]
-
-        node = await ok(c, "node_get", plan="p", node="a")
-        assert node["definition"] == add(1, 2) and node["expanded_ids"] == ["a"]
-        assert node["state"]["status"] == "succeeded" and node["output"] == {"sum": 3}
-        assert "adding 1 + 2" in node["stderr_tail"]
-        assert (await fail(c, "node_get", plan="p", node="zz"))["error"] == "not_found"
-
-        evs = await ok(c, "events_tail", plan="p")
-        assert evs[0]["type"] == "plan_created"
-        tail = await ok(c, "events_tail", plan="p", since_seq=1, limit=2)
-        assert [e["seq"] for e in tail] == [2, 3]
-
-        items = await ok(c, "inbox_list", plan="p")
-        by_kind = {i["kind"]: i for i in items}
-        assert by_kind["ask"]["to"] == "human" and by_kind["failure"]["node"] == "boom"
-        wrong = await fail(c, "inbox_resolve", item=by_kind["ask"]["id"],
-                           resolution={"action": "ack"})
-        assert wrong["error"] == "bad_request"
-        assert await ok(c, "inbox_resolve", item=by_kind["ask"]["id"],
-                        resolution={"answer": "left"}, author="sam") == {"ok": True}
-        await until_status(c, "p", lambda b: b["use"] == "succeeded")
-        assert (await ok(c, "node_get", plan="p", node="use"))["output"] == {"value": "left"}
-
-        assert (await ok(c, "node_skip", plan="p", node="boom", reason="later"))["ok"] is True
-        await until_status(c, "p", lambda b: b["later"] == "skipped")
-        assert (await ok(c, "inbox_list", plan="p")) == []
-        assert len(await ok(c, "inbox_list", plan="p", open_only=False)) == 2
-
-        (store.home / "boom-ok").write_text("")
-        assert (await ok(c, "node_retry", plan="p", node="boom", reason="fixed"))["ok"] is True
-        await until_status(c, "p", lambda b: b["boom"] == "succeeded" and b["later"] == "succeeded")
-
-        assert (await ok(c, "node_cancel", plan="p", node="nap", reason="enough"))["ok"] is True
-        await until_status(c, "p", lambda b: b["nap"] == "cancelled")
-        again = await fail(c, "node_cancel", plan="p", node="nap", reason="twice")
-        assert again["error"] == "bad_request"
-
-
-async def test_fn_list_and_get(store):
+async def test_fn_tools(store):
     async with Client(build_server(store)) as c:
         fns = {f["name"]: f for f in await ok(c, "fn_list")}
-        assert fns["test.add"] == {"name": "test.add", "version": 1,
-                                   "description": "Add two ints. Effect-free, so cached.",
-                                   "in": {"a": "int", "b": "int"}, "out": {"sum": "int"},
-                                   "composite": False, "effects": False}
-        assert fns["test.echo_log"]["description"] == ""  # declared without one
-        assert fns["test.twice"]["composite"] is True and fns["core.ask"]["effects"] is True
-        raw = await ok(c, "fn_get", name="test.twice")
-        assert raw["graph"]["out"] == {"y": {"from": "b.value"}}
+        assert fns["test.add"] == {"name": "test.add", "doc": "Add two ints.",
+                                   "inputs": {"a": "int", "b": "int"}, "outputs": {"sum": "int"}}
+        assert fns["test.boom"]["doc"] == "" and "git.head" in fns
+        assert (await ok(c, "fn_get", name="core.collect"))["inputs"] == {"items": "Any[]"}
         assert (await fail(c, "fn_get", name="no.such"))["error"] == "not_found"
+        bad = await fail(c, "fn_call", name="test.add", inputs={"a": "one", "c": 1})
+        assert bad["error"] == "invalid" and bad["errors"] == [
+            'inputs.a: expected int, got "one"', "inputs.b: missing required field",
+            "inputs.c: fn test.add has no input c"]
+        assert store.plan_ids() == []
 
 
-async def test_fn_call_with_wait_returns_the_result(live):
+async def test_fn_call_waits_for_the_result(live):
     async with Client(build_server(live)) as c:
-        res = await ok(c, "fn_call", name="test.add", input={"a": 2, "b": 3}, wait=20)
-        assert res["status"] == "succeeded" and res["output"] == {"sum": 5}
-        assert res["call"].startswith("call-")
-        assert live.get(res["call"])["meta"] == {"adhoc": True, "fn": "test.add"}
+        res = await ok(c, "fn_call", name="test.add", inputs={"a": 2, "b": 3}, wait=20)
+        assert res == {"plan": res["plan"], "status": "succeeded", "outputs": {"sum": 5}}
+        assert res["plan"].startswith("call-")
+        failed = await ok(c, "fn_call", name="test.boom", inputs={}, wait=20)
+        assert failed["status"] == "failed" and "about to explode" in failed["error"]
+        quick = await ok(c, "fn_call", name="test.window", inputs={"seconds": 5})
+        assert quick["status"] in ("pending", "running")
         assert await ok(c, "plans_list") == []
-        listed = await ok(c, "plans_list", include_adhoc=True)
-        assert [p["id"] for p in listed] == [res["call"]]
+        assert len(await ok(c, "plans_list", include_calls=True)) == 3
 
 
-async def test_fn_call_without_wait_then_poll_fn_result(live):
-    async with Client(build_server(live)) as c:
-        res = await ok(c, "fn_call", name="test.twice", input={"x": 21})
-        assert res == {"call": res["call"], "status": "pending"}
-        deadline = time.time() + 20
-        while time.time() < deadline:
-            got = await ok(c, "fn_result", call=res["call"])
-            if got["status"] == "succeeded":
-                break
-            await anyio.sleep(0.1)
-        assert got == {"call": res["call"], "status": "succeeded", "output": {"y": 42},
-                       "stderr_tail": got["stderr_tail"]}
-        assert "adding 21 + 21" in got["stderr_tail"]
-
-
-async def test_fn_call_with_invalid_input_is_rejected(store):
+async def test_plan_editing_and_error_payloads(store):
     async with Client(build_server(store)) as c:
-        bad = await fail(c, "fn_call", name="test.add", input={"a": "one", "c": 1})
-        assert bad["error"] == "invalid"
-        assert bad["errors"] == ['input.a: expected int, got "one"',
-                                 "input.b: missing required field",
-                                 "input.c: fn test.add has no input port c"]
-        assert (await fail(c, "fn_call", name="no.such", input={}))["error"] == "not_found"
-    assert store.plan_ids() == []
+        doc = {"label": "t", "inputs": {"n": "int"}, "steps": {"a": add({"source": "n"}, d(1))}}
+        assert await ok(c, "plan_create", plan="p", doc=doc, reason="start") == {"rev": 1}
+        got = await ok(c, "plan_get", plan="p")
+        assert got == {"rev": 1, "doc": {"id": "p", **doc}}
+        assert (await fail(c, "plan_get", plan="nope"))["error"] == "not_found"
+        again = await fail(c, "plan_create", plan="p", doc=doc, reason="again")
+        assert again["error"] == "bad_request"
+
+        assert await ok(c, "plan_patch", plan="p", rev=1, reason="grow", author="orch",
+                        ops=[{"op": "add", "path": "/steps/b", "value": add(d(3), d(4))}]
+                        ) == {"rev": 2}
+        conflict = await fail(c, "plan_patch", plan="p", rev=1, reason="stale", ops=[])
+        assert conflict == {"error": "conflict", "message": "plan is at rev 2", "current_rev": 2}
+        invalid = await fail(c, "plan_patch", plan="p", rev=2, reason="bad", ops=[
+            {"op": "add", "path": "/steps/c", "value": {"run": "test.add",
+                                                        "in": {"a": {"source": "zz/sum"}}}}])
+        assert invalid["error"] == "invalid" and invalid["errors"] == [
+            "steps.c.in.b: required input is not bound", "steps.c.in.a: unknown step zz"]
+        args = await fail(c, "plan_patch", plan="p")
+        assert args["error"] == "bad_request" and "rev: Field required" in args["message"]
+
+        assert await ok(c, "step_set_input", plan="p", step="b", input="a", value=10,
+                        reason="by hand") == {"rev": 3}
+        stale = await fail(c, "step_set_input", plan="p", step="b", input="a", value=1, rev=1)
+        assert stale["current_rev"] == 3
+        assert await ok(c, "plan_set_input", plan="p", name="n", value=5, reason="go") == {
+            "ok": True}
+        typed = await fail(c, "plan_set_input", plan="p", name="n", value="x")
+        assert typed["errors"] == ['inputs.n: expected int, got "x"']
+
+        hist = await ok(c, "plan_history", plan="p")
+        assert [(h["rev"], h["author"], h.get("action")) for h in hist] == [
+            (1, "mcp", None), (2, "orch", None), (3, "mcp", None), (3, "mcp", "plan_set_input")]
+        assert [h["rev"] for h in await ok(c, "plan_history", plan="p", since_rev=2)] == [3, 3]
+        assert await ok(c, "plans_list") == [{"id": "p", "label": "t", "rev": 3,
+                                              "counts": {"pending": 2}}]
 
 
-async def test_fn_call_of_a_failing_fn_fails_and_opens_an_inbox_item(live):
+async def test_status_manual_outputs_and_retry(live):
     async with Client(build_server(live)) as c:
-        res = await ok(c, "fn_call", name="test.boom", input={}, wait=20)
-        assert res["status"] == "failed" and res["error"] == "RuntimeError: boom (exit 1)"
-        [item] = await ok(c, "inbox_list", plan=res["call"])
-        assert item["kind"] == "failure" and item["node"] == "call"
-        got = await ok(c, "fn_result", call=res["call"])
-        assert "about to explode" in got["stderr_tail"]
+        await ok(c, "plan_create", plan="p", reason="go", doc={
+            "inputs": {"n": "int"}, "outputs": {"total": {"source": "c/sum"}},
+            "steps": {"a": add({"source": "n"}, d(1)), "boom": {"run": "test.boom", "in": {}},
+                      "c": add({"source": "a/sum"}, d(1))}})
+        await ok(c, "plan_set_input", plan="p", name="n", value=1)
+        s = await until(c, "p", lambda st: st["c"] == "succeeded" and st["boom"] == "failed")
+        assert s["rev"] == 1 and s["inputs"] == {"n": 1} and s["outputs"] == {"total": 3}
+        rows = {r["id"]: r for r in s["steps"]}
+        assert rows["a"] == {"id": "a", "run": "test.add", "status": "succeeded",
+                             "started": rows["a"]["started"], "finished": rows["a"]["finished"],
+                             "outputs": {"sum": 2}, "manual": False}
+        assert "about to explode" in rows["boom"]["error"]
+
+        running = await fail(c, "step_retry", plan="p", step="a")
+        assert running["error"] == "bad_request"
+        assert await ok(c, "step_set_output", plan="p", step="boom", outputs={"done": True},
+                        reason="done by hand") == {"ok": True}
+        s = await ok(c, "status", plan="p")
+        boom = next(r for r in s["steps"] if r["id"] == "boom")
+        assert (boom["status"], boom["manual"], boom["outputs"]) == ("succeeded", True,
+                                                                     {"done": True})
+        bad = await fail(c, "step_set_output", plan="p", step="boom", outputs={"done": 1})
+        assert bad["errors"] == ["outputs.done: expected boolean, got 1"]
+        assert await ok(c, "step_retry", plan="p", step="boom", reason="really run") == {
+            "ok": True}
+        await until(c, "p", lambda st: st["boom"] == "failed")
+        assert (await fail(c, "status", plan="zz"))["error"] == "not_found"

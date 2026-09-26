@@ -1,2 +1,0 @@
-{"name": "test.sleep", "version": 1, "description": "Sleep, then report.",
- "in": {"seconds": "float", "tag": "string?"}, "out": {"slept": "float", "tag": "string?"}}

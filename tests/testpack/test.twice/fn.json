@@ -1,9 +1,0 @@
-{"name": "test.twice", "version": 1, "description": "y = 2x, via add and echo.",
- "in": {"x": "int"}, "out": {"y": "int"},
- "graph": {
-   "nodes": {
-     "a": {"fn": "test.add", "in": {"a": {"from": "$in.x"}, "b": {"from": "$in.x"}}},
-     "b": {"fn": "core.echo", "in": {"value": {"from": "a.sum"}}}
-   },
-   "out": {"y": {"from": "b.value"}}
- }}

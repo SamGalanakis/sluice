@@ -1,3 +1,0 @@
-{"name": "test.heavy", "version": 1, "description": "Sleep while holding a heavy slot.",
- "in": {"seconds": "float"}, "out": {"start": "float", "end": "float"},
- "slots": {"heavy": 1}}

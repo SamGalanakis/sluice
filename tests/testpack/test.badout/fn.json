@@ -1,2 +1,4 @@
-{"name": "test.badout", "version": 1, "description": "Returns the wrong output type.",
- "in": {}, "out": {"n": "int", "report": {"outcome": ["done", "blocked"]}}}
+{"name": "test.badout", "inputs": {},
+ "outputs": {"n": "int",
+             "report": {"type": "record",
+                        "fields": {"outcome": {"type": "enum", "symbols": ["done", "blocked"]}}}}}

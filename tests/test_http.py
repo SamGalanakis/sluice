@@ -31,20 +31,19 @@ def wait_for_port(port: int, proc: subprocess.Popen, timeout: float = 20.0) -> N
 async def drive(url: str) -> None:
     async with Client(url) as c:
         r = await c.call_tool("plan_create", {"plan": "web", "reason": "smoke", "doc": {
-            "nodes": {"a": {"fn": "test.add", "in": {"a": {"value": 1}, "b": {"value": 2}}},
-                      "b": {"fn": "test.twice", "in": {"x": {"from": "a.sum"}}}}}})
+            "outputs": {"total": {"source": "b/sum"}},
+            "steps": {"a": {"run": "test.add", "in": {"a": {"default": 1}, "b": {"default": 2}}},
+                      "b": {"run": "test.add", "in": {"a": {"source": "a/sum"},
+                                                      "b": {"default": 3}}}}}})
         assert json.loads(r.content[0].text) == {"rev": 1}
         deadline = time.time() + 30
         while time.time() < deadline:
             r = await c.call_tool("status", {"plan": "web"})
             status = json.loads(r.content[0].text)
-            if all(n["status"] == "succeeded" for n in status["nodes"]):
+            if all(s["status"] == "succeeded" for s in status["steps"]):
                 break
             await anyio.sleep(0.2)
-        assert {n["id"]: n["status"] for n in status["nodes"]} == dict.fromkeys(
-            ["a", "b", "b/a", "b/b"], "succeeded")
-        r = await c.call_tool("node_get", {"plan": "web", "node": "b"})
-        assert json.loads(r.content[0].text)["output"] == {"y": 6}
+        assert status["outputs"] == {"total": 6}
 
 
 def test_sluice_serve_over_streamable_http(home):
@@ -59,5 +58,4 @@ def test_sluice_serve_over_streamable_http(home):
         proc.terminate()
         code = proc.wait(timeout=30)
     assert code == 0, proc.stderr.read().decode()
-    types = [e["type"] for e in Store(home).events("web")]
-    assert types[-1] == "runner_stopped"
+    assert Store(home).read_state("web")["steps"]["b"]["outputs"] == {"sum": 6}

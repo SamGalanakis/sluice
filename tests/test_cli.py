@@ -4,167 +4,102 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import pytest
 
-from sluice.runner import Runner
-from sluice.store import Store
-from tests.conftest import TESTPACK
+from tests.conftest import write_config
+
+PLAN = {"label": "cli", "inputs": {"n": "int"}, "outputs": {"total": {"source": "b/sum"}},
+        "steps": {"a": {"run": "test.add", "in": {"a": {"source": "n"}, "b": {"default": 2}}},
+                  "b": {"run": "test.add", "in": {"a": {"source": "a/sum"}, "b": {"default": 1}}},
+                  "boom": {"run": "test.boom", "in": {}}}}
 
 
 @pytest.fixture
 def sluice(tmp_path):
     home = tmp_path / "home"
 
-    def run(*args, check=True, input=None):
+    def run(*args, check=True):
         p = subprocess.run([sys.executable, "-m", "sluice.cli", *args], capture_output=True,
-                           text=True, input=input, timeout=120, check=False,
-                           env={**os.environ, "SLUICE_HOME": str(home)}, cwd=tmp_path)
+                           text=True, timeout=120, check=False, cwd=tmp_path,
+                           env={**os.environ, "SLUICE_HOME": str(home)})
         if check:
             assert p.returncode == 0, p.stderr
         return p
 
-    run.home = home
-    run.tmp = tmp_path
+    run.home, run.tmp = home, tmp_path
     return run
 
 
-PLAN = {"title": "cli", "nodes": {
-    "a": {"fn": "test.add", "in": {"a": {"value": 1}, "b": {"value": 2}}},
-    "b": {"fn": "test.twice", "in": {"x": {"from": "a.sum"}}},
-    "c": {"fn": "core.echo", "in": {"value": {"from": "b.y"}},
-          "when": [{"from": "a.sum", "op": "eq", "value": 99}]},
-}}
+def json_out(p):
+    return json.loads(p.stdout)
 
 
-def test_init_writes_a_config_once(sluice):
-    out = sluice("init", "--pack", str(TESTPACK))
-    assert "config.json" in out.stdout
-    cfg = json.loads((sluice.home / "config.json").read_text())
-    assert cfg["packs"] == [str(TESTPACK)] and cfg["tick"] == "2s"
+def test_init_writes_the_default_config_once(sluice):
+    assert "config.json" in sluice("init").stdout
+    assert json.loads((sluice.home / "config.json").read_text()) == {
+        "fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8}
     assert sluice("init", check=False).returncode == 1
-    sluice("init", "--force")
-    assert json.loads((sluice.home / "config.json").read_text())["packs"] == []
 
 
-def test_plan_commands_status_and_loop(sluice):
-    sluice("init", "--pack", str(TESTPACK))
+def test_plans_manual_values_and_the_loop(sluice):
+    write_config(sluice.home)
     (sluice.tmp / "plan.json").write_text(json.dumps(PLAN))
-    assert json.loads(sluice("plan", "create", "demo", "plan.json").stdout) == {"rev": 1}
-    shown = sluice("plan", "show", "demo").stdout
-    assert "plan demo  rev 1  cli" in shown and "b" in shown and "<- a" in shown
-    assert json.loads(sluice("plan", "show", "demo", "--json").stdout)["rev"] == 1
-
-    ops = [{"op": "add", "path": "/nodes/d", "value": {"fn": "core.echo",
-                                                       "in": {"value": {"value": "x"}}}}]
-    (sluice.tmp / "ops.json").write_text(json.dumps(ops))
-    assert json.loads(sluice("plan", "patch", "demo", "--rev", "1", "--reason", "add d",
-                             "ops.json").stdout) == {"rev": 2}
-    stale = sluice("plan", "patch", "demo", "--rev", "1", "--reason", "again", "ops.json",
-                   check=False)
-    assert stale.returncode == 1
-    assert json.loads(stale.stderr) == {"error": "conflict", "message": "plan is at rev 2",
-                                        "current_rev": 2}
-    bad = sluice("plan", "patch", "demo", "--rev", "2", "--reason", "bad",
-                 json.dumps([{"op": "replace", "path": "/nodes/a/in/a/value", "value": "x"}]),
-                 check=False)
-    assert json.loads(bad.stderr)["errors"] == ['nodes.a.in.a: expected int, got "x"']
-    history = sluice("plan", "history", "demo").stdout.splitlines()
-    assert history[0].startswith("rev 1") and "create" in history[0]
-    assert history[1].startswith("rev 2") and "add /nodes/d" in history[1]
-
-    dry = sluice("dry-run", "demo").stdout
-    assert "start    a" in dry and "blocked  b" in dry
+    assert json_out(sluice("plan", "create", "demo", "plan.json")) == {"rev": 1}
+    assert json_out(sluice("plan", "show", "demo"))["steps"]["a"]["run"] == "test.add"
+    ops = [{"op": "replace", "path": "/label", "value": "renamed"}]
+    assert json_out(sluice("plan", "patch", "demo", "--rev", "1", "--reason", "rename",
+                           json.dumps(ops))) == {"rev": 2}
+    stale = sluice("plan", "patch", "demo", "--rev", "1", "--reason", "x", "[]", check=False)
+    assert stale.returncode == 1 and json.loads(stale.stderr)["current_rev"] == 2
+    bad = sluice("set-input", "demo", "n", '"x"', check=False)
+    assert json.loads(bad.stderr)["errors"] == ['inputs.n: expected int, got "x"']
+    assert json_out(sluice("set-input", "demo", "n", "4", "--reason", "go")) == {"ok": True}
 
     loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"], cwd=sluice.tmp,
-                            env={**os.environ, "SLUICE_HOME": str(sluice.home)},
-                            stderr=subprocess.PIPE)
+                            env={**os.environ, "SLUICE_HOME": str(sluice.home)})
     try:
         deadline = time.time() + 30
         while time.time() < deadline:
-            s = json.loads(sluice("status", "demo", "--json").stdout)
-            if all(n["status"] in ("succeeded", "skipped") for n in s["nodes"]):
+            s = json_out(sluice("status", "demo", "--json"))
+            if {x["id"]: x["status"] for x in s["steps"]} == {
+                    "a": "succeeded", "b": "succeeded", "boom": "failed"}:
                 break
             time.sleep(0.3)
-        second = sluice("loop", check=False)
-        assert second.returncode == 1 and "another runner is active" in second.stderr
+        assert s["outputs"] == {"total": 7}
+        assert json_out(sluice("set-output", "demo", "boom", '{"done": true}')) == {"ok": True}
+        assert json_out(sluice("retry", "demo", "boom", "--reason", "run it")) == {"ok": True}
     finally:
         loop.send_signal(signal.SIGTERM)
         assert loop.wait(timeout=20) == 0
+
     table = sluice("status", "demo").stdout
-    assert "plan demo  rev 2" in table
-    assert "c                        core.echo          skipped" in table
-    assert "b/a                      test.add           succeeded" in table
-    events = sluice("events", "demo").stdout
-    assert "runner_started" in events and "runner_stopped" in events
-    assert "node_skipped" in events
-
-
-def test_inbox_and_node_actions(sluice):
-    sluice("init", "--pack", str(TESTPACK))
-    plan = {"nodes": {"boom": {"fn": "test.boom"},
-                      "q": {"fn": "core.ask", "in": {"question": {"value": "go?"}}}}}
-    sluice("plan", "create", "p", json.dumps(plan))
-    store = Store(sluice.home)
-    runner = Runner(store)
-    deadline = time.time() + 20
-    while time.time() < deadline and len(store.inbox_list()) < 2:
-        runner.tick()
-        time.sleep(0.05)
-    listing = sluice("inbox").stdout
-    assert "p.0001" in listing and "p.0002" in listing and "go?" in listing
-    items = json.loads(sluice("inbox", "--plan", "p", "--json").stdout)
-    ask = next(i for i in items if i["kind"] == "ask")
-    fail = next(i for i in items if i["kind"] == "failure")
-    assert json.loads(sluice("inbox", "resolve", ask["id"], '{"answer": 42}').stdout) == {
-        "ok": True}
-    bad = sluice("inbox", "resolve", fail["id"], '{"action": "explode"}', check=False)
-    assert json.loads(bad.stderr)["error"] == "bad_request"
-    assert json.loads(sluice("node", "skip", "p", "boom", "--reason", "meh").stdout)["ok"]
-    assert "inbox empty" in sluice("inbox").stdout
-    assert len(json.loads(sluice("inbox", "--all", "--json").stdout)) == 2
-    assert json.loads(sluice("node", "retry", "p", "boom").stdout)["nodes"] == ["boom"]
-    missing = sluice("node", "cancel", "p", "zz", check=False)
+    assert "plan demo  rev 2" in table and "inputs: n=4" in table and "outputs: total=7" in table
+    assert "b                test.add         succeeded" in table
+    history = sluice("plan", "history", "demo").stdout.splitlines()
+    assert history[0].startswith("rev 1") and "1 op(s)" in history[0]
+    assert "plan_set_input" in history[2] and "step_set_output" in history[3]
+    assert "step_retry" in history[4] and history[4].endswith("run it")
+    missing = sluice("retry", "demo", "zz", check=False)
     assert json.loads(missing.stderr)["error"] == "not_found"
-    assert store.read_state("p")["nodes"]["q"]["status"] == "succeeded"
 
 
 def test_fn_commands(sluice):
-    sluice("init", "--pack", str(TESTPACK))
+    write_config(sluice.home)
     listing = sluice("fn", "list").stdout
-    assert "test.add               (a: int, b: int) -> (sum: int)" in listing
-    assert "Add two ints." in listing
-    assert json.loads(sluice("fn", "show", "test.twice").stdout)["name"] == "test.twice"
-    (sluice.tmp / "in.json").write_text('{"a": 40, "b": 2}')
-    assert json.loads(sluice("fn", "test", "test.add", "in.json").stdout) == {"sum": 42}
-    assert json.loads(sluice("fn", "test", "test.quad", '{"x": 1}').stdout) == {"y": 4, "half": 2}
-    boom = sluice("fn", "test", "test.boom", "{}", check=False)
-    assert boom.returncode == 1 and "about to explode" in boom.stderr
-    assert "test.boom: failed: RuntimeError: boom" in boom.stderr
-    assert not (sluice.home / "plans").exists()  # fn test leaves this home untouched
-
-    called = json.loads(sluice("fn", "call", "test.add", '{"a": 1, "b": 1}').stdout)
-    assert called["status"] == "pending"
-    store = Store(sluice.home)
-    runner = Runner(store)
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        runner.tick()
-        res = json.loads(sluice("fn", "result", called["call"]).stdout)
-        if res["status"] == "succeeded":
-            break
-        time.sleep(0.1)
-    assert res["output"] == {"sum": 2}
-    bad = sluice("fn", "call", "test.add", '{"a": "x", "b": 1}', check=False)
-    assert json.loads(bad.stderr)["errors"] == ['input.a: expected int, got "x"']
+    assert "test.add           (a: int, b: int) -> (sum: int)" in listing
+    assert "Add two ints." in listing and "git.head" in listing
+    assert json_out(sluice("fn", "show", "core.echo"))["name"] == "core.echo"
     assert sluice("fn", "show", "no.such", check=False).returncode == 1
+    called = json_out(sluice("fn", "call", "core.echo", '{"value": 1}'))
+    assert called["status"] == "pending" and called["plan"].startswith("call-")
+    bad = sluice("fn", "call", "test.add", '{"a": "x", "b": 1}', check=False)
+    assert json.loads(bad.stderr)["errors"] == ['inputs.a: expected int, got "x"']
 
 
-def test_a_broken_pack_is_reported(sluice, tmp_path):
-    bad = tmp_path / "badpack" / "x"
-    bad.mkdir(parents=True)
-    (bad / "fn.json").write_text("{not json")
-    sluice("init", "--pack", str(Path(bad).parent))
+def test_a_broken_fn_dir_is_reported(sluice, tmp_path):
+    (tmp_path / "fns" / "x").mkdir(parents=True)
+    (tmp_path / "fns" / "x" / "fn.json").write_text("{not json")
+    write_config(sluice.home, fn_dirs=[str(tmp_path / "fns")])
     p = sluice("fn", "list", check=False)
     assert p.returncode == 1 and "cannot load fns" in p.stderr and "bad JSON" in p.stderr

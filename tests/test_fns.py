@@ -3,73 +3,50 @@ from pathlib import Path
 
 import pytest
 
-from sluice.fns import Registry, RegistryError
+from sluice.fns import BUILTIN_DIR, Registry, RegistryError
 from tests.conftest import TESTPACK
 
 
-def write_fn(pack: Path, dirname: str, spec: dict, main: bool = True) -> None:
-    d = pack / dirname
-    d.mkdir(parents=True)
-    (d / "fn.json").write_text(json.dumps(spec))
+def write_fn(d: Path, name: str, spec: dict, main: bool = True) -> None:
+    (d / name).mkdir(parents=True)
+    (d / name / "fn.json").write_text(json.dumps(spec))
     if main:
-        (d / "main.py").write_text("")
+        (d / name / "main.py").write_text("")
 
 
-def test_loads_builtins_and_the_test_pack():
-    reg = Registry.load([TESTPACK])
-    assert {"core.echo", "core.ask", "core.fail", "test.add", "test.twice"} <= set(reg.names())
-    add = reg.get("test.add")
-    assert add.effects is False and add.dir == TESTPACK / "test.add"
-    assert reg.get("test.twice").composite and not add.composite
-    flaky = reg.get("test.flaky")
-    assert (flaky.retry_transient, flaky.retry_backoff, flaky.timeout) == (2, 1.0, 3600.0)
-    assert reg.get("test.heavy").slots == {"heavy": 1}
-    assert reg.get("test.echo_log").slots == {"default": 1}
+def test_loads_the_builtins_and_extra_dirs():
+    reg = Registry.load([BUILTIN_DIR, TESTPACK])
+    assert {"core.echo", "core.collect", "git.head", "agent.run", "test.add"} <= set(reg.names())
+    echo, add = reg.get("core.echo"), reg.get("test.add")
+    assert echo.native and not add.native and add.dir == TESTPACK / "test.add"
+    assert add.summary() == {"name": "test.add", "doc": "Add two ints.",
+                             "inputs": {"a": "int", "b": "int"}, "outputs": {"sum": "int"}}
+    assert reg.get("test.boom").doc == ""  # doc is optional
 
 
-def test_description_is_optional():
-    reg = Registry.load([TESTPACK])
-    assert "description" not in reg.get("test.echo_log").raw
-    assert reg.get("test.echo_log").description == ""
+def test_non_fn_entries_are_skipped(tmp_path):
+    write_fn(tmp_path, "x.one", {"name": "x.one", "inputs": {}, "outputs": {}})
+    for junk in ("_lib", "tests", "examples"):
+        (tmp_path / junk).mkdir()
+        (tmp_path / junk / "helper.py").write_text("")
+    (tmp_path / "README.md").write_text("# fns")
+    assert Registry.load([tmp_path]).names() == ["x.one"]
 
 
 def test_duplicate_names_are_a_load_error(tmp_path):
-    write_fn(tmp_path, "a", {"name": "test.add", "in": {}, "out": {}})
-    with pytest.raises(RegistryError) as e:
+    write_fn(tmp_path, "mine", {"name": "test.add", "inputs": {}, "outputs": {}})
+    with pytest.raises(RegistryError, match="duplicate fn name test.add"):
         Registry.load([TESTPACK, tmp_path])
-    assert any("duplicate fn name test.add" in x for x in e.value.errors)
-
-
-def test_a_builtin_name_cannot_be_reused(tmp_path):
-    write_fn(tmp_path, "echo", {"name": "core.echo", "in": {}, "out": {}})
-    with pytest.raises(RegistryError, match="duplicate fn name core.echo"):
-        Registry.load([tmp_path])
-
-
-def test_subdirectories_without_fn_json_are_skipped(tmp_path):
-    write_fn(tmp_path, "x.one", {"name": "x.one", "in": {}, "out": {}})
-    for junk in ("_lib", "tests", "examples", "standards"):
-        (tmp_path / junk).mkdir()
-        (tmp_path / junk / "helper.py").write_text("raise SystemExit('not a fn')")
-    (tmp_path / "README.md").write_text("# pack")
-    reg = Registry.load([tmp_path])
-    assert [n for n in reg.names() if not n.startswith("core.")] == ["x.one"]
 
 
 def test_every_fn_json_problem_is_reported(tmp_path):
-    write_fn(tmp_path, "bad", {"name": "Bad Name", "version": "1", "in": {"x": "str"},
-                               "out": [], "timeout": "1d", "slots": {"a": 0}, "effects": "no",
-                               "retry": {"transient": -1}, "extra": 1}, main=False)
+    write_fn(tmp_path, "bad", {"name": "Bad", "doc": 3, "inputs": {"x": "str"},
+                               "outputs": [], "version": 1}, main=False)
     with pytest.raises(RegistryError) as e:
-        Registry.load([tmp_path])
+        Registry.load([tmp_path, tmp_path / "missing"])
     text = "\n".join(e.value.errors)
-    for needle in ("name must be dotted lowercase", "version must be an int",
-                   "in.x: unknown type 'str'", "out must be an object", "timeout: bad duration",
-                   "slots must be", "effects must be a bool", "retry.transient must be",
-                   "unknown key 'extra'", "needs main.py or a graph"):
+    for needle in ("name must be dotted lowercase", "doc must be a string",
+                   "inputs.x: unknown type 'str'", "outputs is required",
+                   "unknown key 'version'", "main.py is missing",
+                   "missing: fn directory does not exist"):
         assert needle in text
-
-
-def test_missing_pack_dir_is_an_error(tmp_path):
-    with pytest.raises(RegistryError, match="pack directory does not exist"):
-        Registry.load([tmp_path / "nope"])

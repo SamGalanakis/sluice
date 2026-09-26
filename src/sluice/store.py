@@ -1,4 +1,5 @@
-"""The workspace on disk (SPEC §2, §5.3, §6): plans, the edit log, state, events, inbox."""
+"""The workspace on disk (SPEC §2, §5, §6): config, plans with their edit log, state, and the
+edits made by hand (manual values)."""
 
 from __future__ import annotations
 
@@ -7,7 +8,10 @@ import copy
 import fcntl
 import json
 import os
+import secrets
 import threading
+import time
+from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -16,61 +20,39 @@ import jsonpatch
 import jsonpointer
 
 from . import plan as P
+from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound
-from .fns import Registry, builtin_packs
-from .util import append_line, atomic_write_json, now_iso, parse_duration, read_json
+from .fns import BUILTIN_DIR, Registry
+from .util import append_line, atomic_write_json, now_iso, read_json
 
-DEFAULT_CONFIG: dict[str, Any] = {
-    "packs": [],
-    "slots": {"default": 8, "agent": 6, "heavy": 2},
-    "tick": "2s",
-    "http": {"host": "127.0.0.1", "port": 7420},
-}
+DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
+                                  "max_parallel": 8}
+CALL_PREFIX = "call-"
+CALL_STEP = "call"
 
 
 def default_home() -> Path:
     return Path(os.environ.get("SLUICE_HOME") or Path.home() / ".sluice")
 
 
-def load_config(home: Path) -> dict[str, Any]:
-    path = home / "config.json"
-    cfg = copy.deepcopy(DEFAULT_CONFIG)
-    if path.exists():
-        raw = read_json(path)
-        if not isinstance(raw, dict):
-            raise BadRequest(f"{path}: expected an object")
-        cfg.update(raw)
-    cfg["packs"] = [str((home / p).resolve()) if not os.path.isabs(p) else p
-                    for p in cfg.get("packs", [])]
-    parse_duration(cfg["tick"])
-    return cfg
-
-
-def empty_state() -> dict[str, Any]:
-    return {"rev": 0, "plan_rev": 0, "nodes": {}}
-
-
 class Store:
-    """All reads and writes of a SLUICE_HOME. Safe across threads and processes (flock).
+    """All reads and writes of a SLUICE_HOME. Safe across threads and processes (flock)."""
 
-    Its registry holds the packs shipped in sluice/packs plus the extra packs of config.json.
-    """
-
-    def __init__(self, home: Path | str | None = None, registry: Registry | None = None):
+    def __init__(self, home: Path | str | None = None):
         self.home = Path(home) if home is not None else default_home()
-        self.config = load_config(self.home)
-        self._registry = registry
-        self.listeners: list[Callable[[str], None]] = []
+        self.config = copy.deepcopy(DEFAULT_CONFIG)
+        if (self.home / "config.json").exists():
+            self.config.update(read_json(self.home / "config.json"))
+        self._registry: Registry | None = None
+        self.listeners: list[Callable[[], None]] = []  # called after every accepted edit
         self._held = threading.local()
-        self._exp_cache: dict[str, tuple[int, P.Expanded]] = {}
-        self._exp_lock = threading.Lock()
-
-    # ---- paths and config ----
+        self._parsed: dict[str, tuple[int, P.Plan]] = {}
 
     @property
     def registry(self) -> Registry:
         if self._registry is None:
-            self._registry = Registry.load([*builtin_packs(), *self.config["packs"]])
+            dirs = [BUILTIN_DIR, *(self.home / d for d in self.config["fn_dirs"])]
+            self._registry = Registry.load(dirs)
         return self._registry
 
     def plan_dir(self, pid: str) -> Path:
@@ -80,45 +62,24 @@ class Store:
     def runs_dir(self) -> Path:
         return self.home / "runs"
 
-    @property
-    def cache_dir(self) -> Path:
-        return self.home / "cache"
-
-    def slot_capacity(self, name: str) -> int:
-        """Configured capacity of a slot; a name missing from config has capacity 1."""
-        return int(self.config.get("slots", {}).get(name, 1))
-
-    # ---- locking ----
-
     @contextlib.contextmanager
     def lock(self, pid: str) -> Iterator[None]:
         """Exclusive flock on the plan dir's .lock; re-entrant within a thread."""
-        held: dict[str, list[int]] = self._held.__dict__.setdefault("locks", {})
-        entry = held.get(pid)
-        if entry is not None:
-            entry[1] += 1
-            try:
-                yield
-            finally:
-                entry[1] -= 1
+        held: set[str] = self._held.__dict__.setdefault("pids", set())
+        if pid in held:
+            yield
             return
-        d = self.plan_dir(pid)
-        d.mkdir(parents=True, exist_ok=True)
-        fd = os.open(d / ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+        self.plan_dir(pid).mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.plan_dir(pid) / ".lock", os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            held[pid] = [fd, 1]
+            held.add(pid)
             try:
                 yield
             finally:
-                del held[pid]
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                held.discard(pid)
         finally:
-            os.close(fd)
-
-    def _notify(self, pid: str) -> None:
-        for fn in list(self.listeners):
-            fn(pid)
+            os.close(fd)  # closing the descriptor releases the flock
 
     # ---- plans ----
 
@@ -128,233 +89,224 @@ class Store:
             return []
         return sorted(p.name for p in root.iterdir() if (p / "plan.json").is_file())
 
-    def _require(self, pid: str) -> Path:
-        d = self.plan_dir(pid)
-        if not P.ID_RE.match(pid) or not (d / "plan.json").is_file():
-            raise NotFound(f"no plan {pid!r}")
-        return d
-
     def get(self, pid: str) -> dict[str, Any]:
-        """The current document, including `rev`."""
-        return read_json(self._require(pid) / "plan.json")
+        """The current plan, including `rev`."""
+        path = self.plan_dir(pid) / "plan.json"
+        if not P.ID_RE.match(pid) or not path.is_file():
+            raise NotFound(f"no plan {pid!r}")
+        return read_json(path)
 
-    def expanded(self, pid: str) -> tuple[dict[str, Any], P.Expanded]:
-        """The current document and its expansion (cached per rev)."""
+    def plan(self, pid: str) -> tuple[dict[str, Any], P.Plan]:
+        """The current document and its parsed plan (cached per rev)."""
         doc = self.get(pid)
-        with self._exp_lock:
-            hit = self._exp_cache.get(pid)
-        if hit is not None and hit[0] == doc["rev"]:
-            return doc, hit[1]
-        exp = P.expand_doc(doc, self.registry)
-        with self._exp_lock:
-            self._exp_cache[pid] = (doc["rev"], exp)
-        return doc, exp
-
-    def validate(self, doc: Any, pid: str | None = None,
-                 state: dict[str, Any] | None = None) -> list[str]:
-        """Validate a document without writing. With `pid`, rule 9 runs against that plan."""
-        previous = None
-        if pid is not None and state is None:
-            with contextlib.suppress(NotFound):
-                state = self.read_state(pid)
-        if pid is not None:
-            with contextlib.suppress(NotFound, InvalidPlan):
-                previous = self.expanded(pid)[1]
-        errs, _ = P.validate(doc, self.registry, state=state, previous=previous)
-        return errs
+        hit = self._parsed.get(pid)
+        if hit is None or hit[0] != doc["rev"]:
+            errs, plan = P.validate({k: v for k, v in doc.items() if k != "rev"}, self.registry)
+            if errs:
+                raise InvalidPlan(errs, f"plan {pid} no longer validates")
+            hit = self._parsed[pid] = (doc["rev"], plan)
+        return doc, hit[1]
 
     def create(self, pid: str, doc: Any, author: str, reason: str) -> int:
         if not isinstance(pid, str) or not P.ID_RE.match(pid):
             raise BadRequest(f"plan ids match {P.ID_RE.pattern}, got {pid!r}")
         if not isinstance(doc, dict):
-            raise InvalidPlan(["document: expected an object"])
-        doc = {k: v for k, v in doc.items() if k != "rev"}
-        doc.setdefault("id", pid)
+            raise InvalidPlan(["plan: expected an object"])
+        doc = {"id": pid, **{k: v for k, v in doc.items() if k != "rev"}}
         if doc["id"] != pid:
-            raise InvalidPlan([f"id: the document says {doc['id']!r} but the plan is {pid!r}"])
+            raise InvalidPlan([f"id: the plan says {doc['id']!r} but is created as {pid!r}"])
         errs, _ = P.validate(doc, self.registry)
         if errs:
             raise InvalidPlan(errs)
-        d = self.plan_dir(pid)
-        (self.home / "plans").mkdir(parents=True, exist_ok=True)
         with self.lock(pid):
-            if (d / "plan.json").exists():
+            if (self.plan_dir(pid) / "plan.json").exists():
                 raise BadRequest(f"plan {pid!r} already exists")
-            append_line(d / "plan.log.jsonl", {"rev": 1, "at": now_iso(), "author": author,
-                                               "reason": reason,
-                                               "ops": [{"op": "add", "path": "", "value": doc}]})
-            atomic_write_json(d / "plan.json", {**doc, "rev": 1})
-            self.append_event(pid, "plan_created", data={"rev": 1, "author": author,
-                                                         "reason": reason})
-        self._notify(pid)
+            self._log(pid, 1, author, reason, [{"op": "add", "path": "", "value": doc}])
+            atomic_write_json(self.plan_dir(pid) / "plan.json", {**doc, "rev": 1})
+        self._notify()
         return 1
 
-    def patch(self, pid: str, rev: int, ops: Any, author: str, reason: str, *,
-              state: dict[str, Any] | None = None) -> int:
+    def patch(self, pid: str, rev: int, ops: Any, author: str, reason: str) -> int:
         """Apply an RFC 6902 patch at `rev`. Raises Conflict, InvalidPlan or NotFound."""
-        d = self._require(pid)
         with self.lock(pid):
             cur = self.get(pid)
             if rev != cur["rev"]:
                 raise Conflict(cur["rev"])
-            doc = {k: v for k, v in cur.items() if k != "rev"}
-            new = apply_ops(doc, ops)
+            old = {k: v for k, v in cur.items() if k != "rev"}
+            new = apply_ops(old, ops)
+            errs, _ = P.validate(new, self.registry)
             if new.get("id") != pid:
-                raise InvalidPlan(["id: the plan id cannot change"])
-            if state is None:
-                state = self.read_state(pid)
-            try:
-                previous = self.expanded(pid)[1]
-            except InvalidPlan:
-                previous = None
-            errs, _ = P.validate(new, self.registry, state=state, previous=previous)
+                errs.insert(0, "id: the plan id cannot change")
+            new_steps = new.get("steps") if isinstance(new.get("steps"), dict) else {}
+            for sid, e in self.read_state(pid)["steps"].items():
+                if e["status"] != "running":
+                    continue
+                if sid not in new_steps:
+                    errs.append(f"steps.{sid}: cannot remove a running step")
+                elif new_steps[sid] != old["steps"].get(sid):
+                    errs.append(f"steps.{sid}: cannot change a running step")
             if errs:
                 raise InvalidPlan(errs)
-            new_rev = cur["rev"] + 1
-            append_line(d / "plan.log.jsonl", {"rev": new_rev, "at": now_iso(), "author": author,
-                                               "reason": reason, "ops": ops})
-            atomic_write_json(d / "plan.json", {**new, "rev": new_rev})
-            self.append_event(pid, "plan_patched", data={"rev": new_rev, "author": author,
-                                                         "reason": reason})
-        self._notify(pid)
-        return new_rev
+            self._log(pid, rev + 1, author, reason, ops)
+            atomic_write_json(self.plan_dir(pid) / "plan.json", {**new, "rev": rev + 1})
+        self._notify()
+        return rev + 1
+
+    def _log(self, pid: str, rev: int, author: str, reason: str, ops: list | None = None,
+             **manual: Any) -> None:
+        """One log line: an edit (`ops`), or a manual value (`action` and its args, no ops)."""
+        entry = {"rev": rev, "at": now_iso(), "author": author, "reason": reason}
+        entry.update({"ops": ops} if ops is not None else manual)
+        append_line(self.plan_dir(pid) / "plan.log.jsonl", entry)
+
+    def _notify(self) -> None:
+        for fn in list(self.listeners):
+            fn()
 
     def history(self, pid: str, since_rev: int | None = None) -> list[dict[str, Any]]:
-        d = self._require(pid)
-        out = []
-        with open(d / "plan.log.jsonl", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    e = json.loads(line)
-                    if since_rev is None or e["rev"] > since_rev:
-                        out.append(e)
-        return out
-
-    def plan_at(self, pid: str, rev: int) -> dict[str, Any]:
-        """Replay the log up to `rev`. Returns the document without rev."""
-        doc: dict[str, Any] | None = None
-        for e in self.history(pid):
-            if e["rev"] > rev:
-                break
-            if e["rev"] == 1:
-                doc = copy.deepcopy(e["ops"][0]["value"])
-            else:
-                doc = jsonpatch.apply_patch(doc, e["ops"])
-        if doc is None or rev < 1 or rev > self.get(pid)["rev"]:
-            raise NotFound(f"plan {pid!r} has no rev {rev}")
-        return doc
-
-    def revert(self, pid: str, rev: int, to_rev: int, author: str, reason: str) -> int:
-        target = self.plan_at(pid, to_rev)
-        cur = self.get(pid)
-        if rev != cur["rev"]:
-            raise Conflict(cur["rev"])
-        doc = {k: v for k, v in cur.items() if k != "rev"}
-        ops = jsonpatch.make_patch(doc, target).patch
-        return self.patch(pid, rev, ops, author, reason or f"revert to rev {to_rev}")
+        self.get(pid)
+        lines = (self.plan_dir(pid) / "plan.log.jsonl").read_text(encoding="utf-8").splitlines()
+        entries = [json.loads(x) for x in lines if x.strip()]
+        return [e for e in entries if since_rev is None or e["rev"] > since_rev]
 
     # ---- state ----
 
     def read_state(self, pid: str) -> dict[str, Any]:
-        path = self._require(pid) / "state.json"
-        return read_json(path) if path.exists() else empty_state()
+        path = self.plan_dir(pid) / "state.json"
+        return read_json(path) if path.exists() else {"inputs": {}, "steps": {}}
 
-    def write_state(self, pid: str, state: dict[str, Any]) -> int:
-        """Persist state with rev + 1. Callers hold the plan lock."""
-        state["rev"] = int(state.get("rev", 0)) + 1
+    def write_state(self, pid: str, state: dict[str, Any]) -> None:
+        """Callers hold the plan lock."""
         atomic_write_json(self.plan_dir(pid) / "state.json", state)
-        return state["rev"]
 
-    # ---- events ----
+    def status(self, pid: str) -> dict[str, Any]:
+        doc, plan = self.plan(pid)
+        state = self.read_state(pid)
+        outputs = {}
+        for name, ref in plan.outputs.items():
+            ok, v = P.value_of(ref, plan, state)
+            outputs[name] = v if ok else None
+        steps = []
+        for sid, step in plan.steps.items():
+            e = state["steps"].get(sid, {"status": "pending"})
+            row = {"id": sid, "run": step.fn.name, "status": e["status"],
+                   "started": e.get("started"), "finished": e.get("finished")}
+            row.update({k: e[k] for k in ("outputs", "error") if e.get(k) is not None})
+            steps.append({**row, "manual": bool(e.get("manual"))})
+        return {"rev": doc["rev"], "inputs": {n: state["inputs"].get(n) for n in plan.inputs},
+                "outputs": outputs, "steps": steps}
 
-    def _last_seq(self, path: Path) -> int:
-        if not path.exists():
-            return 0
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            back = min(size, 65536)
-            f.seek(size - back)
-            lines = [ln for ln in f.read().splitlines() if ln.strip()]
-        return json.loads(lines[-1])["seq"] if lines else 0
-
-    def append_event(self, pid: str, type_: str, node: str | None = None,
-                     data: dict[str, Any] | None = None) -> dict[str, Any]:
-        path = self.plan_dir(pid) / "events.jsonl"
-        with self.lock(pid):
-            ev: dict[str, Any] = {"seq": self._last_seq(path) + 1, "at": now_iso(), "type": type_}
-            if node is not None:
-                ev["node"] = node
-            ev["data"] = data or {}
-            append_line(path, ev)
-        return ev
-
-    def events(self, pid: str, since_seq: int | None = None,
-               limit: int | None = None) -> list[dict[str, Any]]:
-        path = self._require(pid) / "events.jsonl"
-        if not path.exists():
-            return []
+    def plans(self, include_calls: bool = False) -> list[dict[str, Any]]:
         out = []
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    e = json.loads(line)
-                    if since_seq is None or e["seq"] > since_seq:
-                        out.append(e)
-        if limit is not None:
-            out = out[:limit] if since_seq is not None else out[-limit:]
+        for pid in self.plan_ids():
+            if pid.startswith(CALL_PREFIX) and not include_calls:
+                continue
+            doc = self.get(pid)
+            st = self.read_state(pid)["steps"]
+            counts = Counter(st.get(s, {"status": "pending"})["status"] for s in doc["steps"])
+            out.append({"id": pid, "label": doc.get("label", ""), "rev": doc["rev"],
+                        "counts": dict(counts)})
         return out
 
-    # ---- inbox ----
+    # ---- manual values (SPEC §6) ----
 
-    def inbox_open(self, pid: str, kind: str, node: str, data: dict[str, Any]) -> dict[str, Any]:
-        d = self.plan_dir(pid) / "inbox"
+    def set_input(self, pid: str, name: str, value: Any, author: str, reason: str) -> None:
         with self.lock(pid):
-            d.mkdir(parents=True, exist_ok=True)
-            n = len(list(d.glob("*.json"))) + 1
-            item = {"id": f"{pid}.{n:04d}", "plan": pid, "node": node, "kind": kind,
-                    "status": "open", "opened": now_iso(), **data,
-                    "resolution": None, "resolved_by": None, "resolved_at": None}
-            atomic_write_json(d / f"{item['id']}.json", item)
-            self.append_event(pid, "inbox_opened", node, {"item": item["id"], "kind": kind})
-        return item
+            doc, plan = self.plan(pid)
+            if name not in plan.inputs:
+                raise NotFound(f"plan {pid} has no input {name!r}")
+            errs = T.check_value(plan.inputs[name], value, f"inputs.{name}")
+            if errs:
+                raise InvalidPlan(errs)
+            state = self.read_state(pid)
+            if name in state["inputs"] and state["inputs"][name] != value:
+                started = [s.id for s in plan.steps.values()
+                           if any(r.step is None and r.name == name for r in s.reads)
+                           and state["steps"].get(s.id, {}).get("status", "pending") != "pending"]
+                if started:
+                    raise BadRequest(f"input {name} was already read by step {started[0]}")
+            state["inputs"][name] = value
+            self.write_state(pid, state)
+            self._log(pid, doc["rev"], author, reason, action="plan_set_input", input=name,
+                      value=value)
+        self._notify()
 
-    def _item_path(self, item_id: str) -> Path:
-        pid, _, n = item_id.rpartition(".") if isinstance(item_id, str) else ("", "", "")
-        path = self.plan_dir(pid) / "inbox" / f"{item_id}.json"
-        if not pid or not P.ID_RE.match(pid) or not n.isdigit() or not path.exists():
-            raise NotFound(f"no inbox item {item_id!r}")
-        return path
+    def set_step_input(self, pid: str, step: str, name: str, value: Any, author: str,
+                       reason: str, rev: int | None = None) -> int:
+        with self.lock(pid):
+            cur = self.get(pid)
+            if step not in cur["steps"]:
+                raise NotFound(f"plan {pid} has no step {step!r}")
+            op = {"op": "add", "path": f"/steps/{step}/in/{name}", "value": {"default": value}}
+            ops = [{"op": "add", "path": f"/steps/{step}/in", "value": {}}, op] \
+                if "in" not in cur["steps"][step] else [op]
+            return self.patch(pid, cur["rev"] if rev is None else rev, ops, author, reason)
 
-    def inbox_get(self, item_id: str) -> dict[str, Any]:
-        return read_json(self._item_path(item_id))
+    def set_output(self, pid: str, step: str, outputs: Any, author: str, reason: str) -> None:
+        with self.lock(pid):
+            doc, plan = self.plan(pid)
+            if step not in plan.steps:
+                raise NotFound(f"plan {pid} has no step {step!r}")
+            s = plan.steps[step]
+            types = {k: s.output_type(k) for k in s.fn.outputs}
+            errs = T.check_value(T.record_of(types), outputs, "outputs")
+            if isinstance(outputs, dict):
+                errs += [f"outputs.{k}: fn {s.fn.name} has no output {k}"
+                         for k in outputs if k not in types]
+            if errs:
+                raise InvalidPlan(errs)
+            state = self.read_state(pid)
+            if state["steps"].get(step, {}).get("status") == "running":
+                raise BadRequest(f"step {step} is running")
+            state["steps"][step] = {"status": "succeeded", "started": None,
+                                    "finished": now_iso(), "outputs": outputs, "manual": True}
+            self.write_state(pid, state)
+            self._log(pid, doc["rev"], author, reason, action="step_set_output", step=step,
+                      outputs=outputs)
+        self._notify()
 
-    def inbox_close(self, item_id: str, resolution: dict[str, Any], author: str) -> dict[str, Any]:
-        """Mark an item resolved. Callers apply any state change themselves."""
-        path = self._item_path(item_id)
-        item = read_json(path)
-        with self.lock(item["plan"]):
-            item = read_json(path)
-            if item["status"] != "open":
-                raise BadRequest(f"inbox item {item_id} is already resolved")
-            item.update(status="resolved", resolution=resolution, resolved_by=author,
-                        resolved_at=now_iso())
-            atomic_write_json(path, item)
-            self.append_event(item["plan"], "inbox_resolved", item["node"],
-                              {"item": item_id, "resolution": resolution, "author": author})
-        return item
+    def retry(self, pid: str, step: str, author: str, reason: str) -> None:
+        """step_retry: a failed (or manually set) step goes back to pending."""
+        with self.lock(pid):
+            doc, plan = self.plan(pid)
+            if step not in plan.steps:
+                raise NotFound(f"plan {pid} has no step {step!r}")
+            state = self.read_state(pid)
+            e = state["steps"].get(step, {"status": "pending"})
+            if e["status"] != "failed" and not e.get("manual"):
+                raise BadRequest(f"step {step} is {e['status']}; only a failed or manually set "
+                                 "step can be retried")
+            state["steps"][step] = {"status": "pending"}
+            self.write_state(pid, state)
+            self._log(pid, doc["rev"], author, reason, action="step_retry", step=step)
+        self._notify()
 
-    def inbox_list(self, pid: str | None = None, open_only: bool = True) -> list[dict[str, Any]]:
-        pids = [pid] if pid is not None else self.plan_ids()
-        out = []
-        for p in pids:
-            d = self._require(p) / "inbox"
-            if not d.is_dir():
-                continue
-            for f in sorted(d.glob("*.json")):
-                item = read_json(f)
-                if not open_only or item["status"] == "open":
-                    out.append(item)
+    # ---- one-off calls (fn_call) ----
+
+    def create_call(self, name: str, inputs: Any, author: str) -> str:
+        """Check `inputs` against the fn, then create a one-step plan that calls it."""
+        fn = self.registry.get(name)
+        if fn is None:
+            raise NotFound(f"no fn {name!r}")
+        if not isinstance(inputs, dict):
+            raise InvalidPlan(["inputs: expected an object keyed by input name"])
+        errs = T.check_value(T.record_of(fn.inputs), inputs, "inputs")
+        errs += [f"inputs.{k}: fn {name} has no input {k}" for k in inputs
+                 if k not in fn.inputs]
+        if errs:
+            raise InvalidPlan(errs, f"inputs do not match fn {name}")
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        pid = f"{CALL_PREFIX}{stamp}-{secrets.token_hex(3)}"
+        doc = {"label": f"call {name}", "steps": {CALL_STEP: {
+            "run": name, "in": {k: {"default": v} for k, v in inputs.items()}}}}
+        self.create(pid, doc, author, f"fn_call {name}")
+        return pid
+
+    def call_result(self, pid: str) -> dict[str, Any]:
+        self.get(pid)
+        e = self.read_state(pid)["steps"].get(CALL_STEP, {"status": "pending"})
+        out = {"plan": pid, "status": e["status"]}
+        out.update({k: e[k] for k in ("outputs", "error") if e.get(k) is not None})
         return out
 
 
@@ -370,5 +322,5 @@ def apply_ops(doc: dict[str, Any], ops: Any) -> dict[str, Any]:
                 KeyError) as e:
             raise InvalidPlan([f"ops[{i}]: {e}"]) from e
     if not isinstance(cur, dict):
-        raise InvalidPlan(["document: expected an object"])
+        raise InvalidPlan(["plan: expected an object"])
     return cur

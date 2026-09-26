@@ -1,2 +1,3 @@
-{"name": "test.env", "version": 1, "description": "Report the process contract as seen by a fn.",
- "in": {"x": "any?"}, "out": {"env": {"map": "string"}, "cwd": "string", "input": "any"}}
+{"name": "test.env", "doc": "Report the process contract as a fn sees it.",
+ "inputs": {"x": "Any?"},
+ "outputs": {"env": "Any", "cwd": "string", "input": "Any", "step": "string"}}

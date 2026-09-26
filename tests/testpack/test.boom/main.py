@@ -6,7 +6,7 @@ from sluice.fn import run
 
 
 def main(inp, ctx):
-    if inp.get("ok") or (ctx.home / "boom-ok").exists():
+    if inp["ok"] or (ctx.home / "boom-ok").exists():
         return {"done": True}
     ctx.log("about to explode")
     raise RuntimeError("boom")

@@ -1,2 +1,0 @@
-{"name": "test.echo_log", "version": 1,
- "in": {"msg": "string"}, "out": {"msg": "string", "attempt": "int"}}

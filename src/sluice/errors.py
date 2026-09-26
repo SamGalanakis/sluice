@@ -1,4 +1,4 @@
-"""Errors shared by the store, the tools and the CLI. Each maps to a JSON payload (SPEC §9)."""
+"""Errors shared by the store, the tools and the CLI. Each maps to a JSON payload (SPEC §8)."""
 
 from __future__ import annotations
 

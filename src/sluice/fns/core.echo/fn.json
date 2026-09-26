@@ -1,0 +1,10 @@
+{
+  "name": "core.echo",
+  "doc": "Pass the value through. Built in: runs inline, no process.",
+  "inputs": {
+    "value": "Any"
+  },
+  "outputs": {
+    "value": "Any"
+  }
+}

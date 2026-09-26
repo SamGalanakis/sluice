@@ -1,0 +1,10 @@
+{
+  "name": "core.collect",
+  "doc": "The fan-in join: gather values into one array. Built in: runs inline, no process.",
+  "inputs": {
+    "items": "Any[]"
+  },
+  "outputs": {
+    "items": "Any[]"
+  }
+}

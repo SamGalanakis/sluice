@@ -1,7 +1,9 @@
+import copy
 import json
 import multiprocessing
 import threading
 
+import jsonpatch
 import pytest
 
 from sluice.errors import BadRequest, Conflict, InvalidPlan, NotFound
@@ -10,112 +12,112 @@ from tests.conftest import create
 
 
 def add(a, b=1):
-    return {"fn": "test.add", "in": {"a": {"value": a}, "b": {"value": b}}}
+    return {"run": "test.add", "in": {"a": {"default": a}, "b": {"default": b}}}
 
 
-def test_create_writes_snapshot_log_and_event(store):
+def replay(store, pid):
+    """Rebuild the plan from its log alone (manual-value entries carry no ops)."""
+    doc = None
+    for e in store.history(pid):
+        if e["rev"] == 1 and "ops" in e:
+            doc = copy.deepcopy(e["ops"][0]["value"])
+        elif "ops" in e:
+            doc = jsonpatch.apply_patch(doc, e["ops"])
+    return doc
+
+
+def test_create_writes_snapshot_and_log(store):
     assert create(store, "p", {"a": add(1)}) == 1
-    d = store.plan_dir("p")
-    snap = json.loads((d / "plan.json").read_text())
-    assert snap["rev"] == 1 and snap["id"] == "p" and snap["nodes"]["a"]["fn"] == "test.add"
-    log = [json.loads(x) for x in (d / "plan.log.jsonl").read_text().splitlines()]
-    assert log[0]["rev"] == 1 and log[0]["author"] == "test"
-    assert log[0]["ops"] == [{"op": "add", "path": "", "value": {k: v for k, v in snap.items()
-                                                                 if k != "rev"}}]
-    assert [e["type"] for e in store.events("p")] == ["plan_created"]
+    snap = json.loads((store.plan_dir("p") / "plan.json").read_text())
+    assert snap == {"id": "p", "label": "p", "steps": {"a": add(1)}, "rev": 1}
+    [entry] = store.history("p")
+    assert (entry["rev"], entry["author"], entry["reason"]) == (1, "test", "test")
+    assert entry["ops"] == [{"op": "add", "path": "", "value": replay(store, "p")}]
     with pytest.raises(BadRequest, match="already exists"):
         create(store, "p", {})
 
 
-def test_create_rejects_invalid_documents_without_writing(store):
+def test_create_rejects_an_invalid_plan_without_writing(store):
     with pytest.raises(InvalidPlan) as e:
-        create(store, "p", {"a": {"fn": "nope.fn"}})
-    assert e.value.errors == ["nodes.a.fn: unknown fn nope.fn"]
+        create(store, "p", {"a": {"run": "no.such"}})
+    assert e.value.errors == ["steps.a.run: unknown fn 'no.such'"]
     assert store.plan_ids() == []
-    with pytest.raises(InvalidPlan, match="invalid"):
-        store.create("p", {"id": "other", "nodes": {}}, "t", "r")
 
 
 def test_patch_is_compare_and_swap(store):
     create(store, "p", {"a": add(1)})
-    assert store.patch("p", 1, [{"op": "add", "path": "/nodes/b", "value": add(2)}], "me",
+    assert store.patch("p", 1, [{"op": "add", "path": "/steps/b", "value": add(2)}], "me",
                        "more") == 2
     with pytest.raises(Conflict) as e:
-        store.patch("p", 1, [{"op": "remove", "path": "/nodes/b"}], "me", "stale")
-    assert e.value.current_rev == 2
+        store.patch("p", 1, [{"op": "remove", "path": "/steps/b"}], "me", "stale")
     assert e.value.payload() == {"error": "conflict", "message": "plan is at rev 2",
                                  "current_rev": 2}
-    assert "b" in store.get("p")["nodes"]
+    assert "b" in store.get("p")["steps"]
 
 
 def test_patch_rejects_invalid_results_and_bad_ops(store):
     create(store, "p", {"a": add(1)})
     with pytest.raises(InvalidPlan) as e:
-        store.patch("p", 1, [{"op": "replace", "path": "/nodes/a/in/a/value", "value": "x"}],
+        store.patch("p", 1, [{"op": "replace", "path": "/steps/a/in/a/default", "value": "x"}],
                     "me", "bad type")
-    assert e.value.errors == ['nodes.a.in.a: expected int, got "x"']
+    assert e.value.errors == ['steps.a.in.a: expected int, got "x"']
     with pytest.raises(InvalidPlan) as e:
-        store.patch("p", 1, [{"op": "remove", "path": "/nodes/zz"}], "me", "bad op")
+        store.patch("p", 1, [{"op": "remove", "path": "/steps/zz"}], "me", "bad op")
     assert e.value.errors[0].startswith("ops[0]:")
-    with pytest.raises(InvalidPlan, match="invalid") as e:
-        store.patch("p", 1, [{"op": "add", "path": "/rev", "value": 9}], "me", "rev")
-    assert e.value.errors == ["rev: maintained by the store; it cannot be set or patched"]
-    with pytest.raises(InvalidPlan):
+    with pytest.raises(InvalidPlan) as e:
         store.patch("p", 1, [{"op": "replace", "path": "/id", "value": "q"}], "me", "id")
-    assert store.get("p")["rev"] == 1
-    assert len(store.history("p")) == 1
+    assert e.value.errors == ["id: the plan id cannot change"]
+    assert store.get("p")["rev"] == 1 and len(store.history("p")) == 1
     with pytest.raises(NotFound):
         store.patch("nope", 1, [], "me", "x")
 
 
-def test_log_replay_equals_snapshot_and_revert(store):
-    create(store, "p", {"a": add(1)})
-    store.patch("p", 1, [{"op": "add", "path": "/nodes/b", "value": add(2)}], "me", "b")
-    store.patch("p", 2, [{"op": "replace", "path": "/title", "value": "renamed"},
-                         {"op": "add", "path": "/nodes/c", "value": add(3)}], "me", "c")
-    store.patch("p", 3, [{"op": "remove", "path": "/nodes/a"}], "me", "drop a")
-    cur = {k: v for k, v in store.get("p").items() if k != "rev"}
-    assert store.plan_at("p", 4) == cur
-    assert set(store.plan_at("p", 2)["nodes"]) == {"a", "b"}
-    assert store.plan_at("p", 1)["title"] == "p"
-    assert [h["rev"] for h in store.history("p", since_rev=2)] == [3, 4]
-    assert store.revert("p", 4, 2, "me", "undo") == 5
-    assert store.plan_at("p", 5) == store.plan_at("p", 2)
-    assert store.history("p")[-1]["author"] == "me"
-    with pytest.raises(NotFound):
-        store.plan_at("p", 9)
+def test_running_steps_cannot_be_removed_or_changed(store):
+    create(store, "p", {"a": add(1), "b": add(2)})
+    with store.lock("p"):
+        store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "running"}}})
+    with pytest.raises(InvalidPlan) as e:
+        store.patch("p", 1, [{"op": "remove", "path": "/steps/a"}], "me", "drop")
+    assert e.value.errors == ["steps.a: cannot remove a running step"]
+    with pytest.raises(InvalidPlan) as e:
+        store.patch("p", 1, [{"op": "replace", "path": "/steps/a/in/b/default", "value": 3}],
+                    "me", "change")
+    assert e.value.errors == ["steps.a: cannot change a running step"]
+    assert store.patch("p", 1, [{"op": "remove", "path": "/steps/b"}], "me", "ok") == 2
 
 
-def _patcher(home: str, n: int, tag: str) -> int:
-    """Add n nodes, retrying on conflict. Returns how many conflicts it saw."""
+def test_the_log_replays_to_the_snapshot(store):
+    create(store, "p", {"a": add(1)}, inputs={"n": "int"})
+    store.patch("p", 1, [{"op": "add", "path": "/steps/b", "value": add(2)}], "me", "b")
+    store.set_input("p", "n", 4, "me", "a manual value between edits")
+    store.patch("p", 2, [{"op": "replace", "path": "/label", "value": "renamed"},
+                         {"op": "remove", "path": "/steps/a"}], "me", "c")
+    assert replay(store, "p") == {k: v for k, v in store.get("p").items() if k != "rev"}
+    assert [e["rev"] for e in store.history("p", since_rev=1)] == [2, 2, 3]
+
+
+def _patcher(home: str, n: int, tag: str) -> None:
     s = Store(home)
-    conflicts = 0
     for i in range(n):
         while True:
-            rev = s.get("p")["rev"]
             try:
-                s.patch("p", rev, [{"op": "add", "path": f"/nodes/{tag}-{i}", "value": add(i)}],
-                        tag, "concurrent")
+                s.patch("p", s.get("p")["rev"],
+                        [{"op": "add", "path": f"/steps/{tag}-{i}", "value": add(i)}], tag, "go")
                 break
             except Conflict:
-                conflicts += 1
-    return conflicts
+                pass
 
 
-def _check_consistent(store, expected_nodes: int) -> None:
+def _check_consistent(store, expected: int) -> None:
     doc = store.get("p")
-    assert len(doc["nodes"]) == expected_nodes
-    hist = store.history("p")
-    assert [h["rev"] for h in hist] == list(range(1, doc["rev"] + 1))
-    assert store.plan_at("p", doc["rev"]) == {k: v for k, v in doc.items() if k != "rev"}
-    seqs = [e["seq"] for e in store.events("p")]
-    assert seqs == list(range(1, len(seqs) + 1))
+    assert len(doc["steps"]) == expected
+    assert [h["rev"] for h in store.history("p")] == list(range(1, doc["rev"] + 1))
+    assert replay(store, "p") == {k: v for k, v in doc.items() if k != "rev"}
 
 
 def test_concurrent_patchers_in_threads(store, home):
     create(store, "p", {})
-    threads = [threading.Thread(target=_patcher, args=(str(home), 10, f"t{k}"))
-               for k in range(4)]
+    threads = [threading.Thread(target=_patcher, args=(str(home), 10, f"t{k}")) for k in range(4)]
     for t in threads:
         t.start()
     for t in threads:
@@ -125,47 +127,64 @@ def test_concurrent_patchers_in_threads(store, home):
 
 def test_concurrent_patchers_in_processes(store, home):
     create(store, "p", {})
-    ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(4) as pool:
+    with multiprocessing.get_context("spawn").Pool(4) as pool:
         pool.starmap(_patcher, [(str(home), 8, f"p{k}") for k in range(4)])
     _check_consistent(store, 32)
 
 
-def test_state_has_its_own_rev(store):
-    create(store, "p", {})
-    st = store.read_state("p")
-    assert st == {"rev": 0, "plan_rev": 0, "nodes": {}}
-    with store.lock("p"):
-        assert store.write_state("p", st) == 1
-        assert store.write_state("p", st) == 2
-    assert store.read_state("p")["rev"] == 2
-
-
-def test_events_tail(store):
-    create(store, "p", {})
-    for i in range(5):
-        store.append_event("p", "node_started", f"n{i}", {"i": i})
-    evs = store.events("p")
-    assert [e["seq"] for e in evs] == [1, 2, 3, 4, 5, 6]
-    assert [e["seq"] for e in store.events("p", since_seq=3)] == [4, 5, 6]
-    assert [e["seq"] for e in store.events("p", since_seq=1, limit=2)] == [2, 3]
-    assert [e["seq"] for e in store.events("p", limit=2)] == [5, 6]
-    assert evs[1]["node"] == "n0" and evs[1]["data"] == {"i": 0}
-
-
-def test_inbox_open_list_close(store):
-    create(store, "p", {})
-    a = store.inbox_open("p", "failure", "n1", {"error": "boom"})
-    b = store.inbox_open("p", "ask", "n2", {"question": "?"})
-    assert (a["id"], b["id"]) == ("p.0001", "p.0002")
-    assert [i["id"] for i in store.inbox_list()] == ["p.0001", "p.0002"]
-    store.inbox_close("p.0001", {"action": "ack"}, "me")
-    assert [i["id"] for i in store.inbox_list("p")] == ["p.0002"]
-    closed = store.inbox_get("p.0001")
-    assert closed["status"] == "resolved" and closed["resolved_by"] == "me"
-    assert len(store.inbox_list(open_only=False)) == 2
-    with pytest.raises(BadRequest, match="already resolved"):
-        store.inbox_close("p.0001", {"action": "ack"}, "me")
+def test_set_input_is_typed_logged_and_frozen_once_read(store):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": {"source": "n"}, "b": {"default": 1}}}},
+           inputs={"n": "int", "unused": "string?"})
+    with pytest.raises(InvalidPlan) as e:
+        store.set_input("p", "n", "x", "me", "wrong")
+    assert e.value.errors == ['inputs.n: expected int, got "x"']
     with pytest.raises(NotFound):
-        store.inbox_get("p.0009")
-    assert [e["type"] for e in store.events("p")][-1] == "inbox_resolved"
+        store.set_input("p", "zz", 1, "me", "unknown")
+    store.set_input("p", "n", 1, "me", "first")
+    store.set_input("p", "n", 2, "me", "not read yet, so it may change")
+    assert store.read_state("p")["inputs"] == {"n": 2}
+    last = store.history("p")[-1]
+    assert (last["action"], last["input"], last["value"], last["author"]) == (
+        "plan_set_input", "n", 2, "me")
+    assert "ops" not in last
+    with store.lock("p"):
+        st = store.read_state("p")
+        st["steps"]["a"] = {"status": "running"}
+        store.write_state("p", st)
+    with pytest.raises(BadRequest, match="input n was already read by step a"):
+        store.set_input("p", "n", 3, "me", "too late")
+    store.set_input("p", "n", 2, "me", "the same value is fine")
+
+
+def test_step_set_input_is_an_edit(store):
+    create(store, "p", {"a": add(1)})
+    assert store.set_step_input("p", "a", "b", 7, "me", "by hand") == 2
+    assert store.get("p")["steps"]["a"]["in"]["b"] == {"default": 7}
+    assert store.history("p")[-1]["ops"] == [
+        {"op": "add", "path": "/steps/a/in/b", "value": {"default": 7}}]
+    with pytest.raises(Conflict):
+        store.set_step_input("p", "a", "b", 8, "me", "stale", rev=1)
+    with pytest.raises(InvalidPlan):
+        store.set_step_input("p", "a", "b", "x", "me", "bad type")
+
+
+def test_set_output_and_retry(store):
+    create(store, "p", {"a": add(1),
+                        "t": {"run": "test.window", "scatter": "tag",
+                              "in": {"seconds": {"default": 0}, "tag": {"default": [1, 2]}}}})
+    with pytest.raises(InvalidPlan) as e:
+        store.set_output("p", "a", {"sum": "x", "extra": 1}, "me", "bad")
+    assert e.value.errors == ['outputs.sum: expected int, got "x"',
+                              "outputs.extra: fn test.add has no output extra"]
+    with pytest.raises(InvalidPlan):  # a scattered step's outputs are arrays
+        store.set_output("p", "t", {"start": 1.0, "end": 2.0, "tag": 1}, "me", "bad")
+    store.set_output("p", "t", {"start": [1.0], "end": [2.0], "tag": [1]}, "me", "ok")
+    store.set_output("p", "a", {"sum": 5}, "me", "done by hand")
+    e = store.read_state("p")["steps"]["a"]
+    assert (e["status"], e["outputs"], e["manual"]) == ("succeeded", {"sum": 5}, True)
+    assert store.history("p")[-1]["action"] == "step_set_output"
+    store.retry("p", "a", "me", "run it for real")
+    assert store.read_state("p")["steps"]["a"] == {"status": "pending"}
+    assert store.history("p")[-1]["action"] == "step_retry"
+    with pytest.raises(BadRequest, match="step a is pending"):
+        store.retry("p", "a", "me", "again")

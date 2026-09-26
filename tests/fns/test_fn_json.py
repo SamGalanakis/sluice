@@ -8,6 +8,10 @@ FNS = Path(__file__).resolve().parents[2] / "src" / "sluice" / "fns"
 ALLOWED_KEYS = {"name", "doc", "inputs", "outputs"}
 
 EXPECTED = {
+    "core": {
+        "core.echo": [{"value": "Any"}, {"value": "Any"}],
+        "core.collect": [{"items": "Any[]"}, {"items": "Any[]"}],
+    },
     "agents": {
         "agent.devin": [
             {

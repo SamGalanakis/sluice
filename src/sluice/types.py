@@ -6,8 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-PRIMITIVES = ("string", "int", "float", "bool", "any")
-SPECIAL = ("list", "map", "optional", "union", "record")
+PRIMITIVES = ("string", "int", "float", "boolean", "Any")
 
 
 class TypeSyntaxError(ValueError):
@@ -35,15 +34,7 @@ class List:
     of: Type
 
     def __str__(self) -> str:
-        return f"list<{self.of}>"
-
-
-@dataclass(frozen=True)
-class Map:
-    of: Type
-
-    def __str__(self) -> str:
-        return f"map<{self.of}>"
+        return f"{self.of}[]"
 
 
 @dataclass(frozen=True)
@@ -59,87 +50,56 @@ class Record:
     fields: tuple[tuple[str, Type], ...]
 
     def field(self, name: str) -> Type | None:
-        for k, t in self.fields:
-            if k == name:
-                return t
-        return None
+        return dict(self.fields).get(name)
 
     def __str__(self) -> str:
-        parts = [f"{k}?" if isinstance(t, Optional) else k for k, t in self.fields]
-        return "{" + ", ".join(parts) + "}"
+        return "{" + ", ".join(f"{k}?" if isinstance(t, Optional) else k
+                               for k, t in self.fields) + "}"
 
 
-@dataclass(frozen=True)
-class Union:
-    tags: tuple[tuple[str, Record], ...]
+Type = Prim | Enum | List | Optional | Record
 
-    def variant(self, tag: str) -> Record | None:
-        for k, r in self.tags:
-            if k == tag:
-                return r
-        return None
-
-    def __str__(self) -> str:
-        return "union<" + "|".join(k for k, _ in self.tags) + ">"
-
-
-Type = Prim | Enum | List | Map | Optional | Record | Union
-
-ANY = Prim("any")
-STRING = Prim("string")
+ANY = Prim("Any")
 
 
 def _join(path: str, key: str) -> str:
     return f"{path}.{key}" if path else key
 
 
+def optional(t: Type) -> Type:
+    return t if isinstance(t, Optional) else Optional(t)
+
+
 def parse(form: Any, path: str = "type") -> Type:
-    """Parse the JSON form of a type. Raises TypeSyntaxError naming `path`."""
+    """Parse a type in its CWL spelling (SPEC §3). Raises TypeSyntaxError naming `path`."""
     if isinstance(form, str):
-        base, opt = (form[:-1], True) if form.endswith("?") else (form, False)
-        if base not in PRIMITIVES:
+        if form.endswith("?"):
+            return optional(parse(form[:-1], path))
+        if form.endswith("[]"):
+            return List(parse(form[:-2], path))
+        if form not in PRIMITIVES:
             raise TypeSyntaxError(f"{path}: unknown type {form!r}")
-        return Optional(Prim(base)) if opt else Prim(base)
-    if isinstance(form, list):
-        if not form or not all(isinstance(v, str) for v in form):
-            raise TypeSyntaxError(f"{path}: an enum is a non-empty list of strings")
-        if len(set(form)) != len(form):
-            raise TypeSyntaxError(f"{path}: enum values repeat")
-        return Enum(tuple(form))
+        return Prim(form)
+    if isinstance(form, list) and len(form) == 2 and "null" in form:
+        return optional(parse(form[1] if form[0] == "null" else form[0], path))
     if isinstance(form, dict):
-        if len(form) == 1 and next(iter(form)) in SPECIAL:
-            key, inner = next(iter(form.items()))
-            sub = f"{path}.{key}"
-            if key == "list":
-                return List(parse(inner, sub))
-            if key == "map":
-                return Map(parse(inner, sub))
-            if key == "optional":
-                t = parse(inner, sub)
-                return t if isinstance(t, Optional) else Optional(t)
-            if key == "record":
-                if not isinstance(inner, dict):
-                    raise TypeSyntaxError(f"{sub}: expected an object of fields")
-                return _record(inner, sub)
-            if not isinstance(inner, dict) or not inner:
-                raise TypeSyntaxError(f"{sub}: expected an object of tag -> record")
-            tags = []
-            for tag, rec in inner.items():
-                t = parse(rec, f"{sub}.{tag}")
-                if not isinstance(t, Record):
-                    raise TypeSyntaxError(f"{sub}.{tag}: a union variant must be a record")
-                tags.append((tag, t))
-            return Union(tuple(tags))
-        return _record(form, path)
-    raise TypeSyntaxError(f"{path}: not a type: {form!r}")
+        kind = form.get("type")
+        if kind == "array" and set(form) == {"type", "items"}:
+            return List(parse(form["items"], f"{path}.items"))
+        if kind == "enum" and set(form) == {"type", "symbols"}:
+            sym = form["symbols"]
+            if (not isinstance(sym, list) or not sym or len(set(sym)) != len(sym)
+                    or not all(isinstance(v, str) for v in sym)):
+                raise TypeSyntaxError(f"{path}.symbols: a non-empty list of distinct strings")
+            return Enum(tuple(sym))
+        if kind == "record" and set(form) == {"type", "fields"} and isinstance(form["fields"],
+                                                                               dict):
+            return record_of({k: parse(v, f"{path}.{k}") for k, v in form["fields"].items()})
+    raise TypeSyntaxError(f"{path}: not a type: {json.dumps(form)}")
 
 
-def _record(fields: dict[str, Any], path: str) -> Record:
-    return Record(tuple((k, parse(v, _join(path, k))) for k, v in fields.items()))
-
-
-def record_of(ports: dict[str, Type]) -> Record:
-    return Record(tuple(ports.items()))
+def record_of(fields: dict[str, Type]) -> Record:
+    return Record(tuple(fields.items()))
 
 
 # ---- fits -------------------------------------------------------------------------------
@@ -148,53 +108,35 @@ def record_of(ports: dict[str, Type]) -> Record:
 def fits(out: Type, inp: Type) -> tuple[bool, str]:
     """Can every value of `out` be used where `inp` is expected? Returns (ok, reason)."""
     reason = _fits(out, inp, "")
-    return (reason is None, reason or "")
+    return reason is None, reason or ""
 
 
 def _fits(o: Type, i: Type, p: str) -> str | None:
-    if i == ANY or o == ANY:
+    if ANY in (o, i):
         return None
     if isinstance(i, Optional):
         return _fits(o.of if isinstance(o, Optional) else o, i.of, p)
     if isinstance(o, Optional):
         return f"{p} is optional" if p else f"{o} is optional"
     where = f"{p}: " if p else ""
-    if isinstance(i, Prim):
-        if isinstance(o, Prim):
-            if o.name == i.name or (o.name == "int" and i.name == "float"):
-                return None
-            return f"{where}{o} is not {i}"
-        if isinstance(o, Enum) and i.name == "string":
+    if isinstance(i, Prim) and isinstance(o, Prim):
+        if o.name == i.name or (o.name, i.name) == ("int", "float"):
             return None
-        return f"{where}{o} is not {i}"
-    if isinstance(i, Enum):
-        if isinstance(o, Enum):
-            extra = [v for v in o.values if v not in i.values]
-            return f"{where}{', '.join(extra)} not in {i}" if extra else None
-        return f"{where}{o} is not {i}"
-    if isinstance(i, List) and isinstance(o, List):
+    elif isinstance(i, Prim) and isinstance(o, Enum) and i.name == "string":
+        return None
+    elif isinstance(i, Enum) and isinstance(o, Enum):
+        extra = [v for v in o.values if v not in i.values]
+        return f"{where}{', '.join(extra)} not in {i}" if extra else None
+    elif isinstance(i, List) and isinstance(o, List):
         return _fits(o.of, i.of, f"{p}[]")
-    if isinstance(i, Map) and isinstance(o, Map):
-        return _fits(o.of, i.of, f"{p}.*" if p else "*")
-    if isinstance(i, Record) and isinstance(o, Record):
+    elif isinstance(i, Record) and isinstance(o, Record):
         for name, it in i.fields:
             ot = o.field(name)
-            fp = _join(p, name)
             if ot is None:
                 if isinstance(it, Optional):
                     continue
-                return f"{fp} is missing"
-            r = _fits(ot, it, fp)
-            if r:
-                return r
-        return None
-    if isinstance(i, Union) and isinstance(o, Union):
-        for tag, rec in o.tags:
-            target = i.variant(tag)
-            if target is None:
-                return f"{where}tag {tag} is not accepted"
-            r = _fits(rec, target, _join(p, tag))
-            if r:
+                return f"{_join(p, name)} is missing"
+            if r := _fits(ot, it, _join(p, name)):
                 return r
         return None
     return f"{where}{o} is not {i}"
@@ -217,95 +159,63 @@ def check_value(t: Type, value: Any, path: str = "") -> list[str]:
 
 def _check(t: Type, v: Any, p: str, errs: list[str]) -> None:
     where = f"{p}: " if p else ""
-    if t == ANY:
+    if t == ANY or (isinstance(t, Optional) and v is None):
         return
     if isinstance(t, Optional):
-        if v is not None:
-            _check(t.of, v, p, errs)
-        return
-    if isinstance(t, Prim):
-        ok = {
-            "string": isinstance(v, str),
-            "int": isinstance(v, int) and not isinstance(v, bool),
-            "float": isinstance(v, int | float) and not isinstance(v, bool),
-            "bool": isinstance(v, bool),
-        }[t.name]
+        _check(t.of, v, p, errs)
+    elif isinstance(t, Prim):
+        ok = {"string": isinstance(v, str),
+              "int": isinstance(v, int) and not isinstance(v, bool),
+              "float": isinstance(v, int | float) and not isinstance(v, bool),
+              "boolean": isinstance(v, bool)}[t.name]
         if not ok:
             errs.append(f"{where}expected {t.name}, got {_show(v)}")
-        return
-    if isinstance(t, Enum):
+    elif isinstance(t, Enum):
         if not (isinstance(v, str) and v in t.values):
             errs.append(f"{where}expected one of {t}, got {_show(v)}")
-        return
-    if isinstance(t, List):
+    elif isinstance(t, List):
         if not isinstance(v, list):
-            errs.append(f"{where}expected a list, got {_show(v)}")
+            errs.append(f"{where}expected an array, got {_show(v)}")
             return
         for n, item in enumerate(v):
             _check(t.of, item, f"{p}[{n}]", errs)
-        return
-    if isinstance(t, Map):
-        if not isinstance(v, dict):
-            errs.append(f"{where}expected an object, got {_show(v)}")
-            return
-        for k, item in v.items():
-            _check(t.of, item, _join(p, k), errs)
-        return
-    if isinstance(t, Record):
-        if not isinstance(v, dict):
-            errs.append(f"{where}expected an object {t}, got {_show(v)}")
-            return
+    elif not isinstance(v, dict):
+        errs.append(f"{where}expected an object {t}, got {_show(v)}")
+    else:
         for name, ft in t.fields:
-            if name not in v:
-                if not isinstance(ft, Optional):
-                    errs.append(f"{_join(p, name)}: missing required field")
-                continue
-            _check(ft, v[name], _join(p, name), errs)
-        return
-    if isinstance(t, Union):
-        if not isinstance(v, dict):
-            errs.append(f"{where}expected an object with a kind, got {_show(v)}")
-            return
-        kind = v.get("kind")
-        rec = t.variant(kind) if isinstance(kind, str) else None
-        if rec is None:
-            tags = ", ".join(k for k, _ in t.tags)
-            errs.append(f"{_join(p, 'kind')}: expected one of [{tags}], got {_show(kind)}")
-            return
-        _check(rec, v, p, errs)
+            if name in v:
+                _check(ft, v[name], _join(p, name), errs)
+            elif not isinstance(ft, Optional):
+                errs.append(f"{_join(p, name)}: missing required field")
 
 
 # ---- navigation -------------------------------------------------------------------------
 
 
 def navigate(t: Type, fields: tuple[str, ...] | list[str]) -> tuple[Type | None, str]:
-    """The type of `value.f1.f2...` for a value of type `t`. Returns (type, error)."""
-    optional = False
+    """The type of `value.f1.f2...` (a digit selects a list item). Returns (type, error)."""
+    maybe = False
     for f in fields:
         while isinstance(t, Optional):
-            optional, t = True, t.of
+            maybe, t = True, t.of
         if t == ANY:
             return ANY, ""
-        if isinstance(t, Record):
-            ft = t.field(f)
-            if ft is None:
-                return None, f"no field {f} in {t}"
+        if isinstance(t, Record) and (ft := t.field(f)) is not None:
             t = ft
-        elif isinstance(t, Map):
-            optional, t = True, t.of
-        elif isinstance(t, Union) and f == "kind":
-            t = Enum(tuple(k for k, _ in t.tags))
+        elif isinstance(t, List) and f.isdigit():
+            t = t.of  # an index past the end yields null, caught by the runtime input check
         else:
-            return None, f"cannot read field {f} of {t}"
-    if optional and not isinstance(t, Optional) and t != ANY:
-        t = Optional(t)
-    return t, ""
+            return None, f"cannot read {f} of {t}"
+    return (optional(t) if maybe else t), ""
 
 
 def navigate_value(value: Any, fields: tuple[str, ...] | list[str]) -> Any:
-    """Runtime counterpart of `navigate`: missing fields and nulls yield None."""
+    """Runtime counterpart of `navigate`: missing fields, bad indexes and nulls yield None."""
     for f in fields:
-        if not isinstance(value, dict):
+        if isinstance(value, dict):
+            value = value.get(f)
+        elif isinstance(value, list) and f.isdigit() and int(f) < len(value):
+            value = value[int(f)]
+        else:
             return None
-        value = value.get(f)
     return value
