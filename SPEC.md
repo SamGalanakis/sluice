@@ -419,11 +419,13 @@ the contract other packs and plans bind to.
 | `agent.devin` | `cwd: string, spec: string (spec text), log: string?, resume: string?, report_path: string?` | `log: string, final: string, report: string?` |
 | `agent.codex` | `cwd, spec, model: ["sol","astra"]?, log?, resume?, report_path?` | same as devin |
 | `agent.claude` | `cwd: string, prompt: string, model: string? (default "opus"), session: string?` | `result: string, session: string, cost_usd: float?` |
+| `agent.run` | `engine: ["devin","codex","claude"], cwd: string, spec: string, model: string?, resume: string?, report_path: string?` | `final: string, report: string?, session: string?` |
 | `agent.review` | `cwd: string, base: string (git ref), standards: string (path), notes: string?` | `summary: string, sha: string, commits: int` |
 | `decide.llm` | `question: string, context: any?, options: {list: string}, threshold: float?` | `choice: string, p: float, confident: bool` |
 | `decide.jev` | same as `decide.llm` | same as `decide.llm` |
 
-Agent fns fail as transient on capacity/rate-limit errors. `agent.review` commits fixes itself
+`agent.run` dispatches to the engine named in its input (the same invocation the engine's own fn
+uses), so a composite can pick the engine from data. Agent fns fail as transient on capacity/rate-limit errors. `agent.review` commits fixes itself
 (no comments) and never adds AI attribution to commits. `decide.jev` reads `SLUICE_JEV_URL` and
 `SLUICE_JEV_KEY`; its request mapping is isolated in one function and marked PENDING until
 checked against the real API. `decide.llm` uses `claude -p` with a JSON answer; its `p` is
