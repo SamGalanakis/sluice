@@ -333,7 +333,10 @@ input=None)` runs a command and raises `ShError` on a non-zero exit when `check`
 ## 8. MCP server
 
 `sluice serve` runs the runner and an MCP server (official `mcp` SDK, streamable HTTP) at
-`http://<host>:<port>/mcp` in one process. Errors are tool errors whose message is JSON
+`http://<host>:<port>/mcp` in one process. With `--no-runner` it serves only, and a separate
+`sluice loop` runs the steps: the two share nothing but the files (the runner polls about once
+a second), so the server can restart without ending running steps. Stopping the runner ends
+the fns it is running. Errors are tool errors whose message is JSON
 `{"error": "not_found"|"conflict"|"invalid"|"bad_request", "message", ...}` (`conflict` carries
 `current_rev` for a plan edit, or `status` for an inbox item that is no longer open; `invalid`
 carries `errors`). `rev` is optional on the convenience tools (they apply
@@ -490,7 +493,8 @@ fields' `rules` with lang-core's validators and shows what fails.
 MCP is the interface; the CLI only starts it and reaches the same tools from a shell:
 
 ```
-sluice serve [--host H] [--port P]    runner + MCP server + dashboard (with the inbox)
+sluice serve [--host H] [--port P] [--no-runner]
+                                      runner + MCP server + dashboard (with the inbox)
 sluice loop                           runner only
 sluice tool                           list the MCP tools with one-line descriptions
 sluice tool <name> '<json args>'      call that tool in-process and print its result

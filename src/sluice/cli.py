@@ -33,10 +33,11 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
 
     host = a.host or store.config["http"]["host"]
     port = a.port or int(store.config["http"]["port"])
-    runner = Runner(store)
-    store.listeners.append(runner.wake)
-    thread = threading.Thread(target=runner.run_forever, name="sluice-runner", daemon=True)
-    thread.start()
+    runner = None if a.no_runner else Runner(store)
+    if runner:  # else a separate `sluice loop` runs the steps and outlives server restarts
+        store.listeners.append(runner.wake)
+        thread = threading.Thread(target=runner.run_forever, name="sluice-runner", daemon=True)
+        thread.start()
     stopping = threading.Event()  # ends the dashboard's streams, so shutdown need not wait
 
     class Server(uvicorn.Server):
@@ -64,8 +65,9 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
                               timeout_graceful_shutdown=5)).run()
     finally:
         stopping.set()
-        runner.stop()
-        thread.join(timeout=30)
+        if runner:
+            runner.stop()
+            thread.join(timeout=30)
     return 0
 
 
@@ -139,6 +141,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="runner + MCP server + dashboard (with the inbox)")
     s.add_argument("--host")
     s.add_argument("--port", type=int)
+    s.add_argument("--no-runner", action="store_true",
+                   help="serve only; run `sluice loop` separately so restarting the server "
+                   "leaves running steps alone")
     sub.add_parser("loop", help="runner only")
     s = sub.add_parser("tool", help="list the MCP tools, or call one in-process",
                        description="Without a name, list the tools. With one, call it with a "

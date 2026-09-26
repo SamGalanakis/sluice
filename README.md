@@ -61,6 +61,13 @@ uv run sluice tool verify  # exits 1 when there are problems
 `sluice tool <name> '<json>'` calls the same tools the MCP server exposes, in-process. Without
 `serve` running, start `sluice loop` for the runner, or pass `"direct": true` to `fn_call`.
 
+For long-running work, run the two apart so restarting the server never ends a running step:
+
+```sh
+sluice loop                  # the runner: keep it up
+sluice serve --no-runner     # MCP + dashboard: restart freely
+```
+
 ```sh
 uv run sluice watch -p demo --kinds step.status,message   # one JSON line per new log record
 ```

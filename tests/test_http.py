@@ -83,3 +83,51 @@ def test_sluice_serve_over_streamable_http_and_the_dashboard(home):
         code = proc.wait(timeout=30)
     assert code == 0, proc.stderr.read().decode()
     assert Store(home).read_state("web")["steps"]["b"]["outputs"] == {"sum": 6}
+
+
+def test_a_server_restart_leaves_steps_of_a_separate_runner_running(home):
+    env = {**os.environ, "SLUICE_HOME": str(home)}
+    store = Store(home)
+    loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def serve() -> tuple[subprocess.Popen, int]:
+        port = free_port()
+        proc = subprocess.Popen([sys.executable, "-m", "sluice.cli", "serve", "--no-runner",
+                                 "--port", str(port)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        wait_for_port(port, proc)
+        return proc, port
+
+    async def plan(url: str) -> None:
+        async with Client(url) as c:
+            await c.call_tool("project_create", {"name": "slow"})
+            await c.call_tool("plan_patch", {"project": "slow", "rev": 1, "reason": "t", "ops": [
+                {"op": "replace", "path": "/steps", "value": {
+                    "w": {"run": "test.window", "in": {"seconds": {"default": 3}}}}}]})
+
+    def status() -> str:
+        return store.read_state("slow")["steps"].get("w", {}).get("status", "none")
+
+    try:
+        server, port = serve()
+        anyio.run(plan, f"http://127.0.0.1:{port}/mcp")
+        deadline = time.time() + 10
+        while status() != "running" and time.time() < deadline:
+            time.sleep(0.1)
+        assert status() == "running"
+        server.terminate()
+        assert server.wait(timeout=30) == 0
+        server, port = serve()  # a restarted server; the step is still running meanwhile
+        assert status() == "running"
+        deadline = time.time() + 20
+        while status() == "running" and time.time() < deadline:
+            time.sleep(0.1)
+        assert status() == "succeeded", store.read_state("slow")
+        assert get(port, "/projects/slow")[0] == 200
+    finally:
+        for p in (locals().get("server"), loop):
+            if p is not None and p.poll() is None:
+                p.terminate()
+                p.wait(timeout=30)
+    assert loop.returncode == 0, loop.stderr.read().decode()
