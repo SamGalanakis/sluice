@@ -1,0 +1,18 @@
+{
+  "name": "git.merge",
+  "description": "Merge source into target in a temporary worktree; conflicts are data, not failures.",
+  "in": {
+    "repo": "string",
+    "source": "string",
+    "target": "string",
+    "message": "string?",
+    "push": "bool?"
+  },
+  "out": {
+    "merged": "bool",
+    "sha": "string?",
+    "conflicts": {
+      "list": "string"
+    }
+  }
+}

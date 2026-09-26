@@ -1,0 +1,16 @@
+{
+  "name": "gh.pr",
+  "description": "Create a GitHub PR for head into base, or update the existing open PR.",
+  "in": {
+    "path": "string",
+    "base": "string",
+    "head": "string",
+    "title": "string",
+    "body": "string",
+    "draft": "bool?"
+  },
+  "out": {
+    "number": "int",
+    "url": "string"
+  }
+}

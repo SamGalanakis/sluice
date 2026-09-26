@@ -1,0 +1,17 @@
+{
+  "name": "decide.jev",
+  "description": "Pick one of the given options by calling the Jev decision service.",
+  "in": {
+    "question": "string",
+    "context": "any?",
+    "options": {
+      "list": "string"
+    },
+    "threshold": "float?"
+  },
+  "out": {
+    "choice": "string",
+    "p": "float",
+    "confident": "bool"
+  }
+}

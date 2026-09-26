@@ -1,0 +1,15 @@
+{
+  "name": "git.worktree",
+  "description": "Add a git worktree on a new or existing branch.",
+  "in": {
+    "repo": "string",
+    "base": "string",
+    "branch": "string",
+    "path": "string?"
+  },
+  "out": {
+    "path": "string",
+    "branch": "string",
+    "sha": "string"
+  }
+}

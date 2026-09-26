@@ -1,0 +1,16 @@
+{
+  "name": "agent.devin",
+  "description": "Run a Devin session on a spec text in a working directory.",
+  "in": {
+    "cwd": "string",
+    "spec": "string",
+    "log": "string?",
+    "resume": "string?",
+    "report_path": "string?"
+  },
+  "out": {
+    "log": "string",
+    "final": "string",
+    "report": "string?"
+  }
+}

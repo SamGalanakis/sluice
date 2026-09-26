@@ -1,0 +1,11 @@
+{
+  "name": "git.head",
+  "description": "Report the current branch and commit of a worktree.",
+  "in": {
+    "path": "string"
+  },
+  "out": {
+    "branch": "string",
+    "sha": "string"
+  }
+}
