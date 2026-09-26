@@ -13,6 +13,14 @@ EXPECTED = {
         "core.collect": [{"items": "Any[]"}, {"items": "Any[]"}],
         "core.format": [{"template": "string", "values": "Any"}, {"text": "string"}],
     },
+    "threads": {
+        "thread.post": [{"thread": "string", "body": "string", "from": "string",
+                         "to": "string?", "data": "Any?"},
+                        {"seq": "int"}],
+        "thread.wait": [{"thread": "string", "since_seq": "int?", "to": "string?",
+                         "timeout": "int?"},
+                        {"messages": "Any[]", "last_seq": "int"}],
+    },
     "agents": {
         "agent.devin": [
             {

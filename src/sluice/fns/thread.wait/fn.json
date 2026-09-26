@@ -1,0 +1,14 @@
+{
+  "name": "thread.wait",
+  "doc": "Wait for messages on a thread after since_seq (with `to`: those addressed to it or to nobody). Returns as soon as there is one, or with none after timeout seconds (default 300).",
+  "inputs": {
+    "thread": "string",
+    "since_seq": "int?",
+    "to": "string?",
+    "timeout": "int?"
+  },
+  "outputs": {
+    "messages": "Any[]",
+    "last_seq": "int"
+  }
+}

@@ -11,6 +11,14 @@ its failure. An orchestrator decides what happens after a failure.
   project. Names never collide across scopes; `fn_save` writes a new one after checking it.
 - Plans are local JSON (CWL-like `inputs`, `outputs`, `steps`). Every edit goes through typed MCP
   tools at the current revision and is appended to a log.
+- Each project has one append-only **log** (`log.jsonl`): every edit, manual value, step status
+  change, `fn_call` and thread message, with a `seq`. It is capped history; `plan.json` and
+  `state.json` are the current truth. `log_read`/`log_wait` read it over MCP and
+  `sluice watch -p <project>` follows it from a shell.
+- A result is only valid for the inputs it was computed from: when they change, the step and
+  everything downstream turn **stale** and wait for `step_retry` (or `step_set_output`).
+- **Threads** are named conversations in the log: `thread.post` appends a message,
+  `log_wait` (or the `thread.wait` step) waits for one.
 - `verify` checks functions, projects, plans and state and says where each problem is.
 
 See [SPEC.md](SPEC.md) for the contract and `src/sluice/docs` for the pages agents read.
@@ -25,3 +33,10 @@ uv run sluice tool verify  # exits 1 when there are problems
 
 `sluice tool <name> '<json>'` calls the same tools the MCP server exposes, in-process. Without
 `serve` running, start `sluice loop` for the runner, or pass `"direct": true` to `fn_call`.
+
+```sh
+uv run sluice watch -p demo --kinds step.status,message   # one JSON line per new log record
+```
+
+In Claude Code, `Monitor("sluice watch -p demo --kinds step.status,message")` turns each step
+change and message into an event.

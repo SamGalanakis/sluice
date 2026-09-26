@@ -45,6 +45,12 @@ main_py, project="fixes")`, then use `"run": "text.upper"` in that project's pla
    `step_retry("fixes", "fix")`, or record the result yourself with
    `step_set_output("fixes", "fix", {...})`.
 
+## A step that went stale
+You fixed an upstream by hand: `step_set_output("fixes", "fix", {...})` with a different result
+than before. Everything computed from the old result turns `stale` (`status` shows it; its
+readers wait). `step_retry` each stale step in order, or accept one as it is with
+`step_set_output`.
+
 ## A human or orchestrator step
 Declare a plan input (e.g. `"approved": "boolean"`) and have later steps read it. They wait until
 someone calls `plan_set_input(project, "approved", true)`.

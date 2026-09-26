@@ -2,10 +2,12 @@
 
 `fn_list(project)` shows what a project can use and `fn_get(name, project)` one function's full
 definition. `fn_call(name, inputs, project, wait)` runs a single function without touching the
-plan; poll `call_status(call, project)` if it outlives `wait`.
+plan; poll `call_status(call, project)` if it outlives `wait`, or wait for its `call` records
+with `log_wait(project, since_seq, kinds=["call"])`. Each status change of a call is a record
+in the project's log (the home log without a project).
 
 ## Scopes
-- **builtin**: shipped with sluice (`core.*`, `agent.*`, `git.*`, `jev.*`, ...).
+- **builtin**: shipped with sluice (`core.*`, `agent.*`, `git.*`, `jev.*`, `thread.*`, ...).
 - **global**: `$SLUICE_HOME/fns/` and the dirs in the config's `fn_dirs`; every project sees them.
 - **project**: the project's own `fns/`; only that project sees them.
 

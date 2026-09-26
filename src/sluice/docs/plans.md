@@ -40,6 +40,17 @@ project starts with `{"inputs": {}, "outputs": {}, "steps": {}}`. Each step runs
 A step starts once every plan input and step it reads has a value / has succeeded. A failed step
 blocks everything downstream until you act.
 
+## Stale results
+A result holds only for the inputs it was computed from. When those change (an upstream re-ran
+with a different result, you changed a plan input or a step's binding, or an upstream you
+bypassed with `force` finished), the step turns `stale`, and so does every succeeded step
+downstream of it. A stale step keeps its outputs so you can look at them, but it never re-runs
+by itself, and steps reading it wait. You decide:
+- `step_retry(project, step)` runs it again with the current inputs (then retry its stale
+  dependents, or they come back by themselves if its new result is the same as before);
+- `step_set_output(project, step, outputs)` accepts a result by hand.
+If the inputs change back to what the step was computed from, it is `succeeded` again.
+
 ## Names
 Project names, step ids, plan input and output names: lowercase letters, digits, `-`, `_`;
 start with a letter or digit.
@@ -61,12 +72,19 @@ plan's history (`plan_history`).
 
 ## Manual values
 - `plan_set_input(project, name, value)`: provide a plan input the plan is waiting on. Changing
-  it later only affects steps that have not started.
-- `step_set_input(project, step, input, value)`: pin a literal on one step input (an edit).
+  it later makes the steps that already read it stale.
+- `step_set_input(project, step, input, value)`: pin a literal on one step input (an edit; a
+  succeeded step turns stale).
 - `step_set_output(project, step, outputs)`: mark a step succeeded with outputs you supply (you
   did the work, or you know the result). Type-checked against the function's outputs; for a
-  scattered step, each output is an array.
-- `step_retry(project, step)`: run a failed (or manually set) step again.
+  scattered step, each output is an array. Refused while a step it reads has not succeeded or a
+  plan input it reads has no value (the error names them); `force: true` sets it anyway, and the
+  step turns stale once those values are all there.
+- `step_retry(project, step)`: run a failed, stale or manually set step again.
+
+Every edit, manual value and step status change is a record in the project's log:
+`plan_history(project)` shows the edits and manual values, `log_read(project)` everything
+(`docs("threads")`).
 
 ## Validation errors
 Every edit is checked: functions exist (as the project sees them), required inputs are bound,

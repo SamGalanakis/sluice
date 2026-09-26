@@ -1,0 +1,14 @@
+{
+  "name": "thread.post",
+  "doc": "Post a message to a thread of the project (a `message` record in its log). Returns the record's seq.",
+  "inputs": {
+    "thread": "string",
+    "body": "string",
+    "from": "string",
+    "to": "string?",
+    "data": "Any?"
+  },
+  "outputs": {
+    "seq": "int"
+  }
+}
