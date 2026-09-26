@@ -1,0 +1,20 @@
+{
+  "name": "agent.review",
+  "version": 1,
+  "description": "Review the diff of a branch against the project standards and fix issues by committing.",
+  "in": {
+    "cwd": "string",
+    "base": "string",
+    "standards": "string",
+    "notes": "string?"
+  },
+  "out": {
+    "summary": "string",
+    "sha": "string",
+    "commits": "int"
+  },
+  "effects": true,
+  "timeout": "4h",
+  "slots": {"agent": 1},
+  "retry": {"transient": 3, "backoff": "10m"}
+}

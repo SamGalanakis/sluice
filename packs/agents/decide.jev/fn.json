@@ -1,0 +1,20 @@
+{
+  "name": "decide.jev",
+  "version": 1,
+  "description": "Pick one of the given options by calling the Jev decision service.",
+  "in": {
+    "question": "string",
+    "context": "any?",
+    "options": {"list": "string"},
+    "threshold": "float?"
+  },
+  "out": {
+    "choice": "string",
+    "p": "float",
+    "confident": "bool"
+  },
+  "effects": true,
+  "timeout": "5m",
+  "slots": {"default": 1},
+  "retry": {"transient": 2, "backoff": "30s"}
+}
