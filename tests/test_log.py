@@ -207,3 +207,37 @@ def live(store):
     yield store
     runner.stop()
     t.join(10)
+
+
+def test_page_pages_newest_first_by_seq_with_the_filter(store):
+    d = store.home
+    for i in range(1, 13):  # seqs 1..12: messages on a (odd) and b (even), a step change at 12
+        rec = ({"kind": "step.status", "step": "s", "from": None, "to": "pending"} if i == 12
+               else {"kind": "message", "thread": "a" if i % 2 else "b", "from": "t",
+                     "body": str(i)})
+        store.append(None, rec)
+
+    def seqs(res):
+        return [r["seq"] for r in res["records"]]
+
+    newest = L.page(d, size=5)
+    assert seqs(newest) == [12, 11, 10, 9, 8] and not newest["newer"] and newest["older"]
+    assert newest["last_seq"] == 12
+    older = L.page(d, before=8, size=5)
+    assert seqs(older) == [7, 6, 5, 4, 3] and older["newer"] and older["older"]
+    last = L.page(d, before=3, size=5)
+    assert seqs(last) == [2, 1] and last["newer"] and not last["older"]
+    assert seqs(L.page(d, before=1, size=5)) == []
+    exact = L.page(d, before=6, size=5)
+    assert seqs(exact) == [5, 4, 3, 2, 1] and not exact["older"]
+    newer = L.page(d, after=2, size=5)
+    assert seqs(newer) == [7, 6, 5, 4, 3] and newer["newer"] and newer["older"]
+    top = L.page(d, after=7, size=5)
+    assert seqs(top) == [12, 11, 10, 9, 8] and not top["newer"] and top["older"]
+    assert seqs(L.page(d, after=12, size=5)) == []
+    a = L.page(d, threads=["a"], size=3)
+    assert seqs(a) == [11, 9, 7] and a["older"] and not a["newer"]
+    assert seqs(L.page(d, threads=["a"], before=7, size=3)) == [5, 3, 1]
+    assert seqs(L.page(d, kinds=["step"])) == [12]
+    both = L.page(d, kinds=["step", "message"], threads=["b"], size=3)
+    assert seqs(both) == [12, 10, 8] and both["older"]

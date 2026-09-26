@@ -174,6 +174,41 @@ def read(directory: Path, since_seq: int | None = None, kinds: Iterable[str] | N
     return {"records": found, "last_seq": max(last, 0)}
 
 
+def page(directory: Path, kinds: Iterable[str] | None = None,
+         threads: Iterable[str] | None = None, before: int | None = None,
+         after: int | None = None, size: int = 50) -> dict[str, Any]:
+    """One page of matching records, newest first, for the log viewer:
+    `{records, newer, older, last_seq}`.
+
+    Without `before`/`after`: the newest `size`. With `before`: the newest `size` with a lower
+    seq. With `after`: the oldest `size` with a higher seq. `newer`/`older` say whether matching
+    records exist on either side of the page; `last_seq` is the log's last seq.
+    """
+    found: list[dict[str, Any]] = []
+    newer = older = False
+    last = 0
+    for rec in _backwards(Path(directory) / FILE):
+        last = last or rec["seq"]
+        if not matches(rec, kinds, threads):
+            continue
+        seq = rec["seq"]
+        if after is not None:
+            if seq <= after:
+                older = True
+                break
+            found.append(rec)
+        elif before is not None and seq >= before:
+            newer = True
+        elif len(found) == size:
+            older = True
+            break
+        else:
+            found.append(rec)
+    if after is not None and len(found) > size:
+        found, newer = found[-size:], True
+    return {"records": found, "newer": newer, "older": older, "last_seq": last}
+
+
 def latest_call(directory: Path, call: str) -> dict[str, Any] | None:
     """The most recent `call` record for this call id."""
     for rec in _backwards(Path(directory) / FILE):
