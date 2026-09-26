@@ -75,7 +75,8 @@ required field of `inp` exists in `out` and fits, extra fields in `out` are fine
 **Process contract.** The runner runs `uv run --quiet --script <fn_dir>/main.py` with stdin = an
 object keyed by input name (unbound optional inputs are `null`); env `SLUICE_HOME`,
 `SLUICE_PLAN`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
-`PYTHONPATH` containing sluice's `src` dir; cwd = the run dir. The fn writes one JSON object keyed
+`PYTHONPATH` containing sluice's `src` dir, plus every `KEY=value` line of `$SLUICE_HOME/.env` if it
+exists (secrets such as API keys live there, never in plans); cwd = the run dir. The fn writes one JSON object keyed
 by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
 fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
 (`run(main, retries=N)`, §7).
@@ -251,8 +252,9 @@ sluice view <id> [--html out.html]      Mermaid to stdout, or write the HTML pag
 ## 10. Built-in fns in this repo
 
 `src/sluice/fns/` holds the built-ins plus two families: `agent.*`/`decide.*` (run Devin, Codex,
-Claude, the review agent, decisions) and `git.*`/`gh.pr` (worktrees, merge, rebase, push, pull
-requests). Their `fn.json` files are the reference for their types.
+Claude, the review agent, decisions), `jev.*` (Jev, TypeSafe's System One model: `jev.ask`,
+`jev.choice`, `jev.score`, `jev.noul`; needs `TYPESAFE_API_KEY`) and `git.*`/`gh.pr` (worktrees,
+merge, rebase, push, pull requests). Shared helper code for fns lives in `src/sluice/fns/_lib/`. Their `fn.json` files are the reference for their types.
 
 ## 11. Conventions
 
