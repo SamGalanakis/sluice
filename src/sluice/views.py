@@ -151,6 +151,7 @@ code{padding:0 .25em}pre{padding:.5rem;overflow-x:auto;white-space:pre-wrap;marg
 .diagram{background:var(--card);border-radius:6px;text-align:center;overflow-x:auto;
 padding:.5rem;margin:.5rem 0}
 .diagram pre{background:none;text-align:left}
+.diagram pre.mermaid:not([data-processed]){visibility:hidden}
 .card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:.6rem .8rem;
 margin:.5rem 0}
 .badge{display:inline-block;min-width:1.4em;margin-left:.3em;padding:0 .4em;border-radius:1em;
@@ -191,6 +192,8 @@ table.log td:last-child{min-width:14rem}
 @media (max-width:600px){table.log .at{display:none}}
 """
 
+EMPTY_DIAGRAM = '<p class="muted">No steps yet.</p>'
+
 DIAGRAM_JS = """
 import mermaid from "MERMAID_JS";
 mermaid.initialize({startOnLoad: false,
@@ -199,6 +202,10 @@ let n = 0;
 // Render the source element's Mermaid text into its view; a newer render wins.
 window.sluiceDiagram = async (src) => {
   const view = document.getElementById(src.dataset.view), id = ++n;
+  if (src.hasAttribute("data-empty")) {
+    if (view) view.innerHTML = EMPTY;
+    return;
+  }
   try {
     const {svg} = await mermaid.render("mermaid-" + id, src.textContent);
     if (id === n && view) view.innerHTML = svg;
@@ -206,7 +213,7 @@ window.sluiceDiagram = async (src) => {
 };
 const src = document.getElementById("plan-src");
 if (src) window.sluiceDiagram(src); else mermaid.run({querySelector: "pre.mermaid"});
-""".replace("MERMAID_JS", MERMAID_JS)
+""".replace("MERMAID_JS", MERMAID_JS).replace("EMPTY", json.dumps(EMPTY_DIAGRAM))
 
 
 def _signals(values: Mapping[str, Any]) -> str:
@@ -395,9 +402,10 @@ def _project(store: Store, project: str, live: bool) -> tuple[dict[str, str], st
     inputs = {n: state["inputs"].get(n) for n in plan.inputs}
     outputs = {n: value_of(r, plan, state)[1] for n, r in plan.outputs.items()}
     source = e(mermaid(plan, state))
+    empty = " data-empty" if not plan.steps else ""
     parts = {"summary": _part("summary", summary)}
     if live:
-        parts["plan-src"] = (f'<pre id="plan-src" hidden data-view="plan-diagram" '
+        parts["plan-src"] = (f'<pre id="plan-src" hidden{empty} data-view="plan-diagram" '
                              f'data-init="window.sluiceDiagram?.(el)">\n{source}</pre>')
     parts.update({
         "inputs": _part("inputs", _values_table(inputs, plan.input_docs)),
@@ -417,9 +425,10 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     project's version `ver`, else the standalone page plan_view returns."""
     live = ver is not None
     p, source = _project(store, project, live)
+    diagram = (f'<pre class="mermaid">\n{source}</pre>'
+               if store.plan(project)[1].steps else EMPTY_DIAGRAM)
     body = f"""{p["summary"]}
-{p.get("plan-src", "")}<div id="plan-diagram" class="diagram"><pre class="mermaid">
-{source}</pre></div>
+{p.get("plan-src", "")}<div id="plan-diagram" class="diagram">{diagram}</div>
 <h2>Inputs</h2>{p["inputs"]}
 <h2>Outputs</h2>{p["outputs"]}
 <h2>Steps</h2>{p["steps"]}

@@ -92,6 +92,18 @@ def test_the_project_page(store):
     assert '<pre class="mermaid">\nflowchart LR' in standalone
 
 
+
+def test_an_empty_plan_shows_a_placeholder_not_mermaid_source(store):
+    create(store, "v", {})
+    page = views.project_page(store, "v", ver="abc")
+    diagram = page[page.index('<div id="plan-diagram"'):]
+    assert diagram.startswith('<div id="plan-diagram" class="diagram"><p class="muted">No steps')
+    assert '<pre class="mermaid">' not in page
+    assert '<pre id="plan-src" hidden data-empty data-view="plan-diagram" ' in page
+    assert "No steps yet." in views.DIAGRAM_JS and "data-empty" in views.DIAGRAM_JS
+    assert ".diagram pre.mermaid:not([data-processed]){visibility:hidden}" in views.CSS
+
+
 def test_values_are_escaped(store):
     create(store, "v", {"a": {"run": "core.echo", "in": {"value": d("<script>x</script>")}}},
            outputs={"out": {"source": "a/value"}})
