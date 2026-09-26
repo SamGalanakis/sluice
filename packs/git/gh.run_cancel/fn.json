@@ -1,0 +1,11 @@
+{
+  "name": "gh.run_cancel",
+  "doc": "Cancel a GitHub Actions run; a run that already completed is not an error.",
+  "inputs": {
+    "path": "string",
+    "run_id": "int"
+  },
+  "outputs": {
+    "cancelled": "boolean"
+  }
+}

@@ -6,10 +6,30 @@
 
 import json
 import os
+import re
 
 from sluice.fn import ShError, Transient, run, sh
 
 TRANSIENT_MARKERS = ("rate limit", "overloaded", "529")
+
+
+def _with_step_thread(text, ctx, listen):
+    """Append the step-thread instructions when running as a plan step."""
+    if listen is False or not (ctx.project and ctx.step):
+        return text
+    thread = "step-" + re.sub(r"[^a-z0-9_-]", "-", ctx.step.lower())
+    read = (f'{{"project": "{ctx.project}", "threads": ["{thread}"], '
+            f'"since_seq": <last>}}')
+    post = (f'{{"name": "thread.post", "project": "{ctx.project}", "direct": true, '
+            f'"inputs": {{"thread": "{thread}", "from": "{ctx.step}", '
+            f'"to": "orchestrator", "body": "..."}}}}')
+    return text + (
+        f"\n\nMessages for you arrive on sluice thread `{thread}` of project "
+        f"`{ctx.project}`. At each natural checkpoint run `sluice tool log_read "
+        f"'{read}'` and follow instructions addressed to you. If you hit a question "
+        f"you cannot settle within your task, post it with `sluice tool fn_call "
+        f"'{post}'` and continue with anything not blocked by it."
+    )
 
 
 def claude(prompt, model, cwd, session=None):
@@ -33,7 +53,8 @@ def claude(prompt, model, cwd, session=None):
 
 def main(inp, ctx):
     data = claude(
-        inp["prompt"], inp.get("model") or "opus", inp["cwd"], inp.get("session"))
+        _with_step_thread(inp["prompt"], ctx, inp.get("listen")),
+        inp.get("model") or "opus", inp["cwd"], inp.get("session"))
     return {
         "result": data["result"],
         "session": data["session_id"],

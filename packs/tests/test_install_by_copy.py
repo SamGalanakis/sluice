@@ -36,7 +36,7 @@ async def test_copied_packs_are_global_clean_and_run(tmp_path):
     listing = {e["name"]: e for e in store.registry().listing()}
     copied = {"jev.ask", "jev.choice", "jev.score", "jev.noul", "git.worktree",
               "git.worktree_rm", "git.head", "git.merge", "git.rebase", "git.push",
-              "gh.pr"}
+              "gh.pr", "gh.pr_wait", "gh.run_latest", "gh.run_cancel"}
     assert copied <= set(listing)
     assert {listing[n]["scope"] for n in copied} == {"global"}
     assert verify(store) == {"ok": True, "problems": []}
