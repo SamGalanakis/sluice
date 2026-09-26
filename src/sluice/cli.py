@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
         "tools: `sluice serve` exposes them, `sluice tool` calls them from the shell.")
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("serve", help="runner + MCP server (+ project pages)")
+    s = sub.add_parser("serve", help="runner + MCP server + read-only dashboard")
     s.add_argument("--host")
     s.add_argument("--port", type=int)
     sub.add_parser("loop", help="runner only")
