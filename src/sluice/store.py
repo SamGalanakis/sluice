@@ -17,7 +17,7 @@ import jsonpointer
 
 from . import plan as P
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound
-from .fns import Registry
+from .fns import Registry, builtin_packs
 from .util import append_line, atomic_write_json, now_iso, parse_duration, read_json
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -51,7 +51,10 @@ def empty_state() -> dict[str, Any]:
 
 
 class Store:
-    """All reads and writes of a SLUICE_HOME. Safe across threads and processes (flock)."""
+    """All reads and writes of a SLUICE_HOME. Safe across threads and processes (flock).
+
+    Its registry holds the packs shipped in sluice/packs plus the extra packs of config.json.
+    """
 
     def __init__(self, home: Path | str | None = None, registry: Registry | None = None):
         self.home = Path(home) if home is not None else default_home()
@@ -67,7 +70,7 @@ class Store:
     @property
     def registry(self) -> Registry:
         if self._registry is None:
-            self._registry = Registry.load(self.config["packs"])
+            self._registry = Registry.load([*builtin_packs(), *self.config["packs"]])
         return self._registry
 
     def plan_dir(self, pid: str) -> Path:

@@ -1,0 +1,9 @@
+{"name": "test.pair", "version": 1, "description": "Two windows in a row.",
+ "in": {"seconds": "float"}, "out": {"start": "float", "end": "float"},
+ "graph": {
+   "nodes": {
+     "w1": {"fn": "test.window", "in": {"seconds": {"from": "$in.seconds"}}},
+     "w2": {"fn": "test.window", "in": {"seconds": {"from": "$in.seconds"}}, "after": ["w1"]}
+   },
+   "out": {"start": {"from": "w1.start"}, "end": {"from": "w2.end"}}
+ }}

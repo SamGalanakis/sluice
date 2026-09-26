@@ -50,15 +50,26 @@ class Context:
     fn_dir: Path
     _spawn_nodes: dict[str, Any] = field(default_factory=dict)
     _spawn_reasons: list[str] = field(default_factory=list)
+    _forward: str | None = None
 
     def log(self, msg: str) -> None:
         print(msg, file=sys.stderr, flush=True)
 
-    def spawn(self, nodes: dict[str, Any], reason: str) -> None:
-        """Ask the runner to add these nodes to the plan when this fn succeeds."""
+    def spawn(self, nodes: dict[str, Any], reason: str, forward: str | None = None) -> None:
+        """Ask the runner to add these nodes to the plan when this fn succeeds.
+
+        With `forward`, this node is answered by that spawned node: dependents wait for it
+        and read its outputs (SPEC §4.1).
+        """
         clash = set(nodes) & set(self._spawn_nodes)
         if clash:
             raise ValueError(f"spawn ids used twice: {sorted(clash)}")
+        if forward is not None:
+            if forward not in nodes:
+                raise ValueError(f"forward target {forward!r} is not among the spawned nodes")
+            if self._forward is not None:
+                raise ValueError("a node forwards to at most one spawned node")
+            self._forward = forward
         self._spawn_nodes.update(nodes)
         self._spawn_reasons.append(reason)
 
@@ -99,8 +110,11 @@ def run(main: Callable[[dict[str, Any], Context], dict[str, Any]]) -> None:
         if not isinstance(out, dict):
             raise TypeError(f"main must return a dict, got {type(out).__name__}")
         if ctx._spawn_nodes:
-            out = {**out, "_spawn": {"reason": "; ".join(ctx._spawn_reasons),
-                                     "nodes": ctx._spawn_nodes}}
+            spawn: dict[str, Any] = {"reason": "; ".join(ctx._spawn_reasons),
+                                     "nodes": ctx._spawn_nodes}
+            if ctx._forward is not None:
+                spawn["forward"] = ctx._forward
+            out = {**out, "_spawn": spawn}
     except Transient as e:
         print(f"transient: {e}", file=sys.stderr, flush=True)
         _write_json(ctx.run_dir / "error.json", {"type": "Transient", "message": str(e)})

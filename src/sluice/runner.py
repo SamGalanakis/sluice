@@ -206,10 +206,11 @@ class Runner:
             self._poll(pid, exp, state)
             rev = doc["rev"]
             for _ in range(len(exp.nodes) + 2):
-                doc, exp = store.expanded(pid)
+                doc, exp = store.expanded(pid)  # a spawn may have grown the plan
                 if doc["rev"] != rev:
                     self._reconcile(pid, exp, nodes)
                     rev = doc["rev"]
+                self._derive(pid, exp, nodes)
                 decisions = L.decide(store, pid, doc, exp, nodes, now=time.time(),
                                      slots_used=others + L.slot_usage(nodes))
                 acted = False
@@ -223,7 +224,7 @@ class Runner:
                     elif d.action == "start":
                         self._start(pid, exp, state, exp.nodes[d.id], d)
                         acted = True
-                self._update_composites(pid, exp, nodes)
+                self._derive(pid, exp, nodes)
                 if not acted:
                     break
             state["plan_rev"] = doc["rev"]
@@ -302,30 +303,50 @@ class Runner:
             self._fail(pid, en, e, err, run_dir)
             return
         spawn = out.pop("_spawn", None)
-        errs = T.check_value(en.fn.out_record, out)
-        if errs:
-            self._fail(pid, en, e, "output does not match the fn's out type: " + "; ".join(errs),
-                       run_dir)
-            return
+        forward = spawn.get("forward") if isinstance(spawn, dict) else None
+        if forward is None:
+            # A forwarding node is answered by its target, so its own output is not checked.
+            errs = T.check_value(en.fn.out_record, out)
+            if errs:
+                self._fail(pid, en, e, "output does not match the fn's out type: "
+                           + "; ".join(errs), run_dir)
+                return
         if spawn is not None:
-            errs = self._apply_spawn(pid, en.id, e, spawn, state)
+            errs = self._apply_spawn(pid, en, e, spawn, state)
             if errs:
                 self._fail(pid, en, e, "invalid spawn: " + "; ".join(errs), run_dir)
                 return
-        if not en.fn.effects:
+        if forward is not None:
+            e.update(status="forwarded", forward=forward, pid=None)
+            self.store.append_event(pid, "node_forwarded", en.id, {"to": forward})
+            return
+        if not en.fn.effects and spawn is None:
             key = cache_key(en.fn.name, en.fn.version, read_json(run_dir / "input.json"))
             atomic_write_json(self.store.cache_dir / f"{key}.json", out)
         L.succeed(self.store, pid, en.id, e, out)
 
-    def _apply_spawn(self, pid: str, nid: str, e: dict[str, Any], spawn: Any,
+    def _apply_spawn(self, pid: str, en: ENode, e: dict[str, Any], spawn: Any,
                      state: dict[str, Any]) -> list[str]:
-        if (not isinstance(spawn, dict) or set(spawn) - {"reason", "nodes"}
+        nid = en.id
+        if (not isinstance(spawn, dict) or set(spawn) - {"reason", "nodes", "forward"}
                 or not isinstance(spawn.get("nodes"), dict)):
-            return ['_spawn must be {"reason": str, "nodes": {id: node}}']
+            return ['_spawn must be {"reason": str, "nodes": {id: node}, "forward"?: id}']
         new = spawn["nodes"]
         bad = [i for i in new if not isinstance(i, str) or not ID_RE.match(i)]
         if bad:
             return [f"nodes.{i}: node ids match {ID_RE.pattern}" for i in bad]
+        forward = spawn.get("forward")
+        if forward is not None:
+            if forward not in new:
+                return [f"_spawn.forward: {forward!r} is not one of the spawned nodes"]
+            target = new[forward]
+            fn = self.store.registry.get(target.get("fn")) if isinstance(target, dict) else None
+            if fn is None:
+                return [f"_spawn.forward: {forward} has no known fn"]
+            ok, why = T.fits(fn.out_record, en.fn.out_record)
+            if not ok:
+                return [(f"_spawn.forward: out type {fn.out_record} of {forward} (fn {fn.name}) "
+                         f"does not fit {en.fn.out_record} of fn {en.fn.name}: {why}")]
         doc = self.store.get(pid)
         run_id = e.get("run_id")
         reason = f"{spawn.get('reason') or 'spawn'} (run {run_id})"
@@ -422,6 +443,8 @@ class Runner:
 
     def _native(self, pid: str, en: ENode, e: dict[str, Any], inp: dict[str, Any]) -> None:
         name = en.fn.name
+        self.store.append_event(pid, "node_started", en.id, {"attempt": e["attempt"],
+                                                             "native": True})
         if name == "core.echo":
             L.succeed(self.store, pid, en.id, e, {"value": inp["value"]})
         elif name == "core.fail":
@@ -436,7 +459,35 @@ class Runner:
         else:  # pragma: no cover - the registry defines exactly these natives
             self._fail(pid, en, e, f"unknown native fn {name}", None, inp=inp)
 
-    # ---- composites ----
+    # ---- derived statuses: forwarded nodes, then composites ----
+
+    def _derive(self, pid: str, exp: Expanded, nodes: dict[str, Any]) -> None:
+        self._update_forwards(pid, exp, nodes)
+        self._update_composites(pid, exp, nodes)
+
+    def _update_forwards(self, pid: str, exp: Expanded, nodes: dict[str, Any]) -> None:
+        """A forwarded node ends as its final target ends, with that target's output."""
+        vals = L.Values(self.store, pid, exp, nodes)
+        for nid in exp.leaves():
+            e = nodes[nid]
+            if not e.get("forward"):
+                continue
+            st = vals.status(nid)
+            if st == e["status"]:
+                continue
+            target = vals.final_target(nid)
+            if st == "forwarded":
+                e.update(status=st, finished=None, output=None, error=None)
+                continue
+            e.update(status=st, finished=now_iso(), claims_held=[])
+            if st == "succeeded":
+                out = vals.output(nid) or {}
+                e["output"] = L.write_output(self.store, pid, nid, out)
+                self.store.append_event(pid, "node_succeeded", nid, {"forwarded_to": target})
+            else:
+                if st == "failed":
+                    e["error"] = f"forward target {target} failed"
+                self.store.append_event(pid, f"node_{st}", nid, {"forwarded_to": target})
 
     def _update_composites(self, pid: str, exp: Expanded, nodes: dict[str, Any]) -> None:
         vals = L.Values(self.store, pid, exp, nodes)

@@ -1,0 +1,2 @@
+{"name": "test.spawner", "version": 1, "description": "Spawns count add nodes (or a bad one).",
+ "in": {"count": "int", "prefix": "string", "bad": "bool?"}, "out": {"spawned": {"list": "string"}}}

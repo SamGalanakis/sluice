@@ -1,0 +1,9 @@
+{"name": "test.gated", "version": 1, "description": "A test.gate chain inside a composite.",
+ "in": {"green_at": "int", "prefix": "string"}, "out": {"round": "int", "end": "float"},
+ "graph": {
+   "nodes": {
+     "g": {"fn": "test.gate", "in": {"round": {"value": 1}, "green_at": {"from": "$in.green_at"},
+                                     "prefix": {"from": "$in.prefix"}, "claims": {"value": []}}}
+   },
+   "out": {"round": {"from": "g.round"}, "end": {"from": "g.end"}}
+ }}

@@ -1,0 +1,4 @@
+{"name": "test.gate", "version": 1,
+ "description": "A check that stays red until round green_at; each red round forwards to a retry.",
+ "in": {"round": "int", "green_at": "int", "prefix": "string", "claims": {"list": "string"}},
+ "out": {"round": "int", "start": "float", "end": "float"}}

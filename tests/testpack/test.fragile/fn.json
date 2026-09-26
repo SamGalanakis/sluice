@@ -1,0 +1,9 @@
+{"name": "test.fragile", "version": 1, "description": "A composite whose first step fails.",
+ "in": {}, "out": {"done": "bool"},
+ "graph": {
+   "nodes": {
+     "b": {"fn": "test.boom", "in": {}},
+     "e": {"fn": "core.echo", "in": {"value": {"from": "b.done"}}}
+   },
+   "out": {"done": {"from": "e.value"}}
+ }}

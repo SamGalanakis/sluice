@@ -22,7 +22,6 @@ from .store import DEFAULT_CONFIG, Store, default_home
 from .util import atomic_write_json
 
 AUTHOR = "cli"
-REPO_PACKS = Path(__file__).resolve().parents[2] / "packs"
 
 
 def _out(obj: Any) -> None:
@@ -55,8 +54,7 @@ def cmd_init(a: argparse.Namespace) -> int:
     if path.exists() and not a.force:
         print(f"{path} exists (use --force to overwrite)", file=sys.stderr)
         return 1
-    packs = a.pack if a.pack else [str(p) for p in sorted(REPO_PACKS.glob("*")) if p.is_dir()]
-    cfg = {**DEFAULT_CONFIG, "packs": [str(Path(p).resolve()) for p in packs]}
+    cfg = {**DEFAULT_CONFIG, "packs": [str(Path(p).resolve()) for p in a.pack or []]}
     atomic_write_json(path, cfg)
     print(f"wrote {path}")
     return 0
@@ -280,7 +278,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init", help="write a default config.json")
-    s.add_argument("--pack", action="append", help="pack dir (repeatable; default: repo packs)")
+    s.add_argument("--pack", action="append",
+                   help="an extra pack dir (repeatable); the built-in packs always load")
     s.add_argument("--force", action="store_true")
 
     s = sub.add_parser("serve", help="runner + MCP server")

@@ -1,0 +1,2 @@
+{"name": "test.window", "version": 1, "description": "Sleep and report the time window.",
+ "in": {"seconds": "float"}, "out": {"start": "float", "end": "float"}}

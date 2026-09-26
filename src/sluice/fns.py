@@ -43,6 +43,17 @@ BUILTINS: list[dict[str, Any]] = [
 ]
 
 
+BUILTIN_PACKS = Path(__file__).resolve().parent / "packs"
+
+
+def builtin_packs() -> list[Path]:
+    """The packs shipped inside the sluice package: every directory under sluice/packs."""
+    if not BUILTIN_PACKS.is_dir():
+        return []
+    return sorted(p for p in BUILTIN_PACKS.iterdir()
+                  if p.is_dir() and not p.name.startswith(("_", ".")))
+
+
 class RegistryError(Exception):
     def __init__(self, errors: list[str]):
         super().__init__("; ".join(errors))
@@ -179,15 +190,20 @@ class Registry:
 
     @classmethod
     def load(cls, packs: list[str | Path]) -> Registry:
-        """Load the built-ins and every `<pack>/<dir>/fn.json`. Collects every error."""
+        """Load the native built-ins and every `<pack>/<dir>/fn.json` (subdirectories without
+        fn.json are not fns and are skipped). Collects every error."""
         fns: dict[str, Fn] = {}
         where: dict[str, str] = {}
         errs: list[str] = []
         for raw in BUILTINS:
             fn = parse_fn(raw, raw["name"], native=True)
             fns[fn.name], where[fn.name] = fn, "built-in"
+        seen: set[Path] = set()
         for pack in packs:
-            pack = Path(pack)
+            pack = Path(pack).resolve()
+            if pack in seen:
+                continue
+            seen.add(pack)
             if not pack.is_dir():
                 errs.append(f"{pack}: pack directory does not exist")
                 continue

@@ -88,7 +88,27 @@ class Values:
             return self.derive(nid)
         if nid in self.overrides:
             return self.overrides[nid]
-        return self.nodes.get(nid, {}).get("status", "pending")
+        e = self.nodes.get(nid, {})
+        if e.get("forward"):
+            target = self.final_target(nid)
+            st = self.status(target) if target != nid else "forwarded"
+            if st == "missing":
+                return "cancelled"
+            return st if st in TERMINAL else "forwarded"
+        return e.get("status", "pending")
+
+    def final_target(self, nid: str) -> str:
+        """Follow `forward` links from a node to the node that finally answers for it."""
+        seen, t = {nid}, nid
+        while (f := self.nodes.get(t, {}).get("forward")) and f not in seen:
+            seen.add(f)
+            t = f
+        return t
+
+    def forwarders(self) -> dict[str, str]:
+        """target -> the live forwarded node that points at it."""
+        return {e["forward"]: i for i, e in self.nodes.items()
+                if e.get("forward") and e.get("status") == "forwarded"}
 
     def derive(self, nid: str) -> str:
         """SPEC §6 derived status of a composite."""
@@ -99,9 +119,8 @@ class Values:
         if kids and all(k == "skipped" for k in kids):
             return "skipped"
         if all(k in TERMINAL for k in kids):
-            if all(self.ready(b) for b in (en.outs or {}).values()):
-                return "succeeded"
-            return "cancelled" if "cancelled" in kids else "skipped"
+            ok = all(self.ready(b) for b in (en.outs or {}).values())
+            return "succeeded" if ok else "skipped"
         return "running" if any(k != "pending" for k in kids) else "pending"
 
     def ready(self, b: Binding) -> bool:
@@ -132,6 +151,10 @@ class Values:
         en = self.exp.nodes.get(ref.node)
         if en is None:
             raise Unresolvable(f"unknown node {ref.node}")
+        if not en.composite and self.nodes.get(ref.node, {}).get("forward"):
+            target = self.final_target(ref.node)
+            if target != ref.node:
+                return self.resolve_ref(Ref(target, ref.port, ref.fields))
         if en.composite:
             ob = (en.outs or {}).get(ref.port)
             v = None if ob is None else self.resolve(ob)
@@ -143,7 +166,13 @@ class Values:
         return T.navigate_value(v, ref.fields)
 
     def output(self, nid: str) -> dict[str, Any] | None:
-        en = self.exp.nodes[nid]
+        if self.status(nid) != "succeeded":
+            return None
+        if self.nodes.get(nid, {}).get("forward"):
+            nid = self.final_target(nid)
+        en = self.exp.nodes.get(nid)
+        if en is None:
+            return None
         try:
             if en.composite:
                 if self.status(nid) != "succeeded":
@@ -233,10 +262,13 @@ def decide(store: Store, pid: str, doc: dict[str, Any], exp: Expanded, nodes: di
         if nb and nb > now:
             out.append(Decision(nid, "blocked", f"retry backoff until {now_iso(nb)}"))
             continue
-        take = {nid: list(en.claims)}
+        cover = _cover(exp, nodes, vals.forwarders(), nid)
+        take = {nid: list((Counter(en.claims) - cover).elements())}
+        cover -= Counter(en.claims)
         for a in ancestors:
             if exp.nodes[a].claims and a not in held:
-                take[a] = list(exp.nodes[a].claims)
+                take[a] = list((Counter(exp.nodes[a].claims) - cover).elements())
+                cover -= Counter(exp.nodes[a].claims)
         need: Counter[str] = Counter(c for cl in take.values() for c in cl)
         busy = [r for r in need if claims_used[r] + need[r] > resources.get(r, 0)]
         if busy:
@@ -255,6 +287,22 @@ def decide(store: Store, pid: str, doc: dict[str, Any], exp: Expanded, nodes: di
         vals.overrides[nid] = "running"
         out.append(Decision(nid, "start", "ready", take))
     return out
+
+
+def _cover(exp: Expanded, nodes: dict[str, Any], forwarders: dict[str, str],
+           nid: str) -> Counter[str]:
+    """Claims already held on behalf of `nid`: by every node forwarding (transitively) to it
+    or to one of its composite ancestors, and by those forwarders' own ancestors."""
+    cover: Counter[str] = Counter()
+    for x in [nid, *exp.ancestors(nid)]:
+        seen = set()
+        f = forwarders.get(x)
+        while f is not None and f not in seen:
+            seen.add(f)
+            for holder in [f, *(exp.ancestors(f) if f in exp.nodes else [])]:
+                cover.update(nodes.get(holder, {}).get("claims_held", []))
+            f = forwarders.get(f)
+    return cover
 
 
 # ---- processes --------------------------------------------------------------------------
@@ -320,7 +368,8 @@ def succeed(store: Store, pid: str, nid: str, e: dict[str, Any], out: dict[str, 
 
 def reset(e: dict[str, Any], bump: bool) -> None:
     e.update(status="pending", pid=None, finished=None, output=None, error=None,
-             cache_hit=False, not_before=None, retries=0, skipped_by=None, claims_held=[])
+             cache_hit=False, not_before=None, retries=0, skipped_by=None, claims_held=[],
+             forward=None)
     if bump:
         e["attempt"] = e.get("attempt", 1) + 1
 
@@ -345,7 +394,13 @@ def node_action(store: Store, pid: str, nid: str, action: str, reason: str,
         eligible_st = {"retry": ("failed", "cancelled", "skipped"),
                        "skip": ("pending", "waiting", "failed"),
                        "cancel": ("pending", "waiting", "running", "failed")}[action]
-        leaves = [x for x in exp.leaves_under(nid) if nodes[x]["status"] in eligible_st]
+        vals = Values(store, pid, exp, nodes)
+        targets = []
+        for x in exp.leaves_under(nid):
+            # A forwarded node is answered by its final target: act on that instead.
+            t = vals.final_target(x) if nodes[x].get("forward") else x
+            targets.extend(exp.leaves_under(t) if t in exp.nodes else [])
+        leaves = [x for x in dict.fromkeys(targets) if nodes[x]["status"] in eligible_st]
         if not leaves:
             st = nodes[nid]["status"]
             hint = "; use node_cancel" if action == "skip" and st == "running" else ""

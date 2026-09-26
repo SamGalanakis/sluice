@@ -1,0 +1,9 @@
+{"name": "test.quad", "version": 1, "description": "y = 4x, as two nested test.twice.",
+ "in": {"x": "int"}, "out": {"y": "int", "half": "int"},
+ "graph": {
+   "nodes": {
+     "t1": {"fn": "test.twice", "in": {"x": {"from": "$in.x"}}},
+     "t2": {"fn": "test.twice", "in": {"x": {"from": "t1.y"}}}
+   },
+   "out": {"y": {"from": "t2.y"}, "half": {"from": "t1.y"}}
+ }}

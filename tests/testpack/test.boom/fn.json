@@ -1,0 +1,2 @@
+{"name": "test.boom", "version": 1, "description": "Fails hard, unless told not to.",
+ "in": {"ok": "bool?"}, "out": {"done": "bool"}}
