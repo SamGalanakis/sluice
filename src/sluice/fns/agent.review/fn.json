@@ -1,13 +1,13 @@
 {
   "name": "agent.review",
-  "description": "Review the diff of a branch against the project standards and fix issues by committing.",
-  "in": {
+  "doc": "Review the diff of a branch against the project standards and fix issues by committing.",
+  "inputs": {
     "cwd": "string",
     "base": "string",
     "standards": "string",
     "notes": "string?"
   },
-  "out": {
+  "outputs": {
     "summary": "string",
     "sha": "string",
     "commits": "int"

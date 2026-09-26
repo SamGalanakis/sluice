@@ -1,20 +1,24 @@
 {
   "name": "agent.codex",
-  "description": "Run a Codex session on a spec text in a working directory.",
-  "in": {
+  "doc": "Run a Codex session on a spec text in a working directory.",
+  "inputs": {
     "cwd": "string",
     "spec": "string",
-    "model": {
-      "optional": [
-        "sol",
-        "astra"
-      ]
-    },
+    "model": [
+      "null",
+      {
+        "type": "enum",
+        "symbols": [
+          "sol",
+          "astra"
+        ]
+      }
+    ],
     "log": "string?",
     "resume": "string?",
     "report_path": "string?"
   },
-  "out": {
+  "outputs": {
     "log": "string",
     "final": "string",
     "report": "string?"

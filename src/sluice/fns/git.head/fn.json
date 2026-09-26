@@ -1,10 +1,10 @@
 {
   "name": "git.head",
-  "description": "Report the current branch and commit of a worktree.",
-  "in": {
+  "doc": "Report the current branch and commit of a worktree.",
+  "inputs": {
     "path": "string"
   },
-  "out": {
+  "outputs": {
     "branch": "string",
     "sha": "string"
   }

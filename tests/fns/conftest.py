@@ -34,7 +34,7 @@ def call_fn(tmp_path):
             "PYTHONPATH": str(SRC),
             "SLUICE_HOME": str(tmp_path / "sluice-home"),
             "SLUICE_PLAN": "test-plan",
-            "SLUICE_NODE": "test-node",
+            "SLUICE_STEP": "test-step",
             "SLUICE_RUN_ID": "test-run",
             "SLUICE_RUN_DIR": str(run_dir),
             "SLUICE_BACKOFF": "0",
