@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import signal
@@ -76,8 +77,21 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
     thread.start()
     print(f"sluice: MCP at http://{host}:{port}/mcp, runner on {store.home}", file=sys.stderr,
           flush=True)
+    class Server(uvicorn.Server):
+        @contextlib.contextmanager
+        def capture_signals(self):
+            # Shut down gracefully on SIGINT/SIGTERM, without re-raising the signal
+            # afterwards, so the runner loop can stop and record runner_stopped.
+            sigs = (signal.SIGINT, signal.SIGTERM)
+            prev = {s: signal.signal(s, self.handle_exit) for s in sigs}
+            try:
+                yield
+            finally:
+                for s, h in prev.items():
+                    signal.signal(s, h)
+
     try:
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        Server(uvicorn.Config(app, host=host, port=port, log_level="warning")).run()
     finally:
         runner.stop()
         thread.join(timeout=30)
