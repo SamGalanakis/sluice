@@ -1,0 +1,98 @@
+{
+  "id": "fig-3842-send-batch",
+  "title": "FIG-3842 send_batch (one arc, three tasks)",
+  "paused": false,
+  "resources": {"pg-schema": 1},
+  "meta": {"arc": "fig-3842-send-batch", "ticket": "FIG-3842"},
+  "nodes": {
+    "arc-fork": {
+      "fn": "lash.fork",
+      "in": {"name": {"value": "fig-3842-send-batch"}, "base": {"value": "origin/main"}},
+      "note": "Creates the arc branch at origin/main. Branches carry ticket ids, never arc ids."
+    },
+    "arc-push": {
+      "fn": "git.push",
+      "in": {"path": {"from": "arc-fork.path"}, "branch": {"from": "arc-fork.branch"}}
+    },
+    "arc-fork-rm": {
+      "fn": "lash.fork_rm",
+      "in": {"name": {"value": "fig-3842-send-batch"}},
+      "after": ["arc-push"],
+      "note": "Frees the arc branch so git.merge can check it out in its own worktree."
+    },
+    "store": {
+      "fn": "lash.task",
+      "in": {
+        "name": {"value": "fig-3842-store"},
+        "task": {"value": "Add the send_batch store method and its PG table per the FIG-3842 spec section 2. Drive the new method in lash-sim's cross_backend_store_differential and add the table to its residue digest."},
+        "arc": {"value": "fig-3842-send-batch"},
+        "engine": {"value": "codex"},
+        "model": {"value": "sol"},
+        "ladder": {"value": ["codex", "codex", "claude"]},
+        "may_edit": {"value": ["crates/lash-postgres-store/**", "crates/lash-store/**", "crates/lash-sim/**"]},
+        "labels": {"value": ["//crates/lash-postgres-store:tests", "//crates/lash-sim:cross_backend_store_differential"]},
+        "report_path": {"value": "/workspace/notes/lash/tasks/fig-3842-store/report.md"},
+        "ticket": {"value": "FIG-3842"}
+      },
+      "after": ["arc-fork-rm"],
+      "claims": ["pg-schema"],
+      "note": "Touches the PG schema catalog, a hot file: holds the pg-schema claim across retries."
+    },
+    "api": {
+      "fn": "lash.task",
+      "in": {
+        "name": {"value": "fig-3842-api"},
+        "task": {"value": "Expose send_batch on the session ingress API as a primitive (ids and cursors, no presentation), with its conformance laws."},
+        "arc": {"value": "fig-3842-send-batch"},
+        "engine": {"value": "devin"},
+        "may_edit": {"value": ["crates/lash-core/src/ingress/**", "crates/lash-conformance/**"]},
+        "labels": {"value": ["//crates/lash-core:tests"]},
+        "report_path": {"value": "/workspace/notes/lash/tasks/fig-3842-api/report.md"},
+        "ticket": {"value": "FIG-3842"}
+      },
+      "after": ["arc-fork-rm"]
+    },
+    "host": {
+      "fn": "lash.task",
+      "in": {
+        "name": {"value": "fig-3842-host"},
+        "task": {"value": "Route the Restate host's batched sends through the new store method. Hosts never drive."},
+        "context": {"from": "store.review"},
+        "arc": {"value": "fig-3842-send-batch"},
+        "engine": {"value": "claude"},
+        "may_edit": {"value": ["crates/lash-restate/src/handlers/**", "examples/agent-service/**"]},
+        "gates": {"value": ["narrow `kiln test` for every touched target", "`python3 scripts/dev-test.py`", "`just agent-service-restate-e2e` (host wiring changed)"]},
+        "labels": {"value": ["//crates/lash-restate:tests"]},
+        "report_path": {"value": "/workspace/notes/lash/tasks/fig-3842-host/report.md"},
+        "ticket": {"value": "FIG-3842"}
+      },
+      "note": "Depends on store's output: forks from the arc branch after store merged, and gets store's review summary as context."
+    },
+    "land": {
+      "fn": "lash.arc_land",
+      "in": {
+        "name": {"value": "fig-3842-land"},
+        "arc": {"value": "fig-3842-send-batch"},
+        "title": {"value": "Sessions accept batched sends through one store call (FIG-3842)"},
+        "what": {"value": "A send_batch store method with its PG table, the ingress primitive over it, and Restate host routing through it."},
+        "door": {"value": "one-way"},
+        "blast": {"value": "PG schema (new table), session ingress API, Restate host send path."},
+        "gates": {"value": [
+          {"kind": "kiln-test", "target": "//:dev_tests"},
+          {"kind": "just", "target": "agent-service-restate-e2e"},
+          {"kind": "just", "target": "restate-postgres-workers-e2e"},
+          {"kind": "script", "target": "scripts/check-substrate-boundary.sh"}
+        ]}
+      },
+      "after": ["store", "api", "host"]
+    },
+    "ticket": {
+      "fn": "linear.update",
+      "in": {
+        "issue": {"value": "FIG-3842"},
+        "state": {"value": "In Review"},
+        "comment": {"from": "land.url"}
+      }
+    }
+  }
+}

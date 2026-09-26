@@ -1,0 +1,9 @@
+{
+  "name": "lash.standards",
+  "version": 1,
+  "description": "The absolute path of this pack's coding-standards file, for agent.review.",
+  "in": {},
+  "out": {"path": "string"},
+  "effects": true,
+  "timeout": "1m"
+}

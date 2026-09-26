@@ -1,0 +1,22 @@
+{
+  "name": "check.l2",
+  "version": 1,
+  "description": "L2 (arc -> main): run named gates in a fork of the arc branch and consult the known-red ledger. A failure matching a live known-red entry is known_red; anything else (including a match on an expired entry) is a new red. ok means no new reds. kiln-test gates must show at least one executed test case (min_tests).",
+  "in": {
+    "path": "string",
+    "gates": {"list": {"kind": ["just", "kiln-test", "script"], "target": "string", "args": {"optional": {"list": "string"}}, "min_tests": "int?"}},
+    "known_reds": "string?"
+  },
+  "out": {
+    "ok": "bool",
+    "results": {"list": {"gate": "string", "status": ["pass", "known_red", "red"], "summary": "string", "tests_run": "int", "failures": {"list": "string"}, "known": {"list": "string"}}},
+    "new_reds": {"list": "string"},
+    "known_reds": {"list": "string"},
+    "stale": {"list": "string"},
+    "summary": "string",
+    "log": "string"
+  },
+  "effects": true,
+  "timeout": "6h",
+  "slots": {"heavy": 1}
+}

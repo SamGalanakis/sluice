@@ -1,0 +1,11 @@
+{
+  "name": "lash.fork_rm",
+  "version": 1,
+  "description": "Remove a kiln fork (`kiln rm lash <name>`), which also stops its Bazel server and any process inside it. Never rm -rf a fork.",
+  "in": {"name": "string"},
+  "out": {"removed": "bool"},
+  "effects": true,
+  "timeout": "10m",
+  "slots": {"default": 1},
+  "retry": {"transient": 1, "backoff": "1m"}
+}

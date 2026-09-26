@@ -1,0 +1,10 @@
+{
+  "name": "check.l0",
+  "version": 1,
+  "description": "L0 (every commit): `kiln fmt -- --check` and `git diff --check` in a fork. With base, the diff check covers everything since the merge-base with base; without, the uncommitted changes.",
+  "in": {"path": "string", "base": "string?"},
+  "out": {"ok": "bool", "summary": "string", "log": "string", "failures": {"list": "string"}},
+  "effects": true,
+  "timeout": "15m",
+  "slots": {"default": 1}
+}

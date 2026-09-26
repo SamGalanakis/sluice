@@ -1,0 +1,33 @@
+{
+  "name": "lash.gate",
+  "version": 1,
+  "description": "The retry/escalation gate after a task attempt's L1. Green: ok=true. Red with attempts left: ok=false and SPAWNS the next lash.attempt node (the same engine resumes its warm session with the failing output; a new engine on the ladder starts fresh from the brief plus the failure). Red on the last rung: fails, so the runner opens an inbox item.",
+  "in": {
+    "name": "string",
+    "attempt": "int",
+    "engine": ["devin", "codex", "claude"],
+    "ladder": {"optional": {"list": ["devin", "codex", "claude"]}},
+    "model": "string?",
+    "brief": "string",
+    "session": "string?",
+    "path": "string",
+    "branch": "string",
+    "base": "string",
+    "arc": "string",
+    "labels": {"optional": {"list": "string"}},
+    "allow_no_tests": "bool?",
+    "report_path": "string?",
+    "ok": "bool",
+    "summary": "string",
+    "log": "string",
+    "failures": {"list": "string"}
+  },
+  "out": {
+    "ok": "bool",
+    "attempt": "int",
+    "next": "string?",
+    "summary": "string"
+  },
+  "effects": true,
+  "timeout": "2m"
+}

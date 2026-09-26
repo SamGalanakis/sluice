@@ -1,0 +1,95 @@
+{
+  "name": "lash.attempt",
+  "version": 1,
+  "description": "One attempt at a task in an existing fork: agent.run (fresh, or resuming a warm session) -> L1 -> lash.gate -> lash.finish when the gate is green. A red gate spawns the next attempt as a new top-level node.",
+  "in": {
+    "name": "string",
+    "attempt": "int",
+    "engine": ["devin", "codex", "claude"],
+    "ladder": {"optional": {"list": ["devin", "codex", "claude"]}},
+    "model": "string?",
+    "spec": "string",
+    "brief": "string",
+    "resume": "string?",
+    "path": "string",
+    "branch": "string",
+    "base": "string",
+    "arc": "string",
+    "labels": {"optional": {"list": "string"}},
+    "allow_no_tests": "bool?",
+    "report_path": "string?"
+  },
+  "out": {
+    "merged": "bool",
+    "sha": "string?",
+    "review": "string",
+    "attempt": "int"
+  },
+  "graph": {
+    "nodes": {
+      "work": {
+        "fn": "agent.run",
+        "in": {
+          "engine": {"from": "$in.engine"},
+          "cwd": {"from": "$in.path"},
+          "spec": {"from": "$in.spec"},
+          "model": {"from": "$in.model"},
+          "resume": {"from": "$in.resume"},
+          "report_path": {"from": "$in.report_path"}
+        }
+      },
+      "check": {
+        "fn": "check.l1",
+        "in": {
+          "path": {"from": "$in.path"},
+          "base": {"from": "$in.base"},
+          "labels": {"from": "$in.labels"},
+          "allow_no_tests": {"from": "$in.allow_no_tests"}
+        },
+        "after": ["work"]
+      },
+      "gate": {
+        "fn": "lash.gate",
+        "in": {
+          "name": {"from": "$in.name"},
+          "attempt": {"from": "$in.attempt"},
+          "engine": {"from": "$in.engine"},
+          "ladder": {"from": "$in.ladder"},
+          "model": {"from": "$in.model"},
+          "brief": {"from": "$in.brief"},
+          "session": {"from": "work.session"},
+          "path": {"from": "$in.path"},
+          "branch": {"from": "$in.branch"},
+          "base": {"from": "$in.base"},
+          "arc": {"from": "$in.arc"},
+          "labels": {"from": "$in.labels"},
+          "allow_no_tests": {"from": "$in.allow_no_tests"},
+          "report_path": {"from": "$in.report_path"},
+          "ok": {"from": "check.ok"},
+          "summary": {"from": "check.summary"},
+          "log": {"from": "check.log"},
+          "failures": {"from": "check.failures"}
+        }
+      },
+      "finish": {
+        "fn": "lash.finish",
+        "in": {
+          "name": {"from": "$in.name"},
+          "path": {"from": "$in.path"},
+          "branch": {"from": "$in.branch"},
+          "base": {"from": "$in.base"},
+          "arc": {"from": "$in.arc"},
+          "labels": {"from": "$in.labels"},
+          "allow_no_tests": {"from": "$in.allow_no_tests"}
+        },
+        "when": [{"from": "gate.ok", "op": "eq", "value": true}]
+      }
+    },
+    "out": {
+      "merged": {"from": "finish.merged"},
+      "sha": {"from": "finish.sha"},
+      "review": {"from": "finish.review"},
+      "attempt": {"from": "gate.attempt"}
+    }
+  }
+}

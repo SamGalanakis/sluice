@@ -1,0 +1,17 @@
+{
+  "name": "lash.card",
+  "version": 1,
+  "description": "Render an arc PR body with a merge-danger card (door, blast radius, what changed, L2 evidence). A one-way door yields draft=true so nothing lands it before a human reviews.",
+  "in": {
+    "door": ["one-way", "two-way"],
+    "blast": "string",
+    "what": "string",
+    "checks": "string",
+    "known_reds": {"optional": {"list": "string"}},
+    "part_of": {"optional": {"list": "string"}},
+    "refs": {"optional": {"list": "string"}}
+  },
+  "out": {"body": "string", "draft": "bool"},
+  "effects": false,
+  "timeout": "1m"
+}

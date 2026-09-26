@@ -1,0 +1,74 @@
+{
+  "name": "lash.task",
+  "version": 1,
+  "description": "The unit of lash work: kiln fork from the arc branch -> brief -> attempt 1 (agent.run -> L1 -> gate -> review -> L1 -> merge into the arc branch -> fork rm). A red L1 spawns further attempts along the engine ladder; the last red opens an inbox item.",
+  "in": {
+    "name": "string",
+    "task": "string",
+    "arc": "string",
+    "engine": ["devin", "codex", "claude"],
+    "may_edit": {"list": "string"},
+    "gates": {"optional": {"list": "string"}},
+    "labels": {"optional": {"list": "string"}},
+    "ladder": {"optional": {"list": ["devin", "codex", "claude"]}},
+    "model": "string?",
+    "report_path": "string?",
+    "context": "string?",
+    "ticket": "string?",
+    "allow_no_tests": "bool?"
+  },
+  "out": {
+    "merged": "bool",
+    "sha": "string?",
+    "review": "string",
+    "attempt": "int",
+    "branch": "string"
+  },
+  "graph": {
+    "nodes": {
+      "fork": {
+        "fn": "lash.fork",
+        "in": {"name": {"from": "$in.name"}, "base": {"from": "$in.arc"}}
+      },
+      "brief": {
+        "fn": "lash.brief",
+        "in": {
+          "task": {"from": "$in.task"},
+          "may_edit": {"from": "$in.may_edit"},
+          "gates": {"from": "$in.gates"},
+          "report_path": {"from": "$in.report_path"},
+          "path": {"from": "fork.path"},
+          "branch": {"from": "fork.branch"},
+          "context": {"from": "$in.context"},
+          "ticket": {"from": "$in.ticket"}
+        }
+      },
+      "attempt": {
+        "fn": "lash.attempt",
+        "in": {
+          "name": {"from": "$in.name"},
+          "attempt": {"value": 1},
+          "engine": {"from": "$in.engine"},
+          "ladder": {"from": "$in.ladder"},
+          "model": {"from": "$in.model"},
+          "spec": {"from": "brief.brief"},
+          "brief": {"from": "brief.brief"},
+          "path": {"from": "fork.path"},
+          "branch": {"from": "fork.branch"},
+          "base": {"from": "fork.base"},
+          "arc": {"from": "$in.arc"},
+          "labels": {"from": "$in.labels"},
+          "allow_no_tests": {"from": "$in.allow_no_tests"},
+          "report_path": {"from": "$in.report_path"}
+        }
+      }
+    },
+    "out": {
+      "merged": {"from": "attempt.merged"},
+      "sha": {"from": "attempt.sha"},
+      "review": {"from": "attempt.review"},
+      "attempt": {"from": "attempt.attempt"},
+      "branch": {"from": "fork.branch"}
+    }
+  }
+}

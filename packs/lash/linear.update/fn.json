@@ -1,0 +1,20 @@
+{
+  "name": "linear.update",
+  "version": 1,
+  "description": "Set a Linear issue's workflow state (by name, within the issue's team) and/or add a comment, via the Linear GraphQL API. Reads LINEAR_API_KEY; SLUICE_LINEAR_URL overrides the endpoint.",
+  "in": {
+    "issue": "string",
+    "state": "string?",
+    "comment": "string?"
+  },
+  "out": {
+    "issue_id": "string",
+    "identifier": "string",
+    "state": "string?",
+    "comment_id": "string?"
+  },
+  "effects": true,
+  "timeout": "2m",
+  "slots": {"default": 1},
+  "retry": {"transient": 3, "backoff": "1m"}
+}

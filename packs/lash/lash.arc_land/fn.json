@@ -1,0 +1,79 @@
+{
+  "name": "lash.arc_land",
+  "version": 1,
+  "description": "Land an arc: fork the arc branch (detached), run L2 against the known-red ledger, and only if L2 is green open a PR from the arc branch to main whose body carries a merge-danger card. One-way doors open as draft. A red L2 fails the node (inbox) and keeps the fork.",
+  "in": {
+    "name": "string",
+    "arc": "string",
+    "title": "string",
+    "what": "string",
+    "door": ["one-way", "two-way"],
+    "blast": "string",
+    "gates": {"list": {"kind": ["just", "kiln-test", "script"], "target": "string", "args": {"optional": {"list": "string"}}, "min_tests": "int?"}},
+    "known_reds": "string?",
+    "part_of": {"optional": {"list": "string"}},
+    "refs": {"optional": {"list": "string"}}
+  },
+  "out": {
+    "number": "int",
+    "url": "string",
+    "draft": "bool",
+    "checks": "string"
+  },
+  "graph": {
+    "nodes": {
+      "fork": {
+        "fn": "lash.fork",
+        "in": {"name": {"from": "$in.name"}, "base": {"from": "$in.arc"}, "detach": {"value": true}}
+      },
+      "l2": {
+        "fn": "check.l2",
+        "in": {
+          "path": {"from": "fork.path"},
+          "gates": {"from": "$in.gates"},
+          "known_reds": {"from": "$in.known_reds"}
+        }
+      },
+      "red": {
+        "fn": "core.fail",
+        "in": {"message": {"from": "l2.summary"}},
+        "when": [{"from": "l2.ok", "op": "eq", "value": false}]
+      },
+      "card": {
+        "fn": "lash.card",
+        "in": {
+          "door": {"from": "$in.door"},
+          "blast": {"from": "$in.blast"},
+          "what": {"from": "$in.what"},
+          "checks": {"from": "l2.summary"},
+          "known_reds": {"from": "l2.known_reds"},
+          "part_of": {"from": "$in.part_of"},
+          "refs": {"from": "$in.refs"}
+        },
+        "when": [{"from": "l2.ok", "op": "eq", "value": true}]
+      },
+      "pr": {
+        "fn": "gh.pr",
+        "in": {
+          "path": {"from": "fork.path"},
+          "base": {"value": "main"},
+          "head": {"from": "$in.arc"},
+          "title": {"from": "$in.title"},
+          "body": {"from": "card.body"},
+          "draft": {"from": "card.draft"}
+        }
+      },
+      "rm": {
+        "fn": "lash.fork_rm",
+        "in": {"name": {"from": "$in.name"}},
+        "after": ["pr"]
+      }
+    },
+    "out": {
+      "number": {"from": "pr.number"},
+      "url": {"from": "pr.url"},
+      "draft": {"from": "card.draft"},
+      "checks": {"from": "l2.summary"}
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "check.l3",
+  "version": 1,
+  "description": "L3 (milestone/release): `kiln test //:workspace_tests` plus a configurable list of gates, with the same receipt rules as L2. Known reds are reported but do not pass the release gate unless allow_known_reds.",
+  "in": {
+    "path": "string",
+    "extra": {"optional": {"list": {"kind": ["just", "kiln-test", "script"], "target": "string", "args": {"optional": {"list": "string"}}, "min_tests": "int?"}}},
+    "known_reds": "string?",
+    "allow_known_reds": "bool?"
+  },
+  "out": {
+    "ok": "bool",
+    "results": {"list": {"gate": "string", "status": ["pass", "known_red", "red"], "summary": "string", "tests_run": "int", "failures": {"list": "string"}, "known": {"list": "string"}}},
+    "new_reds": {"list": "string"},
+    "known_reds": {"list": "string"},
+    "stale": {"list": "string"},
+    "summary": "string",
+    "log": "string"
+  },
+  "effects": true,
+  "timeout": "8h",
+  "slots": {"heavy": 2}
+}

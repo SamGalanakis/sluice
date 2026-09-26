@@ -1,0 +1,74 @@
+{
+  "name": "lash.finish",
+  "version": 1,
+  "description": "The tail of a green task attempt: agent.review (fresh context, the pack's coding standards, commits fixes) -> L1 again -> git.merge of the task branch into the arc branch (pushed) -> lash.fork_rm. A red L1 after review or a merge conflict fails the node (inbox) and keeps the fork.",
+  "in": {
+    "name": "string",
+    "path": "string",
+    "branch": "string",
+    "base": "string",
+    "arc": "string",
+    "labels": {"optional": {"list": "string"}},
+    "allow_no_tests": "bool?"
+  },
+  "out": {
+    "merged": "bool",
+    "sha": "string?",
+    "review": "string",
+    "tests_run": "int"
+  },
+  "graph": {
+    "nodes": {
+      "standards": {"fn": "lash.standards", "in": {}},
+      "review": {
+        "fn": "agent.review",
+        "in": {
+          "cwd": {"from": "$in.path"},
+          "base": {"from": "$in.base"},
+          "standards": {"from": "standards.path"}
+        }
+      },
+      "recheck": {
+        "fn": "check.l1",
+        "in": {
+          "path": {"from": "$in.path"},
+          "base": {"from": "$in.base"},
+          "labels": {"from": "$in.labels"},
+          "allow_no_tests": {"from": "$in.allow_no_tests"}
+        },
+        "after": ["review"]
+      },
+      "red_after_review": {
+        "fn": "core.fail",
+        "in": {"message": {"from": "recheck.summary"}},
+        "when": [{"from": "recheck.ok", "op": "eq", "value": false}]
+      },
+      "merge": {
+        "fn": "git.merge",
+        "in": {
+          "repo": {"from": "$in.path"},
+          "source": {"from": "$in.branch"},
+          "target": {"from": "$in.arc"},
+          "push": {"value": true}
+        },
+        "when": [{"from": "recheck.ok", "op": "eq", "value": true}]
+      },
+      "conflict": {
+        "fn": "core.fail",
+        "in": {"message": {"value": "The task branch conflicts with the arc branch; see this task's merge node for the conflicting paths. The fork is kept."}},
+        "when": [{"from": "merge.merged", "op": "eq", "value": false}]
+      },
+      "rm": {
+        "fn": "lash.fork_rm",
+        "in": {"name": {"from": "$in.name"}},
+        "when": [{"from": "merge.merged", "op": "eq", "value": true}]
+      }
+    },
+    "out": {
+      "merged": {"from": "merge.merged"},
+      "sha": {"from": "merge.sha"},
+      "review": {"from": "review.summary"},
+      "tests_run": {"from": "recheck.tests_run"}
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "lash.fork",
+  "version": 1,
+  "description": "Cut a kiln fork of lash (`kiln fork lash <name>`) and create a branch there from the base (default origin/main; a bare branch name resolves to origin/<name> when that exists). With detach, stay on a detached HEAD at the base.",
+  "in": {
+    "name": "string",
+    "base": "string?",
+    "branch": "string?",
+    "detach": "bool?"
+  },
+  "out": {
+    "path": "string",
+    "branch": "string",
+    "sha": "string",
+    "base": "string"
+  },
+  "effects": true,
+  "timeout": "20m",
+  "slots": {"default": 1},
+  "retry": {"transient": 2, "backoff": "1m"}
+}

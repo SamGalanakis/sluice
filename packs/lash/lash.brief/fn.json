@@ -1,0 +1,18 @@
+{
+  "name": "lash.brief",
+  "version": 1,
+  "description": "Render a lash worker brief: the lane-rules/AGENTS.md preamble, the task, where to work, the paths it may edit, the gates to run, the attribution rule and the report path.",
+  "in": {
+    "task": "string",
+    "may_edit": {"list": "string"},
+    "gates": {"optional": {"list": "string"}},
+    "report_path": "string?",
+    "path": "string?",
+    "branch": "string?",
+    "context": "string?",
+    "ticket": "string?"
+  },
+  "out": {"brief": "string"},
+  "effects": false,
+  "timeout": "1m"
+}

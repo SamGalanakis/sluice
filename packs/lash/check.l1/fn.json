@@ -1,0 +1,22 @@
+{
+  "name": "check.l1",
+  "version": 1,
+  "description": "L1 (task -> arc branch): L0, then narrow `kiln test <labels>` (optional), then `python3 scripts/dev-test.py`, stopping at the first red stage. Judged by test receipts: tests requested but zero cases executed is red even on exit 0.",
+  "in": {
+    "path": "string",
+    "base": "string?",
+    "labels": {"optional": {"list": "string"}},
+    "args": {"optional": {"list": "string"}},
+    "allow_no_tests": "bool?"
+  },
+  "out": {
+    "ok": "bool",
+    "summary": "string",
+    "log": "string",
+    "tests_run": "int",
+    "failures": {"list": "string"}
+  },
+  "effects": true,
+  "timeout": "3h",
+  "slots": {"heavy": 1}
+}
