@@ -92,7 +92,7 @@ def test_every_page_renders(store, port):
     assert code == 200 and '<div id="graph">' in page and "@get('/projects/p/stream'" in page
     assert '<a href="/projects/p/log">Log</a>' in page and 'data-step="a"' in page
     code, step = get(port, "/projects/p/steps/a")
-    assert code == 200 and '<div id="step-detail">' in step and "<code>a</code>" in step
+    assert code == 200 and '<div id="step-detail">' in step and "<h2>a</h2>" in step
     assert "@get('/projects/p/steps/a/stream'" in step and '"sver"' in html.unescape(step)
     assert get(port, "/projects/p/steps/nope")[0] == 404
     assert get(port, "/projects/p/steps/nope/stream")[0] == 404
@@ -195,7 +195,7 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
     assert new_ver != [f'signals {{"ver":"{ver}"}}'] and new_ver[0].startswith('signals {"ver"')
     # a client with an old version gets every part at once, then nothing more
     stale = stream(port, "/projects/p/stream", {"ver": ver}, seconds=0.8)
-    assert len(patches(stale)) == 4  # summary, needs, graph and the nav badge
+    assert len(patches(stale)) == 5  # summary, needs, result, graph and the nav badge
 
 
 def test_a_running_steps_stderr_moves_its_progress_line(store, port):

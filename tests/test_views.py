@@ -2,6 +2,7 @@
 cards and its layout, a step's detail, the "Needs you" lines, the index, and escaping."""
 
 import html
+import json
 import re
 
 from sluice import log as L
@@ -59,17 +60,17 @@ def test_mermaid_shows_inputs_steps_outputs_edges_and_status_classes(store):
 
 
 def card(page, sid):
-    """The card of a step on the board: its element, up to the next node."""
+    """The card of a step on the board: its element, up to its end."""
     m = re.search(rf'<(a|div) class="node (card|chip) [^"]*" id="n-{sid}".*?</\1>', page,
                   re.DOTALL)
     assert m, f"no card for {sid}"
     return m[0]
 
 
-def pos(page, key):
-    m = re.search(rf'data-node="{re.escape(key)}"[^>]*style="--x:(\d+)px;--y:(\d+)px', page)
-    assert m, f"no node {key}"
-    return int(m[1]), int(m[2])
+def rows(page):
+    """The step ids on the board, row by row."""
+    return [re.findall(r'id="n-([^"]+)"', r)
+            for r in re.findall(r'<li class="row"[^>]*>(.*?)</li>', page, re.DOTALL)]
 
 
 def board_project(store):
@@ -103,12 +104,13 @@ def test_the_board_shows_each_step_as_a_card(store):
     page = views.project_page(store, "v", ver="abc")
     a = card(page, "a")
     assert a.startswith('<a class="node card is-succeeded" id="n-a" data-node="s:a" '
-                        'href="/projects/v/steps/a" data-step="a"')
+                        'href="/projects/v/steps/a" data-step="a">')
     assert '<span class="vh">succeeded</span>' in a  # the glyph's word, for assistive tech
-    assert '<span class="ttl">Add one to n</span>' in a  # the doc is the title
-    assert '<span class="ln ln-output">sum: 2</span>' in a and "test.add" in a
-    assert '<span class="dur">12m 4s</span>' in a
-    assert '<span class="ttl">b</span>' in card(page, "b")  # no doc: the id
+    assert '<span class="sid">a</span>' in a  # the id is the title, the doc under it
+    assert '<span class="doc">Add one to n</span>' in a
+    assert '<dl class="outs"><div><dt>sum</dt><dd>2</dd></div></dl>' in a  # what it handed on
+    assert '<span class="dur">12m 4s</span>' in a and "test.add" in a
+    assert '<span class="doc">' not in card(page, "b")  # no doc: the id alone
     assert "set by hand" in card(page, "b") and "is-manual" in card(page, "b")
     c = card(page, "c")
     assert "is-failed" in c and '<span class="ln ln-error">exit code 1…</span>' in c
@@ -117,12 +119,14 @@ def test_the_board_shows_each_step_as_a_card(store):
     assert '<span class="ln ln-progress">halfway there</span>' in each  # last stderr line
     assert 'data-since="2026-01-01T10:12:05Z"' in each  # its running time stays current
     assert "is-stale" in card(page, "late") and "Its inputs changed" in card(page, "late")
-    assert card(page, "fmt").startswith('<a class="node chip is-succeeded"')  # glue: a chip
-    # plan inputs are a strip above the board (no nodes, no edges); outputs are nodes
-    assert '<p class="inputs"><span class="label">Inputs</span> <span class="in">n = 1</span>' \
-        in page and 'data-node="i:' not in page
-    assert re.search(r'data-node="o:total"[^>]*><span class="io">Output <b>total</b></span>'
-                     r'<span class="v">4</span>', page)
+    fmt = card(page, "fmt")  # glue: a chip with its id and fn
+    assert fmt.startswith('<a class="node chip is-succeeded"') and "core.format" in fmt
+    # plan inputs fold above the board; the plan's outputs are the Result, not board nodes
+    assert "<summary>Plan inputs: n</summary>" in page and 'data-node="i:' not in page
+    result = page[page.index('<section class="result"'):page.index("</section>",
+                                                                    page.index('class="result"'))]
+    assert "<dt>total</dt><dd><code class=\"v\">4</code></dd>" in result
+    assert 'data-node="o:' not in page
     # the page: its summary, the drawer that shows a step, and the live stream
     assert "3 of 6 succeeded · 1 running · 1 stale · 1 failed" in page
     assert 'id="drawer"' in page
@@ -132,30 +136,36 @@ def test_the_board_shows_each_step_as_a_card(store):
     assert "mermaid" not in page
 
 
-def test_the_board_lays_steps_out_by_dependency_depth(store):
+def test_the_board_lays_steps_out_in_rows_by_dependency_depth(store):
     board_project(store)
     page = views.project_page(store, "v", ver="abc")
-    xs = {k: pos(page, k)[0] for k in ("s:a", "s:fmt", "s:b", "s:c", "s:each", "s:late",
-                                       "o:total")}
-    assert xs["s:a"] == xs["s:c"] == 12  # the first column is at the left edge
-    assert xs["s:a"] < xs["s:b"] == xs["s:fmt"] == xs["s:each"]
-    assert xs["s:b"] < xs["s:late"] < xs["o:total"]
-    # a chain lines up: b sits level with a, the step that feeds it first
-    assert pos(page, "s:a")[1] <= pos(page, "s:b")[1]
-    # an edge per handoff, named by its ports (shown when a block is traced)
-    edges = set(re.findall(r'<path data-from="([^"]+)" data-to="([^"]+)"', page))
-    assert edges == {("s:a", "s:fmt"), ("s:a", "s:b"), ("s:a", "s:each"),
-                     ("s:a", "s:late"), ("s:b", "s:late"), ("s:b", "o:total")}
-    names = {(f, t): n for f, t, n in re.findall(
-        r'<text data-from="([^"]+)" data-to="([^"]+)"[^>]*>([^<]*)</text>', page)}
-    assert names[("s:a", "s:fmt")] == "sum → values" and names[("s:a", "s:b")] == "sum → a"
-    # a:sum → late crosses a column: it runs through a gap (a dummy slot), not under a card
-    late = re.search(r'<path data-from="s:a" data-to="s:late" d="([^"]+)"', page)[1]
-    assert late.count("C") == 2 and "L" in late
+    assert rows(page) == [["a", "c"], ["fmt", "b", "each"], ["late"]]
+    assert '<li class="row" style="--n:3">' in page
+    # the edges, one per handoff, named by their ports, for board.js to draw
+    data = json.loads(html.unescape(re.search(r'<div class="plane" data-edges="([^"]*)"',
+                                              page)[1]))
+    assert {(f, t): n for f, t, n in data} == {
+        ("s:a", "s:fmt"): "sum → values", ("s:a", "s:b"): "sum → a",
+        ("s:a", "s:each"): "sum → tag", ("s:a", "s:late"): "sum → a",
+        ("s:b", "s:late"): "sum → b"}
+    # more than four side by side wrap inside their row
+    create(store, "wide", {f"s{i}": {"run": "test.add", "in": {"a": d(i), "b": d(1)}}
+                           for i in range(6)})
+    assert '<li class="row" style="--n:4">' in views.project_page(store, "wide", ver="x")
     # nothing at all yet: a placeholder that says how steps arrive
     create(store, "empty", {})
     empty = views.project_page(store, "empty", ver="x")
     assert "No steps yet." in empty and 'class="plane"' not in empty
+
+
+def test_answers_show_what_was_chosen_and_markdown_shows_its_words():
+    ans = {"action": "choose", "params": {}, "values": {"value": "Retro NES", "notes": ""}}
+    assert views.show_value(ans) == "Retro NES"
+    assert views.show_value({"action": "answer", "text": "yes"}) == "yes"
+    assert views.show_value("## Recheck\n\n**Fixes** hold") == "Recheck"
+    assert views.show_value(True) == "yes"
+    assert '<div class="v long md"><h2>Recheck</h2>' in views._value("## Recheck\n\nok")
+    assert views._value("two\nlines").startswith('<div class="v long text">')
 
 
 def test_the_standalone_page_is_the_board_and_every_step_in_a_disclosure(store):
@@ -197,13 +207,13 @@ def test_a_steps_detail(store):
                  {"kind": "message", "thread": "other", "from": "x", "body": "not here"})
     html = views.step_detail(store, "v", "agent")
     head = html[:html.index("</header>")]
-    assert "<h2>Write &lt;the&gt; thing</h2>" in head
-    assert "<code>agent</code> · test.open · succeeded · 1m 30s · $0.12" in head  # ids here
+    assert "<h2>agent</h2>" in head and '<p class="d-doc">Write &lt;the&gt; thing</p>' in head
+    assert "test.open · succeeded · 1m 30s · $0.12" in head  # the run's facts, cost as money
     sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
     assert sections == ["Outputs", "Messages", "Prompt", "Inputs", "Stderr", "Runs"]
     assert ('<dt>answer <span class="type">string</span></dt><dd><p class="meta">What it '
             'found</p><span class="v">&lt;i&gt;42&lt;/i&gt;</span></dd>') in html
-    assert '<code class="v">0.123457</code>' in html
+    assert "0.123457" not in html  # cost is a fact of the run, in the header, not an output
     assert '<div class="prompt">Do &lt;b&gt;it&lt;/b&gt;\nthen stop</div>' in html
     assert ('<dt>made <span class="type">int</span></dt><dd><p class="meta">from <a href="/projects/v/steps/make" '
             'data-step="make">make/sum</a></p><code class="v">2</code></dd>') in html
@@ -247,9 +257,12 @@ def test_long_descriptions_fold_and_inputs_show_their_docs(store):
     page = views.project_page(store, "v", ver="x")
     assert '<details class="about" data-preserve-attr="open"><summary><span class="clamp">' \
         "A long description." in page
-    assert ('<span class="in" title="Who &lt;b&gt;counts&lt;/b&gt;">who <span class="attn">'
-            'not set</span></span> · <span class="in">k = 3</span>') \
-        in page
+    # plan inputs fold: their names (an unset one marked), then name, doc and value inside
+    assert ('<summary>Plan inputs: who <span class="attn">(not set)</span>, k</summary>'
+            in page)
+    assert ('<dt>who</dt><dd><p class="meta">Who &lt;b&gt;counts&lt;/b&gt;</p><span class="attn">'
+            'not set</span></dd>') in page
+    assert '<dt>k</dt><dd><code class="v">3</code></dd>' in page
 
 
 def test_needs_you_lists_answers_inputs_failures_and_unanswered_messages(store):
@@ -362,7 +375,8 @@ def test_values_are_escaped(store):
         assert "<script>progress" not in page and "<i>me" not in page
     assert "&lt;script&gt;progress&lt;/script&gt;" in pages[0]
     assert '<details class="about"' not in pages[0]  # a short description is not folded
-    assert "&lt;script&gt;doc&lt;/script&gt;" in pages[0]
+    assert 'title="&lt;script&gt;doc&lt;/script&gt;"' in pages[0]  # a's chip
+    assert "&lt;script&gt;doc&lt;/script&gt;" in pages[4]  # its detail
     assert "&lt;script&gt;alert(3)&lt;/script&gt;" in pages[0]  # the unanswered message
     assert "&lt;b&gt;bold&lt;/b&gt;" in pages[3]
     log = pages[2]

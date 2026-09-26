@@ -84,8 +84,8 @@ async def test_projects(store):
         assert (await fail(c, "project_update", name="zz", description=""))["error"] == \
             "not_found"
         assert await ok(c, "projects_list") == [
-            {"name": "p", "description": "first", "rev": 1, "counts": {}},
-            {"name": "q", "description": "second", "rev": 1, "counts": {}}]
+            {"name": "p", "description": "first", "rev": 1, "counts": {}, "archived": False},
+            {"name": "q", "description": "second", "rev": 1, "counts": {}, "archived": False}]
         assert await ok(c, "plan_get", project="p") == {
             "rev": 1, "plan": {"inputs": {}, "outputs": {}, "steps": {}}}
 
@@ -184,7 +184,8 @@ async def test_plan_editing_and_error_payloads(store):
         assert [h["seq"] for h in hist] == sorted(h["seq"] for h in hist)
         assert [h["rev"] for h in await ok(c, "plan_history", project="p", since_rev=3)] == [4, 4]
         assert await ok(c, "projects_list") == [{"name": "p", "description": "t", "rev": 4,
-                                                 "counts": {"pending": 2}}]
+                                                 "counts": {"pending": 2},
+                                                 "archived": False}]
 
 
 async def test_status_manual_outputs_and_retry(live):

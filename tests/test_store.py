@@ -50,9 +50,9 @@ def test_projects_are_listed_and_updated(store):
     with store.lock("b"):
         store.write_state("b", {"inputs": {}, "steps": {"a": {"status": "failed"}}})
     assert store.projects() == [
-        {"name": "a", "description": "now described", "rev": 1, "counts": {}},
+        {"name": "a", "description": "now described", "rev": 1, "counts": {}, "archived": False},
         {"name": "b", "description": "the b project", "rev": 2,
-         "counts": {"failed": 1, "pending": 1}}]
+         "counts": {"failed": 1, "pending": 1}, "archived": False}]
     with pytest.raises(NotFound):
         store.update_project("zz", "x")
     with pytest.raises(NotFound):

@@ -393,7 +393,8 @@ to the current revision under the lock) and required on `plan_patch`.
 pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe every argument.
 Validation errors carry the path and what was expected.
 
-**Views.** A dashboard that only reads, with one exception: answering an inbox item (§8a).
+**Views.** A dashboard that only reads, with two exceptions: answering an inbox item (§8a) and
+archiving a project.
 Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
 `prefers-color-scheme`, usable at phone width, keyboard reachable), every page on one centred
 column that the top nav's content shares, a top nav (Projects · Functions · Log · Inbox) that
@@ -422,33 +423,41 @@ raw HTML escaped, unsafe link schemes refused).
   but a step of the plan (the orchestrator, a person) that no later message on the same thread
   from that addressee answers ("Message"). Shown only when something waits; its count is not
   red.
-- `GET /`: the compact "Needs you" lines (one per project: what kinds wait, how many), then
-  one row per project: name, description (two lines), a progress bar by status with "n of m"
+- `GET /`: the compact "Needs you" lines (one per project that is not archived: what kinds
+  wait, how many), then one row per active project, and the archived ones folded under
+  "Archived (n)"; each row: name, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
-- `GET /projects/<name>`: the name, description (two lines, then "Show more"), one summary line (succeeded of total, running,
-  stale, failed, total `cost_usd`, last activity) under its tabs (History is the log filtered
-  to the history kinds; Functions the functions as the project sees them); the "Needs you" lines; then the **board**:
-  the plan as HTML cards laid out on the server in columns by dependency depth (plan outputs
-  last; the plan inputs are a clamped strip above it, `name = value`, a doc in its title), each column ordered and placed by the mean height of what feeds
-  it, an edge per handoff drawn as inline SVG (an edge that spans columns runs through a thin
-  slot in each column it crosses, never under a card). A card shows its status glyph, its title
-  (the step's doc, else its id), one line (a running step's last non-empty stderr line of its
-  current run; a failed step's error; a succeeded step's first text output, else `name:
-  value`; a pending step's missing plan inputs; "its inputs changed" when stale), then what runs
-  it (for an `agent.*` fn its engine and a bound `model`, else the fn), `done of total` for a
-  scattered step, "stale" or "set by hand", its cost (an output `cost_usd`) and how long it ran
-  (live while running). Built-ins that run inline (`core.*`) are slim chips. Plan output nodes show their
-  values ("not set" otherwise). Hovering or focusing a card traces it:
-  its edges light up and name their ports (`output → input`), the rest dims. The board scrolls
-  sideways inside itself (never the page) and opens at its left edge, scrolling only to bring the leftmost running, failed or
-  stale step into view when it is off-screen; at phone width the cards stack in the same order and the edges are left out. A card
-  links to the step's page; with JavaScript it opens the step in a drawer instead (the address
-  becomes `#step:<id>`, so Back and a shared link work; Escape closes it).
+- `GET /projects/<name>`: the name and its tabs (History is the log filtered to the history
+  kinds; Functions the functions as the project sees them), the description (two lines, then
+  "Show more"), one summary line (succeeded of total, running, stale, failed, total
+  `cost_usd`, last activity) with the Archive switch (an archived project says so), the plan
+  inputs folded ("Plan inputs: names", an unset one marked; inside, each doc and value), the
+  "Needs you" lines, the **Result** (the plan's outputs that have a value; a long text folds
+  to its first lines, markdown rendered), then the **board**: one row per dependency depth, top
+  to bottom, inside the page's column (up to four cards side by side; more wrap within the
+  row). The server lays out the rows, so the order reads without JavaScript; `board.js` draws
+  an edge per handoff from the bottom of a card to the top of the one it feeds, with an
+  arrowhead, several edges on one side of a card spread along it (from the plane's
+  `data-edges`: `[from, to, "output → input"]`). A card shows its status glyph, the step's id
+  as its title and how long it ran (live while running), its doc (two lines), then what it
+  says now: a running step's last non-empty stderr line of its current run; a failed step's
+  error; a succeeded step's outputs as `name value` rows (its declared outputs when it
+  declares any, else its fn's, never `session` or `cost_usd`; up to four; an inbox answer as
+  the value chosen, markdown as its first line of words); a pending step's missing plan
+  inputs; "its inputs changed" when stale; then what runs it (for an `agent.*` fn its engine
+  and a bound `model`, else the fn), `done of total` for a scattered step, "stale" or "set by
+  hand" and its cost. Built-ins that run inline (`core.*`) are small chips (id and fn, the doc
+  in their title). Hovering or focusing a card traces it: its edges light up and name their
+  ports, the rest dims; the arrow keys move between cards. At phone width the cards stack one
+  per line and the edges are left out. A card links to the step's page; with JavaScript it
+  opens the step in a drawer instead (the address becomes `#step:<id>`, so Back and a shared
+  link work; Escape closes it).
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own):
-  its title, then id, fn, status, time and cost; its error; its progress (the tail of the
+  its id, its doc, then fn, status, time, cost (as money) and session; its error; its progress (the tail of the
   current run's stderr, while running); its outputs with their declared types and docs (while
-  running, what the agent has submitted so far); the messages on its `step-<id>` thread; its
+  running, what the agent has submitted so far; `session` and `cost_usd` are in the header, not
+  here; a text that reads as markdown is rendered); the messages on its `step-<id>` thread; its
   prompt in full (the binding named `prompt`, `spec`, `task`, `instructions` or `brief`); its
   other bindings, each with where it comes from (a plan input, a step's output, linked, or
   set in the plan), its type and its value (the run's own `input.json`, else what the binding
@@ -477,12 +486,13 @@ the stats (mtime, size) of the files they read (`project.json`, `plan.json`, `st
 step's runs, so a progress line moves while an agent works; a step's version adds the step and
 the stderr of its runs. The server polls those stats about once a second off the event loop
 (never blocking the runner or the MCP tools); when they change it re-renders the page's parts
-(each an element with an id: the project page's summary, needs, graph and nav badge) and sends
+(each an element with an id: the project page's summary, needs, result, graph and nav badge) and sends
 a `datastar-patch-elements` event for each part that differs, then the new version. An idle
 page receives nothing; a client whose version is not current (e.g. reconnecting) first gets
 every part. Parts are morphed, so an expanded disclosure stays open. `/static/board.js` keeps
-relative and running times current, opens and closes the drawer, traces cards, flips a glyph
-whose status changes, and scrolls the board to the live frontier. On the log page, changing the filter updates the `kinds`/`thread` signals and
+relative and running times current, opens and closes the drawer, draws and traces the edges
+(redrawn when the board changes or resizes), moves between cards with the arrow keys, and flips
+a glyph whose status changes. On the log page, changing the filter updates the `kinds`/`thread` signals and
 reconnects the stream, which sends the new table and rewrites the address bar to the filter's
 query string; on the newest page, new matching records are prepended as they are appended.
 Streams end when the server shuts down; the client reconnects with backoff.
@@ -503,12 +513,16 @@ Streams end when the server shuts down; the client reconnects with backoff.
   took shows at once, without waiting on the stream (which may be reconnecting after a
   restart; streams retry at most 3 s apart): on the open view the item leaves the list and the
   badge drops.
-- `POST /projects/<name>/inbox/<id>/answer`: the only write. A JSON body is the answer object;
+- `POST /projects/<name>/inbox/<id>/answer`: the first write. A JSON body is the answer object;
   a form body (`text`, `next`) becomes `{"action": "answer", "text"}` and redirects to `next` (a
   local path) on success. Both call the store's `inbox_answer`, the tool's own code path, with
   author `dashboard`. Refusals map to 404 (`not_found`), 409 (`conflict`: already answered or
   closed) and 400 (`invalid`, `bad_request`); JSON gets the error payload, a form an HTML page. A
   request whose `Origin` is not this host is refused (403).
+- `POST /projects/<name>/archive`: the other write. A form `archived` ("1" or "0") calls the
+  store's `update_project`, the `project_update` tool's own code path, then redirects (303) to
+  the project. An archived project keeps running; it is listed apart and left out of the
+  index's "Needs you". Same refusals as the answer route (404, 403 for another `Origin`).
 - `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
   `GET /static/board.js`: the board's script.
 
@@ -519,9 +533,9 @@ step's detail in a disclosure (no nav, no drawer, no stream, no script).
 | Tool | Args | Returns |
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
-| `projects_list` | – | `[{name, description, rev, counts}]` |
+| `projects_list` | – | `[{name, description, rev, counts, archived}]` |
 | `project_create` | `name, description?` | `{name}` (with an empty plan) |
-| `project_update` | `name, description` | `{name}` |
+| `project_update` | `name, description?, archived?` | `{name}`; `archived: true` lists the project apart on the dashboard and leaves it out of the index's "Needs you" (nothing stops) |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |

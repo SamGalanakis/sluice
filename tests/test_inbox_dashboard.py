@@ -320,7 +320,8 @@ def test_a_card_opens_the_step_drawer_and_escape_closes_it(store, port, chrome):
     chrome.open(f"http://127.0.0.1:{port}/projects/p")
     chrome.wait("!!window.sluiceStream && !!document.querySelector('#n-a')")
     chrome.eval("document.querySelector('#n-a').click()")
-    assert chrome.wait("document.querySelector('#step-detail h2')?.textContent") == "First"
+    assert chrome.wait("document.querySelector('#step-detail h2')?.textContent") == "a"
+    assert chrome.wait("document.querySelector('#step-detail .d-doc')?.textContent") == "First"
     assert chrome.eval("location.hash") == "#step:a"
     assert chrome.eval("document.querySelector('#n-a').classList.contains('open')")
     # tracing: focusing b lights the edge from a
@@ -328,7 +329,34 @@ def test_a_card_opens_the_step_drawer_and_escape_closes_it(store, port, chrome):
     assert chrome.eval("document.querySelector('path[data-from=\"s:a\"][data-to=\"s:b\"]')"
                        ".classList.contains('on')")
     chrome.eval("document.querySelector('#n-b').click()")
-    chrome.wait("document.querySelector('#step-detail h2')?.textContent === 'Second'")
+    chrome.wait("document.querySelector('#step-detail h2')?.textContent === 'b'")
     chrome.eval("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))")
     chrome.wait("getComputedStyle(document.getElementById('drawer')).display === 'none'")
     assert chrome.eval("location.hash") == ""
+
+
+def test_archiving_a_project_lists_it_apart_and_quiets_its_needs(store, port):
+    create(store, "old", {"a": {"run": "test.add", "in": {"a": {"default": 1},
+                                                           "b": {"default": 2}}}})
+    create(store, "new", {})
+    with store.lock("old"):
+        store.write_state("old", {"inputs": {}, "steps": {"a": {"status": "failed",
+                                                                "error": "boom"}}})
+    index = get(port, "/")[1]
+    assert "Needs you" in index and "Archived (" not in index
+    code, _, _ = post(port, "/projects/old/archive", {"archived": "1"}, json_body=False)
+    assert code == 303 and store.archived("old")
+    index = get(port, "/")[1]
+    assert "Needs you" not in index  # its failure no longer asks for anyone
+    assert "Archived (1)" in index
+    assert index.index('href="/projects/new"') < index.index("Archived (1)") \
+        < index.index('href="/projects/old"')
+    page = get(port, "/projects/old")[1]
+    assert "Archived: listed apart" in page and ">Unarchive</button>" in page
+    assert "Failed" in page  # the project itself still says what failed
+    assert post(port, "/projects/old/archive", {"archived": "0"}, json_body=False)[0] == 303
+    assert not store.archived("old") and "Archived (" not in get(port, "/")[1]
+    assert post(port, "/projects/nope/archive", {"archived": "1"}, json_body=False)[0] == 404
+    refused = post(port, "/projects/old/archive", {"archived": "1"}, json_body=False,
+                   headers={"Origin": "http://elsewhere.example"})
+    assert refused[0] == 403 and not store.archived("old")

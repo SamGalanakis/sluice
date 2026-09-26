@@ -123,8 +123,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def projects_list() -> Any:
-        """List projects: [{name, description, rev, counts}]; counts maps step status -> number
-        of steps in the project's plan."""
+        """List projects: [{name, description, rev, counts, archived}]; counts maps step
+        status -> number of steps in the project's plan."""
         return store.projects()
 
     @tool
@@ -138,14 +138,17 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return store.create_project(name, description, AUTHOR)
 
     @tool
-    def project_update(name: str, description: str) -> Any:
-        """Replace a project's description. Returns {name}.
+    def project_update(name: str, description: str | None = None,
+                       archived: bool | None = None) -> Any:
+        """Replace a project's description and/or archive it. Returns {name}.
 
         Args:
             name: the project.
-            description: the new description.
+            description: the new description (leave out to keep it).
+            archived: true to archive (the dashboard lists it apart and leaves it out of
+                "Needs you"; nothing stops or changes), false to bring it back.
         """
-        return store.update_project(name, description)
+        return store.update_project(name, description, archived)
 
     @tool
     def fn_list(project: str | None = None) -> Any:

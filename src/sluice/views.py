@@ -23,6 +23,7 @@ import dataclasses
 import datetime as dt
 import html
 import json
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -612,144 +613,110 @@ def needs_band(items: list[dict[str, str]], link_steps: bool = True) -> str:
             f"<ul>{rows}</ul></section>")
 
 
-# ---- the board: layered layout, drawn on the server -------------------------------------
+# ---- the board: rows by dependency depth, inside the column -----------------------------
 
-CARD_W, CHIP_W, COL_GAP, PAD, ROW_GAP = 248, 188, 56, 12, 14
-HEIGHTS = {"card": 112, "chip": 34, "output": 56, "dummy": 2}
-
-
-@dataclasses.dataclass
-class Node:
-    key: str
-    kind: str  # card, chip, input, output, dummy
-    col: int
-    order: int
-    x: float = 0
-    y: float = 0
-    w: float = CARD_W
-
-    @property
-    def h(self) -> int:
-        return HEIGHTS[self.kind]
-
-    @property
-    def cy(self) -> float:
-        return self.y + self.h / 2
+ROW_MAX = 4  # cards side by side in one row; more wrap onto another line of the same row
+RUN_FACTS = ("session", "cost_usd")  # what a run says about itself, not what it produced
+OUT_ROWS = 4  # outputs a card shows
 
 
-@dataclasses.dataclass
-class Edge:
-    src: str
-    dst: str
-    labels: list[str]
-    path: list[str]  # node keys from src to dst, dummies between
-
-
-def graph_layout(board: Board) -> tuple[dict[str, Node], list[Edge], float, float]:
-    """Columns by dependency depth (plan outputs last); an edge spanning
-    columns gets a thin dummy node in each column it crosses, so it runs through a gap instead
-    of under a card; each column is ordered and placed by the mean height of what feeds it."""
-    plan, blocks = board.plan, board.blocks
+def depths(board: Board) -> dict[str, int]:
+    """Each step's row: 0 for a step that reads no other step, else one below its deepest
+    upstream."""
     depth: dict[str, int] = {}
 
-    def col_of(sid: str) -> int:
+    def row_of(sid: str) -> int:
         if sid not in depth:
             depth[sid] = 0  # (the plan is acyclic; this only guards the recursion)
-            depth[sid] = 1 + max((col_of(d) for d in blocks[sid].deps if d in blocks), default=0)
+            depth[sid] = max((row_of(d) + 1 for d in board.blocks[sid].deps
+                              if d in board.blocks), default=0)
         return depth[sid]
 
-    nodes: dict[str, Node] = {}
-    for i, (sid, b) in enumerate(blocks.items()):
-        nodes[f"s:{sid}"] = Node(f"s:{sid}", "chip" if b.glue else "card", col_of(sid), i)
-    last = max((n.col for n in nodes.values()), default=0) + 1
-    for i, n in enumerate(plan.outputs):
-        nodes[f"o:{n}"] = Node(f"o:{n}", "output", last, i)
-    for n in nodes.values():
-        n.col -= 1  # steps that read no other step form the first column
+    for sid in board.blocks:
+        row_of(sid)
+    return depth
 
-    def src_key(ref: Any) -> str:  # plan inputs are the strip above the board, not nodes
-        return f"s:{ref.step}" if ref.step else ""
 
+def edges(board: Board) -> list[tuple[str, str, str]]:
+    """(from step, to step, "output → input" names) for every handoff between steps."""
     pairs: dict[tuple[str, str], list[str]] = {}
-    for sid, b in blocks.items():
+    for sid, b in board.blocks.items():
         for name in b.bindings:
             for r in b.refs(name):
-                if src_key(r) in nodes:
+                if r.step and r.step in board.blocks:
                     label = r.name if r.name == name else f"{r.name} → {name}"
-                    pairs.setdefault((src_key(r), f"s:{sid}"), []).append(label)
-    for name, ref in plan.outputs.items():
-        if src_key(ref) in nodes:
-            pairs.setdefault((src_key(ref), f"o:{name}"), []).append(ref.name)
-    edges, preds = [], {k: [] for k in nodes}
-    for (a, b), labels in pairs.items():
-        path = [a]
-        for c in range(nodes[a].col + 1, nodes[b].col):
-            d = f"d:{len(nodes)}"
-            nodes[d] = Node(d, "dummy", c, nodes[b].order)
-            preds[d] = [path[-1]]
-            path.append(d)
-        preds[b].append(path[-1])
-        path.append(b)
-        edges.append(Edge(a, b, list(dict.fromkeys(labels)), path))
-    columns: dict[int, list[Node]] = {}
-    for n in nodes.values():
-        columns.setdefault(n.col, []).append(n)
-    for c in sorted(columns):
-        wanted = {}
-        for n in columns[c]:
-            ps = [nodes[p] for p in preds[n.key] if nodes[p].col < c]
-            wanted[n.key] = sum(p.cy for p in ps) / len(ps) - n.h / 2 if ps else None
-        columns[c].sort(key=lambda n: (wanted[n.key] if wanted[n.key] is not None else -1,
-                                       n.kind == "dummy", n.order))
-        cursor = PAD
-        for n in columns[c]:
-            want = wanted[n.key]
-            n.y = max(cursor, want if want is not None else cursor)
-            cursor = n.y + n.h + (4 if n.kind == "dummy" else ROW_GAP)
-    x = PAD
-    for c in range(max(columns, default=0) + 1):
-        # a column of glue chips (and edges passing through) is narrower than one with cards
-        w = CHIP_W if all(n.kind in ("chip", "dummy") for n in columns.get(c, [])) else CARD_W
-        for n in columns.get(c, []):
-            n.x, n.w = x, w
-        x += w + COL_GAP
-    width = x - COL_GAP + PAD
-    height = max((n.y + n.h for n in nodes.values()), default=0) + PAD
-    return nodes, edges, width, height
+                    pairs.setdefault((r.step, sid), []).append(label)
+    return [(a, b, ", ".join(dict.fromkeys(ls))) for (a, b), ls in pairs.items()]
 
 
-def _edge_d(nodes: Mapping[str, Node], path: list[str]) -> tuple[str, float, float]:
-    """An SVG path through the edge's nodes (curves between columns, straight through dummy
-    slots) and the midpoint of its last curve (where its label sits)."""
-    pts = []
-    for i, k in enumerate(path):
-        n = nodes[k]
-        if i > 0:
-            pts.append((n.x, n.cy))
-        if i < len(path) - 1:
-            pts.append((n.x + n.w, n.cy))
-    d = f"M{pts[0][0]:.0f} {pts[0][1]:.1f}"
-    mid = pts[0]
-    for i in range(1, len(pts)):
-        (x0, y0), (x1, y1) = pts[i - 1], pts[i]
-        if i % 2:  # a gap between columns
-            dx = (x1 - x0) / 2
-            d += f"C{x0 + dx:.0f} {y0:.1f} {x1 - dx:.0f} {y1:.1f} {x1:.0f} {y1:.1f}"
-            mid = ((x0 + x1) / 2, (y0 + y1) / 2)
-        else:  # across a dummy slot
-            d += f"L{x1:.0f} {y1:.1f}"
-    return d, mid[0], mid[1]
+def answer_text(value: Any) -> str | None:
+    """What a person chose, from an inbox answer {action, params?, values?, text?}."""
+    if not isinstance(value, dict) or "action" not in value:
+        return None
+    for src in (value.get("values"), value.get("params")):
+        if isinstance(src, dict) and src.get("value") not in (None, ""):
+            return _short(src["value"], 200)
+    if isinstance(value.get("text"), str) and value["text"].strip():
+        return _line(value["text"], 200)
+    return str(value["action"])
 
 
-def _card(store: Store, board: Board, b: Block, n: Node, live: bool) -> str:
-    kind, text = block_line(store, board, b)
+def first_line(text: str) -> str:
+    """The first line of prose that says something, without markdown's markers."""
+    for line in text.splitlines():
+        line = line.strip().lstrip("#>-*• ").replace("**", "").replace("`", "").strip()
+        if line:
+            return _line(line, 200)
+    return ""
+
+
+def show_value(value: Any) -> str:
+    """A value in one short line of plain text, as a card shows it."""
+    if (chosen := answer_text(value)) is not None:
+        return chosen
+    if isinstance(value, str):
+        return first_line(value)
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return _short(value, 120)
+
+
+def produced(block: Block) -> list[tuple[str, Any]]:
+    """What a finished step handed on: its declared outputs when it declares any, else its
+    fn's outputs; never the run's own facts (session, cost)."""
+    outs = block.entry.get("outputs")
+    if not isinstance(outs, dict):
+        return []
+    raw = block.raw.get("outputs")
+    declared = [n for n in (raw if isinstance(raw, dict) else {}) if n in outs]
+    names = declared or [n for n in (*block.outputs, *outs) if n in outs]
+    return [(n, outs[n]) for n in dict.fromkeys(names) if n not in RUN_FACTS]
+
+
+def _outputs_dl(items: list[tuple[str, Any]]) -> str:
+    rows = "".join(f'<div><dt>{e(n)}</dt><dd>{e(show_value(v))}</dd></div>'
+                   for n, v in items[:OUT_ROWS])
+    more = f'<p class="more-outs">and {len(items) - OUT_ROWS} more</p>' \
+        if len(items) > OUT_ROWS else ""
+    return f'<dl class="outs">{rows}</dl>{more}'
+
+
+def _card(store: Store, board: Board, b: Block, live: bool) -> str:
     tag = "a" if live else "div"
     href = f' href="{e(step_href(board.project, b.sid))}" data-step="{e(b.sid)}"' if live else ""
-    style = f'style="--x:{n.x:.0f}px;--y:{n.y:.0f}px;--nw:{n.w:.0f}px"'
-    cls = f"node {n.kind} is-{e(b.mark)}"
-    attrs = f'{cls}" id="n-{e(b.sid)}" data-node="{e(n.key)}"{href} {style}'
-    if n.kind == "chip":
-        return f'<{tag} class="{attrs}>{glyph(b.mark)}<span class="ttl">{e(b.title)}</span></{tag}>'
+    attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}" id="n-{e(b.sid)}" '
+             f'data-node="s:{e(b.sid)}"{href}')
+    if b.glue:
+        title = f' title="{e(" ".join(b.doc.split()))}"' if b.doc.strip() else ""
+        return (f'<{tag} {attrs}{title}>{glyph(b.mark)}<span class="sid">{e(b.sid)}</span>'
+                f'<span class="fnname">{e(b.fn)}</span></{tag}>')
+    kind, text = block_line(store, board, b)
+    if b.status == "succeeded" and produced(b):
+        body = _outputs_dl(produced(b))
+    elif text:
+        body = f'<span class="ln ln-{kind}">{e(text)}</span>'
+    else:
+        body = ""
     meta = [e(b.engine)]
     if "total" in b.entry:
         meta.append(f"{int(b.entry.get('done') or 0)} of {int(b.entry['total'])}")
@@ -759,68 +726,76 @@ def _card(store: Store, board: Board, b: Block, n: Node, live: bool) -> str:
         meta.append("set by hand")
     if b.cost is not None:
         meta.append(e(_money(b.cost)))
-    line = f'<span class="ln ln-{kind}">{e(text)}</span>' if text else \
-        '<span class="ln"></span>'
-    return (f'<{tag} class="{attrs}><span class="hd">{glyph(b.mark)}'
-            f'<span class="ttl">{e(b.title)}</span></span>{line}'
-            f'<span class="meta"><span>{" · ".join(meta)}</span>'
-            f'<span class="dur">{_elapsed(b)}</span></span></{tag}>')
-
-
-def _io_node(key: str, n: Node, name: str, value: Any, has: bool, doc: str = "") -> str:
-    label = "Output"
-    val = f'<span class="v">{e(_short(value, 80))}</span>' if has else \
-        '<span class="v unset">not set</span>'
-    title = f' title="{e(doc)}"' if doc else ""
-    return (f'<div class="node {n.kind}" data-node="{e(key)}"{title} '
-            f'style="--x:{n.x:.0f}px;--y:{n.y:.0f}px"><span class="io">{label} '
-            f'<b>{e(name)}</b></span>{val}</div>')
+    doc = f'<span class="doc">{e(" ".join(b.doc.split()))}</span>' if b.doc.strip() else ""
+    return (f'<{tag} {attrs}><span class="hd">{glyph(b.mark)}<span class="sid">{e(b.sid)}'
+            f'</span><span class="dur">{_elapsed(b)}</span></span>{doc}'
+            f'<span class="body">{body}</span>'
+            f'<span class="meta">{" · ".join(meta)}</span></{tag}>')
 
 
 def board_html(store: Store, board: Board, live: bool = True) -> str:
-    """The plan as a board of cards (the `graph` part)."""
+    """The plan as a board (the `graph` part): one row per dependency depth, top to bottom,
+    inside the page's column. The server lays out the rows (the order reads without
+    JavaScript); static/board.js draws the edges between the cards from `data-edges`."""
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
-    nodes, edges, width, height = graph_layout(board)
-    paths, labels = [], []
-    for ed in edges:
-        d, mx, my = _edge_d(nodes, ed.path)
-        ends = f'data-from="{e(ed.src)}" data-to="{e(ed.dst)}"'
-        paths.append(f'<path {ends} d="{d}"/>')
-        labels.append(f'<text {ends} x="{mx:.0f}" y="{my - 5:.0f}">{e(", ".join(ed.labels))}'
-                      f"</text>")
-    svg = (f'<svg class="edges" width="{width:.0f}" height="{height:.0f}" aria-hidden="true">'
-           f'<g class="wires">{"".join(paths)}</g><g class="names">{"".join(labels)}</g></svg>')
-    cards = []
-    for key, n in sorted(nodes.items(), key=lambda kv: (kv[1].col, kv[1].y)):
-        kind, name = key.split(":", 1)
-        if kind == "s":
-            cards.append(_card(store, board, board.blocks[name], n, live))
-        elif kind == "o":
-            has, v = value_of(board.plan.outputs[name], board.plan, board.state)
-            cards.append(_io_node(key, n, name, v, has))
-    return (f'<div class="board" tabindex="0" role="region" aria-label="Plan" '
-            f'style="--w:{width:.0f}px;--h:{height:.0f}px"><div class="plane">{svg}'
-            f'{"".join(cards)}</div></div>')
+    depth = depths(board)
+    rows: dict[int, list[str]] = {}
+    for sid, b in board.blocks.items():
+        rows.setdefault(depth[sid], []).append(_card(store, board, b, live))
+    html_rows = "".join(
+        f'<li class="row" style="--n:{min(len(cards), ROW_MAX)}">{"".join(cards)}</li>'
+        for _, cards in sorted(rows.items()))
+    data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in edges(board)],
+                      ensure_ascii=False)
+    return (f'<div class="board" role="region" aria-label="Plan">'
+            f'<div class="plane" data-edges="{e(data)}"><svg class="edges" aria-hidden="true">'
+            f'</svg><ol class="rows">{html_rows}</ol></div></div>')
+
+
+def result_panel(board: Board) -> str:
+    """The plan's outputs once any has a value: what the whole plan produced."""
+    rows = []
+    for name, ref in board.plan.outputs.items():
+        has, v = value_of(ref, board.plan, board.state)
+        if has:
+            rows.append(f"<div><dt>{e(name)}</dt><dd>{_result_value(v)}</dd></div>")
+    if not rows:
+        return ""
+    return (f'<section class="result" aria-labelledby="result-h"><h2 id="result-h">Result</h2>'
+            f'<dl class="kv">{"".join(rows)}</dl></section>')
+
+
+def _result_value(value: Any) -> str:
+    """A plan output: short values as they are; a long text folded to its first lines."""
+    if isinstance(value, str) and ("\n" in value or len(value) > 200):
+        body = markdown(value) if MARKDOWN_HINT.search(value) else f"<p>{e(value)}</p>"
+        return (f'<details class="fold" data-preserve-attr="open"><summary>'
+                f'<div class="md clip">{body}</div></summary></details>')
+    return _value(value)
 
 
 def inputs_strip(board: Board) -> str:
-    """The plan inputs in one clamped line, `name = value`, an input's doc in its title."""
-    items = []
+    """The plan inputs, folded: their names in the summary, `name = value` inside."""
+    if not board.plan.inputs:
+        return ""
+    rows, names = [], []
     for name, t in board.plan.inputs.items():
         doc = board.plan.input_docs.get(name, "")
-        title = f' title="{e(doc)}"' if doc else ""
         if name in board.state["inputs"]:
-            v = f"{e(name)} = {e(_short(board.state['inputs'][name], 60))}"
+            v = _value(board.state["inputs"][name])
+            names.append(e(name))
         elif isinstance(t, T.Optional):
-            v = f'{e(name)} = <span class="quiet">null</span>'
+            v = '<span class="quiet">null</span>'
+            names.append(e(name))
         else:
-            v = f'{e(name)} <span class="attn">not set</span>'
-        items.append(f'<span class="in"{title}>{v}</span>')
-    if not items:
-        return ""
-    return f'<p class="inputs"><span class="label">Inputs</span> {" · ".join(items)}</p>'
+            v = '<span class="attn">not set</span>'
+            names.append(f'{e(name)} <span class="attn">(not set)</span>')
+        about = f'<p class="meta">{e(doc)}</p>' if doc else ""
+        rows.append(f"<div><dt>{e(name)}</dt><dd>{about}{v}</dd></div>")
+    return (f'<details class="inputs" data-preserve-attr="open"><summary>Plan inputs: '
+            f'{", ".join(names)}</summary><dl class="kv">{"".join(rows)}</dl></details>')
 
 
 def _about(text: str) -> str:
@@ -912,6 +887,8 @@ def _index_needs(store: Store) -> str:
     """The compact "Needs you" lines of the index: one per project that has something."""
     rows = []
     for name in store.project_names():
+        if store.archived(name):
+            continue
         items = needs(store, name)
         if not items:
             continue
@@ -930,10 +907,18 @@ def _index_needs(store: Store) -> str:
 
 
 def index_parts(store: Store) -> dict[str, str]:
-    rows = "".join(_project_row(store, n) for n in store.project_names())
+    names = store.project_names()
+    active = [n for n in names if not store.archived(n)]
+    old = [n for n in names if n not in active]
+    rows = "".join(_project_row(store, n) for n in active)
     body = f'<ul class="projects">{rows}</ul>' if rows else \
         ('<p class="empty">No projects yet. An orchestrator creates one with '
-         "<code>project_create</code>.</p>")
+         "<code>project_create</code>.</p>" if not old else
+         '<p class="empty">Every project is archived.</p>')
+    if old:
+        body += (f'<details class="archived" data-preserve-attr="open"><summary>Archived '
+                 f'({len(old)})</summary><ul class="projects">'
+                 f'{"".join(_project_row(store, n) for n in old)}</ul></details>')
     return {"needs": _part("needs", _index_needs(store)), "projects": _part("projects", body),
             "nav-inbox": nav_inbox(open_count(store))}
 
@@ -955,14 +940,27 @@ def project_parts(store: Store, project: str) -> dict[str, str]:
     return _project(store, project, True)
 
 
+def _archive_form(project: str, archived: bool) -> str:
+    """The project's archive switch (a plain form: it works without JavaScript)."""
+    label, value = ("Unarchive", "0") if archived else ("Archive", "1")
+    return (f'<form class="archive" method="post" action="/projects/{e(quote(project))}/archive">'
+            f'<input type="hidden" name="archived" value="{value}">'
+            f'<button type="submit">{label}</button></form>')
+
+
 def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     board = load_board(store, project)
     about = board.info.get("description") or ""
-    head = (_about(about)
-            + f'<p class="meta sum">{_summary_line(board, last_change(store, project))}</p>'
-            + inputs_strip(board))
+    archived = board.info.get("archived") is True
+    note = '<p class="archived-note">Archived: listed apart and left out of Needs you.</p>' \
+        if archived else ""
+    line = f'<p class="meta sum">{_summary_line(board, last_change(store, project))}</p>'
+    if live:
+        line = f'<div class="sumline">{line}{_archive_form(project, archived)}</div>'
+    head = note + _about(about) + line + inputs_strip(board)
     parts = {"summary": _part("summary", head),
              "needs": _part("needs", needs_band(needs(store, project)) if live else ""),
+             "result": _part("result", result_panel(board)),
              "graph": _part("graph", board_html(store, board, live))}
     if live:
         parts["nav-inbox"] = nav_inbox(open_count(store))
@@ -995,7 +993,7 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     live = ver is not None
     p = _project(store, project, live)
     body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}{p["needs"]}'
-            f'{p["graph"]}')
+            f'{p["result"]}{p["graph"]}')
     if live:
         body += _drawer(project)
     else:
@@ -1030,9 +1028,17 @@ def step_run_dirs(store: Store, project: str, sid: str) -> list[Path]:
             and (d := _run_dir(store, project, r)) is not None]
 
 
+MARKDOWN_HINT = re.compile(r"^\s{0,3}(#{1,6} |[-*] |\d+\. |> )|\*\*|`[^`\n]+`", re.MULTILINE)
+
+
 def _value(value: Any, long_at: int = 160) -> str:
-    """A value: short text inline, long text (prose) or structures in a scrolling block."""
+    """A value: short text inline, markdown rendered, other long text (prose) or structures
+    in a scrolling block, an inbox answer as what was chosen."""
+    if (chosen := answer_text(value)) is not None:
+        return f'<span class="v">{e(chosen)}</span>'
     if isinstance(value, str):
+        if MARKDOWN_HINT.search(value):
+            return f'<div class="v long md">{markdown(value)}</div>'
         if "\n" not in value and len(value) <= long_at:
             return f'<span class="v">{e(value)}</span>'
         return f'<div class="v long text">{e(value)}</div>'
@@ -1086,15 +1092,20 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     if b is None:
         raise NotFound(f"the plan of project {project} has no step {sid!r}")
     sections = []
-    meta = [f"<code>{e(sid)}</code>", e(b.fn), e(WORDS.get(b.mark, b.status))]
+    meta = [e(b.fn), e(WORDS.get(b.mark, b.status))]
     if "total" in b.entry:
         meta.append(f"{int(b.entry.get('done') or 0)} of {int(b.entry['total'])} runs")
     if _elapsed(b):
         meta.append(_elapsed(b))
     if b.cost is not None:
         meta.append(e(_money(b.cost)))
-    head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(b.title)}</h2>'
-            f'</div><p class="meta">{" · ".join(meta)}</p></header>')
+    session = (b.entry.get("outputs") or {}).get("session") \
+        if isinstance(b.entry.get("outputs"), dict) else None
+    if isinstance(session, str) and session:
+        meta.append(f'session <code title="{e(session)}">{e(session[:8])}</code>')
+    doc = f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>' if b.doc.strip() else ""
+    head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(sid)}</h2>'
+            f'</div>{doc}<p class="meta">{" · ".join(meta)}</p></header>')
 
     def section(title: str, body: str, cls: str = "") -> None:
         sections.append(f'<section class="d-sec {cls}">{_label(title)}{body}</section>')
@@ -1126,6 +1137,8 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     if outs is not None:
         rows = []
         for n in dict.fromkeys([*declared, *outs]):
+            if n in RUN_FACTS:  # in the header: they describe the run, not its product
+                continue
             t = f' <span class="type">{e(declared[n])}</span>' if n in declared else ""
             doc = f'<p class="meta">{e(b.output_docs[n])}</p>' if b.output_docs.get(n) else ""
             v = _value(outs[n]) if n in outs else '<span class="quiet">none</span>'

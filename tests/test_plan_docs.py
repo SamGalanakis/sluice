@@ -60,10 +60,11 @@ def test_the_project_page_shows_the_docs(store, port):
     create(store, "p", {"s": echo("who", "Echo <i>it</i>")},
            inputs={"who": {"type": "string", "doc": "Who <b>signs</b> off"}})
     page = get(port, "/projects/p")[1]
-    # the input's doc on its node and on its "Needs you" line; the step's doc is its title
-    assert '<span class="in" title="Who &lt;b&gt;signs&lt;/b&gt; off">who ' in page
+    # the input's doc in the plan inputs and on its "Needs you" line; the step's doc on its
+    # card (a glue chip carries it as its title)
+    assert '<dt>who</dt><dd><p class="meta">Who &lt;b&gt;signs&lt;/b&gt; off</p>' in page
     assert "<b>who</b> has no value — Who &lt;b&gt;signs&lt;/b&gt; off" in page
-    assert '<span class="ttl">Echo &lt;i&gt;it&lt;/i&gt;</span>' in page
+    assert 'title="Echo &lt;i&gt;it&lt;/i&gt;"' in page
     assert "<i>it" not in page and "<b>signs" not in page
 
 

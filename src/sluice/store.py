@@ -214,14 +214,28 @@ class Store:
         self.notify()
         return {"name": name}
 
-    def update_project(self, name: str, description: str) -> dict[str, str]:
-        if not isinstance(description, str):
+    def update_project(self, name: str, description: str | None = None,
+                       archived: bool | None = None) -> dict[str, str]:
+        """Replace the description and/or set `archived` (an archived project stays whole and
+        keeps running; the dashboard lists it apart and leaves it out of "Needs you")."""
+        if description is not None and not isinstance(description, str):
             raise BadRequest("description: expected a string")
+        if archived is not None and not isinstance(archived, bool):
+            raise BadRequest("archived: expected true or false")
         with self.lock(name):
-            cur = self.project(name)
-            atomic_write_json(self.project_dir(name) / "project.json",
-                              {**cur, "description": description})
+            new = dict(self.project(name))
+            if description is not None:
+                new["description"] = description
+            if archived is not None:
+                new["archived"] = archived
+            atomic_write_json(self.project_dir(name) / "project.json", new)
         return {"name": name}
+
+    def archived(self, name: str) -> bool:
+        try:
+            return self.project(name).get("archived") is True
+        except (NotFound, OSError, ValueError):
+            return False
 
     def projects(self) -> list[dict[str, Any]]:
         out = []
@@ -230,7 +244,8 @@ class Store:
             st = self.read_state(name)["steps"]
             counts = Counter(st.get(s, {"status": "pending"})["status"] for s in doc["steps"])
             out.append({"name": name, "description": info.get("description", ""),
-                        "rev": doc["rev"], "counts": dict(counts)})
+                        "rev": doc["rev"], "counts": dict(counts),
+                        "archived": info.get("archived") is True})
         return out
 
     # ---- the plan ----

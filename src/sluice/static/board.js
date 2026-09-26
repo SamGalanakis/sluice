@@ -5,7 +5,7 @@
 //   button closes it, and focus goes back to the card;
 // - hovering or focusing a block traces its edges (they light up and name their ports);
 // - a status that changes flips its glyph once;
-// - the board opens at its left edge, scrolled only to bring an off-screen live block into view.
+// - the edges between the cards are drawn here, and the arrow keys move between cards.
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -180,17 +180,101 @@ if (graph) {
                       subtree: true, childList: true });
 }
 
-// ---- the live frontier in view ----------------------------------------------------------------
-// The board opens at its left edge. Only when the leftmost running, failed or stale block would
-// be off-screen does it scroll, just far enough to show that block whole (its left padding, the
-// space before the plan, counts: it is measured on screen).
+// ---- edges ---------------------------------------------------------------------------------
+// The server lays the cards out in rows by depth; the edges (`data-edges` on the plane:
+// [from, to, "output → input"]) are drawn here, from the bottom of a card to the top of the
+// one it feeds, with an arrowhead. Several edges on one side of a card spread along it, in
+// the order of the cards at their other ends. Redrawn when the board changes or resizes.
 
-const board = $(".board");
-if (board && board.scrollWidth > board.clientWidth) {
-  const live = $$(".plane .is-running, .plane .is-failed, .plane .is-stale");
-  const first = live.sort((a, b) => a.offsetLeft - b.offsetLeft)[0];
-  if (first) {
-    const right = first.getBoundingClientRect().right - board.getBoundingClientRect().left + 24;
-    if (right > board.clientWidth) board.scrollLeft = right - board.clientWidth;
-  }
+const SVG = "http://www.w3.org/2000/svg";
+
+function svgEl(name, attrs) {
+  const el = document.createElementNS(SVG, name);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
 }
+
+function drawEdges(plane) {
+  const svg = $("svg.edges", plane);
+  if (!svg) return;
+  let data = [];
+  try { data = JSON.parse(plane.dataset.edges || "[]"); } catch { data = []; }
+  const box = plane.getBoundingClientRect();
+  const rect = new Map();
+  for (const n of $$(".node[data-node]", plane)) rect.set(n.dataset.node, n.getBoundingClientRect());
+  const ends = data.filter(([a, b]) => rect.has(a) && rect.has(b));
+  const cx = (key) => rect.get(key).left + rect.get(key).width / 2;
+  const spread = (key, others) => {  // an x on the card for each edge, in the others' order
+    const r = rect.get(key), sorted = [...others].sort((p, q) => cx(p) - cx(q));
+    return new Map(sorted.map((o, i) => [o, r.left + r.width * (i + 1) / (sorted.length + 1)]));
+  };
+  const outs = new Map(), ins = new Map();
+  for (const [a, b] of ends) {
+    if (!outs.has(a)) outs.set(a, []);
+    if (!ins.has(b)) ins.set(b, []);
+    outs.get(a).push(b);
+    ins.get(b).push(a);
+  }
+  const outX = new Map([...outs].map(([k, v]) => [k, spread(k, v)]));
+  const inX = new Map([...ins].map(([k, v]) => [k, spread(k, v)]));
+  const marker = svgEl("marker", { id: "arrow", viewBox: "0 0 10 10", refX: "8", refY: "5",
+                                   markerWidth: "8", markerHeight: "8",
+                                   orient: "auto-start-reverse" });
+  marker.append(svgEl("path", { d: "M0 1L9 5L0 9z" }));
+  const defs = svgEl("defs", {});
+  defs.append(marker);
+  const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
+  for (const [a, b, label] of ends) {
+    const x1 = outX.get(a).get(b) - box.left, y1 = rect.get(a).bottom - box.top;
+    const x2 = inX.get(b).get(a) - box.left, y2 = rect.get(b).top - box.top - 1;
+    const dy = Math.max((y2 - y1) / 2, 14);
+    const d = `M${x1.toFixed(1)} ${y1.toFixed(1)}C${x1.toFixed(1)} ${(y1 + dy).toFixed(1)} `
+      + `${x2.toFixed(1)} ${(y2 - dy).toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+    wires.append(svgEl("path", { "data-from": a, "data-to": b, d, "marker-end": "url(#arrow)" }));
+    const text = svgEl("text", { "data-from": a, "data-to": b, x: ((x1 + x2) / 2).toFixed(1),
+                                 y: ((y1 + y2) / 2 + 4).toFixed(1) });
+    text.textContent = label;
+    names.append(text);
+  }
+  svg.replaceChildren(defs, wires, names);
+}
+
+let pending = 0;
+function redraw() {
+  cancelAnimationFrame(pending);
+  pending = requestAnimationFrame(() => { for (const p of $$(".plane")) drawEdges(p); });
+}
+redraw();
+window.addEventListener("resize", redraw);
+document.fonts?.ready.then(redraw);
+if (graph) {
+  const sizes = new ResizeObserver(redraw);
+  const watch = () => { for (const p of $$(".plane", graph)) sizes.observe(p); };
+  watch();
+  new MutationObserver((records) => {
+    // our own drawing lives in svg.edges: redraw only for changes to the board itself
+    if (records.some((r) => !r.target.closest?.("svg.edges"))) { watch(); redraw(); }
+  }).observe(graph, { childList: true, subtree: true, characterData: true, attributes: true,
+                      attributeFilter: ["data-edges", "class"] });
+}
+
+// ---- moving between cards with the arrow keys ---------------------------------------------------
+
+document.addEventListener("keydown", (evt) => {
+  const here = document.activeElement?.closest?.(".plane .node[data-node]");
+  if (!here || evt.altKey || evt.ctrlKey || evt.metaKey) return;
+  const dir = { ArrowDown: [0, 1], ArrowUp: [0, -1], ArrowRight: [1, 0], ArrowLeft: [-1, 0] }[evt.key];
+  if (!dir) return;
+  const r = here.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+  let best = null, bestScore = Infinity;
+  for (const n of $$(".node[data-node]", here.closest(".plane"))) {
+    if (n === here) continue;
+    const q = n.getBoundingClientRect(), nx = q.left + q.width / 2, ny = q.top + q.height / 2;
+    const along = dir[0] ? (nx - x) * dir[0] : (ny - y) * dir[1];
+    const across = dir[0] ? Math.abs(ny - y) : Math.abs(nx - x);
+    if (along <= 4 || (dir[0] && across > r.height / 2)) continue;  // left/right: same row
+    const score = along + across * 2;
+    if (score < bestScore) { best = n; bestScore = score; }
+  }
+  if (best) { evt.preventDefault(); best.focus(); }
+});

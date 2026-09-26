@@ -10,7 +10,8 @@ gets nothing. A step's detail (the project page's drawer, or its own page) strea
 under the `sver` signal, versioned by the project and that step's runs.
 The log page's stream sends the table when the filter signals changed, and on the newest page
 prepends new matching records. The inbox page streams its items the same way, and its answer
-route is the dashboard's one write: it calls the same Store.inbox_answer as the MCP tool.
+route is one of the dashboard's two writes: it calls the same Store.inbox_answer as the MCP
+tool. The other is archiving a project (Store.update_project, like project_update).
 """
 
 from __future__ import annotations
@@ -317,6 +318,21 @@ class Dashboard:
             return JSONResponse(item)
         return RedirectResponse(back, status_code=303)
 
+    async def archive(self, request: Request) -> Response:
+        """Archive a project, or bring it back (form field `archived`: "1" or "0"), through
+        Store.update_project like the project_update tool; then back to the project."""
+        origin = request.headers.get("origin")
+        if origin and urlsplit(origin).netloc != request.headers.get("host"):
+            return Response("changes from other sites are refused", status_code=403)
+        name = request.path_params["name"]
+        form = await request.form()
+        try:
+            await anyio.to_thread.run_sync(self.store.update_project, name, None,
+                                           str(form.get("archived")) == "1")
+        except SluiceError as err:
+            return Response(err.message, status_code=HTTP_STATUS.get(err.code, 400))
+        return RedirectResponse(f"/projects/{views.quote(name)}", status_code=303)
+
     async def static(self, request: Request) -> Response:
         name = request.path_params["file"]
         if name not in STATIC_TYPES:
@@ -345,4 +361,5 @@ class Dashboard:
                               ("/static/{file}", self.static)):
             server.custom_route(path, methods=["GET"])(handler)
         server.custom_route("/projects/{name}/inbox/{id}/answer", methods=["POST"])(self.answer)
+        server.custom_route("/projects/{name}/archive", methods=["POST"])(self.archive)
 

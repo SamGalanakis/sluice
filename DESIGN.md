@@ -7,7 +7,7 @@ colors:
   card: "oklch(1 0 0)"
   quiet-fill: "oklch(0.955 0.01 190)"
   secondary-fill: "oklch(0.945 0.012 190)"
-  muted-ink: "oklch(0.49 0.035 205)"
+  muted-ink: "oklch(0.45 0.035 205)"
   primary: "oklch(0.48 0.12 158)"
   primary-ink: "oklch(0.985 0.006 175)"
   hairline: "oklch(0.205 0.02 286 / 10%)"
@@ -22,35 +22,35 @@ colors:
   canvas-dark: "oklch(0.17 0.012 220)"
   ink-dark: "oklch(0.94 0.01 165)"
   card-dark: "oklch(0.215 0.014 220)"
-  muted-ink-dark: "oklch(0.72 0.025 175)"
+  muted-ink-dark: "oklch(0.79 0.022 175)"
   primary-dark: "oklch(0.79 0.105 158)"
 typography:
   title:
     fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "18px"
-    fontWeight: 600
-    lineHeight: "24px"
+    fontSize: "26px"
+    fontWeight: 650
+    lineHeight: "32px"
     letterSpacing: "-0.01em"
   section:
     fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "16px"
+    fontSize: "17px"
     fontWeight: 600
-    lineHeight: "22px"
+    lineHeight: "24px"
   body:
+    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "15px"
+    fontWeight: 400
+    lineHeight: "22px"
+  small:
     fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: "20px"
-  small:
-    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "12.5px"
-    fontWeight: 400
-    lineHeight: "18px"
   meta:
     fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "11px"
+    fontSize: "13px"
     fontWeight: 500
-    lineHeight: "16px"
+    lineHeight: "18px"
   data:
     fontFamily: "ui-monospace, SFMono-Regular, Cascadia Code, Liberation Mono, Menlo, monospace"
     fontSize: "12px"
@@ -152,34 +152,35 @@ repeats what the shape says.
 
 ## Typography
 
-One family, Inter Variable (the system sans without it), on a fixed ramp: 18/24 page title,
-16/22 section, 14/20 body, 12.5/18 small, 11/16 meta. Monospace is for data only: stderr, fn
+One family, Inter Variable (the system sans without it), on a fixed ramp for a glance from a
+second screen: 26/32 page title, 17/24 section, 15/22 body, 14/20 card text, 13/18 meta. Monospace is for data only: stderr, fn
 names in the functions list, values, types. All numerals are tabular.
 
 ### Named Rules
 **The Meta Voice Rule.** What a run says about itself (times, costs, counts, engines, labels)
-is 11px meta in muted ink, sentence case. Nothing is uppercase; no kickers or eyebrows.
+is 13px meta in muted ink, sentence case. Nothing is uppercase; no kickers or eyebrows.
 
 ## Layout
 
-The board is laid out on the server: columns by dependency depth (plan outputs last; plan inputs
-are a two-line strip above), 248px card columns and 188px chip-only columns with 56px gaps, each column placed by the
-mean height of what feeds it, edges as inline SVG through thin slots so they never run under a
-card. It scrolls sideways inside itself and opens at its left edge, scrolling only when the
-live frontier is off-screen; the page never scrolls
-sideways. Text blocks hold a 72-75ch measure.
+The plan reads top to bottom, inside the column: one row per dependency depth, up to four cards
+side by side (more wrap within the row), 44px between rows for the edges, cards in a row of
+equal height. The server lays out the rows; board.js draws the edges between measured cards
+(bottom centre to top centre, spread when several share a side, an arrowhead at the end). A
+finished plan leads with its Result above the board. Text blocks hold a 72-75ch measure.
 
 ### Named Rules
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
 least a 24px gutter, 16px below 720px): `main` is a three-track grid (gutter, column, gutter)
-and everything goes in the middle track. The top nav's content aligns to the same edges (the
-wordmark on the left edge, Inbox ending on the right), so nav, title, lists, tables and cards
-share one left edge at every width. The board alone spans the window: its first column starts
-on the column's edge; a plan too wide for that starts further left, only as far as it must to
-end at the right gutter (never past the left one), and scrolls inside itself only when the
-window cannot hold it. Nothing makes the page scroll sideways.
+and everything goes in the middle track, the board included. The top nav's content aligns to
+the same edges (the wordmark on the left edge, Inbox ending on the right), so nav, title,
+lists, tables and cards share one left edge at every width. Nothing makes the page scroll
+sideways.
 
-Below 720px the board stacks in the same order without edges, and the step drawer becomes a
+**The Result First Rule.** What a plan produced outranks how it got there: the plan's outputs
+sit above the board, a long text folded to its first lines, and every card says what it handed
+on (its typed outputs), not what its agent chatted.
+
+Below 720px the board stacks one card per line without edges, and the step drawer becomes a
 full-screen sheet over the scrim.
 
 ## Elevation & Depth
@@ -196,19 +197,24 @@ work.
 ## Components
 
 ### Cards / Containers
-- **Work card** (248x112): glyph + title (the step's doc, two lines), one line (progress in
-  mono while running, the error when failed, the first text output when done), then meta
-  (engine or fn, cost, stale or set by hand) with the duration pinned right. Running cards take
-  an active-blue border, failed a full-ink one, stale an amber one; pending titles dim.
-- **Glue chip** (188x34): inline built-ins (`core.*`); glyph + one-line title, no border.
-- **Output node**: dashed, "Output **name**" in meta, the value on one line (muted when unset).
-- **Inputs strip**: `name = value` pairs in one clamped line above the board; unset reads amber.
+- **Work card**: glyph, the step id (15px semibold) and the duration pinned right; the doc (two
+  lines, muted); then what it says now: progress in mono while running, the error when failed,
+  its outputs as `name value` rows when done (declared outputs first, never session or cost;
+  an inbox answer as the value chosen); then meta (engine or fn, cost, stale or set by hand).
+  Running cards take an active-blue border, failed a full-ink one, stale an amber one; pending
+  ids dim.
+- **Glue chip**: inline built-ins (`core.*`); glyph, id and fn in a dashed pill, sized to its
+  content, the doc in its title.
+- **Result**: a card-coloured panel above the board, `name value` rows; long text folds to
+  132px under a fade with "Show all".
+- **Plan inputs**: folded, "Plan inputs: names" (an unset one marked amber); inside, each name,
+  doc and value.
 
 ### Buttons
 Primary is green on its own ink; others are card-coloured with an input hairline.
 
 ### Navigation
-- **Top bar** (48px, card fill, on the column): the mark (an ink rounded square with a gate
+- **Top bar** (52px, card fill, on the column): the mark (an ink rounded square with a gate
   over water, cut in the card colour) and the sluice wordmark, then Projects, Functions, Log;
   Inbox, with the one red badge, sits at the right edge. The current section is ink with a 2px
   ink bar on the bar's bottom hairline and `aria-current` (`page`, or `true` on a page inside
@@ -221,12 +227,12 @@ Primary is green on its own ink; others are card-coloured with an input hairline
   fill with a strong hairline; a filter, so it does not look like the tabs.
 
 ### Needs you
-One bordered list, one row per thing that waits: a 64px meta kind word (Answer, Input in
+One bordered list, one row per thing that waits: a 72px kind word (Answer, Input in
 amber; Failed in ink; Message in blue), the text on one line, its age in meta.
 
 ### Step drawer
 Right-hand panel (680px) over the board without a scrim on desktop, full-screen with a scrim on
-phones. Header: glyph and title, then the ids line. Sections under meta labels in need order:
+phones. Header: glyph and the step id (20px), its doc, then fn, status, time, cost and session. Sections under meta labels in need order:
 Error, Progress, Outputs, Messages, Prompt, Inputs, Stderr (folded), Runs.
 
 ## Do's and Don'ts
