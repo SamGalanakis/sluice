@@ -1,0 +1,4 @@
+{"name": "test.badout", "inputs": {},
+ "outputs": {"n": "int",
+             "report": {"type": "record",
+                        "fields": {"outcome": {"type": "enum", "symbols": ["done", "blocked"]}}}}}

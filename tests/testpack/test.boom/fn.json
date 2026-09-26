@@ -1,0 +1,1 @@
+{"name": "test.boom", "inputs": {"ok": "boolean?"}, "outputs": {"done": "boolean"}}

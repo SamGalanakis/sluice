@@ -1,0 +1,3 @@
+{"name": "test.window", "doc": "Sleep, then report when it ran.",
+ "inputs": {"seconds": "float", "tag": "Any?"},
+ "outputs": {"start": "float", "end": "float", "tag": "Any"}}

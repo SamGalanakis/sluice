@@ -1,0 +1,3 @@
+{"name": "test.env", "doc": "Report the process contract as a fn sees it.",
+ "inputs": {"x": "Any?"},
+ "outputs": {"env": "Any", "cwd": "string", "input": "Any", "step": "string"}}

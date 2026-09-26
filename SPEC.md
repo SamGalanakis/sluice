@@ -23,6 +23,7 @@ change.
 
 ```
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8}
+runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 plans/<plan_id>/
   plan.json                 current plan (snapshot of the log)
   plan.log.jsonl            one line per accepted edit
@@ -138,7 +139,9 @@ step is refused.
 
 `state.json`:
 `{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
-"outputs", "error", "manual"}}}` with status `pending`, `running`, `succeeded`, `failed`.
+"outputs", "error", "manual"}}}` with status `pending`, `running`, `succeeded`, `failed`. A
+scattered step also records `done` and `total` runs. A step waiting for a process slot stays
+`pending`; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
 
 Loop (every ~1 s, and right after an in-process edit), over all plans:
 1. New steps get `pending`. State entries of steps removed from the plan are dropped.
@@ -153,7 +156,8 @@ On startup, steps left `running` by a previous runner are marked `failed` with
 `error: "runner restarted"`.
 
 **Manual values** (recorded in state and in `plan.log.jsonl` as author/reason entries without
-ops, so the history shows who set what):
+ops, `{"rev", "at", "author", "reason", "action": "<tool name>", ...its arguments}`, so the
+history shows who set what):
 - `plan_set_input(name, value)`: sets a declared plan input (type-checked). Steps reading it
   become ready. Changing a value already read by a started step is refused.
 - `step_set_output(step, outputs)`: marks a non-running step `succeeded` with the given outputs

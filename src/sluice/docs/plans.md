@@ -70,5 +70,5 @@ plan's history (`plan_history`).
 ## Validation errors
 Every edit is checked: functions exist, required inputs are bound, refs point at real inputs or
 outputs, types fit, no cycles. Errors are a list with paths, e.g.
-`steps.notes.in.spec: source gate/items.0 has type Any[] ... does not fit string`. Fix each path
+`steps.notes.in.cwd: repo is int, which does not fit string: int is not string`. Fix each path
 and resend.
