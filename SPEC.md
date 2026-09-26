@@ -121,8 +121,11 @@ dir. `SLUICE_PROJECT` names the project (empty for a call without one); for a ca
 by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
 fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
 (`run(main, retries=N)`, §7). Each fn process starts its own session; when the runner stops a
-run (runner shutdown, a removed step, a failed sibling scatter run) it kills the whole process
-group, so nothing started under `uv run` outlives it.
+run (runner shutdown, a removed step, a failed sibling scatter run) it sends the whole process
+group SIGTERM, then SIGKILL to whatever is left after 5 s, so nothing started under `uv run`
+outlives it (SIGTERM first lets an agent CLI stop tool processes it started in sessions of
+their own). `sluice serve` and `sluice loop` stop their fns this way on SIGINT, SIGTERM and
+SIGHUP (a closed terminal or `tmux kill-session`), then exit 0.
 
 ## 5. Plans
 

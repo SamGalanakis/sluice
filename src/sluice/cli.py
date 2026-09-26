@@ -16,6 +16,10 @@ from .runner import Runner
 from .store import DEFAULT_CONFIG, Store, default_home
 from .util import atomic_write_json
 
+# `serve` and `loop` stop their fns and exit 0 on these; SIGHUP is what closing the terminal
+# (or `tmux kill-session`) sends.
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
 
 def ensure_home(quiet: bool = False) -> None:
     """A first run creates SLUICE_HOME with the default config.json."""
@@ -47,10 +51,9 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
 
         @contextlib.contextmanager
         def capture_signals(self):
-            # Shut down on SIGINT/SIGTERM without re-raising the signal afterwards, so the
+            # Shut down on STOP_SIGNALS without re-raising the signal afterwards, so the
             # runner stops its fns and the process exits 0.
-            sigs = (signal.SIGINT, signal.SIGTERM)
-            prev = {s: signal.signal(s, self.handle_exit) for s in sigs}
+            prev = {s: signal.signal(s, self.handle_exit) for s in STOP_SIGNALS}
             try:
                 yield
             finally:
@@ -73,7 +76,7 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
 
 def cmd_loop(a: argparse.Namespace, store: Store) -> int:
     runner = Runner(store)
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    for sig in STOP_SIGNALS:
         signal.signal(sig, lambda *_: runner.stop())
     runner.run_forever()
     return 0

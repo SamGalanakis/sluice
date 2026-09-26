@@ -47,6 +47,7 @@ NATIVE = {"core.echo": lambda inp: {"value": inp["value"]},
           "core.collect": lambda inp: {"items": inp["items"]},
           "core.format": _format}
 RESTARTED = "runner restarted"
+KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
 
 
 # ---- one fn execution (SPEC §4 process contract) ----------------------------------------
@@ -77,13 +78,44 @@ def spawn(fn: Fn, inp: dict[str, Any], run_dir: Path, env: dict[str, str]) -> su
                                 start_new_session=True)
 
 
-def kill(proc: subprocess.Popen) -> None:
-    """Kill a fn process and everything it started, then reap it."""
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        os.killpg(proc.pid, sig)
     except (ProcessLookupError, PermissionError):
-        proc.kill()
-    proc.wait()
+        if proc.poll() is None:
+            proc.send_signal(sig)
+
+
+def _group_alive(proc: subprocess.Popen) -> bool:
+    proc.poll()  # reap the leader, so only live members keep the group
+    try:
+        os.killpg(proc.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return proc.returncode is None
+    return True
+
+
+def kill(*procs: subprocess.Popen, grace: float = KILL_GRACE) -> None:
+    """Stop fn processes and everything in their process groups, then reap them.
+
+    SIGTERM first, so an agent CLI can stop the tool processes it started in sessions of their
+    own (Claude Code runs each Bash command in a new session); SIGKILL whatever is left in a
+    group after `grace` seconds.
+    """
+    for p in procs:
+        _signal_group(p, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    left = list(procs)
+    while left and time.monotonic() < deadline:
+        left = [p for p in left if _group_alive(p)]
+        if left:
+            time.sleep(0.05)
+    for p in left:
+        _signal_group(p, signal.SIGKILL)
+    for p in procs:
+        p.wait()
 
 
 def read_run(fn: Fn, run_dir: Path, code: int) -> tuple[dict[str, Any], str]:
@@ -146,8 +178,7 @@ class Active:
         return {o: [self.results[i].get(o) for i in range(n)] for o in self.fn.outputs}
 
     def kill(self) -> None:
-        for p in self.procs.values():
-            kill(p)
+        kill(*self.procs.values())
 
 
 class Runner:
@@ -188,8 +219,7 @@ class Runner:
                 self._wake.wait(interval)
                 self._wake.clear()
         finally:
-            for a in self.active.values():
-                a.kill()
+            kill(*(p for a in self.active.values() for p in a.procs.values()))
             os.close(fd)
 
     def _report(self, who: str, message: str) -> None:

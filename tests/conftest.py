@@ -101,3 +101,43 @@ def settle(runner: Runner, store: Store, project: str, until=None,
             return steps
         time.sleep(0.05)
     raise AssertionError(f"timed out; statuses: {statuses(store, project)}")
+
+
+def pid_alive(pid: int) -> bool:
+    """Whether a process exists and is not a zombie (Linux /proc)."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+def spawned_children(store: Store, project: str, steps: list[str],
+                     timeout: float = 30.0) -> list[int]:
+    """The pids of the `sleep` children that the test.spawn steps `steps` started, once each
+    has written its child.pid."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        pids = []
+        for sid in steps:
+            for rid in store.read_state(project)["steps"].get(sid, {}).get("run_ids") or []:
+                f = store.runs_dir(project) / rid / "child.pid"
+                if f.exists() and f.read_text().strip():
+                    pids.append(int(f.read_text()))
+        if len(pids) == len(steps):
+            return pids
+        time.sleep(0.1)
+    raise AssertionError(f"the steps did not start their children; statuses: "
+                         f"{statuses(store, project)}")
+
+
+def wait_gone(pids: list[int], timeout: float = 10.0) -> list[int]:
+    """The pids still alive after waiting up to `timeout` s for all of them to go."""
+    deadline = time.time() + timeout
+    while any(map(pid_alive, pids)) and time.time() < deadline:
+        time.sleep(0.05)
+    return [p for p in pids if pid_alive(p)]
+
+
+# test.spawn steps: one child in the fn's process group, one in a session of its own
+SPAWN_STEPS = {"plain": {"run": "test.spawn", "in": {}},
+               "detached": {"run": "test.spawn", "in": {"detach": {"default": True}}}}
