@@ -1,0 +1,209 @@
+"""The log (SPEC §6b): one log.jsonl per project (and one in the home), seq-ordered records of
+every kind, capped; read through log_read / log_wait."""
+
+import json
+import multiprocessing
+import threading
+import time
+
+import anyio
+import pytest
+from mcp import Client
+
+from sluice import log as L
+from sluice.mcp_server import build_server
+from sluice.store import Store
+from tests.conftest import create, settle, write_config
+
+
+def add(a, b=1):
+    return {"run": "test.add", "in": {"a": {"default": a}, "b": {"default": b}}}
+
+
+def kinds(records):
+    return [r["kind"] for r in records]
+
+
+def _post(home: str, n: int, tag: str) -> None:
+    s = Store(home)
+    for i in range(n):
+        s.append("p", {"kind": "message", "thread": "t", "from": tag, "body": str(i)})
+
+
+def test_one_log_holds_every_kind_in_seq_order(store, runner):
+    create(store, "p", {"a": add(1), "boom": {"run": "test.boom", "in": {}}},
+           inputs={"n": "int"})
+    store.set_input("p", "n", 1, "me", "go")
+    settle(runner, store, "p")
+    store.set_output("p", "boom", {"done": True}, "me", "by hand")
+    store.retry("p", "boom", "me", "again")
+    recs = L.read(store.project_dir("p"))["records"]
+    assert [r["seq"] for r in recs] == list(range(1, len(recs) + 1))
+    assert all(set(r) >= {"seq", "at", "kind"} for r in recs)
+    assert set(kinds(recs)) == {"plan.edit", "plan.input", "step.status", "step.output",
+                                "step.retry"}
+    status = [(r["step"], r["from"], r["to"]) for r in recs if r["kind"] == "step.status"]
+    assert ("a", None, "running") in status and ("a", "running", "succeeded") in status
+    assert ("boom", "running", "failed") in status
+    assert status[-2:] == [("boom", "failed", "succeeded"), ("boom", "succeeded", "pending")]
+    failed = next(r for r in recs if r["kind"] == "step.status" and r["to"] == "failed")
+    assert "about to explode" in failed["error"] and failed["run_ids"]
+    assert not (store.project_dir("p") / "plan.log.jsonl").exists()
+
+
+def test_concurrent_writers_in_processes_get_distinct_increasing_seqs(store, home):
+    store.create_project("p")
+    with multiprocessing.get_context("spawn").Pool(4) as pool:
+        pool.starmap(_post, [(str(home), 25, f"w{k}") for k in range(4)])
+    recs = L.read(store.project_dir("p"))["records"]
+    assert [r["seq"] for r in recs] == list(range(1, 102))  # the creation edit, then 100
+    for k in range(4):  # each writer's own messages keep their order
+        assert [r["body"] for r in recs if r.get("from") == f"w{k}"] == [str(i)
+                                                                          for i in range(25)]
+
+
+def test_read_filters_by_kind_group_thread_since_and_limit(store):
+    store.create_project("p")
+    for i in range(6):
+        store.append("p", {"kind": "message", "thread": "ab"[i % 2], "from": "x", "body": str(i)})
+    store.append("p", {"kind": "step.status", "step": "s", "from": None, "to": "pending"})
+    d = store.project_dir("p")
+    assert kinds(L.read(d, kinds=["step"])["records"]) == ["step.status"]
+    assert kinds(L.read(d, kinds=["plan"])["records"]) == ["plan.edit"]
+    a = L.read(d, threads=["a"])  # threads alone: only messages on them
+    assert [r["body"] for r in a["records"]] == ["0", "2", "4"] and a["last_seq"] == 8
+    both = L.read(d, kinds=["message", "step.status"], threads=["b"])["records"]
+    assert [r.get("body", r["kind"]) for r in both] == ["1", "3", "5", "step.status"]
+    tail = L.read(d, limit=2)  # without since_seq: the last `limit`
+    assert [r["seq"] for r in tail["records"]] == [7, 8] and tail["last_seq"] == 8
+    page = L.read(d, since_seq=2, kinds=["message"], limit=2)  # with it: the next `limit`
+    assert [r["seq"] for r in page["records"]] == [3, 4] and page["last_seq"] == 4
+    rest = L.read(d, since_seq=page["last_seq"], kinds=["message"], limit=10)
+    assert [r["seq"] for r in rest["records"]] == [5, 6, 7] and rest["last_seq"] == 8
+    assert L.read(d, since_seq=8) == {"records": [], "last_seq": 8}
+    assert L.check_kinds(["step", "message", "nope"]) == [
+        "unknown kind 'nope'; kinds: " + ", ".join((*L.KINDS, *L.GROUPS))]
+
+
+def test_a_half_written_last_line_is_not_read_yet(store):
+    store.create_project("p")
+    path = store.project_dir("p") / L.FILE
+    with open(path, "a") as f:
+        f.write('{"seq": 2, "at": "x", "kind": "message", "thread": "t", "bo')
+    assert [r["seq"] for r in L.read(store.project_dir("p"))["records"]] == [1]
+    assert L.read(store.project_dir("p"), since_seq=0)["last_seq"] == 1
+
+
+def test_reading_backwards_across_blocks(store, monkeypatch):
+    monkeypatch.setattr(L, "BLOCK", 64)  # records longer than a block
+    store.create_project("p")
+    for i in range(5):
+        store.append("p", {"kind": "message", "thread": "t", "from": "x",
+                           "body": "y" * 150 + str(i)})
+    d = store.project_dir("p")
+    res = L.read(d, since_seq=3)
+    assert [r["seq"] for r in res["records"]] == [4, 5, 6] and res["last_seq"] == 6
+    assert res["records"][-1]["body"].endswith("4")
+    assert L.last_record(d)["seq"] == 6
+
+
+def test_the_cap_keeps_run_dirs_that_state_still_uses(tmp_path):
+    home = tmp_path / "home"
+    write_config(home, log_max=6)
+    store = Store(home)
+    from sluice.runner import Runner
+
+    runner = Runner(store)
+    create(store, "p", {"a": add(1)})
+    settle(runner, store, "p")
+    [run_id] = store.read_state("p")["steps"]["a"]["run_ids"]
+    for i in range(12):
+        store.append("p", {"kind": "message", "thread": "t", "from": "x", "body": str(i)})
+    recs = L.read(store.project_dir("p"))["records"]
+    assert len(recs) <= 6 and "plan.edit" not in kinds(recs)
+    assert (store.runs_dir("p") / run_id).is_dir()  # state.json still refers to it
+    assert store.history("p") == []  # history only goes back as far as the log
+
+
+def test_log_read_and_log_wait_tools(live):
+    live.create_project("p")
+
+    async def main():
+        async with Client(build_server(live)) as c:
+            async def tool(name, **args):
+                r = await c.call_tool(name, args)
+                return r.is_error, json.loads(r.content[0].text)
+
+            err, res = await tool("log_read", project="p")
+            assert not err and kinds(res["records"]) == ["plan.edit"] and res["last_seq"] == 1
+            err, bad = await tool("log_read", project="p", kinds=["nope"])
+            assert err and bad["error"] == "bad_request"
+            err, missing = await tool("log_read", project="zz")
+            assert err and missing["error"] == "not_found"
+
+            t0 = time.monotonic()
+            err, res = await tool("log_wait", project="p", since_seq=1, timeout=1)
+            assert not err and res == {"records": [], "last_seq": 1}
+            assert 0.9 <= time.monotonic() - t0 < 5
+
+            def later():
+                time.sleep(1.0)
+                live.append("p", {"kind": "step.status", "step": "x", "from": None,
+                                  "to": "pending"})
+                time.sleep(0.5)
+                live.append("p", {"kind": "message", "thread": "q", "from": "h", "body": "hi"})
+
+            threading.Thread(target=later, daemon=True).start()
+            waited = {}
+
+            async def wait():
+                waited["res"] = (await tool("log_wait", project="p", since_seq=1,
+                                            threads=["q"], timeout=20))[1]
+                waited["at"] = time.monotonic()
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(wait)
+                await anyio.sleep(0.2)
+                t1 = time.monotonic()
+                err, other = await tool("projects_list")  # the server is not blocked
+                assert not err and other[0]["name"] == "p" and time.monotonic() - t1 < 1
+                assert "res" not in waited
+            assert [r["body"] for r in waited["res"]["records"]] == ["hi"]
+            assert waited["res"]["last_seq"] == 3
+
+            err, home = await tool("log_read")  # the home log: calls without a project
+            assert not err and home == {"records": [], "last_seq": 0}
+
+    anyio.run(main)
+
+
+def test_log_wait_sees_an_append_from_another_process(live, home):
+    live.create_project("p")
+
+    async def main():
+        async with Client(build_server(live)) as c:
+            proc = multiprocessing.get_context("spawn").Process(target=_post,
+                                                                 args=(str(home), 1, "other"))
+            t0 = time.monotonic()
+            proc.start()
+            r = await c.call_tool("log_wait", {"project": "p", "since_seq": 1,
+                                               "kinds": ["message"], "timeout": 30})
+            res = json.loads(r.content[0].text)
+            proc.join()
+            assert [m["from"] for m in res["records"]] == ["other"]
+            assert time.monotonic() - t0 < 25
+
+    anyio.run(main)
+
+
+@pytest.fixture
+def live(store):
+    from sluice.runner import Runner
+
+    runner = Runner(store)
+    store.listeners.append(runner.wake)
+    t = threading.Thread(target=runner.run_forever, kwargs={"interval": 0.2}, daemon=True)
+    t.start()
+    yield store
+    runner.stop()
+    t.join(10)

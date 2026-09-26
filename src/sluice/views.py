@@ -2,7 +2,7 @@
 
 - `mermaid(plan, state)`: the plan as a flowchart with one colour per step status.
 - `project_page`: diagram, plan inputs and outputs, steps (each expands to its inputs, outputs
-  and stderr tail) and the recent plan log. `render()` serves it to `plan_view` too.
+  and stderr tail) and the recent plan history. `render()` serves it to `plan_view` too.
 - `index`: every project; `fns_page`: every visible function grouped by scope.
 
 Everything here only reads the store, and every value is HTML-escaped (plans are untrusted).
@@ -15,6 +15,7 @@ import html
 import json
 from typing import Any
 
+from . import log as L
 from .errors import BadRequest
 from .plan import Plan, value_of
 from .store import Store
@@ -24,8 +25,9 @@ CLASSES = {"pending": "fill:#f1f1f1,stroke:#999,color:#333",
            "running": "fill:#dbeafe,stroke:#2563eb,color:#1e3a8a",
            "succeeded": "fill:#dcfce7,stroke:#16a34a,color:#14532d",
            "failed": "fill:#fee2e2,stroke:#dc2626,color:#7f1d1d",
+           "stale": "fill:#fef3c7,stroke:#d97706,color:#78350f",
            "manual": "fill:#fff,stroke:#16a34a,stroke-width:3px,stroke-dasharray:6 3"}
-STATUSES = ("pending", "running", "succeeded", "failed")
+STATUSES = ("pending", "running", "succeeded", "stale", "failed")
 MERMAID_JS = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
 HISTORY = 20
 SCOPE_TITLES = {"builtin": "Built-in", "global": "Global", "project": "Project"}
@@ -76,7 +78,8 @@ def mermaid(plan: Plan, state: dict[str, Any]) -> str:
         lines.append(f"  classDef {cls} {style}")
     for sid in plan.steps:
         entry = state["steps"].get(sid, {"status": "pending"})
-        cls = "manual" if entry.get("manual") else entry["status"]
+        cls = "manual" if entry.get("manual") and entry["status"] == "succeeded" \
+            else entry["status"]
         lines.append(f"  class {ids['step', sid]} {cls}")
     return "\n".join(lines) + "\n"
 
@@ -85,10 +88,10 @@ def mermaid(plan: Plan, state: dict[str, Any]) -> str:
 
 CSS = """
 :root{--bg:#fff;--fg:#1f2328;--muted:#656d76;--line:#d0d7de;--card:#f6f8fa;--link:#0969da;
---bad:#cf222e;--badbg:#ffebe9;--ok:#1a7f37;--run:#0969da;--code:#eff1f3}
+--bad:#cf222e;--badbg:#ffebe9;--ok:#1a7f37;--run:#0969da;--stale:#9a6700;--code:#eff1f3}
 @media (prefers-color-scheme: dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8d96a0;
 --line:#30363d;--card:#161b22;--link:#4493f8;--bad:#f85149;--badbg:#3b1219;--ok:#3fb950;
---run:#4493f8;--code:#1f242c}}
+--run:#4493f8;--stale:#d29922;--code:#1f242c}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif}
 nav{display:flex;gap:1rem;align-items:center;padding:.6rem 1rem;border-bottom:1px solid var(--line)}
@@ -107,6 +110,7 @@ pre.mermaid{background:var(--card);text-align:center}
 .card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:.6rem .8rem;
 margin:.5rem 0}
 .s-failed,.bad{color:var(--bad)}.s-succeeded{color:var(--ok)}.s-running{color:var(--run)}
+.s-stale{color:var(--stale)}
 .problem{background:var(--badbg);border-color:var(--bad)}
 details summary{cursor:pointer}
 """
@@ -168,11 +172,11 @@ def _counts(counts: dict[str, int]) -> str:
 
 
 def last_change(store: Store, project: str) -> str:
-    """The later of the last plan.log entry and the last state.json write."""
+    """The later of the last log record and the last state.json write."""
     times = []
-    log = store.history(project)
-    if log:
-        times.append(log[-1]["at"])
+    last = L.last_record(store.log_dir(project))
+    if last:
+        times.append(last["at"])
     state = store.project_dir(project) / "state.json"
     if state.exists():
         t = dt.datetime.fromtimestamp(state.stat().st_mtime, dt.UTC)
@@ -235,7 +239,9 @@ def project_page(store: Store, project: str, doc: dict[str, Any], plan: Plan,
     outputs = {n: value_of(r, plan, state)[1] for n, r in plan.outputs.items()}
     log_rows = []
     for x in reversed(store.history(project)[-HISTORY:]):
-        what = x.get("action") or f"{len(x.get('ops') or [])} op(s)"
+        what = x["kind"] + (f" ({len(x.get('ops') or [])} ops)" if "ops" in x else "")
+        what += f" {x['step']}" if "step" in x else f" {x['name']}" if "name" in x else ""
+        what += " (forced)" if x.get("force") else ""
         log_rows.append(f"<tr><td>{x['rev']}</td><td>{e(x['at'])}</td><td>{e(x['author'])}</td>"
                         f"<td>{e(what)}</td><td>{e(x.get('reason') or '')}</td></tr>")
     about = info.get("description") or ""
@@ -250,7 +256,7 @@ def project_page(store: Store, project: str, doc: dict[str, Any], plan: Plan,
 <h2>Outputs</h2>{_values_table(outputs)}
 <h2>Steps</h2>{steps_table}
 <h2>History</h2>
-<div class="scroll"><table><tr><th>rev</th><th>at</th><th>author</th><th>action</th>
+<div class="scroll"><table><tr><th>rev</th><th>at</th><th>author</th><th>what</th>
 <th>reason</th></tr>{"".join(log_rows)}</table></div>"""
     return layout(project, body, live=live, diagram=True, nav=live is not None)
 

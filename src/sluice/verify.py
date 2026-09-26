@@ -13,7 +13,7 @@ from .errors import NotFound
 from .store import PROJECT_KEYS, Store
 from .util import parse_dotenv
 
-STATUSES = {"pending", "running", "succeeded", "failed"}
+STATUSES = {"pending", "running", "succeeded", "failed", "stale"}
 
 
 class Report:
@@ -138,7 +138,7 @@ def _check_project(store: Store, r: Report, name: str) -> None:
             r.add(at, f"status must be one of {sorted(STATUSES)}")
             continue
         step = plan.steps.get(sid)
-        if e["status"] == "succeeded" and step is not None:
+        if e["status"] in ("succeeded", "stale") and step is not None:
             types = {k: step.output_type(k) for k in step.fn.outputs}
             r.add_path_errors(where, T.check_value(T.record_of(types), e.get("outputs"),
                                                    f"steps.{sid}.outputs"))

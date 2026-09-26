@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import fcntl
-import json
 import os
 import threading
 from collections import Counter
@@ -17,14 +15,15 @@ from typing import Any
 import jsonpatch
 import jsonpointer
 
+from . import log as L
 from . import plan as P
 from . import registry as R
 from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound
-from .util import append_line, atomic_write_json, atomic_write_text, now_iso, read_json
+from .util import atomic_write_json, atomic_write_text, now_iso, read_json
 
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
-                                  "max_parallel": 8}
+                                  "max_parallel": 8, "log_max": L.DEFAULT_MAX}
 PROJECT_KEYS = {"name", "description"}
 
 
@@ -60,34 +59,39 @@ class Store:
             raise NotFound(f"no project {name!r} (project names match {P.ID_RE.pattern})")
         return self.home / "projects" / name
 
-    def runs_dir(self, project: str) -> Path:
-        return self.project_dir(project) / "runs"
+    def log_dir(self, project: str | None) -> Path:
+        """Where a log lives: the project's dir, or SLUICE_HOME for calls without a project."""
+        return self.project_dir(project) if project else self.home
 
-    def calls_dir(self, project: str | None) -> Path:
-        return (self.project_dir(project) if project else self.home) / "calls"
+    def runs_dir(self, project: str | None) -> Path:
+        return self.log_dir(project) / "runs"
 
     def global_fn_dirs(self) -> list[Path]:
         return [self.home / "fns", *(self.home / d for d in self.config["fn_dirs"])]
 
     @contextlib.contextmanager
-    def lock(self, project: str) -> Iterator[None]:
-        """Exclusive flock on the project's .lock; re-entrant within a thread."""
+    def lock(self, project: str | None) -> Iterator[None]:
+        """Exclusive flock on the project's .lock (SLUICE_HOME/.lock without a project), the
+        lock of its state and its log; re-entrant within a thread."""
         held: set[str] = self._held.__dict__.setdefault("projects", set())
-        if project in held:
+        key = project or ""
+        if key in held:
             yield
             return
-        d = self.project_dir(project)
-        d.mkdir(parents=True, exist_ok=True)
-        fd = os.open(d / ".lock", os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            held.add(project)
+        with L.flock(self.log_dir(project) / L.LOCK):
+            held.add(key)
             try:
                 yield
             finally:
-                held.discard(project)
-        finally:
-            os.close(fd)  # closing the descriptor releases the flock
+                held.discard(key)
+
+    # ---- the log (SPEC §6b) ----
+
+    def append(self, project: str | None, *records: dict[str, Any]) -> list[int]:
+        """Append records to the project's (or the home's) log; returns their seqs."""
+        with self.lock(project):
+            return L.append(self.log_dir(project), list(records),
+                            int(self.config.get("log_max") or L.DEFAULT_MAX))
 
     # ---- functions (SPEC §2 scopes) ----
 
@@ -199,7 +203,7 @@ class Store:
             if (d / "project.json").exists():
                 raise BadRequest(f"project {name!r} already exists")
             doc = copy.deepcopy(P.EMPTY)
-            (d / "plan.log.jsonl").unlink(missing_ok=True)
+            (d / L.FILE).unlink(missing_ok=True)
             self._log(name, 1, author, reason or "project created",
                       [{"op": "add", "path": "", "value": doc}])
             atomic_write_json(d / "plan.json", {**doc, "rev": 1})
@@ -272,22 +276,23 @@ class Store:
         return rev + 1
 
     def _log(self, project: str, rev: int, author: str, reason: str, ops: list | None = None,
-             **manual: Any) -> None:
-        """One log line: an edit (`ops`), or a manual value (`action` and its args, no ops)."""
-        entry = {"rev": rev, "at": now_iso(), "author": author, "reason": reason}
-        entry.update({"ops": ops} if ops is not None else manual)
-        append_line(self.project_dir(project) / "plan.log.jsonl", entry)
+             kind: str = "plan.edit", **fields: Any) -> None:
+        """A history record: an edit (`plan.edit` with `ops`), or a manual value (its kind and
+        arguments). Callers hold the project lock."""
+        rec = {"kind": kind, "rev": rev, "author": author, "reason": reason, **fields}
+        if ops is not None:
+            rec["ops"] = ops
+        self.append(project, rec)
 
     def notify(self) -> None:
         for fn in list(self.listeners):
             fn()
 
     def history(self, project: str, since_rev: int | None = None) -> list[dict[str, Any]]:
+        """plan_history: the plan edits and manual values still in the log."""
         self.project(project)
-        path = self.project_dir(project) / "plan.log.jsonl"
-        entries = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()
-                   if x.strip()]
-        return [e for e in entries if since_rev is None or e["rev"] > since_rev]
+        recs = L.read(self.log_dir(project), kinds=L.HISTORY_KINDS)["records"]
+        return [e for e in recs if since_rev is None or e["rev"] > since_rev]
 
     # ---- state ----
 
@@ -333,7 +338,7 @@ class Store:
             state = self.read_state(project)
             state["inputs"][name] = value
             self.write_state(project, state)
-            self._log(project, doc["rev"], author, reason, action="plan_set_input", input=name,
+            self._log(project, doc["rev"], author, reason, kind="plan.input", name=name,
                       value=value)
         self.notify()
 
@@ -348,8 +353,16 @@ class Store:
                 if "in" not in cur["steps"][step] else [op]
             return self.patch(project, cur["rev"] if rev is None else rev, ops, author, reason)
 
-    def set_output(self, project: str, step: str, outputs: Any, author: str,
-                   reason: str) -> None:
+    def _status_change(self, project: str, step: str, before: str | None, after: str) -> None:
+        if before != after:
+            self.append(project, {"kind": "step.status", "step": step, "from": before,
+                                  "to": after})
+
+    def set_output(self, project: str, step: str, outputs: Any, author: str, reason: str,
+                   force: bool = False) -> None:
+        """step_set_output: the step succeeds with these outputs (manual). Refused while what
+        it reads is not ready, unless `force` (then its inputs are unknown: it turns stale once
+        they are all there)."""
         with self.lock(project):
             doc, plan = self._plan_for_write(project)
             if step not in plan.steps:
@@ -363,29 +376,40 @@ class Store:
             if errs:
                 raise InvalidPlan(errs)
             state = self.read_state(project)
-            if state["steps"].get(step, {}).get("status") == "running":
+            before = state["steps"].get(step, {}).get("status")
+            if before == "running":
                 raise BadRequest(f"step {step} is running")
+            waiting = P.not_ready(s, plan, state)
+            if waiting and not force:
+                raise InvalidPlan(waiting, f"step {step} reads values that are not ready; "
+                                  "pass force: true to set its outputs anyway (it turns stale "
+                                  "once they are)")
+            h = None if waiting else P.inputs_hash(P.resolved_inputs(s, plan, state))
             state["steps"][step] = {"status": "succeeded", "started": None,
-                                    "finished": now_iso(), "outputs": outputs, "manual": True}
+                                    "finished": now_iso(), "outputs": outputs, "manual": True,
+                                    "inputs_hash": h}
             self.write_state(project, state)
-            self._log(project, doc["rev"], author, reason, action="step_set_output", step=step,
-                      outputs=outputs)
+            extra = {"force": True} if force else {}
+            self._log(project, doc["rev"], author, reason, kind="step.output", step=step,
+                      outputs=outputs, **extra)
+            self._status_change(project, step, before, "succeeded")
         self.notify()
 
     def retry(self, project: str, step: str, author: str, reason: str) -> None:
-        """step_retry: a failed (or manually set) step goes back to pending."""
+        """step_retry: a failed, stale or manually set step goes back to pending."""
         with self.lock(project):
             doc, plan = self._plan_for_write(project)
             if step not in plan.steps:
                 raise NotFound(f"the plan of project {project} has no step {step!r}")
             state = self.read_state(project)
             e = state["steps"].get(step, {"status": "pending"})
-            if e["status"] != "failed" and not e.get("manual"):
-                raise BadRequest(f"step {step} is {e['status']}; only a failed or manually set "
-                                 "step can be retried")
+            if e["status"] not in ("failed", "stale") and not e.get("manual"):
+                raise BadRequest(f"step {step} is {e['status']}; only a failed, stale or "
+                                 "manually set step can be retried")
             state["steps"][step] = {"status": "pending"}
             self.write_state(project, state)
-            self._log(project, doc["rev"], author, reason, action="step_retry", step=step)
+            self._log(project, doc["rev"], author, reason, kind="step.retry", step=step)
+            self._status_change(project, step, e["status"], "pending")
         self.notify()
 
 

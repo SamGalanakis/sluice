@@ -56,7 +56,8 @@ def json_out(p):
 def test_the_first_run_writes_the_default_config_and_lists_the_tools(sluice):
     listing = sluice("tool").stdout
     assert json.loads((sluice.home / "config.json").read_text()) == {
-        "fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8}
+        "fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8,
+        "log_max": 10000}
     names = [line.split()[0] for line in listing.splitlines()]
     assert {"projects_list", "plan_patch", "fn_call", "verify", "status"} <= set(names)
     assert any(line.startswith("verify ") and "Check functions" in line
@@ -136,8 +137,8 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
         assert loop.wait(timeout=20) == 0
 
     history = json_out(sluice.tool("plan_history", project="demo"))
-    assert [h.get("action") for h in history] == [
-        None, None, "plan_set_input", "step_set_output", "step_retry"]
+    assert [h["kind"] for h in history] == [
+        "plan.edit", "plan.edit", "plan.input", "step.output", "step.retry"]
     assert history[-1]["reason"] == "run it"
     view = sluice.tool("plan_view", project="demo")
     assert view.stdout.startswith("flowchart LR\n")

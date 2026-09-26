@@ -168,14 +168,14 @@ def test_set_input_is_typed_logged_and_may_change_after_a_read(store):
         store.set_input("p", "zz", 1, "me", "unknown")
     store.set_input("p", "n", 1, "me", "first")
     last = store.history("p")[-1]
-    assert (last["action"], last["input"], last["value"], last["author"]) == (
-        "plan_set_input", "n", 1, "me")
+    assert (last["kind"], last["name"], last["value"], last["author"]) == (
+        "plan.input", "n", 1, "me")
     assert "ops" not in last
     with store.lock("p"):
         st = store.read_state("p")
         st["steps"]["a"] = {"status": "running"}
         store.write_state("p", st)
-    store.set_input("p", "n", 3, "me", "only steps that have not started see it")
+    store.set_input("p", "n", 3, "me", "a running step keeps the value it started with")
     assert store.read_state("p")["inputs"] == {"n": 3}
 
 
@@ -205,9 +205,9 @@ def test_set_output_and_retry(store):
     store.set_output("p", "a", {"sum": 5}, "me", "done by hand")
     e = store.read_state("p")["steps"]["a"]
     assert (e["status"], e["outputs"], e["manual"]) == ("succeeded", {"sum": 5}, True)
-    assert store.history("p")[-1]["action"] == "step_set_output"
+    assert store.history("p")[-1]["kind"] == "step.output"
     store.retry("p", "a", "me", "run it for real")
     assert store.read_state("p")["steps"]["a"] == {"status": "pending"}
-    assert store.history("p")[-1]["action"] == "step_retry"
+    assert store.history("p")[-1]["kind"] == "step.retry"
     with pytest.raises(BadRequest, match="step a is pending"):
         store.retry("p", "a", "me", "again")

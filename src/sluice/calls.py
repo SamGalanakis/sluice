@@ -1,5 +1,7 @@
-"""One-off fn calls outside the plan (SPEC §8 fn_call): `calls/<call_id>/` in the home or in a
-project, holding call.json (the record), input.json, output.json and stderr.log.
+"""One-off fn calls outside the plan (SPEC §8 fn_call). A call is a series of `call` records in
+the log (the project's, or the home's for a call without a project), one per status change:
+`{"kind": "call", "call", "fn", "status", "inputs"?, "outputs"?, "error"?}`. The latest record
+is the call's status. Its run dir is `runs/<call id>/` next to the log.
 
 The runner starts pending calls; a direct call is run by the process that made it.
 """
@@ -10,28 +12,19 @@ import os
 import re
 import secrets
 import time
-from pathlib import Path
 from typing import Any
 
+from . import log as L
 from . import types as T
 from .errors import InvalidPlan, NotFound
 from .registry import Fn
 from .store import Store
-from .util import atomic_write_json, now_iso, read_json, tail_text
+from .util import tail_text
 
 CALL_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 DONE = ("succeeded", "failed")
-
-
-def call_dir(store: Store, call: str, project: str | None) -> Path:
-    if not isinstance(call, str) or not CALL_RE.match(call):
-        raise NotFound(f"no call {call!r}")
-    if project is not None:
-        store.project(project)
-    d = store.calls_dir(project) / call
-    if not (d / "call.json").is_file():
-        raise NotFound(f"no call {call!r}" + (f" in project {project}" if project else ""))
-    return d
+GONE = "the process running this direct call is gone"
+FIELDS = ("call", "fn", "status", "inputs", "outputs", "error", "direct", "pid")
 
 
 def check_inputs(fn: Fn, inputs: Any) -> None:
@@ -45,7 +38,7 @@ def check_inputs(fn: Fn, inputs: Any) -> None:
 
 def create(store: Store, name: str, inputs: Any, project: str | None,
            direct: bool = False) -> str:
-    """Check the fn and its inputs, then record a call: pending (for the runner) or, when
+    """Check the fn and its inputs, then log the call: pending (for the runner) or, when
     `direct`, running in this process."""
     reg = store.usable_registry(project)
     fn = reg.get(name)
@@ -54,25 +47,36 @@ def create(store: Store, name: str, inputs: Any, project: str | None,
     check_inputs(fn, inputs)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     call = f"{stamp}-{secrets.token_hex(3)}"
-    d = store.calls_dir(project) / call
-    d.mkdir(parents=True)
     full = {k: None for k in fn.inputs}
     full.update(inputs)
-    atomic_write_json(d / "input.json", full)
-    rec = {"call": call, "fn": name, "project": project, "created": now_iso(),
-           "status": "running" if direct else "pending"}
+    rec: dict[str, Any] = {"kind": "call", "call": call, "fn": name,
+                           "status": "running" if direct else "pending", "inputs": full}
     if direct:
-        rec.update(direct=True, pid=os.getpid(), started=rec["created"])
-    atomic_write_json(d / "call.json", rec)  # written last: the runner keys off call.json
+        rec.update(direct=True, pid=os.getpid())
+    store.append(project, rec)
     return call
 
 
-def read(d: Path) -> dict[str, Any]:
-    return read_json(d / "call.json")
+def latest(store: Store, call: str, project: str | None) -> dict[str, Any]:
+    """The call's latest record."""
+    if not isinstance(call, str) or not CALL_RE.match(call):
+        raise NotFound(f"no call {call!r}")
+    if project is not None:
+        store.project(project)
+    rec = L.latest_call(store.log_dir(project), call)
+    if rec is None:
+        raise NotFound(f"no call {call!r}" + (f" in project {project}" if project else ""))
+    return rec
 
 
-def write(d: Path, rec: dict[str, Any]) -> None:
-    atomic_write_json(d / "call.json", rec)
+def record(store: Store, project: str | None, rec: dict[str, Any]) -> None:
+    """Log the call's new status (`rec` is its latest record, updated)."""
+    new = {k: rec[k] for k in FIELDS if rec.get(k) is not None}
+    if new["status"] != "pending":
+        new.pop("inputs", None)  # the pending record has them; the run dir has input.json
+    if new["status"] in DONE:
+        new.pop("pid", None)
+    store.append(project, {"kind": "call", **new})
 
 
 def result(rec: dict[str, Any]) -> dict[str, Any]:
@@ -82,7 +86,7 @@ def result(rec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _alive(pid: Any) -> bool:
+def alive(pid: Any) -> bool:
     try:
         os.kill(int(pid), 0)
     except (OSError, ValueError, TypeError):
@@ -91,13 +95,12 @@ def _alive(pid: Any) -> bool:
 
 
 def status(store: Store, call: str, project: str | None) -> dict[str, Any]:
-    """call_status: the result plus the tail of the fn's stderr."""
-    d = call_dir(store, call, project)
-    rec = read(d)
+    """call_status: the latest record's result plus the tail of the fn's stderr."""
+    rec = latest(store, call, project)
     out = result(rec)
-    if rec["status"] == "running" and rec.get("direct") and not _alive(rec.get("pid")):
-        out.update(status="failed", error="the process running this direct call is gone")
-    tail = tail_text(d / "stderr.log", 2000).strip()
+    if rec["status"] == "running" and rec.get("direct") and not alive(rec.get("pid")):
+        out.update(status="failed", error=GONE)
+    tail = tail_text(store.runs_dir(project) / call / "stderr.log", 2000).strip()
     if tail:
         out["stderr_tail"] = tail
     return out

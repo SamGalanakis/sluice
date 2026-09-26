@@ -20,12 +20,13 @@ from typing import Any
 import sluice
 
 from . import calls as C
+from . import log as L
 from . import types as T
 from .errors import BadRequest, InvalidPlan, NotFound
-from .plan import Plan, Source, Step, value_of
+from .plan import Plan, Step, inputs_hash, is_ready, mark_stale, resolved_inputs, topo_order
 from .registry import Fn
 from .store import Store
-from .util import atomic_write_json, canonical, now_iso, read_dotenv, read_json, tail_text
+from .util import atomic_write_json, canonical, now_iso, read_dotenv, tail_text
 
 SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
 
@@ -107,32 +108,21 @@ def run_native(fn: Fn, inp: dict[str, Any]) -> tuple[dict[str, Any], str]:
 
 def run_call_direct(store: Store, call: str, project: str | None) -> dict[str, Any]:
     """fn_call with direct: run a call created with `direct` in this process, to the end."""
-    d = C.call_dir(store, call, project)
-    rec = C.read(d)
+    rec = C.latest(store, call, project)
     fn = store.fn(rec["fn"], project)
-    inp = read_json(d / "input.json")
+    inp = rec["inputs"]
     if fn.native:
         outputs, err = run_native(fn, inp)
     else:
+        d = store.runs_dir(project) / call
         proc = spawn(fn, inp, d, fn_env(store, project, fn, "", call, d))
         outputs, err = read_run(fn, d, proc.wait())
     _finish(rec, outputs=outputs, error=err or None)
-    C.write(d, rec)
+    C.record(store, project, rec)
     return C.result(rec)
 
 
 # ---- the loop ----------------------------------------------------------------------------
-
-
-def source_value(src: Source, plan: Plan, state: dict[str, Any]) -> Any:
-    if not src.refs and not src.fan_in:
-        return src.default
-    values = [value_of(r, plan, state)[1] for r in src.refs]
-    return values if src.fan_in else values[0]
-
-
-def is_ready(step: Step, plan: Plan, state: dict[str, Any]) -> bool:
-    return all(value_of(r, plan, state)[0] for r in step.reads)
 
 
 @dataclass
@@ -144,7 +134,7 @@ class Active:
     step: str  # the step id; "" for a call
     inputs: list[dict[str, Any]]
     scatter: bool = False
-    run_dirs: list[Path] = field(default_factory=list)  # one per run (calls: the call dir)
+    run_dirs: list[Path] = field(default_factory=list)  # one per run
     procs: dict[int, subprocess.Popen] = field(default_factory=dict)
     results: dict[int, dict[str, Any]] = field(default_factory=dict)
     launched: int = 0
@@ -164,7 +154,7 @@ class Runner:
     def __init__(self, store: Store):
         self.store = store
         self.active: dict[tuple[str, ...], Active] = {}
-        self._finished_calls: set[Path] = set()
+        self._calls: dict[str, tuple[int, dict[str, dict[str, Any]]]] = {}  # log -> seq, live
         self._reported: dict[str, str] = {}
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -225,6 +215,7 @@ class Runner:
         with self.store.lock(project):
             state = self.store.read_state(project)
             before = canonical(state)
+            was = {sid: e.get("status") for sid, e in state["steps"].items()}
             _, plan = self.store.plan(project)
             problems = self.store.registry(project).blocking
             if problems:  # SPEC §2: no new runs until the functions are fixed
@@ -245,10 +236,15 @@ class Runner:
                 if e["status"] == "running":
                     self._poll(("step", project, sid), e)
             self._launch(project, st)  # queued scatter runs first
-            progress = not problems
+            order = topo_order(plan)
+            progress = True
             while progress:  # built-ins finish inline and can make more steps ready
+                mark_stale(plan, state)  # before anything reads a result that no longer holds
                 progress = False
-                for sid, step in plan.steps.items():
+                if problems:
+                    break
+                for sid in order:
+                    step = plan.steps[sid]
                     if st[sid]["status"] != "pending" or not is_ready(step, plan, state):
                         continue
                     if not step.fn.native and self._procs() >= self.store.config["max_parallel"]:
@@ -259,28 +255,53 @@ class Runner:
             if canonical(state) == before:
                 return False
             self.store.write_state(project, state)
+            records = []
+            for sid, e in st.items():
+                if e["status"] != was.get(sid):
+                    rec = {"kind": "step.status", "step": sid, "from": was.get(sid),
+                           "to": e["status"]}
+                    if e["status"] == "failed":
+                        rec["error"] = e.get("error")
+                    if e["status"] in ("succeeded", "failed") and e.get("run_ids"):
+                        rec["run_ids"] = e["run_ids"]
+                    records.append(rec)
+            if records:
+                self.store.append(project, *records)
             return True
 
     def _tick_calls(self, project: str | None) -> None:
-        root = self.store.calls_dir(project)
-        if not root.is_dir():
-            return
-        for d in sorted(root.iterdir()):
-            if d in self._finished_calls or not (d / "call.json").is_file():
-                continue
-            rec = C.read(d)
-            before = dict(rec)
-            if rec["status"] == "running" and not rec.get("direct"):
-                self._poll(("call", project or "", rec["call"]), rec)
+        """Start pending calls and collect finished ones. Follows the log's `call` records from
+        the last seq seen, keeping the calls that are still pending or running."""
+        d = self.store.log_dir(project)
+        key = project or ""
+        seq, live = self._calls.get(key, (0, {}))
+        res = L.read(d, since_seq=seq, kinds=["call"])
+        if res["last_seq"] < seq:  # the log was reset: start over
+            seq, live = 0, {}
+            res = L.read(d, since_seq=0, kinds=["call"])
+        for rec in res["records"]:
+            if rec["status"] in C.DONE:
+                live.pop(rec["call"], None)
+            else:
+                live[rec["call"]] = rec
+        self._calls[key] = (res["last_seq"], live)
+        for call, rec in list(live.items()):
+            rec = dict(rec)
+            before = rec["status"]
+            akey = ("call", key, call)
+            if rec["status"] == "running" and rec.get("direct"):
+                if not C.alive(rec.get("pid")):  # its process died before logging the end
+                    _finish(rec, error=C.GONE)
+            elif rec["status"] == "running":
+                self._poll(akey, rec)
             elif rec["status"] == "pending" and \
                     self._procs() < self.store.config["max_parallel"]:
-                self._start_call(("call", project or "", rec["call"]), d, rec, project)
-            if rec["status"] in C.DONE:
-                self._finished_calls.add(d)
-            if rec != before:
-                C.write(d, rec)
+                self._start_call(akey, rec, project)
+            if rec["status"] != before:
+                C.record(self.store, project, rec)
+                live[call] = rec  # the record itself is picked up on the next pass
 
-    def _start_call(self, key: tuple[str, ...], d: Path, rec: dict[str, Any],
+    def _start_call(self, key: tuple[str, ...], rec: dict[str, Any],
                     project: str | None) -> None:
         reg = self.store.registry(project)
         if reg.blocking:
@@ -288,11 +309,12 @@ class Runner:
         fn = reg.get(rec["fn"])
         if fn is None:
             return _finish(rec, error=f"no fn {rec['fn']!r}")
-        inp = read_json(d / "input.json")
-        rec.update(status="running", started=now_iso())
+        inp = rec.get("inputs") or {}
+        rec.update(status="running")
         if fn.native:
             outputs, err = run_native(fn, inp)
             return _finish(rec, outputs=outputs, error=err or None)
+        d = self.store.runs_dir(project) / rec["call"]
         a = self.active[key] = Active(fn, project, "", [inp], run_dirs=[d])
         try:
             a.procs[0] = spawn(fn, inp, d, fn_env(self.store, project, fn, "", rec["call"], d))
@@ -304,10 +326,9 @@ class Runner:
     # ---- one step ----
 
     def _begin(self, project: str, step: Step, plan: Plan, state: dict[str, Any]) -> None:
+        inp = resolved_inputs(step, plan, state)
         e = state["steps"][step.id] = {"status": "running", "started": now_iso(),
-                                       "run_ids": []}
-        inp = {k: None for k in step.fn.inputs}
-        inp.update({k: source_value(s, plan, state) for k, s in step.sources.items()})
+                                       "run_ids": [], "inputs_hash": inputs_hash(inp)}
         runs = [inp]
         if step.scatter:
             items = inp[step.scatter]

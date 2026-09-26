@@ -13,7 +13,7 @@ from tests.conftest import create
 TOOLS = {"docs", "projects_list", "project_create", "project_update", "fn_list", "fn_get",
          "fn_save", "fn_call", "call_status", "plan_get", "plan_patch", "plan_history",
          "plan_set_input", "step_set_input", "step_set_output", "step_retry", "verify",
-         "plan_view", "status"}
+         "plan_view", "status", "log_read", "log_wait"}
 UPPER = """from sluice.fn import run
 
 run(lambda inp, ctx: {"text": inp["text"].upper()})
@@ -132,7 +132,7 @@ async def test_fn_call_waits_for_the_runner(live):
     async with Client(build_server(live)) as c:
         res = await ok(c, "fn_call", name="test.add", inputs={"a": 2, "b": 3}, wait=20)
         assert res == {"call": res["call"], "status": "succeeded", "outputs": {"sum": 5}}
-        assert (live.home / "calls" / res["call"] / "call.json").is_file()
+        assert (live.home / "runs" / res["call"] / "output.json").is_file()
         failed = await ok(c, "fn_call", name="test.boom", inputs={}, project="p", wait=20)
         assert failed["status"] == "failed" and "about to explode" in failed["error"]
         assert "about to explode" in (await ok(c, "call_status", call=failed["call"],
@@ -177,9 +177,10 @@ async def test_plan_editing_and_error_payloads(store):
         assert typed["errors"] == ['inputs.n: expected int, got "x"']
 
         hist = await ok(c, "plan_history", project="p")
-        assert [(h["rev"], h["author"], h.get("action")) for h in hist] == [
-            (1, "", None), (2, "mcp", None), (3, "orch", None), (4, "mcp", None),
-            (4, "mcp", "plan_set_input")]
+        assert [(h["rev"], h["author"], h["kind"]) for h in hist] == [
+            (1, "", "plan.edit"), (2, "mcp", "plan.edit"), (3, "orch", "plan.edit"),
+            (4, "mcp", "plan.edit"), (4, "mcp", "plan.input")]
+        assert [h["seq"] for h in hist] == sorted(h["seq"] for h in hist)
         assert [h["rev"] for h in await ok(c, "plan_history", project="p", since_rev=3)] == [4, 4]
         assert await ok(c, "projects_list") == [{"name": "p", "description": "t", "rev": 4,
                                                  "counts": {"pending": 2}}]

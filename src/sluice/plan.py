@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any
 
 from . import types as T
 from .registry import Fn, Registry
+from .util import canonical
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
@@ -242,3 +244,94 @@ def value_of(ref: Ref, plan: Plan, state: dict[str, Any]) -> tuple[bool, Any]:
             return False, None
         v = e["outputs"].get(ref.name)
     return True, T.navigate_value(v, ref.fields)
+
+
+def source_value(src: Source, plan: Plan, state: dict[str, Any]) -> Any:
+    if not src.refs and not src.fan_in:
+        return src.default
+    values = [value_of(r, plan, state)[1] for r in src.refs]
+    return values if src.fan_in else values[0]
+
+
+def is_ready(step: Step, plan: Plan, state: dict[str, Any]) -> bool:
+    """Every plan input the step reads has a value and every step it reads has succeeded."""
+    return all(value_of(r, plan, state)[0] for r in step.reads)
+
+
+def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
+    """Why a step is not ready: `step a is pending`, `plan input n has no value`."""
+    out = []
+    for r in step.reads:
+        if value_of(r, plan, state)[0]:
+            continue
+        if r.step is None:
+            out.append(f"plan input {r.name} has no value")
+        else:
+            status = state["steps"].get(r.step, {}).get("status", "pending")
+            out.append(f"step {r.step} is {status}")
+    return list(dict.fromkeys(out))
+
+
+def resolved_inputs(step: Step, plan: Plan, state: dict[str, Any]) -> dict[str, Any]:
+    """The input object a step runs with (unbound optional inputs are null); for a scattered
+    step, with the whole array."""
+    inp: dict[str, Any] = {k: None for k in step.fn.inputs}
+    inp.update({k: source_value(s, plan, state) for k, s in step.sources.items()})
+    return inp
+
+
+def inputs_hash(inp: dict[str, Any]) -> str:
+    """SPEC §6 staleness: a hash of the canonical JSON of the resolved inputs."""
+    return hashlib.sha256(canonical(inp).encode()).hexdigest()[:32]
+
+
+def topo_order(plan: Plan) -> list[str]:
+    """Step ids with every step after the steps it reads (the plan is acyclic)."""
+    order: list[str] = []
+    seen: set[str] = set()
+
+    def visit(sid: str) -> None:
+        if sid in seen:
+            return
+        seen.add(sid)
+        for dep in plan.steps[sid].deps:
+            if dep in plan.steps:
+                visit(dep)
+        order.append(sid)
+
+    for sid in plan.steps:
+        visit(sid)
+    return order
+
+
+def mark_stale(plan: Plan, state: dict[str, Any]) -> bool:
+    """SPEC §6 staleness, one pass in dependency order. A succeeded step turns stale when a step
+    it reads is stale, or when its inputs now hash differently from those it was computed from
+    (a null hash, from a forced manual value, counts as different once all its inputs are
+    there). A stale step whose inputs hash as recorded again is succeeded again. A step with no
+    recorded hash at all (state from before hashes existed) adopts the current one.
+    Returns whether anything changed."""
+    changed = False
+    st = state["steps"]
+    for sid in topo_order(plan):
+        e = st.get(sid)
+        if e is None or e.get("status") not in ("succeeded", "stale"):
+            continue
+        step = plan.steps[sid]
+        upstream_stale = any(st.get(d, {}).get("status") == "stale" for d in step.deps)
+        ready = not upstream_stale and is_ready(step, plan, state)
+        h = inputs_hash(resolved_inputs(step, plan, state)) if ready else None
+        if e["status"] == "succeeded":
+            if upstream_stale:
+                e["status"] = "stale"
+                changed = True
+            elif ready and "inputs_hash" not in e:
+                e["inputs_hash"] = h
+                changed = True
+            elif ready and e["inputs_hash"] != h:
+                e["status"] = "stale"
+                changed = True
+        elif ready and e.get("inputs_hash") is not None and e["inputs_hash"] == h:
+            e["status"] = "succeeded"
+            changed = True
+    return changed

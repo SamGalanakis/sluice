@@ -20,6 +20,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
 from . import calls, runner, views
+from . import log as L
 from . import verify as verify_mod
 from .errors import BadRequest, NotFound, SluiceError
 from .store import Store
@@ -178,7 +179,8 @@ def build_server(store: Store) -> MCPServer:
     async def fn_call(name: str, inputs: dict[str, Any], project: str | None = None,
                       wait: float = 0, direct: bool = False) -> Any:
         """Run one function outside the plan. Returns {call, status, outputs?, error?}; status
-        is pending, running, succeeded or failed. Poll call_status(call) for a slow one.
+        is pending, running, succeeded or failed. Poll call_status(call) for a slow one; every
+        status change is also a `call` record in the log (log_read).
 
         Args:
             name: the function to run.
@@ -252,8 +254,8 @@ def build_server(store: Store) -> MCPServer:
 
     @tool
     def plan_set_input(project: str, name: str, value: Any, reason: str = "") -> Any:
-        """Set a declared plan input; steps reading it can then start. A later change only
-        affects steps that have not started. Returns {ok}.
+        """Set a declared plan input; steps reading it can then start. Changing it later makes
+        the succeeded steps that read it (and their dependents) stale. Returns {ok}.
 
         Args:
             project: the project.
@@ -281,22 +283,26 @@ def build_server(store: Store) -> MCPServer:
 
     @tool
     def step_set_output(project: str, step: str, outputs: dict[str, Any],
-                        reason: str = "") -> Any:
+                        reason: str = "", force: bool = False) -> Any:
         """Mark a step succeeded with outputs you supply (manual: true); it is not run unless
-        retried. Returns {ok}.
+        retried. Refused (`invalid`, naming them) while a step it reads has not succeeded or a
+        plan input it reads has no value, unless force. Returns {ok}.
 
         Args:
             project: the project.
             step: a step that is not running.
             outputs: every output of its function, type-checked (arrays for a scattered step).
             reason: why, recorded in the plan's history.
+            force: set it anyway although what it reads is not ready (e.g. a broken
+                upstream); the step then turns stale once those values are all there.
         """
-        store.set_output(project, step, outputs, AUTHOR, reason)
+        store.set_output(project, step, outputs, AUTHOR, reason, force)
         return {"ok": True}
 
     @tool
     def step_retry(project: str, step: str, reason: str = "") -> Any:
-        """Set a failed (or manually set) step back to pending so it runs again. Returns {ok}.
+        """Set a failed, stale or manually set step back to pending so it runs again. Its
+        succeeded dependents turn stale if it produces a different result. Returns {ok}.
 
         Args:
             project: the project.
@@ -305,6 +311,58 @@ def build_server(store: Store) -> MCPServer:
         """
         store.retry(project, step, AUTHOR, reason)
         return {"ok": True}
+
+    def _log_args(project: str | None, kinds: list[str] | None, limit: int | None) -> Any:
+        if project is not None:
+            store.project(project)
+        errs = L.check_kinds(kinds)
+        if errs:
+            raise BadRequest("; ".join(errs))
+        if limit is not None and limit < 1:
+            raise BadRequest("limit: expected a positive int")
+        return store.log_dir(project)
+
+    @tool
+    def log_read(project: str | None = None, since_seq: int | None = None,
+                 kinds: list[str] | None = None, threads: list[str] | None = None,
+                 limit: int = 200) -> Any:
+        """Read the log: {records, last_seq}. Records are {seq, at, kind, ...} oldest first;
+        kinds: plan.edit, plan.input, step.output, step.retry, step.status, call, message.
+
+        Args:
+            project: the project's log; leave out for the home log (calls without a project).
+            since_seq: only records after this seq (pass the last_seq you got to continue).
+                Without it: the last `limit` matching records.
+            kinds: only these kinds; "step" or "plan" match every kind under them.
+            threads: only messages on these threads (and, without kinds, only messages).
+            limit: at most this many records (default 200).
+        """
+        d = _log_args(project, kinds, limit)
+        return L.read(d, since_seq, kinds, threads, limit)
+
+    @tool
+    async def log_wait(since_seq: int, project: str | None = None,
+                       kinds: list[str] | None = None, threads: list[str] | None = None,
+                       timeout: int = 300, limit: int = 200) -> Any:
+        """Wait for log records after since_seq: returns {records, last_seq} as soon as at least
+        one matching record exists, or with no records once `timeout` seconds pass. Call it
+        again with the last_seq it returned to keep watching.
+
+        Args:
+            since_seq: wait for records after this seq (0 for any; last_seq from log_read).
+            project: the project's log; leave out for the home log.
+            kinds: only these kinds (as in log_read).
+            threads: only messages on these threads (as in log_read).
+            timeout: seconds to wait at most (default 300).
+            limit: at most this many records (default 200).
+        """
+        d = _log_args(project, kinds, limit)
+        deadline = anyio.current_time() + max(0, timeout)
+        while True:
+            res = await anyio.to_thread.run_sync(L.read, d, since_seq, kinds, threads, limit)
+            if res["records"] or anyio.current_time() >= deadline:
+                return res
+            await anyio.sleep(min(0.25, max(0.0, deadline - anyio.current_time())))
 
     @tool
     def verify(project: str | None = None) -> Any:
@@ -332,6 +390,9 @@ def build_server(store: Store) -> MCPServer:
     def status(project: str) -> Any:
         """Return {rev, inputs, outputs, steps: [{id, run, status, started, finished,
         outputs?, error?, manual}]}. inputs and outputs map names to values (null if unset).
+        A step's status is pending, running, succeeded, failed or stale (its result was
+        computed from inputs that have changed since; it waits for step_retry or
+        step_set_output, and so do the steps reading it).
 
         Args:
             project: the project.

@@ -78,9 +78,9 @@ def test_the_project_page(store):
     assert "<tr><td>n</td><td><code>1</code></td></tr>" in page
     assert "<tr><td>total</td><td><code>2</code></td></tr>" in page
     history = page[page.index("<h2>History</h2>"):]
-    assert "<td>plan_set_input</td><td>why not</td>" in history
-    assert "<td>2</td>" in history and "<td>1 op(s)</td>" in history  # newest first
-    assert history.index("plan_set_input") < history.index("op(s)")
+    assert "<td>plan.input n</td><td>why not</td>" in history
+    assert "<td>2</td>" in history and "<td>plan.edit (1 ops)</td>" in history  # newest first
+    assert history.index("plan.input") < history.index("plan.edit")
     standalone = views.render(store, "v", "html")
     assert "setInterval" not in standalone and "<nav>" not in standalone
 

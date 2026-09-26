@@ -3,6 +3,9 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
+from sluice.errors import InvalidPlan
 from sluice.runner import RESTARTED, Runner
 from sluice.store import Store
 from tests.conftest import create, settle, statuses, write_config
@@ -142,7 +145,10 @@ def test_plan_inputs_and_manual_outputs_unblock_steps(store, runner):
            inputs={"n": "int"})
     runner.tick()
     assert statuses(store, "p") == {"a": "pending", "b": "pending"}
-    store.set_output("p", "a", {"sum": 41}, "test", "known already")
+    with pytest.raises(InvalidPlan) as e:
+        store.set_output("p", "a", {"sum": 41}, "test", "known already")
+    assert e.value.errors == ["plan input n has no value"]
+    store.set_output("p", "a", {"sum": 41}, "test", "known already", force=True)
     steps = settle(runner, store, "p", until=lambda s: s["b"]["status"] == "succeeded")
     assert steps["b"]["outputs"] == {"sum": 42} and steps["a"]["manual"] is True
     assert statuses(store, "p")["a"] == "succeeded"  # a manual step is never run
