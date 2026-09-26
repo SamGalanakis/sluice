@@ -5,7 +5,7 @@
 //   button closes it, and focus goes back to the card;
 // - hovering or focusing a block traces its edges (they light up and name their ports);
 // - a status that changes flips its glyph once;
-// - the board opens scrolled to the live frontier (the leftmost running, failed or stale block).
+// - the board opens at its left edge, scrolled only to bring an off-screen live block into view.
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -180,12 +180,16 @@ if (graph) {
                       subtree: true, childList: true });
 }
 
-// ---- open at the live frontier --------------------------------------------------------------
+// ---- the live frontier in view ----------------------------------------------------------------
+// The board opens at its left edge. Only when the leftmost running, failed or stale block would
+// be off-screen does it scroll, just far enough to show that block whole.
 
 const board = $(".board");
 if (board && board.scrollWidth > board.clientWidth) {
   const live = $$(".plane .is-running, .plane .is-failed, .plane .is-stale");
-  const next = live.length ? live : $$(".plane .is-pending");
-  const left = Math.min(...next.map((n) => n.offsetLeft));
-  if (Number.isFinite(left)) board.scrollLeft = Math.max(0, left - 72);
+  const first = live.sort((a, b) => a.offsetLeft - b.offsetLeft)[0];
+  if (first) {
+    const right = first.offsetLeft + first.offsetWidth + 24;
+    if (right > board.clientWidth) board.scrollLeft = right - board.clientWidth;
+  }
 }

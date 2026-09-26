@@ -117,9 +117,9 @@ def test_the_board_shows_each_step_as_a_card(store):
     assert 'data-since="2026-01-01T10:12:05Z"' in each  # its running time stays current
     assert "is-stale" in card(page, "late") and "Its inputs changed" in card(page, "late")
     assert card(page, "fmt").startswith('<a class="node chip is-succeeded"')  # glue: a chip
-    # plan inputs and outputs are nodes too, with their values
-    assert re.search(r'data-node="i:n"[^>]*><span class="io">Input <b>n</b></span>'
-                     r'<span class="v">1</span>', page)
+    # plan inputs are a strip above the board (no nodes, no edges); outputs are nodes
+    assert '<p class="inputs"><span class="label">Inputs</span> <span class="in">n = 1</span>' \
+        in page and 'data-node="i:' not in page
     assert re.search(r'data-node="o:total"[^>]*><span class="io">Output <b>total</b></span>'
                      r'<span class="v">4</span>', page)
     # the page: its summary, the drawer that shows a step, and the live stream
@@ -134,19 +134,20 @@ def test_the_board_shows_each_step_as_a_card(store):
 def test_the_board_lays_steps_out_by_dependency_depth(store):
     board_project(store)
     page = views.project_page(store, "v", ver="abc")
-    xs = {k: pos(page, k)[0] for k in ("i:n", "s:a", "s:fmt", "s:b", "s:c", "s:each",
-                                       "s:late", "o:total")}
-    assert xs["i:n"] < xs["s:a"] == xs["s:c"] < xs["s:b"] == xs["s:fmt"] == xs["s:each"]
+    xs = {k: pos(page, k)[0] for k in ("s:a", "s:fmt", "s:b", "s:c", "s:each", "s:late",
+                                       "o:total")}
+    assert xs["s:a"] == xs["s:c"] == 12  # the first column is at the left edge
+    assert xs["s:a"] < xs["s:b"] == xs["s:fmt"] == xs["s:each"]
     assert xs["s:b"] < xs["s:late"] < xs["o:total"]
     # a chain lines up: b sits level with a, the step that feeds it first
     assert pos(page, "s:a")[1] <= pos(page, "s:b")[1]
     # an edge per handoff, named by its ports (shown when a block is traced)
     edges = set(re.findall(r'<path data-from="([^"]+)" data-to="([^"]+)"', page))
-    assert edges == {("i:n", "s:a"), ("s:a", "s:fmt"), ("s:a", "s:b"), ("s:a", "s:each"),
+    assert edges == {("s:a", "s:fmt"), ("s:a", "s:b"), ("s:a", "s:each"),
                      ("s:a", "s:late"), ("s:b", "s:late"), ("s:b", "o:total")}
     names = {(f, t): n for f, t, n in re.findall(
         r'<text data-from="([^"]+)" data-to="([^"]+)"[^>]*>([^<]*)</text>', page)}
-    assert names[("i:n", "s:a")] == "n → a" and names[("s:a", "s:fmt")] == "sum → values"
+    assert names[("s:a", "s:fmt")] == "sum → values" and names[("s:a", "s:b")] == "sum → a"
     # a:sum → late crosses a column: it runs through a gap (a dummy slot), not under a card
     late = re.search(r'<path data-from="s:a" data-to="s:late" d="([^"]+)"', page)[1]
     assert late.count("C") == 2 and "L" in late
@@ -226,11 +227,28 @@ def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
             "status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"}}})
     html = views.step_detail(store, "v", "agent")
     assert '<h3 class="label">Progress</h3><pre class="tail">thinking</pre>' in html
-    outputs = html[html.index("Outputs submitted so far"):]
-    assert "<dt>answer" in outputs and "so far" in outputs and "<dt>ports" not in outputs
+    outputs = html[html.index("Outputs submitted so far"):html.index("</dl>")]
+    assert "<dt>answer" in outputs and "so far" in outputs
+    assert "<dt>ports" not in outputs and "<dt>results" not in outputs  # the fn's own: later
+    (run / "submitted.json").unlink()
+    html = views.step_detail(store, "v", "agent")
+    assert "None yet. Declared: answer" in html and "ports" not in html
 
 
 # ---- what needs a person ------------------------------------------------------------------
+
+
+def test_long_descriptions_fold_and_inputs_show_their_docs(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": src("who"), "b": src("k")}}},
+           inputs={"who": {"type": "int", "doc": "Who <b>counts</b>"}, "k": "int"})
+    store.update_project("v", "A long description. " * 12)
+    store.set_input("v", "k", 3, "test", "")
+    page = views.project_page(store, "v", ver="x")
+    assert '<details class="about" data-preserve-attr="open"><summary><span class="clamp">' \
+        "A long description." in page
+    assert ('<span class="in" title="Who &lt;b&gt;counts&lt;/b&gt;">who <span class="attn">'
+            'not set</span></span> · <span class="in">k = 3</span>') \
+        in page
 
 
 def test_needs_you_lists_answers_inputs_failures_and_unanswered_messages(store):
@@ -313,6 +331,7 @@ def test_values_are_escaped(store):
         assert "<script>x" not in page and "<script>doc" not in page
         assert "<script>progress" not in page and "<i>me" not in page
     assert "&lt;script&gt;progress&lt;/script&gt;" in pages[0]
+    assert '<details class="about"' not in pages[0]  # a short description is not folded
     assert "&lt;script&gt;doc&lt;/script&gt;" in pages[0]
     assert "&lt;script&gt;alert(3)&lt;/script&gt;" in pages[0]  # the unanswered message
     assert "&lt;b&gt;bold&lt;/b&gt;" in pages[3]

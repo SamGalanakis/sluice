@@ -137,6 +137,22 @@ nav.sub { display: flex; gap: 14px; font-size: 12.5px; }
 nav.sub a { color: var(--muted-foreground); }
 .about { color: var(--muted-foreground); max-width: 75ch; }
 .sum { margin-top: 2px; }
+details.about > summary { list-style: none; cursor: pointer; color: var(--muted-foreground); }
+details.about > summary::-webkit-details-marker { display: none; }
+details.about .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+                       line-clamp: 2; overflow: hidden; }
+details.about[open] .clamp { display: block; }
+details.about > summary::after { content: "Show more"; font-size: 12.5px;
+                                 text-decoration: underline; text-underline-offset: 3px;
+                                 text-decoration-color: var(--border-strong); }
+details.about[open] > summary::after { content: "Show less"; }
+details[open].about > summary { margin-bottom: 0; }
+.inputs { font-size: 12.5px; line-height: 18px; margin-top: 6px; max-width: 960px;
+          display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+          line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.inputs .label { display: inline; margin-right: 4px; }
+.inputs .in[title] { text-decoration: underline dotted var(--border-strong);
+                     text-underline-offset: 3px; }
 
 /* ---- the board ---------------------------------------------------------------------- */
 #graph { margin-top: 12px; }
@@ -181,13 +197,12 @@ a.card:hover, a.chip:hover { border-color: var(--border-strong); }
         color: var(--muted-foreground); }
 .chip .g { margin-top: 0; }
 .chip .ttl { -webkit-line-clamp: 1; line-clamp: 1; }
-.input, .output { height: 56px; padding: 8px 12px; border-radius: var(--radius);
+.output { height: 56px; padding: 8px 12px; border-radius: var(--radius);
                   border: 1px dashed var(--border-strong); display: grid; align-content: center; }
 .io { font-size: 11px; line-height: 16px; color: var(--muted-foreground); }
 .io b { color: var(--foreground); font-weight: 500; }
-.input .v, .output .v { font-size: 12.5px; line-height: 18px; white-space: nowrap;
+.output .v { font-size: 12.5px; line-height: 18px; white-space: nowrap;
                         overflow: hidden; text-overflow: ellipsis; }
-.input .v.unset { color: var(--status-attention); }
 .output .v.unset { color: var(--muted-foreground); }
 
 /* ---- the step drawer and page -------------------------------------------------------- */
