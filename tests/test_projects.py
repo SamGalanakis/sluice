@@ -123,22 +123,32 @@ def test_a_project_fn_colliding_with_a_global_one_blocks_that_project(store, run
     assert store.read_state("p")["steps"]["a"]["status"] == "succeeded"
 
 
-def test_a_global_fn_colliding_with_a_builtin_blocks_every_project(store, runner):
+def test_a_broken_global_fn_is_left_out_but_blocks_no_project(store, runner):
     create(store, "p", {"a": step("core.echo", value=1)})
     write_fn(store.home / "fns", "git.head", {"path": "string"}, {"sha": "string"})
     problems = store.registry().problems
     assert [p["where"] for p in problems] == ["fns/git.head/fn.json"]
     assert problems[0]["message"].startswith("fn git.head collides with the builtin fn at ")
-    assert store.registry("p").problems == problems
+    assert store.registry("p").problems == problems  # still reported (verify, fn_list)
     heads = [e for e in store.registry().listing() if e["name"] == "git.head"]
     assert [(e["scope"], "error" in e) for e in heads] == [("builtin", False), ("global", True)]
-    assert store.fn("git.head").scope == "builtin"
-    with pytest.raises(InvalidPlan, match="the global functions"):
-        store.usable_registry()
-    with pytest.raises(InvalidPlan, match="project p"):
-        store.patch("p", 2, [], "t", "blocked")
+    assert store.fn("git.head").scope == "builtin"  # the colliding global one is left out
+    store.usable_registry()  # global problems never block
+    assert store.patch("p", 2, [], "t", "not blocked") == 3
     runner.tick()
-    assert store.read_state("p")["steps"]["a"]["status"] == "pending"
+    assert store.read_state("p")["steps"]["a"]["status"] == "succeeded"
+
+
+def test_a_plan_step_using_an_unloadable_global_fn_fails_validation(store):
+    create(store, "p", {})
+    bad = store.home / "fns" / "text.bad"
+    bad.mkdir(parents=True)
+    (bad / "fn.json").write_text('{"name": "text.bad", "inputs": {"x": "strang"}, "outputs": {}}')
+    with pytest.raises(InvalidPlan) as err:
+        store.patch("p", 2, [{"op": "add", "path": "/steps/b",
+                              "value": {"run": "text.bad", "in": {"x": {"default": "y"}}}}],
+                    "t", "uses a broken global fn")
+    assert any("steps.b" in e and "text.bad" in e for e in err.value.errors)
 
 
 def test_fn_save_writes_a_valid_fn_into_its_scope(store):

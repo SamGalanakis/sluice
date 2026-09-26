@@ -126,9 +126,9 @@ class Store:
         """The registry, refusing when any fn it covers has a problem (SPEC §2): plan edits,
         manual values, fn_call and runs wait until verify is clean for these scopes."""
         reg = self.registry(project)
-        if reg.problems:
+        if reg.blocking:
             who = f"project {project}" if project else "the global functions"
-            raise InvalidPlan([f"{p['where']}: {p['message']}" for p in reg.problems],
+            raise InvalidPlan([f"{p['where']}: {p['message']}" for p in reg.blocking],
                               f"{who}: function problems block edits and runs until fixed "
                               f"(see verify)")
         return reg

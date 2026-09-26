@@ -226,7 +226,7 @@ class Runner:
             state = self.store.read_state(project)
             before = canonical(state)
             _, plan = self.store.plan(project)
-            problems = self.store.registry(project).problems
+            problems = self.store.registry(project).blocking
             if problems:  # SPEC §2: no new runs until the functions are fixed
                 self._report(project, f"function problems block runs: {problems[0]['where']}: "
                                       f"{problems[0]['message']}")
@@ -283,7 +283,7 @@ class Runner:
     def _start_call(self, key: tuple[str, ...], d: Path, rec: dict[str, Any],
                     project: str | None) -> None:
         reg = self.store.registry(project)
-        if reg.problems:
+        if reg.blocking:
             return  # stays pending until the functions are fixed
         fn = reg.get(rec["fn"])
         if fn is None:

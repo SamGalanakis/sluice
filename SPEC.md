@@ -54,12 +54,14 @@ function. Two projects may each have a function of the same name. A fn dir is an
 subdirectory containing `fn.json` whose `name` matches the directory; anything else (e.g.
 `_lib/`) is ignored.
 
-**Function problems block.** While any function a project sees has a problem (a collision, or
-a fn.json that fails the §6a checks), that project refuses plan edits, manual values, `fn_call`
-and new runs (`invalid`, listing the problems); steps already running finish. A problem in the
-global scope blocks every project and project-less calls. Reads (`status`, `plan_get`,
-`plan_history`, views, `fn_list`, `verify`) keep working. Functions are rescanned when a
-`fn.json` or `main.py` changes, so a fix (or `fn_save`) needs no restart.
+**Only project problems block.** While one of the project's own functions has a problem (a
+collision, or a fn.json that fails the §6a checks), that project refuses plan edits, manual values,
+`fn_call` and new runs (`invalid`, listing the problems); steps already running finish. Problems
+in the global or built-in scope never block anything: the broken or colliding function is left
+out of lookup and reported by `verify` and `fn_list`, and a plan step that uses it fails
+validation like any unknown function. Reads (`status`, `plan_get`, `plan_history`, views,
+`fn_list`, `verify`) always work. Functions are rescanned when a `fn.json` or `main.py` changes,
+so a fix (or `fn_save`) needs no restart.
 
 Writes are atomic (`<file>.tmp` then `os.replace`); read-modify-write holds `fcntl.flock`.
 

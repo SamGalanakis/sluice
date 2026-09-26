@@ -148,6 +148,9 @@ class Registry:
         self.key = key
         self.fns: dict[str, Fn] = {}
         self.problems = list(dir_problems)
+        # Only the project's own fns can block it (SPEC §2); a broken or colliding global/built-in
+        # fn is just left out, and a plan that uses it fails validation on that step.
+        self.blocking: list[dict[str, str]] = []
         for e in self.entries:
             if e.fn is not None and not e.errors:
                 other = self.fns.get(e.name)
@@ -156,8 +159,10 @@ class Registry:
                     continue
                 e.errors.append(f"fn {e.name} collides with the {other.scope} fn at "
                                 f"{show(other.dir)}")
-            self.problems.extend({"where": show(e.dir / "fn.json"), "message": m}
-                                 for m in e.errors)
+            found = [{"where": show(e.dir / "fn.json"), "message": m} for m in e.errors]
+            self.problems.extend(found)
+            if e.scope == "project":
+                self.blocking.extend(found)
 
     def get(self, name: str) -> Fn | None:
         return self.fns.get(name)
