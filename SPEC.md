@@ -25,12 +25,13 @@ change.
 `SLUICE_HOME` (default `~/.sluice`):
 
 ```
-config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8}
+config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8,
+                             "calls_max": 1000}
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 .env                        global secrets (KEY=value lines)
 fns/                        global user functions
-calls/<call_id>/            one-off fn_call runs without a project: call.json, input.json,
-                            output.json, stderr.log
+calls.jsonl                 log of one-off fn_call runs without a project (capped, §6)
+runs/<run_id>/              input.json, output.json, stderr.log of those calls
 projects/<name>/
   project.json              {"name", "description"}
   plan.json                 the project's plan (snapshot of the log)
@@ -39,7 +40,8 @@ projects/<name>/
   fns/                      project-local functions
   .env                      project secrets (override global ones)
   runs/<run_id>/            input.json, output.json, stderr.log for one fn execution
-  calls/<call_id>/          one-off fn_call runs in this project
+  calls.jsonl               log of one-off fn_call runs in this project (capped, §6)
+  threads/<name>.jsonl      message threads (thread.* fns, §10)
   .lock                     flock target for read-modify-write in this project
 ```
 
@@ -171,9 +173,20 @@ step is refused.
 
 `state.json`:
 `{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
-"outputs", "error", "manual"}}}` with status `pending`, `running`, `succeeded`, `failed`. A
+"outputs", "error", "manual", "inputs_hash"}}}` with status `pending`, `running`, `succeeded`,
+`failed`, `stale`. A
 scattered step also records `done` and `total` runs. A step waiting for a process slot stays
 `pending`; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
+
+**Staleness.** A result is only valid for the inputs it was computed from. When a step succeeds
+(run, or set by hand) its state records `inputs_hash`: a hash of the resolved input values it
+consumed (null for a step set by hand while an upstream was unfinished: "inputs unknown"). Each
+tick, a `succeeded` step whose inputs would now resolve to a different hash (an upstream re-ran
+with a different result, a plan input changed, an upstream finished after a manual completion)
+becomes `stale`, and so does every succeeded step downstream of a stale step. Stale steps keep
+their outputs for inspection but never re-run by themselves, and steps reading them wait (they
+are not `succeeded`). `step_retry` re-runs a stale step; `step_set_output` accepts its result by
+hand again. `status` and the views show stale steps distinctly.
 
 Loop (every ~1 s, and right after an in-process edit), over all projects:
 1. New steps get `pending`. State entries of steps removed from the plan, and values of plan
@@ -184,9 +197,13 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
 3. Start ready `pending` steps, at most `max_parallel` processes across all projects. Built-in fns
    run inline.
 4. Write `state.json` if anything changed.
-5. Calls (`calls/` in the home and in each project): start `pending` ones within the same
-   `max_parallel` budget, and record finished ones in `call.json` (`status`, `started`,
-   `finished`, `outputs`, `error`).
+5. Calls: start `pending` ones within the same `max_parallel` budget. Every call is one
+   append-only log (`calls.jsonl` in the home, or in the project) of records
+   `{"call", "at", "fn", "status", "inputs"?, "outputs"?, "error"?}`; each status change appends a
+   record and `call_status` reads the latest one for a call id. The log is a FIFO capped at
+   `config.calls_max` records (default 1000): when it grows past the cap, the oldest records are
+   dropped (under the lock) together with run dirs no remaining record refers to. Calls still
+   pending or running are never dropped.
 
 On startup, steps and calls left `running` by a previous runner are marked `failed` with
 `error: "runner restarted"`. A `direct` call (§8 `fn_call`) is run by the process that made it,
@@ -196,12 +213,15 @@ never by the runner.
 ops, `{"rev", "at", "author", "reason", "action": "<tool name>", ...its arguments}`, so the
 history shows who set what):
 - `plan_set_input(name, value)`: sets a declared plan input (type-checked). Steps reading it
-  become ready. Changing a value later affects only steps that have not started yet.
-- `step_set_output(step, outputs)`: marks a non-running step `succeeded` with the given outputs
-  (type-checked against its fn's outputs, arrays for a scattered step), `manual: true`. For
-  manual work, a failed step whose result is known, or a stand-in. It is never run afterwards
-  unless retried.
-- `step_retry(step)`: sets a `failed` (or manual) step back to `pending`.
+  become ready. Changing it later makes steps that already read it `stale`.
+- `step_set_output(step, outputs, force?)`: marks a non-running step `succeeded` with the given
+  outputs (type-checked against its fn's outputs, arrays for a scattered step), `manual: true`.
+  For manual work, a failed step whose result is known, or a stand-in. Refused (`invalid`, naming
+  them) while any step it reads from has not succeeded, unless `force: true` (deliberately
+  bypassing a broken upstream; the step then records unknown inputs and turns `stale` once those
+  upstreams produce values). It is never run afterwards unless retried.
+- `step_retry(step)`: sets a `failed`, `stale` or manual step back to `pending`. Its succeeded
+  dependents turn `stale` when it produces a different result.
 - Setting a step's input by hand is an edit: `step_set_input(step, input, value)` patches its
   binding to `{"default": value}`.
 
@@ -300,14 +320,14 @@ document (no nav, no refresh), from the same renderer.
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, error?}]` in lookup order (`scope`: builtin, global or project); `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
-| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (under `calls/`) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s. `direct: true` runs it in the calling process to the end instead (no runner needed) |
+| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (logged in `calls.jsonl`) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s. `direct: true` runs it in the calling process to the end instead (no runner needed) |
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` |
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?` | `{rev}` |
 | `plan_history` | `project, since_rev?` | log entries |
 | `plan_set_input` | `project, name, value, reason?` | `{ok}` |
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
-| `step_set_output` | `project, step, outputs, reason?` | `{ok}` |
+| `step_set_output` | `project, step, outputs, reason?, force?` | `{ok}` |
 | `step_retry` | `project, step, reason?` | `{ok}` |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
@@ -322,6 +342,7 @@ sluice serve [--host H] [--port P]    runner + MCP server + dashboard
 sluice loop                           runner only
 sluice tool                           list the MCP tools with one-line descriptions
 sluice tool <name> '<json args>'      call that tool in-process and print its result
+sluice watch -p P [--threads a,b] [--steps]   stream new thread messages / step changes (§10)
 ```
 
 Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
@@ -336,6 +357,25 @@ also exits 1.
 Claude, the review agent, decisions), `jev.*` (Jev, TypeSafe's System One model: `jev.ask`,
 `jev.choice`, `jev.score`, `jev.noul`; needs `TYPESAFE_API_KEY`) and `git.*`/`gh.pr` (worktrees,
 merge, rebase, push, pull requests). Shared helper code for fns lives in `src/sluice/fns/_lib/`. Their `fn.json` files are the reference for their types.
+
+**Threads** (`thread.*`, plain functions, no engine support): a thread is an append-only message
+log `projects/<p>/threads/<name>.jsonl` (the project comes from `SLUICE_PROJECT`; thread names use
+the id pattern). A message is `{"seq", "at", "from", "to"?, "body", "data"?}`, `seq` counting from
+1 per thread. Agents use them through `fn_call` (any harness), plans as ordinary steps.
+- `thread.post`: inputs `{thread, body: string, from: string, to: string?, data: Any?}`, outputs
+  `{seq: int}`.
+- `thread.read`: inputs `{thread, since_seq: int?, to: string?, limit: int?}`, outputs
+  `{messages: Any[], last_seq: int}` (messages after `since_seq`; with `to`, only those addressed
+  to it or to nobody).
+- `thread.wait`: like `thread.read`, plus `timeout: int?` seconds (default 300): blocks until at
+  least one matching message arrives or the timeout passes (then `messages` is empty).
+- `thread.list`: inputs `{}`, outputs `{threads: [{name, last_seq, last_at}]}`.
+
+**Watching** (for harnesses with monitors, e.g. Claude Code's Monitor tool): `sluice watch -p P
+[--threads a,b] [--steps] [--since-seq N]` never exits and prints one JSON line per change: each
+new message on the named threads (`{"kind": "message", "thread", ...message}`), and with
+`--steps` each step status change of the project's plan (`{"kind": "step", "step", "status",
+"error"?}`, found by polling `status` every second). It reads files only; it needs no runner.
 
 ## 11. Conventions
 
