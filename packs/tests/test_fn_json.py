@@ -30,6 +30,12 @@ EXPECTED = {
              "session": "string?"},
             {"result": "string", "session": "string", "cost_usd": "float?"},
         ),
+        "agent.run": (
+            {"engine": ["devin", "codex", "claude"], "cwd": "string",
+             "spec": "string", "model": "string?", "resume": "string?",
+             "report_path": "string?"},
+            {"final": "string", "report": "string?", "session": "string?"},
+        ),
         "agent.review": (
             {"cwd": "string", "base": "string", "standards": "string",
              "notes": "string?"},
@@ -81,6 +87,7 @@ META = {
     "agent.codex": ("4h", {"agent": 1}, {"transient": 3, "backoff": "10m"}, True),
     "agent.claude": ("4h", {"agent": 1}, {"transient": 3, "backoff": "10m"}, True),
     "agent.review": ("4h", {"agent": 1}, {"transient": 3, "backoff": "10m"}, True),
+    "agent.run": ("4h", {"agent": 1}, {"transient": 3, "backoff": "10m"}, True),
     "decide.llm": ("5m", {"default": 1}, {"transient": 2, "backoff": "30s"}, True),
     "decide.jev": ("5m", {"default": 1}, {"transient": 2, "backoff": "30s"}, True),
     "git.worktree": ("10m", {"default": 1}, {"transient": 2, "backoff": "30s"}, True),

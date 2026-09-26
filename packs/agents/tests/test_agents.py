@@ -46,7 +46,7 @@ def init_repo(path):
 
 
 def make_devin(tmp_path, fake_bin, *, code=0, log_body="devin log output\n",
-               final_body="devin finished\n"):
+               final_body="devin finished\n", with_session=True):
     argv_file = tmp_path / "devin.argv"
     spec_copy = tmp_path / "devin.spec.copy"
     script = (
@@ -62,8 +62,9 @@ def make_devin(tmp_path, fake_bin, *, code=0, log_body="devin log output\n",
         "done\n"
         f'cp "$spec" "{spec_copy}"\n'
         f"printf '{log_body}' > \"$log\"\n"
-        'echo "sess-abc" > "$log.session"\n'
     )
+    if with_session:
+        script += 'echo "sess-abc" > "$log.session"\n'
     if final_body is not None:
         script += f"printf '{final_body}' > \"$log.final\"\n"
     script += f"exit {code}\n"
@@ -510,3 +511,129 @@ def test_agent_claude_live(call_fn, tmp_path):
     assert (repo.path / "hello.txt").exists()
     assert int(repo.git("rev-list", "--count", "HEAD")) >= 2
     assert out["session"]
+
+
+def test_run_devin(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file, _ = make_devin(tmp_path, fake_bin)
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "devin", "cwd": str(cwd), "spec": "do it"},
+        path=bin_dir,
+    )
+    run_dir = call_fn.run_dirs[-1]
+    assert code == 0, err
+    assert out == {"final": "devin finished\n", "report": None,
+                   "session": "sess-abc\n"}
+    assert read_argv(argv_file) == [
+        "--cd", str(cwd),
+        "--spec", str(run_dir / "spec.md"),
+        "--log", str(run_dir / "devin.log"),
+    ]
+
+
+def test_run_devin_no_session(call_fn, fake_bin, tmp_path):
+    bin_dir, _, _ = make_devin(tmp_path, fake_bin, with_session=False)
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "devin", "cwd": str(tmp_path), "spec": "s"},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert out["session"] is None
+
+
+def test_run_codex(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_codex(tmp_path, fake_bin)
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "codex", "cwd": str(tmp_path), "spec": "s", "model": "sol"},
+        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
+    )
+    run_dir = call_fn.run_dirs[-1]
+    assert code == 0, err
+    assert out == {"final": "codex log output\n", "report": None,
+                   "session": "sess-codex\n"}
+    argv = read_argv(argv_file)
+    assert argv[:4] == [
+        "--cd", str(tmp_path), "--spec", str(run_dir / "spec.md")]
+    assert argv[argv.index("--model") + 1] == "sol"
+
+
+def test_run_claude(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_claude(
+        tmp_path, fake_bin,
+        stdout_obj={"result": "done", "session_id": "s-42",
+                    "total_cost_usd": 0.01})
+    report = tmp_path / "rep.md"
+    report.write_text("REP")
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "the prompt",
+         "report_path": str(report)},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert out == {"final": "done", "report": "REP", "session": "s-42"}
+    assert read_argv(argv_file) == [
+        "-p", "the prompt",
+        "--model", "opus",
+        "--output-format", "json",
+        "--dangerously-skip-permissions",
+    ]
+
+
+def test_run_resume(call_fn, fake_bin, tmp_path):
+    bin_dir, devin_argv, _ = make_devin(tmp_path, fake_bin)
+    code, _out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "devin", "cwd": str(tmp_path), "spec": "s",
+         "resume": "sess-9"},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert read_argv(devin_argv)[-2:] == ["--resume", "sess-9"]
+
+    _, claude_argv = make_claude(
+        tmp_path, fake_bin,
+        stdout_obj={"result": "x", "session_id": "sess-7"})
+    code, _out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "s",
+         "resume": "sess-7"},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert read_argv(claude_argv)[-2:] == ["--resume", "sess-7"]
+
+
+def test_run_transient_per_engine(call_fn, fake_bin, tmp_path):
+    bin_dir, _, _ = make_devin(
+        tmp_path, fake_bin, code=1, log_body="capacity issues\n")
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "devin", "cwd": str(tmp_path), "spec": "s"},
+        path=bin_dir,
+    )
+    assert code == 75, err
+    assert out is None
+
+    make_codex(tmp_path, fake_bin, code=1, log_body="429 rate limit\n")
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "codex", "cwd": str(tmp_path), "spec": "s"},
+        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
+        path=bin_dir,
+    )
+    assert code == 75, err
+    assert out is None
+
+    make_claude(tmp_path, fake_bin, code=1, stderr_text="529 overloaded\\n")
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "s"},
+        path=bin_dir,
+    )
+    assert code == 75, err
+    assert out is None
