@@ -90,7 +90,7 @@ def test_devin_success(call_fn, fake_bin, tmp_path):
         "--spec", str(run_dir / "spec.md"),
         "--log", str(run_dir / "devin.log"),
     ]
-    assert spec_copy.read_text() == "do the thing"
+    assert spec_copy.read_text().startswith("do the thing")
 
 
 def test_devin_log_and_report_path(call_fn, fake_bin, tmp_path):
@@ -242,8 +242,10 @@ def test_claude_success(call_fn, fake_bin, tmp_path):
     )
     assert code == 0, err
     assert out == {"result": "did it", "session": "s-1", "cost_usd": 0.02}
-    assert read_argv(argv_file) == [
-        "-p", "do the thing",
+    argv = read_argv(argv_file)
+    assert argv[0] == "-p"
+    assert argv[1].startswith("do the thing")
+    assert argv[2:] == [
         "--model", "opus",
         "--output-format", "json",
         "--dangerously-skip-permissions",
@@ -325,6 +327,7 @@ def test_review(call_fn, fake_bin, tmp_path):
     assert "git diff base...HEAD" in argv[1]
     assert str(repo.path / "STANDARDS.md") in argv[1]
     assert "be strict" in argv[1]
+    assert "step-test-step" in argv[1]
 
 
 def claude_decide(choice, p, structured=False):
@@ -512,8 +515,10 @@ def test_run_claude(call_fn, fake_bin, tmp_path):
     )
     assert code == 0, err
     assert out == {"final": "done", "report": "REP", "session": "s-42"}
-    assert read_argv(argv_file) == [
-        "-p", "the prompt",
+    argv = read_argv(argv_file)
+    assert argv[0] == "-p"
+    assert argv[1].startswith("the prompt")
+    assert argv[2:] == [
         "--model", "opus",
         "--output-format", "json",
         "--dangerously-skip-permissions",
@@ -576,3 +581,99 @@ def test_run_transient_per_engine(call_fn, fake_bin, tmp_path):
     assert code == 1, err
     assert "transient (attempt 1)" in err  # the helper retried before giving up
     assert out is None
+
+
+def spec_of(call_fn):
+    """The spec.md the last fn call wrote into its run dir."""
+    return (call_fn.run_dirs[-1] / "spec.md").read_text()
+
+
+def test_step_thread_devin(call_fn, fake_bin, tmp_path):
+    """Running as a plan step, the spec gains the step-thread section."""
+    bin_dir, _, spec_copy = make_devin(tmp_path, fake_bin)
+    code, _out, err = call_fn(
+        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "do it"},
+        path=bin_dir)
+    assert code == 0, err
+    spec = spec_copy.read_text()
+    assert spec.startswith("do it")
+    assert "sluice thread `step-test-step` of project `test-project`" in spec
+    assert '"threads": ["step-test-step"]' in spec
+    assert '"project": "test-project"' in spec
+    assert '"name": "thread.post"' in spec
+    assert '"from": "test-step"' in spec
+    assert '"to": "orchestrator"' in spec
+    assert "sluice tool log_read" in spec
+    assert "sluice tool fn_call" in spec
+
+
+def test_step_thread_off(call_fn, fake_bin, tmp_path):
+    """listen: false, and running outside a plan step, leave the spec alone."""
+    bin_dir, _, spec_copy = make_devin(tmp_path, fake_bin)
+    code, _out, err = call_fn(
+        AGENTS / "agent.devin",
+        {"cwd": str(tmp_path), "spec": "s", "listen": False}, path=bin_dir)
+    assert code == 0, err
+    assert spec_copy.read_text() == "s"
+
+    code, _out, err = call_fn(
+        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
+        env={"SLUICE_STEP": ""}, path=bin_dir)
+    assert code == 0, err
+    assert spec_copy.read_text() == "s"
+
+    code, _out, err = call_fn(
+        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
+        env={"SLUICE_PROJECT": ""}, path=bin_dir)
+    assert code == 0, err
+    assert spec_copy.read_text() == "s"
+
+
+def test_step_thread_codex(call_fn, fake_bin, tmp_path):
+    bin_dir, _ = make_codex(tmp_path, fake_bin)
+    code, _out, err = call_fn(
+        AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s"},
+        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")})
+    assert code == 0, err
+    assert "sluice thread `step-test-step`" in spec_of(call_fn)
+
+
+def test_step_thread_claude(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_claude(
+        tmp_path, fake_bin, stdout_obj={"result": "r", "session_id": "s"})
+    code, _out, err = call_fn(
+        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+        path=bin_dir)
+    assert code == 0, err
+    argv = read_argv(argv_file)
+    assert "sluice thread `step-test-step`" in argv[argv.index("-p") + 1]
+
+
+def test_step_thread_run(call_fn, fake_bin, tmp_path):
+    """agent.run appends the section once, whatever the engine."""
+    bin_dir, argv_file = make_claude(
+        tmp_path, fake_bin, stdout_obj={"result": "r", "session_id": "s"})
+    code, _out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "s"},
+        path=bin_dir)
+    assert code == 0, err
+    argv = read_argv(argv_file)
+    assert "sluice thread `step-test-step`" in argv[argv.index("-p") + 1]
+
+    make_devin(tmp_path, fake_bin)
+    code, _out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "devin", "cwd": str(tmp_path), "spec": "s", "listen": False},
+        path=bin_dir)
+    assert code == 0, err
+    assert spec_of(call_fn) == "s"
+
+
+def test_step_thread_sanitizes_step(call_fn, fake_bin, tmp_path):
+    bin_dir, _, spec_copy = make_devin(tmp_path, fake_bin)
+    code, _out, err = call_fn(
+        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
+        env={"SLUICE_STEP": "Build.Mac OS"}, path=bin_dir)
+    assert code == 0, err
+    assert "`step-build-mac-os`" in spec_copy.read_text()

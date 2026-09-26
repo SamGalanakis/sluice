@@ -15,7 +15,8 @@ EXPECTED = {
                 "spec": "string",
                 "log": "string?",
                 "resume": "string?",
-                "report_path": "string?"
+                "report_path": "string?",
+                "listen": "boolean?"
             },
             {
                 "log": "string",
@@ -39,7 +40,8 @@ EXPECTED = {
                 ],
                 "log": "string?",
                 "resume": "string?",
-                "report_path": "string?"
+                "report_path": "string?",
+                "listen": "boolean?"
             },
             {
                 "log": "string",
@@ -52,7 +54,8 @@ EXPECTED = {
                 "cwd": "string",
                 "prompt": "string",
                 "model": "string?",
-                "session": "string?"
+                "session": "string?",
+                "listen": "boolean?"
             },
             {
                 "result": "string",
@@ -74,7 +77,8 @@ EXPECTED = {
                 "spec": "string",
                 "model": "string?",
                 "resume": "string?",
-                "report_path": "string?"
+                "report_path": "string?",
+                "listen": "boolean?"
             },
             {
                 "final": "string",
@@ -87,7 +91,8 @@ EXPECTED = {
                 "cwd": "string",
                 "base": "string",
                 "standards": "string",
-                "notes": "string?"
+                "notes": "string?",
+                "listen": "boolean?"
             },
             {
                 "summary": "string",
@@ -205,6 +210,62 @@ EXPECTED = {
             {
                 "number": "int",
                 "url": "string"
+            }
+        ],
+        "gh.pr_wait": [
+            {
+                "path": "string",
+                "pr": "string",
+                "until": {
+                    "type": "enum",
+                    "symbols": [
+                        "checks",
+                        "merged"
+                    ]
+                },
+                "interval": "int?",
+                "timeout": "int?"
+            },
+            {
+                "state": {
+                    "type": "enum",
+                    "symbols": [
+                        "green",
+                        "red",
+                        "conflicting",
+                        "merged",
+                        "closed",
+                        "timeout"
+                    ]
+                },
+                "sha": "string",
+                "url": "string",
+                "failed": "string[]"
+            }
+        ],
+        "gh.run_latest": [
+            {
+                "path": "string",
+                "branch": "string?",
+                "workflow": "string?"
+            },
+            {
+                "run_id": "int",
+                "sha": "string",
+                "status": "string",
+                "conclusion": "string?",
+                "url": "string",
+                "workflow": "string",
+                "failed_jobs": "string[]"
+            }
+        ],
+        "gh.run_cancel": [
+            {
+                "path": "string",
+                "run_id": "int"
+            },
+            {
+                "cancelled": "boolean"
             }
         ]
     }

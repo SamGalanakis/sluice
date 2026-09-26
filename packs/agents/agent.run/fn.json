@@ -14,7 +14,8 @@
     "spec": "string",
     "model": "string?",
     "resume": "string?",
-    "report_path": "string?"
+    "report_path": "string?",
+    "listen": "boolean?"
   },
   "outputs": {
     "final": "string",

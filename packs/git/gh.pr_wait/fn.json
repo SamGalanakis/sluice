@@ -1,0 +1,33 @@
+{
+  "name": "gh.pr_wait",
+  "doc": "Poll a GitHub PR until its checks settle, it merges/closes/conflicts, or a timeout passes.",
+  "inputs": {
+    "path": "string",
+    "pr": "string",
+    "until": {
+      "type": "enum",
+      "symbols": [
+        "checks",
+        "merged"
+      ]
+    },
+    "interval": "int?",
+    "timeout": "int?"
+  },
+  "outputs": {
+    "state": {
+      "type": "enum",
+      "symbols": [
+        "green",
+        "red",
+        "conflicting",
+        "merged",
+        "closed",
+        "timeout"
+      ]
+    },
+    "sha": "string",
+    "url": "string",
+    "failed": "string[]"
+  }
+}

@@ -5,7 +5,8 @@
     "cwd": "string",
     "base": "string",
     "standards": "string",
-    "notes": "string?"
+    "notes": "string?",
+    "listen": "boolean?"
   },
   "outputs": {
     "summary": "string",

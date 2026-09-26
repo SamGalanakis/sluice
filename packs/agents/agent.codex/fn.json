@@ -16,7 +16,8 @@
     ],
     "log": "string?",
     "resume": "string?",
-    "report_path": "string?"
+    "report_path": "string?",
+    "listen": "boolean?"
   },
   "outputs": {
     "log": "string",

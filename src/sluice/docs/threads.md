@@ -44,6 +44,19 @@ addressed to it or to nobody; `timeout` defaults to 300 s, then `messages` is em
               "timeout": {"default": 3600}}}}}
 ```
 
+## Talking to a running agent step
+
+The agents pack (`agent.devin`, `agent.codex`, `agent.claude`, `agent.review`, and so
+`agent.run`) gives every agent running as a plan step its own thread, `step-<id>`, and
+tells it in the spec to check that thread at natural checkpoints and to post questions to
+`orchestrator` there (pass `listen: false` to a step to leave the section out).
+
+- To steer a running step, post on its thread with `to` set to the step id:
+  `fn_call("thread.post", {"thread": "step-work", "from": "orchestrator", "to": "work",
+  "body": "skip the Windows build"}, project="myproj", direct=True)`.
+- To read what the step asks back, watch the same thread:
+  `log_wait(project="myproj", since_seq=<last>, threads=["step-work"])`.
+
 ## Watching from a shell
 `sluice watch -p myproj [--kinds k1,k2] [--threads a,b] [--since-seq N]` follows the log from now
 (or after `--since-seq`) and prints each matching record as one JSON line; it never exits and

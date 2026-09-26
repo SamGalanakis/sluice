@@ -5,7 +5,8 @@
     "cwd": "string",
     "prompt": "string",
     "model": "string?",
-    "session": "string?"
+    "session": "string?",
+    "listen": "boolean?"
   },
   "outputs": {
     "result": "string",

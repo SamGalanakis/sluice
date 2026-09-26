@@ -6,6 +6,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 
 from sluice.fn import ShError, Transient, run, sh
@@ -13,6 +14,25 @@ from sluice.fn import ShError, Transient, run, sh
 CODEX_BIN = str(Path.home() / ".codex" / "bin" / "codex-harness-run")
 CLAUDE_TRANSIENT = ("rate limit", "overloaded", "529")
 CODEX_TRANSIENT = ("rate limit", "429", "capacity")
+
+
+def _with_step_thread(text, ctx, listen):
+    """Append the step-thread instructions when running as a plan step."""
+    if listen is False or not (ctx.project and ctx.step):
+        return text
+    thread = "step-" + re.sub(r"[^a-z0-9_-]", "-", ctx.step.lower())
+    read = (f'{{"project": "{ctx.project}", "threads": ["{thread}"], '
+            f'"since_seq": <last>}}')
+    post = (f'{{"name": "thread.post", "project": "{ctx.project}", "direct": true, '
+            f'"inputs": {{"thread": "{thread}", "from": "{ctx.step}", '
+            f'"to": "orchestrator", "body": "..."}}}}')
+    return text + (
+        f"\n\nMessages for you arrive on sluice thread `{thread}` of project "
+        f"`{ctx.project}`. At each natural checkpoint run `sluice tool log_read "
+        f"'{read}'` and follow instructions addressed to you. If you hit a question "
+        f"you cannot settle within your task, post it with `sluice tool fn_call "
+        f"'{post}'` and continue with anything not blocked by it."
+    )
 
 
 def _devin(inp, ctx):
@@ -94,6 +114,7 @@ def _claude(inp):
 
 def main(inp, ctx):
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
+    inp = {**inp, "spec": _with_step_thread(inp["spec"], ctx, inp.get("listen"))}
     engine = inp["engine"]
     if engine == "claude":
         out = _claude(inp)

@@ -6,10 +6,12 @@ home or project actually needs.
 | Pack | Functions |
 |---|---|
 | `agents/` | `agent.devin`, `agent.codex`, `agent.claude`, `agent.run`, `agent.review`, `decide.llm` — run Devin/Codex/Claude agents and LLM decisions |
-| `git/` | `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`, `git.push`, `gh.pr` — worktrees, merges, rebases, pushes, pull requests |
+| `git/` | `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`, `git.push`, `gh.pr`, `gh.pr_wait`, `gh.run_latest`, `gh.run_cancel` — worktrees, merges, rebases, pushes, pull requests, workflow runs |
 | `jev/` | `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` — TypeSafe's System One model (Jev); needs `TYPESAFE_API_KEY` |
 
-Each `fn.json` is the reference for that function's typed inputs and outputs.
+Each `fn.json` is the reference for that function's typed inputs and outputs. The agents
+pack is a starting point: engine routing is up to each project — copy or wrap `agent.run`
+into the project's own `fns/` and choose engines there.
 
 ## Installing
 
