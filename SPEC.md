@@ -166,6 +166,9 @@ ops, so the history shows who set what):
 **Built-in fns** (in `src/sluice/fns/`, run inline):
 - `core.echo`: inputs `{"value": "Any"}`, outputs `{"value": "Any"}`.
 - `core.collect`: inputs `{"items": "Any[]"}`, outputs `{"items": "Any[]"}`. The fan-in join.
+- `core.format`: inputs `{"template": "string", "values": "Any"}`, outputs `{"text": "string"}`.
+  Python `str.format`: an array fills `{0}`, `{1}`...; a record fills `{name}`. Non-string values are
+  rendered as JSON. Builds prompts from upstream outputs.
 
 ## 7. Helper library `sluice.fn` (stdlib only)
 
@@ -198,8 +201,25 @@ input=None)` runs a command and raises `ShError` on a non-zero exit when `check`
 `current_rev`, `invalid` carries `errors`). `rev` is optional on the convenience tools (they apply
 to the current revision under the lock) and required on `plan_patch`.
 
+**Docs for agents.** The server sets MCP `instructions` from `src/sluice/docs/instructions.md`
+(short: what sluice is, the workflow, where to read more). A `docs(topic?)` tool returns the index
+(topic names with their first heading) without a topic, or `src/sluice/docs/<topic>.md`. The same
+pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe every argument.
+Validation errors carry the path and what was expected.
+
+**Views.** One renderer turns a plan plus its state into a picture:
+- Mermaid (`flowchart LR`): plan inputs as rounded nodes, steps as boxes labelled
+  `id / fn / status` (a scattered step shows `done/total`), plan outputs as rounded nodes, an edge
+  per source ref labelled with the output name, one colour class per status (pending grey,
+  running blue, succeeded green, failed red, manual outlined).
+- HTML: a standalone page with that Mermaid diagram (mermaid from cdn.jsdelivr.net), a table of
+  steps (status, started, finished, error first line), and the plan's input and output values.
+`plan_view(plan, format)` returns either as text. `sluice serve` also serves the HTML live at
+`GET /plans` (an index) and `GET /plans/<id>` (refreshes every 3 s).
+
 | Tool | Args | Returns |
 |---|---|---|
+| `docs` | `topic?` | the index, or one page as markdown |
 | `fn_list` | – | `[{name, doc, inputs, outputs}]` |
 | `fn_get` | `name` | the fn.json |
 | `fn_call` | `name, inputs, wait?` | runs one fn as a one-step plan (`call-<ts>-<short>`); `{plan, status, outputs?, error?}`, waiting up to `wait` s |
@@ -212,6 +232,7 @@ to the current revision under the lock) and required on `plan_patch`.
 | `step_set_input` | `plan, step, input, value, reason?, rev?` | `{rev}` |
 | `step_set_output` | `plan, step, outputs, reason?` | `{ok}` |
 | `step_retry` | `plan, step, reason?` | `{ok}` |
+| `plan_view` | `plan, format: "mermaid"\|"html"` | the diagram or page as text |
 | `status` | `plan` | `{rev, inputs: {name: value or null}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, manual}]}` |
 
 ## 9. CLI
@@ -224,6 +245,7 @@ sluice set-input <plan> <name> '<json>'
 sluice set-output <plan> <step> '<json>'
 sluice retry <plan> <step>
 sluice status <id>
+sluice view <id> [--html out.html]      Mermaid to stdout, or write the HTML page
 ```
 
 ## 10. Built-in fns in this repo
