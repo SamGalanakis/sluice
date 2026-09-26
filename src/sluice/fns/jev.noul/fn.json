@@ -1,0 +1,6 @@
+{
+  "name": "jev.noul",
+  "doc": "Probability (0 to 1) that the answer to a yes/no question about a state is yes, from Jev. yes/no optionally describe what each answer means. Needs TYPESAFE_API_KEY.",
+  "inputs": {"state": "Any", "instructions": "Any", "yes": "Any?", "no": "Any?", "model": "string?"},
+  "outputs": {"noul": "float", "model": "string"}
+}

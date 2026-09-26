@@ -9,11 +9,8 @@ HTTP server on 127.0.0.1 since its only seam is SLUICE_JEV_URL.
 import json
 import os
 import subprocess
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from typing import ClassVar
 
 import pytest
 
@@ -419,72 +416,6 @@ def test_decide_llm_transient(call_fn, fake_bin, tmp_path):
         AGENTS / "decide.llm", {"question": "q", "options": ["a"]}, path=bin_dir)
     assert code == 1, err
     assert "transient (attempt 1)" in err  # the helper retried before giving up
-
-
-def test_decide_jev_not_configured(call_fn):
-    code, out, err = call_fn(
-        AGENTS / "decide.jev",
-        {"question": "q", "options": ["a", "b"]},
-        env={"SLUICE_JEV_URL": "", "SLUICE_JEV_KEY": ""},
-    )
-    assert code == 1
-    assert out is None
-    assert "Jev is not configured" in err
-
-
-class _Jev(BaseHTTPRequestHandler):
-    status: ClassVar[int] = 200
-    payload: ClassVar[bytes] = b'{"choice": "b", "p": 0.9}'
-    requests: ClassVar[list] = []
-
-    def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        type(self).requests.append(
-            {"auth": self.headers.get("Authorization"), "body": json.loads(body)})
-        self.send_response(type(self).status)
-        self.end_headers()
-        self.wfile.write(type(self).payload)
-
-    def log_message(self, *args):
-        pass
-
-
-@pytest.fixture
-def jev_server():
-    _Jev.requests = []
-    _Jev.status = 200
-    _Jev.payload = b'{"choice": "b", "p": 0.9}'
-    srv = HTTPServer(("127.0.0.1", 0), _Jev)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    yield f"http://127.0.0.1:{srv.server_port}/decide"
-    srv.shutdown()
-    srv.server_close()
-
-
-def test_decide_jev_success(call_fn, jev_server):
-    code, out, err = call_fn(
-        AGENTS / "decide.jev",
-        {"question": "which", "options": ["a", "b"], "context": {"n": 1}},
-        env={"SLUICE_JEV_URL": jev_server, "SLUICE_JEV_KEY": "sekret"},
-    )
-    assert code == 0, err
-    assert out == {"choice": "b", "p": 0.9, "confident": True}
-    assert _Jev.requests[0]["auth"] == "Bearer sekret"
-    assert _Jev.requests[0]["body"] == {
-        "question": "which", "options": ["a", "b"], "context": {"n": 1}}
-
-
-def test_decide_jev_transient_on_429(call_fn, jev_server):
-    _Jev.status = 429
-    code, out, err = call_fn(
-        AGENTS / "decide.jev",
-        {"question": "q", "options": ["a"]},
-        env={"SLUICE_JEV_URL": jev_server, "SLUICE_JEV_KEY": "k"},
-    )
-    assert code == 1, err
-    assert "transient (attempt 1)" in err  # the helper retried before giving up
-    assert out is None
 
 
 @requires_live

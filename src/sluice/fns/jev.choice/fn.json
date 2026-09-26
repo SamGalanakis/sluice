@@ -1,0 +1,6 @@
+{
+  "name": "jev.choice",
+  "doc": "Pick one option for a state with Jev. options is a list of option names or a map of option to description. confident is confidence >= min_confidence (default 0.8). Needs TYPESAFE_API_KEY.",
+  "inputs": {"state": "Any", "instructions": "Any", "options": "Any", "min_confidence": "float?", "model": "string?"},
+  "outputs": {"choice": "string", "probabilities": "Any", "confidence": "float", "confident": "boolean", "model": "string"}
+}
