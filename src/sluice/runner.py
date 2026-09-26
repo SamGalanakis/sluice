@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -69,8 +70,19 @@ def spawn(fn: Fn, inp: dict[str, Any], run_dir: Path, env: dict[str, str]) -> su
     with open(run_dir / "input.json", "rb") as stdin, \
             open(run_dir / "output.json", "wb") as stdout, \
             open(run_dir / "stderr.log", "wb") as stderr:
+        # Its own session, so kill() reaches the fn under `uv run` as well (a process group).
         return subprocess.Popen(["uv", "run", "--quiet", "--script", str(fn.dir / "main.py")],
-                                stdin=stdin, stdout=stdout, stderr=stderr, cwd=run_dir, env=env)
+                                stdin=stdin, stdout=stdout, stderr=stderr, cwd=run_dir, env=env,
+                                start_new_session=True)
+
+
+def kill(proc: subprocess.Popen) -> None:
+    """Kill a fn process and everything it started, then reap it."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    proc.wait()
 
 
 def read_run(fn: Fn, run_dir: Path, code: int) -> tuple[dict[str, Any], str]:
@@ -145,8 +157,7 @@ class Active:
 
     def kill(self) -> None:
         for p in self.procs.values():
-            p.kill()
-            p.wait()
+            kill(p)
 
 
 class Runner:

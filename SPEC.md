@@ -108,7 +108,9 @@ dir. `SLUICE_PROJECT` names the project (empty for a call without one); for a ca
 `SLUICE_STEP` is empty and `SLUICE_RUN_ID` is the call id. The fn writes one JSON object keyed
 by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
 fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
-(`run(main, retries=N)`, §7).
+(`run(main, retries=N)`, §7). Each fn process starts its own session; when the runner stops a
+run (runner shutdown, a removed step, a failed sibling scatter run) it kills the whole process
+group, so nothing started under `uv run` outlives it.
 
 ## 5. Plans
 

@@ -1,4 +1,7 @@
 import json
+import os
+import time
+from pathlib import Path
 
 from sluice.runner import RESTARTED, Runner
 from sluice.store import Store
@@ -169,6 +172,35 @@ def test_a_new_runner_marks_leftover_running_steps_failed(store, runner):
     e = store.read_state("p")["steps"]["w"]
     assert (e["status"], e["error"]) == ("failed", RESTARTED)
     assert statuses(store, "p")["after"] == "pending"
+
+
+def _procs_in(run_dir) -> list[int]:
+    """Pids of processes whose working directory is run_dir (Linux /proc)."""
+    pids = []
+    for proc in Path("/proc").iterdir():
+        try:
+            if proc.name.isdigit() and Path(os.readlink(proc / "cwd")) == run_dir:
+                pids.append(int(proc.name))
+        except OSError:
+            continue
+    return pids
+
+
+def test_stopping_a_step_kills_the_fn_under_uv_too(store, runner):
+    create(store, "p", {"w": window(30)})
+    settle(runner, store, "p", until=lambda s: s["w"]["status"] == "running")
+    [run_id] = store.read_state("p")["steps"]["w"]["run_ids"]
+    run_dir = store.runs_dir("p") / run_id
+    deadline = time.time() + 20
+    while len(_procs_in(run_dir)) < 2 and time.time() < deadline:  # uv and the fn's python
+        time.sleep(0.05)
+    assert len(_procs_in(run_dir)) >= 2
+    for a in runner.active.values():
+        a.kill()
+    deadline = time.time() + 5
+    while _procs_in(run_dir) and time.time() < deadline:
+        time.sleep(0.05)
+    assert _procs_in(run_dir) == []
 
 
 def test_removed_steps_are_dropped_and_new_ones_picked_up(store, runner):
