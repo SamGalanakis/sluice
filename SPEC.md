@@ -395,8 +395,11 @@ Validation errors carry the path and what was expected.
 
 **Views.** A dashboard that only reads, with one exception: answering an inbox item (§8a).
 Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
-`prefers-color-scheme`, usable at phone width, keyboard reachable), a top nav (Projects ·
-Functions · Log · Inbox), every value HTML-escaped (plans, logs, run output and inbox items are
+`prefers-color-scheme`, usable at phone width, keyboard reachable), every page on one centred
+column that the top nav's content shares, a top nav (Projects · Functions · Log · Inbox) that
+marks the current section (`aria-current` and a bar, not colour alone; a project's pages are in
+Projects), every page of a project headed by its name and its tabs (Plan · Log · Inbox ·
+History · Functions, the current one marked), every value HTML-escaped (plans, logs, run output and inbox items are
 untrusted). The Inbox link carries the count of open items across all projects as the
 dashboard's one red badge (none when nothing waits); nothing else is red. A step's status is a
 drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
@@ -424,8 +427,8 @@ raw HTML escaped, unsafe link schemes refused).
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
 - `GET /projects/<name>`: the name, description (two lines, then "Show more"), one summary line (succeeded of total, running,
-  stale, failed, total `cost_usd`, last activity) and links (log, plan history: the log
-  filtered to the history kinds, inbox, functions); the "Needs you" lines; then the **board**:
+  stale, failed, total `cost_usd`, last activity) under its tabs (History is the log filtered
+  to the history kinds; Functions the functions as the project sees them); the "Needs you" lines; then the **board**:
   the plan as HTML cards laid out on the server in columns by dependency depth (plan outputs
   last; the plan inputs are a clamped strip above it, `name = value`, a doc in its title), each column ordered and placed by the mean height of what feeds
   it, an edge per handoff drawn as inline SVG (an edge that spans columns runs through a thin
@@ -496,7 +499,10 @@ Streams end when the server shuts down; the client reconnects with backoff.
   an inbox item or `plan_set_input`; the table has no write of its own. The page streams like
   the index (`/inbox/stream`, `/projects/<name>/inbox/stream`,
   parts: the items and the nav badge); each open item's answer area carries
-  `data-ignore-morph`, so a patch never resets what a person is typing.
+  `data-ignore-morph`, so a patch never resets what a person is typing. An answer the server
+  took shows at once, without waiting on the stream (which may be reconnecting after a
+  restart; streams retry at most 3 s apart): on the open view the item leaves the list and the
+  badge drops.
 - `POST /projects/<name>/inbox/<id>/answer`: the only write. A JSON body is the answer object;
   a form body (`text`, `next`) becomes `{"action": "answer", "text"}` and redirects to `next` (a
   local path) on success. Both call the store's `inbox_answer`, the tool's own code path, with

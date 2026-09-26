@@ -182,14 +182,15 @@ if (graph) {
 
 // ---- the live frontier in view ----------------------------------------------------------------
 // The board opens at its left edge. Only when the leftmost running, failed or stale block would
-// be off-screen does it scroll, just far enough to show that block whole.
+// be off-screen does it scroll, just far enough to show that block whole (its left padding, the
+// space before the plan, counts: it is measured on screen).
 
 const board = $(".board");
 if (board && board.scrollWidth > board.clientWidth) {
   const live = $$(".plane .is-running, .plane .is-failed, .plane .is-stale");
   const first = live.sort((a, b) => a.offsetLeft - b.offsetLeft)[0];
   if (first) {
-    const right = first.offsetLeft + first.offsetWidth + 24;
+    const right = first.getBoundingClientRect().right - board.getBoundingClientRect().left + 24;
     if (right > board.clientWidth) board.scrollLeft = right - board.clientWidth;
   }
 }

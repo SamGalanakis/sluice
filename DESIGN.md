@@ -97,10 +97,17 @@ components:
     rounded: "9px"
     height: "18px"
   nav-link-current:
+    textColor: "{colors.ink}"
+    padding: "0 10px"
+    height: "48px"
+  project-tab-current:
+    textColor: "{colors.ink}"
+    padding: "8px 0 10px"
+  status-filter-current:
     backgroundColor: "{colors.secondary-fill}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.md}"
-    padding: "6px 10px"
+    rounded: "6px"
+    padding: "2px 10px"
 ---
 
 # Design System: sluice dashboard
@@ -160,9 +167,20 @@ are a two-line strip above), 248px card columns and 188px chip-only columns with
 mean height of what feeds it, edges as inline SVG through thin slots so they never run under a
 card. It scrolls sideways inside itself and opens at its left edge, scrolling only when the
 live frontier is off-screen; the page never scrolls
-sideways. Text blocks hold a 72-75ch measure; the needs list and index hold 960px. Below 720px
-the board stacks in the same order without edges, and the step drawer becomes a full-screen
-sheet over the scrim.
+sideways. Text blocks hold a 72-75ch measure.
+
+### Named Rules
+**The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
+least a 24px gutter, 16px below 720px): `main` is a three-track grid (gutter, column, gutter)
+and everything goes in the middle track. The top nav's content aligns to the same edges (the
+wordmark on the left edge, Inbox ending on the right), so nav, title, lists, tables and cards
+share one left edge at every width. The board alone spans the window: its first column starts
+on the column's edge; a plan too wide for that starts further left, only as far as it must to
+end at the right gutter (never past the left one), and scrolls inside itself only when the
+window cannot hold it. Nothing makes the page scroll sideways.
+
+Below 720px the board stacks in the same order without edges, and the step drawer becomes a
+full-screen sheet over the scrim.
 
 ## Elevation & Depth
 
@@ -190,8 +208,17 @@ work.
 Primary is green on its own ink; others are card-coloured with an input hairline.
 
 ### Navigation
-A 48px top bar: the sluice wordmark, then Projects, Functions, Log, Inbox (with the one red
-badge); the current page takes the secondary fill.
+- **Top bar** (48px, card fill, on the column): the mark (an ink rounded square with a gate
+  over water, cut in the card colour) and the sluice wordmark, then Projects, Functions, Log;
+  Inbox, with the one red badge, sits at the right edge. The current section is ink with a 2px
+  ink bar on the bar's bottom hairline and `aria-current` (`page`, or `true` on a page inside
+  the section: a project's pages are in Projects); the rest are muted ink, with a quiet fill on
+  hover.
+- **Project tabs**: every page of a project opens with its name (the page title) and tabs,
+  Plan, Log, Inbox, History, Functions, on a hairline; the current tab is ink with a 2px ink
+  underline. They fit a phone and scroll sideways inside themselves if they ever do not.
+- **Status filter** (inbox): a small segmented control, the current status in the secondary
+  fill with a strong hairline; a filter, so it does not look like the tabs.
 
 ### Needs you
 One bordered list, one row per thing that waits: a 64px meta kind word (Answer, Input in

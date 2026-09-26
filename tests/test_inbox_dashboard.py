@@ -39,8 +39,8 @@ def post(port, path, data, json_body=True, headers=None):
 
 
 def badge(page):
-    m = re.search(r'<a id="nav-inbox" href="/inbox">Inbox(?: <span class="badge"[^>]*>(\d+)'
-                  r"</span>)?</a>", page)
+    m = re.search(r'<a id="nav-inbox" href="/inbox"(?: aria-current="page")?>Inbox'
+                  r'(?: <span class="badge"[^>]*>(\d+)</span>)?</a>', page)
     assert m, "no inbox link in the nav"
     return int(m[1] or 0)
 
@@ -158,7 +158,7 @@ def test_the_inbox_stream_drops_an_answered_item_and_moves_the_badge(store, port
     sent = patches(events)
     items = next(p for p in sent if p.startswith('elements <div id="inbox-items">'))
     assert "Pick one" not in items and "Nothing is waiting on you." in items
-    assert 'elements <a id="nav-inbox" href="/inbox">Inbox</a>' in sent
+    assert 'elements <a id="nav-inbox" href="/inbox" aria-current="page">Inbox</a>' in sent
     ver = signals_of(get(port, "/")[1])["ver"]
     events = stream(port, "/stream", {"ver": ver},
                     action=later(lambda: store.inbox_post("p", "Another")))
@@ -289,6 +289,25 @@ def test_the_doc_examples_render_and_their_buttons_answer(store, port, chrome):
         "values": {"version": "1.4.0", "notes": "Retries failed charges.", "notify": True}}
     assert [i["id"] for i in store.inbox("p")] == [broken]
 
+
+def test_an_answer_shows_at_once_while_the_stream_is_down(store, port, chrome):
+    """After a server restart the page's stream reconnects on its own schedule; an answer the
+    server took must not wait for it: the item leaves the open list and the badge drops."""
+    store.create_project("p")
+    a = store.inbox_post("p", "First?")["id"]
+    store.inbox_post("p", "Second?")
+    chrome.open("about:blank")
+    # hold every stream request unanswered: the page is up, its stream is not
+    chrome.send("Fetch.enable", {"patterns": [{"urlPattern": "*/stream*"}]})
+    chrome.send("Page.navigate", {"url": f"http://127.0.0.1:{port}/inbox"})
+    chrome.wait(f"!!document.querySelector('#item-p-{a} .answer[data-drawn]')")
+    assert chrome.eval("document.querySelector('#nav-inbox .badge').textContent") == "2"
+    chrome.eval(f"document.querySelector('#item-p-{a} textarea').value = 'yes'")
+    chrome.eval(f"document.querySelector('#item-p-{a} form button').click()")
+    chrome.wait(f"document.querySelector('#item-p-{a}') === null")
+    assert store.inbox("p", "answered")[0]["answer"]["text"] == "yes"
+    assert chrome.eval("document.querySelector('#nav-inbox .badge').textContent") == "1"
+    assert chrome.eval("performance.getEntriesByType('navigation').length") == 1  # no reload
 
 # ---- the board in a browser----------------------------------------------------------------------
 

@@ -47,7 +47,8 @@ STATUSES = ("pending", "running", "succeeded", "stale", "failed")
 DATASTAR_JS = "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js"
 FONT_CSS = "https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/index.css"
 # Keep the stream open across server restarts and network blips (Datastar backs off to 30 s).
-STREAM_OPTIONS = "{retry: 'always', retryMaxCount: 1000000}"
+# Reconnect for good, and within 3 s once the server is back (Datastar backs off to 30 s).
+STREAM_OPTIONS = "{retry: 'always', retryMaxCount: 1000000, retryMaxWait: 3000}"
 PAGE_SIZE = 50  # log records per log page
 SCOPE_TITLES = {"builtin": "Built-in", "global": "Global", "project": "Project"}
 # The log viewer's kind filter: each group name, then the kinds under it (§6b).
@@ -249,36 +250,69 @@ def open_count(store: Store) -> int:
     return len(store.inbox())
 
 
-def nav_inbox(count: int | None) -> str:
+def nav_inbox(count: int | None, current: bool = False) -> str:
     """The nav's Inbox link: its count of open items is the dashboard's one red badge."""
     badge = f' <span class="badge" title="open items">{count}</span>' if count else ""
-    return f'<a id="nav-inbox" href="/inbox">Inbox{badge}</a>'
+    cur = ' aria-current="page"' if current else ""
+    return f'<a id="nav-inbox" href="/inbox"{cur}>Inbox{badge}</a>'
 
 
 NAV = (("/", "Projects"), ("/fns", "Functions"), ("/log", "Log"))
+# The wordmark's mark: a gate across a channel, in ink.
+BRAND_MARK = ('<svg class="mark" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">'
+              '<rect width="20" height="20" rx="5" fill="currentColor"/>'
+              '<path d="M4 13.5c2-1.6 4-1.6 6 0s4 1.6 6 0" fill="none" stroke="var(--card)" '
+              'stroke-width="1.6" stroke-linecap="round"/>'
+              '<path d="M7 4.5v5.5M13 4.5v5.5M7 7h6" fill="none" stroke="var(--card)" '
+              'stroke-width="1.6" stroke-linecap="round"/></svg>')
+# A project's local nav: tab, label, and the address after /projects/<name> (or a callable).
+PROJECT_TABS = ("plan", "log", "inbox", "history", "fns")
+
+
+def project_head(project: str, tab: str | None) -> str:
+    """A project page's title and its local nav (Plan, Log, Inbox, History, Functions), the
+    tab `tab` marked; the same on every page of the project. `tab` None: the title alone."""
+    title = f"<h1>{e(project)}</h1>"
+    if tab is None:
+        return f'<div class="phead">{title}</div>'
+    p = quote(project)
+    hrefs = {"plan": (f"/projects/{p}", "Plan"), "log": (f"/projects/{p}/log", "Log"),
+             "inbox": (f"/projects/{p}/inbox", "Inbox"),
+             "history": (f"/projects/{p}/log?{HISTORY_QUERY}", "History"),
+             "fns": (f"/fns?project={p}", "Functions")}
+    links = "".join(f'<a href="{e(href)}"{_current(t, tab)}>{text}</a>'
+                    for t, (href, text) in ((t, hrefs[t]) for t in PROJECT_TABS))
+    return (f'<div class="phead">{title}<nav class="ptabs" aria-label="Project">{links}</nav>'
+            f"</div>")
+
+
+def _current(item: str, here: str, sub: bool = False) -> str:
+    """The aria-current of a nav item: `page` for the page itself, `true` for a page inside it
+    (`sub`), else nothing."""
+    if item != here:
+        return ""
+    return ' aria-current="true"' if sub else ' aria-current="page"'
 
 
 def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
            signals: Mapping[str, Any] | None = None, main_attrs: str = "",
-           inbox: int | None = None, script: str = "", here: str = "",
+           inbox: int | None = None, script: str = "", here: str = "", sub: bool = False,
            board: bool = False) -> str:
     """A page. With `stream`, Datastar opens that SSE stream once the page has loaded (with
     `signals`, the page's Datastar signals, sent along as the `datastar` query parameter).
     `inbox` is the count of open items for the nav's badge; `script` a module to load; `here`
-    the nav entry of this page; `board` loads the board's script (times, drawer, tracing)."""
+    the nav entry of this page (`sub`: of the section this page is in, as a project's pages are
+    in Projects); `board` loads the board's script (times, drawer, tracing)."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
     scripts = "".join(f'<script type="module" src="{e(s)}"></script>'
                       for s in (script, "/static/board.js" if board else "") if s)
     top = ""
     if nav:
-        cur = ' aria-current="page"'
-        links = "".join(f'<a href="{href}"{cur if href == here else ""}>{text}</a>'
+        links = "".join(f'<a href="{href}"{_current(href, here, sub)}>{text}</a>'
                         for href, text in NAV)
-        top = (f'<nav class="top"><a class="brand" href="/">sluice</a>{links}'
-               f"{nav_inbox(inbox)}</nav>")
+        top = (f'<nav class="top" aria-label="Sections"><a class="brand" href="/">{BRAND_MARK}'
+               f"<span>sluice</span></a>{links}{nav_inbox(inbox, here == '/inbox')}</nav>")
     body_attrs = f' data-signals="{_signals(signals)}"' if signals else ""
-    if here == "/inbox":  # the Inbox link is a streamed part: its current state lives here
-        body_attrs += ' class="at-inbox"'
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
     return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
@@ -766,8 +800,8 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
         elif kind == "o":
             has, v = value_of(board.plan.outputs[name], board.plan, board.state)
             cards.append(_io_node(key, n, name, v, has))
-    return (f'<div class="board" tabindex="0" role="region" aria-label="Plan">'
-            f'<div class="plane" style="--w:{width:.0f}px;--h:{height:.0f}px">{svg}'
+    return (f'<div class="board" tabindex="0" role="region" aria-label="Plan" '
+            f'style="--w:{width:.0f}px;--h:{height:.0f}px"><div class="plane">{svg}'
             f'{"".join(cards)}</div></div>')
 
 
@@ -924,18 +958,10 @@ def project_parts(store: Store, project: str) -> dict[str, str]:
 def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     board = load_board(store, project)
     about = board.info.get("description") or ""
-    links = ""
-    if live:
-        p = quote(project)
-        links = (f'<nav class="sub"><a href="/projects/{p}/log">Log</a>'
-                 f'<a href="/projects/{p}/log?{HISTORY_QUERY}">Plan history</a>'
-                 f'<a href="/projects/{p}/inbox">Inbox</a>'
-                 f'<a href="/fns?project={p}">Functions</a></nav>')
-    head = (f'<div class="p-title"><h1>{e(project)}</h1>{links}</div>'
-            + _about(about)
+    head = (_about(about)
             + f'<p class="meta sum">{_summary_line(board, last_change(store, project))}</p>'
             + inputs_strip(board))
-    parts = {"summary": _part("summary", head, "header"),
+    parts = {"summary": _part("summary", head),
              "needs": _part("needs", needs_band(needs(store, project)) if live else ""),
              "graph": _part("graph", board_html(store, board, live))}
     if live:
@@ -968,7 +994,8 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     every step's detail in a disclosure)."""
     live = ver is not None
     p = _project(store, project, live)
-    body = f'{p["summary"]}{p["needs"]}{p["graph"]}'
+    body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}{p["needs"]}'
+            f'{p["graph"]}')
     if live:
         body += _drawer(project)
     else:
@@ -980,7 +1007,7 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     return layout(project, body, nav=live,
                   stream=f"/projects/{project}/stream" if live else None,
                   signals={"ver": ver, "step": "", "sver": ""} if live else None,
-                  inbox=open_count(store) if live else None, board=live)
+                  inbox=open_count(store) if live else None, here="/", sub=True, board=live)
 
 
 def render(store: Store, project: str, fmt: str) -> str:
@@ -1185,10 +1212,9 @@ def step_parts(store: Store, project: str, sid: str) -> dict[str, str]:
 def step_page(store: Store, project: str, sid: str, ver: str) -> str:
     """One step on a page of its own (what a card links to without JavaScript)."""
     parts = step_parts(store, project, sid)
-    back = (f'<p class="crumb"><a href="/projects/{quote(project)}">{e(project)}</a></p>')
-    return layout(f"{sid} · {project}", back + parts["step-detail"],
+    return layout(f"{sid} · {project}", project_head(project, "plan") + parts["step-detail"],
                   stream=f"/projects/{project}/steps/{sid}/stream", signals={"sver": ver},
-                  main_attrs=' class="page-step"', inbox=open_count(store), board=True)
+                  inbox=open_count(store), here="/", sub=True, board=True)
 
 
 # ---- the log viewer ---------------------------------------------------------------------
@@ -1373,16 +1399,19 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
             f'<label class="thread">Threads <input name="thread" '
             f'value="{e(",".join(q.threads))}" placeholder="any" size="16" data-bind:thread>'
             f"</label><button>Apply</button></form>")
-    title = (f'Log <small>of <a href="/projects/{e(project)}">{e(project)}</a></small>'
-             if project else "Log <small>of calls without a project</small>")
+    if project is None:
+        title = "<h1>Log <small>of calls without a project</small></h1>"
+    else:
+        history = bool(q.kinds) and set(q.kinds) == set(L.HISTORY_KINDS) and not q.threads
+        title = project_head(project, "history" if history else "log")
     signals = {"kinds": [k if k in q.kinds else "" for k in KIND_OPTIONS],
                "thread": ",".join(q.threads), "before": q.before or 0, "after": q.after or 0,
                "view": q.query(), "seen": last}
     url = "history.replaceState(null, '', location.pathname + ($view ? '?' + $view : ''))"
-    return layout(f"{project or 'home'} log", f"<h1>{title}</h1>{form}{view}",
+    return layout(f"{project or 'home'} log", f"{title}{form}{view}",
                   stream=f"{base}/stream", signals=signals,
                   main_attrs=f' data-effect="{e(url)}"', inbox=open_count(store),
-                  here="/log" if project is None else "")
+                  here="/log" if project is None else "/", sub=project is not None)
 
 
 # ---- functions --------------------------------------------------------------------------
@@ -1439,8 +1468,10 @@ def fns_page(store: Store, project: str | None = None) -> str:
         sections.append(f"<h2>{title}</h2>{cards}")
     extra = "".join(f'<p class="fn problem err">{e(p["where"])}: {e(p["message"])}</p>'
                     for p in other)
-    return layout("Functions", f"<h1>Functions</h1>{picker}{extra}{''.join(sections)}",
-                  inbox=open_count(store), here="/fns")
+    title = "<h1>Functions</h1>" if project is None else project_head(project, "fns")
+    return layout("Functions", f"{title}{picker}{extra}{''.join(sections)}",
+                  inbox=open_count(store), here="/fns" if project is None else "/",
+                  sub=project is not None)
 
 
 # ---- the inbox --------------------------------------------------------------------------
@@ -1512,7 +1543,8 @@ def inbox_parts(store: Store, project: str | None, status: str) -> dict[str, str
         or f'<p class="empty">{e(empty)}</p>'
     if status == "open":
         body += _waiting(store, project)
-    return {"inbox-items": _part("inbox-items", body), "nav-inbox": nav_inbox(open_count(store))}
+    return {"inbox-items": _part("inbox-items", body),
+            "nav-inbox": nav_inbox(open_count(store), project is None)}
 
 
 def inbox_page(store: Store, project: str | None, status: str, ver: str) -> str:
@@ -1524,13 +1556,11 @@ def inbox_page(store: Store, project: str | None, status: str, ver: str) -> str:
         raise BadRequest(f"status: expected one of {', '.join(INBOX_FILTERS)}, got {status!r}")
     base, parts = inbox_base(project), inbox_parts(store, project, status)
     filters = "".join(
-        f'<a aria-current="page" href="{e(base + ("" if s == "open" else "?status=" + s))}">'
-        f"{s}</a>" if s == status else
-        f'<a href="{e(base + ("" if s == "open" else "?status=" + s))}">{s}</a>'
-        for s in INBOX_FILTERS)
-    title = (f'Inbox <small>of <a href="/projects/{e(project)}">{e(project)}</a></small>'
-             if project else "Inbox")
-    return layout("Inbox", f'<h1>{title}</h1><nav class="tabs">{filters}</nav>'
+        f'<a href="{e(base + ("" if s == "open" else "?status=" + s))}"'
+        f'{_current(s, status)}>{s.capitalize()}</a>' for s in INBOX_FILTERS)
+    title = "<h1>Inbox</h1>" if project is None else project_head(project, "inbox")
+    return layout("Inbox", f'{title}<nav class="seg" aria-label="Status">{filters}</nav>'
                   f'{parts["inbox-items"]}', stream=f"{base}/stream",
                   signals={"ver": ver, "status": status}, inbox=open_count(store),
-                  script="/static/inbox.js", here="/inbox" if project is None else "")
+                  script="/static/inbox.js", here="/inbox" if project is None else "/",
+                  sub=project is not None)

@@ -4,6 +4,7 @@ cards and its layout, a step's detail, the "Needs you" lines, the index, and esc
 import html
 import re
 
+from sluice import log as L
 from sluice import views
 from tests.conftest import create, write_fn
 
@@ -307,6 +308,35 @@ def test_the_project_index(store):
     assert re.search(r'<time datetime="\d{4}-\d\d-\d\dT[\d:]+Z"', page)
     assert '<a href="/fns">Functions</a>' in page and '<a href="/" aria-current="page">' in page
 
+
+
+def test_every_page_of_a_project_carries_its_tabs_with_one_marked(store):
+    create(store, "v", {"a": {"run": "core.echo", "in": {"value": d(1)}, "doc": "A"}})
+
+    def tabs(page):
+        nav = re.search(r'<nav class="ptabs" aria-label="Project">(.*?)</nav>', page)[1]
+        return re.findall(r'<a href="[^"]*"( aria-current="page")?>(\w+)</a>', nav)
+
+    def marked(page):
+        return [name for cur, name in tabs(page) if cur]
+
+    def top(page):  # the top nav's marked section
+        return re.findall(r'<nav class="top".*?<a href="/" aria-current="(\w+)">Projects</a>',
+                          page)
+
+    board = views.project_page(store, "v", ver="x")
+    assert [name for _, name in tabs(board)] == ["Plan", "Log", "Inbox", "History", "Functions"]
+    assert marked(board) == ["Plan"] and top(board) == ["true"]
+    history = views.LogQuery.parse({"kind": list(L.HISTORY_KINDS)})
+    assert marked(views.log_page(store, "v", views.LogQuery())) == ["Log"]
+    assert marked(views.log_page(store, "v", history)) == ["History"]
+    assert marked(views.inbox_page(store, "v", "open", "x")) == ["Inbox"]
+    assert marked(views.fns_page(store, "v")) == ["Functions"]
+    assert 'class="ptabs"' in views.step_page(store, "v", "a", "x")
+    assert 'class="ptabs"' not in views.project_page(store, "v")  # the standalone plan_view
+    home = views.inbox_page(store, None, "open", "x")
+    assert 'class="ptabs"' not in home and 'href="/inbox" aria-current="page">Inbox' in home
+    assert '<a href="/" aria-current="page">Projects</a>' in views.index(store)
 
 def test_values_are_escaped(store):
     create(store, "v", {"a": {"run": "core.echo", "in": {"value": d("<script>x</script>")},

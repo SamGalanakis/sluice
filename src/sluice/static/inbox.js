@@ -145,6 +145,7 @@ async function send(area, answer) {
     const got = await res.json();
     if (res.ok) {
       area.replaceChildren(h("p", { class: "ou-status" }, "Answered."));
+      answered(area);
       return;
     }
     note.textContent = [got.message ?? `could not answer (${res.status})`,
@@ -154,6 +155,24 @@ async function send(area, answer) {
     note.textContent = `could not answer: ${err}`;
     area.querySelectorAll("button").forEach(b => { b.disabled = false; });
   }
+}
+
+/** The server took the answer: show it now, whether or not the page's stream is connected (it
+ * may be reconnecting after a restart). On the open view the item leaves the list, and the
+ * nav's count drops; the stream's next patch says the same. */
+function answered(area) {
+  const view = new URLSearchParams(location.search).get("status") ?? "open";
+  const list = area.closest("#inbox-items");
+  if (view === "open" && list) {
+    area.closest("article.item")?.remove();
+    if (!list.querySelector("article.item")) {
+      list.prepend(h("p", { class: "empty" }, "Nothing is waiting on you."));
+    }
+  }
+  const badge = document.querySelector("#nav-inbox .badge");
+  const left = badge ? Number(badge.textContent) - 1 : NaN;
+  if (left > 0) badge.textContent = String(left);
+  else if (badge) badge.remove();
 }
 
 function submit(ctx, p, form) {
