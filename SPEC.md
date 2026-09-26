@@ -11,6 +11,9 @@ change.
 
 - **Function (fn):** a reusable unit with a name, an optional `doc`, typed named `inputs`, typed
   named `outputs`, and a Python implementation (`main.py`, run with `uv`).
+- **Project:** a name and an optional description, nothing else (no code directory: put whatever
+  context matters in the description). Each project has exactly one plan, its own functions and
+  its own `.env`. Every call names the project it acts on.
 - **Plan:** typed plan `inputs`, named plan `outputs`, and `steps`. Each step runs one fn; each of
   its inputs comes from a plan input, other steps' outputs, or a literal. Edited only through
   typed edits, every edit logged.
@@ -24,18 +27,32 @@ change.
 ```
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8}
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
-plans/<plan_id>/
-  plan.json                 current plan (snapshot of the log)
-  plan.log.jsonl            one line per accepted edit
+.env                        global secrets (KEY=value lines)
+fns/                        global user functions
+calls/<call_id>/            one-off fn_call runs without a project
+projects/<name>/
+  project.json              {"name", "description"}
+  plan.json                 the project's plan (snapshot of the log)
+  plan.log.jsonl            one line per accepted edit or manual value
   state.json                runner-owned: plan input values, step status and outputs
-  .lock                     flock target for read-modify-write in this dir
-runs/<run_id>/              input.json, output.json, stderr.log for one fn execution
+  fns/                      project-local functions
+  .env                      project secrets (override global ones)
+  runs/<run_id>/            input.json, output.json, stderr.log for one fn execution
+  calls/<call_id>/          one-off fn_call runs in this project
+  .lock                     flock target for read-modify-write in this project
 ```
 
-Fns load from the built-in dir `src/sluice/fns/` (shipped in the package) plus every dir in
-`config.fn_dirs`. A fn dir is any immediate subdirectory containing `fn.json`; other entries are
-ignored. Duplicate names are a load error. Writes are atomic (`<file>.tmp` then `os.replace`);
-read-modify-write holds `fcntl.flock`.
+**Function scopes:** built-in (shipped in the package, `src/sluice/fns/`), global
+(`SLUICE_HOME/fns/` and every dir in `config.fn_dirs`), and project (`projects/<name>/fns/`). A
+project sees built-in + global + its own functions. **Names never collide:** a global function may
+not reuse a built-in name, and a project function may not reuse a built-in or global name (or
+another name in the same scope). A collision is an error of the later scope: the offending
+project (or global dir) reports it from `verify` and `fn_list`, its plan edits and runs are
+refused until it is fixed, and `fn_save` refuses to create one. Two projects may each have a
+function of the same name. A fn dir is any immediate subdirectory containing `fn.json`;
+anything else (e.g. `_lib/`) is ignored.
+
+Writes are atomic (`<file>.tmp` then `os.replace`); read-modify-write holds `fcntl.flock`.
 
 ## 3. Types
 
@@ -75,9 +92,10 @@ required field of `inp` exists in `out` and fits, extra fields in `out` are fine
 
 **Process contract.** The runner runs `uv run --quiet --script <fn_dir>/main.py` with stdin = an
 object keyed by input name (unbound optional inputs are `null`); env `SLUICE_HOME`,
-`SLUICE_PLAN`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
-`PYTHONPATH` containing sluice's `src` dir, plus every `KEY=value` line of `$SLUICE_HOME/.env` if it
-exists (secrets such as API keys live there, never in plans); cwd = the run dir. The fn writes one JSON object keyed
+`SLUICE_PROJECT`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
+`PYTHONPATH` containing sluice's `src` dir, plus every `KEY=value` line of `SLUICE_HOME/.env` and
+then the project's `.env` (project values win). Secrets live there, never in plans. cwd = the run
+dir. `SLUICE_PROJECT` names the project (empty for a call without one). The fn writes one JSON object keyed
 by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
 fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
 (`run(main, retries=N)`, §7).
@@ -86,9 +104,6 @@ fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happ
 
 ```json
 {
-  "id": "release-2",
-  "rev": 7,
-  "label": "Release 2",
   "inputs":  {"repo": "string", "tasks": "string[]"},
   "outputs": {"notes": {"source": "notes/final"}},
   "steps": {
@@ -106,7 +121,10 @@ fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happ
 }
 ```
 
-- Ids (plan, steps, plan inputs/outputs) match `^[a-z0-9][a-z0-9_-]*$`. `rev` is store-maintained.
+A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps": {}}`.
+
+- Project names, step ids, plan input and output names match `^[a-z0-9][a-z0-9_-]*$`. The plan's
+  `rev` is store-maintained and returned by `plan_get`/`status`.
 - **Step inputs** (`in`): `{"default": <json>}` a literal; `{"source": "<ref>"}` one value;
   `{"source": ["<ref>", ...]}` fan-in: an array of the values, in order. A ref is a plan input
   name (`repo`) or `<step>/<output>`, optionally followed by `.<field or index>...` to reach
@@ -122,7 +140,7 @@ fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happ
 - A step is **ready** when every plan input and step it reads has a value / has `succeeded`.
 
 **Validation** (every edit must pass; all errors returned with paths): ids valid; every `run`
-exists; every required fn input bound, no unknown inputs; every ref names a declared plan input
+exists (in the project's lookup order); every required fn input bound, no unknown inputs; every ref names a declared plan input
 or an existing step and one of its fn's outputs (fields navigated through record types, anything
 under `Any` allowed; a scattered step's outputs are arrays); `fits` holds for each source (for a
 list source, the target must be an array or `Any` and each element must fit its item type; for
@@ -143,12 +161,12 @@ step is refused.
 scattered step also records `done` and `total` runs. A step waiting for a process slot stays
 `pending`; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
 
-Loop (every ~1 s, and right after an in-process edit), over all plans:
+Loop (every ~1 s, and right after an in-process edit), over all projects:
 1. New steps get `pending`. State entries of steps removed from the plan are dropped.
 2. Finished processes: exit 0 with valid outputs → `succeeded` with `outputs`; otherwise
    `failed` with `error` (exit code or type errors, plus the stderr tail). A scattered step
    collects its runs as they finish.
-3. Start ready `pending` steps, at most `max_parallel` processes across all plans. Built-in fns
+3. Start ready `pending` steps, at most `max_parallel` processes across all projects. Built-in fns
    run inline.
 4. Write `state.json` if anything changed.
 
@@ -159,7 +177,7 @@ On startup, steps left `running` by a previous runner are marked `failed` with
 ops, `{"rev", "at", "author", "reason", "action": "<tool name>", ...its arguments}`, so the
 history shows who set what):
 - `plan_set_input(name, value)`: sets a declared plan input (type-checked). Steps reading it
-  become ready. Changing a value already read by a started step is refused.
+  become ready. Changing a value later affects only steps that have not started yet.
 - `step_set_output(step, outputs)`: marks a non-running step `succeeded` with the given outputs
   (type-checked against its fn's outputs, arrays for a scattered step), `manual: true`. For
   manual work, a failed step whose result is known, or a stand-in. It is never run afterwards
@@ -174,6 +192,22 @@ history shows who set what):
 - `core.format`: inputs `{"template": "string", "values": "Any"}`, outputs `{"text": "string"}`.
   Python `str.format`: an array fills `{0}`, `{1}`...; a record fills `{name}`. Non-string values are
   rendered as JSON. Builds prompts from upstream outputs.
+
+## 6a. Verify
+
+`verify(project?)` checks everything and returns every problem it finds, each with a location
+(`project`, `fn`, file path or plan path) and a message; it changes nothing. Without a project it
+checks the global scope and every project. It covers:
+- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, nothing else), the name
+  matching its directory, every type parsing, `main.py` present for non-built-ins;
+- name collisions across scopes (see §2);
+- `project.json` shape, `.env` files parsing as `KEY=value` lines;
+- the plan: full validation (§5) against the project's functions;
+- `state.json` agreeing with the plan (no state for unknown steps, outputs of succeeded steps
+  passing their fn's output types, plan input values passing their types).
+
+`{"ok": bool, "problems": [{"where", "message"}]}`. CLI `sluice verify [-p P]` prints them and exits
+non-zero when there are any.
 
 ## 7. Helper library `sluice.fn` (stdlib only)
 
@@ -220,37 +254,43 @@ Validation errors carry the path and what was expected.
 - HTML: a standalone page with that Mermaid diagram (mermaid from cdn.jsdelivr.net), a table of
   steps (status, started, finished, error first line), and the plan's input and output values.
 `plan_view(plan, format)` returns either as text. `sluice serve` also serves the HTML live at
-`GET /plans` (an index) and `GET /plans/<id>` (refreshes every 3 s).
+`GET /projects` (an index) and `GET /projects/<name>` (refreshes every 3 s).
 
 | Tool | Args | Returns |
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
-| `fn_list` | – | `[{name, doc, inputs, outputs}]` |
-| `fn_get` | `name` | the fn.json |
-| `fn_call` | `name, inputs, wait?` | runs one fn as a one-step plan (`call-<ts>-<short>`); `{plan, status, outputs?, error?}`, waiting up to `wait` s |
-| `plans_list` | `include_calls?` | `[{id, label, rev, counts}]` |
-| `plan_create` | `plan, doc, reason` | `{rev}` |
-| `plan_get` | `plan` | `{rev, doc}` |
-| `plan_patch` | `plan, rev, ops, reason, author?` | `{rev}` |
-| `plan_history` | `plan, since_rev?` | log entries |
-| `plan_set_input` | `plan, name, value, reason?` | `{ok}` |
-| `step_set_input` | `plan, step, input, value, reason?, rev?` | `{rev}` |
-| `step_set_output` | `plan, step, outputs, reason?` | `{ok}` |
-| `step_retry` | `plan, step, reason?` | `{ok}` |
-| `plan_view` | `plan, format: "mermaid"\|"html"` | the diagram or page as text |
-| `status` | `plan` | `{rev, inputs: {name: value or null}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, manual}]}` |
+| `projects_list` | – | `[{name, description, rev, counts}]` |
+| `project_create` | `name, description?` | `{name}` (with an empty plan) |
+| `project_update` | `name, description` | `{name}` |
+| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope}]` (`scope`: project, global or builtin) |
+| `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
+| `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
+| `fn_call` | `name, inputs, project?, wait?` | runs one fn outside the plan (under `calls/`); `{call, status, outputs?, error?}`, waiting up to `wait` s |
+| `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` |
+| `plan_get` | `project` | `{rev, plan}` |
+| `plan_patch` | `project, rev, ops, reason, author?` | `{rev}` |
+| `plan_history` | `project, since_rev?` | log entries |
+| `plan_set_input` | `project, name, value, reason?` | `{ok}` |
+| `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
+| `step_set_output` | `project, step, outputs, reason?` | `{ok}` |
+| `step_retry` | `project, step, reason?` | `{ok}` |
+| `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
+| `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
+| `status` | `project` | `{rev, inputs: {name: value or null}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, manual}]}` |
 
 ## 9. CLI
 
 ```
 sluice init | serve | loop
-sluice fn list | show <name> | call <name> '<json>' [--wait S]
-sluice plan create <id> <file.json> | show <id> | patch <id> --rev N --reason R <ops.json> | history <id>
-sluice set-input <plan> <name> '<json>'
-sluice set-output <plan> <step> '<json>'
-sluice retry <plan> <step>
-sluice status <id>
-sluice view <id> [--html out.html]      Mermaid to stdout, or write the HTML page
+sluice project list | create <name> [--description D] | show <name>
+sluice fn list [-p P] | show <name> [-p P] | call <name> '<json>' [-p P]   (runs it directly, no runner needed)
+sluice plan show -p P | patch -p P --rev N --reason R <ops.json> | history -p P
+sluice set-input -p P <name> '<json>'
+sluice set-output -p P <step> '<json>'
+sluice retry -p P <step>
+sluice status -p P
+sluice verify [-p P]
+sluice view -p P [--html out.html]      Mermaid to stdout, or write the HTML page
 ```
 
 ## 10. Built-in fns in this repo
