@@ -126,7 +126,7 @@ def sh(
     print(f"$ {' '.join(argv)}" + (f"  (in {cwd})" if cwd else ""), file=sys.stderr, flush=True)
     full_env = {**os.environ, **env} if env else None
     p = subprocess.run(argv, cwd=cwd, env=full_env, timeout=timeout, input=input,
-                       text=True, capture_output=True)
+                       text=True, capture_output=True, check=False)
     for stream in (p.stdout, p.stderr):
         if stream.strip():
             print(stream[-_TAIL:].rstrip(), file=sys.stderr, flush=True)
