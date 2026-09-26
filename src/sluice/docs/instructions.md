@@ -12,4 +12,6 @@ Workflow:
 Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.0` to reach
 inside). Every edit is type-checked; errors name the exact path to fix.
 
+`plan_view(plan, "mermaid")` shows the graph with each step's status.
+
 Read `docs()` for the index, `docs("plans")` before writing your first plan.
