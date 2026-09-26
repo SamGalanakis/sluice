@@ -22,7 +22,7 @@ import jsonpointer
 from . import plan as P
 from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound
-from .fns import BUILTIN_DIR, Registry
+from .registry import BUILTIN_DIR, Registry
 from .util import append_line, atomic_write_json, now_iso, read_json
 
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},

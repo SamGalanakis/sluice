@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from sluice.fns import BUILTIN_DIR, Registry, RegistryError
+from sluice.registry import BUILTIN_DIR, Registry, RegistryError
 from tests.conftest import TESTPACK
 
 

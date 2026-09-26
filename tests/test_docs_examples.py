@@ -6,8 +6,8 @@ import re
 import pytest
 
 from sluice import plan as P
-from sluice.fns import BUILTIN_DIR, Registry
 from sluice.mcp_server import DOCS
+from sluice.registry import BUILTIN_DIR, Registry
 
 BLOCK = re.compile(r"```json\n(.*?)```", re.DOTALL)
 

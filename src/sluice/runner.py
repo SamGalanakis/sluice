@@ -21,7 +21,7 @@ from . import types as T
 from .errors import BadRequest, InvalidPlan
 from .plan import Plan, Source, Step, value_of
 from .store import Store
-from .util import atomic_write_json, canonical, now_iso, tail_text
+from .util import atomic_write_json, canonical, now_iso, read_dotenv, tail_text
 
 SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
 
@@ -216,7 +216,8 @@ class Runner:
         run_dir.mkdir(parents=True)
         atomic_write_json(run_dir / "input.json", a.inputs[i])
         pythonpath = os.pathsep.join(filter(None, [SRC_DIR, os.environ.get("PYTHONPATH")]))
-        env = {**os.environ, "SLUICE_HOME": str(self.store.home), "SLUICE_PLAN": pid,
+        env = {**os.environ, **read_dotenv(self.store.home / ".env"),
+               "SLUICE_HOME": str(self.store.home), "SLUICE_PLAN": pid,
                "SLUICE_STEP": a.step.id, "SLUICE_RUN_ID": run_id,
                "SLUICE_RUN_DIR": str(run_dir), "SLUICE_FN_DIR": str(a.step.fn.dir),
                "PYTHONPATH": pythonpath}

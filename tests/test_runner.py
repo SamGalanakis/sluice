@@ -203,3 +203,13 @@ def test_core_format_fills_from_an_array_or_a_record(store, runner):
     assert steps["pos"]["outputs"] == {"text": "3 and null"}
     assert steps["named"]["outputs"] == {"text": 'sum=x all=[1, "y"]'}
     assert steps["bad"]["error"] == "core.format: KeyError: 'missing'"
+
+
+def test_fn_processes_get_the_home_dotenv(store, runner):
+    (store.home / ".env").write_text("# secrets\nTEST_TOKEN=abc123\nexport TEST_QUOTED=\"a b\"\n"
+                                     "\nnot a line\nSLUICE_STEP=cannot-override\n")
+    create(store, "p", {"e": {"run": "test.env", "in": {}}})
+    settle(runner, store, "p")
+    env = outputs(store, "p", "e")["env"]
+    assert env["TEST_TOKEN"] == "abc123" and env["TEST_QUOTED"] == "a b"
+    assert env["SLUICE_STEP"] == "e"

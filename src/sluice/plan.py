@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import types as T
-from .fns import Fn, Registry
+from .registry import Fn, Registry
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"id", "label", "inputs", "outputs", "steps"}

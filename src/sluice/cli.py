@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import BadRequest, NotFound, SluiceError
-from .fns import RegistryError
+from .registry import RegistryError
 from .runner import Runner
 from .store import DEFAULT_CONFIG, Store, default_home
 from .util import atomic_write_json

@@ -51,3 +51,21 @@ def tail_text(path: Path, limit: int = 2000) -> str:
             return f.read().decode("utf-8", errors="replace")[-limit:]
     except OSError:
         return ""
+
+
+def read_dotenv(path: Path) -> dict[str, str]:
+    """`KEY=value` lines of a .env file (blank lines, `#` comments and quotes handled)."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    env = {}
+    for line in lines:
+        key, sep, value = line.strip().removeprefix("export ").partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not key.isidentifier():
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        env[key] = value
+    return env

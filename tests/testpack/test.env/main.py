@@ -8,7 +8,7 @@ from sluice.fn import run
 
 
 def main(inp, ctx):
-    env = {k: v for k, v in os.environ.items() if k.startswith("SLUICE_")}
+    env = {k: v for k, v in os.environ.items() if k.startswith(("SLUICE_", "TEST_"))}
     return {"env": env, "cwd": os.getcwd(), "input": inp, "step": ctx.step}
 
 

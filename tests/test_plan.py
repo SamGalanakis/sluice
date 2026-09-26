@@ -1,7 +1,7 @@
 import pytest
 
 from sluice import plan as P
-from sluice.fns import BUILTIN_DIR, Registry
+from sluice.registry import BUILTIN_DIR, Registry
 from tests.conftest import TESTPACK
 
 
