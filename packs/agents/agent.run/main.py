@@ -18,10 +18,14 @@ CLAUDE_TRANSIENT = ("rate limit", "rate_limit", "overloaded", "529")
 CODEX_TRANSIENT = ("rate limit", "429", "capacity")
 
 
-def _with_step_thread(text, ctx, listen):
-    """Append the step-thread instructions when running as a plan step."""
-    if listen is False or not (ctx.project and ctx.step):
-        return text
+def _type(form):
+    return form if isinstance(form, str) else json.dumps(form)
+
+
+def _step_thread(ctx, listen):
+    """The step-thread note: where messages for this step arrive and how to ask back."""
+    if listen is False:
+        return ""
     thread = "step-" + re.sub(r"[^a-z0-9_-]", "-", ctx.step.lower())
     since = last_seq(ctx.home / "projects" / ctx.project)
     read = (f'{{"project": "{ctx.project}", "threads": ["{thread}"], '
@@ -29,8 +33,8 @@ def _with_step_thread(text, ctx, listen):
     post = (f'{{"name": "thread.post", "project": "{ctx.project}", "direct": true, '
             f'"inputs": {{"thread": "{thread}", "from": "{ctx.step}", '
             f'"to": "orchestrator", "body": "..."}}}}')
-    return text + (
-        f"\n\nMessages for you arrive on sluice thread `{thread}` of project "
+    return (
+        f"Messages for you arrive on sluice thread `{thread}` of project "
         f"`{ctx.project}`. At natural pauses (between sub-tasks) check it with "
         f"`sluice tool log_read '{read}'`, and next time pass the `last_seq` it returns "
         f"as `since_seq`. Follow instructions addressed to you; ignore records not on "
@@ -38,6 +42,37 @@ def _with_step_thread(text, ctx, listen):
         f"it with `sluice tool fn_call '{post}'` and continue with anything not blocked "
         f"by it."
     )
+
+
+def _with_step_notes(text, inp, ctx, listen):
+    """Append what a plan step adds to the task: its extra inputs with their values, the
+    outputs it must submit (and how), and the step-thread note (unless listen is false)."""
+    if not (ctx.project and ctx.step):
+        return text
+    parts = [text]
+    if ctx.extra_inputs:
+        lines = ["## Inputs"]
+        for name, port in ctx.extra_inputs.items():
+            value = inp.get(name)
+            shown = value if isinstance(value, str) else json.dumps(value, indent=2)
+            lines.append(f"`{name}` ({_type(port['type'])}):\n{shown}")
+        parts.append("\n\n".join(lines))
+    if ctx.outputs:
+        lines = ["## Outputs you must submit"]
+        for name, port in ctx.outputs.items():
+            doc = f": {port['doc']}" if port.get("doc") else ""
+            lines.append(f"- `{name}` ({_type(port['type'])}){doc}")
+        values = ", ".join(f'"{n}": <{_type(p["type"])}>' for n, p in ctx.outputs.items())
+        lines.append(
+            "Submit them, as JSON values of those types, before you finish:\n"
+            f"`sluice tool step_submit '{{\"project\": \"{ctx.project}\", "
+            f"\"step\": \"{ctx.step}\", \"run\": \"{ctx.run_id}\", "
+            f"\"outputs\": {{{values}}}}}'`\n"
+            "If it returns `invalid`, fix what it lists and submit again (the last "
+            "submission counts).")
+        parts.append("\n".join(lines))
+    parts.append(_step_thread(ctx, listen))
+    return "\n\n".join(p for p in parts if p)
 
 
 def _devin(inp, ctx):
@@ -52,8 +87,8 @@ def _devin(inp, ctx):
     ]
     if inp.get("model"):
         argv += ["--model", inp["model"]]
-    if inp.get("resume"):
-        argv += ["--resume", inp["resume"]]
+    if inp.get("session"):
+        argv += ["--resume", inp["session"]]
     try:
         sh_stream(argv, follow=log)  # the harness writes its progress to the log
     except ShError as e:
@@ -62,11 +97,8 @@ def _devin(inp, ctx):
             raise Transient("devin-harness-run reported capacity issues") from e
         raise
     final_file = Path(str(log) + ".final")
-    session_file = Path(str(log) + ".session")
-    return {
-        "final": final_file.read_text() if final_file.exists() else "",
-        "session": session_file.read_text().strip() if session_file.exists() else None,
-    }
+    return {"final": final_file.read_text() if final_file.exists() else "",
+            "session": _session(log)}
 
 
 def _codex(inp, ctx):
@@ -81,8 +113,8 @@ def _codex(inp, ctx):
     ]
     if inp.get("model"):
         argv += ["--model", inp["model"]]
-    if inp.get("resume"):
-        argv += ["--resume", inp["resume"]]
+    if inp.get("session"):
+        argv += ["--resume", inp["session"]]
     try:
         sh_stream(argv, follow=log)  # the harness writes its progress to the log
     except ShError as e:
@@ -91,11 +123,13 @@ def _codex(inp, ctx):
             raise Transient("codex-harness-run hit a rate limit or capacity error") from e
         raise
     # codex writes <log>.session but no <log>.final: the last chunk of the log is the report.
-    session_file = Path(str(log) + ".session")
-    return {
-        "final": log.read_text()[-4000:] if log.exists() else "",
-        "session": session_file.read_text().strip() if session_file.exists() else None,
-    }
+    return {"final": log.read_text()[-4000:] if log.exists() else "", "session": _session(log)}
+
+
+def _session(log):
+    """The session id the harness wrote next to its log ("" when it wrote none)."""
+    f = Path(str(log) + ".session")
+    return f.read_text().strip() if f.exists() else ""
 
 
 def _one_line(text, n):
@@ -202,13 +236,13 @@ def claude(prompt, model, cwd, session=None):
 
 
 def _claude(inp):
-    data = claude(inp["spec"], inp.get("model") or "opus", inp["cwd"], inp.get("resume"))
+    data = claude(inp["spec"], inp.get("model") or "opus", inp["cwd"], inp.get("session"))
     return {"final": data["result"], "session": data["session_id"]}
 
 
 def main(inp, ctx):
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
-    inp = {**inp, "spec": _with_step_thread(inp["spec"], ctx, inp.get("listen"))}
+    inp = {**inp, "spec": _with_step_notes(inp["spec"], inp, ctx, inp.get("listen"))}
     engine = inp["engine"]
     if engine == "claude":
         out = _claude(inp)

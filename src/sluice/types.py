@@ -102,6 +102,21 @@ def record_of(fields: dict[str, Type]) -> Record:
     return Record(tuple(fields.items()))
 
 
+def form(t: Type) -> Any:
+    """A type in its CWL spelling again (the inverse of `parse`): a string where one exists."""
+    if isinstance(t, Prim):
+        return t.name
+    if isinstance(t, Optional):
+        inner = form(t.of)
+        return f"{inner}?" if isinstance(inner, str) else ["null", inner]
+    if isinstance(t, List):
+        inner = form(t.of)
+        return f"{inner}[]" if isinstance(inner, str) else {"type": "array", "items": inner}
+    if isinstance(t, Enum):
+        return {"type": "enum", "symbols": list(t.values)}
+    return {"type": "record", "fields": {k: form(v) for k, v in t.fields}}
+
+
 # ---- fits -------------------------------------------------------------------------------
 
 

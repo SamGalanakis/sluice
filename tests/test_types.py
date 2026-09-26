@@ -123,3 +123,14 @@ def test_navigate_types_and_values():
     assert T.navigate_value(v, ["a", "b", "1"]) == 20
     assert T.navigate_value(v, ["a", "b", "5"]) is None
     assert T.navigate_value(v, ["n", "x"]) is None
+
+
+@pytest.mark.parametrize("form", [
+    "string", "Any", "int?", "string[]", "float[]?",
+    ["null", {"type": "enum", "symbols": ["a", "b"]}],
+    {"type": "array", "items": {"type": "record", "fields": {"a": "int", "b": "string?"}}},
+    {"type": "array", "items": ["null", {"type": "enum", "symbols": ["x"]}]},
+])
+def test_form_spells_a_type_back(form):
+    assert T.form(T.parse(form)) == form
+    assert T.parse(T.form(T.parse({"type": "array", "items": "int"}))) == T.List(T.Prim("int"))

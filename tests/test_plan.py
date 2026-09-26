@@ -61,7 +61,7 @@ def test_a_valid_plan(reg):
     ({"steps": {"a": {"run": "test.add", "in": {"a": ONE}}}},
      "steps.a.in.b: required input is not bound"),
     ({"steps": {"a": {"run": "test.add", "in": {"a": ONE, "b": ONE, "c": ONE}}}},
-     "steps.a.in.c: fn test.add has no input c"),
+     "steps.a.in.c: fn test.add has no input c (only an open fn takes extra inputs)"),
     # refs name a plan input or a step output
     ({"steps": {"a": add({"source": "missing"}, ONE)}}, "steps.a.in.a: unknown plan input missing"),
     ({"steps": {"a": add({"source": "zz/sum"}, ONE)}}, "steps.a.in.a: unknown step zz"),

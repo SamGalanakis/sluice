@@ -1,6 +1,7 @@
 {
   "name": "agent.codex",
   "doc": "Run a Codex session on a spec text in a working directory.",
+  "open": true,
   "inputs": {
     "cwd": "string",
     "spec": "string",
@@ -15,13 +16,14 @@
       }
     ],
     "log": "string?",
-    "resume": "string?",
+    "session": "string?",
     "report_path": "string?",
     "listen": "boolean?"
   },
   "outputs": {
     "log": "string",
     "final": "string",
-    "report": "string?"
+    "report": "string?",
+    "session": "string"
   }
 }

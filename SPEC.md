@@ -10,7 +10,9 @@ change.
 ## 1. Concepts
 
 - **Function (fn):** a reusable unit with a name, an optional `doc`, typed named `inputs`, typed
-  named `outputs`, and a Python implementation (`main.py`, run with `uv`).
+  named `outputs`, and a Python implementation (`main.py`, run with `uv`). An **open** fn (an
+  agent) also takes whatever extra inputs a step binds and declares, per step, outputs that
+  its agent submits (§5).
 - **Project:** a name and an optional description, nothing else (no code directory: put whatever
   context matters in the description). Each project has exactly one plan, its own functions and
   its own `.env`. Every call names the project it acts on.
@@ -49,7 +51,8 @@ projects/<name>/
   fns/                      project-local functions
   .env                      project secrets (override global ones)
   runs/<run_id>/            input.json, output.json, stderr.log for one fn execution (a step run,
-                            or a call: then run_id is the call id)
+                            or a call: then run_id is the call id); submitted.json, what its
+                            agent submitted (§5)
   .lock                     flock target for read-modify-write in this project and log appends
 ```
 
@@ -96,6 +99,12 @@ required field of `inp` exists in `out` and fits, extra fields in `out` are fine
 `check_value(type, value) -> list[str]` validates a runtime value, returning path-bearing errors
 (`report.outcome: expected one of [done, blocked], got "ok"`).
 
+Types are written on fn inputs and outputs, plan inputs and the outputs a step of an open fn
+declares (§5). An extra input of such a step has no written type: it takes its source's (a
+ref's type; for a list source an array of the refs' type, `Any[]` when they differ; `Any` for a
+`default`; the item type when it is the scatter input). Where a type is handed on (the env of
+an open fn, §4) it is spelled back in the forms above, a string where one exists.
+
 ## 4. Functions
 
 `<fn_dir>/fn.json` plus `<fn_dir>/main.py`:
@@ -109,13 +118,18 @@ required field of `inp` exists in `out` and fits, extra fields in `out` are fine
 }
 ```
 
-`name` (dotted lowercase), `inputs` and `outputs` are required; `doc` is optional.
+`name` (dotted lowercase), `inputs` and `outputs` are required; `doc` is optional, and so is
+`"open": true`: a step running an open fn may bind extra inputs and declare outputs of its own
+(§5). Agent fns are open; nothing else needs to be.
 
 **Process contract.** The runner runs `uv run --quiet --script <fn_dir>/main.py` with stdin = an
 object keyed by input name (unbound optional inputs are `null`); env `SLUICE_HOME`,
 `SLUICE_PROJECT`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
 `PYTHONPATH` containing sluice's `src` dir, plus every `KEY=value` line of `SLUICE_HOME/.env` and
-then the project's `.env` (project values win). Secrets live there, never in plans. cwd = the run
+then the project's `.env` (project values win). A step of an open fn also gets, when it has
+any, `SLUICE_STEP_INPUTS`, JSON `{name: {"type": T}}` of its extra inputs (their values are in
+stdin under their names), and `SLUICE_STEP_OUTPUTS`, JSON `{name: {"type": T, "doc": "..."}}`
+of the outputs it declares (`doc` empty when there is none). Secrets live there, never in plans. cwd = the run
 dir. `SLUICE_PROJECT` names the project (empty for a call without one); for a call,
 `SLUICE_STEP` is empty and `SLUICE_RUN_ID` is the call id. The fn writes one JSON object keyed
 by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
@@ -170,13 +184,30 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   every run succeeds and fails if any fails.
 - **Plan outputs** name the plan's results: `{"source": "<ref>"}`. `fn_call` and `status`
   report them.
+- **Typed agent blocks.** A step whose fn is open (§4) may bind **extra inputs** in `in`
+  besides the fn's own (`{"source": ...}` or `{"default": ...}`; names follow the id pattern;
+  their types come from their sources, §3), and may declare its own **`outputs`**: `{"name":
+  <type> or {"type": <type>, "doc": "..."}}`, which join the fn's outputs (a name the fn
+  already has is an error). Refs to them validate like any output (field paths included; arrays
+  for a scattered step). A non-open fn given either is a validation error. While the step
+  runs, its agent submits the declared outputs with `step_submit(project, step, outputs,
+  run?)`: checked against the declared outputs (every required one, types fitting, no others;
+  `invalid` lists every mismatch with its path), refused unless the step is `running`; `run`
+  (a run id) is needed only when the step has several runs (scatter). Accepted outputs are
+  written to the run dir's `submitted.json` (a resubmit replaces it) and logged
+  (`step.submit`). When the fn exits 0, the runner merges them into the step's outputs (the
+  fn's returned values win on a name they share); a required declared output never submitted
+  fails the step with `declared outputs not submitted: <names> (the agent must call
+  step_submit ...)`. An unsubmitted optional one is null.
 - A step is **ready** when every plan input and step it reads has a value / has `succeeded`.
 
 **Validation** (every edit must pass; all errors returned with paths): ids valid; docs are
 strings and an input's object form has a `type`; every `run`
-exists (in the project's lookup order); every required fn input bound, no unknown inputs; every ref names a declared plan input
-or an existing step and one of its fn's outputs (fields navigated through record types, anything
-under `Any` allowed; a scattered step's outputs are arrays); `fits` holds for each source (for a
+exists (in the project's lookup order); every required fn input bound, no unknown inputs (extra
+inputs and declared outputs only on an open fn's step, no declared output named like one of
+the fn's); every ref names a declared plan input
+or an existing step and one of its outputs (its fn's or those it declares; fields navigated
+through record types, anything under `Any` allowed; a scattered step's outputs are arrays); `fits` holds for each source (for a
 list source, the target must be an array or `Any` and each element must fit its item type; for
 the scatter input, each item must fit the fn's input type); defaults and plan input values pass
 `check_value`; the graph is acyclic.
@@ -214,9 +245,10 @@ with no `inputs_hash` at all (state written before hashes existed) adopts the cu
 Loop (every ~1 s, and right after an in-process edit), over all projects:
 1. New steps get `pending`. State entries of steps removed from the plan, and values of plan
    inputs removed from it, are dropped.
-2. Finished processes: exit 0 with valid outputs → `succeeded` with `outputs`; otherwise
-   `failed` with `error` (exit code or type errors, plus the stderr tail). A scattered step
-   collects its runs as they finish.
+2. Finished processes: exit 0 with valid outputs → `succeeded` with `outputs` (for a step
+   that declares outputs, merged with what its agent submitted, §5); otherwise `failed` with
+   `error` (exit code, type errors or declared outputs not submitted, plus the stderr tail).
+   A scattered step collects its runs as they finish.
 3. Mark stale steps (above), then start ready `pending` steps, at most `max_parallel` processes
    across all projects. Built-in fns run inline; staleness is re-checked after each round of
    inline results, so nothing starts from a result that no longer holds.
@@ -237,7 +269,8 @@ record):
   become ready. Changing it later makes steps that already read it `stale`. Record `plan.input`
   `{name, value}`.
 - `step_set_output(step, outputs, force?)`: marks a non-running step `succeeded` with the given
-  outputs (type-checked against its fn's outputs, arrays for a scattered step), `manual: true`.
+  outputs (type-checked against its outputs, its fn's and those it declares; arrays for a
+  scattered step), `manual: true`.
   For manual work, a failed step whose result is known, or a stand-in. Refused (`invalid`, its
   `errors` naming each: `step a is pending`, `plan input n has no value`) while any step it reads
   from has not succeeded or any plan input it reads has no value, unless `force: true`
@@ -264,14 +297,15 @@ it, e.g. `projects/p/fns/x.y/fn.json`), followed by `#<path in the document>` fo
 (`projects/p/plan.json#steps.a.run`, `projects/p/state.json#inputs.n`) or `:<line>` for `.env`
 files. Without a project it checks the built-in and global scopes and every directory under
 `projects/`; with one, the built-in and global scopes and that project. It covers:
-- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, nothing else), the name
+- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc` and boolean `open`,
+  nothing else), the name
   matching its directory, every type parsing, `main.py` present for non-built-ins;
 - name collisions across scopes (see §2);
 - `project.json` shape (`name` equal to its directory, optional string `description`), `.env`
   files parsing as `KEY=value` lines (blank lines, `#` comments and `export ` allowed);
 - the plan: full validation (§5) against the project's functions;
 - `state.json` agreeing with the plan (no state for unknown steps or undeclared plan inputs,
-  valid statuses, outputs of succeeded steps passing their fn's output types, plan input values
+  valid statuses, outputs of succeeded steps passing their output types, plan input values
   passing their types).
 
 `{"ok": bool, "problems": [{"where", "message"}]}`. CLI `sluice verify [-p P]` prints them and exits
@@ -290,6 +324,7 @@ fn process posting to a thread) get distinct, increasing seqs; the file is in se
 | `plan.input` | `rev, author, reason, name, value` | `plan_set_input` |
 | `step.output` | `rev, author, reason, step, outputs, force?` | `step_set_output` |
 | `step.retry` | `rev, author, reason, step` | `step_retry` |
+| `step.submit` | `step, run, outputs` | every accepted `step_submit` (§5) |
 | `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per pass (`from` is the status before the pass, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
 | `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` |
 | `message` | `thread, from, to?, body, data?` | `thread.post` (§10) |
@@ -327,7 +362,9 @@ if __name__ == "__main__":
 ```
 
 `run(main, retries=0, backoff=30)` reads stdin, calls `main(inp, ctx)` (`ctx`: `project`, `step`,
-`run_id`, `run_dir`, `home`, `fn_dir`, `attempt`, `log(msg)`) with stdout redirected to stderr,
+`run_id`, `run_dir`, `home`, `fn_dir`, `attempt`, `log(msg)`, and for an open fn's step
+`extra_inputs` `{name: {type}}` and `outputs` `{name: {type, doc}}` from the env of §4, else
+empty) with stdout redirected to stderr,
 prints the result as JSON. On `Transient` it sleeps `backoff` s (env `SLUICE_BACKOFF` overrides)
 and calls `main` again, up to `retries` times; any other exception, or running out of retries,
 prints the traceback and exits 1. `sh(argv, cwd=None, check=True, env=None, timeout=None,
@@ -437,7 +474,7 @@ document (no nav, no links, no log, no stream), from the same renderer.
 | `projects_list` | – | `[{name, description, rev, counts}]` |
 | `project_create` | `name, description?` | `{name}` (with an empty plan) |
 | `project_update` | `name, description` | `{name}` |
-| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, error?}]` in lookup order (`scope`: builtin, global or project); `error` marks a function with a problem |
+| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
 | `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s. `direct: true` runs it in the calling process to the end instead (no runner needed) |
@@ -449,6 +486,7 @@ document (no nav, no links, no log, no stream), from the same renderer.
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
 | `step_set_output` | `project, step, outputs, reason?, force?` | `{ok}` (§6: refused while what it reads is not ready, unless `force`) |
 | `step_retry` | `project, step, reason?` | `{ok}` (a failed, stale or manual step) |
+| `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty) |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
@@ -524,7 +562,12 @@ the reference for their types.
 Every other fn in this repo is a **first-party pack** under `packs/`, not loaded by default:
 
 - `packs/agents/`: `agent.devin`, `agent.codex`, `agent.claude`, `agent.run`, `agent.review`,
-  `decide.llm` (run Devin, Codex, Claude, the review agent, decisions)
+  `decide.llm` (run Devin, Codex, Claude, the review agent, decisions). The agent fns are open
+  (§5): as a plan step they add to their task text an `## Inputs` section (each extra input
+  with its type and value), an `## Outputs you must submit` section (each declared output with
+  its type and doc, and the exact `sluice tool step_submit` command) and the step-thread note.
+  Each takes `session?` and returns `session` (empty when the harness wrote none): binding a
+  later step's `session` to an earlier step's `session` output continues that agent.
 - `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
   `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)
 - `packs/jev/`: `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` (Jev, TypeSafe's System One

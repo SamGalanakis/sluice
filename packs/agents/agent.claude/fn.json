@@ -1,6 +1,7 @@
 {
   "name": "agent.claude",
   "doc": "Run a Claude session on a prompt in a working directory.",
+  "open": true,
   "inputs": {
     "cwd": "string",
     "prompt": "string",

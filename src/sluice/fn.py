@@ -22,7 +22,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -51,9 +51,22 @@ class Context:
     home: Path
     fn_dir: Path
     attempt: int = 1
+    # An open fn's step (SPEC §5): the extra inputs it binds, {name: {"type"}} (their values
+    # are in inp), and the outputs it declares, {name: {"type", "doc"}}, which the agent
+    # submits with step_submit. Empty otherwise.
+    extra_inputs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def log(self, msg: str) -> None:
         print(msg, file=sys.stderr, flush=True)
+
+
+def _ports(name: str) -> dict[str, dict[str, Any]]:
+    try:
+        value = json.loads(os.environ.get(name) or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _context() -> Context:
@@ -66,6 +79,8 @@ def _context() -> Context:
         run_dir=run_dir,
         home=Path(env.get("SLUICE_HOME", str(Path.home() / ".sluice"))),
         fn_dir=Path(env.get("SLUICE_FN_DIR", ".")),
+        extra_inputs=_ports("SLUICE_STEP_INPUTS"),
+        outputs=_ports("SLUICE_STEP_OUTPUTS"),
     )
 
 

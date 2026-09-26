@@ -9,10 +9,16 @@ HTTP server on 127.0.0.1 since its only seam is SLUICE_JEV_URL.
 import json
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from sluice import log as L
+from sluice.runner import Runner
+from sluice.store import Store
 
 AGENTS = Path(__file__).resolve().parents[1]
 
@@ -103,6 +109,7 @@ def test_devin_success(call_fn, fake_bin, tmp_path):
         "log": str(run_dir / "devin.log"),
         "final": "devin finished\n",
         "report": None,
+        "session": "sess-abc",
     }
     assert read_argv(argv_file) == [
         "--cd", str(cwd),
@@ -125,17 +132,17 @@ def test_devin_log_and_report_path(call_fn, fake_bin, tmp_path):
     )
     assert code == 0, err
     assert out == {"log": str(log), "final": "devin finished\n",
-                   "report": "REPORT BODY"}
+                   "report": "REPORT BODY", "session": "sess-abc"}
     argv = read_argv(argv_file)
     assert "--log" in argv
     assert argv[argv.index("--log") + 1] == str(log)
 
 
-def test_devin_resume(call_fn, fake_bin, tmp_path):
+def test_devin_session(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file, _ = make_devin(tmp_path, fake_bin)
     code, _out, err = call_fn(
         AGENTS / "agent.devin",
-        {"cwd": str(tmp_path), "spec": "s", "resume": "sess-9"},
+        {"cwd": str(tmp_path), "spec": "s", "session": "sess-9"},
         path=bin_dir,
     )
     assert code == 0, err
@@ -235,6 +242,17 @@ def test_codex_no_model(call_fn, fake_bin, tmp_path):
     )
     assert code == 0, err
     assert "--model" not in read_argv(argv_file)
+
+
+def test_codex_session(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_codex(tmp_path, fake_bin)
+    code, out, err = call_fn(
+        AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s", "session": "sess-1"},
+        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
+    )
+    assert code == 0, err
+    assert read_argv(argv_file)[-2:] == ["--resume", "sess-1"]
+    assert out["session"] == "sess-codex"
 
 
 def test_codex_transient(call_fn, fake_bin, tmp_path):
@@ -446,6 +464,16 @@ def test_review(call_fn, fake_bin, tmp_path):
     assert str(repo.path / "STANDARDS.md") in argv[1]
     assert "be strict" in argv[1]
     assert "step-test-step" in argv[1]
+    assert out["session"] == "rs" and "--resume" not in argv
+
+    code, out, err = call_fn(
+        AGENTS / "agent.review",
+        {"cwd": str(repo.path), "base": "base",
+         "standards": str(repo.path / "STANDARDS.md"), "session": "rs-0"},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert read_argv(argv_file)[-2:] == ["--resume", "rs-0"]
 
 
 def claude_decide(choice, p, structured=False):
@@ -598,7 +626,7 @@ def test_run_devin_no_session(call_fn, fake_bin, tmp_path):
         path=bin_dir,
     )
     assert code == 0, err
-    assert out["session"] is None
+    assert out["session"] == ""
 
 
 def test_run_codex(call_fn, fake_bin, tmp_path):
@@ -643,12 +671,12 @@ def test_run_claude(call_fn, fake_bin, tmp_path):
     ]
 
 
-def test_run_resume(call_fn, fake_bin, tmp_path):
+def test_run_session(call_fn, fake_bin, tmp_path):
     bin_dir, devin_argv, _ = make_devin(tmp_path, fake_bin)
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "devin", "cwd": str(tmp_path), "spec": "s",
-         "resume": "sess-9"},
+         "session": "sess-9"},
         path=bin_dir,
     )
     assert code == 0, err
@@ -659,7 +687,7 @@ def test_run_resume(call_fn, fake_bin, tmp_path):
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "s",
-         "resume": "sess-7"},
+         "session": "sess-7"},
         path=bin_dir,
     )
     assert code == 0, err
@@ -799,3 +827,161 @@ def test_step_thread_sanitizes_step(call_fn, fake_bin, tmp_path):
         env={"SLUICE_STEP": "Build.Mac OS"}, path=bin_dir)
     assert code == 0, err
     assert "`step-build-mac-os`" in spec_copy.read_text()
+
+
+# ---- typed agent blocks: extra inputs, declared outputs, step_submit ----------------------
+
+STEP_INPUTS = {"interface": {"type": "string"}, "branches": {"type": "string[]"}}
+STEP_OUTPUTS = {"branch": {"type": "string", "doc": "The branch you pushed"},
+                "report": {"type": {"type": "record", "fields": {"ok": "boolean"}}, "doc": ""}}
+BLOCK_ENV = {"SLUICE_STEP_INPUTS": json.dumps(STEP_INPUTS),
+             "SLUICE_STEP_OUTPUTS": json.dumps(STEP_OUTPUTS)}
+BLOCK_INPUTS = {"interface": "docs/api.md\nsecond line", "branches": ["a", "b"]}
+
+
+def prompt_of(name, call_fn, argv_file):
+    """The task text an agent fn handed its CLI: spec.md for the harnesses, else claude's -p
+    argument."""
+    if name in ("agent.claude", "agent.review", "agent.run"):
+        argv = read_argv(argv_file)
+        return argv[argv.index("-p") + 1]
+    return spec_of(call_fn)
+
+
+def block_call(name, call_fn, fake_bin, tmp_path, inputs, env):
+    """Run agent fn `name` against its fake with these extra inputs and env; return the text
+    it handed its CLI."""
+    base = {"agent.claude": {"prompt": "the task"}, "agent.codex": {"spec": "the task"},
+            "agent.devin": {"spec": "the task"},
+            "agent.run": {"engine": "claude", "spec": "the task"},
+            "agent.review": {"base": "HEAD", "standards": "S.md"}}[name]
+    cwd = tmp_path / "repo"
+    if not cwd.exists():
+        init_repo(cwd)
+    if name == "agent.codex":
+        bin_dir, argv_file = make_codex(tmp_path, fake_bin)
+        env = {**env, "SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
+    elif name == "agent.devin":
+        bin_dir, argv_file, _ = make_devin(tmp_path, fake_bin)
+    else:
+        bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event()])
+    code, _out, err = call_fn(AGENTS / name, {"cwd": str(cwd), **base, **inputs}, env=env,
+                              path=bin_dir)
+    assert code == 0, err
+    return prompt_of(name, call_fn, argv_file)
+
+
+AGENT_FNS = ["agent.claude", "agent.codex", "agent.devin", "agent.run", "agent.review"]
+
+
+@pytest.mark.parametrize("name", AGENT_FNS)
+def test_a_block_is_told_its_inputs_and_the_outputs_to_submit(name, call_fn, fake_bin,
+                                                               tmp_path):
+    text = block_call(name, call_fn, fake_bin, tmp_path, BLOCK_INPUTS, BLOCK_ENV)
+    inputs = text.index("## Inputs")
+    outputs = text.index("## Outputs you must submit")
+    thread = text.index("Messages for you arrive on sluice thread")
+    assert inputs < outputs < thread
+    assert ("`interface` (string):\ndocs/api.md\nsecond line\n\n"
+            "`branches` (string[]):\n[\n  \"a\",\n  \"b\"\n]") in text
+    assert "- `branch` (string): The branch you pushed\n" in text
+    assert '- `report` ({"type": "record", "fields": {"ok": "boolean"}})\n' in text
+    assert ("`sluice tool step_submit '{\"project\": \"test-project\", \"step\": \"test-step\", "
+            "\"run\": \"test-run\", \"outputs\": {\"branch\": <string>, \"report\": "
+            "<{\"type\": \"record\", \"fields\": {\"ok\": \"boolean\"}}>}}'`") in text
+    assert "If it returns `invalid`, fix what it lists and submit again" in text
+
+
+@pytest.mark.parametrize("name", AGENT_FNS)
+def test_a_block_without_ports_gets_only_the_thread_note(name, call_fn, fake_bin, tmp_path):
+    text = block_call(name, call_fn, fake_bin, tmp_path, {}, {})
+    assert "## Inputs" not in text and "## Outputs" not in text and "step_submit" not in text
+    assert "Messages for you arrive on sluice thread" in text
+
+
+def test_sections_apply_one_at_a_time_and_listen_false_drops_only_the_note(
+        call_fn, fake_bin, tmp_path):
+    only_out = {"SLUICE_STEP_OUTPUTS": BLOCK_ENV["SLUICE_STEP_OUTPUTS"]}
+    text = block_call("agent.devin", call_fn, fake_bin, tmp_path, {"listen": False}, only_out)
+    assert text.startswith("the task\n\n## Outputs you must submit\n")
+    assert "## Inputs" not in text and "sluice thread" not in text
+    only_in = {"SLUICE_STEP_INPUTS": json.dumps({"n": {"type": "Any"}})}
+    text = block_call("agent.devin", call_fn, fake_bin, tmp_path, {"n": {"k": 1}}, only_in)
+    assert text.startswith('the task\n\n## Inputs\n\n`n` (Any):\n{\n  "k": 1\n}\n\n'
+                           "Messages for you")
+
+
+# ---- the same, end to end under the runner -----------------------------------------------
+
+SUBMITTING_CLAUDE = '''#!{python}
+"""A fake claude that does what the prompt says: fills the step_submit command's
+placeholders and runs it through the sluice CLI, then reports a result."""
+import json, re, sys
+from sluice.cli import main
+
+prompt = sys.argv[sys.argv.index("-p") + 1]
+submit = {submit!r}
+if submit:
+    cmd = re.search(r"sluice tool step_submit '(.*?)'`", prompt).group(1)
+    args = json.loads(re.sub(r"<[^>]+>", json.dumps(submit), cmd))
+    code = main(["tool", "step_submit", json.dumps(args)])
+    print(f"step_submit exited {{code}}", file=sys.stderr)
+print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "num_turns": 1,
+                  "result": "done", "session_id": "s-run", "total_cost_usd": 0.0}}))
+'''
+
+
+def run_plan(tmp_path, steps, submit):
+    """Run `steps` (a plan using the agents pack) under a runner on a scratch home whose
+    claude is the fake above; returns (store, state steps)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"fn_dirs": [str(AGENTS)]}))
+    fake = tmp_path / "claude-fake"
+    fake.write_text(SUBMITTING_CLAUDE.format(python=sys.executable, submit=submit))
+    fake.chmod(0o755)
+    (home / ".env").write_text(f"SLUICE_CLAUDE_BIN={fake}\n")
+    store = Store(home)
+    store.create_project("p", "", "t", "t")
+    store.patch("p", 1, [{"op": "replace", "path": "/steps", "value": steps}], "t", "t")
+    runner = Runner(store)
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        runner.tick()
+        st = store.read_state("p")["steps"]
+        if st and all(e["status"] in ("succeeded", "failed") for e in st.values()):
+            return store, st
+        time.sleep(0.1)
+    raise AssertionError(f"timed out: {store.read_state('p')['steps']}")
+
+
+def claude_block(**extra):
+    return {"run": "agent.claude", "in": {"cwd": {"default": "/tmp"},
+                                          "prompt": {"default": "Pick a word."}, **extra}}
+
+
+def test_an_agent_that_submits_hands_its_outputs_downstream(tmp_path):
+    store, st = run_plan(tmp_path, {
+        "a": {**claude_block(), "outputs": {"word": "string"}},
+        "b": {**claude_block(word={"source": "a/word"}, session={"source": "a/session"}),
+              "outputs": {"echo": "string"}},
+    }, submit="blue")
+    assert st["a"]["status"] == "succeeded", st["a"].get("error")
+    assert st["a"]["outputs"] == {"result": "done", "session": "s-run", "cost_usd": 0.0,
+                                  "word": "blue"}
+    assert st["b"]["status"] == "succeeded", st["b"].get("error")
+    assert st["b"]["outputs"]["echo"] == "blue"
+    [run_b] = st["b"]["run_ids"]
+    prompt = json.loads((store.runs_dir("p") / run_b / "input.json").read_text())
+    assert prompt["word"] == "blue" and prompt["session"] == "s-run"
+    subs = L.read(store.log_dir("p"), kinds=["step.submit"])["records"]
+    assert [(r["step"], r["outputs"]) for r in subs] == [("a", {"word": "blue"}),
+                                                         ("b", {"echo": "blue"})]
+
+
+def test_an_agent_that_does_not_submit_fails_its_step(tmp_path):
+    _, st = run_plan(tmp_path, {"a": {**claude_block(), "outputs": {"word": "string"}}},
+                     submit=None)
+    assert st["a"]["status"] == "failed"
+    assert "declared outputs not submitted: word" in st["a"]["error"]
+    assert "step_submit" in st["a"]["error"]

@@ -5,7 +5,8 @@ from pathlib import Path
 
 PACKS = Path(__file__).resolve().parents[1]
 
-ALLOWED_KEYS = {"name", "doc", "inputs", "outputs"}
+ALLOWED_KEYS = {"name", "doc", "inputs", "outputs", "open"}
+OPEN = {"agent.devin", "agent.codex", "agent.claude", "agent.run", "agent.review"}
 
 EXPECTED = {
     "agents": {
@@ -14,14 +15,15 @@ EXPECTED = {
                 "cwd": "string",
                 "spec": "string",
                 "log": "string?",
-                "resume": "string?",
+                "session": "string?",
                 "report_path": "string?",
                 "listen": "boolean?"
             },
             {
                 "log": "string",
                 "final": "string",
-                "report": "string?"
+                "report": "string?",
+                "session": "string"
             }
         ],
         "agent.codex": [
@@ -39,14 +41,15 @@ EXPECTED = {
                     }
                 ],
                 "log": "string?",
-                "resume": "string?",
+                "session": "string?",
                 "report_path": "string?",
                 "listen": "boolean?"
             },
             {
                 "log": "string",
                 "final": "string",
-                "report": "string?"
+                "report": "string?",
+                "session": "string"
             }
         ],
         "agent.claude": [
@@ -76,14 +79,14 @@ EXPECTED = {
                 "cwd": "string",
                 "spec": "string",
                 "model": "string?",
-                "resume": "string?",
+                "session": "string?",
                 "report_path": "string?",
                 "listen": "boolean?"
             },
             {
                 "final": "string",
                 "report": "string?",
-                "session": "string?"
+                "session": "string"
             }
         ],
         "agent.review": [
@@ -92,12 +95,14 @@ EXPECTED = {
                 "base": "string",
                 "standards": "string",
                 "notes": "string?",
+                "session": "string?",
                 "listen": "boolean?"
             },
             {
                 "summary": "string",
                 "sha": "string",
-                "commits": "int"
+                "commits": "int",
+                "session": "string"
             }
         ],
         "decide.llm": [
@@ -296,3 +301,4 @@ def test_fn_json_matches_spec():
         exp_in, exp_out = EXPECTED[pack][name]
         assert doc["inputs"] == exp_in, f"{name} inputs: {doc['inputs']}"
         assert doc["outputs"] == exp_out, f"{name} outputs: {doc['outputs']}"
+        assert doc.get("open", False) is (name in OPEN), f"{name} open"

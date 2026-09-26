@@ -52,11 +52,17 @@ if __name__ == "__main__":
 
 - The name is dotted lowercase (`area.verb`); `inputs` and `outputs` map names to types
   (`docs("types")`).
+- `"open": true` makes it an agent block (`docs("plans")`): a step may bind extra inputs and
+  declare outputs, which whoever does the work submits with `step_submit` while the step runs
+  (the env carries them as `SLUICE_STEP_INPUTS` / `SLUICE_STEP_OUTPUTS`, and `ctx` below). Tell
+  the agent both, and the command; the agents pack shows how.
 - `inp` holds the inputs by name (missing optional inputs are `None`). Return every output.
 - `sh(argv, cwd=...)` runs a command and raises on a non-zero exit.
 - Raise `Transient` for failures worth retrying (rate limits, capacity); `run(main, retries=N)`
   retries them. Any other exception fails the step with its traceback.
-- `ctx` has `project`, `step`, `run_id`, `run_dir` (scratch space), `attempt`.
+- `ctx` has `project`, `step`, `run_id`, `run_dir` (scratch space), `attempt`, and, for a
+  step of an open function, `extra_inputs` (`{name: {"type"}}`; the values are in `inp`) and
+  `outputs` (`{name: {"type", "doc"}}`, the outputs the step declares).
 - Secrets come from the environment: `$SLUICE_HOME/.env`, then the project's `.env` (project
   values win). Never put them in plans.
 - Output types are checked after the function exits; a mismatch fails the step.

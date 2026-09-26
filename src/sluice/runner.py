@@ -25,7 +25,7 @@ from . import types as T
 from .errors import BadRequest, InvalidPlan, NotFound
 from .plan import Plan, Step, inputs_hash, is_ready, mark_stale, resolved_inputs, topo_order
 from .registry import Fn
-from .store import Store
+from .store import SUBMITTED, Store
 from .util import atomic_write_json, canonical, now_iso, read_dotenv, tail_text
 
 SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
@@ -54,8 +54,9 @@ KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
 
 
 def fn_env(store: Store, project: str | None, fn: Fn, step: str, run_id: str,
-           run_dir: Path) -> dict[str, str]:
-    """os.environ, then the home .env, then the project's .env, then the SLUICE_* variables."""
+           run_dir: Path, ports: dict[str, Any] | None = None) -> dict[str, str]:
+    """os.environ, then the home .env, then the project's .env, then the SLUICE_* variables
+    (with `ports`, an open fn's step: SLUICE_STEP_INPUTS and SLUICE_STEP_OUTPUTS)."""
     pythonpath = os.pathsep.join(filter(None, [SRC_DIR, os.environ.get("PYTHONPATH")]))
     env = {**os.environ, **read_dotenv(store.home / ".env")}
     if project:
@@ -63,6 +64,10 @@ def fn_env(store: Store, project: str | None, fn: Fn, step: str, run_id: str,
     env.update({"SLUICE_HOME": str(store.home), "SLUICE_PROJECT": project or "",
                 "SLUICE_STEP": step, "SLUICE_RUN_ID": run_id, "SLUICE_RUN_DIR": str(run_dir),
                 "SLUICE_FN_DIR": str(fn.dir), "PYTHONPATH": pythonpath})
+    for key, name in (("inputs", "SLUICE_STEP_INPUTS"), ("outputs", "SLUICE_STEP_OUTPUTS")):
+        env.pop(name, None)
+        if ports and ports[key]:
+            env[name] = json.dumps(ports[key])
     return env
 
 
@@ -118,8 +123,10 @@ def kill(*procs: subprocess.Popen, grace: float = KILL_GRACE) -> None:
         p.wait()
 
 
-def read_run(fn: Fn, run_dir: Path, code: int) -> tuple[dict[str, Any], str]:
-    """A finished process's outputs, or the error: exit code or type errors plus stderr tail."""
+def read_run(fn: Fn, run_dir: Path, code: int,
+             declared: dict[str, T.Type] | None = None) -> tuple[dict[str, Any], str]:
+    """A finished process's outputs, or the error: exit code or type errors plus stderr tail.
+    With `declared` (a step's own outputs), those come from what was submitted (SPEC §5)."""
     tail = tail_text(run_dir / "stderr.log", 2000).strip()
     if code != 0:
         return {}, f"exit code {code}" + (f"\n{tail}" if tail else "")
@@ -128,7 +135,30 @@ def read_run(fn: Fn, run_dir: Path, code: int) -> tuple[dict[str, Any], str]:
     except (OSError, json.JSONDecodeError) as ex:
         return {}, f"the output is not one JSON object: {ex}"
     errs = T.check_value(T.record_of(fn.outputs), out)
-    return (out, "") if not errs else ({}, "outputs do not match the fn: " + "; ".join(errs))
+    if errs:
+        return {}, "outputs do not match the fn: " + "; ".join(errs)
+    return with_submitted(out, declared, run_dir) if declared else (out, "")
+
+
+def with_submitted(out: dict[str, Any], declared: dict[str, T.Type],
+                   run_dir: Path) -> tuple[dict[str, Any], str]:
+    """The step's outputs: the fn's own plus the declared ones its agent submitted with
+    step_submit (the run dir's submitted.json; the fn's own values win on a name they share).
+    A required declared output that was not submitted fails the step."""
+    try:
+        sent = json.loads((run_dir / SUBMITTED).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        sent = {}
+    except (OSError, json.JSONDecodeError) as ex:
+        return {}, f"the submitted outputs are not readable: {ex}"
+    merged = {k: sent.get(k) for k in declared} | out
+    missing = [k for k, t in declared.items() if k not in sent and not isinstance(t, T.Optional)]
+    if missing:
+        return {}, (f"declared outputs not submitted: {', '.join(missing)} (the agent must call "
+                    "step_submit with them before it finishes)")
+    errs = T.check_value(T.record_of(declared), merged)
+    return (merged, "") if not errs else ({}, "submitted outputs do not match: "
+                                          + "; ".join(errs))
 
 
 def run_native(fn: Fn, inp: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -166,6 +196,8 @@ class Active:
     step: str  # the step id; "" for a call
     inputs: list[dict[str, Any]]
     scatter: bool = False
+    declared: dict[str, T.Type] = field(default_factory=dict)  # a step's own outputs
+    ports: dict[str, Any] | None = None  # what an open fn is told about its step
     run_dirs: list[Path] = field(default_factory=list)  # one per run
     procs: dict[int, subprocess.Popen] = field(default_factory=dict)
     results: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -175,7 +207,8 @@ class Active:
         if not self.scatter:
             return self.results[0]
         n = len(self.inputs)
-        return {o: [self.results[i].get(o) for i in range(n)] for o in self.fn.outputs}
+        return {o: [self.results[i].get(o) for i in range(n)]
+                for o in {**self.fn.outputs, **self.declared}}
 
     def kill(self) -> None:
         kill(*self.procs.values())
@@ -366,11 +399,12 @@ class Runner:
                 return _finish(e, error=f"scatter input {step.scatter} is not an array")
             runs = [{**inp, step.scatter: item} for item in items]
         for i, run in enumerate(runs):
-            errs = T.check_value(T.record_of(step.fn.inputs), run, "inputs")
+            errs = T.check_value(T.record_of(step.inputs), run, "inputs")
             if errs:
                 where = f"run {i}: " if step.scatter else ""
                 return _finish(e, error=f"{where}inputs do not match the fn: " + "; ".join(errs))
-        a = Active(step.fn, project, step.id, runs, scatter=bool(step.scatter))
+        a = Active(step.fn, project, step.id, runs, scatter=bool(step.scatter),
+                   declared=step.declared, ports=step.ports() if step.fn.open else None)
         if step.scatter:
             e.update(done=0, total=len(runs))
         if step.fn.native:
@@ -409,7 +443,7 @@ class Runner:
         run_id = f"{stamp}-{a.step}-{i}-{secrets.token_hex(2)}"
         run_dir = self.store.runs_dir(a.project) / run_id
         a.run_dirs.append(run_dir)
-        env = fn_env(self.store, a.project, a.fn, a.step, run_id, run_dir)
+        env = fn_env(self.store, a.project, a.fn, a.step, run_id, run_dir, a.ports)
         a.procs[i] = spawn(a.fn, a.inputs[i], run_dir, env)
         return run_id
 
@@ -422,7 +456,7 @@ class Runner:
             if code is None:
                 continue
             del a.procs[i]
-            outputs, err = read_run(a.fn, a.run_dirs[i], code)
+            outputs, err = read_run(a.fn, a.run_dirs[i], code, a.declared)
             if err:
                 a.kill()
                 del self.active[key]

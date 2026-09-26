@@ -26,6 +26,7 @@ from .util import atomic_write_json, atomic_write_text, now_iso, read_json
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                                   "max_parallel": 8, "log_max": L.DEFAULT_MAX}
 PROJECT_KEYS = {"name", "description"}
+SUBMITTED = "submitted.json"  # in a run dir: the outputs its agent submitted (step_submit)
 ANSWER_KEYS = {"action": str, "params": dict, "values": dict, "text": str}
 
 
@@ -373,10 +374,10 @@ class Store:
             if step not in plan.steps:
                 raise NotFound(f"the plan of project {project} has no step {step!r}")
             s = plan.steps[step]
-            types = {k: s.output_type(k) for k in s.fn.outputs}
+            types = {k: s.output_type(k) for k in s.outputs}
             errs = T.check_value(T.record_of(types), outputs, "outputs")
             if isinstance(outputs, dict):
-                errs += [f"outputs.{k}: fn {s.fn.name} has no output {k}"
+                errs += [f"outputs.{k}: step {step} (fn {s.fn.name}) has no output {k}"
                          for k in outputs if k not in types]
             if errs:
                 raise InvalidPlan(errs)
@@ -416,6 +417,43 @@ class Store:
             self._log(project, doc["rev"], author, reason, kind="step.retry", step=step)
             self._status_change(project, step, e["status"], "pending")
         self.notify()
+
+    def submit(self, project: str, step: str, outputs: Any,
+               run: str | None = None) -> dict[str, Any]:
+        """step_submit: the agent of a running step hands over the outputs the step declares
+        (SPEC §5). Checked against them: every required one, fitting types, no others. Written
+        to the run's submitted.json (a resubmit replaces it) and logged as `step.submit`; the
+        runner merges them into the step's outputs when the fn exits."""
+        with self.lock(project):
+            _, plan = self.plan(project)
+            s = plan.steps.get(step)
+            if s is None:
+                raise NotFound(f"the plan of project {project} has no step {step!r}")
+            if not s.declared:
+                raise BadRequest(f"step {step} declares no outputs to submit")
+            e = self.read_state(project)["steps"].get(step, {"status": "pending"})
+            if e["status"] != "running":
+                raise BadRequest(f"step {step} is {e['status']}; outputs are submitted while "
+                                 "it runs")
+            runs = e.get("run_ids") or []
+            if run is None:
+                if len(runs) != 1:
+                    raise BadRequest(f"step {step} has {len(runs)} runs; pass run, the run id "
+                                     "(SLUICE_RUN_ID) of yours")
+                run = runs[0]
+            elif run not in runs:
+                raise NotFound(f"step {step} has no run {run!r}")
+            errs = T.check_value(T.record_of(s.declared), outputs, "outputs")
+            if isinstance(outputs, dict):
+                errs += [f"outputs.{k}: step {step} declares no output {k}"
+                         + (" (the fn returns that one itself)" if k in s.fn.outputs else "")
+                         for k in outputs if k not in s.declared]
+            if errs:
+                raise InvalidPlan(errs, f"outputs do not match what step {step} declares")
+            atomic_write_json(self.runs_dir(project) / run / SUBMITTED, outputs)
+            self.append(project, {"kind": "step.submit", "step": step, "run": run,
+                                  "outputs": outputs})
+        return {"ok": True, "run": run}
 
     # ---- the inbox (SPEC §8) ----
 

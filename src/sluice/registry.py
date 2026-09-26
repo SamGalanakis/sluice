@@ -19,7 +19,7 @@ from . import types as T
 BUILTIN_DIR = Path(__file__).resolve().parent / "fns"
 NATIVE = {"core.echo", "core.collect", "core.format"}  # built-ins run inline; no main.py
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
-KEYS = {"name", "doc", "inputs", "outputs"}
+KEYS = {"name", "doc", "inputs", "outputs", "open"}
 SCOPES = ("builtin", "global", "project")
 
 Show = Callable[[Path], str]
@@ -34,14 +34,16 @@ class Fn:
     raw: dict[str, Any]
     dir: Path
     scope: str = "global"
+    open: bool = False  # a step running it may bind extra inputs and declare outputs (§5)
 
     @property
     def native(self) -> bool:
         return self.scope == "builtin" and self.name in NATIVE
 
     def summary(self) -> dict[str, Any]:
-        return {"name": self.name, "doc": self.doc, "inputs": self.raw["inputs"],
-                "outputs": self.raw["outputs"], "scope": self.scope}
+        out = {"name": self.name, "doc": self.doc, "inputs": self.raw["inputs"],
+               "outputs": self.raw["outputs"], "scope": self.scope}
+        return {**out, "open": True} if self.open else out
 
 
 @dataclass
@@ -67,7 +69,7 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
              check_dir: bool = True) -> tuple[Fn | None, list[str]]:
     """Validate one fn.json (SPEC §4, §6a). Returns (fn or None, every problem found)."""
     if not isinstance(raw, dict):
-        return None, ["expected an object {name, doc?, inputs, outputs}"]
+        return None, ["expected an object {name, doc?, inputs, outputs, open?}"]
     errs = [f"unknown key {k!r}" for k in raw if k not in KEYS]
     name = raw.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
@@ -76,6 +78,8 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
         errs.append(f"name {name} does not match its directory {fn_dir.name}")
     if not isinstance(raw.get("doc", ""), str):
         errs.append("doc must be a string")
+    if not isinstance(raw.get("open", False), bool):
+        errs.append("open must be a boolean")
     ports: dict[str, dict[str, T.Type]] = {}
     for key in ("inputs", "outputs"):
         spec = raw.get(key)
@@ -94,7 +98,7 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
     if errs:
         return None, errs
     return Fn(name, raw.get("doc", ""), ports["inputs"], ports["outputs"], raw, fn_dir,
-              scope), []
+              scope, raw.get("open", False)), []
 
 
 def fingerprint(dirs: Iterable[Path]) -> tuple:

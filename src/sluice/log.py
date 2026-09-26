@@ -23,8 +23,8 @@ from typing import Any
 
 from .util import now_iso
 
-KINDS = ("plan.edit", "plan.input", "step.output", "step.retry", "step.status", "call",
-         "message", "inbox.post", "inbox.answer", "inbox.close")
+KINDS = ("plan.edit", "plan.input", "step.output", "step.retry", "step.status", "step.submit",
+         "call", "message", "inbox.post", "inbox.answer", "inbox.close")
 GROUPS = ("plan", "step", "inbox")  # a group name matches every kind under it, e.g. step.status
 HISTORY_KINDS = ("plan.edit", "plan.input", "step.output", "step.retry")
 LIVE = ("pending", "running")
