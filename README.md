@@ -24,10 +24,29 @@ its failure. An orchestrator decides what happens after a failure.
   `log_wait` (or the `thread.wait` step) waits for one.
 - `verify` checks functions, projects, plans and state and says where each problem is.
 
-- `sluice serve` also serves a read-only **dashboard**: projects, each plan as a live Mermaid
-  diagram with its steps and history, the functions, and a paged, filterable **log viewer**
-  (`/projects/<name>/log`, `/log`). Pages work without JavaScript; with it,
+- `sluice serve` also serves a **dashboard**: projects, each plan as a live Mermaid
+  diagram with its steps and history, the functions, a paged, filterable **log viewer**
+  (`/projects/<name>/log`, `/log`) and the **Inbox**. Pages work without JavaScript; with it,
   [Datastar](https://data-star.dev) streams only the parts that changed.
+
+## Inbox
+
+Things waiting on a person. An agent posts an item with `inbox_post(project, title, body?, ui?,
+input?, from?)`; a plan step does it with the built-in `inbox.ask` and waits for the answer.
+The dashboard's Inbox (`/inbox`, `/projects/<name>/inbox`) lists open items, with their count
+as the nav's one red badge. Each shows its markdown body and either a text box or, when the
+item has a `ui`, a small form drawn from an [OpenUI Lang](https://www.openui.com) program
+(buttons, choices, fields; the vocabulary is in `docs("inbox")`). Answering posts `{action,
+params?, values?, text?}` through the same code path as the `inbox_answer` tool; an item named
+after a plan `input` sets that input (type-checked), so the steps waiting on it start. Answers
+and closes are one-shot (a second one is a `conflict`), items live in the project's
+`inbox.json`, and every change is an `inbox.*` log record, so `log_wait` or
+`sluice watch -p demo --kinds inbox` wakes whoever waits.
+
+```sh
+uv run sluice tool inbox_post '{"project": "demo", "title": "Ship v2?", "ui": "root = Button(\"Ship\", \"ship\")"}'
+uv run sluice tool inbox_list '{"status": "answered"}'
+```
 
 See [SPEC.md](SPEC.md) for the contract and `src/sluice/docs` for the pages agents read.
 

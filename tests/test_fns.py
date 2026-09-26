@@ -6,7 +6,7 @@ def test_loads_the_builtins_and_extra_dirs_with_their_scope():
     reg = load({"builtin": [BUILTIN_DIR], "global": [TESTPACK]})
     assert reg.problems == []
     assert {"core.echo", "core.collect", "core.format", "thread.post", "thread.wait",
-            "test.add"} <= set(reg.names())
+            "inbox.ask", "test.add"} <= set(reg.names())
     echo, add = reg.get("core.echo"), reg.get("test.add")
     assert echo.native and not add.native and add.dir == TESTPACK / "test.add"
     assert (echo.scope, add.scope) == ("builtin", "global")

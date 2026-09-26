@@ -1,16 +1,19 @@
-"""Views (SPEC §8): the HTML of the read-only dashboard `sluice serve` renders, and `plan_view`.
+"""Views (SPEC §8): the HTML of the dashboard `sluice serve` renders, and `plan_view`.
 
 - `mermaid(plan, state)`: the plan as a flowchart with one colour per step status.
 - `project_page`: summary, diagram, plan inputs and outputs, steps (each expands to its inputs,
   outputs and stderr tail), the recent plan history and the latest log records. `render()`
   serves it (standalone) to `plan_view` too.
 - `index`: every project; `fns_page`: every visible function grouped by scope; `log_page`: one
-  page of a log, filtered (`LogQuery`).
+  page of a log, filtered (`LogQuery`); `inbox_page`: the items waiting on a person, each open
+  one with its answer box (drawn from its OpenUI program by `static/inbox.js`).
 
 A live page (given its stream URL) loads Datastar and opens one SSE stream; `dashboard` sends
 the parts that changed, re-rendered by the same `*_parts` functions, as element patches. Each
-part is one element with an id. Everything here only reads the store, and every value is
-HTML-escaped (plans and logs are untrusted).
+part is one element with an id. Everything here only reads the store (the inbox's answer
+route lives in `dashboard`), and every value is
+HTML-escaped (plans, logs and inbox items are untrusted; markdown bodies are rendered with raw
+HTML disabled).
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import urlencode
+
+from markdown_it import MarkdownIt
 
 from . import log as L
 from .errors import BadRequest
@@ -49,6 +54,13 @@ KIND_OPTIONS = tuple(dict.fromkeys(
     x for k in L.KINDS for x in [*(g for g in L.GROUPS if k.startswith(g + ".")), k]))
 
 e = html.escape
+# CommonMark plus tables; raw HTML is escaped as text and unsafe link schemes are refused.
+MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
+INBOX_FILTERS = ("open", "answered", "closed", "all")
+
+
+def markdown(text: str) -> str:
+    return MARKDOWN.render(text)
 
 
 # ---- Mermaid ----------------------------------------------------------------------------
@@ -131,6 +143,25 @@ padding:.5rem;margin:.5rem 0}
 .diagram pre{background:none;text-align:left}
 .card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:.6rem .8rem;
 margin:.5rem 0}
+.badge{display:inline-block;min-width:1.4em;margin-left:.3em;padding:0 .4em;border-radius:1em;
+background:var(--bad);color:#fff;font-size:.8em;font-weight:600;text-align:center}
+.item h3{margin:.1rem 0;font-size:1.05rem}.item .md>:first-child{margin-top:.3rem}
+.item .md>:last-child{margin-bottom:.3rem}
+.answer textarea,.answer input:not([type=checkbox]):not([type=radio]),.answer select{
+width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);
+border-radius:4px;padding:.3rem .4rem}
+.answer form{display:flex;flex-direction:column;gap:.4rem;align-items:flex-start;margin:.4rem 0}
+button.primary{background:var(--link);border-color:var(--link);color:#fff}
+.ou-root{display:flex;flex-direction:column;gap:.5rem;margin:.4rem 0}
+.ou-stack{display:flex;gap:.5rem}.ou-col{flex-direction:column}.ou-row{flex-wrap:wrap;
+align-items:center}
+.ou-form{display:flex;flex-direction:column;gap:.5rem}
+.ou-field{display:flex;flex-direction:column;gap:.15rem;border:0;padding:0;margin:0}
+.ou-label,.ou-field legend{color:var(--muted);font-size:.9em;padding:0}
+.ou-error{color:var(--stale);font-size:.9em}
+.ou-callout{border-left:3px solid var(--run);background:var(--card);padding:.4rem .6rem}
+.ou-success{border-color:var(--ok)}.ou-warning{border-color:var(--stale)}
+.ou-dropped,.ou-status{color:var(--muted);font-size:.9em}
 .s-failed,.bad{color:var(--bad)}.s-succeeded{color:var(--ok)}.s-running{color:var(--run)}
 .s-stale{color:var(--stale)}
 .problem{background:var(--badbg);border-color:var(--bad)}
@@ -172,15 +203,28 @@ def _signals(values: Mapping[str, Any]) -> str:
     return e(json.dumps(values, ensure_ascii=False))
 
 
+def open_count(store: Store) -> int:
+    """How many inbox items wait on a person, across every project."""
+    return len(store.inbox())
+
+
+def nav_inbox(count: int | None) -> str:
+    """The nav's Inbox link: its count of open items is the dashboard's one red badge."""
+    badge = f' <span class="badge" title="open items">{count}</span>' if count else ""
+    return f'<a id="nav-inbox" href="/inbox">Inbox{badge}</a>'
+
+
 def layout(title: str, body: str, diagram: bool = False, nav: bool = True,
            stream: str | None = None, signals: Mapping[str, Any] | None = None,
-           main_attrs: str = "") -> str:
+           main_attrs: str = "", inbox: int | None = None, script: str = "") -> str:
     """A page. With `stream`, Datastar opens that SSE stream once the page has loaded (with
-    `signals`, the page's Datastar signals, sent along as the `datastar` query parameter)."""
+    `signals`, the page's Datastar signals, sent along as the `datastar` query parameter).
+    `inbox` is the count of open items for the nav's badge; `script` a module to load."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
-    script = f'<script type="module">{DIAGRAM_JS}</script>' if diagram else ""
+    script = (f'<script type="module" src="{e(script)}"></script>' if script else "") + (
+        f'<script type="module">{DIAGRAM_JS}</script>' if diagram else "")
     top = ('<nav><b>sluice</b><a href="/">Projects</a> · <a href="/fns">Functions</a> · '
-           '<a href="/log">Log</a></nav>' if nav else "")
+           f'<a href="/log">Log</a> · {nav_inbox(inbox)}</nav>' if nav else "")
     body_attrs = f' data-signals="{_signals(signals)}"' if signals else ""
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
@@ -240,14 +284,15 @@ def index_parts(store: Store) -> dict[str, str]:
     table = ('<div class="scroll"><table><tr><th>project</th><th>description</th><th>steps</th>'
              '<th>plan</th><th>last change</th></tr>' + "".join(rows) + "</table></div>"
              if rows else '<p class="muted">No projects yet.</p>')
-    return {"projects": _part("projects", table)}
+    return {"projects": _part("projects", table), "nav-inbox": nav_inbox(open_count(store))}
 
 
 def index(store: Store, ver: str | None = None) -> str:
     """The project index; live (streaming from /stream) when given the home's version `ver`."""
     parts = index_parts(store)
     return layout("projects", f"<h1>Projects</h1>{parts['projects']}",
-                  stream="/stream" if ver else None, signals={"ver": ver} if ver else None)
+                  stream="/stream" if ver else None, signals={"ver": ver} if ver else None,
+                  inbox=open_count(store))
 
 
 # ---- the project page -------------------------------------------------------------------
@@ -325,8 +370,11 @@ def _project(store: Store, project: str, live: bool) -> tuple[dict[str, str], st
         status = state["steps"].get(sid, {"status": "pending"})["status"]
         counts[status] = counts.get(status, 0) + 1
     about = info.get("description") or ""
+    waiting = len(store.inbox(project)) if live else 0
     links = (f' · <a href="/projects/{e(project)}/log">log</a> · '
-             f'<a href="/fns?project={e(project)}">functions</a>' if live else "")
+             f'<a href="/fns?project={e(project)}">functions</a> · '
+             f'<a href="/projects/{e(project)}/inbox">inbox</a>'
+             + (f" ({waiting} open)" if waiting else "") if live else "")
     summary = (f'<h1>{e(project)} <small class="muted">rev {e(str(doc["rev"]))}</small></h1>'
                + (f"<p>{e(about)}</p>" if about else "") + f"<p>{_counts(counts)}{links}</p>")
     inputs = {n: state["inputs"].get(n) for n in plan.inputs}
@@ -345,6 +393,7 @@ def _project(store: Store, project: str, live: bool) -> tuple[dict[str, str], st
     if live:
         recent = L.page(store.log_dir(project), size=RECENT)["records"]
         parts["recent"] = _part("recent", _log_table(recent))
+        parts["nav-inbox"] = nav_inbox(open_count(store))
     return parts, source
 
 
@@ -365,7 +414,8 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
                  f'</h2>{p["recent"]}')
     return layout(project, body, diagram=True, nav=live,
                   stream=f"/projects/{project}/stream" if live else None,
-                  signals={"ver": ver} if live else None)
+                  signals={"ver": ver} if live else None,
+                  inbox=open_count(store) if live else None)
 
 
 def render(store: Store, project: str, fmt: str) -> str:
@@ -484,6 +534,16 @@ def log_summary(rec: dict[str, Any]) -> str:
     if kind == "message":
         to = f" → {rec['to']}" if rec.get("to") else ""
         return e(f"{rec.get('thread')} from {rec.get('from')}{to}: {_line(rec.get('body', ''))}")
+    if kind == "inbox.post":
+        who = f" from {rec['from']}" if rec.get("from") else ""
+        return e(f"{rec.get('item')}{who}: {_line(rec.get('title', ''))}")
+    if kind == "inbox.answer":
+        answer = rec.get("answer") or {}
+        text = f": {_line(answer['text'], 60)}" if answer.get("text") else ""
+        return e(f"{rec.get('item')} answered by {rec.get('by')} ({answer.get('action')}){text}")
+    if kind == "inbox.close":
+        why = f": {_line(rec['reason'], 80)}" if rec.get("reason") else ""
+        return e(f"{rec.get('item')} closed by {rec.get('by')}{why}")
     return e(_line(json.dumps(rec, ensure_ascii=False)))
 
 
@@ -562,7 +622,7 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
     url = "history.replaceState(null, '', location.pathname + ($view ? '?' + $view : ''))"
     return layout(f"{project or 'home'} log", f"<h1>{title}</h1>{form}{view}",
                   stream=f"{base}/stream", signals=signals,
-                  main_attrs=f' data-effect="{e(url)}"')
+                  main_attrs=f' data-effect="{e(url)}"', inbox=open_count(store))
 
 
 # ---- functions --------------------------------------------------------------------------
@@ -618,4 +678,94 @@ def fns_page(store: Store, project: str | None = None) -> str:
         sections.append(f"<h2>{title}</h2>{cards}")
     extra = "".join(f'<div class="card problem bad">{e(p["where"])}: {e(p["message"])}</div>'
                     for p in other)
-    return layout("functions", f"<h1>Functions</h1>{picker}{extra}{''.join(sections)}")
+    return layout("functions", f"<h1>Functions</h1>{picker}{extra}{''.join(sections)}",
+                  inbox=open_count(store))
+
+
+# ---- the inbox --------------------------------------------------------------------------
+
+
+def _age(iso: str, now: dt.datetime | None = None) -> str:
+    """`5m ago` from an ISO timestamp (the item's age when the page was drawn)."""
+    try:
+        then = dt.datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+    except (TypeError, ValueError):
+        return str(iso)
+    secs = int(((now or dt.datetime.now(dt.UTC)) - then).total_seconds())
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= size:
+            return f"{secs // size}{unit} ago"
+    return "just now"
+
+
+def _when(iso: str) -> str:
+    return f'<time datetime="{e(iso)}" title="{e(iso)}">{e(_age(iso))}</time>'
+
+
+def inbox_base(project: str | None) -> str:
+    return f"/projects/{project}/inbox" if project else "/inbox"
+
+
+def _item(item: dict[str, Any], back: str, all_projects: bool) -> str:
+    """One item: title, where it comes from, its markdown body, then its answer box (open) or
+    its answer or close reason."""
+    p, iid = item["project"], item["id"]
+    meta = [f'<a href="/projects/{e(p)}/inbox">{e(p)}</a>' if all_projects else "",
+            f"<code>{e(iid)}</code>", f"from {e(item['from'])}" if item.get("from") else "",
+            f"asked {_when(item['created'])}",
+            f"sets <code>{e(item['input'])}</code>" if item.get("input") else ""]
+    out = [f'<h3>{e(item["title"])}</h3>',
+           f'<div class="muted">{" · ".join(m for m in meta if m)}</div>']
+    if item.get("body"):
+        out.append(f'<div class="md">{markdown(item["body"])}</div>')
+    url = f"/projects/{p}/inbox/{iid}/answer"
+    if item["status"] == "open":
+        ui = f' data-ui="{e(item["ui"])}"' if item.get("ui") else ""
+        out.append(
+            f'<div class="answer" data-ignore-morph data-url="{e(url)}" '
+            f'data-key="{e(p)}/{e(iid)}"{ui}><form method="post" action="{e(url)}">'
+            f'<input type="hidden" name="next" value="{e(back)}">'
+            f'<textarea name="text" rows="3" required aria-label="answer"></textarea>'
+            f'<button class="primary">Answer</button></form></div>')
+    elif item["status"] == "answered":
+        answer = item.get("answer") or {}
+        text = f"<blockquote>{e(answer['text'])}</blockquote>" if answer.get("text") else ""
+        out.append(f'<div>answered {_when(item.get("answered", ""))} with '
+                   f'<code>{e(str(answer.get("action")))}</code>{text}'
+                   f"<pre>{_json(answer)}</pre></div>")
+    else:
+        why = f": {e(item['reason'])}" if item.get("reason") else ""
+        out.append(f'<div class="muted">closed {_when(item.get("closed", ""))}{why}</div>')
+    return f'<article class="card item" id="item-{e(p)}-{e(iid)}">{"".join(out)}</article>'
+
+
+def inbox_parts(store: Store, project: str | None, status: str) -> dict[str, str]:
+    """The inbox page's parts: its items (open ones oldest first, the rest newest first) and
+    the nav badge."""
+    items = store.inbox(project, status)
+    items = items if status == "open" else items[::-1]
+    back = inbox_base(project) + ("" if status == "open" else f"?status={status}")
+    empty = {"open": "Nothing is waiting on you."}.get(status, f"No {status} items.")
+    body = "".join(_item(i, back, project is None) for i in items) \
+        or f'<p class="muted">{e(empty)}</p>'
+    return {"inbox-items": _part("inbox-items", body), "nav-inbox": nav_inbox(open_count(store))}
+
+
+def inbox_page(store: Store, project: str | None, status: str, ver: str) -> str:
+    """The inbox (every project's, or one project's): a status filter over `inbox_parts`,
+    streaming its changes; open items draw their OpenUI program with /static/inbox.js."""
+    if project is not None:
+        store.project(project)
+    if status not in INBOX_FILTERS:
+        raise BadRequest(f"status: expected one of {', '.join(INBOX_FILTERS)}, got {status!r}")
+    base, parts = inbox_base(project), inbox_parts(store, project, status)
+    filters = " · ".join(
+        f"<b>{s}</b>" if s == status else
+        f'<a href="{e(base + ("" if s == "open" else "?status=" + s))}">{s}</a>'
+        for s in INBOX_FILTERS)
+    title = (f'Inbox <small class="muted">of <a href="/projects/{e(project)}">{e(project)}</a>'
+             f"</small>" if project else "Inbox")
+    return layout("inbox", f'<h1>{title}</h1><nav class="pager">{filters}</nav>'
+                  f'{parts["inbox-items"]}', stream=f"{base}/stream",
+                  signals={"ver": ver, "status": status}, inbox=open_count(store),
+                  script="/static/inbox.js")

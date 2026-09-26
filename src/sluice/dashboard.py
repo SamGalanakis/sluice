@@ -6,7 +6,8 @@ what it shows (`ver`, from the stats of the files it reads). Its stream polls th
 sends a `datastar-patch-elements` event for each part that differs from what the client has,
 then the new `ver` (so a reconnecting client resumes from there). An idle page gets nothing.
 The log page's stream sends the table when the filter signals changed, and on the newest page
-prepends new matching records. Everything is read-only.
+prepends new matching records. The inbox page streams its items the same way, and its answer
+route is the dashboard's one write: it calls the same Store.inbox_answer as the MCP tool.
 """
 
 from __future__ import annotations
@@ -16,20 +17,26 @@ import threading
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import anyio
 from datastar_py import ServerSentEventGenerator as SSE
 from datastar_py.consts import ElementPatchMode
 from datastar_py.starlette import DatastarResponse, read_signals
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from . import inbox as I
 from . import log as L
 from . import views
 from .errors import BadRequest, NotFound, SluiceError
 from .store import Store
 
-PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE)
+PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE, I.FILE)
+STATIC = Path(__file__).resolve().parent / "static"
+STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json"}
+AUTHOR = "dashboard"
+HTTP_STATUS = {"not_found": 404, "conflict": 409}
 REPLACED = {"plan-src"}  # replaced, not morphed, so its data-init re-renders the diagram
 
 
@@ -45,15 +52,18 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(repr(value).encode()).hexdigest()[:16]
 
 
-def project_ver(store: Store, project: str) -> str:
-    """The version of what the project page shows: the stats of the files it reads."""
-    d = store.project_dir(project)
-    return _digest([_stat(d / f) for f in PROJECT_FILES])
-
-
 def index_ver(store: Store) -> str:
+    """The version of the index and inbox pages: the stats of every project's files."""
     return _digest([(n, [_stat(store.project_dir(n) / f) for f in PROJECT_FILES])
                     for n in store.project_names()])
+
+
+def project_ver(store: Store, project: str) -> str:
+    """The version of what the project page shows: the stats of the files it reads, and of
+    every inbox (for the nav's badge)."""
+    d = store.project_dir(project)
+    inboxes = [_stat(store.project_dir(n) / I.FILE) for n in store.project_names()]
+    return _digest([[_stat(d / f) for f in PROJECT_FILES], inboxes])
 
 
 def log_ver(store: Store, project: str | None) -> str:
@@ -206,6 +216,69 @@ class Dashboard:
                 return Response(err.message, status_code=404)
         return DatastarResponse(self._log_stream(name, await _signals(request)))
 
+    def _inbox(self, project: str | None, status: str) -> str:
+        return views.inbox_page(self.store, project, status, index_ver(self.store))
+
+    async def inbox(self, request: Request) -> Response:
+        return await self._page(self._inbox, request.path_params.get("name"),
+                                request.query_params.get("status") or "open")
+
+    async def inbox_stream(self, request: Request) -> Response:
+        name = request.path_params.get("name")
+        signals = await _signals(request)
+        status = signals.get("status") if signals.get("status") in views.INBOX_FILTERS \
+            else "open"
+        try:
+            if name is not None:
+                await anyio.to_thread.run_sync(self.store.project, name)
+        except SluiceError as err:
+            return Response(err.message, status_code=404)
+        return DatastarResponse(self._parts_stream(
+            signals.get("ver"), lambda: index_ver(self.store),
+            lambda: views.inbox_parts(self.store, name, status)))
+
+    async def answer(self, request: Request) -> Response:
+        """Answer an inbox item: a JSON answer {action, params?, values?, text?} (from
+        inbox.js), or the no-JS text box's form (its text, then a redirect back). Both go
+        through Store.inbox_answer, like the inbox_answer tool."""
+        origin = request.headers.get("origin")
+        if origin and urlsplit(origin).netloc != request.headers.get("host"):
+            return Response("answers from other sites are refused", status_code=403)
+        name, item_id = request.path_params["name"], request.path_params["id"]
+        is_json = request.headers.get("content-type", "").startswith("application/json")
+        back = "/inbox"
+        try:
+            if is_json:
+                try:
+                    answer = await request.json()
+                except ValueError:
+                    raise BadRequest("the body is not JSON") from None
+            else:
+                form = await request.form()
+                answer = {"action": "answer", "text": str(form.get("text") or "")}
+                nxt = str(form.get("next") or "")
+                back = nxt if nxt.startswith("/") and not nxt.startswith("//") else back
+            item = await anyio.to_thread.run_sync(self.store.inbox_answer, name, item_id,
+                                                  answer, AUTHOR)
+        except SluiceError as err:
+            code = HTTP_STATUS.get(err.code, 400)
+            if is_json:
+                return JSONResponse(err.payload(), status_code=code)
+            errs = "".join(f"<li>{views.e(x)}</li>" for x in err.extra.get("errors", []))
+            return HTMLResponse(views.layout(
+                "not answered", f"<p>{views.e(err.message)}</p><ul>{errs}</ul>"
+                f'<p><a href="{views.e(back)}">back to the inbox</a></p>'), status_code=code)
+        if is_json:
+            return JSONResponse(item)
+        return RedirectResponse(back, status_code=303)
+
+    async def static(self, request: Request) -> Response:
+        name = request.path_params["file"]
+        if name not in STATIC_TYPES:
+            return Response("not found", status_code=404)
+        return FileResponse(STATIC / name, media_type=STATIC_TYPES[name],
+                            headers={"cache-control": "no-cache"})
+
     async def fns(self, request: Request) -> Response:
         return await self._page(views.fns_page, self.store,
                                 request.query_params.get("project") or None)
@@ -218,6 +291,11 @@ class Dashboard:
                               ("/projects/{name}/log", self.log),
                               ("/projects/{name}/log/stream", self.log_stream),
                               ("/log", self.log), ("/log/stream", self.log_stream),
-                              ("/fns", self.fns)):
+                              ("/fns", self.fns), ("/inbox", self.inbox),
+                              ("/inbox/stream", self.inbox_stream),
+                              ("/projects/{name}/inbox", self.inbox),
+                              ("/projects/{name}/inbox/stream", self.inbox_stream),
+                              ("/static/{file}", self.static)):
             server.custom_route(path, methods=["GET"])(handler)
+        server.custom_route("/projects/{name}/inbox/{id}/answer", methods=["POST"])(self.answer)
 

@@ -11,10 +11,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-import pytest
-import uvicorn
-
-from sluice.mcp_server import build_server
 from tests.conftest import create
 
 
@@ -24,29 +20,6 @@ def d(x):
 
 def message(thread, body, frm="t"):
     return {"kind": "message", "thread": thread, "from": frm, "body": body}
-
-
-@pytest.fixture
-def port(store):
-    """A dashboard served from this process (no runner), polling every 0.1 s."""
-    stop = threading.Event()
-    app = build_server(store, stop, interval=0.1).streamable_http_app()
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        free = s.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=free,
-                                           log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.time() + 10
-    while not server.started:
-        assert time.time() < deadline, "server did not start"
-        time.sleep(0.05)
-    yield free
-    stop.set()
-    server.should_exit = True
-    thread.join(timeout=10)
-    assert not thread.is_alive()
 
 
 def get(port, path):
@@ -221,7 +194,8 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
     assert new_ver != [f'signals {{"ver":"{ver}"}}'] and new_ver[0].startswith('signals {"ver"')
     # a client with an old version gets every part at once, then nothing more
     stale = stream(port, "/projects/p/stream", {"ver": ver}, seconds=0.8)
-    assert len(patches(stale)) == 7
+    assert len(patches(stale)) == 8  # summary, diagram, inputs, outputs, steps, history,
+    #                                   recent log and the nav badge
 
 
 def test_the_index_stream_shows_a_new_project(store, port):

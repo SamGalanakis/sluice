@@ -16,7 +16,7 @@ BLOCK = re.compile(r"```json\n(.*?)```", re.DOTALL)
 
 
 def plans():
-    for page in ("plans", "examples", "threads"):
+    for page in ("plans", "examples", "threads", "inbox"):
         for i, block in enumerate(BLOCK.findall((DOCS / f"{page}.md").read_text())):
             doc = json.loads(block)
             if isinstance(doc, dict) and "steps" in doc:

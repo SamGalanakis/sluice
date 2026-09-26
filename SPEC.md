@@ -22,6 +22,9 @@ change.
   current truth.
 - **Runner:** starts a step once everything it reads is available, records its outputs or its
   failure. A failed step shows up in `status`; an orchestrator decides what next.
+- **Inbox:** each project's items waiting on a person (a question, optionally with an OpenUI
+  form, optionally setting a plan input). A person answers in the dashboard; agents post, wait
+  on the log and read the answer (§8a).
 
 ## 2. Workspace layout
 
@@ -41,7 +44,8 @@ projects/<name>/
   plan.json                 the project's plan (current truth)
   state.json                runner-owned: plan input values, step status and outputs (current truth)
   log.jsonl                 the project's log (§6b): edits, manual values, step status changes,
-                            calls, thread messages
+                            calls, thread messages, inbox changes
+  inbox.json                {"items": [...]}: the project's inbox items (§8a), current truth
   fns/                      project-local functions
   .env                      project secrets (override global ones)
   runs/<run_id>/            input.json, output.json, stderr.log for one fn execution (a step run,
@@ -279,6 +283,9 @@ fn process posting to a thread) get distinct, increasing seqs; the file is in se
 | `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per pass (`from` is the status before the pass, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
 | `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` |
 | `message` | `thread, from, to?, body, data?` | `thread.post` (§10) |
+| `inbox.post` | `item, title, from?, input?` | `inbox_post`, `inbox.ask` (§8a) |
+| `inbox.answer` | `item, answer, by` | `inbox_answer` and the dashboard's answer route |
+| `inbox.close` | `item, reason?, by` | `inbox_close` |
 
 The log is history, not the source of truth, so it is capped at `config.log_max` records
 (default 10000): when an append takes it past the cap, the oldest records are dropped under the
@@ -290,7 +297,7 @@ back only as far as the log does.
 
 Readers take no lock: a line not yet complete is left out until it is. `log_read` and `log_wait`
 (§8), `thread.wait` and `sluice watch` share one filter: `kinds` (exact kinds, or a group name,
-`step` or `plan`, for every kind under it) and `threads` (messages only on these threads; given
+`step`, `plan` or `inbox`, for every kind under it) and `threads` (messages only on these threads; given
 without `kinds`, only messages at all).
 
 ## 7. Helper library `sluice.fn` (stdlib only)
@@ -321,7 +328,8 @@ input=None)` runs a command and raises `ShError` on a non-zero exit when `check`
 `sluice serve` runs the runner and an MCP server (official `mcp` SDK, streamable HTTP) at
 `http://<host>:<port>/mcp` in one process. Errors are tool errors whose message is JSON
 `{"error": "not_found"|"conflict"|"invalid"|"bad_request", "message", ...}` (`conflict` carries
-`current_rev`, `invalid` carries `errors`). `rev` is optional on the convenience tools (they apply
+`current_rev` for a plan edit, or `status` for an inbox item that is no longer open; `invalid`
+carries `errors`). `rev` is optional on the convenience tools (they apply
 to the current revision under the lock) and required on `plan_patch`.
 
 **Docs for agents.** The server sets MCP `instructions` from `src/sluice/docs/instructions.md`
@@ -330,10 +338,15 @@ to the current revision under the lock) and required on `plan_patch`.
 pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe every argument.
 Validation errors carry the path and what was expected.
 
-**Views.** A read-only dashboard: nothing in it creates or edits anything. Server-rendered HTML
-with inline CSS (light and dark via `prefers-color-scheme`, usable at phone width), a top nav
-(Projects · Functions · Log), every value HTML-escaped (plans and logs are untrusted). The only
-external assets are Datastar v1.0.4 and mermaid, both from cdn.jsdelivr.net.
+**Views.** A dashboard that only reads, with one exception: answering an inbox item (§8a).
+Server-rendered HTML with inline CSS (light and dark via `prefers-color-scheme`, usable at phone
+width), a top nav (Projects · Functions · Log · Inbox), every value HTML-escaped (plans, logs
+and inbox items are untrusted). The Inbox link carries the count of open items across all
+projects as the dashboard's one red badge (none when nothing waits). The only external assets
+come from cdn.jsdelivr.net: Datastar v1.0.4, mermaid, and, on inbox pages,
+`@openuidev/lang-core@0.3.0/+esm` (jsDelivr's ESM build; it imports `zod@4.6.5` from the same
+CDN). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
+raw HTML escaped, unsafe link schemes refused).
 - Mermaid (`flowchart LR`): plan inputs as rounded nodes, steps as boxes labelled
   `id / fn / status` (a scattered step shows `done/total`), plan outputs as rounded nodes, an edge
   per source ref labelled with the output name, one colour class per status (pending grey,
@@ -375,6 +388,23 @@ reconnects the stream, which sends the new table and rewrites the address bar to
 query string; on the newest page, new matching records are prepended as they are appended.
 Streams end when the server shuts down; the client reconnects with backoff.
 
+- `GET /inbox` (every project) and `GET /projects/<name>/inbox`: the items, filtered by
+  `?status=open|answered|closed|all` (default open; open oldest first, the others newest first).
+  An item shows its title, project, id, `from`, age, the input it sets, and its body as markdown.
+  An open item has an answer box that works without JavaScript (a form POST of `text`, then a
+  303 back); with it, `/static/inbox.js` draws the item's `ui` (§8a) above the box, and folds
+  the box away when the program has buttons. An answered item shows its answer, a closed one
+  its reason. The page streams like the index (`/inbox/stream`, `/projects/<name>/inbox/stream`,
+  parts: the items and the nav badge); each open item's answer area carries
+  `data-ignore-morph`, so a patch never resets what a person is typing.
+- `POST /projects/<name>/inbox/<id>/answer`: the only write. A JSON body is the answer object;
+  a form body (`text`, `next`) becomes `{"action": "answer", "text"}` and redirects to `next` (a
+  local path) on success. Both call the store's `inbox_answer`, the tool's own code path, with
+  author `dashboard`. Refusals map to 404 (`not_found`), 409 (`conflict`: already answered or
+  closed) and 400 (`invalid`, `bad_request`); JSON gets the error payload, a form an HTML page. A
+  request whose `Origin` is not this host is refused (403).
+- `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary.
+
 `plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML
 document (no nav, no links, no log, no stream), from the same renderer.
 
@@ -401,13 +431,52 @@ document (no nav, no links, no log, no stream), from the same renderer.
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
 | `status` | `project` | `{rev, inputs: {name: value or null}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, manual}]}` (status: pending, running, succeeded, failed or stale) |
+| `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
+| `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
+| `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
+| `inbox_close` | `project, id, reason?` | the closed item; `conflict` unless it is open |
+
+## 8a. The inbox
+
+Each project has an inbox, `inbox.json`: `{"items": [...]}` in posting order, written atomically
+under the project's flock (like `state.json`), and not trimmed with the log. An item is `{id,
+title, body?, ui?, input?, from?, status, created, answer?, answered?, closed?, reason?}`: `id`
+is `i<n>` (one more than the highest in the project), `body` markdown, `ui` an OpenUI Lang
+program, `input` a plan input, `from` who asked (a step id, an agent), `status` `open`,
+`answered` or `closed`, the times ISO UTC. Only an open item changes, once: answering or closing
+anything else is refused (`conflict` with its `status`), which is what makes a stale button or a
+second answer harmless. Every change appends one log record (§6b), so `log_wait(project,
+since_seq, kinds=["inbox"])` and `sluice watch --kinds inbox` wake whoever waits on it.
+
+An **answer** is `{action: string, params?: object, values?: object, text?: string}` (nothing
+else). With `input`, answering sets that plan input through `plan_set_input`'s own path (type
+check, `plan.input` record by the answering author, reason `inbox item <id>: <title>`) before
+the item is marked answered; the value is the first present of `values.value`, `params.value`
+and `text`. None present, or a value that does not fit, refuses the answer (`invalid`) and the
+item stays open. `inbox_post` refuses an `input` the plan does not declare.
+
+**The ui.** `ui` is OpenUI Lang (openui.com), drawn in the browser by a small vanilla-DOM
+renderer (`src/sluice/static/inbox.js`, no build step) around lang-core's parser. The vocabulary
+is closed and lives in one file, `src/sluice/static/openui.json` (each component's positional
+props with their types, and a description): the renderer builds the parser's JSON Schema from
+it and has one renderer per component; `docs("inbox")` lists the same signatures (a test
+checks both). Components: Stack, Heading, Text, Callout, Table, Separator, Form, Input,
+Textarea, Select, Radio, Checkbox, Button (prose goes in `body`, so there is no Markdown
+component). Program text is only ever set as DOM text, never as HTML. A statement with an
+unknown component or a bad prop, a reference to nothing, an unused statement or a line that is
+not a statement is dropped, and the item shows `n lines dropped` with the reasons; if nothing is
+left to draw, it says so. The text box always remains. A Button answers with `{action (default
+"submit"), params (default {}), values}`, where `values` maps each field of its Form (or, outside
+a form, each field outside any form) to its value (Input text, or a number for `type: "number"`;
+Checkbox a boolean; Select and Radio the chosen option or ""); a primary button first checks the
+fields' `rules` with lang-core's validators and shows what fails.
 
 ## 9. CLI
 
 MCP is the interface; the CLI only starts it and reaches the same tools from a shell:
 
 ```
-sluice serve [--host H] [--port P]    runner + MCP server + dashboard
+sluice serve [--host H] [--port P]    runner + MCP server + dashboard (with the inbox)
 sluice loop                           runner only
 sluice tool                           list the MCP tools with one-line descriptions
 sluice tool <name> '<json args>'      call that tool in-process and print its result
@@ -423,8 +492,8 @@ also exits 1.
 
 ## 10. Built-in fns and first-party packs
 
-`src/sluice/fns/` holds only what sluice itself needs: `core.*` (§6) and `thread.*` (below),
-plus shared helper code for built-in fns in `src/sluice/fns/_lib/`. Their `fn.json` files are
+`src/sluice/fns/` holds only what sluice itself needs: `core.*` (§6), `thread.*` and
+`inbox.ask` (below), plus shared helper code for built-in fns in `src/sluice/fns/_lib/`. Their `fn.json` files are
 the reference for their types.
 
 Every other fn in this repo is a **first-party pack** under `packs/`, not loaded by default:
@@ -456,6 +525,15 @@ log's. Agents post through `fn_call` (any harness) and read with `log_read`/`log
   is at least one or `timeout` s (default 300) pass, then `messages` is empty. `last_seq` is the
   log's last seq, to pass back as `since_seq`.
 
+**`inbox.ask`**: inputs `{title: string, body: string?, ui: string?}`, outputs `{answer: {action:
+string, params: Any?, values: Any?, text: string?}}`. It posts an item to the project's inbox
+(§8a) with `from` = the step (`call <run_id>` for a call) and polls `inbox.json` every 0.5 s
+until the item is answered (the answer is the output) or closed (the step fails with `inbox item
+<id> was closed without an answer: <reason>`). It waits as long as it takes. If this step
+already has an open item with the same title, body and ui (a run killed by a runner restart,
+then retried), it waits on that one instead of posting again. Like the thread fns, it needs a
+project.
+
 **Watching.** Agents watch through MCP: `log_wait` in a loop, passing back `last_seq`. For
 harnesses with monitors (e.g. Claude Code's Monitor tool) the shell form is `sluice watch [-p P]
 [--kinds k1,k2] [--threads a,b] [--since-seq N]`: it follows the project's log (the home log
@@ -466,6 +544,7 @@ reads the file only; it needs no runner or server.
 ## 11. Conventions
 
 Python ≥ 3.12, `uv` for everything. `src/sluice/fn.py`, `src/sluice/__init__.py`,
-`src/sluice/log.py` and `src/sluice/util.py` import only the stdlib (fns import them). Tests in
+`src/sluice/log.py`, `src/sluice/inbox.py` and `src/sluice/util.py` import only the stdlib (fns
+import them). Tests in
 `tests/`; external tools are faked in tests. Commits: plain sentences, no AI attribution of any
 kind; stage exact paths.

@@ -1,0 +1,13 @@
+{
+  "name": "inbox.ask",
+  "doc": "Ask a person: post an item to the project's inbox (from = this step) and wait until it is answered; the answer is {action, params?, values?, text?}. Fails if the item is closed instead.",
+  "inputs": {
+    "title": "string",
+    "body": "string?",
+    "ui": "string?"
+  },
+  "outputs": {
+    "answer": {"type": "record", "fields": {"action": "string", "params": "Any?",
+                                             "values": "Any?", "text": "string?"}}
+  }
+}

@@ -7,15 +7,16 @@ streamable HTTP next to the runner, and `sluice tool` calls the same tools in-pr
 import functools
 import inspect
 import json
+import keyword
 import threading
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from . import calls, runner, views
 from . import log as L
@@ -56,20 +57,25 @@ def _error(e: SluiceError) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=e.to_json())], is_error=True)
 
 
+def _kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """An argument named after a Python keyword (`from`) reaches its parameter (`from_`)."""
+    return {(k + "_" if keyword.iskeyword(k) else k): v for k, v in kwargs.items()}
+
+
 def _tool(fn):
     """Wrap a tool body so results become JSON and SluiceErrors become JSON error payloads."""
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             try:
-                return _result(await fn(*args, **kwargs))
+                return _result(await fn(*args, **_kwargs(kwargs)))
             except SluiceError as e:
                 return _error(e)
     else:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
-                return _result(fn(*args, **kwargs))
+                return _result(fn(*args, **_kwargs(kwargs)))
             except SluiceError as e:
                 return _error(e)
     wrapper.__signature__ = inspect.signature(fn).replace(return_annotation=CallToolResult)
@@ -329,13 +335,14 @@ def build_server(store: Store, stop: threading.Event | None = None,
                  kinds: list[str] | None = None, threads: list[str] | None = None,
                  limit: int = 200) -> Any:
         """Read the log: {records, last_seq}. Records are {seq, at, kind, ...} oldest first;
-        kinds: plan.edit, plan.input, step.output, step.retry, step.status, call, message.
+        kinds: plan.edit, plan.input, step.output, step.retry, step.status, call, message,
+        inbox.post, inbox.answer, inbox.close.
 
         Args:
             project: the project's log; leave out for the home log (calls without a project).
             since_seq: only records after this seq (pass the last_seq you got to continue).
                 Without it: the last `limit` matching records.
-            kinds: only these kinds; "step" or "plan" match every kind under them.
+            kinds: only these kinds; "step", "plan" or "inbox" match every kind under them.
             threads: only messages on these threads (and, without kinds, only messages).
             limit: at most this many records (default 200).
         """
@@ -400,6 +407,64 @@ def build_server(store: Store, stop: threading.Event | None = None,
             project: the project.
         """
         return store.status(project)
+
+    @tool
+    def inbox_post(project: str, title: str, body: str | None = None, ui: str | None = None,
+                   input: str | None = None,
+                   from_: Annotated[str | None, Field(alias="from")] = None) -> Any:
+        """Ask a person something: post an open item to the project's inbox (the dashboard's
+        Inbox shows it). Returns {id}. Wait for the answer with log_wait(project, since_seq,
+        kinds=["inbox"]), or read it with inbox_list. Read docs("inbox") first.
+
+        Args:
+            project: the project.
+            title: the question, one line.
+            body: more context, as markdown.
+            ui: an OpenUI Lang program with buttons or a form for the answer (docs("inbox")
+                lists the components); without it the person gets a text box.
+            input: a declared plan input the answer sets (its value: values.value, else
+                params.value, else text), type-checked like plan_set_input.
+            from: who is asking (a step id, an agent name).
+        """
+        return {"id": store.inbox_post(project, title, body, ui, input, from_)["id"]}
+
+    @tool
+    def inbox_list(project: str | None = None, status: str = "open") -> Any:
+        """List inbox items, oldest first: [{project, id, title, body?, ui?, input?, from?,
+        status, created, answer?, answered?, closed?, reason?}]. An answer is {action,
+        params?, values?, text?}.
+
+        Args:
+            project: only this project's items; leave out for every project.
+            status: open (default), answered, closed or all.
+        """
+        return store.inbox(project, status)
+
+    @tool
+    def inbox_answer(project: str, id: str, answer: dict[str, Any]) -> Any:
+        """Answer an open inbox item, as the person would from the dashboard. An item that is
+        already answered or closed is refused (`conflict` with its `status`). When the item
+        names a plan input, the answer sets it first; a value that does not fit is refused
+        (`invalid`) and the item stays open. Returns the answered item.
+
+        Args:
+            project: the project.
+            id: the item id, e.g. "i3".
+            answer: {action: string, params?: object, values?: object, text?: string}.
+        """
+        return store.inbox_answer(project, id, answer, AUTHOR)
+
+    @tool
+    def inbox_close(project: str, id: str, reason: str | None = None) -> Any:
+        """Withdraw an open inbox item you posted (you no longer need the answer). Refused
+        (`conflict`) once it is answered or closed. Returns the closed item.
+
+        Args:
+            project: the project.
+            id: the item id.
+            reason: why, shown with the item.
+        """
+        return store.inbox_close(project, id, reason, AUTHOR)
 
     Dashboard(store, stop, interval).add_routes(mcp)
     return mcp

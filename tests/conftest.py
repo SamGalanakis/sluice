@@ -1,9 +1,13 @@
 import json
+import socket
+import threading
 import time
 from pathlib import Path
 
 import pytest
+import uvicorn
 
+from sluice.mcp_server import build_server
 from sluice.runner import Runner
 from sluice.store import Store
 
@@ -27,6 +31,29 @@ def home(tmp_path: Path) -> Path:
 @pytest.fixture
 def store(home: Path) -> Store:
     return Store(home)
+
+
+@pytest.fixture
+def port(store):
+    """A dashboard served from this process (no runner), polling every 0.1 s."""
+    stop = threading.Event()
+    app = build_server(store, stop, interval=0.1).streamable_http_app()
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        free = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=free,
+                                           log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not server.started:
+        assert time.time() < deadline, "server did not start"
+        time.sleep(0.05)
+    yield free
+    stop.set()
+    server.should_exit = True
+    thread.join(timeout=10)
+    assert not thread.is_alive()
 
 
 @pytest.fixture

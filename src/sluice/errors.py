@@ -37,6 +37,15 @@ class Conflict(SluiceError):
         self.current_rev = current_rev
 
 
+class NotOpen(SluiceError):
+    """An inbox item that is no longer open (answered or closed): acting on it is stale."""
+
+    code = "conflict"
+
+    def __init__(self, item_id: str, status: str):
+        super().__init__(f"inbox item {item_id} is {status}, not open", status=status)
+
+
 class InvalidPlan(SluiceError):
     code = "invalid"
 

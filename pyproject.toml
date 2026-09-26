@@ -9,6 +9,7 @@ dependencies = [
     "jsonpatch>=1.33",
     "uvicorn>=0.30",
     "datastar-py>=1.0.2",
+    "markdown-it-py>=4,<5",
 ]
 
 [project.scripts]

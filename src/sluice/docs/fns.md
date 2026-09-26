@@ -7,9 +7,10 @@ with `log_wait(project, since_seq, kinds=["call"])`. Each status change of a cal
 in the project's log (the home log without a project).
 
 ## Scopes
-- **builtin**: shipped with sluice (`core.*`, `thread.*`). Other first-party functions come in
-  packs (`agents`, `git`, `jev` in the repo's `packs/`): install one by copying `packs/<pack>/*`
-  into `$SLUICE_HOME/fns/` or a project's `fns/`, or by adding its path to `fn_dirs`.
+- **builtin**: shipped with sluice (`core.*`, `thread.*`, `inbox.ask`). Other first-party
+  functions come in packs (`agents`, `git`, `jev` in the repo's `packs/`): install one by copying
+  `packs/<pack>/*` into `$SLUICE_HOME/fns/` or a project's `fns/`, or by adding its path to
+  `fn_dirs`.
 - **global**: `$SLUICE_HOME/fns/` and the dirs in the config's `fn_dirs`; every project sees them.
 - **project**: the project's own `fns/`; only that project sees them.
 

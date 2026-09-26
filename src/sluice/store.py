@@ -15,16 +15,18 @@ from typing import Any
 import jsonpatch
 import jsonpointer
 
+from . import inbox as I
 from . import log as L
 from . import plan as P
 from . import registry as R
 from . import types as T
-from .errors import BadRequest, Conflict, InvalidPlan, NotFound
+from .errors import BadRequest, Conflict, InvalidPlan, NotFound, NotOpen
 from .util import atomic_write_json, atomic_write_text, now_iso, read_json
 
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                                   "max_parallel": 8, "log_max": L.DEFAULT_MAX}
 PROJECT_KEYS = {"name", "description"}
+ANSWER_KEYS = {"action": str, "params": dict, "values": dict, "text": str}
 
 
 def default_home() -> Path:
@@ -411,6 +413,115 @@ class Store:
             self._log(project, doc["rev"], author, reason, kind="step.retry", step=step)
             self._status_change(project, step, e["status"], "pending")
         self.notify()
+
+    # ---- the inbox (SPEC §8) ----
+
+    def log_cap(self) -> int:
+        return int(self.config.get("log_max") or L.DEFAULT_MAX)
+
+    def inbox(self, project: str | None = None, status: str = "open") -> list[dict[str, Any]]:
+        """inbox_list: the items with this status ("all" for every one) of the project, or of
+        every project, oldest first; each carries its `project`."""
+        if status not in (*I.STATUSES, "all"):
+            raise BadRequest(f"status: expected one of {', '.join(I.STATUSES)} or all, "
+                             f"got {status!r}")
+        if project is not None:
+            self.project(project)
+        out = [{"project": name, **item}
+               for name in ([project] if project else self.project_names())
+               for item in I.items(self.project_dir(name))
+               if status in ("all", item["status"])]
+        return sorted(out, key=lambda item: item["created"])
+
+    def inbox_post(self, project: str, title: str, body: str | None = None,
+                   ui: str | None = None, input: str | None = None,
+                   sender: str | None = None) -> dict[str, Any]:
+        """Post an open item. With `input`, answering it sets that plan input, so the plan
+        must declare it."""
+        if not isinstance(title, str) or not title.strip():
+            raise BadRequest("title: expected a non-empty string")
+        with self.lock(project):
+            self.project(project)
+            if input is not None and input not in self.plan(project)[1].inputs:
+                raise NotFound(f"the plan of project {project} has no input {input!r}")
+            item = I.post(self.project_dir(project), self.log_cap(), title, body, ui, input,
+                          sender)
+        self.notify()
+        return item
+
+    def _open_item(self, project: str, item_id: str) -> dict[str, Any]:
+        """The item, refusing an unknown one (NotFound) or one that is not open (NotOpen).
+        Callers hold the project lock."""
+        self.project(project)
+        item = I.find(self.project_dir(project), item_id)
+        if item is None:
+            raise NotFound(f"project {project} has no inbox item {item_id!r}")
+        if item["status"] != "open":
+            raise NotOpen(item_id, item["status"])
+        return item
+
+    def inbox_answer(self, project: str, item_id: str, answer: Any,
+                     author: str) -> dict[str, Any]:
+        """Answer an open item. When it names a plan input, the answer's value (answer_value)
+        goes through set_input first; a value that does not fit refuses the answer and the item
+        stays open. The one write path for MCP and the dashboard."""
+        errs = check_answer(answer)
+        if errs:
+            raise InvalidPlan(errs, "not a valid answer")
+        with self.lock(project):
+            item = self._open_item(project, item_id)
+            if item.get("input"):
+                name = item["input"]
+                value = answer_value(answer)
+                if value is None:
+                    need = "give values.value, params.value or text"
+                    raise InvalidPlan([f"answer: inbox item {item_id} sets plan input {name}; "
+                                       + need])
+                try:
+                    self.set_input(project, name, value, author,
+                                   f"inbox item {item_id}: {item['title']}")
+                except InvalidPlan as e:
+                    raise InvalidPlan(e.errors, f"inbox item {item_id}: the answer does not "
+                                      f"fit plan input {name}") from e
+            item = I.finish(self.project_dir(project), self.log_cap(), item_id,
+                            {"status": "answered", "answer": answer, "answered": now_iso()},
+                            {"kind": "inbox.answer", "answer": answer, "by": author})
+        self.notify()
+        return item
+
+    def inbox_close(self, project: str, item_id: str, reason: str | None,
+                    author: str) -> dict[str, Any]:
+        """Withdraw an open item (the poster no longer needs it)."""
+        with self.lock(project):
+            self._open_item(project, item_id)
+            extra = {"reason": reason} if reason else {}
+            item = I.finish(self.project_dir(project), self.log_cap(), item_id,
+                            {"status": "closed", "closed": now_iso(), **extra},
+                            {"kind": "inbox.close", **extra, "by": author})
+        self.notify()
+        return item
+
+
+def check_answer(answer: Any) -> list[str]:
+    """An answer is {action: string, params?: object, values?: object, text?: string}."""
+    if not isinstance(answer, dict):
+        return ["answer: expected an object {action, params?, values?, text?}"]
+    errs = [f"answer.{k}: unknown key (answers have action, params, values, text)"
+            for k in answer if k not in ANSWER_KEYS]
+    if "action" not in answer:
+        errs.append("answer.action: missing required field")
+    errs += [f"answer.{k}: expected {'a string' if t is str else 'an object'}"
+             for k, t in ANSWER_KEYS.items() if k in answer and not isinstance(answer[k], t)]
+    return errs
+
+
+def answer_value(answer: dict[str, Any]) -> Any:
+    """The value an answer gives a plan input: the first of `values.value` (a form field named
+    value), `params.value` (a button's value) and `text` that is there; None when none is."""
+    for where in (answer.get("values") or {}, answer.get("params") or {}):
+        if "value" in where:
+            return where["value"]
+    return answer.get("text")
 
 
 def _body(doc: dict[str, Any]) -> dict[str, Any]:
