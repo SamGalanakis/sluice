@@ -1,0 +1,20 @@
+{
+  "name": "git.worktree",
+  "version": 1,
+  "description": "Add a git worktree on a new or existing branch.",
+  "in": {
+    "repo": "string",
+    "base": "string",
+    "branch": "string",
+    "path": "string?"
+  },
+  "out": {
+    "path": "string",
+    "branch": "string",
+    "sha": "string"
+  },
+  "effects": true,
+  "timeout": "10m",
+  "slots": {"default": 1},
+  "retry": {"transient": 2, "backoff": "30s"}
+}

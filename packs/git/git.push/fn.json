@@ -1,0 +1,18 @@
+{
+  "name": "git.push",
+  "version": 1,
+  "description": "Push HEAD to a branch on a remote, optionally with --force-with-lease.",
+  "in": {
+    "path": "string",
+    "branch": "string",
+    "remote": "string?",
+    "force_with_lease": "bool?"
+  },
+  "out": {
+    "sha": "string"
+  },
+  "effects": true,
+  "timeout": "10m",
+  "slots": {"default": 1},
+  "retry": {"transient": 2, "backoff": "30s"}
+}
