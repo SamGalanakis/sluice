@@ -14,8 +14,8 @@ from .util import canonical
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
-STEP_KEYS = {"run", "in", "scatter", "doc"}
-INPUT_KEYS = {"type", "doc"}  # the object form of a plan input: {"type": T, "doc": "..."}
+STEP_KEYS = {"run", "in", "scatter", "doc", "outputs"}
+INPUT_KEYS = {"type", "doc"}  # a plan input's or step output's object form {"type": T, "doc"}
 
 
 @dataclass(frozen=True)
@@ -42,11 +42,25 @@ class Source:
 
 @dataclass
 class Step:
+    """A step. Running an open fn it may also bind extra inputs (typed by their sources) and
+    declare outputs of its own, which the agent submits (`step_submit`)."""
+
     id: str
     fn: Fn
     sources: dict[str, Source]
     scatter: str | None
     doc: str = ""
+    extra: dict[str, T.Type] = field(default_factory=dict)  # extra input -> its source's type
+    declared: dict[str, T.Type] = field(default_factory=dict)  # declared output -> type
+    output_docs: dict[str, str] = field(default_factory=dict)  # only outputs that have one
+
+    @property
+    def inputs(self) -> dict[str, T.Type]:
+        return {**self.fn.inputs, **self.extra}
+
+    @property
+    def outputs(self) -> dict[str, T.Type]:
+        return {**self.fn.outputs, **self.declared}
 
     @property
     def reads(self) -> list[Ref]:
@@ -57,8 +71,15 @@ class Step:
         return list(dict.fromkeys(r.step for r in self.reads if r.step))
 
     def output_type(self, name: str) -> T.Type | None:
-        t = self.fn.outputs.get(name)
+        t = self.outputs.get(name)
         return T.List(t) if t is not None and self.scatter else t
+
+    def ports(self) -> dict[str, dict[str, Any]]:
+        """What an open fn is told about the step (SPEC §4): its extra inputs {name: {type}}
+        and declared outputs {name: {type, doc}}, types in their CWL spelling."""
+        return {"inputs": {k: {"type": T.form(t)} for k, t in self.extra.items()},
+                "outputs": {k: {"type": T.form(t), "doc": self.output_docs.get(k, "")}
+                            for k, t in self.declared.items()}}
 
 
 @dataclass
@@ -70,8 +91,8 @@ class Plan:
 
 
 def parse_input(form: Any, path: str, errs: list[str]) -> tuple[T.Type | None, str]:
-    """A plan input declaration: a type, or `{"type": T, "doc": "..."}` (CWL's object form; no
-    type form has only these keys). Returns (its type, its doc)."""
+    """A plan input or step output declaration: a type, or `{"type": T, "doc": "..."}` (CWL's
+    object form; no type form has only these keys). Returns (its type, its doc)."""
     doc = ""
     if isinstance(form, dict) and form.keys() <= INPUT_KEYS:
         if "type" not in form:
@@ -131,6 +152,22 @@ def ref_type(ref: Ref, plan: Plan) -> tuple[T.Type | None, str]:
             return None, f"step {ref.step} (fn {step.fn.name}) has no output {ref.name}"
     t, err = T.navigate(base, ref.fields)
     return (t, "") if t is not None else (None, f"{ref}: {err}")
+
+
+def source_type(s: Source, plan: Plan, path: str, errs: list[str]) -> T.Type:
+    """The type an extra input takes from its source: a ref's type, an array of the refs'
+    type for a list source (`Any[]` when they differ), `Any` for a default."""
+    if not s.refs and not s.fan_in:
+        return T.ANY
+    found = []
+    for i, ref in enumerate(s.refs):
+        t, err = ref_type(ref, plan)
+        if t is None:
+            errs.append(f"{path}.source[{i}]: {err}" if s.fan_in else f"{path}: {err}")
+        found.append(t or T.ANY)
+    if not s.fan_in:
+        return found[0]
+    return T.List(found[0] if len(set(found)) == 1 else T.ANY)
 
 
 def check_source(s: Source, target: T.Type, plan: Plan, path: str, errs: list[str]) -> None:
@@ -208,7 +245,7 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
     for sid, raw in _ids(doc.get("steps", {}), "steps", errs).items():
         p = f"steps.{sid}"
         if not isinstance(raw, dict):
-            errs.append(f"{p}: a step is {{run, in, scatter?, doc?}}")
+            errs.append(f"{p}: a step is {{run, in, scatter?, doc?, outputs?}}")
             continue
         errs.extend(f"{p}.{k}: unknown key" for k in raw if k not in STEP_KEYS)
         text = raw.get("doc", "")
@@ -225,15 +262,36 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
             ins = {}
         sources = {k: s for k, v in ins.items()
                    if (s := parse_source(v, f"{p}.in.{k}", errs)) is not None}
-        errs.extend(f"{p}.in.{k}: fn {fn.name} has no input {k}" for k in ins
-                    if k not in fn.inputs)
+        for k in ins:
+            if k in fn.inputs:
+                continue
+            if not fn.open:
+                errs.append(f"{p}.in.{k}: fn {fn.name} has no input {k} (only an open fn "
+                            "takes extra inputs)")
+            elif not ID_RE.match(k):
+                errs.append(f"{p}.in.{k}: extra input names match {ID_RE.pattern}")
         errs.extend(f"{p}.in.{k}: required input is not bound" for k, t in fn.inputs.items()
                     if k not in ins and not isinstance(t, T.Optional))
         scatter = raw.get("scatter")
         if scatter is not None and scatter not in ins:
             errs.append(f"{p}.scatter: {scatter!r} is not a bound input of the step")
             scatter = None
-        plan.steps[sid] = Step(sid, fn, sources, scatter, text)
+        step = plan.steps[sid] = Step(sid, fn, sources, scatter, text)
+        if "outputs" in raw:
+            if not fn.open:
+                errs.append(f"{p}.outputs: fn {fn.name} is not open; only a step running an "
+                            "open fn declares outputs")
+            else:
+                for name, form in _ids(raw["outputs"], f"{p}.outputs", errs).items():
+                    if name in fn.outputs:
+                        errs.append(f"{p}.outputs.{name}: fn {fn.name} already has an output "
+                                    f"{name}")
+                        continue
+                    t, out_doc = parse_input(form, f"{p}.outputs.{name}", errs)
+                    if t is not None:
+                        step.declared[name] = t
+                        if out_doc:
+                            step.output_docs[name] = out_doc
     for name, raw in _ids(doc.get("outputs", {}), "outputs", errs).items():
         src = parse_source(raw, f"outputs.{name}", errs)
         if src is None or len(src.refs) != 1 or src.fan_in:
@@ -247,10 +305,19 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
 
     for step in plan.steps.values():
         for k, s in step.sources.items():
+            path = f"steps.{step.id}.in.{k}"
             if k in step.fn.inputs:
                 target = step.fn.inputs[k]
-                check_source(s, T.List(target) if k == step.scatter else target, plan,
-                             f"steps.{step.id}.in.{k}", errs)
+                check_source(s, T.List(target) if k == step.scatter else target, plan, path,
+                             errs)
+            elif step.fn.open:
+                t = source_type(s, plan, path, errs)
+                if k == step.scatter:
+                    inner = t.of if isinstance(t, T.Optional) else t
+                    if inner != T.ANY and not isinstance(inner, T.List):
+                        errs.append(f"{path}: the scatter input needs an array, not {t}")
+                    t = inner.of if isinstance(inner, T.List) else T.ANY
+                step.extra[k] = t
     cycle = find_cycle({s.id: s.deps for s in plan.steps.values()})
     if cycle:
         errs.append(f"steps.{cycle[0]}: dependency cycle {' -> '.join(cycle)}")
@@ -303,7 +370,7 @@ def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
 def resolved_inputs(step: Step, plan: Plan, state: dict[str, Any]) -> dict[str, Any]:
     """The input object a step runs with (unbound optional inputs are null); for a scattered
     step, with the whole array."""
-    inp: dict[str, Any] = {k: None for k in step.fn.inputs}
+    inp: dict[str, Any] = {k: None for k in step.inputs}
     inp.update({k: source_value(s, plan, state) for k, s in step.sources.items()})
     return inp
 

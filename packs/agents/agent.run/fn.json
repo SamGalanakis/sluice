@@ -1,6 +1,7 @@
 {
   "name": "agent.run",
   "doc": "Run a spec on the agent engine named in the input.",
+  "open": true,
   "inputs": {
     "engine": {
       "type": "enum",
@@ -13,13 +14,13 @@
     "cwd": "string",
     "spec": "string",
     "model": "string?",
-    "resume": "string?",
+    "session": "string?",
     "report_path": "string?",
     "listen": "boolean?"
   },
   "outputs": {
     "final": "string",
     "report": "string?",
-    "session": "string?"
+    "session": "string"
   }
 }

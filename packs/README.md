@@ -11,6 +11,21 @@ home or project actually needs.
 
 Each `fn.json` is the reference for that function's typed inputs and outputs.
 
+## Agent blocks and sessions
+
+The agent functions (`agent.claude`, `agent.codex`, `agent.devin`, `agent.run`,
+`agent.review`) are **open**: a plan step running one may bind extra inputs and declare
+outputs (`docs("plans")`). As a plan step, each appends to its task text an `## Inputs`
+section (every extra input with its type and value), an `## Outputs you must submit` section
+(every declared output with its type and doc, and the exact `sluice tool step_submit` command
+to submit them) and the step-thread note (`listen: false` drops only the note). The step fails
+if the agent finishes without submitting a required output.
+
+Every agent function takes `session?: string` and returns `session: string` (Claude's session
+id, or the id the Devin or Codex harness writes to `<log>.session`; empty when there is none).
+A follow-up to a particular agent is another step with `session` bound to the earlier step's
+`session` output, or a `fn_call` with that session.
+
 The agents pack is a starting point: which engine runs which kind of work is up to each
 project. To route, copy (or wrap) `agent.run` into the project's own `fns/` under a name of
 its own and pick the engines there.

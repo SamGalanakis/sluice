@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,10 @@ def pytest_configure(config):
 def call_fn(tmp_path):
     run_dirs = []
 
-    def _call(fn_dir, inp, env=None, path=None):
+    def _call(fn_dir, inp, env=None, path=None, watch=None):
+        """Run the fn; returns (exit code, parsed stdout or None, stderr). With `watch`, the
+        fn's stderr goes to stderr.log in its run dir (as under the runner) and
+        watch(stderr so far) is called every 0.05 s while it runs."""
         run_dir = Path(tempfile.mkdtemp(prefix="run-", dir=tmp_path))
         run_dirs.append(run_dir)
         e = {
@@ -45,20 +49,27 @@ def call_fn(tmp_path):
         if path:
             dirs = [path] if isinstance(path, (str, Path)) else list(path)
             e["PATH"] = os.pathsep.join([*(str(d) for d in dirs), e["PATH"]])
-        p = subprocess.run(
-            ["uv", "run", "--quiet", "--script", str(Path(fn_dir) / "main.py")],
-            input=json.dumps(inp),
-            text=True,
-            capture_output=True,
-            env=e,
-            cwd=run_dir,
-            check=False,
-        )
+        argv = ["uv", "run", "--quiet", "--script", str(Path(fn_dir) / "main.py")]
+        if watch is None:
+            p = subprocess.run(argv, input=json.dumps(inp), text=True, capture_output=True,
+                               env=e, cwd=run_dir, check=False)
+            code, stdout, stderr = p.returncode, p.stdout, p.stderr
+        else:
+            err_file = run_dir / "stderr.log"
+            with open(err_file, "w") as err:
+                p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=err, text=True, env=e, cwd=run_dir)
+                p.stdin.write(json.dumps(inp))
+                p.stdin.close()
+                while p.poll() is None:
+                    watch(err_file.read_text())
+                    time.sleep(0.05)
+                code, stdout, stderr = p.returncode, p.stdout.read(), err_file.read_text()
         try:
-            out = json.loads(p.stdout)
+            out = json.loads(stdout)
         except json.JSONDecodeError:
             out = None
-        return p.returncode, out, p.stderr
+        return code, out, stderr
 
     _call.run_dirs = run_dirs
     return _call

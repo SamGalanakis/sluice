@@ -139,6 +139,6 @@ def _check_project(store: Store, r: Report, name: str) -> None:
             continue
         step = plan.steps.get(sid)
         if e["status"] in ("succeeded", "stale") and step is not None:
-            types = {k: step.output_type(k) for k in step.fn.outputs}
+            types = {k: step.output_type(k) for k in step.outputs}
             r.add_path_errors(where, T.check_value(T.record_of(types), e.get("outputs"),
                                                    f"steps.{sid}.outputs"))

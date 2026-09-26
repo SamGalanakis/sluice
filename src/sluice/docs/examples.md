@@ -12,20 +12,22 @@ project's functions and `.env`. (`git.head` comes from the `git` pack — instal
 1, ...)` replacing `/inputs`, `/outputs` and `/steps` to reach:
 ```json
 {"inputs": {"repo": "string"},
- "outputs": {"summary": {"source": "summary/final"}},
+ "outputs": {"summary": {"source": "summary/result"}},
  "steps": {
-   "api": {"run": "agent.run", "in": {"engine": {"default": "devin"}, "cwd": {"source": "repo"},
-            "spec": {"default": "Add a /health endpoint"}}},
-   "ui":  {"run": "agent.run", "in": {"engine": {"default": "devin"}, "cwd": {"source": "repo"},
-            "spec": {"default": "Show health status in the footer"}}},
-   "prompt": {"run": "core.format", "in": {
-            "template": {"default": "Summarise these two changes for the changelog:\n\n{0}\n\n---\n\n{1}"},
-            "values": {"source": ["api/final", "ui/final"]}}},
-   "summary": {"run": "agent.run", "in": {"engine": {"default": "claude"}, "cwd": {"source": "repo"},
-            "spec": {"source": "prompt/text"}}}}}
+   "api": {"run": "agent.devin", "outputs": {"branch": "string"},
+           "in": {"cwd": {"source": "repo"},
+                  "spec": {"default": "Add a /health endpoint on a new branch of your own"}}},
+   "ui":  {"run": "agent.devin", "outputs": {"branch": "string"},
+           "in": {"cwd": {"source": "repo"},
+                  "spec": {"default": "Show health status in the footer, on a new branch of your own"}}},
+   "summary": {"run": "agent.claude",
+           "in": {"cwd": {"source": "repo"}, "api": {"source": "api/branch"},
+                  "ui": {"source": "ui/branch"},
+                  "prompt": {"default": "Summarise the changes on these two branches for the changelog"}}}}}
 ```
-`api` and `ui` run in parallel once `plan_set_input("health", "repo", "/repo")` is set; `prompt`
-waits for both (fan-in) and builds the text that `summary` receives.
+`api` and `ui` run in parallel once `plan_set_input("health", "repo", "/repo")` is set; each
+submits the branch it worked on. `summary` waits for both (fan-in) and gets both branches as
+inputs. More on shaping plans like this: `docs("composing")`.
 
 ## One step per item (scatter)
 ```json

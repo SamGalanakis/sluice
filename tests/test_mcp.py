@@ -14,7 +14,7 @@ TOOLS = {"docs", "projects_list", "project_create", "project_update", "fn_list",
          "fn_save", "fn_call", "call_status", "plan_get", "plan_patch", "plan_history",
          "plan_set_input", "step_set_input", "step_set_output", "step_retry", "verify",
          "plan_view", "status", "log_read", "log_wait", "inbox_post", "inbox_list",
-         "inbox_answer", "inbox_close"}
+         "inbox_answer", "inbox_close", "step_submit"}
 UPPER = """from sluice.fn import run
 
 run(lambda inp, ctx: {"text": inp["text"].upper()})

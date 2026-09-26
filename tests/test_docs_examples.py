@@ -16,7 +16,7 @@ BLOCK = re.compile(r"```json\n(.*?)```", re.DOTALL)
 
 
 def plans():
-    for page in ("plans", "examples", "threads", "inbox"):
+    for page in ("plans", "examples", "threads", "inbox", "composing"):
         for i, block in enumerate(BLOCK.findall((DOCS / f"{page}.md").read_text())):
             doc = json.loads(block)
             if isinstance(doc, dict) and "steps" in doc:
@@ -32,3 +32,4 @@ def test_doc_plans_validate(doc):
 
 def test_there_are_plans_to_check():
     assert len(list(plans())) >= 4
+    assert len([p for p in plans() if p.id.startswith("composing-")]) == 3

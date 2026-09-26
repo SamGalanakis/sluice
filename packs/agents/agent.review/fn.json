@@ -1,16 +1,19 @@
 {
   "name": "agent.review",
   "doc": "Review the diff of a branch against the project standards and fix issues by committing.",
+  "open": true,
   "inputs": {
     "cwd": "string",
     "base": "string",
     "standards": "string",
     "notes": "string?",
+    "session": "string?",
     "listen": "boolean?"
   },
   "outputs": {
     "summary": "string",
     "sha": "string",
-    "commits": "int"
+    "commits": "int",
+    "session": "string"
   }
 }

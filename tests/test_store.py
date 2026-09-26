@@ -198,7 +198,7 @@ def test_set_output_and_retry(store):
     with pytest.raises(InvalidPlan) as e:
         store.set_output("p", "a", {"sum": "x", "extra": 1}, "me", "bad")
     assert e.value.errors == ['outputs.sum: expected int, got "x"',
-                              "outputs.extra: fn test.add has no output extra"]
+                              "outputs.extra: step a (fn test.add) has no output extra"]
     with pytest.raises(InvalidPlan):  # a scattered step's outputs are arrays
         store.set_output("p", "t", {"start": 1.0, "end": 2.0, "tag": 1}, "me", "bad")
     store.set_output("p", "t", {"start": [1.0], "end": [2.0], "tag": [1]}, "me", "ok")

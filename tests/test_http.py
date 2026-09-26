@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import anyio
 from mcp import Client
 
 from sluice.store import Store
+from tests.conftest import SPAWN_STEPS, create, pid_alive, spawned_children, wait_gone
 
 
 def free_port() -> int:
@@ -131,3 +133,23 @@ def test_a_server_restart_leaves_steps_of_a_separate_runner_running(home):
                 p.terminate()
                 p.wait(timeout=30)
     assert loop.returncode == 0, loop.stderr.read().decode()
+
+
+def test_sighup_stops_serve_and_every_process_its_runner_started(home):
+    store = Store(home)
+    create(store, "p", SPAWN_STEPS)
+    port = free_port()
+    proc = subprocess.Popen([sys.executable, "-m", "sluice.cli", "serve", "--port", str(port)],
+                            env={**os.environ, "SLUICE_HOME": str(home)},
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        wait_for_port(port, proc)
+        pids = spawned_children(store, "p", list(SPAWN_STEPS))
+        assert all(map(pid_alive, pids))
+        proc.send_signal(signal.SIGHUP)
+        assert proc.wait(timeout=30) == 0, proc.stderr.read().decode()
+        assert wait_gone(pids) == []
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

@@ -48,6 +48,44 @@ a step and has no value yet, with its doc.
 - `{"source": ["a/out", "b/out"]}`: fan-in, the step gets an array of those values in order.
 - Optional function inputs (`T?`) may be left out.
 
+## Agent blocks: typed inputs and outputs
+An agent function (`agent.claude`, `agent.codex`, `agent.devin`, `agent.run`, `agent.review`)
+is **open** (`fn_list` shows `open: true`): a step running it may bind extra inputs of any name
+and declare the outputs it will produce. How to shape a plan around them: `docs("composing")`.
+
+```json
+{"inputs": {"repo": "string"},
+ "outputs": {"branch": {"source": "logic/branch"}},
+ "steps": {
+   "design": {"run": "agent.claude", "doc": "Write the interface the others build on",
+              "in": {"cwd": {"source": "repo"},
+                     "prompt": {"default": "Design the scoring interface; commit it on a new branch."}},
+              "outputs": {"interface": {"type": "string", "doc": "Path of the interface file"},
+                          "branch": "string"}},
+   "logic": {"run": "agent.claude",
+             "in": {"cwd": {"source": "repo"},
+                    "prompt": {"default": "Implement the interface on a branch of your own, based on the given one."},
+                    "interface": {"source": "design/interface"},
+                    "base": {"source": "design/branch"}},
+             "outputs": {"branch": "string"}}}}
+```
+
+- **Extra inputs** (`interface`, `base` above) take the type of their source (`Any` for a
+  `default`). The agent sees each one, with its type and value, under `## Inputs` in its task.
+- **Declared outputs** (`outputs`, next to `run` and `in`) are a type, or `{"type", "doc"}`;
+  they join the function's own outputs, so `design/interface` is a ref like any other and is
+  type-checked where it is read.
+- The agent is told the outputs under `## Outputs you must submit`, with the exact command:
+  `sluice tool step_submit '{"project": ..., "step": ..., "run": ..., "outputs": {...}}'`
+  (the MCP tool `step_submit`). A submission that does not fit returns `invalid` listing every
+  problem, and the agent submits again; the last one counts. Each accepted one is a
+  `step.submit` log record.
+- When the agent's process ends, the submitted outputs join the step's outputs. A required
+  declared output that was never submitted fails the step, naming it.
+- Every agent function takes `session` and returns `session`: bind a later step's `session` to
+  an earlier step's `session` output to continue that same agent (or `fn_call` it with the
+  session to follow up by hand).
+
 ## Shapes
 - **Chain:** B reads A's output.
 - **Fan-out:** several steps read the same output.
@@ -55,7 +93,7 @@ a step and has no value yet, with its doc.
   `core.format` builds text from them (`"{0} and {1}"`, or `{name}` with a record).
 - **Scatter:** `"scatter": "<input>"` runs the step once per item of that input's array; each
   output becomes an array in item order. Use it when the number of items is only known at run
-  time.
+  time. An extra input can be the scattered one; each run's agent submits its own outputs.
 
 A step starts once every plan input and step it reads has a value / has succeeded. A failed step
 blocks everything downstream until you act.
@@ -96,7 +134,8 @@ plan's history (`plan_history`).
 - `step_set_input(project, step, input, value)`: pin a literal on one step input (an edit; a
   succeeded step turns stale).
 - `step_set_output(project, step, outputs)`: mark a step succeeded with outputs you supply (you
-  did the work, or you know the result). Type-checked against the function's outputs; for a
+  did the work, or you know the result). Type-checked against the step's outputs (its
+  function's and those it declares); for a
   scattered step, each output is an array. Refused while a step it reads has not succeeded or a
   plan input it reads has no value (the error names them); `force: true` sets it anyway, and the
   step turns stale once those values are all there.
@@ -108,6 +147,7 @@ Every edit, manual value and step status change is a record in the project's log
 
 ## Validation errors
 Every edit is checked: functions exist (as the project sees them), required inputs are bound,
-refs point at real inputs or outputs, types fit, no cycles. Errors are a list with paths, e.g.
+extra inputs and declared outputs only on an open function's step, refs point at real inputs
+or outputs, types fit, no cycles. Errors are a list with paths, e.g.
 `steps.notes.in.cwd: repo is int, which does not fit string: int is not string`. Fix each path
 and resend. `verify(project)` runs the same checks plus function and state checks.

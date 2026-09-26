@@ -320,6 +320,25 @@ def build_server(store: Store, stop: threading.Event | None = None,
         store.retry(project, step, AUTHOR, reason)
         return {"ok": True}
 
+    @tool
+    def step_submit(project: str, step: str, outputs: dict[str, Any],
+                    run: str | None = None) -> Any:
+        """Submit the outputs a running step declares (its `outputs`), from the agent doing
+        the step's work. Checked against the declared outputs: every required one present,
+        types fitting, no others; `invalid` lists every mismatch with its path, so fix them
+        and submit again. Submitting again replaces what was sent. When the step's fn exits,
+        these join its outputs; a required one never submitted fails the step. Returns
+        {ok, run}.
+
+        Args:
+            project: the project.
+            step: the running step.
+            outputs: an object keyed by declared output name.
+            run: the run id (SLUICE_RUN_ID); needed only when the step runs several times at
+                once (scatter).
+        """
+        return store.submit(project, step, outputs, run)
+
     def _log_args(project: str | None, kinds: list[str] | None, limit: int | None) -> Any:
         if project is not None:
             store.project(project)
@@ -335,8 +354,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
                  kinds: list[str] | None = None, threads: list[str] | None = None,
                  limit: int = 200) -> Any:
         """Read the log: {records, last_seq}. Records are {seq, at, kind, ...} oldest first;
-        kinds: plan.edit, plan.input, step.output, step.retry, step.status, call, message,
-        inbox.post, inbox.answer, inbox.close.
+        kinds: plan.edit, plan.input, step.output, step.retry, step.status, step.submit, call,
+        message, inbox.post, inbox.answer, inbox.close.
 
         Args:
             project: the project's log; leave out for the home log (calls without a project).

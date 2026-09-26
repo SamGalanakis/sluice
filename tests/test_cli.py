@@ -9,7 +9,8 @@ from dataclasses import dataclass
 import pytest
 
 from sluice import cli
-from tests.conftest import write_config
+from sluice.store import Store
+from tests.conftest import SPAWN_STEPS, create, pid_alive, spawned_children, wait_gone, write_config
 
 PLAN = {"inputs": {"n": "int"}, "outputs": {"total": {"source": "b/sum"}},
         "steps": {"a": {"run": "test.add", "in": {"a": {"source": "n"}, "b": {"default": 2}}},
@@ -146,3 +147,24 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
     assert '<pre class="mermaid">' in page.stdout
     missing = sluice.tool("step_retry", project="demo", step="zz", check=False)
     assert json.loads(missing.stderr)["error"] == "not_found"
+
+
+def test_sighup_stops_the_loop_and_every_process_its_fns_started(home):
+    """Closing the terminal (`tmux kill-session`) sends SIGHUP: the loop stops its fns like on
+    SIGTERM, including a child in a session of its own that only the fn's SIGTERM handling
+    reaches, and exits 0."""
+    store = Store(home)
+    create(store, "p", SPAWN_STEPS)
+    loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"],
+                            env={**os.environ, "SLUICE_HOME": str(home)},
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        pids = spawned_children(store, "p", list(SPAWN_STEPS))
+        assert all(map(pid_alive, pids))
+        loop.send_signal(signal.SIGHUP)
+        assert loop.wait(timeout=20) == 0, loop.stderr.read().decode()
+        assert wait_gone(pids) == []
+    finally:
+        if loop.poll() is None:
+            loop.kill()
+            loop.wait()

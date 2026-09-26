@@ -2,6 +2,12 @@ sluice runs plans: graphs of typed function calls ("steps"). Work is organised i
 project has one plan, its own functions and its own secrets. You edit a plan with these tools; a
 runner executes it in the background and records each step's outputs or failure.
 
+The point: the plan carries the routine, so your attention goes to judgment: failures,
+questions, decisions. Keep plans light. A step is a unit of work you would hand to a person,
+usually an agent block (an agent with a prompt and typed inputs and outputs); an edge is a
+real handoff. Agents do their own mechanics (branches, merges, formatting). Change the plan as
+you learn. Read `docs("composing")` before your first plan.
+
 Workflow:
 1. `projects_list`, or `project_create(name, description)` (it starts with an empty plan). Every
    plan tool takes `project`.
@@ -28,4 +34,5 @@ When you need a person (a decision, an approval, a missing value), post to the i
 (`inbox_post`, or an `inbox.ask` step in a plan) and wait with `log_wait(project, since_seq,
 kinds=["inbox"])`; see `docs("inbox")`.
 
-Read `docs()` for the index, `docs("plans")` before writing your first plan.
+Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
+plan.
