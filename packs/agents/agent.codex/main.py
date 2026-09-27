@@ -14,6 +14,7 @@ from sluice.log import last_seq
 
 DEFAULT_BIN = str(Path.home() / ".codex" / "bin" / "codex-harness-run")
 TRANSIENT_MARKERS = ("rate limit", "429", "capacity")
+EFFORT = {"sol": "high", "astra": "high", "luna": "max"}  # each model's default effort
 
 
 def _type(form):
@@ -84,8 +85,8 @@ def main(inp, ctx):
         "--spec", str(spec_file),
         "--log", str(log),
     ]
-    if inp.get("model"):
-        argv += ["--model", inp["model"]]
+    model = inp.get("model") or "sol"
+    argv += ["--model", model, "--effort", inp.get("effort") or EFFORT[model]]
     if inp.get("session"):
         argv += ["--resume", inp["session"]]
     try:

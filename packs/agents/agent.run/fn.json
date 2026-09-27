@@ -1,6 +1,6 @@
 {
   "name": "agent.run",
-  "doc": "Run a spec on the agent engine named in the input.",
+  "doc": "Run a spec on the agent engine named in the input. For codex, model is sol (default), astra or luna and effort defaults to high (sol, astra) or max (luna); claude always runs Opus.",
   "open": true,
   "inputs": {
     "engine": {
@@ -14,6 +14,20 @@
     "cwd": "string",
     "spec": "string",
     "model": "string?",
+    "effort": [
+      "null",
+      {
+        "type": "enum",
+        "symbols": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    ],
     "session": "string?",
     "report_path": "string?",
     "listen": "boolean?"

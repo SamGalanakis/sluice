@@ -642,6 +642,9 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   its type and doc, and the exact `sluice tool step_submit` command) and the step-thread note.
   Each takes `session?` and returns `session` (empty when the harness wrote none): binding a
   later step's `session` to an earlier step's `session` output continues that agent.
+  Claude always runs Opus. Codex (`agent.codex`, or `agent.run` with engine `codex`) takes
+  `model` `sol` (the default), `astra` or `luna` and `effort` (`minimal` to `max`), whose
+  default is `high` for sol and astra and `max` for luna; both always reach the harness.
 - `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
   `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)
 - `packs/jev/`: `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` (Jev, TypeSafe's System One

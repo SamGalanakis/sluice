@@ -193,7 +193,7 @@ def make_codex(tmp_path, fake_bin, *, code=0, log_body="codex log output\n",
         "while [ $# -gt 0 ]; do\n"
         '  case "$1" in\n'
         '    --log) log="$2"; shift 2 ;;\n'
-        '    --spec|--cd|--model|--resume) shift 2 ;;\n'
+        '    --spec|--cd|--model|--effort|--resume) shift 2 ;;\n'
         "    *) shift ;;\n"
         "  esac\n"
         "done\n"
@@ -231,17 +231,21 @@ def test_codex_success(call_fn, fake_bin, tmp_path):
     assert argv[:4] == [
         "--cd", str(tmp_path), "--spec", str(run_dir / "spec.md")]
     assert argv[argv.index("--model") + 1] == "astra"
+    assert argv[argv.index("--effort") + 1] == "high"
 
 
-def test_codex_no_model(call_fn, fake_bin, tmp_path):
+def test_codex_model_and_effort_defaults(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_codex(tmp_path, fake_bin)
-    code, _out, err = call_fn(
-        AGENTS / "agent.codex",
-        {"cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
-    )
-    assert code == 0, err
-    assert "--model" not in read_argv(argv_file)
+    env = {"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
+    for extra, model, effort in (({}, "sol", "high"), ({"model": "luna"}, "luna", "max"),
+                                 ({"model": "astra"}, "astra", "high"),
+                                 ({"model": "luna", "effort": "medium"}, "luna", "medium")):
+        code, _out, err = call_fn(AGENTS / "agent.codex",
+                                  {"cwd": str(tmp_path), "spec": "s", **extra}, env=env)
+        assert code == 0, err
+        argv = read_argv(argv_file)
+        assert (argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]) == \
+            (model, effort)
 
 
 def test_codex_session(call_fn, fake_bin, tmp_path):
@@ -651,7 +655,7 @@ def test_run_codex(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_codex(tmp_path, fake_bin)
     code, out, err = call_fn(
         AGENTS / "agent.run",
-        {"engine": "codex", "cwd": str(tmp_path), "spec": "s", "model": "sol"},
+        {"engine": "codex", "cwd": str(tmp_path), "spec": "s", "model": "luna"},
         env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
     )
     run_dir = call_fn.run_dirs[-1]
@@ -661,7 +665,20 @@ def test_run_codex(call_fn, fake_bin, tmp_path):
     argv = read_argv(argv_file)
     assert argv[:4] == [
         "--cd", str(tmp_path), "--spec", str(run_dir / "spec.md")]
-    assert argv[argv.index("--model") + 1] == "sol"
+    assert argv[argv.index("--model") + 1] == "luna"
+    assert argv[argv.index("--effort") + 1] == "max"
+
+
+def test_run_codex_refuses_another_model_and_effort_elsewhere(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_codex(tmp_path, fake_bin)
+    env = {"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
+    code, _, err = call_fn(AGENTS / "agent.run", {"engine": "codex", "cwd": str(tmp_path),
+                                                  "spec": "s", "model": "gpt-4"}, env=env)
+    assert code == 1 and "codex models are sol, astra, luna" in err
+    code, _, err = call_fn(AGENTS / "agent.run", {"engine": "devin", "cwd": str(tmp_path),
+                                                  "spec": "s", "effort": "max"}, env=env)
+    assert code == 1 and "effort is for the codex engine" in err
+    assert not argv_file.exists()
 
 
 def test_run_claude(call_fn, fake_bin, tmp_path):

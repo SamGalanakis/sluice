@@ -8,6 +8,8 @@ PACKS = Path(__file__).resolve().parents[1]
 ALLOWED_KEYS = {"name", "doc", "inputs", "outputs", "open"}
 OPEN = {"agent.devin", "agent.codex", "agent.claude", "agent.run", "agent.review"}
 
+EFFORT = {"type": "enum", "symbols": ["minimal", "low", "medium", "high", "xhigh", "max"]}
+
 EXPECTED = {
     "agents": {
         "agent.devin": [
@@ -36,10 +38,12 @@ EXPECTED = {
                         "type": "enum",
                         "symbols": [
                             "sol",
-                            "astra"
+                            "astra",
+                            "luna"
                         ]
                     }
                 ],
+                "effort": ["null", EFFORT],
                 "log": "string?",
                 "session": "string?",
                 "report_path": "string?",
@@ -78,6 +82,7 @@ EXPECTED = {
                 "cwd": "string",
                 "spec": "string",
                 "model": "string?",
+                "effort": ["null", EFFORT],
                 "session": "string?",
                 "report_path": "string?",
                 "listen": "boolean?"

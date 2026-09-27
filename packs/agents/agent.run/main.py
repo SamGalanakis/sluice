@@ -16,6 +16,7 @@ from sluice.log import last_seq
 CODEX_BIN = str(Path.home() / ".codex" / "bin" / "codex-harness-run")
 CLAUDE_TRANSIENT = ("rate limit", "rate_limit", "overloaded", "529")
 CODEX_TRANSIENT = ("rate limit", "429", "capacity")
+CODEX_EFFORT = {"sol": "high", "astra": "high", "luna": "max"}  # each model's default effort
 
 
 def _type(form):
@@ -111,8 +112,10 @@ def _codex(inp, ctx):
         "--spec", str(spec_file),
         "--log", str(log),
     ]
-    if inp.get("model"):
-        argv += ["--model", inp["model"]]
+    model = inp.get("model") or "sol"
+    if model not in CODEX_EFFORT:
+        raise ValueError(f"codex models are {', '.join(CODEX_EFFORT)}, got {model!r}")
+    argv += ["--model", model, "--effort", inp.get("effort") or CODEX_EFFORT[model]]
     if inp.get("session"):
         argv += ["--resume", inp["session"]]
     try:
@@ -246,6 +249,8 @@ def main(inp, ctx):
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
     inp = {**inp, "spec": _with_step_notes(inp["spec"], inp, ctx, inp.get("listen"))}
     engine = inp["engine"]
+    if inp.get("effort") and engine != "codex":
+        raise ValueError("effort is for the codex engine")
     if engine == "claude":
         out = _claude(inp)
     elif engine == "codex":
