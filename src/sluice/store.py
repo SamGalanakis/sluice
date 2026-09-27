@@ -20,6 +20,7 @@ from . import inbox as I
 from . import log as L
 from . import plan as P
 from . import registry as R
+from . import state as S
 from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound, NotOpen
 from .util import atomic_write_json, atomic_write_text, now_iso, read_json
@@ -289,8 +290,8 @@ class Store:
         out = []
         for name in self.project_names():
             info, doc = self.project(name), self.get(name)
-            st = self.read_state(name)["steps"]
-            counts = Counter(st.get(s, {"status": "pending"})["status"] for s in doc["steps"])
+            state = self.read_state(name)
+            counts = Counter(S.entry_of(state, s)["status"] for s in doc["steps"])
             out.append({"name": name, "description": info.get("description", ""),
                         "rev": doc["rev"], "counts": dict(counts),
                         "archived": info.get("archived") is True,
@@ -462,13 +463,13 @@ class Store:
         with self.lock(project):
             chosen = self.select_steps(project, steps, tags)
             state = self.read_state(project)
-            idle = [f"{s} is {state['steps'].get(s, {'status': 'pending'})['status']}"
+            idle = [f"{s} is {S.entry_of(state, s)['status']}"
                     for s in chosen
-                    if state["steps"].get(s, {"status": "pending"})["status"] != "running"]
+                    if S.entry_of(state, s)["status"] != "running"]
             if idle:
                 raise BadRequest(f"only a running step can be cancelled: {', '.join(idle)}")
             for sid in chosen:
-                state["steps"][sid]["cancel"] = reason or "cancelled"
+                state["steps"][sid].update(S.cancel(reason))
             self.write_state(project, state)
             self.append(project, *({"kind": "step.cancel", "step": sid, "author": author,
                                     "reason": reason} for sid in chosen))
@@ -520,7 +521,7 @@ class Store:
         for sid, step in plan.steps.items():
             if only is not None and sid not in only:
                 continue
-            e = state["steps"].get(sid, {"status": "pending"})
+            e = S.entry_of(state, sid)
             row = {"id": sid, "run": step.fn.name, "status": e["status"],
                    "started": e.get("started"), "finished": e.get("finished")}
             row.update({k: e[k] for k in ("outputs", "error") if e.get(k) is not None})
@@ -611,9 +612,7 @@ class Store:
                                   "pass force: true to set its outputs anyway (it turns stale "
                                   "once they are)")
             h = None if waiting else P.inputs_hash(P.resolved_inputs(s, plan, state))
-            state["steps"][step] = {"status": "succeeded", "started": None,
-                                    "finished": now_iso(), "outputs": outputs, "manual": True,
-                                    "inputs_hash": h}
+            state["steps"][step] = S.manual(outputs, h)
             self.write_state(project, state)
             extra = {"force": True} if force else {}
             self._log(project, doc["rev"], author, reason, kind="step.output", step=step,
@@ -629,14 +628,14 @@ class Store:
             doc, _ = self._plan_for_write(project)
             chosen = self.select_steps(project, steps, tags)
             state = self.read_state(project)
-            was = {s: state["steps"].get(s, {"status": "pending"}) for s in chosen}
+            was = {s: S.entry_of(state, s) for s in chosen}
             bad = [f"step {s} is {e['status']}" for s, e in was.items()
                    if e["status"] not in ("failed", "stale") and not e.get("manual")]
             if bad:
                 raise BadRequest(f"{'; '.join(bad)}; only a failed, stale or manually set step "
                                  "can be retried")
             for sid in chosen:
-                state["steps"][sid] = {"status": "pending"}
+                state["steps"][sid] = S.pending()
             self.write_state(project, state)
             for sid, e in was.items():
                 self._log(project, doc["rev"], author, reason, kind="step.retry", step=sid)
@@ -657,7 +656,7 @@ class Store:
                 raise NotFound(f"the plan of project {project} has no step {step!r}")
             if not s.declared:
                 raise BadRequest(f"step {step} declares no outputs to submit")
-            e = self.read_state(project)["steps"].get(step, {"status": "pending"})
+            e = S.entry_of(self.read_state(project), step)
             if e["status"] != "running":
                 raise BadRequest(f"step {step} is {e['status']}; outputs are submitted while "
                                  "it runs")

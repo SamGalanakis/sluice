@@ -7,9 +7,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import state as S
 from . import types as T
 from .registry import Fn, Registry
-from .util import canonical, now_iso
+from .util import canonical
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
@@ -363,10 +364,11 @@ def value_of(ref: Ref, plan: Plan, state: dict[str, Any]) -> tuple[bool, Any]:
         else:
             return False, None
     else:
-        e = state["steps"].get(ref.step, {})
+        e = S.entry_of(state, ref.step)
         if e.get("status") != "succeeded":
             return False, None
-        v = e["outputs"].get(ref.name)
+        outs = e.get("outputs")
+        v = outs.get(ref.name) if isinstance(outs, dict) else None
     return True, T.navigate_value(v, ref.fields)
 
 
@@ -383,9 +385,8 @@ SETTLED = ("succeeded", "skipped")  # what an `after` edge waits for
 def skip_reason(step: Step, plan: Plan, state: dict[str, Any]) -> str | None:
     """Why the step is skipped, or None: a step it reads from was skipped, or its `when` is
     known and not true. None too while that is not known yet."""
-    st = state["steps"]
     for d in step.deps:
-        if st.get(d, {}).get("status") == "skipped":
+        if S.entry_of(state, d).get("status") == "skipped":
             return f"step {d} was skipped"
     if step.when is not None:
         known, value = value_of(step.when, plan, state)
@@ -399,22 +400,21 @@ def settle_skip(step: Step, plan: Plan, state: dict[str, Any]) -> bool:
     that is neither a boolean nor null fails it); skipped whose reason no longer holds is
     pending again (it never ran, so it is decided afresh). Returns whether it changed."""
     st = state["steps"]
-    e = st.get(step.id, {"status": "pending"})
+    e = S.entry_of(state, step.id)
     if e["status"] not in ("pending", "skipped"):
         return False
     why = skip_reason(step, plan, state)
     if e["status"] == "pending" and why:
-        st[step.id] = {"status": "skipped", "skipped": why, "finished": now_iso()}
+        st[step.id] = S.skipped(why)
         return True
     if e["status"] == "skipped":
         if why == e.get("skipped"):
             return False
-        st[step.id] = {"status": "pending"} if why is None else {**e, "skipped": why}
+        st[step.id] = S.pending() if why is None else {**e, "skipped": why}
         return True
     known, value = value_of(step.when, plan, state) if step.when else (False, None)
     if known and not isinstance(value, bool):
-        st[step.id] = {"status": "failed", "finished": now_iso(), "outputs": None,
-                       "error": f"when: {step.when} is {canonical(value)}, not a boolean"}
+        st[step.id] = S.failed(f"when: {step.when} is {canonical(value)}, not a boolean")
         return True
     return False
 
@@ -432,7 +432,7 @@ def is_ready(step: Step, plan: Plan, state: dict[str, Any]) -> bool:
     """Every plan input the step reads has a value, and every step it reads or runs after has
     succeeded."""
     return all(value_of(r, plan, state)[0] for r in step.reads) and all(
-        state["steps"].get(a, {}).get("status") in SETTLED for a in step.after)
+        S.entry_of(state, a).get("status") in SETTLED for a in step.after)
 
 
 def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
@@ -444,10 +444,10 @@ def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
         if r.step is None:
             out.append(f"plan input {r.name} has no value")
         else:
-            status = state["steps"].get(r.step, {}).get("status", "pending")
+            status = S.entry_of(state, r.step).get("status", "pending")
             out.append(f"step {r.step} is {status}")
     for a in step.after:
-        status = state["steps"].get(a, {}).get("status", "pending")
+        status = S.entry_of(state, a).get("status", "pending")
         if status not in SETTLED:
             out.append(f"after step {a}, which is {status}")
     return list(dict.fromkeys(out))
@@ -493,13 +493,13 @@ def mark_stale(plan: Plan, state: dict[str, Any]) -> bool:
     recorded hash at all (state from before hashes existed) adopts the current one.
     Returns whether anything changed."""
     changed = False
-    st = state["steps"]
     for sid in topo_order(plan):
-        e = st.get(sid)
-        if e is None or e.get("status") not in ("succeeded", "stale"):
+        e = S.entry_of(state, sid)
+        if e.get("status") not in ("succeeded", "stale"):
             continue
         step = plan.steps[sid]
-        upstream_stale = any(st.get(d, {}).get("status") == "stale" for d in step.deps)
+        upstream_stale = any(S.entry_of(state, d).get("status") == "stale"
+                             for d in step.deps)
         ready = not upstream_stale and is_ready(step, plan, state)
         h = inputs_hash(resolved_inputs(step, plan, state)) if ready else None
         if e["status"] == "succeeded":

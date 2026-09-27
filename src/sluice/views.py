@@ -33,9 +33,10 @@ from urllib.parse import quote, urlencode
 from markdown_it import MarkdownIt
 
 from . import log as L
+from . import state as S
 from . import types as T
 from .errors import BadRequest, NotFound, SluiceError
-from .plan import Plan, parse_ref, value_of
+from .plan import Plan, Ref, Source, Step, source_value, value_of
 from .store import Store
 from .util import read_json, tail_text
 
@@ -46,7 +47,7 @@ CLASSES = {"pending": "fill:#f1f1f1,stroke:#999,color:#333",
            "stale": "fill:#fef3c7,stroke:#d97706,color:#78350f",
            "skipped": "fill:#fff,stroke:#999,color:#777,stroke-dasharray:3 3",
            "manual": "fill:#fff,stroke:#16a34a,stroke-width:3px,stroke-dasharray:6 3"}
-STATUSES = ("pending", "running", "succeeded", "skipped", "stale", "failed")
+STATUSES = S.STATUSES
 # Datastar with Rocket (web components); static/sluice.js imports the same module
 DATASTAR_JS = ("https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/"
                "datastar-rocket.js")
@@ -119,7 +120,7 @@ def mermaid(plan: Plan, state: dict[str, Any]) -> str:
     for n in plan.inputs:
         lines.append(f"  {ids['in', n]}([{_q(n)}])")
     for sid, step in plan.steps.items():
-        entry = state["steps"].get(sid, {"status": "pending"})
+        entry = S.entry_of(state, sid)
         label = step_label(sid, step.fn.name, entry, step.doc)
         lines.append(f"  {ids['step', sid]}[{_q(label)}]")
     for n in plan.outputs:
@@ -137,7 +138,7 @@ def mermaid(plan: Plan, state: dict[str, Any]) -> str:
     for cls, style in CLASSES.items():
         lines.append(f"  classDef {cls} {style}")
     for sid in plan.steps:
-        entry = state["steps"].get(sid, {"status": "pending"})
+        entry = S.entry_of(state, sid)
         cls = "manual" if entry.get("manual") and entry["status"] == "succeeded" \
             else entry["status"]
         lines.append(f"  class {ids['step', sid]} {cls}")
@@ -410,19 +411,28 @@ def _label(text: str) -> str:
 
 @dataclasses.dataclass
 class Block:
-    """One step as the dashboard shows it, read from plan.json (raw, so bindings and declared
-    outputs it does not know yet still show), the parsed plan and state.json."""
+    """One step as the dashboard shows it: the plan's parsed Step (plan.py reads its
+    bindings, `when`, pause and tags) plus its state.json entry."""
 
-    sid: str
-    fn: str
-    doc: str
-    raw: dict[str, Any]
+    step: Step
     entry: dict[str, Any]
     glue: bool  # a built-in that runs inline (core.*): a slim chip on the board
     fn_inputs: dict[str, str]  # its fn's inputs, then any extra ones it binds (open fns)
     fn_outputs: dict[str, str]  # its declared outputs first (open fns), then its fn's
     output_docs: dict[str, str] = dataclasses.field(default_factory=dict)
     submitted: frozenset[str] = frozenset()  # its outputs the agent submits (declared, submits)
+
+    @property
+    def sid(self) -> str:
+        return self.step.id
+
+    @property
+    def fn(self) -> str:
+        return self.step.fn.name
+
+    @property
+    def doc(self) -> str:
+        return self.step.doc
 
     @property
     def status(self) -> str:
@@ -439,53 +449,41 @@ class Block:
 
     @property
     def paused(self) -> bool:
-        p = self.raw.get("paused")
-        return p is True or isinstance(p, str) and bool(p.strip())
+        return self.step.paused
 
     @property
     def pause_reason(self) -> str:
-        p = self.raw.get("paused")
-        return p.strip() if isinstance(p, str) else ""
+        return self.step.pause_reason.strip()
 
     @property
     def after(self) -> list[str]:
-        a = self.raw.get("after")
-        return [x for x in a if isinstance(x, str)] if isinstance(a, list) else []
+        return self.step.after
 
     @property
-    def when(self) -> Any:
-        """The parsed `when` ref, or None."""
-        w = self.raw.get("when")
-        return parse_ref(w)[0] if isinstance(w, str) else None
+    def when(self) -> Ref | None:
+        return self.step.when
 
     @property
     def tags(self) -> list[str]:
-        t = self.raw.get("tags")
-        return [x for x in t if isinstance(x, str)] if isinstance(t, list) else []
+        return self.step.tags
 
     @property
     def title(self) -> str:
         return " ".join(self.doc.split()) or self.sid
 
     @property
-    def bindings(self) -> dict[str, Any]:
-        b = self.raw.get("in")
-        return b if isinstance(b, dict) else {}
+    def bindings(self) -> dict[str, Source]:
+        return self.step.sources
 
-    def refs(self, name: str) -> list[Any]:
-        """The parsed refs one binding reads (none for a default)."""
-        src = self.bindings.get(name)
-        if not isinstance(src, dict) or "source" not in src:
-            return []
-        texts = src["source"] if isinstance(src["source"], list) else [src["source"]]
-        return [r for r in (parse_ref(t)[0] for t in texts) if r is not None]
+    def refs(self, name: str) -> list[Ref]:
+        """The refs one binding reads (none for a default)."""
+        src = self.step.sources.get(name)
+        return list(src.refs) if src is not None else []
 
     @property
-    def deps(self) -> list[str]:
+    def waits(self) -> list[str]:
         """The steps it waits for: those it reads from, then those it runs after."""
-        when = [self.when.step] if self.when is not None and self.when.step else []
-        return list(dict.fromkeys([*(r.step for n in self.bindings for r in self.refs(n)
-                                     if r.step), *when, *self.after]))
+        return self.step.waits
 
     @property
     def outputs(self) -> dict[str, str]:
@@ -503,8 +501,8 @@ class Block:
         return self.fn.startswith("agent.") or any(n in self.bindings for n in PROMPT_INPUTS)
 
     def default(self, name: str) -> Any:
-        src = self.bindings.get(name)
-        return src.get("default") if isinstance(src, dict) else None
+        src = self.step.sources.get(name)
+        return src.default if src is not None else None
 
     @property
     def engine(self) -> str:
@@ -550,15 +548,12 @@ def load_board(store: Store, project: str) -> Board:
     info = store.project(project)
     doc, plan = store.plan(project)
     state = store.read_state(project)
-    raw_steps = doc.get("steps") if isinstance(doc.get("steps"), dict) else {}
     blocks = {}
     for sid, step in plan.steps.items():
-        raw = raw_steps.get(sid) if isinstance(raw_steps.get(sid), dict) else {}
         declared = step.declared
         extra = step.extra
         blocks[sid] = Block(
-            sid, step.fn.name, step.doc or "", raw,
-            state["steps"].get(sid, {"status": "pending"}), step.fn.native,
+            step, S.entry_of(state, sid), step.fn.native,
             {k: str(v) for k, v in {**step.fn.inputs, **extra}.items()},
             {k: str(v) for k, v in {**declared, **step.fn.outputs}.items()},
             dict(step.output_docs), frozenset(step.declared))
@@ -793,7 +788,7 @@ def depths(board: Board) -> dict[str, int]:
     def row_of(sid: str) -> int:
         if sid not in depth:
             depth[sid] = 0  # (the plan is acyclic; this only guards the recursion)
-            depth[sid] = max((row_of(d) + 1 for d in board.blocks[sid].deps
+            depth[sid] = max((row_of(d) + 1 for d in board.blocks[sid].waits
                               if d in board.blocks), default=0)
         return depth[sid]
 
@@ -890,7 +885,7 @@ def waits_on(board: Board, b: Block) -> list[tuple[str, str]]:
     skipped."""
     if b.status != "pending":
         return []
-    return [(d, board.blocks[d].mark) for d in b.deps
+    return [(d, board.blocks[d].mark) for d in b.waits
             if d in board.blocks and board.blocks[d].status not in ("succeeded", "skipped")]
 
 
@@ -1466,14 +1461,13 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     def resolved(name: str) -> tuple[bool, Any]:
         if name in ran:
             return True, ran[name]
-        refs = b.refs(name)
-        if not refs:
-            return name in b.bindings, b.default(name)
-        vals = [value_of(r, board.plan, board.state) for r in refs]
-        src = b.bindings[name]["source"]
-        if isinstance(src, list):
-            return all(ok for ok, _ in vals), [v for _, v in vals]
-        return vals[0]
+        src = b.step.sources.get(name)
+        if src is None:
+            return False, None
+        if not src.refs:
+            return True, src.default
+        ok = all(value_of(r, board.plan, board.state)[0] for r in src.refs)
+        return ok, source_value(src, board.plan, board.state)
 
     if prompt:
         ok, v = resolved(prompt)

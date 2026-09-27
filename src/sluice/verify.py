@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from . import plan as P
+from . import state as S
 from . import types as T
 from .errors import NotFound
 from .store import PROJECT_KEYS, Store
 from .util import parse_dotenv
 
-STATUSES = {"pending", "running", "succeeded", "failed", "stale", "skipped"}
+STATUSES = S.STATUSES
 
 
 class Report:

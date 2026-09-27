@@ -21,6 +21,7 @@ import sluice
 
 from . import calls as C
 from . import log as L
+from . import state as S
 from . import types as T
 from .errors import BadRequest, InvalidPlan, NotFound
 from .plan import (
@@ -36,7 +37,7 @@ from .plan import (
 )
 from .registry import NATIVE, Fn
 from .store import SUBMITTED, Store
-from .util import atomic_write_json, canonical, now_iso, read_dotenv, tail_text
+from .util import atomic_write_json, canonical, read_dotenv, tail_text
 
 SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
 RESTARTED = "runner restarted"
@@ -296,7 +297,7 @@ class Runner:
             for name in [n for n in state["inputs"] if n not in plan.inputs]:
                 del state["inputs"][name]
             for sid in plan.steps:
-                st.setdefault(sid, {"status": "pending"})
+                st.setdefault(sid, S.pending())
             for sid, e in st.items():
                 if e["status"] == "running" and "cancel" in e:  # step_cancel asked to stop it
                     if (a := self.active.pop(("step", project, sid), None)) is not None:
@@ -404,8 +405,7 @@ class Runner:
 
     def _begin(self, project: str, step: Step, plan: Plan, state: dict[str, Any]) -> None:
         inp = resolved_inputs(step, plan, state)
-        e = state["steps"][step.id] = {"status": "running", "started": now_iso(),
-                                       "run_ids": [], "inputs_hash": inputs_hash(inp)}
+        e = state["steps"][step.id] = S.running(inputs_hash(inp))
         runs = [inp]
         if step.scatter:
             items = inp[step.scatter]
@@ -480,5 +480,4 @@ class Runner:
 
 
 def _finish(e: dict[str, Any], outputs: Any = None, error: str | None = None) -> None:
-    e.update(status="failed" if error else "succeeded", finished=now_iso(),
-             outputs=None if error else outputs, error=error)
+    e.update(S.failed(error) if error else S.succeeded(outputs))
