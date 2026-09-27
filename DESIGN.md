@@ -168,10 +168,12 @@ is 13px meta in muted ink, sentence case. Nothing is uppercase; no kickers or ey
 ## Layout
 
 The plan reads top to bottom, inside the column, in lanes: the steps joined by handoffs stand
-in one column, independent lanes side by side (36px apart, 18px on a phone, wrapping), each a
-stack of rows by dependency depth with 40px between rows (28px on a phone) for the edges; rows
-line up across lanes, and a lane keeps only the rows it uses; a lane that wraps onto a line
-of its own has nothing to line up with, so it starts at its first step. The server lays the board out;
+in one column, independent lanes side by side, wrapping, each a stack of rows by dependency
+depth with 40px between rows (28px on a phone) for the edges, from its own first step. When a
+plan has several lanes, each is a quiet box (the muted fill, 0.625rem radius, 16px by 18px
+padding, 12px on a phone; 14px apart, 10px on a phone; no border: a region, not a card, since
+the bubbles carry the borders), so what belongs together reads without the edges; one lane
+has no box. The server lays the board out;
 the `<sluice-board>` component draws the edges between measured cards (bottom to top, spread
 when several share a side, an arrowhead at the end; dashed for an `after` edge, which orders
 two steps without passing data), threading an edge that passes rows through their gaps so it

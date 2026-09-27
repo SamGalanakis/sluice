@@ -491,9 +491,11 @@ raw HTML escaped, unsafe link schemes refused).
   and Archive switches; then the description (markdown, folded to its opening, then "Show
   more"; a paused or archived project says so), then the **board**. Its **lanes** are the
   steps joined by handoffs (an edge that carries a value; `after` only orders), so independent
-  pieces of work stand side by side, in the plan's order, and wrap on a narrow screen. Each
-  lane is a column of rows by dependency depth (`after` counts), and rows line up across lanes;
-  inside a lane, each row is sorted by where its neighbours sit, a few sweeps down and up, so
+  pieces of work stand side by side, in the plan's order, and wrap on a narrow screen; when
+  there are several, each is its own quiet box. Each lane is a column of rows by dependency
+  depth (`after` counts), from its own first step (rows do not line up across lanes); an edge
+  inside a lane stays in its box, and an `after` edge between lanes crosses between them.
+  Inside a lane, each row is sorted by where its neighbours sit, a few sweeps down and up, so
   edges seldom cross. Each step is a compact bubble: its status glyph, its id and, small, how
   long it ran (live while running) and `done/total` for a scattered step; its tooltip is its
   doc and what it says now (a running step's last non-empty stderr line, a failed step's

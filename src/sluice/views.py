@@ -935,21 +935,21 @@ LEGEND_AFTER = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20"
 
 
 def board_html(store: Store, board: Board, live: bool = True) -> str:
-    """The plan as a board (the `graph` part): lanes side by side (they wrap on a narrow
-    screen), each a column of rows by dependency depth; rows line up across lanes. The server
-    lays the cards out (the order reads without JavaScript); the <sluice-board> component
-    (static/sluice.js) draws the edges between them from its `edges` attribute, around the
-    cards they would cross."""
+    """The plan as a board (the `graph` part): each independent piece of work (a lane) its own
+    box when there are several, side by side and wrapping, each a column of rows by
+    dependency depth from its own first step. The server lays the cards out (the order reads
+    without JavaScript); the <sluice-board> component (static/sluice.js) draws the edges
+    between them from its `edges` attribute, around the cards they would cross."""
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
     groups, _ = lanes(board)
     html = []
     for rows in groups:
-        top = min(rows)  # a lane that wraps to a line of its own starts there (sluice.js)
-        html.append(f'<li class="lane" style="--rows:{max(rows) + 1};--own:{max(rows) - top + 1}">'
-                    '<ol class="rows">' + "".join(
-            f'<li class="row" style="--r:{d + 1};--q:{d - top + 1}">'
+        top = min(rows)  # each lane starts at its own first step
+        html.append(f'<li class="lane" style="--rows:{max(rows) - top + 1}"><ol class="rows">'
+                    + "".join(
+            f'<li class="row" style="--r:{d - top + 1}">'
             f'{"".join(_card(store, board, board.blocks[sid], live) for sid in rows[d])}</li>'
             for d in sorted(rows)) + "</ol></li>")
     es = edges(board)
@@ -962,7 +962,7 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
     return (f'<sluice-board class="board" role="region" aria-label="Plan" edges="{e(data)}" '
             f'data-preserve-attr="data-rocket-host"><div class="plane">'
             f'<svg class="edges" aria-hidden="true" data-ignore-morph></svg>'
-            f'<ol class="lanes">{"".join(html)}</ol>'
+            f'<ol class="lanes{" boxed" if len(groups) > 1 else ""}">{"".join(html)}</ol>'
             f"</div>{legend}</sluice-board>")
 
 

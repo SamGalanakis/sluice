@@ -124,15 +124,31 @@ function drawEdges(host, data) {
   const plane = $(".plane", host), svg = $("svg.edges", host);
   if (!plane || !svg) return;
   const box = plane.getBoundingClientRect();
-  const rect = new Map();
+  const boxed = $(".lanes", plane)?.classList.contains("boxed");
+  const lanes = $$(".lane", plane), rect = new Map();
   for (const n of $$(".node[data-node]", plane)) {
     const r = n.getBoundingClientRect();
     rect.set(n.dataset.node, { left: r.left - box.left, right: r.right - box.left,
                                top: r.top - box.top, bottom: r.bottom - box.top,
-                               width: r.width });
+                               width: r.width, lane: lanes.indexOf(n.closest(".lane")) });
   }
-  const rows = bands(rect.values());
-  const lo = -CLEAR * 2, hi = box.width + CLEAR * 2;
+  // An edge inside a box threads that box's rows (each box has its own) and stays in it; an
+  // edge between boxes threads the rows of the whole board, so it passes no card.
+  const rowsOf = new Map();
+  const route = (a, b) => {
+    const la = rect.get(a).lane, lb = rect.get(b).lane, key = la === lb ? `${la}` : "x";
+    if (!rowsOf.has(key)) {
+      const rows = bands([...rect.values()].filter((r) => key === "x" || r.lane === la));
+      let lo = -CLEAR * 2, hi = box.width + CLEAR * 2;
+      if (boxed && la === lb && lanes[la]) {
+        const l = lanes[la].getBoundingClientRect();
+        lo = l.left - box.left + SIDE;
+        hi = l.right - box.left - SIDE;
+      }
+      rowsOf.set(key, { rows, lo, hi, key });
+    }
+    return rowsOf.get(key);
+  };
   const ends = (Array.isArray(data) ? data : []).filter(([a, b]) => rect.has(a) && rect.has(b));
   const cx = (key) => rect.get(key).left + rect.get(key).width / 2;
   const spread = (key, others) => {
@@ -152,14 +168,39 @@ function drawEdges(host, data) {
   const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
   const f = (n) => n.toFixed(1);
   for (const [a, b, label] of ends) {
+    const ra = rect.get(a), rb = rect.get(b);
+    if (ra.lane !== rb.lane && rb.top < ra.bottom + CLEAR) {
+      // between boxes on one line (each starts at its own first step): side to side, into
+      // the card's facing edge, rather than up into its top
+      const dir = rb.left >= ra.right ? 1 : rb.right <= ra.left ? -1 : cx(b) >= cx(a) ? 1 : -1;
+      const x1 = dir > 0 ? ra.right : ra.left, y1 = (ra.top + ra.bottom) / 2;
+      const tip = dir > 0 ? rb.left - 1 : rb.right + 1, y2 = (rb.top + rb.bottom) / 2;
+      const x2 = tip - dir * HEAD_H, dx = Math.max(Math.abs(x2 - x1) / 2, 12) * dir;
+      const attrs = { "data-from": a, "data-to": b,
+                      d: `M${f(x1)} ${f(y1)}C${f(x1 + dx)} ${f(y1)} ${f(x2 - dx)} ${f(y2)} `
+                         + `${f(x2)} ${f(y2)}` };
+      if (label === "after") attrs.class = "order";
+      wires.append(svgEl("path", attrs));
+      wires.append(svgEl("path", { "data-from": a, "data-to": b, class: "head",
+                                   d: `M${f(x2)} ${f(y2 - HEAD_W)}L${f(tip)} ${f(y2)}`
+                                      + `L${f(x2)} ${f(y2 + HEAD_W)}z` }));
+      for (const end of ["from", "to"]) {
+        const text = svgEl("text", { "data-from": a, "data-to": b, "data-end": end,
+                                     x: f((x1 + x2) / 2), y: f((y1 + y2) / 2 - 4) });
+        text.textContent = label;
+        names.append(text);
+      }
+      continue;
+    }
     const x1 = outX.get(a).get(b), y1 = rect.get(a).bottom;
     const x2 = inX.get(b).get(a), tip = rect.get(b).top - 1;
     const y2 = tip - HEAD_H;  // the line ends straight down, into the head's base
     const pts = [[x1, y1]];
+    const { rows, lo, hi, key } = route(a, b);
     rows.forEach((row, i) => {
       if (row.top <= y1 + 1 || row.bottom >= tip - 1) return;  // only the rows in between
       const t = ((row.top + row.bottom) / 2 - y1) / (tip - y1);
-      const x = passAt(row, x1 + (x2 - x1) * t, lo, hi, used, i);
+      const x = passAt(row, x1 + (x2 - x1) * t, lo, hi, used, `${key}:${i}`);
       pts.push([x, row.top - 4], [x, row.bottom + 4]);
     });
     pts.push([x2, y2]);
@@ -229,14 +270,6 @@ function nearestCard(here, evt) {
   return best;
 }
 
-// A lane that wrapped onto a line below the first starts at its own first row (CSS), since
-// there is nothing beside it to line its depths up with.
-function markWrapped(host) {
-  const lanes = $$(".lane", host);
-  const top = lanes[0]?.offsetTop ?? 0;
-  for (const lane of lanes) lane.classList.toggle("wrapped", lane.offsetTop > top + 1);
-}
-
 rocket("sluice-board", {
   mode: "light",
   props: ({ json }) => ({ edges: json.default([]) }),
@@ -245,7 +278,6 @@ rocket("sluice-board", {
     const redraw = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        markWrapped(host);
         drawEdges(host, props.edges);
         const held = $(".node:hover, .node:focus-visible", host);  // new paths: keep it lit
         if (held) trace(host, held);
@@ -306,7 +338,6 @@ rocket("sluice-board", {
     });
   },
   onFirstRender({ host, props }) {
-    markWrapped(host);
     drawEdges(host, props.edges);
   },
 });

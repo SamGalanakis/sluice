@@ -66,7 +66,7 @@ def lanes(page):
     for lane in re.findall(r'<li class="lane"[^>]*><ol class="rows">(.*?)</ol></li>', page,
                            re.DOTALL):
         out.append({int(r): re.findall(r'id="n-([^"]+)"', cards) for r, cards in
-                    re.findall(r'<li class="row" style="--r:(\d+);[^"]*">(.*?)</li>', lane,
+                    re.findall(r'<li class="row" style="--r:(\d+)">(.*?)</li>', lane,
                                re.DOTALL)})
     return out
 
@@ -142,14 +142,28 @@ def test_the_board_shows_each_step_as_a_bubble(store):
     assert "mermaid" not in page
 
 
+def test_each_lane_is_its_own_box_from_its_own_first_step(store):
+    # x runs after a, so it sits a row below a on the old shared grid; in its own box it starts
+    # at the top, and the after edge crosses between the boxes
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "x": {"run": "test.add", "in": {"a": d(2), "b": d(2)}, "after": ["a"]},
+                        "y": {"run": "test.add", "in": {"a": src("x/sum"), "b": d(1)}}})
+    page = views.project_page(store, "v", ver="abc")
+    assert lanes(page) == [{1: ["a"]}, {1: ["x"], 2: ["y"]}]
+    assert '<ol class="lanes boxed">' in page
+    assert board_edges(page)[("s:a", "s:x")] == "after"
+    create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    assert '<ol class="lanes">' in views.project_page(store, "w", ver="abc")  # one lane: no box
+
+
 def test_the_board_lays_steps_out_in_lanes_of_rows_by_dependency_depth(store):
     board_project(store)
     page = views.project_page(store, "v", ver="abc")
     # the steps joined by handoffs make one lane; c hands nothing on, so it stands apart
     assert lanes(page) == [{1: ["a"], 2: ["fmt", "b", "each"], 3: ["late"]}, {1: ["c"]}]
-    assert '<li class="lane" style="--rows:3;--own:3">' in page  # a lane has the rows it uses
-    # each row knows its depth, and its place in a lane that wraps onto a line of its own
-    assert '<li class="row" style="--r:3;--q:3">' in page
+    assert '<li class="lane" style="--rows:3">' in page  # a lane has the rows it uses
+    # two lanes: each is its own box
+    assert '<ol class="lanes boxed">' in page
     # the edges, one per handoff, named by their ports, for <sluice-board> to draw
     assert board_edges(page) == {
         ("s:a", "s:fmt"): "sum → values", ("s:a", "s:b"): "sum → a",
@@ -157,14 +171,14 @@ def test_the_board_lays_steps_out_in_lanes_of_rows_by_dependency_depth(store):
         ("s:b", "s:late"): "sum → b"}
     assert '<svg class="edges" aria-hidden="true" data-ignore-morph>' in page  # drawn, kept
     assert "hands on a value" in page and "runs after" not in page  # the legend
-    # an `after` orders lanes without joining them; rows still line up across lanes
+    # an `after` orders lanes without joining them; each lane starts at its own first step
     create(store, "two", {
         "a1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
         "a2": {"run": "test.add", "in": {"a": src("a1/sum"), "b": d(1)}},
         "b1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "after": ["a2"]},
         "b2": {"run": "test.add", "in": {"a": src("b1/sum"), "b": d(1)}}})
     two = views.project_page(store, "two", ver="x")
-    assert lanes(two) == [{1: ["a1"], 2: ["a2"]}, {3: ["b1"], 4: ["b2"]}]
+    assert lanes(two) == [{1: ["a1"], 2: ["a2"]}, {1: ["b1"], 2: ["b2"]}]
     assert board_edges(two)[("s:a2", "s:b1")] == "after" and "runs after" in two
     # inside a lane, a row follows the row above it: crossings undone
     create(store, "cross", {

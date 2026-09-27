@@ -229,17 +229,18 @@ sluice-drawer { display: contents; }
 .board { position: relative; padding: 8px 0 12px; --node-h: 36px; --row-gap: 40px; }
 .plane { position: relative; }
 .lanes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap;
-         justify-content: center; align-items: flex-start; gap: var(--row-gap) 36px;
-         position: relative; z-index: 1; }
+         justify-content: center; align-items: flex-start; gap: var(--row-gap) 36px; }
+/* several independent pieces of work: each its own quiet box (a region, not a card: the
+   bubbles carry the borders), laid out from its own first step */
+.lanes.boxed { gap: 14px; }
+.lanes.boxed > .lane { flex: 1 1 auto; max-width: 100%; box-sizing: border-box; padding: 16px 18px;
+                       border-radius: var(--radius); background: var(--muted); }
 .lane { min-width: 0; }
 .lane > .rows { list-style: none; margin: 0; padding: 0; display: grid; row-gap: var(--row-gap);
+                grid-template-columns: minmax(0, 1fr);  /* a long id ellipsizes, not overflows */
                 grid-template-rows: repeat(var(--rows), minmax(var(--node-h), auto)); }
-.row { grid-row: var(--r); display: flex; flex-wrap: wrap; justify-content: center;
+.row { grid-row: var(--r); min-width: 0; display: flex; flex-wrap: wrap; justify-content: center;
        align-items: flex-start; gap: 12px 14px; }
-/* a lane on a line of its own (sluice.js marks it) has no neighbour to line up with: it
-   starts at its first step instead of below the empty rows of the lanes above */
-.lane.wrapped > .rows { grid-template-rows: repeat(var(--own), minmax(var(--node-h), auto)); }
-.lane.wrapped .row { grid-row: var(--q); }
 .legend { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
           gap: 4px 8px; margin-top: 20px; font-size: 12.5px; line-height: 16px;
           color: var(--muted-foreground); }
@@ -259,7 +260,8 @@ sluice-drawer { display: contents; }
 .plane.tracing .wires path.head.on { fill: var(--foreground); stroke: none; }
 .plane.tracing .names text.on { opacity: 1; }
 .plane.tracing .node:not(.near) { opacity: .45; }
-.node { display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+.node { position: relative; z-index: 2;  /* over the edges, which are over the boxes */
+        display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
         padding: 7px 14px 7px 10px; border-radius: 999px; color: inherit;
         text-decoration: none; background: var(--card); border: 1px solid var(--border);
         transition: opacity 150ms, border-color 150ms, background 150ms; }
@@ -555,6 +557,8 @@ main > .phead + * { margin-top: 0; }
   #nav-inbox .badge { margin-left: 2px; }
   .board { --row-gap: 28px; }
   .lanes { column-gap: 18px; }
+  .lanes.boxed { gap: 10px; }
+  .lanes.boxed > .lane { padding: 12px; }
   .row { gap: 8px 10px; }
   .legend { justify-content: flex-start; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
