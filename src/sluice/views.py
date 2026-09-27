@@ -251,14 +251,20 @@ def open_count(store: Store) -> int:
     return len(store.inbox())
 
 
+# the Inbox's icon, shown in place of its word on a phone
+TRAY = ('<svg class="tray" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">'
+        '<path d="M3 11.5 5 4.5h10l2 7M3 11.5V15.5h14v-4M3 11.5h4l1 2h4l1-2h4" fill="none" '
+        'stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>')
+
+
 def nav_inbox(count: int | None, current: bool = False) -> str:
     """The nav's Inbox link: its count of open items is the dashboard's one red badge."""
     badge = f' <span class="badge" title="open items">{count}</span>' if count else ""
     cur = ' aria-current="page"' if current else ""
-    return f'<a id="nav-inbox" href="/inbox"{cur}>Inbox{badge}</a>'
+    return f'<a id="nav-inbox" href="/inbox"{cur}>{TRAY}<span class="t">Inbox</span>{badge}</a>'
 
 
-NAV = (("/", "Projects"), ("/fns", "Functions"), ("/log", "Log"))
+NAV = (("/", "Projects"), ("/log", "Log"), ("/fns", "Functions"))  # with no project chosen
 # The wordmark's mark: a gate across a channel, in ink.
 BRAND_MARK = ('<svg class="mark" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">'
               '<rect width="20" height="20" rx="5" fill="currentColor"/>'
@@ -266,25 +272,28 @@ BRAND_MARK = ('<svg class="mark" viewBox="0 0 20 20" width="20" height="20" aria
               'stroke-width="1.6" stroke-linecap="round"/>'
               '<path d="M7 4.5v5.5M13 4.5v5.5M7 7h6" fill="none" stroke="var(--card)" '
               'stroke-width="1.6" stroke-linecap="round"/></svg>')
-# A project's local nav: tab, label, and the address after /projects/<name> (or a callable).
-PROJECT_TABS = ("plan", "log", "inbox", "history", "fns")
+CHEVRON = ('<svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+           '<path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" '
+           'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+PROJECT_TABS = ("plan", "log", "history", "fns")  # a project's sections, in the nav
 
 
 def project_head(project: str, tab: str | None) -> str:
-    """A project page's title and its local nav (Plan, Log, Inbox, History, Functions), the
-    tab `tab` marked; the same on every page of the project. `tab` None: the title alone."""
-    title = f"<h1>{e(project)}</h1>"
+    """A project page's title: the nav already names the project (its switcher) and the
+    section, so it is for assistive technology only; visible on the standalone page
+    (`tab` None), which has no nav."""
     if tab is None:
-        return f'<div class="phead">{title}</div>'
-    p = quote(project)
-    hrefs = {"plan": (f"/projects/{p}", "Plan"), "log": (f"/projects/{p}/log", "Log"),
-             "inbox": (f"/projects/{p}/inbox", "Inbox"),
-             "history": (f"/projects/{p}/log?{HISTORY_QUERY}", "History"),
-             "fns": (f"/fns?project={p}", "Functions")}
-    links = "".join(f'<a href="{e(href)}"{_current(t, tab)}>{text}</a>'
-                    for t, (href, text) in ((t, hrefs[t]) for t in PROJECT_TABS))
-    return (f'<div class="phead">{title}<nav class="ptabs" aria-label="Project">{links}</nav>'
-            f"</div>")
+        return f'<div class="phead"><h1>{e(project)}</h1></div>'
+    return f'<h1 class="vh">{e(project)}</h1>'
+
+
+def _project_mark(counts: Mapping[str, int]) -> str:
+    """One glyph for a whole project: running, failed, stale, finished, or waiting."""
+    total = sum(counts.values())
+    for status in ("running", "failed", "stale"):
+        if counts.get(status):
+            return glyph(status)
+    return glyph("succeeded" if total and counts.get("succeeded") == total else "pending")
 
 
 def _current(item: str, here: str, sub: bool = False) -> str:
@@ -295,24 +304,64 @@ def _current(item: str, here: str, sub: bool = False) -> str:
     return ' aria-current="true"' if sub else ' aria-current="page"'
 
 
+def project_switcher(store: Store, project: str | None) -> str:
+    """The nav's project switcher: its button is the project's name ("All projects" when none
+    is chosen); the menu lists every project, the archived ones last. A <details>, so it works
+    without JavaScript."""
+    items, old = [], []
+    for info in store.projects():
+        name = info["name"]
+        cur = ' aria-current="page"' if name == project else ""
+        row = (f'<a href="/projects/{e(quote(name))}"{cur}>{_project_mark(info["counts"])}'
+               f"<span>{e(name)}</span></a>")
+        (old if info.get("archived") else items).append(row)
+    cur = ' aria-current="page"' if project is None else ""
+    menu = f'<a href="/" class="all"{cur}>All projects</a>' + "".join(items)
+    if old:
+        menu += f'<p class="menu-label">Archived</p>{"".join(old)}'
+    label = e(project) if project else "All projects"
+    return (f'<details class="switcher"><summary aria-label="Project: {label}">'
+            f'<span class="sw-name">{label}</span>{CHEVRON}</summary>'
+            f'<div class="menu">{menu}</div></details>')
+
+
+def top_nav(store: Store | None, project: str | None, tab: str | None, here: str,
+            inbox: int | None, sub: bool = False) -> str:
+    """The one nav: the mark, the project switcher, the sections of the chosen project (Plan,
+    Log, History, Functions) or of all of them (Projects, Log, Functions), and the Inbox with
+    the one red badge."""
+    if project is not None:
+        p = quote(project)
+        hrefs = {"plan": (f"/projects/{p}", "Plan"), "log": (f"/projects/{p}/log", "Log"),
+                 "history": (f"/projects/{p}/log?{HISTORY_QUERY}", "History"),
+                 "fns": (f"/fns?project={p}", "Functions")}
+        links = "".join(f'<a href="{e(href)}"{_current(t, tab or "", sub)}>{text}</a>'
+                        for t, (href, text) in ((t, hrefs[t]) for t in PROJECT_TABS))
+    else:
+        links = "".join(f'<a href="{href}"{_current(href, here)}>{text}</a>'
+                        for href, text in NAV)
+    switcher = project_switcher(store, project) if store is not None else ""
+    return (f'<nav class="top" aria-label="Sections"><a class="brand" href="/" '
+            f'aria-label="sluice: all projects">{BRAND_MARK}</a>{switcher}'
+            f'<span class="links">{links}</span>{nav_inbox(inbox, here == "/inbox")}</nav>')
+
+
 def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
            signals: Mapping[str, Any] | None = None, main_attrs: str = "",
            inbox: int | None = None, script: str = "", here: str = "", sub: bool = False,
-           board: bool = False) -> str:
+           board: bool = False, store: Store | None = None, project: str | None = None,
+           tab: str | None = None) -> str:
     """A page. With `stream`, Datastar opens that SSE stream once the page has loaded (with
     `signals`, the page's Datastar signals, sent along as the `datastar` query parameter).
     `inbox` is the count of open items for the nav's badge; `script` a module to load; `here`
-    the nav entry of this page (`sub`: of the section this page is in, as a project's pages are
-    in Projects); `board` loads the board's script (times, drawer, tracing)."""
+    the nav entry of this page, `project` and `tab` the chosen project and its section (`sub`:
+    a page inside that entry, as a step is inside Plan); `store` lists the projects for the
+    nav's switcher; `board` loads the board's script (times, drawer, tracing)."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
     scripts = "".join(f'<script type="module" src="{e(s)}"></script>'
-                      for s in (script, "/static/board.js" if board else "") if s)
-    top = ""
-    if nav:
-        links = "".join(f'<a href="{href}"{_current(href, here, sub)}>{text}</a>'
-                        for href, text in NAV)
-        top = (f'<nav class="top" aria-label="Sections"><a class="brand" href="/">{BRAND_MARK}'
-               f"<span>sluice</span></a>{links}{nav_inbox(inbox, here == '/inbox')}</nav>")
+                      for s in (script, "/static/board.js" if board else "",
+                                "/static/nav.js" if nav else "") if s)
+    top = top_nav(store, project, tab, here, inbox, sub) if nav else ""
     body_attrs = f' data-signals="{_signals(signals)}"' if signals else ""
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
@@ -874,6 +923,7 @@ def index(store: Store, ver: str | None = None) -> str:
     return layout("Projects", f'<h1 class="vh">Projects</h1>{parts["needs"]}'
                   f'{parts["projects"]}', stream="/stream" if ver else None,
                   signals={"ver": ver} if ver else None, inbox=open_count(store), here="/",
+                  store=store,
                   board=bool(ver))
 
 
@@ -952,7 +1002,8 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     return layout(project, body, nav=live,
                   stream=f"/projects/{project}/stream" if live else None,
                   signals={"ver": ver, "step": "", "sver": ""} if live else None,
-                  inbox=open_count(store) if live else None, here="/", sub=True, board=live)
+                  inbox=open_count(store) if live else None, here="/", board=live,
+                  store=store, project=project, tab="plan")
 
 
 def render(store: Store, project: str, fmt: str) -> str:
@@ -1227,7 +1278,8 @@ def step_page(store: Store, project: str, sid: str, ver: str) -> str:
     parts = step_parts(store, project, sid)
     return layout(f"{sid} · {project}", project_head(project, "plan") + parts["step-detail"],
                   stream=f"/projects/{project}/steps/{sid}/stream", signals={"sver": ver},
-                  inbox=open_count(store), here="/", sub=True, board=True)
+                  inbox=open_count(store), here="/", sub=True, board=True, store=store,
+                  project=project, tab="plan")
 
 
 # ---- the log viewer ---------------------------------------------------------------------
@@ -1413,10 +1465,11 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
             f'value="{e(",".join(q.threads))}" placeholder="any" size="16" data-bind:thread>'
             f"</label><button>Apply</button></form>")
     if project is None:
-        title = "<h1>Log <small>of calls without a project</small></h1>"
+        title = '<h1 class="vh">Log</h1><p class="meta">Calls made without a project.</p>'
     else:
         history = bool(q.kinds) and set(q.kinds) == set(L.HISTORY_KINDS) and not q.threads
-        title = project_head(project, "history" if history else "log")
+        tab = "history" if history else "log"
+        title = project_head(project, tab)
     signals = {"kinds": [k if k in q.kinds else "" for k in KIND_OPTIONS],
                "thread": ",".join(q.threads), "before": q.before or 0, "after": q.after or 0,
                "view": q.query(), "seen": last}
@@ -1424,7 +1477,9 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
     return layout(f"{project or 'home'} log", f"{title}{form}{view}",
                   stream=f"{base}/stream", signals=signals,
                   main_attrs=f' data-effect="{e(url)}"', inbox=open_count(store),
-                  here="/log" if project is None else "/", sub=project is not None)
+                  here="/log" if project is None else "/",
+                  store=store, project=project,
+                  tab=None if project is None else tab)
 
 
 # ---- functions --------------------------------------------------------------------------
@@ -1481,10 +1536,10 @@ def fns_page(store: Store, project: str | None = None) -> str:
         sections.append(f"<h2>{title}</h2>{cards}")
     extra = "".join(f'<p class="fn problem err">{e(p["where"])}: {e(p["message"])}</p>'
                     for p in other)
-    title = "<h1>Functions</h1>" if project is None else project_head(project, "fns")
+    title = '<h1 class="vh">Functions</h1>' if project is None else project_head(project, "fns")
     return layout("Functions", f"{title}{picker}{extra}{''.join(sections)}",
                   inbox=open_count(store), here="/fns" if project is None else "/",
-                  sub=project is not None)
+                  store=store, project=project, tab="fns")
 
 
 # ---- the inbox --------------------------------------------------------------------------
@@ -1571,9 +1626,8 @@ def inbox_page(store: Store, project: str | None, status: str, ver: str) -> str:
     filters = "".join(
         f'<a href="{e(base + ("" if s == "open" else "?status=" + s))}"'
         f'{_current(s, status)}>{s.capitalize()}</a>' for s in INBOX_FILTERS)
-    title = "<h1>Inbox</h1>" if project is None else project_head(project, "inbox")
+    title = '<h1 class="vh">Inbox</h1>' if project is None else project_head(project, "inbox")
     return layout("Inbox", f'{title}<nav class="seg" aria-label="Status">{filters}</nav>'
                   f'{parts["inbox-items"]}', stream=f"{base}/stream",
                   signals={"ver": ver, "status": status}, inbox=open_count(store),
-                  script="/static/inbox.js", here="/inbox" if project is None else "/",
-                  sub=project is not None)
+                  script="/static/inbox.js", here="/inbox", store=store, project=project)

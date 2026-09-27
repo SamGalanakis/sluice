@@ -329,33 +329,43 @@ def test_the_project_index(store):
 
 
 
-def test_every_page_of_a_project_carries_its_tabs_with_one_marked(store):
+def test_one_nav_whose_switcher_names_the_project_and_whose_sections_follow_it(store):
     create(store, "v", {"a": {"run": "core.echo", "in": {"value": d(1)}, "doc": "A"}})
+    create(store, "w", {"a": {"run": "core.echo", "in": {"value": d(1)}}})
+    store.update_project("w", archived=True)
 
-    def tabs(page):
-        nav = re.search(r'<nav class="ptabs" aria-label="Project">(.*?)</nav>', page)[1]
-        return re.findall(r'<a href="[^"]*"( aria-current="page")?>(\w+)</a>', nav)
+    def nav(page):
+        return re.findall(r'<nav class="top".*?</nav>', page, re.DOTALL)
 
-    def marked(page):
-        return [name for cur, name in tabs(page) if cur]
+    def button(page):
+        return re.search(r'<summary[^>]*><span class="sw-name">([^<]*)</span>', page)[1]
 
-    def top(page):  # the top nav's marked section
-        return re.findall(r'<nav class="top".*?<a href="/" aria-current="(\w+)">Projects</a>',
-                          page)
+    def links(page):  # the sections, and which is marked
+        inner = re.search(r'<span class="links">(.*?)</span>', page)[1]
+        return re.findall(r'<a href="[^"]*"(?: aria-current="(\w+)")?>(\w+)</a>', inner)
 
     board = views.project_page(store, "v", ver="x")
-    assert [name for _, name in tabs(board)] == ["Plan", "Log", "Inbox", "History", "Functions"]
-    assert marked(board) == ["Plan"] and top(board) == ["true"]
+    assert len(nav(board)) == 1 and 'class="ptabs"' not in board
+    assert button(board) == "v" and '<h1 class="vh">v</h1>' in board
+    assert links(board) == [("page", "Plan"), ("", "Log"), ("", "History"), ("", "Functions")]
+    menu = re.search(r'<div class="menu">(.*?)</div></details>', board)[1]
+    assert menu.index('href="/projects/v" aria-current="page"') < menu.index("Archived") \
+        < menu.index('href="/projects/w"')  # archived projects come last
     history = views.LogQuery.parse({"kind": list(L.HISTORY_KINDS)})
-    assert marked(views.log_page(store, "v", views.LogQuery())) == ["Log"]
-    assert marked(views.log_page(store, "v", history)) == ["History"]
-    assert marked(views.inbox_page(store, "v", "open", "x")) == ["Inbox"]
-    assert marked(views.fns_page(store, "v")) == ["Functions"]
-    assert 'class="ptabs"' in views.step_page(store, "v", "a", "x")
-    assert 'class="ptabs"' not in views.project_page(store, "v")  # the standalone plan_view
-    home = views.inbox_page(store, None, "open", "x")
-    assert 'class="ptabs"' not in home and 'href="/inbox" aria-current="page">Inbox' in home
-    assert '<a href="/" aria-current="page">Projects</a>' in views.index(store)
+    marked = {name: cur for cur, name in links(views.log_page(store, "v", history)) if cur}
+    assert marked == {"History": "page"}
+    assert ("page", "Log") in links(views.log_page(store, "v", views.LogQuery()))
+    assert ("page", "Functions") in links(views.fns_page(store, "v"))
+    step = views.step_page(store, "v", "a", "x")
+    assert button(step) == "v" and ("true", "Plan") in links(step)
+    home = views.index(store)
+    assert button(home) == "All projects"
+    assert links(home) == [("page", "Projects"), ("", "Log"), ("", "Functions")]
+    inbox = views.inbox_page(store, None, "open", "x")
+    assert '<a id="nav-inbox" href="/inbox" aria-current="page">' in inbox
+    assert nav(views.project_page(store, "v")) == []  # the standalone plan_view has none
+    assert '<div class="phead"><h1>v</h1></div>' in views.project_page(store, "v")
+
 
 def test_values_are_escaped(store):
     create(store, "v", {"a": {"run": "core.echo", "in": {"value": d("<script>x</script>")},

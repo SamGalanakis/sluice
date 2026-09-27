@@ -40,7 +40,7 @@ from .util import read_json
 PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE, I.FILE)
 STATIC = Path(__file__).resolve().parent / "static"
 STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json",
-                "board.js": "text/javascript"}
+                "board.js": "text/javascript", "nav.js": "text/javascript"}
 AUTHOR = "dashboard"
 HTTP_STATUS = {"not_found": 404, "conflict": 409}
 

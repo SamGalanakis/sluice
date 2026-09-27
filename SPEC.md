@@ -397,10 +397,11 @@ Validation errors carry the path and what was expected.
 archiving a project.
 Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
 `prefers-color-scheme`, usable at phone width, keyboard reachable), every page on one centred
-column that the top nav's content shares, a top nav (Projects · Functions · Log · Inbox) that
-marks the current section (`aria-current` and a bar, not colour alone; a project's pages are in
-Projects), every page of a project headed by its name and its tabs (Plan · Log · Inbox ·
-History · Functions, the current one marked), every value HTML-escaped (plans, logs, run output and inbox items are
+column that the top nav's content shares, one nav and no second row: a project switcher whose
+button is the chosen project's name ("All projects" when none; its menu lists the projects, the
+archived ones last), then that scope's sections (a project's Plan · Log · History · Functions,
+or Projects · Log · Functions), the current one marked (`aria-current` and a bar, not colour
+alone; a step's page is inside Plan), and Inbox at the right, every value HTML-escaped (plans, logs, run output and inbox items are
 untrusted). The Inbox link carries the count of open items across all projects as the
 dashboard's one red badge (none when nothing waits); nothing else is red. A step's status is a
 drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
@@ -428,8 +429,9 @@ raw HTML escaped, unsafe link schemes refused).
   "Archived (n)"; each row: name, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
-- `GET /projects/<name>`: the name and its tabs (History is the log filtered to the history
-  kinds; Functions the functions as the project sees them), the description (two lines, then
+- `GET /projects/<name>`: under the nav naming the project (its History section is the log
+  filtered to the history kinds; Functions the functions as the project sees them), the
+  description (two lines, then
   "Show more"; an archived project says so), the "Needs you" lines, then the **board**: one
   row per dependency depth, top to bottom, inside the page's column, each step a compact
   bubble: its status glyph, its id and, small, how long it ran (live while running) and

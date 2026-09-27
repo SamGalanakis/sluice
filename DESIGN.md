@@ -100,9 +100,12 @@ components:
     textColor: "{colors.ink}"
     padding: "0 10px"
     height: "48px"
-  project-tab-current:
+  project-switcher:
+    backgroundColor: "{colors.card}"
     textColor: "{colors.ink}"
-    padding: "8px 0 10px"
+    rounded: "8px"
+    padding: "0 10px"
+    height: "34px"
   status-filter-current:
     backgroundColor: "{colors.secondary-fill}"
     textColor: "{colors.ink}"
@@ -173,7 +176,7 @@ follows the board. Text blocks hold a 72-75ch measure.
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
 least a 24px gutter, 16px below 720px): `main` is a three-track grid (gutter, column, gutter)
 and everything goes in the middle track, the board included. The top nav's content aligns to
-the same edges (the wordmark on the left edge, Inbox ending on the right), so nav, title,
+the same edges (the mark on the left edge, Inbox ending on the right), so nav, title,
 lists, tables and cards share one left edge at every width. Nothing makes the page scroll
 sideways.
 
@@ -211,17 +214,23 @@ work.
 Primary is green on its own ink; others are card-coloured with an input hairline.
 
 ### Navigation
-- **Top bar** (52px, card fill, on the column): the mark (an ink rounded square with a gate
-  over water, cut in the card colour) and the sluice wordmark, then Projects, Functions, Log;
-  Inbox, with the one red badge, sits at the right edge. The current section is ink with a 2px
-  ink bar on the bar's bottom hairline and `aria-current` (`page`, or `true` on a page inside
-  the section: a project's pages are in Projects); the rest are muted ink, with a quiet fill on
-  hover.
-- **Project tabs**: every page of a project opens with its name (the page title) and tabs,
-  Plan, Log, Inbox, History, Functions, on a hairline; the current tab is ink with a 2px ink
-  underline. They fit a phone and scroll sideways inside themselves if they ever do not.
+- **One bar** (52px, card fill, on the column), the only navigation: the mark (an ink rounded
+  square with a gate over water, cut in the card colour; it leads to All projects), the
+  **project switcher**, then the sections; Inbox, with the one red badge, sits at the right
+  edge. There is no second row: a page does not repeat the project's name or its sections.
+- **Project switcher**: a bordered button whose label is the chosen project's name (or "All
+  projects") and a chevron; it opens a menu of All projects, then every project with its status
+  glyph, the archived ones last under a label. A `<details>`, so it works without script;
+  `nav.js` closes it on a click elsewhere or Escape.
+- **Sections** follow the switcher: in a project, Plan, Log, History, Functions; with none
+  chosen, Projects, Log, Functions. The current one is ink with a 2px ink bar on the bar's
+  bottom hairline and `aria-current` (`page`, or `true` on a page inside it: a step is inside
+  Plan); the rest are muted ink, with a quiet fill on hover.
+- **Phone** (below 720px): the mark gives way to the switcher (whose menu leads to All
+  projects), the switcher's label clips at 120px, and Inbox is a tray icon with its badge; the
+  sections scroll sideways inside themselves if they ever do not fit.
 - **Status filter** (inbox): a small segmented control, the current status in the secondary
-  fill with a strong hairline; a filter, so it does not look like the tabs.
+  fill with a strong hairline; a filter, so it does not look like the sections.
 
 ### Needs you
 One bordered list, one row per thing that waits: a 72px kind word (Answer, Input in

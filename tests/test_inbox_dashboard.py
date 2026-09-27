@@ -39,7 +39,8 @@ def post(port, path, data, json_body=True, headers=None):
 
 
 def badge(page):
-    m = re.search(r'<a id="nav-inbox" href="/inbox"(?: aria-current="page")?>Inbox'
+    m = re.search(r'<a id="nav-inbox" href="/inbox"(?: aria-current="page")?><svg class="tray"'
+                  r'.*?</svg><span class="t">Inbox</span>'
                   r'(?: <span class="badge"[^>]*>(\d+)</span>)?</a>', page)
     assert m, "no inbox link in the nav"
     return int(m[1] or 0)
@@ -158,7 +159,8 @@ def test_the_inbox_stream_drops_an_answered_item_and_moves_the_badge(store, port
     sent = patches(events)
     items = next(p for p in sent if p.startswith('elements <div id="inbox-items">'))
     assert "Pick one" not in items and "Nothing is waiting on you." in items
-    assert 'elements <a id="nav-inbox" href="/inbox" aria-current="page">Inbox</a>' in sent
+    nav = next(p for p in sent if p.startswith('elements <a id="nav-inbox"'))
+    assert 'aria-current="page"' in nav and 'class="badge"' not in nav
     ver = signals_of(get(port, "/")[1])["ver"]
     events = stream(port, "/stream", {"ver": ver},
                     action=later(lambda: store.inbox_post("p", "Another")))
@@ -346,7 +348,7 @@ def test_archiving_a_project_lists_it_apart_and_quiets_its_needs(store, port):
     assert "Needs you" in index and "Archived (" not in index
     code, _, _ = post(port, "/projects/old/archive", {"archived": "1"}, json_body=False)
     assert code == 303 and store.archived("old")
-    index = get(port, "/")[1]
+    index = get(port, "/")[1].split("<main", 1)[1]  # the page, not the nav's switcher
     assert "Needs you" not in index  # its failure no longer asks for anyone
     assert "Archived (1)" in index
     assert index.index('href="/projects/new"') < index.index("Archived (1)") \
