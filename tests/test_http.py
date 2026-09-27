@@ -73,7 +73,7 @@ def test_sluice_serve_over_streamable_http_and_the_dashboard(home):
         code, index = get(port, "/")
         assert code == 200 and 'href="/projects/web"' in index and "smoke" in index
         code, page = get(port, "/projects/web")
-        assert code == 200 and '<div class="plane"' in page and "datastar@v1.0.4" in page
+        assert code == 200 and '<div class="plane"' in page and "/static/datastar-rocket-1.0.4.js" in page
         assert 'data-step="b"' in page and 'id="drawer"' in page
         code, log = get(port, "/projects/web/log?kind=step")
         assert code == 200 and "b pending → " in log and "<code>plan.edit</code>" not in log
