@@ -191,30 +191,36 @@ def run_call_direct(store: Store, call: str, project: str | None) -> dict[str, A
 
 
 @dataclass
+class Run:
+    """One fn execution: its input; its run dir and process once spawned; its outputs once
+    collected (None until then)."""
+
+    inp: dict[str, Any]
+    run_dir: Path | None = None
+    proc: subprocess.Popen | None = None
+    result: dict[str, Any] | None = None
+
+
+@dataclass
 class Active:
-    """A running step or call: one input object per run (several when scattered)."""
+    """A running step or call: its runs (several when the step scatters)."""
 
     fn: Fn
     project: str | None
     step: str  # the step id; "" for a call
-    inputs: list[dict[str, Any]]
+    runs: list[Run]
     scatter: bool = False
     declared: dict[str, T.Type] = field(default_factory=dict)  # a step's own outputs
     ports: dict[str, Any] | None = None  # what an open fn is told about its step
-    run_dirs: list[Path] = field(default_factory=list)  # one per run
-    procs: dict[int, subprocess.Popen] = field(default_factory=dict)
-    results: dict[int, dict[str, Any]] = field(default_factory=dict)
-    launched: int = 0
 
     def outputs(self) -> dict[str, Any]:
         if not self.scatter:
-            return self.results[0]
-        n = len(self.inputs)
-        return {o: [self.results[i].get(o) for i in range(n)]
+            return self.runs[0].result
+        return {o: [run.result.get(o) for run in self.runs]
                 for o in {**self.fn.outputs, **self.declared}}
 
     def kill(self) -> None:
-        kill(*self.procs.values())
+        kill(*(run.proc for run in self.runs if run.proc is not None))
 
 
 class Runner:
@@ -255,7 +261,8 @@ class Runner:
                 self._wake.wait(interval)
                 self._wake.clear()
         finally:
-            kill(*(p for a in self.active.values() for p in a.procs.values()))
+            kill(*(run.proc for a in self.active.values() for run in a.runs
+                   if run.proc is not None))
             os.close(fd)
 
     def _report(self, who: str, message: str) -> None:
@@ -308,7 +315,6 @@ class Runner:
                     self._poll(("step", project, sid), e)
             held = self.store.paused(project)  # a paused project starts nothing
             holding = set(plan.steps) if held else {s for s, x in plan.steps.items() if x.paused}
-            self._launch(project, st)  # queued scatter runs first
             order = topo_order(plan)
             progress = True
             while progress:  # built-ins finish inline and can make more steps ready
@@ -327,7 +333,6 @@ class Runner:
                         progress = True
                         continue
                     self._begin(project, step, plan, state)
-                    self._launch(project, st)
                     progress = True
             if canonical(state) == before:
                 return False
@@ -393,13 +398,13 @@ class Runner:
             outputs, err = run_native(fn, inp)
             return _finish(rec, outputs=outputs, error=err or None)
         d = self.store.runs_dir(project) / rec["call"]
-        a = self.active[key] = Active(fn, project, "", [inp], run_dirs=[d])
+        a = Active(fn, project, "", [Run(inp, d)])
         try:
-            a.procs[0] = spawn(fn, inp, d, fn_env(self.store, project, fn, "", rec["call"], d))
-            a.launched = 1
-        except OSError as ex:
-            del self.active[key]
-            _finish(rec, error=f"could not start the fn: {ex}")
+            a.runs[0].proc = spawn(fn, inp, d,
+                                   fn_env(self.store, project, fn, "", rec["call"], d))
+        except Exception as ex:  # noqa: BLE001 - a failed start fails the call
+            return _finish(rec, error=f"could not start the fn: {ex}")
+        self.active[key] = a
 
     # ---- one step ----
 
@@ -417,64 +422,60 @@ class Runner:
             if errs:
                 where = f"run {i}: " if step.scatter else ""
                 return _finish(e, error=f"{where}inputs do not match the fn: " + "; ".join(errs))
-        a = Active(step.fn, project, step.id, runs, scatter=bool(step.scatter),
-                   declared=step.declared, ports=step.ports() if step.fn.open else None)
+        a = Active(step.fn, project, step.id, [Run(run) for run in runs],
+                   scatter=bool(step.scatter), declared=step.declared,
+                   ports=step.ports() if step.fn.open else None)
         if step.scatter:
             e.update(done=0, total=len(runs))
         if step.fn.native:
-            for i, run in enumerate(runs):
-                a.results[i], err = run_native(step.fn, run)
+            for run in a.runs:
+                run.result, err = run_native(step.fn, run.inp)
                 if err:
                     return _finish(e, error=err)
             if step.scatter:
-                e["done"] = len(runs)
-        if len(a.results) == len(runs):
+                e["done"] = len(a.runs)
+        else:
+            try:
+                for i in range(len(a.runs)):
+                    e["run_ids"].append(self._spawn_run(a, i))
+            except Exception as ex:  # noqa: BLE001 - a failed start fails the step
+                a.kill()
+                return _finish(e, error=f"could not start the fn: {ex}")
+        if all(run.result is not None for run in a.runs):
             return _finish(e, outputs=a.outputs())
         self.active[("step", project, step.id)] = a
 
-    def _launch(self, project: str, st: dict[str, Any]) -> None:
-        """Start the queued runs of this project's scattered steps."""
-        for key, a in list(self.active.items()):
-            if key[0] != "step" or key[1] != project:
-                continue
-            while a.launched < len(a.inputs):
-                i, a.launched = a.launched, a.launched + 1
-                try:
-                    st[a.step]["run_ids"].append(self._spawn_run(a, i))
-                except OSError as ex:
-                    a.kill()
-                    del self.active[key]
-                    _finish(st[a.step], error=f"could not start the fn: {ex}")
-                    break
-
     def _spawn_run(self, a: Active, i: int) -> str:
+        """Start run i of a scattered (or single-run) step; returns its run id."""
         assert a.project is not None
         stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
         run_id = f"{stamp}-{a.step}-{i}-{secrets.token_hex(2)}"
-        run_dir = self.store.runs_dir(a.project) / run_id
-        a.run_dirs.append(run_dir)
+        run = a.runs[i]
+        run.run_dir = run_dir = self.store.runs_dir(a.project) / run_id
         env = fn_env(self.store, a.project, a.fn, a.step, run_id, run_dir, a.ports)
-        a.procs[i] = spawn(a.fn, a.inputs[i], run_dir, env)
+        run.proc = spawn(a.fn, run.inp, run_dir, env)
         return run_id
 
     def _poll(self, key: tuple[str, ...], e: dict[str, Any]) -> None:
         a = self.active.get(key)
         if a is None:  # started by a runner that is gone
             return _finish(e, error=RESTARTED)
-        for i, proc in list(a.procs.items()):
-            code = proc.poll()
+        for i, run in enumerate(a.runs):
+            if run.proc is None:
+                continue
+            code = run.proc.poll()
             if code is None:
                 continue
-            del a.procs[i]
-            outputs, err = read_run(a.fn, a.run_dirs[i], code, a.declared)
+            run.proc = None
+            outputs, err = read_run(a.fn, run.run_dir, code, a.declared)
             if err:
                 a.kill()
                 del self.active[key]
                 return _finish(e, error=f"run {i}: {err}" if a.scatter else err)
-            a.results[i] = outputs
+            run.result = outputs
             if a.scatter:
-                e["done"] = len(a.results)
-        if len(a.results) == len(a.inputs):
+                e["done"] = sum(r.result is not None for r in a.runs)
+        if all(run.result is not None for run in a.runs):
             del self.active[key]
             _finish(e, outputs=a.outputs())
 

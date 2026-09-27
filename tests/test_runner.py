@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from sluice import log as L
 from sluice.errors import InvalidPlan
 from sluice.runner import RESTARTED, Runner
 from tests.conftest import add, create, d, settle, src, statuses, window
@@ -93,6 +94,33 @@ def test_a_failing_scatter_run_fails_the_step(store, runner):
     steps = settle(runner, store, "p")
     assert steps["b"]["status"] == "failed"
     assert steps["b"]["error"].startswith("run 1: exit code 1")
+
+
+def test_a_spawn_error_fails_the_step_and_kills_the_runs_that_started(store, runner,
+                                                                    monkeypatch):
+    create(store, "p", {"w": {"run": "test.window", "scatter": "tag",
+                              "in": {"seconds": d(30), "tag": d(["a", "b", "c"])}}})
+    real = Runner._spawn_run
+
+    def flaky(self, a, i):
+        if i == 1:
+            raise RuntimeError("spawn blew up")
+        return real(self, a, i)
+
+    monkeypatch.setattr(Runner, "_spawn_run", flaky)
+    steps = settle(runner, store, "p")
+    e = steps["w"]
+    assert e["status"] == "failed" and e["error"] == "could not start the fn: spawn blew up"
+    assert not runner.active
+    [run_id] = e["run_ids"]  # only the run that started is recorded
+    [rec] = [r for r in L.read(store.log_dir("p"), kinds=["step.status"])["records"]
+             if r["to"] == "failed"]
+    assert (rec["step"], rec["error"], rec["run_ids"]) == ("w", e["error"], [run_id])
+    run_dir = store.runs_dir("p") / run_id
+    deadline = time.time() + 10
+    while _procs_in(run_dir) and time.time() < deadline:
+        time.sleep(0.05)
+    assert _procs_in(run_dir) == []
 
 
 def test_a_failure_records_the_exit_code_and_stderr_and_blocks_dependents(store, runner):
