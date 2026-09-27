@@ -6,3 +6,5 @@ __pycache__/
 dist/
 *.egg-info/
 .env
+.excalidraw-mcp/
+REPORT-*.md
