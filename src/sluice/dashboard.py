@@ -318,20 +318,41 @@ class Dashboard:
             return JSONResponse(item)
         return RedirectResponse(back, status_code=303)
 
-    async def archive(self, request: Request) -> Response:
-        """Archive a project, or bring it back (form field `archived`: "1" or "0"), through
-        Store.update_project like the project_update tool; then back to the project."""
+    async def _switch(self, request: Request, field: str, change: Callable[[bool], Any],
+                      back: str) -> Response:
+        """A switch form: `field` "1" or "0" calls `change(on)` (the tool's own code path),
+        then back (303). Refused from another site's page."""
         origin = request.headers.get("origin")
         if origin and urlsplit(origin).netloc != request.headers.get("host"):
             return Response("changes from other sites are refused", status_code=403)
-        name = request.path_params["name"]
-        form = await request.form()
+        on = str((await request.form()).get(field)) == "1"
         try:
-            await anyio.to_thread.run_sync(self.store.update_project, name, None,
-                                           str(form.get("archived")) == "1")
+            await anyio.to_thread.run_sync(change, on)
         except SluiceError as err:
             return Response(err.message, status_code=HTTP_STATUS.get(err.code, 400))
-        return RedirectResponse(f"/projects/{views.quote(name)}", status_code=303)
+        return RedirectResponse(back, status_code=303)
+
+    async def archive(self, request: Request) -> Response:
+        """Archive a project, or bring it back, like the project_update tool."""
+        name = request.path_params["name"]
+        return await self._switch(request, "archived",
+                                  lambda on: self.store.update_project(name, None, on),
+                                  f"/projects/{views.quote(name)}")
+
+    async def pause(self, request: Request) -> Response:
+        """Pause a project, or resume it, like the project_update tool."""
+        name = request.path_params["name"]
+        return await self._switch(request, "paused",
+                                  lambda on: self.store.update_project(name, paused=on),
+                                  f"/projects/{views.quote(name)}")
+
+    async def pause_step(self, request: Request) -> Response:
+        """Pause a step, or resume it, like the step_pause tool; back to its drawer."""
+        name, sid = request.path_params["name"], request.path_params["sid"]
+        return await self._switch(
+            request, "paused",
+            lambda on: self.store.pause_step(name, sid, on, AUTHOR, ""),
+            f"/projects/{views.quote(name)}#step:{views.quote(sid)}")
 
     async def static(self, request: Request) -> Response:
         name = request.path_params["file"]
@@ -362,4 +383,7 @@ class Dashboard:
             server.custom_route(path, methods=["GET"])(handler)
         server.custom_route("/projects/{name}/inbox/{id}/answer", methods=["POST"])(self.answer)
         server.custom_route("/projects/{name}/archive", methods=["POST"])(self.archive)
+        server.custom_route("/projects/{name}/pause", methods=["POST"])(self.pause)
+        server.custom_route("/projects/{name}/steps/{sid}/pause",
+                            methods=["POST"])(self.pause_step)
 

@@ -168,7 +168,8 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   `rev` is store-maintained and returned by `plan_get`/`status`.
 - **Docs.** A plan input is declared by its type, or, as in CWL, by `{"type": <type>, "doc":
   "..."}` (both keys only; no type form has just these keys, so the two never clash). A step
-  may carry `"doc": "..."` next to `run`, `in` and `scatter`. Docs are optional strings that say
+  may carry `"doc": "..."` next to `run`, `in` and `scatter`, and `"paused": true` to hold it
+  (§6). Docs are optional strings that say
   what a value or a step is for; `status` returns them (`input_docs`, a step's `doc`), the
   Mermaid view puts a step's doc on a second line of its label, the dashboard shows a step's doc
   as its card's title and an input's doc on its node, and an
@@ -250,8 +251,11 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    that declares outputs, merged with what its agent submitted, §5); otherwise `failed` with
    `error` (exit code, type errors or declared outputs not submitted, plus the stderr tail).
    A scattered step collects its runs as they finish.
-3. Mark stale steps (above), then start every ready `pending` step. Built-in fns run inline; staleness is re-checked after each round of
-   inline results, so nothing starts from a result that no longer holds.
+3. Mark stale steps (above), then start every ready `pending` step that is not paused (a step's
+   `"paused": true`, or its project's `paused` in `project.json`: it stays `pending`, whatever
+   it would read held, until unpaused; a running one finishes). Built-in fns run inline;
+   staleness is re-checked after each round of inline results, so nothing starts from a result
+   that no longer holds.
 4. If anything changed, write `state.json`, then append a `step.status` record per step whose
    status changed in this pass (§6b).
 5. Calls: follow the log's `call` records; start `pending` calls and log each status change (§6b). `call_status` reads a call's latest record.
@@ -391,8 +395,8 @@ to the current revision under the lock) and required on `plan_patch`.
 pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe every argument.
 Validation errors carry the path and what was expected.
 
-**Views.** A dashboard that only reads, with two exceptions: answering an inbox item (§8a) and
-archiving a project.
+**Views.** A dashboard that only reads, with three exceptions: answering an inbox item (§8a),
+archiving a project, and pausing or resuming a project or a step.
 Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
 `prefers-color-scheme`, usable at phone width, keyboard reachable), every page on one centred
 column that the top nav's content shares, one nav and no second row: a project switcher whose
@@ -403,7 +407,7 @@ alone; a step's page is inside Plan), and Inbox at the right, every value HTML-e
 untrusted). The Inbox link carries the count of open items across all projects as the
 dashboard's one red badge (none when nothing waits); nothing else is red. A step's status is a
 drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
-hand, circular arrow stale, cross failed) with its word for assistive technology, never colour
+hand, circular arrow stale, cross failed, ring with two bars paused) with its word for assistive technology, never colour
 alone. The only external assets come from cdn.jsdelivr.net: Datastar v1.0.4, the Inter font
 (`@fontsource-variable/inter@5.3.0`; the system sans without it), and, on inbox pages,
 `@openuidev/lang-core@0.3.0/+esm` (jsDelivr's ESM build; it imports `zod@4.6.5` from the same
@@ -521,6 +525,11 @@ Streams end when the server shuts down; the client reconnects with backoff.
   store's `update_project`, the `project_update` tool's own code path, then redirects (303) to
   the project. An archived project keeps running; it is listed apart and left out of the
   index's "Needs you". Same refusals as the answer route (404, 403 for another `Origin`).
+- `POST /projects/<name>/pause` and `POST /projects/<name>/steps/<id>/pause`: a form `paused`
+  ("1" or "0") calls `update_project` or `pause_step` (the `project_update` and `step_pause`
+  tools' code paths), then redirects (303) to the project, with the step's drawer open
+  (`#step:<id>`) for a step. Same refusals. A paused step that has not started shows a pause
+  glyph; a paused project says so under its name with a Resume switch next to Archive.
 - `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
   `GET /static/board.js`: the board's script.
 
@@ -531,9 +540,10 @@ step's detail in a disclosure (no nav, no drawer, no stream, no script).
 | Tool | Args | Returns |
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
-| `projects_list` | – | `[{name, description, rev, counts, archived}]` |
+| `projects_list` | – | `[{name, description, rev, counts, archived, paused}]` |
 | `project_create` | `name, description?` | `{name}` (with an empty plan) |
-| `project_update` | `name, description?, archived?` | `{name}`; `archived: true` lists the project apart on the dashboard and leaves it out of the index's "Needs you" (nothing stops) |
+| `project_update` | `name, description?, archived?, paused?` | `{name}`; `archived: true` lists the project apart on the dashboard and leaves it out of the index's "Needs you" (nothing stops); `paused: true` starts none of its steps until `false` (§6) |
+| `project_delete` | `name` | `{deleted}`: removes the project's directory (plan, state, log, inbox, runs); refused (`bad_request`) unless it is archived and none of its steps is running |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
@@ -541,6 +551,10 @@ step's detail in a disclosure (no nav, no drawer, no stream, no script).
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's latest record |
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?` | `{rev}` |
+| `step_add` | `project, step, spec, reason?` | `{rev}`: `plan_patch` adding one step at the current rev |
+| `step_update` | `project, step, changes, reason?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
+| `step_remove` | `project, step, reason?` | `{rev}`; refused while it runs or something reads it |
+| `step_pause` | `project, step, paused? = true, reason?` | `{rev}`: sets or clears the step's `paused` (§6) |
 | `plan_history` | `project, since_rev?` | the `plan.edit`, `plan.input`, `step.output` and `step.retry` records still in the log (with `rev` > `since_rev`) |
 | `plan_set_input` | `project, name, value, reason?` | `{ok}` |
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
@@ -551,7 +565,7 @@ step's detail in a disclosure (no nav, no drawer, no stream, no script).
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty) |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
-| `status` | `project` | `{rev, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc) |
+| `status` | `project` | `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
 | `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |

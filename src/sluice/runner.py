@@ -298,6 +298,7 @@ class Runner:
             for sid, e in st.items():
                 if e["status"] == "running":
                     self._poll(("step", project, sid), e)
+            held = self.store.paused(project)  # a paused project starts nothing
             self._launch(project, st)  # queued scatter runs first
             order = topo_order(plan)
             progress = True
@@ -310,6 +311,8 @@ class Runner:
                     step = plan.steps[sid]
                     if st[sid]["status"] != "pending" or not is_ready(step, plan, state):
                         continue
+                    if held or step.paused:
+                        continue  # stays pending, its inputs held, until unpaused
                     self._begin(project, step, plan, state)
                     self._launch(project, st)
                     progress = True

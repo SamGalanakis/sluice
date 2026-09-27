@@ -14,7 +14,8 @@ TOOLS = {"docs", "projects_list", "project_create", "project_update", "fn_list",
          "fn_save", "fn_call", "call_status", "plan_get", "plan_patch", "plan_history",
          "plan_set_input", "step_set_input", "step_set_output", "step_retry", "verify",
          "plan_view", "status", "log_read", "log_wait", "inbox_post", "inbox_list",
-         "inbox_answer", "inbox_close", "step_submit"}
+         "inbox_answer", "inbox_close", "step_submit", "project_delete", "step_add",
+         "step_update", "step_remove", "step_pause"}
 UPPER = """from sluice.fn import run
 
 run(lambda inp, ctx: {"text": inp["text"].upper()})
@@ -84,10 +85,55 @@ async def test_projects(store):
         assert (await fail(c, "project_update", name="zz", description=""))["error"] == \
             "not_found"
         assert await ok(c, "projects_list") == [
-            {"name": "p", "description": "first", "rev": 1, "counts": {}, "archived": False},
-            {"name": "q", "description": "second", "rev": 1, "counts": {}, "archived": False}]
+            {"name": "p", "description": "first", "rev": 1, "counts": {}, "archived": False,
+             "paused": False},
+            {"name": "q", "description": "second", "rev": 1, "counts": {}, "archived": False,
+             "paused": False}]
         assert await ok(c, "plan_get", project="p") == {
             "rev": 1, "plan": {"inputs": {}, "outputs": {}, "steps": {}}}
+
+
+async def test_project_delete_needs_archiving_and_removes_everything(store):
+    async with Client(build_server(store)) as c:
+        await ok(c, "project_create", name="p")
+        await ok(c, "step_add", project="p", step="a", spec=add(d(1), d(2)))
+        err = await fail(c, "project_delete", name="p")
+        assert err["error"] == "bad_request" and "archive" in err["message"]
+        await ok(c, "project_update", name="p", archived=True)
+        with store.lock("p"):
+            store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "running"}}})
+        assert "running steps: a" in (await fail(c, "project_delete", name="p"))["message"]
+        with store.lock("p"):
+            store.write_state("p", {"inputs": {}, "steps": {}})
+        assert await ok(c, "project_delete", name="p") == {"deleted": "p"}
+        assert not store.project_dir("p").exists()
+        assert await ok(c, "projects_list") == []
+        assert (await fail(c, "status", project="p"))["error"] == "not_found"
+        await ok(c, "project_create", name="p")  # the name is free again
+        assert (await ok(c, "plan_get", project="p"))["rev"] == 1
+
+
+async def test_step_tools_edit_one_step_at_the_current_rev(store):
+    async with Client(build_server(store)) as c:
+        await ok(c, "project_create", name="p")
+        assert await ok(c, "step_add", project="p", step="a", spec=add(d(1), d(2))) == {"rev": 2}
+        await ok(c, "step_add", project="p", step="b", spec=add({"source": "a/sum"}, d(3)))
+        assert (await fail(c, "step_add", project="p", step="a", spec=add(d(1), d(2))))[
+            "error"] == "bad_request"
+        await ok(c, "step_update", project="p", step="a",
+                 changes={"doc": "adds", "in": {"a": d(5), "b": d(6)}})
+        await ok(c, "step_update", project="p", step="a", changes={"doc": None})
+        plan = (await ok(c, "plan_get", project="p"))["plan"]
+        assert plan["steps"]["a"] == add(d(5), d(6))  # null removed the doc
+        err = await fail(c, "step_update", project="p", step="a", changes={"run": "no.such"})
+        assert err["error"] == "invalid"
+        err = await fail(c, "step_remove", project="p", step="a")  # b still reads it
+        assert err["error"] == "invalid"
+        await ok(c, "step_remove", project="p", step="b")
+        assert await ok(c, "step_remove", project="p", step="a") == {"rev": 7}
+        assert (await ok(c, "plan_get", project="p"))["plan"]["steps"] == {}
+        history = await ok(c, "plan_history", project="p")
+        assert [h["reason"] for h in history][-2:] == ["remove step b", "remove step a"]
 
 
 async def test_fn_tools(store):
@@ -185,7 +231,7 @@ async def test_plan_editing_and_error_payloads(store):
         assert [h["rev"] for h in await ok(c, "plan_history", project="p", since_rev=3)] == [4, 4]
         assert await ok(c, "projects_list") == [{"name": "p", "description": "t", "rev": 4,
                                                  "counts": {"pending": 2},
-                                                 "archived": False}]
+                                                 "archived": False, "paused": False}]
 
 
 async def test_status_manual_outputs_and_retry(live):

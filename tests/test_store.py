@@ -50,9 +50,11 @@ def test_projects_are_listed_and_updated(store):
     with store.lock("b"):
         store.write_state("b", {"inputs": {}, "steps": {"a": {"status": "failed"}}})
     assert store.projects() == [
-        {"name": "a", "description": "now described", "rev": 1, "counts": {}, "archived": False},
+        {"name": "a", "description": "now described", "rev": 1, "counts": {}, "archived": False,
+         "paused": False},
         {"name": "b", "description": "the b project", "rev": 2,
-         "counts": {"failed": 1, "pending": 1}, "archived": False}]
+         "counts": {"failed": 1, "pending": 1}, "archived": False,
+         "paused": False}]
     with pytest.raises(NotFound):
         store.update_project("zz", "x")
     with pytest.raises(NotFound):
@@ -107,7 +109,7 @@ def test_running_steps_cannot_be_removed_or_changed(store):
     with pytest.raises(InvalidPlan) as e:
         store.patch("p", 2, [{"op": "replace", "path": "/steps/a/in/b/default", "value": 3}],
                     "me", "change")
-    assert e.value.errors == ["steps.a: cannot change a running step"]
+    assert e.value.errors == ["steps.a: cannot change a running step (only pause it)"]
     assert store.patch("p", 2, [{"op": "remove", "path": "/steps/b"}], "me", "ok") == 3
 
 

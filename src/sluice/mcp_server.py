@@ -123,7 +123,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def projects_list() -> Any:
-        """List projects: [{name, description, rev, counts, archived}]; counts maps step
+        """List projects: [{name, description, rev, counts, archived, paused}]; counts maps step
         status -> number of steps in the project's plan."""
         return store.projects()
 
@@ -139,16 +139,29 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def project_update(name: str, description: str | None = None,
-                       archived: bool | None = None) -> Any:
-        """Replace a project's description and/or archive it. Returns {name}.
+                       archived: bool | None = None, paused: bool | None = None) -> Any:
+        """Replace a project's description, archive it and/or pause it. Returns {name}.
 
         Args:
             name: the project.
             description: the new description (leave out to keep it).
             archived: true to archive (the dashboard lists it apart and leaves it out of
                 "Needs you"; nothing stops or changes), false to bring it back.
+            paused: true to pause the whole project: no step of it starts, however ready,
+                until false again; running steps finish.
         """
-        return store.update_project(name, description, archived)
+        return store.update_project(name, description, archived, paused)
+
+    @tool
+    def project_delete(name: str) -> Any:
+        """Delete a project and everything it holds: plan, state, log, inbox and runs. Cannot
+        be undone. Refused unless it is archived first and none of its steps is running.
+        Returns {deleted}.
+
+        Args:
+            name: the project.
+        """
+        return store.delete_project(name)
 
     @tool
     def fn_list(project: str | None = None) -> Any:
@@ -251,6 +264,58 @@ def build_server(store: Store, stop: threading.Event | None = None,
             author: who is editing (default "mcp").
         """
         return {"rev": store.patch(project, rev, ops, author, reason)}
+
+    @tool
+    def step_add(project: str, step: str, spec: dict[str, Any], reason: str = "") -> Any:
+        """Add one step to a plan: plan_patch for a single step, at the current rev.
+        Validated like any edit. Returns {rev}.
+
+        Args:
+            project: the project.
+            step: the new step's id.
+            spec: the step, {run, in, scatter?, doc?, outputs?, paused?}.
+            reason: why, recorded in the plan's history.
+        """
+        return {"rev": store.add_step(project, step, spec, AUTHOR, reason)}
+
+    @tool
+    def step_update(project: str, step: str, changes: dict[str, Any], reason: str = "") -> Any:
+        """Change fields of one step: each key of `changes` replaces that field (`in` is
+        replaced whole), null removes it. A running step only takes `paused`. Returns {rev}.
+
+        Args:
+            project: the project.
+            step: the step id.
+            changes: e.g. {"doc": "...", "in": {...}}.
+            reason: why, recorded in the plan's history.
+        """
+        return {"rev": store.update_step(project, step, changes, AUTHOR, reason)}
+
+    @tool
+    def step_remove(project: str, step: str, reason: str = "") -> Any:
+        """Remove one step from a plan. Refused (`invalid`) while another step or a plan
+        output still reads it, or while it runs. Returns {rev}.
+
+        Args:
+            project: the project.
+            step: the step id.
+            reason: why, recorded in the plan's history.
+        """
+        return {"rev": store.remove_step(project, step, AUTHOR, reason)}
+
+    @tool
+    def step_pause(project: str, step: str, paused: bool = True, reason: str = "") -> Any:
+        """Pause a step: it does not start, however ready its inputs, until unpaused
+        (paused: false); what it would read is held until then. Pausing a running step lets
+        it finish and holds only its next start. Returns {rev}.
+
+        Args:
+            project: the project.
+            step: the step id.
+            paused: true to pause, false to let it start again.
+            reason: why, recorded in the plan's history.
+        """
+        return {"rev": store.pause_step(project, step, paused, AUTHOR, reason)}
 
     @tool
     def plan_history(project: str, since_rev: int | None = None) -> Any:

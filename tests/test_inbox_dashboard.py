@@ -362,3 +362,28 @@ def test_archiving_a_project_lists_it_apart_and_quiets_its_needs(store, port):
     refused = post(port, "/projects/old/archive", {"archived": "1"}, json_body=False,
                    headers={"Origin": "http://elsewhere.example"})
     assert refused[0] == 403 and not store.archived("old")
+
+
+def test_pause_switches_hold_a_project_or_a_step(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": {"default": 1},
+                                                         "b": {"default": 2}}}})
+    page = get(port, "/projects/p")[1]
+    assert 'action="/projects/p/pause"' in page and ">Pause</button>" in page
+    code, headers, _ = post(port, "/projects/p/pause", {"paused": "1"}, json_body=False)
+    assert code == 303 and store.paused("p")
+    page = get(port, "/projects/p")[1]
+    assert "Paused: no step starts until you resume it." in page and ">Resume</button>" in page
+    assert "Paused." in get(port, "/")[1]
+    code, headers, _ = post(port, "/projects/p/steps/a/pause", {"paused": "1"}, json_body=False)
+    assert code == 303 and headers["location"] == "/projects/p#step:a"
+    assert store.get("p")["steps"]["a"]["paused"] is True
+    page = get(port, "/projects/p")[1]
+    assert 'class="node card is-paused"' in page and 'class="g g-paused"' in page
+    detail = get(port, "/projects/p/steps/a")[1]
+    assert 'action="/projects/p/steps/a/pause"' in detail and ">Resume</button>" in detail
+    post(port, "/projects/p/steps/a/pause", {"paused": "0"}, json_body=False)
+    post(port, "/projects/p/pause", {"paused": "0"}, json_body=False)
+    assert "paused" not in store.get("p")["steps"]["a"] and not store.paused("p")
+    code, _, _ = post(port, "/projects/p/pause", {"paused": "1"}, json_body=False,
+                      headers={"Origin": "http://evil.example"})
+    assert code == 403 and not store.paused("p")

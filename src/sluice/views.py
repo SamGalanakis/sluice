@@ -228,8 +228,10 @@ GLYPHS = {
              'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
              'stroke-linejoin="round"/>',
     "failed": _DISC + f'<path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2" {_CUT}/>',
+    "paused": _RING + '/><path d="M6.6 5.9v4.2M9.4 5.9v4.2" fill="none" stroke="currentColor" '
+              'stroke-width="1.5" stroke-linecap="round"/>',
 }
-WORDS = {"manual": "set by hand"}
+WORDS = {"manual": "set by hand", "paused": "paused"}
 X_ICON = ('<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path '
           'd="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" '
           'stroke-linecap="round"/></svg>')
@@ -409,7 +411,10 @@ class Block:
 
     @property
     def mark(self) -> str:
-        """The glyph's status: `manual` for a value set by hand."""
+        """The glyph's status: `manual` for a value set by hand, `paused` for a held step that
+        has not started."""
+        if self.raw.get("paused") is True and self.status == "pending":
+            return "paused"
         return "manual" if self.entry.get("manual") and self.status == "succeeded" \
             else self.status
 
@@ -862,6 +867,8 @@ def _project_row(store: Store, name: str) -> str:
             f"</li>" for b in running[:4])
         more = f'<li class="more">and {len(running) - 4} more</li>' if len(running) > 4 else ""
         now = f'<ul class="now">{now}{more}</ul>'
+    elif info.get("paused") is True:
+        now = '<p class="now">Paused.</p>'
     elif total and counts.get("succeeded") == total:
         now = '<p class="now">Finished.</p>'
     elif counts.get("failed") or counts.get("stale"):
@@ -935,23 +942,39 @@ def project_parts(store: Store, project: str) -> dict[str, str]:
     return _project(store, project, True)
 
 
-def _archive_form(project: str, archived: bool) -> str:
-    """The project's archive switch (a plain form: it works without JavaScript)."""
-    label, value = ("Unarchive", "0") if archived else ("Archive", "1")
-    return (f'<form class="archive" method="post" action="/projects/{e(quote(project))}/archive">'
-            f'<input type="hidden" name="archived" value="{value}">'
+def _switch(action: str, field: str, on: bool, labels: tuple[str, str]) -> str:
+    """A two-way switch posting `field` "1" or "0" to `action` (a plain form: it works
+    without JavaScript); `labels` are (turn on, turn off)."""
+    label, value = (labels[1], "0") if on else (labels[0], "1")
+    return (f'<form class="switch" method="post" action="{e(action)}">'
+            f'<input type="hidden" name="{field}" value="{value}">'
             f'<button type="submit">{label}</button></form>')
+
+
+def _archive_form(project: str, archived: bool) -> str:
+    return _switch(f"/projects/{quote(project)}/archive", "archived", archived,
+                   ("Archive", "Unarchive"))
+
+
+def _pause_form(project: str, paused: bool, sid: str | None = None) -> str:
+    """Pause or resume the project, or with `sid` one step of it."""
+    base = f"/projects/{quote(project)}" + (f"/steps/{quote(sid)}" if sid else "")
+    return _switch(f"{base}/pause", "paused", paused, ("Pause", "Resume"))
 
 
 def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     board = load_board(store, project)
     about = board.info.get("description") or ""
     archived = board.info.get("archived") is True
-    note = '<p class="archived-note">Archived: listed apart and left out of Needs you.</p>' \
+    paused = board.info.get("paused") is True
+    note = '<p class="attn-note">Paused: no step starts until you resume it.</p>' \
+        if paused else ""
+    note += '<p class="attn-note">Archived: listed apart and left out of Needs you.</p>' \
         if archived else ""
     line = f'<p class="meta sum">{_summary_line(board, last_change(store, project))}</p>'
     if live:
-        line = f'<div class="sumline">{line}{_archive_form(project, archived)}</div>'
+        line = (f'<div class="sumline">{line}<div class="switches">'
+                f"{_pause_form(project, paused)}{_archive_form(project, archived)}</div></div>")
     # the head is the project: its description. What the plan took, produced and cost, and the
     # archive switch, sit under the board.
     about_plan = (result_panel(board) + inputs_strip(board) + line)
@@ -1151,8 +1174,10 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         facts.append(("Session", f'<code title="{e(session)}">{e(session[:8])}</code>'))
     doc = f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>' if b.doc.strip() else ""
     grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
+    switch = f'<div class="d-actions">{_pause_form(project, b.raw.get("paused") is True, sid)}' \
+        "</div>" if live else ""
     head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(sid)}</h2></div>'
-            f'{doc}<dl class="facts">{grid}</dl></header>')
+            f'{doc}<dl class="facts">{grid}</dl>{switch}</header>')
     sections = []
 
     def section(title: str, body: str, extra: str = "") -> None:

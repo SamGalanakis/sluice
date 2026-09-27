@@ -165,6 +165,37 @@ def test_every_ready_step_starts_at_once_across_projects(store, runner):
     assert all(overlap(ws[0], w) for w in ws[1:])
 
 
+def test_a_paused_step_holds_its_inputs_until_unpaused(store, runner):
+    create(store, "p", {"a": add(d(1), d(2)), "b": {**add(src("a/sum"), d(10)), "paused": True},
+                        "c": {"run": "core.echo", "in": {"value": src("b/sum")}}})
+    settle(runner, store, "p", until=lambda s: s["a"]["status"] == "succeeded")
+    for _ in range(3):
+        runner.tick()
+    assert statuses(store, "p") == {"a": "succeeded", "b": "pending", "c": "pending"}
+    assert store.status("p")["steps"][1]["paused"] is True
+    store.pause_step("p", "b", False, "test", "")
+    assert "paused" not in store.get("p")["steps"]["b"]
+    steps = settle(runner, store, "p")
+    assert steps["c"]["outputs"] == {"value": 13}
+
+
+def test_a_paused_project_starts_nothing_and_a_running_step_can_be_paused(store, runner):
+    create(store, "p", {"w": window(0.5), "a": add(d(1), d(2))})
+    create(store, "q", {"a": add(d(1), d(2))})
+    store.update_project("q", paused=True)
+    settle(runner, store, "p", until=lambda s: s["w"]["status"] == "running")
+    assert store.pause_step("p", "w", True, "test", "") == 3  # a running step takes a pause
+    with pytest.raises(InvalidPlan) as e:
+        store.update_step("p", "w", {"doc": "no"}, "test", "")
+    assert e.value.errors == ["steps.w: cannot change a running step (only pause it)"]
+    settle(runner, store, "p")
+    for _ in range(3):
+        runner.tick()
+    assert statuses(store, "q") == {"a": "pending"} and store.status("q")["paused"] is True
+    store.update_project("q", paused=False)
+    assert settle(runner, store, "q")["a"]["outputs"] == {"sum": 3}
+
+
 def test_a_new_runner_marks_leftover_running_steps_failed(store, runner):
     create(store, "p", {"w": window(30), "after": {"run": "core.echo",
                                                    "in": {"value": src("w/end")}}})

@@ -125,8 +125,18 @@ JSON Patch ops against the plan without `rev`:
  {"op": "remove", "path": "/steps/old-step"}]
 ```
 
-You cannot remove or change a running step. Every edit needs a short `reason`; it goes into the
-plan's history (`plan_history`).
+One step at a time, without a `rev`: `step_add(project, step, spec)`,
+`step_update(project, step, changes)` (each key replaces that field, null removes it) and
+`step_remove(project, step)`. They are the same edit, validated the same way.
+
+You cannot remove or change a running step (only pause it). Every edit needs a short `reason`;
+it goes into the plan's history (`plan_history`).
+
+## Pausing
+`step_pause(project, step)` holds a step: it does not start, however ready its inputs, until
+`step_pause(project, step, paused=false)`; everything after it waits too. It is the step's
+`"paused": true`. Pausing a running step lets it finish and holds its next start.
+`project_update(name, paused=true)` holds every step of the project the same way.
 
 ## Manual values
 - `plan_set_input(project, name, value)`: provide a plan input the plan is waiting on. Changing

@@ -164,7 +164,7 @@ details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 .g-pending { color: var(--status-idle); }
 .g-running { color: var(--status-active); }
 .g-succeeded, .g-manual { color: var(--status-success); }
-.g-stale { color: var(--status-attention); }
+.g-stale, .g-paused { color: var(--status-attention); }
 .g-failed { color: var(--foreground); }
 .spin { transform-box: view-box; transform-origin: 8px 8px; animation: spin 1.1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -192,9 +192,11 @@ details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 .sumline { display: flex; align-items: center; justify-content: space-between; gap: 12px;
            margin-top: 4px; }
 .sum { margin: 0; }
-form.archive button { font-size: 13px; padding: 3px 10px; color: var(--muted-foreground); }
-form.archive button:hover { color: var(--foreground); }
-.archived-note { font-size: 13px; color: var(--status-attention); }
+.switches { display: flex; gap: 8px; }
+form.switch button { font-size: 13px; padding: 3px 10px; color: var(--muted-foreground); }
+form.switch button:hover { color: var(--foreground); }
+.attn-note { font-size: 13px; color: var(--status-attention); }
+.d-actions { display: flex; gap: 8px; margin-top: 10px; }
 details.about > summary { list-style: none; cursor: pointer; color: var(--muted-foreground); }
 details.about > summary::-webkit-details-marker { display: none; }
 details.about .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
@@ -261,6 +263,9 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .is-pending .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
 .node.is-running { border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
 .node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground); }
+.is-paused .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
+.node.is-paused { border-style: dashed;
+                  border-color: color-mix(in oklch, var(--status-attention) 60%, transparent); }
 .node.is-stale { border-color: color-mix(in oklch, var(--status-attention) 60%, transparent); }
 .node.open { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
 .chip { border-style: dashed; border-color: var(--border-strong); background: transparent; }

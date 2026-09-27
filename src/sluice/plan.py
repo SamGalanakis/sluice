@@ -14,7 +14,7 @@ from .util import canonical
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
-STEP_KEYS = {"run", "in", "scatter", "doc", "outputs"}
+STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused"}
 INPUT_KEYS = {"type", "doc"}  # a plan input's or step output's object form {"type": T, "doc"}
 
 
@@ -53,6 +53,7 @@ class Step:
     extra: dict[str, T.Type] = field(default_factory=dict)  # extra input -> its source's type
     declared: dict[str, T.Type] = field(default_factory=dict)  # declared output -> type
     output_docs: dict[str, str] = field(default_factory=dict)  # only outputs that have one
+    paused: bool = False  # held: it does not start, even when ready, until unpaused
 
     @property
     def inputs(self) -> dict[str, T.Type]:
@@ -245,7 +246,7 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
     for sid, raw in _ids(doc.get("steps", {}), "steps", errs).items():
         p = f"steps.{sid}"
         if not isinstance(raw, dict):
-            errs.append(f"{p}: a step is {{run, in, scatter?, doc?, outputs?}}")
+            errs.append(f"{p}: a step is {{run, in, scatter?, doc?, outputs?, paused?}}")
             continue
         errs.extend(f"{p}.{k}: unknown key" for k in raw if k not in STEP_KEYS)
         text = raw.get("doc", "")
@@ -276,7 +277,10 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
         if scatter is not None and scatter not in ins:
             errs.append(f"{p}.scatter: {scatter!r} is not a bound input of the step")
             scatter = None
-        step = plan.steps[sid] = Step(sid, fn, sources, scatter, text)
+        paused = raw.get("paused", False)
+        if not isinstance(paused, bool):
+            errs.append(f"{p}.paused: expected true or false")
+        step = plan.steps[sid] = Step(sid, fn, sources, scatter, text, paused=paused is True)
         if "outputs" in raw:
             if not fn.open:
                 errs.append(f"{p}.outputs: fn {fn.name} is not open; only a step running an "

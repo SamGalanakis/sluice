@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import os
+import shutil
 import threading
 from collections import Counter
 from collections.abc import Callable, Iterator
@@ -81,6 +82,8 @@ class Store:
         if key in held:
             yield
             return
+        if project and not self.project_dir(project).is_dir():  # deleted: never recreate it
+            raise NotFound(f"no project {project!r}")
         with L.flock(self.log_dir(project) / L.LOCK):
             held.add(key)
             try:
@@ -202,6 +205,7 @@ class Store:
         if not isinstance(description, str):
             raise BadRequest("description: expected a string")
         d = self.project_dir(name)
+        d.mkdir(parents=True, exist_ok=True)
         with self.lock(name):
             if (d / "project.json").exists():
                 raise BadRequest(f"project {name!r} already exists")
@@ -215,25 +219,54 @@ class Store:
         return {"name": name}
 
     def update_project(self, name: str, description: str | None = None,
-                       archived: bool | None = None) -> dict[str, str]:
+                       archived: bool | None = None, paused: bool | None = None
+                       ) -> dict[str, str]:
         """Replace the description and/or set `archived` (an archived project stays whole and
-        keeps running; the dashboard lists it apart and leaves it out of "Needs you")."""
+        keeps running; the dashboard lists it apart and leaves it out of "Needs you") and/or
+        `paused` (no step of it starts until unpaused; running ones finish)."""
         if description is not None and not isinstance(description, str):
             raise BadRequest("description: expected a string")
-        if archived is not None and not isinstance(archived, bool):
-            raise BadRequest("archived: expected true or false")
+        for key, value in (("archived", archived), ("paused", paused)):
+            if value is not None and not isinstance(value, bool):
+                raise BadRequest(f"{key}: expected true or false")
         with self.lock(name):
             new = dict(self.project(name))
             if description is not None:
                 new["description"] = description
             if archived is not None:
                 new["archived"] = archived
+            if paused is not None:
+                new["paused"] = paused
             atomic_write_json(self.project_dir(name) / "project.json", new)
+        self.notify()
         return {"name": name}
+
+    def delete_project(self, name: str) -> dict[str, Any]:
+        """Delete a project and everything it holds (plan, state, log, inbox, runs). Refused
+        unless it is archived first and none of its steps is running."""
+        with self.lock(name):
+            if not self.archived(name):
+                raise BadRequest(f"archive project {name!r} before deleting it")
+            running = [s for s, e in self.read_state(name)["steps"].items()
+                       if e.get("status") == "running"]
+            if running:
+                raise BadRequest(f"project {name!r} has running steps: {', '.join(running)}")
+            d = self.project_dir(name)
+            (d / "project.json").unlink()  # first: from here on it is not a project
+            shutil.rmtree(d)
+        self._parsed.pop(name, None)
+        self.notify()
+        return {"deleted": name}
 
     def archived(self, name: str) -> bool:
         try:
             return self.project(name).get("archived") is True
+        except (NotFound, OSError, ValueError):
+            return False
+
+    def paused(self, name: str) -> bool:
+        try:
+            return self.project(name).get("paused") is True
         except (NotFound, OSError, ValueError):
             return False
 
@@ -245,7 +278,8 @@ class Store:
             counts = Counter(st.get(s, {"status": "pending"})["status"] for s in doc["steps"])
             out.append({"name": name, "description": info.get("description", ""),
                         "rev": doc["rev"], "counts": dict(counts),
-                        "archived": info.get("archived") is True})
+                        "archived": info.get("archived") is True,
+                        "paused": info.get("paused") is True})
         return out
 
     # ---- the plan ----
@@ -284,14 +318,61 @@ class Store:
                     continue
                 if sid not in new_steps:
                     errs.append(f"steps.{sid}: cannot remove a running step")
-                elif new_steps[sid] != old["steps"].get(sid):
-                    errs.append(f"steps.{sid}: cannot change a running step")
+                elif _unpaused(new_steps[sid]) != _unpaused(old["steps"].get(sid)):
+                    errs.append(f"steps.{sid}: cannot change a running step (only pause it)")
             if errs:
                 raise InvalidPlan(errs)
             self._log(project, rev + 1, author, reason, ops)
             atomic_write_json(self.project_dir(project) / "plan.json", {**new, "rev": rev + 1})
         self.notify()
         return rev + 1
+
+    # ---- one step of the plan: plan_patch for a single step, at the current rev ----
+
+    def add_step(self, project: str, sid: str, step: Any, author: str, reason: str) -> int:
+        if not isinstance(sid, str) or not P.ID_RE.match(sid):
+            raise BadRequest(f"step ids match {P.ID_RE.pattern}, got {sid!r}")
+        with self.lock(project):
+            cur = self.get(project)
+            if sid in cur["steps"]:
+                raise BadRequest(f"step {sid!r} already exists (step_update changes it)")
+            return self.patch(project, cur["rev"],
+                              [{"op": "add", "path": f"/steps/{sid}", "value": step}],
+                              author, reason or f"add step {sid}")
+
+    def update_step(self, project: str, sid: str, changes: Any, author: str,
+                    reason: str) -> int:
+        """Merge `changes` into a step: each key replaces that field of it, null removes it."""
+        if not isinstance(changes, dict) or not changes:
+            raise BadRequest("changes: expected an object of step field -> new value")
+        with self.lock(project):
+            cur = self.get(project)
+            if sid not in cur["steps"]:
+                raise NotFound(f"the plan of project {project} has no step {sid!r}")
+            new = copy.deepcopy(cur["steps"][sid])
+            for key, value in changes.items():
+                if value is None:
+                    new.pop(key, None)
+                else:
+                    new[key] = value
+            return self.patch(project, cur["rev"],
+                              [{"op": "replace", "path": f"/steps/{sid}", "value": new}],
+                              author, reason or f"update step {sid}")
+
+    def remove_step(self, project: str, sid: str, author: str, reason: str) -> int:
+        with self.lock(project):
+            cur = self.get(project)
+            if sid not in cur["steps"]:
+                raise NotFound(f"the plan of project {project} has no step {sid!r}")
+            return self.patch(project, cur["rev"], [{"op": "remove", "path": f"/steps/{sid}"}],
+                              author, reason or f"remove step {sid}")
+
+    def pause_step(self, project: str, sid: str, paused: bool, author: str,
+                   reason: str) -> int:
+        if not isinstance(paused, bool):
+            raise BadRequest("paused: expected true or false")
+        return self.update_step(project, sid, {"paused": True if paused else None}, author,
+                                reason or f"{'pause' if paused else 'unpause'} step {sid}")
 
     def _log(self, project: str, rev: int, author: str, reason: str, ops: list | None = None,
              kind: str = "plan.edit", **fields: Any) -> None:
@@ -336,8 +417,10 @@ class Store:
                    "started": e.get("started"), "finished": e.get("finished")}
             row.update({k: e[k] for k in ("outputs", "error") if e.get(k) is not None})
             row.update({"doc": step.doc} if step.doc else {})
+            row.update({"paused": True} if step.paused else {})
             steps.append({**row, "manual": bool(e.get("manual"))})
-        out = {"rev": doc["rev"], "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}
+        out = {"rev": doc["rev"], "paused": self.paused(project),
+               "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}
         if plan.input_docs:
             out["input_docs"] = dict(plan.input_docs)
         return {**out, "outputs": outputs, "steps": steps}
@@ -610,6 +693,11 @@ def answer_value(answer: dict[str, Any]) -> Any:
 
 def _body(doc: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in doc.items() if k != "rev"}
+
+
+def _unpaused(step: Any) -> Any:
+    """A step without its `paused` flag: the one change a running step takes."""
+    return {k: v for k, v in step.items() if k != "paused"} if isinstance(step, dict) else step
 
 
 def apply_ops(doc: dict[str, Any], ops: Any) -> dict[str, Any]:
