@@ -150,8 +150,16 @@ step, why it is `waiting`. `project_update(name, paused=true)` holds the whole p
 `step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with
 `cancelled: <reason>` and `step_retry` runs it again.
 
+## Conditions
+`"when": "check/ok"` runs a step only if that value is true: a gate without a gate step. The
+ref is read like an input (the step waits for it) and must be a `boolean`. False (or null)
+makes the step `skipped`, with the reason (`check/ok is false`), and every step reading from
+it is skipped too; steps ordered `after` it still run. If the value changes later (you
+retry `check` and it passes), skipped steps go back to pending and run. `status` shows
+`when` and `skipped` on each step.
+
 ## Ordering and tags
-`"after": ["a"]` makes a step wait for `a` to succeed without reading anything from it: for
+`"after": ["a"]` makes a step wait for `a` to succeed (or be skipped) without reading anything from it: for
 two steps that must not overlap (both edit one file) or must happen in order. It is not a
 data edge, so `a` turning stale does not make it stale. `"tags": ["e2e", "heavy"]` label
 steps so you can pause or release them together.

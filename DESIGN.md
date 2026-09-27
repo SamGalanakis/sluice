@@ -150,7 +150,8 @@ light set plus the dark canvas, ink, card, muted ink and primary).
 failed step reads through its cross glyph, full-ink border and bold error line, not red.
 
 **The Shape Carries It Rule.** Every status has its own drawn glyph (dashed ring, spinning
-ring, check, ring and dot, circular arrow, cross, ring with two bars for paused) plus a
+ring, check, ring and dot, circular arrow, cross, ring with two bars for paused, dashed ring
+with a slash for skipped) plus a
 visually hidden word; colour only repeats what the shape says. A paused bubble also has a
 dashed amber border.
 

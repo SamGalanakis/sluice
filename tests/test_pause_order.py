@@ -152,3 +152,73 @@ def test_retry_and_cancel_take_a_selection(store, runner):
     assert statuses(store, "p")["w1"] == "failed"
     assert store.retry("p", tags=["slow"], author="t", reason="again") == ["w1", "w2"]
     assert statuses(store, "p")["w1"] == "pending"
+
+
+def echo(ref):
+    return {"run": "core.echo", "in": {"value": src(ref)}}
+
+
+def test_when_runs_or_skips_a_step_and_skipping_follows_data_not_order(store, runner):
+    create(store, "p", {
+        "check": {"run": "core.echo", "in": {"value": src("ok")}},
+        "land": {**add(d(1), d(1)), "when": "check/value"},
+        "close": echo("land/sum"),  # reads land: skipped with it
+        "cleanup": {**add(d(2), d(2)), "after": ["land"]},  # ordered only: still runs
+        "other": {**add(d(3), d(3)), "when": "ok"},
+    }, inputs={"ok": "boolean"})
+    store.set_input("p", "ok", False, "t", "t")
+    steps = settle(runner, store, "p", until=lambda s: all(
+        e["status"] in ("succeeded", "failed", "skipped") for e in s.values()))
+    assert {k: e["status"] for k, e in steps.items()} == {
+        "check": "succeeded", "land": "skipped", "close": "skipped", "cleanup": "succeeded",
+        "other": "skipped"}
+    assert steps["land"]["skipped"] == "check/value is false"
+    assert steps["close"]["skipped"] == "step land was skipped"
+    st = status_of(store, "p")
+    assert (st["land"]["when"], st["land"]["skipped"]) == ("check/value", "check/value is false")
+    recs = [r for r in L.read(store.log_dir("p"), kinds=["step.status"])["records"]
+            if r["to"] == "skipped"]
+    assert {r["step"]: r["reason"] for r in recs}["land"] == "check/value is false"
+    # the condition changes: skipped steps are decided afresh and run
+    store.set_input("p", "ok", True, "t", "t")
+    runner.tick()  # other reads ok itself; check read it too, so check is stale
+    assert statuses(store, "p")["check"] == "stale"
+    store.retry("p", "check", author="t", reason="recheck")
+    steps = settle(runner, store, "p", until=lambda s: all(
+        e["status"] == "succeeded" for e in s.values()))
+    assert steps["close"]["outputs"] == {"value": 2}
+
+
+def test_when_null_skips_and_a_paused_step_is_held_not_skipped(store, runner):
+    create(store, "p", {"a": {**add(d(1), d(1)), "when": "maybe"},
+                        "b": {**add(d(1), d(1)), "when": "no", "paused": True}},
+           inputs={"maybe": "boolean?", "no": "boolean"})
+    store.set_input("p", "no", False, "t", "t")
+    for _ in range(3):
+        runner.tick()
+    assert statuses(store, "p") == {"a": "skipped", "b": "pending"}
+    assert store.read_state("p")["steps"]["a"]["skipped"] == "maybe is null"
+    store.pause_steps("p", "b", paused=False, author="t")
+    runner.tick()
+    assert statuses(store, "p")["b"] == "skipped"
+
+
+def test_the_board_shows_a_skipped_step_and_a_finished_plan(store, runner):
+    create(store, "p", {"a": {**add(d(1), d(1)), "when": "go"}, "b": add(d(1), d(1))},
+           inputs={"go": "boolean"})
+    store.set_input("p", "go", False, "t", "t")
+    settle(runner, store, "p", until=lambda s: s["a"]["status"] == "skipped"
+           and s["b"]["status"] == "succeeded")
+    page = views.project_page(store, "p", ver="x")
+    assert "is-skipped" in page and 'class="g g-skipped"' in page
+    assert 'title="Skipped: go is false"' in page
+    assert "Finished." in views.index(store)
+    assert "<dt>When</dt>" in views.step_detail(store, "p", "a")
+
+
+def test_a_when_of_type_any_is_checked_when_it_runs(store, runner):
+    create(store, "p", {"v": {"run": "core.echo", "in": {"value": d(3)}},
+                        "a": {**add(d(1), d(1)), "when": "v/value"}})
+    steps = settle(runner, store, "p")
+    assert (steps["a"]["status"], steps["a"]["error"]) == (
+        "failed", "when: v/value is 3, not a boolean")

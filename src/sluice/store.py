@@ -511,6 +511,8 @@ class Store:
             row.update({"paused": step.pause_reason or True} if step.paused else {})
             row.update({"tags": step.tags} if step.tags else {})
             row.update({"after": step.after} if step.after else {})
+            row.update({"when": str(step.when)} if step.when else {})
+            row.update({"skipped": e.get("skipped")} if e["status"] == "skipped" else {})
             if e["status"] == "pending":  # why it has not started
                 held = ([f"paused: {step.pause_reason}" if step.pause_reason else "paused"]
                         if step.paused else [])

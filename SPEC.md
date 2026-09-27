@@ -168,9 +168,17 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   `rev` is store-maintained and returned by `plan_get`/`status`.
 - **Holding and ordering.** A step may carry `"paused": true` or `"paused": "<reason>"` to
   hold it (§6); `"after": ["<step>", ...]` to wait for steps it reads nothing from (an
-  ordering edge: it is ready only once they have succeeded, it is never stale because of
-  them, and it counts for cycles); and `"tags": ["<tag>", ...]` (tags match the id pattern)
-  to select steps by. A step that `plan_patch` or `step_add` adds comes in with
+  ordering edge: it is ready only once they have succeeded or been skipped, it is never stale
+  because of them, and it counts for cycles); `"tags": ["<tag>", ...]` (tags match the id
+  pattern) to select steps by; and `"when": "<ref>"` to run it only if that value is true.
+- **Conditions.** `when` names a step output or plan input of type `boolean` (or `boolean?`;
+  `Any` is checked when it runs), read like an input: the step waits for it. Once it is known,
+  `true` lets the step run; `false` or null makes it `skipped` (state `skipped: "<ref> is
+  false"`) instead of running; any other value fails it (`when: <ref> is 3, not a boolean`).
+  A step that reads from a skipped step is skipped too (`step a was skipped`); an `after` edge
+  counts a skipped step as settled. A skipped step never ran, so it is decided afresh whenever
+  its reason changes: if the value turns true, it goes back to `pending`. A paused step is
+  held, not skipped. A step that `plan_patch` or `step_add` adds comes in with
   `"paused": true` unless the call passes `start: true` or the step sets `paused` itself;
   that pause is one more op in the edit's history.
 - **Docs.** A plan input is declared by its type, or, as in CWL, by `{"type": <type>, "doc":
@@ -230,8 +238,8 @@ changing a running step is refused.
 
 `state.json`:
 `{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
-"outputs", "error", "manual", "inputs_hash"}}}` with status `pending`, `running`, `succeeded`,
-`failed`, `stale`. A
+"outputs", "error", "manual", "inputs_hash", "skipped"}}}` with status `pending`, `running`,
+`succeeded`, `failed`, `stale`, `skipped` (`skipped` holds why). A
 scattered step also records `done` and `total` runs. There is no limit on how many run at
 once: every ready step starts, and a scattered step starts all its runs; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
 
@@ -257,8 +265,10 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    that declares outputs, merged with what its agent submitted, §5); otherwise `failed` with
    `error` (exit code, type errors or declared outputs not submitted, plus the stderr tail).
    A scattered step collects its runs as they finish.
-3. Mark stale steps (above), then start every ready `pending` step (what it reads is there,
-   what it runs `after` has succeeded) that is not paused (a step's `paused`, or its project's
+3. Mark stale steps (above), settle `when` (§5: skip what its condition or a skipped input
+   rules out, and put back to `pending` a skipped step whose reason no longer holds), then
+   start every ready `pending` step (what it reads is there, what it runs `after` has
+   succeeded or been skipped) that is not paused (a step's `paused`, or its project's
    `paused` in `project.json`: it stays `pending`, whatever it would read held, until
    unpaused; pausing never stops a running step). Built-in fns run inline;
    staleness is re-checked after each round of inline results, so nothing starts from a result
@@ -420,7 +430,8 @@ alone; a step's page is inside Plan), and Inbox at the right, every value HTML-e
 untrusted). The Inbox link carries the count of open items across all projects as the
 dashboard's one red badge (none when nothing waits); nothing else is red. A step's status is a
 drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
-hand, circular arrow stale, cross failed, ring with two bars paused) with its word for assistive technology, never colour
+hand, circular arrow stale, cross failed, ring with two bars paused, dashed ring with a slash
+skipped) with its word for assistive technology, never colour
 alone. The only external assets come from cdn.jsdelivr.net: Datastar v1.0.4, the Inter font
 (`@fontsource-variable/inter@5.3.0`; the system sans without it), and, on inbox pages,
 `@openuidev/lang-core@0.3.0/+esm` (jsDelivr's ESM build; it imports `zod@4.6.5` from the same
@@ -586,7 +597,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty) |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
-| `status` | `project, steps?, tags?` | only the steps selected by id and/or tag when given; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, waiting?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
+| `status` | `project, steps?, tags?` | only the steps selected by id and/or tag when given; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
 | `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |

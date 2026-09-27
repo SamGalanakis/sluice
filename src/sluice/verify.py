@@ -13,7 +13,7 @@ from .errors import NotFound
 from .store import PROJECT_KEYS, Store
 from .util import parse_dotenv
 
-STATUSES = {"pending", "running", "succeeded", "failed", "stale"}
+STATUSES = {"pending", "running", "succeeded", "failed", "stale", "skipped"}
 
 
 class Report:

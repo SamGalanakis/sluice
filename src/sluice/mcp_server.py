@@ -530,11 +530,12 @@ def build_server(store: Store, stop: threading.Event | None = None,
     def status(project: str, steps: list[str] | str | None = None,
                tags: list[str] | str | None = None) -> Any:
         """Return {rev, paused, inputs, outputs, steps: [{id, run, status, started, finished,
-        outputs?, error?, doc?, paused?, tags?, after?, waiting?, manual}]}. inputs and outputs
-        map names to values (null if unset). A step's status is pending, running, succeeded,
-        failed or stale (its result was computed from inputs that have changed since; it waits
-        for step_retry or step_set_output, and so do the steps reading it). `waiting`, on a
-        pending step, says why it has not started.
+        outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}.
+        inputs and outputs map names to values (null if unset). A step's status is pending,
+        running, succeeded, failed, stale (its result was computed from inputs that have
+        changed since; it waits for step_retry or step_set_output, and so do the steps reading
+        it) or skipped (its `when` was false, or it reads a skipped step; `skipped` says
+        which). `waiting`, on a pending step, says why it has not started.
 
         Args:
             project: the project.

@@ -12,6 +12,9 @@ it stays easy to read and to change.
 - **An edge is a real handoff**: an interface, a branch, a finding, a decision. If nothing
   meaningful passes between two steps, they need no edge, unless they must not overlap (both
   change the same file): then `"after": ["<step>"]` orders them without passing anything.
+- **Gate with `when`, not a gate step.** `"when": "tests/ok"` on `land` runs it only if the
+  tests passed; otherwise it and what reads from it are skipped, and cleanup ordered `after`
+  it still runs.
 - **Draft, then release.** Steps you add come in paused; add the next handoffs, read them
   over, then `step_pause(steps=[...], subtree=true, paused=false)` to start them. Pause by
   tag to back off when the machine is busy.

@@ -23,7 +23,17 @@ from . import calls as C
 from . import log as L
 from . import types as T
 from .errors import BadRequest, InvalidPlan, NotFound
-from .plan import Plan, Step, inputs_hash, is_ready, mark_stale, resolved_inputs, topo_order
+from .plan import (
+    Plan,
+    Step,
+    inputs_hash,
+    is_ready,
+    mark_stale,
+    resolved_inputs,
+    settle_skip,
+    settle_skips,
+    topo_order,
+)
 from .registry import Fn
 from .store import SUBMITTED, Store
 from .util import atomic_write_json, canonical, now_iso, read_dotenv, tail_text
@@ -313,11 +323,13 @@ class Runner:
                 elif e["status"] == "running":
                     self._poll(("step", project, sid), e)
             held = self.store.paused(project)  # a paused project starts nothing
+            holding = set(plan.steps) if held else {s for s, x in plan.steps.items() if x.paused}
             self._launch(project, st)  # queued scatter runs first
             order = topo_order(plan)
             progress = True
             while progress:  # built-ins finish inline and can make more steps ready
                 mark_stale(plan, state)  # before anything reads a result that no longer holds
+                settle_skips(plan, state, holding)  # `when` false, or reads a skipped step
                 progress = False
                 if problems:
                     break
@@ -327,6 +339,9 @@ class Runner:
                         continue
                     if held or step.paused:
                         continue  # stays pending, its inputs held, until unpaused
+                    if settle_skip(step, plan, state):  # its `when` says no, or it reads a skip
+                        progress = True
+                        continue
                     self._begin(project, step, plan, state)
                     self._launch(project, st)
                     progress = True
@@ -340,6 +355,8 @@ class Runner:
                            "to": e["status"]}
                     if e["status"] == "failed":
                         rec["error"] = e.get("error")
+                    if e["status"] == "skipped":
+                        rec["reason"] = e.get("skipped")
                     if e["status"] in ("succeeded", "failed") and e.get("run_ids"):
                         rec["run_ids"] = e["run_ids"]
                     records.append(rec)

@@ -9,12 +9,12 @@ from typing import Any
 
 from . import types as T
 from .registry import Fn, Registry
-from .util import canonical
+from .util import canonical, now_iso
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
-STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags"}
+STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "when"}
 INPUT_KEYS = {"type", "doc"}  # a plan input's or step output's object form {"type": T, "doc"}
 
 
@@ -57,6 +57,7 @@ class Step:
     pause_reason: str = ""  # why, when `paused` was given as a string
     after: list[str] = field(default_factory=list)  # steps it waits for without reading them
     tags: list[str] = field(default_factory=list)  # free-form labels to select steps by
+    when: Ref | None = None  # a boolean it runs on: false (or null) skips it
 
     @property
     def inputs(self) -> dict[str, T.Type]:
@@ -68,7 +69,9 @@ class Step:
 
     @property
     def reads(self) -> list[Ref]:
-        return [r for s in self.sources.values() for r in s.refs]
+        """Every ref it reads: its inputs' sources, then its `when`."""
+        return [r for s in self.sources.values() for r in s.refs] + \
+            ([self.when] if self.when else [])
 
     @property
     def deps(self) -> list[str]:
@@ -299,10 +302,16 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
                                                for t in tags)):
             errs.append(f"{p}.tags: expected an array of tags matching {ID_RE.pattern}")
             tags = []
+        when = None
+        if "when" in raw:
+            when, err = parse_ref(raw["when"]) if isinstance(raw["when"], str) else (
+                None, "expected a ref such as \"check/ok\"")
+            if err:
+                errs.append(f"{p}.when: {err}")
         step = plan.steps[sid] = Step(
             sid, fn, sources, scatter, text, paused=paused is True or isinstance(paused, str),
             pause_reason=paused if isinstance(paused, str) else "",
-            after=list(dict.fromkeys(after)), tags=list(dict.fromkeys(tags)))
+            after=list(dict.fromkeys(after)), tags=list(dict.fromkeys(tags)), when=when)
         if "outputs" in raw:
             if not fn.open:
                 errs.append(f"{p}.outputs: fn {fn.name} is not open; only a step running an "
@@ -345,6 +354,13 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
                     t = inner.of if isinstance(inner, T.List) else T.ANY
                 step.extra[k] = t
     for step in plan.steps.values():
+        if step.when is not None:
+            t, err = ref_type(step.when, plan)
+            inner = t.of if isinstance(t, T.Optional) else t
+            if err:
+                errs.append(f"steps.{step.id}.when: {err}")
+            elif inner not in (T.Prim("boolean"), T.ANY):  # Any is checked when it runs
+                errs.append(f"steps.{step.id}.when: {step.when} is {t}, not a boolean")
         for a in step.after:
             if a == step.id:
                 errs.append(f"steps.{step.id}.after: a step cannot run after itself")
@@ -380,11 +396,62 @@ def source_value(src: Source, plan: Plan, state: dict[str, Any]) -> Any:
     return values if src.fan_in else values[0]
 
 
+SETTLED = ("succeeded", "skipped")  # what an `after` edge waits for
+
+
+def skip_reason(step: Step, plan: Plan, state: dict[str, Any]) -> str | None:
+    """Why the step is skipped, or None: a step it reads from was skipped, or its `when` is
+    known and not true. None too while that is not known yet."""
+    st = state["steps"]
+    for d in step.deps:
+        if st.get(d, {}).get("status") == "skipped":
+            return f"step {d} was skipped"
+    if step.when is not None:
+        known, value = value_of(step.when, plan, state)
+        if known and value in (False, None):
+            return f"{step.when} is {canonical(value)}"
+    return None
+
+
+def settle_skip(step: Step, plan: Plan, state: dict[str, Any]) -> bool:
+    """Decide one pending or skipped step: pending with a skip reason becomes skipped (a `when`
+    that is neither a boolean nor null fails it); skipped whose reason no longer holds is
+    pending again (it never ran, so it is decided afresh). Returns whether it changed."""
+    st = state["steps"]
+    e = st.get(step.id, {"status": "pending"})
+    if e["status"] not in ("pending", "skipped"):
+        return False
+    why = skip_reason(step, plan, state)
+    if e["status"] == "pending" and why:
+        st[step.id] = {"status": "skipped", "skipped": why, "finished": now_iso()}
+        return True
+    if e["status"] == "skipped":
+        if why == e.get("skipped"):
+            return False
+        st[step.id] = {"status": "pending"} if why is None else {**e, "skipped": why}
+        return True
+    known, value = value_of(step.when, plan, state) if step.when else (False, None)
+    if known and not isinstance(value, bool):
+        st[step.id] = {"status": "failed", "finished": now_iso(), "outputs": None,
+                       "error": f"when: {step.when} is {canonical(value)}, not a boolean"}
+        return True
+    return False
+
+
+def settle_skips(plan: Plan, state: dict[str, Any], held: set[str]) -> bool:
+    """settle_skip for every step not `held` (paused), in dependency order."""
+    changed = False
+    for sid in topo_order(plan):
+        if sid not in held:
+            changed |= settle_skip(plan.steps[sid], plan, state)
+    return changed
+
+
 def is_ready(step: Step, plan: Plan, state: dict[str, Any]) -> bool:
     """Every plan input the step reads has a value, and every step it reads or runs after has
     succeeded."""
     return all(value_of(r, plan, state)[0] for r in step.reads) and all(
-        state["steps"].get(a, {}).get("status") == "succeeded" for a in step.after)
+        state["steps"].get(a, {}).get("status") in SETTLED for a in step.after)
 
 
 def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
@@ -400,7 +467,7 @@ def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
             out.append(f"step {r.step} is {status}")
     for a in step.after:
         status = state["steps"].get(a, {}).get("status", "pending")
-        if status != "succeeded":
+        if status not in SETTLED:
             out.append(f"after step {a}, which is {status}")
     return list(dict.fromkeys(out))
 

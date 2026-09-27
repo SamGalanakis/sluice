@@ -43,8 +43,9 @@ CLASSES = {"pending": "fill:#f1f1f1,stroke:#999,color:#333",
            "succeeded": "fill:#dcfce7,stroke:#16a34a,color:#14532d",
            "failed": "fill:#fee2e2,stroke:#dc2626,color:#7f1d1d",
            "stale": "fill:#fef3c7,stroke:#d97706,color:#78350f",
+           "skipped": "fill:#fff,stroke:#999,color:#777,stroke-dasharray:3 3",
            "manual": "fill:#fff,stroke:#16a34a,stroke-width:3px,stroke-dasharray:6 3"}
-STATUSES = ("pending", "running", "succeeded", "stale", "failed")
+STATUSES = ("pending", "running", "succeeded", "skipped", "stale", "failed")
 DATASTAR_JS = "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js"
 FONT_CSS = "https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/index.css"
 # Keep the stream open across server restarts and network blips (Datastar backs off to 30 s).
@@ -231,6 +232,8 @@ GLYPHS = {
     "failed": _DISC + f'<path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2" {_CUT}/>',
     "paused": _RING + '/><path d="M6.6 5.9v4.2M9.4 5.9v4.2" fill="none" stroke="currentColor" '
               'stroke-width="1.5" stroke-linecap="round"/>',
+    "skipped": _RING + ' stroke-dasharray="2.6 2.2"/><path d="M5.3 10.7l5.4-5.4" fill="none" '
+               'stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
 }
 WORDS = {"manual": "set by hand", "paused": "paused"}
 X_ICON = ('<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path '
@@ -296,7 +299,8 @@ def _project_mark(counts: Mapping[str, int]) -> str:
     for status in ("running", "failed", "stale"):
         if counts.get(status):
             return glyph(status)
-    return glyph("succeeded" if total and counts.get("succeeded") == total else "pending")
+    done = counts.get("succeeded", 0) + counts.get("skipped", 0)
+    return glyph("succeeded" if total and done == total else "pending")
 
 
 def _current(item: str, here: str, sub: bool = False) -> str:
@@ -435,6 +439,12 @@ class Block:
         return [x for x in a if isinstance(x, str)] if isinstance(a, list) else []
 
     @property
+    def when(self) -> Any:
+        """The parsed `when` ref, or None."""
+        w = self.raw.get("when")
+        return parse_ref(w)[0] if isinstance(w, str) else None
+
+    @property
     def tags(self) -> list[str]:
         t = self.raw.get("tags")
         return [x for x in t if isinstance(x, str)] if isinstance(t, list) else []
@@ -459,8 +469,9 @@ class Block:
     @property
     def deps(self) -> list[str]:
         """The steps it waits for: those it reads from, then those it runs after."""
+        when = [self.when.step] if self.when is not None and self.when.step else []
         return list(dict.fromkeys([*(r.step for n in self.bindings for r in self.refs(n)
-                                     if r.step), *self.after]))
+                                     if r.step), *when, *self.after]))
 
     @property
     def outputs(self) -> dict[str, str]:
@@ -600,6 +611,8 @@ def block_line(store: Store, board: Board, block: Block) -> tuple[str, str]:
         return "error", _line(block.entry.get("error") or "failed", 200)
     if status == "stale":
         return "note", "Its inputs changed since it ran"
+    if status == "skipped":
+        return "note", "Skipped: " + (block.entry.get("skipped") or "")
     if status == "succeeded":
         return "output", output_summary(block)
     missing = _missing_inputs(board, block)
@@ -722,6 +735,8 @@ def edges(board: Board) -> list[tuple[str, str, str]]:
                 if r.step and r.step in board.blocks:
                     label = r.name if r.name == name else f"{r.name} → {name}"
                     pairs.setdefault((r.step, sid), []).append(label)
+        if b.when is not None and b.when.step in board.blocks:
+            pairs.setdefault((b.when.step, sid), []).append(f"when {b.when.name}")
         for a in b.after:
             if a in board.blocks:
                 pairs.setdefault((a, sid), []).append("after")
@@ -838,7 +853,8 @@ def _about(text: str) -> str:
 def _summary_line(board: Board, updated: str = "") -> str:
     counts, total = board.counts, len(board.blocks)
     bits = [f"{counts.get('succeeded', 0)} of {total} succeeded"] if total else ["no steps"]
-    bits += [f"{counts[s]} {s}" for s in ("running", "stale", "failed") if counts.get(s)]
+    bits += [f"{counts[s]} {s}" for s in ("skipped", "running", "stale", "failed")
+             if counts.get(s)]
     if board.cost is not None:
         bits.append(_money(board.cost))
     if updated:
@@ -864,11 +880,10 @@ def last_change(store: Store, project: str) -> str:
 
 def _bar(counts: Mapping[str, int], total: int) -> str:
     """Progress by status, proportional, with the same counts as text for assistive tech."""
-    said = ", ".join(f"{counts[s]} {s}" for s in ("succeeded", "running", "stale", "failed",
-                                                   "pending") if counts.get(s))
+    order = ("succeeded", "skipped", "running", "stale", "failed", "pending")
+    said = ", ".join(f"{counts[s]} {s}" for s in order if counts.get(s))
     segs = "".join(f'<i class="b-{s}" style="flex:{counts[s]}"></i>'
-                   for s in ("succeeded", "running", "stale", "failed", "pending")
-                   if counts.get(s))
+                   for s in order if counts.get(s))
     return f'<span class="bar" role="img" aria-label="{e(said or "no steps")}">{segs}</span>' \
         if total else '<span class="bar" role="img" aria-label="no steps"></span>'
 
@@ -897,7 +912,7 @@ def _project_row(store: Store, name: str) -> str:
         now = f'<ul class="now">{now}{more}</ul>'
     elif info.get("paused") is True:
         now = '<p class="now">Paused.</p>'
-    elif total and counts.get("succeeded") == total:
+    elif total and counts.get("succeeded", 0) + counts.get("skipped", 0) == total:
         now = '<p class="now">Finished.</p>'
     elif counts.get("failed") or counts.get("stale"):
         now = '<p class="now">Stopped: nothing is running.</p>'
@@ -1189,6 +1204,8 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         raise NotFound(f"the plan of project {project} has no step {sid!r}")
     outs_all = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else {}
     facts = [("Status", e(WORDS.get(b.mark, b.status))), ("Function", f"<code>{e(b.fn)}</code>")]
+    if b.when is not None:
+        facts.append(("When", f"<code>{e(str(b.when))}</code>"))
     if b.after:
         facts.append(("After", ", ".join(f"<code>{e(a)}</code>" for a in b.after)))
     if b.tags:
@@ -1205,6 +1222,8 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     if isinstance(session, str) and session:
         facts.append(("Session", f'<code title="{e(session)}">{e(session[:8])}</code>'))
     doc = f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>' if b.doc.strip() else ""
+    if b.status == "skipped":
+        doc += f'<p class="d-doc">Skipped: {e(b.entry.get("skipped") or "")}</p>'
     if b.paused and b.status != "running":
         doc += f'<p class="d-doc attn-note">Paused{": " + e(b.pause_reason) if b.pause_reason else ""}</p>'
     grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)

@@ -161,7 +161,7 @@ details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 /* ---- the status glyph ---------------------------------------------------------------- */
 .g { display: inline-flex; flex: none; width: 16px; height: 16px; margin-top: 2px; }
 .g svg { display: block; }
-.g-pending { color: var(--status-idle); }
+.g-pending, .g-skipped { color: var(--status-idle); }
 .g-running { color: var(--status-active); }
 .g-succeeded, .g-manual { color: var(--status-success); }
 .g-stale, .g-paused { color: var(--status-attention); }
@@ -261,7 +261,8 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .sid { font-weight: 550; font-size: 14.5px; line-height: 20px; min-width: 0; overflow: hidden;
        text-overflow: ellipsis; white-space: nowrap; }
 .node .dur { font-size: 12px; line-height: 16px; }
-.is-pending .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
+.is-pending .sid, .is-skipped .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
+.node.is-skipped { border-style: dashed; }
 .node.is-running { border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
 .node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground); }
 .is-paused .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
@@ -382,6 +383,7 @@ details.std > summary::-webkit-details-marker { display: none; }
 .b-stale { background: var(--status-attention); }
 .b-failed { background: var(--foreground); }
 .b-pending { background: var(--secondary); }
+.b-skipped { background: color-mix(in oklch, var(--status-idle) 45%, var(--secondary)); }
 ul.now { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 ul.now li { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
 ul.now a { display: flex; gap: 6px; min-width: 0; text-decoration: none; }
@@ -431,6 +433,7 @@ table.log .at { white-space: nowrap; color: var(--muted-foreground); font-size: 
 table.log .kind { font: 11px var(--font-mono); white-space: nowrap; color: var(--muted-foreground); }
 table.log summary { color: var(--foreground); overflow-wrap: anywhere; }
 table.log .s-failed { font-weight: 600; }
+table.log .s-skipped { color: var(--muted-foreground); }
 table.log .s-succeeded { color: var(--status-success); }
 table.log .s-running { color: var(--status-active); }
 table.log .s-stale { color: var(--status-attention); }
