@@ -142,9 +142,10 @@ def read_run(fn: Fn, run_dir: Path, code: int,
 
 def with_submitted(out: dict[str, Any], declared: dict[str, T.Type],
                    run_dir: Path) -> tuple[dict[str, Any], str]:
-    """The step's outputs: the fn's own plus the declared ones its agent submitted with
-    step_submit (the run dir's submitted.json; the fn's own values win on a name they share).
-    A required declared output that was not submitted fails the step."""
+    """The step's outputs: the fn's own plus the declared ones, which the fn returns itself
+    (an inline fn) or its agent submitted with step_submit (the run dir's submitted.json; the
+    fn's own values win on a name they share). A required declared output given neither way
+    fails the step."""
     try:
         sent = json.loads((run_dir / SUBMITTED).read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -152,7 +153,8 @@ def with_submitted(out: dict[str, Any], declared: dict[str, T.Type],
     except (OSError, json.JSONDecodeError) as ex:
         return {}, f"the submitted outputs are not readable: {ex}"
     merged = {k: sent.get(k) for k in declared} | out
-    missing = [k for k, t in declared.items() if k not in sent and not isinstance(t, T.Optional)]
+    missing = [k for k, t in declared.items()
+               if k not in sent and k not in out and not isinstance(t, T.Optional)]
     if missing:
         return {}, (f"declared outputs not submitted: {', '.join(missing)} (the agent must call "
                     "step_submit with them before it finishes)")

@@ -6,8 +6,29 @@ plan; poll `call_status(call, project)` if it outlives `wait`, or wait for its `
 with `log_wait(project, since_seq, kinds=["call"])`. Each status change of a call is a record
 in the project's log (the home log without a project).
 
+## Inline code: `inline.bash` and `inline.python`
+For a check or a small transform no function exists for, put the code in the step. Bind any
+extra inputs; the code sees them by name. Declare `outputs` to give the step typed results.
+
+```json
+"on-main": {"run": "inline.bash",
+            "in": {"script": {"default": "git -C \"$repo\" fetch -q origin && git -C \"$repo\" merge-base --is-ancestor \"$sha\" origin/main && printf '{\"on_main\": true}' > \"$OUT\""},
+                   "repo": {"source": "repo"}, "sha": {"source": "land/sha"}},
+            "outputs": {"on_main": "boolean"}},
+"count":   {"run": "inline.python",
+            "in": {"code": {"default": "out = {'n': len(items)}"}, "items": {"source": "work/final"}},
+            "outputs": {"n": "int"}}
+```
+
+`inline.bash` runs with errexit and pipefail, extra inputs as environment variables, and reads
+declared outputs from the JSON object the script writes to `$OUT`; it fails on a non-zero exit
+unless `check: false` (then read `code`). `inline.python` (standard library only) sees `inp` and
+each extra input, and returns what it assigns to `out`. Anything longer or reused belongs in a
+function of its own (`fn_save`).
+
 ## Scopes
-- **builtin**: shipped with sluice (`core.*`, `thread.*`, `inbox.ask`). Other first-party
+- **builtin**: shipped with sluice (`core.*`, `thread.*`, `inbox.ask`, and `inline.bash` /
+  `inline.python`, which run a script given as a string: see below). Other first-party
   functions come in packs (`agents`, `git`, `jev` in the repo's `packs/`): install one by copying
   `packs/<pack>/*` into `$SLUICE_HOME/fns/` or a project's `fns/`, or by adding its path to
   `fn_dirs`.

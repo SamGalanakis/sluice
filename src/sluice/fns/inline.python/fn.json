@@ -1,0 +1,13 @@
+{
+  "name": "inline.python",
+  "doc": "Run Python code given as a string (standard library only). The code sees `inp` (every input) and each extra input the step binds as a variable of its name (- becomes _); it may set `out`. `value` is `out`; a step that declares outputs gets them from `out`, a dict. `stdout` is what it printed.",
+  "open": true,
+  "inputs": {
+    "code": "string",
+    "cwd": "string?"
+  },
+  "outputs": {
+    "value": "Any?",
+    "stdout": "string"
+  }
+}

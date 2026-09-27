@@ -7,7 +7,7 @@ from pathlib import Path
 
 FNS = Path(__file__).resolve().parents[2] / "src" / "sluice" / "fns"
 
-ALLOWED_KEYS = {"name", "doc", "inputs", "outputs"}
+ALLOWED_KEYS = {"name", "doc", "inputs", "outputs", "open"}
 
 EXPECTED = {
     "core.echo": [{"value": "Any"}, {"value": "Any"}],
@@ -23,6 +23,10 @@ EXPECTED = {
                   {"answer": {"type": "record", "fields": {
                       "action": "string", "params": "Any?", "values": "Any?",
                       "text": "string?"}}}],
+    "inline.bash": [{"script": "string", "cwd": "string?", "check": "boolean?"},
+                    {"stdout": "string", "stderr": "string", "code": "int"}],
+    "inline.python": [{"code": "string", "cwd": "string?"},
+                      {"value": "Any?", "stdout": "string"}],
 }
 
 

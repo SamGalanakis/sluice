@@ -629,8 +629,8 @@ also exits 1.
 
 ## 10. Built-in fns and first-party packs
 
-`src/sluice/fns/` holds only what sluice itself needs: `core.*` (§6), `thread.*` and
-`inbox.ask` (below), plus shared helper code for built-in fns in `src/sluice/fns/_lib/`. Their `fn.json` files are
+`src/sluice/fns/` holds only what sluice itself needs: `core.*` (§6), `thread.*`, `inbox.ask`
+and `inline.*` (below), plus shared helper code for built-in fns in `src/sluice/fns/_lib/`. Their `fn.json` files are
 the reference for their types.
 
 Every other fn in this repo is a **first-party pack** under `packs/`, not loaded by default:
@@ -666,6 +666,19 @@ log's. Agents post through `fn_call` (any harness) and read with `log_read`/`log
   `to`, only those addressed to it or to nobody; blocks (polling the log every 0.5 s) until there
   is at least one or `timeout` s (default 300) pass, then `messages` is empty. `last_seq` is the
   log's last seq, to pass back as `since_seq`.
+
+**`inline.bash`** and **`inline.python`**: code given as a string, for a check or a small
+transform no fn exists for. Both are open (§5): each extra input the step binds is visible to the
+code by its name (`-` becomes `_`), and a step that declares outputs gets them from the code
+itself, not from `step_submit` (a declared output the fn returns needs no submitting).
+`inline.bash` inputs `{script: string, cwd: string?, check: boolean?}`, outputs `{stdout: string,
+stderr: string, code: int}`: runs `bash -e -o pipefail -c script`; extra inputs are environment
+variables (strings as they are, anything else as JSON); declared outputs come from one JSON
+object the script writes to the file `$OUT`; a non-zero exit fails the step unless `check` is
+false. `inline.python` inputs `{code: string, cwd: string?}`, outputs `{value: Any?, stdout:
+string}`: runs the code (standard library only) with `inp`, `ctx` and each extra input as a
+variable; `value` is what it assigns to `out`, declared outputs come from `out` as a dict, and
+`stdout` is what it printed (also streamed as progress).
 
 **`inbox.ask`**: inputs `{title: string, body: string?, ui: string?}`, outputs `{answer: {action:
 string, params: Any?, values: Any?, text: string?}}`. It posts an item to the project's inbox
