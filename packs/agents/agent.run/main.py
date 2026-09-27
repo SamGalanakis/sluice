@@ -4,6 +4,7 @@
 # ///
 """agent.run: dispatch a spec to the engine named in the input (devin/codex/claude)."""
 
+import datetime as dt
 import json
 import os
 import re
@@ -121,20 +122,50 @@ def _codex(inp, ctx):
     if inp.get("session"):
         argv += ["--resume", inp["session"]]
     try:
+        since = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S")
         sh_stream(argv, follow=log)  # the harness writes its progress to the log
     except ShError as e:
         tail = log.read_text()[-3000:] if log.exists() else (e.stdout + e.stderr)[-3000:]
         if any(m in tail for m in CODEX_TRANSIENT):
             raise Transient("codex-harness-run hit a rate limit or capacity error") from e
         raise
-    # codex writes <log>.session but no <log>.final: the last chunk of the log is the report.
-    return {"final": log.read_text()[-4000:] if log.exists() else "", "session": _session(log)}
+    return {"final": _codex_final(log, since), "session": _session(log)}
 
 
 def _session(log):
     """The session id the harness wrote next to its log ("" when it wrote none)."""
     f = Path(str(log) + ".session")
     return f.read_text().strip() if f.exists() else ""
+
+CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+TAIL = 4000  # of the log, when codex recorded no final message
+
+
+def _codex_final(log, since):
+    """The agent's own last message of this run: the `last_agent_message` of the last
+    `task_complete` codex recorded (at or after `since`, an ISO time) in its session's
+    rollout (~/.codex/sessions/*/*/*/rollout-*-<id>.jsonl; the harness writes the id to
+    <log>.session). The log's last TAIL characters when there is none."""
+    sid = _session(log)
+    root = Path(os.environ.get("SLUICE_CODEX_SESSIONS") or CODEX_SESSIONS)
+    final = None
+    for rollout in sorted(root.glob(f"*/*/*/rollout-*-{sid}.jsonl")) if sid else []:
+        with rollout.open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"task_complete"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                p = rec.get("payload") if isinstance(rec, dict) else None
+                if (isinstance(p, dict) and p.get("type") == "task_complete"
+                        and isinstance(p.get("last_agent_message"), str)
+                        and str(rec.get("timestamp", "")) >= since):
+                    final = p["last_agent_message"]
+    if final is not None:
+        return final
+    return log.read_text()[-TAIL:] if log.exists() else ""
 
 
 def _one_line(text, n):

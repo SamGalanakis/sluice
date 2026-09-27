@@ -222,3 +222,20 @@ def test_a_when_of_type_any_is_checked_when_it_runs(store, runner):
     steps = settle(runner, store, "p")
     assert (steps["a"]["status"], steps["a"]["error"]) == (
         "failed", "when: v/value is 3, not a boolean")
+
+
+def test_a_brief_status_cuts_long_strings(store):
+    create(store, "p", {"a": add(d(1), d(1))}, inputs={"spec": "string"},
+           outputs={"total": {"source": "a/sum"}})
+    long = "x" * 450
+    store.set_input("p", "spec", long, "test", "")
+    with store.lock("p"):
+        state = store.read_state("p")
+        state["steps"]["a"] = {"status": "succeeded",
+                               "outputs": {"sum": 2, "final": long, "notes": ["short", long]}}
+        store.write_state("p", state)
+    cut = "x" * 200 + "… [250 more characters]"
+    brief = store.status("p", brief=True)
+    assert brief["inputs"]["spec"] == cut
+    assert brief["steps"][0]["outputs"] == {"sum": 2, "final": cut, "notes": ["short", cut]}
+    assert store.status("p")["steps"][0]["outputs"]["final"] == long  # whole without brief

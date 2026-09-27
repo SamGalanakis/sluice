@@ -534,7 +534,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def status(project: str, steps: list[str] | str | None = None,
-               tags: list[str] | str | None = None) -> Any:
+               tags: list[str] | str | None = None, brief: bool = False) -> Any:
         """Return {rev, paused, inputs, outputs, steps: [{id, run, status, started, finished,
         outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}.
         inputs and outputs map names to values (null if unset). A step's status is pending,
@@ -547,8 +547,11 @@ def build_server(store: Store, stop: threading.Event | None = None,
             project: the project.
             steps: only these steps (ids).
             tags: only steps carrying any of these tags (with steps: either).
+            brief: cut every string value over 200 characters in inputs and outputs (an
+                agent's `final`, a report) to its start and how much more there is; step_get
+                or a status without brief has them whole.
         """
-        return store.status(project, steps, tags)
+        return store.status(project, steps, tags, brief)
 
     @tool
     def inbox_post(project: str, title: str, body: str | None = None, ui: str | None = None,

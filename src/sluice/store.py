@@ -35,6 +35,21 @@ def default_home() -> Path:
     return Path(os.environ.get("SLUICE_HOME") or Path.home() / ".sluice")
 
 
+
+BRIEF = 200  # characters of a string value `status(brief=True)` keeps
+
+
+def _brief(value: Any) -> Any:
+    """A value with every string over BRIEF characters cut to its start and a note of how
+    much more there is."""
+    if isinstance(value, str) and len(value) > BRIEF:
+        return f"{value[:BRIEF]}… [{len(value) - BRIEF} more characters]"
+    if isinstance(value, dict):
+        return {k: _brief(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_brief(v) for v in value]
+    return value
+
 class Store:
     """All reads and writes of a SLUICE_HOME. Safe across threads and processes (flock)."""
 
@@ -489,8 +504,10 @@ class Store:
         """Callers hold the project lock."""
         atomic_write_json(self.project_dir(project) / "state.json", state)
 
-    def status(self, project: str, steps: Any = None, tags: Any = None) -> dict[str, Any]:
-        """The plan's inputs, outputs and steps (with `steps` and/or `tags`, only those)."""
+    def status(self, project: str, steps: Any = None, tags: Any = None,
+               brief: bool = False) -> dict[str, Any]:
+        """The plan's inputs, outputs and steps (with `steps` and/or `tags`, only those); with
+        `brief`, their long strings cut (`_brief`)."""
         only = set(self.select_steps(project, steps, tags)) if steps or tags else None
         doc, plan = self.plan(project)
         state = self.read_state(project)
@@ -523,6 +540,11 @@ class Store:
                "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}
         if plan.input_docs:
             out["input_docs"] = dict(plan.input_docs)
+        if brief:
+            out["inputs"], outputs = _brief(out["inputs"]), _brief(outputs)
+            for row in rows:
+                if "outputs" in row:
+                    row["outputs"] = _brief(row["outputs"])
         return {**out, "outputs": outputs, "steps": rows}
 
     # ---- manual values (SPEC §6) ----

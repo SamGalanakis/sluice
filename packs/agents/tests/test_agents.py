@@ -234,6 +234,47 @@ def test_codex_success(call_fn, fake_bin, tmp_path):
     assert argv[argv.index("--effort") + 1] == "high"
 
 
+def codex_rollout(tmp_path, *messages):
+    """A codex sessions dir holding the rollout of session sess-codex: (timestamp, text) of
+    each task_complete, among other records."""
+    d = tmp_path / "sessions" / "2026" / "09" / "27"
+    d.mkdir(parents=True)
+    recs = [{"timestamp": "2000-01-01T00:00:00Z", "type": "session_meta", "payload": {}}]
+    for at, text in messages:
+        recs.append({"timestamp": at, "type": "response_item",
+                     "payload": {"type": "message", "role": "assistant",
+                                 "content": [{"type": "output_text", "text": "diff hunks"}]}})
+        recs.append({"timestamp": at, "type": "event_msg",
+                     "payload": {"type": "task_complete", "last_agent_message": text}})
+    (d / "rollout-2026-09-27T10-00-00-sess-codex.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in recs) + "{not json\n")
+    return tmp_path / "sessions"
+
+
+@pytest.mark.parametrize("fn", ["agent.codex", "agent.run"])
+def test_codex_final_is_the_agents_last_message(call_fn, fake_bin, tmp_path, fn):
+    bin_dir, _ = make_codex(tmp_path, fake_bin, big_log=True)
+    sessions = codex_rollout(tmp_path, ("2000-01-01T00:00:01Z", "an earlier turn's answer"),
+                             ("2999-01-01T00:00:00Z", "Landed at abc123. All green."))
+    inp = {"cwd": str(tmp_path), "spec": "the spec"}
+    code, out, err = call_fn(AGENTS / fn, {**inp, "engine": "codex"} if fn == "agent.run"
+                             else inp,
+                             env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run"),
+                                  "SLUICE_CODEX_SESSIONS": str(sessions)})
+    assert code == 0, err
+    assert out["final"] == "Landed at abc123. All green."  # not the log's tail
+
+
+def test_codex_final_ignores_a_previous_turns_message(call_fn, fake_bin, tmp_path):
+    bin_dir, _ = make_codex(tmp_path, fake_bin, big_log=True)
+    sessions = codex_rollout(tmp_path, ("2000-01-01T00:00:01Z", "an earlier turn's answer"))
+    code, out, err = call_fn(AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s"},
+                             env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run"),
+                                  "SLUICE_CODEX_SESSIONS": str(sessions)})
+    assert code == 0, err
+    assert out["final"].endswith("ENDTAIL\n") and len(out["final"]) == 4000  # the fallback
+
+
 def test_codex_model_and_effort_defaults(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_codex(tmp_path, fake_bin)
     env = {"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
