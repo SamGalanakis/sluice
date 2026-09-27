@@ -4,78 +4,21 @@
 # ///
 """agent.devin: run devin-harness-run on a spec in a working directory."""
 
-import json
 import os
-import re
+import sys
 from pathlib import Path
 
-from sluice.fn import ShError, Transient, run, sh_stream
-from sluice.log import last_seq
+from sluice.fn import ShError, Transient, run, sh_stream, with_step_notes
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-def _type(form):
-    return form if isinstance(form, str) else json.dumps(form)
-
-
-def _step_thread(ctx, listen):
-    """The step-thread note: where messages for this step arrive and how to ask back."""
-    if listen is False:
-        return ""
-    thread = "step-" + re.sub(r"[^a-z0-9_-]", "-", ctx.step.lower())
-    since = last_seq(ctx.home / "projects" / ctx.project)
-    read = (f'{{"project": "{ctx.project}", "threads": ["{thread}"], '
-            f'"since_seq": {since}}}')
-    post = (f'{{"name": "thread.post", "project": "{ctx.project}", "direct": true, '
-            f'"inputs": {{"thread": "{thread}", "from": "{ctx.step}", '
-            f'"to": "orchestrator", "body": "..."}}}}')
-    return (
-        f"Messages for you arrive on sluice thread `{thread}` of project "
-        f"`{ctx.project}`. At natural pauses (between sub-tasks) check it with "
-        f"`sluice tool log_read '{read}'`, and next time pass the `last_seq` it returns "
-        f"as `since_seq`. Follow instructions addressed to you; ignore records not on "
-        f"your thread. If you hit a question you cannot settle within your task, post "
-        f"it with `sluice tool fn_call '{post}'` and continue with anything not blocked "
-        f"by it. For a note that needs no answer (a decision you have already made, a "
-        f"heads-up), add `\"needs_reply\": false` to the inputs. Post questions and changes "
-        f"of scope, not progress."
-    )
-
-
-def _with_step_notes(text, inp, ctx, listen):
-    """Append what a plan step adds to the task: its extra inputs with their values, the
-    outputs it must submit (and how), and the step-thread note (unless listen is false)."""
-    if not (ctx.project and ctx.step):
-        return text
-    parts = [text]
-    if ctx.extra_inputs:
-        lines = ["## Inputs"]
-        for name, port in ctx.extra_inputs.items():
-            value = inp.get(name)
-            shown = value if isinstance(value, str) else json.dumps(value, indent=2)
-            lines.append(f"`{name}` ({_type(port['type'])}):\n{shown}")
-        parts.append("\n\n".join(lines))
-    if ctx.outputs:
-        lines = ["## Outputs you must submit"]
-        for name, port in ctx.outputs.items():
-            doc = f": {port['doc']}" if port.get("doc") else ""
-            lines.append(f"- `{name}` ({_type(port['type'])}){doc}")
-        values = ", ".join(f'"{n}": <{_type(p["type"])}>' for n, p in ctx.outputs.items())
-        lines.append(
-            "Submit them, as JSON values of those types, before you finish:\n"
-            f"`sluice tool step_submit '{{\"project\": \"{ctx.project}\", "
-            f"\"step\": \"{ctx.step}\", \"run\": \"{ctx.run_id}\", "
-            f"\"outputs\": {{{values}}}}}'`\n"
-            "If it returns `invalid`, fix what it lists and submit again (the last "
-            "submission counts).")
-        parts.append("\n".join(lines))
-    parts.append(_step_thread(ctx, listen))
-    return "\n\n".join(p for p in parts if p)
+from _agents.engines import _session
 
 
 def main(inp, ctx):
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
     spec_file = ctx.run_dir / "spec.md"
-    spec_file.write_text(_with_step_notes(inp["spec"], inp, ctx, inp.get("listen")))
+    spec_file.write_text(with_step_notes(inp["spec"], inp, ctx, inp.get("listen")))
     log = Path(inp["log"]) if inp.get("log") else ctx.run_dir / "devin.log"
     argv = [
         os.environ.get("SLUICE_DEVIN_BIN", "devin-harness-run"),
@@ -99,12 +42,6 @@ def main(inp, ctx):
     if report_path and Path(report_path).exists():
         report = Path(report_path).read_text()
     return {"log": str(log), "final": final, "report": report, "session": _session(log)}
-
-
-def _session(log):
-    """The session id the harness wrote next to its log ("" when it wrote none)."""
-    f = Path(str(log) + ".session")
-    return f.read_text().strip() if f.exists() else ""
 
 
 if __name__ == "__main__":

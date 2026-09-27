@@ -123,3 +123,28 @@ def test_child_env_drops_the_fns_own_environment(monkeypatch, tmp_path):
     env = child_env()
     assert (env["PATH"], env["VIRTUAL_ENV"]) == ("/host/bin", "/host/venv")
     assert "PYTHONPATH" not in env
+
+
+def test_with_step_notes(tmp_path):
+    """An open fn's step text gains its extra inputs, the outputs to submit and the
+    step-thread note; listen=False drops only the note, no step drops it all."""
+    from sluice.fn import Context, with_step_notes
+    ctx = Context(project="p", step="Build.X", run_id="r1", run_dir=tmp_path,
+                  home=tmp_path, fn_dir=tmp_path,
+                  extra_inputs={"n": {"type": "int"}},
+                  outputs={"branch": {"type": "string", "doc": "The pushed branch"}})
+    text = with_step_notes("do it", {"n": 3}, ctx, None)
+    inputs = text.index("## Inputs")
+    outputs = text.index("## Outputs you must submit")
+    thread = text.index("Messages for you arrive on sluice thread")
+    assert inputs < outputs < thread
+    assert "`n` (int):\n3" in text
+    assert "- `branch` (string): The pushed branch" in text
+    assert ('"project": "p", "step": "Build.X", "run": "r1", '
+            '"outputs": {"branch": <string>}') in text
+    assert "step-build-x" in text and '"since_seq": 0' in text
+    without = with_step_notes("do it", {"n": 3}, ctx, False)
+    assert "sluice thread" not in without and "## Inputs" in without
+    quiet = Context(project="", step="", run_id="", run_dir=tmp_path, home=tmp_path,
+                    fn_dir=tmp_path)
+    assert with_step_notes("do it", {"n": 3}, quiet, None) == "do it"

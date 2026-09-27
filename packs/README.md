@@ -37,7 +37,7 @@ its own and pick the engines there.
 ## Installing
 
 Copy a pack's contents into a functions directory — the whole pack, including any `_`-prefixed
-helper dirs (e.g. `jev/_jev/`):
+helper dirs (e.g. `jev/_jev/`, `agents/_agents/`):
 
 ```sh
 cp -r packs/<pack>/* ~/.sluice/fns/                  # every project in this home

@@ -6,10 +6,14 @@
 
 import json
 import os
+import sys
+from pathlib import Path
 
 from sluice.fn import ShError, Transient, run, sh
 
-TRANSIENT_MARKERS = ("rate limit", "overloaded", "529")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _agents.engines import CLAUDE_TRANSIENT
 
 PROMPT = """\
 Answer the question by picking exactly one of the listed options.
@@ -48,7 +52,7 @@ def main(inp, ctx):
     ]
     p = sh(argv, check=False)
     if p.returncode != 0:
-        if any(m in p.stderr for m in TRANSIENT_MARKERS):
+        if any(m in p.stderr for m in CLAUDE_TRANSIENT):
             raise Transient("claude hit a rate limit or capacity error")
         raise ShError(argv, p.returncode, p.stdout, p.stderr)
     data = json.loads(p.stdout)
@@ -57,10 +61,11 @@ def main(inp, ctx):
     if choice not in options:
         raise ValueError(f"choice {choice!r} not in options {options!r}")
     prob = float(answer["p"])
+    threshold = inp.get("threshold")
     return {
         "choice": choice,
         "p": prob,
-        "confident": prob >= (inp.get("threshold") or 0.8),
+        "confident": prob >= (0.8 if threshold is None else threshold),
     }
 
 

@@ -600,6 +600,14 @@ def test_decide_llm_not_confident_and_threshold(call_fn, fake_bin, tmp_path):
     )
     assert code == 0, err
     assert out["confident"] is True
+    # 0.0 is a bound threshold, not "no threshold"
+    code, out, err = call_fn(
+        AGENTS / "decide.llm",
+        {"question": "q", "options": ["a", "b"], "threshold": 0.0},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert out["confident"] is True
 
 
 def test_decide_llm_prefers_structured_output(call_fn, fake_bin, tmp_path):
@@ -644,6 +652,16 @@ def test_decide_llm_model_override(call_fn, fake_bin, tmp_path):
 def test_decide_llm_transient(call_fn, fake_bin, tmp_path):
     bin_dir, _ = make_claude(
         tmp_path, fake_bin, code=1, stderr_text="Error 529: overloaded\\n")
+    code, _out, err = call_fn(
+        AGENTS / "decide.llm", {"question": "q", "options": ["a"]}, path=bin_dir)
+    assert code == 1, err
+    assert "transient (attempt 1)" in err  # the helper retried before giving up
+
+
+def test_decide_llm_transient_rate_limit(call_fn, fake_bin, tmp_path):
+    """claude's own rate_limit error string retries too."""
+    bin_dir, _ = make_claude(
+        tmp_path, fake_bin, code=1, stderr_text="API Error: rate_limit\\n")
     code, _out, err = call_fn(
         AGENTS / "decide.llm", {"question": "q", "options": ["a"]}, path=bin_dir)
     assert code == 1, err

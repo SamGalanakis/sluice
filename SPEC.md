@@ -705,7 +705,8 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   `model` `sol` (the default) or `astra` and `effort` (`minimal` to `max`), whose default is
   `high`; both always reach the harness. A codex run's echo folds the diff codex prints after
   every patch into one line (the harness log keeps it), and its `final` is the agent's last
-  message from the session's rollout.
+  message from the session's rollout. The fns share their engine code through
+  `packs/agents/_agents/`.
 - `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
   `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)
 - `packs/jev/`: `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` (Jev, TypeSafe's System One
