@@ -447,16 +447,20 @@ raw HTML escaped, unsafe link schemes refused).
   value; a long text folds to its first lines, markdown rendered), the plan's inputs (name,
   value, doc), and one line (succeeded of total, running, stale, failed, total `cost_usd`,
   last activity) with the Archive switch.
-- `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own):
-  its id, its doc, then fn, status, time, cost (as money) and session; its error; its progress (the tail of the
-  current run's stderr, while running); its outputs with their declared types and docs (while
-  running, what the agent has submitted so far; `session` and `cost_usd` are in the header, not
-  here; a text that reads as markdown is rendered); the messages on its `step-<id>` thread; its
-  prompt in full (the binding named `prompt`, `spec`, `task`, `instructions` or `brief`); its
-  other bindings, each with where it comes from (a plan input, a step's output, linked, or
-  set in the plan), its type and its value (the run's own `input.json`, else what the binding
-  resolves to now); the stderr of a finished run (folded); and its attempts from the log
-  (started, outcome, duration). Ids and plumbing live here, not on the board.
+- `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
+  read like a run history: its id and doc, then a grid of facts (status, fn, runs done of total
+  for a scattered step, started, duration, cost as money, session); its error; its progress
+  (the tail of the current run's stderr, while running); its outputs (while running, what the
+  agent has submitted so far), its messages (the `step-<id>` thread), its prompt (the binding
+  named `prompt`, `spec`, `task`, `instructions` or `brief`) and its other inputs (the run's
+  own `input.json`, else what the binding resolves to now), each value under its name with
+  its doc and, for an input, where it comes from as a small link (`← step/output`, or
+  `← input name`; nothing for a value set in the plan). Types show on demand: in the name's
+  title always, beside every name with the Types switch (remembered per browser). Text that
+  reads as markdown is rendered, other multi-line text and structures read as code, an inbox
+  answer as what was chosen; a long value folds to its first lines ("Show all"). Then the
+  stderr of a finished run ("Log output", folded past six lines) and, when it ran more than
+  once, its attempts from the log (outcome, when, how long, newest first).
 - `GET /projects/<name>/log` (and `GET /log` for the home log): the log viewer. Newest first, 50
   records per page; `?before=<seq>` shows the 50 matching records below that seq, `?after=<seq>`
   the 50 above it, with newest / newer / older links. Filters are query parameters, so a URL is

@@ -251,15 +251,51 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
                  background: var(--card); color: var(--muted-foreground); cursor: pointer; }
 .drawer .close:hover { color: var(--foreground); background: var(--muted); }
 @media (min-width: 721px) { .scrim { display: none !important; } }
-.d-head { margin-bottom: 18px; }
+.d-head { margin-bottom: 8px; }
 .d-head .hd { display: flex; gap: 10px; }
 .d-head h2 { margin: 0; font-size: 20px; line-height: 26px; }
 .d-doc { margin: 6px 0 0 26px; color: var(--muted-foreground); max-width: 72ch; }
 .d-head .meta { margin: 6px 0 0 26px; }
 .d-head code { font-size: 11px; }
-.d-sec { margin-top: 20px; }
-.d-sec > .label { margin-bottom: 8px; }
+.d-sec { margin-top: 26px; }
+.d-sec-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+           margin-bottom: 10px; }
+.d-sec-h .label { margin: 0; }
 .d-sec .meta { margin-bottom: 4px; }
+/* the run at a glance: small facts in a grid */
+dl.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+           gap: 10px 16px; margin: 16px 0 0; padding: 12px 14px; background: var(--muted);
+           border: 1px solid var(--border); border-radius: var(--radius); }
+dl.facts > div { min-width: 0; }
+dl.facts dt { font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
+dl.facts dd { margin: 2px 0 0; font-size: 14px; line-height: 20px; white-space: nowrap;
+              overflow: hidden; text-overflow: ellipsis; }
+dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
+/* named values: name (type on demand), where it comes from, its doc, its value */
+.fields { display: grid; gap: 14px; }
+.f { min-width: 0; }
+.f-k { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.f-name { font-weight: 600; font-size: 14px; }
+.f-type { display: none; font: 12px var(--font-mono); color: var(--muted-foreground); }
+.show-types .f-type { display: inline; }
+.f-from { font-size: 12.5px; color: var(--muted-foreground); }
+.f-from a { color: inherit; }
+.f-doc { font-size: 13px; line-height: 18px; color: var(--muted-foreground); margin-top: 1px; }
+.f-v { margin-top: 4px; min-width: 0; overflow-wrap: anywhere; }
+.f-v .v.prose p, .f-v .v.md > :last-child { margin: 0; }
+.f-v .v.code pre, .f-v .clip.code pre { font-size: 12.5px; line-height: 19px; padding: 10px 12px;
+                                        background: var(--muted); border: 1px solid var(--border);
+                                        border-radius: 8px; white-space: pre-wrap; }
+.f-v .v.md, .f-v .clip.md { max-width: 72ch; }
+.types-toggle { font-size: 12px; padding: 1px 9px; border-radius: 999px;
+                color: var(--muted-foreground); }
+.types-toggle[aria-pressed="true"] { color: var(--foreground); background: var(--secondary);
+                                     border-color: var(--border-strong); }
+ol.attempts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+ol.attempts li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.a-n { font-size: 12px; color: var(--muted-foreground); min-width: 1.5em; }
+.a-failed { font-weight: 600; }
+.a-t { margin-left: auto; font-size: 12.5px; color: var(--muted-foreground); }
 .prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; font-size: 14px;
           line-height: 21px; padding: 12px 14px; background: var(--muted);
           border-radius: var(--radius); }

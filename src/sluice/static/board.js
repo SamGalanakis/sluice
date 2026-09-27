@@ -242,7 +242,12 @@ function drawEdges(plane) {
 let pending = 0;
 function redraw() {
   cancelAnimationFrame(pending);
-  pending = requestAnimationFrame(() => { for (const p of $$(".plane")) drawEdges(p); });
+  pending = requestAnimationFrame(() => {
+    for (const p of $$(".plane")) drawEdges(p);
+    // new paths: keep the traced block lit
+    const held = document.querySelector(".plane .node:hover, .plane .node:focus-visible");
+    if (held) trace(held);
+  });
 }
 redraw();
 window.addEventListener("resize", redraw);
@@ -255,8 +260,30 @@ if (graph) {
     // our own drawing lives in svg.edges: redraw only for changes to the board itself
     if (records.some((r) => !r.target.closest?.("svg.edges"))) { watch(); redraw(); }
   }).observe(graph, { childList: true, subtree: true, characterData: true, attributes: true,
-                      attributeFilter: ["data-edges", "class"] });
+                      attributeFilter: ["data-edges"] });
 }
+
+// ---- the Types switch: a value's type shows on demand, remembered in this browser ----------
+
+function setTypes(on) {
+  document.documentElement.classList.toggle("show-types", on);
+  for (const b of $$(".types-toggle")) b.setAttribute("aria-pressed", String(on));
+}
+let typesOn = false;
+try { typesOn = localStorage.getItem("sluice.types") === "1"; } catch { /* no storage */ }
+setTypes(typesOn);
+document.addEventListener("click", (evt) => {
+  if (!evt.target.closest?.(".types-toggle")) return;
+  typesOn = !typesOn;
+  setTypes(typesOn);
+  try { localStorage.setItem("sluice.types", typesOn ? "1" : "0"); } catch { /* no storage */ }
+});
+// a patch brings new switches: keep them in step
+new MutationObserver(() => {
+  for (const b of $$(".types-toggle")) {
+    if (b.getAttribute("aria-pressed") !== String(typesOn)) b.setAttribute("aria-pressed", String(typesOn));
+  }
+}).observe(document.body, { childList: true, subtree: true });
 
 // ---- moving between cards with the arrow keys ---------------------------------------------------
 

@@ -997,21 +997,6 @@ def _value(value: Any, long_at: int = 160) -> str:
     return f'<pre class="v long">{_json(value)}</pre>'
 
 
-def _source(project: str, block: Block, name: str, live: bool) -> str:
-    src = block.bindings.get(name)
-    if not isinstance(src, dict) or "source" not in src:
-        return "set in the plan"
-    out = []
-    for r in block.refs(name):
-        if r.step:
-            ref = e(str(r))
-            out.append(f'<a href="{e(step_href(project, r.step))}" data-step="{e(r.step)}">'
-                       f"{ref}</a>" if live else ref)
-        else:
-            out.append(f"plan input {e(str(r))}")
-    return ("from " + ", ".join(out)) if out else "from " + e(json.dumps(src["source"]))
-
-
 def _runs(store: Store, project: str, sid: str) -> list[dict[str, Any]]:
     """The step's attempts from its step.status records: started, finished, outcome."""
     recs = L.read(store.log_dir(project), kinds=["step.status", "step.output"])["records"]
@@ -1030,33 +1015,101 @@ def _runs(store: Store, project: str, sid: str) -> list[dict[str, Any]]:
     return runs
 
 
+FOLD_LINES = 6  # a value longer than this folds, with "Show all"
+
+
+def _fold(inner: str, cls: str) -> str:
+    """A long value, folded to its first lines under a fade, "Show all" to open it."""
+    return (f'<details class="fold {cls}" data-preserve-attr="open"><summary>'
+            f"{inner}</summary></details>")
+
+
+def field_value(value: Any) -> str:
+    """A value in the step's detail: text as prose (markdown rendered), multi-line plain text
+    and structures as code, an inbox answer as what was chosen; long ones fold."""
+    if (chosen := answer_text(value)) is not None:
+        return f'<span class="v">{e(chosen)}</span>'
+    if isinstance(value, str):
+        if MARKDOWN_HINT.search(value):
+            body, cls, lines = markdown(value), "md", value.count("\n") + len(value) // 90
+        elif "\n" in value:
+            body, cls, lines = f"<pre>{e(value)}</pre>", "code", value.count("\n") + 1
+        else:
+            body, cls, lines = f"<p>{e(value)}</p>", "prose", len(value) // 90
+        inner = f'<div class="clip {cls}">{body}</div>'
+        return _fold(inner, cls) if lines > FOLD_LINES else f'<div class="v {cls}">{body}</div>'
+    if isinstance(value, float):
+        return f'<code class="v">{e(f"{value:.6g}")}</code>'
+    if value is None:
+        return '<span class="quiet">none</span>'
+    text = json.dumps(value, ensure_ascii=False)
+    if len(text) <= 80:
+        return f'<code class="v">{e(text)}</code>'
+    pretty = _json(value)
+    inner = f'<div class="clip code"><pre>{pretty}</pre></div>'
+    return _fold(inner, "code") if pretty.count("\n") > FOLD_LINES else \
+        f'<div class="v code"><pre>{pretty}</pre></div>'
+
+
+def _from(project: str, block: Block, name: str, live: bool) -> str:
+    """Where a binding comes from, as a small link (nothing for a value set in the plan)."""
+    out = []
+    for r in block.refs(name):
+        if r.step:
+            ref = e(str(r))
+            out.append(f'<a href="{e(step_href(project, r.step))}" data-step="{e(r.step)}">'
+                       f"{ref}</a>" if live else ref)
+        else:
+            out.append(f"input {e(str(r))}")
+    return f'<span class="f-from">← {", ".join(out)}</span>' if out else ""
+
+
+def _field(name: str, value: str, type_: str = "", doc: str = "", source: str = "") -> str:
+    """One named value: its name (its type shown with Types on, and in the name's title), where
+    it comes from, its doc and its value."""
+    t = f' title="{e(type_)}"' if type_ else ""
+    ty = f'<span class="f-type">{e(type_)}</span>' if type_ else ""
+    about = f'<p class="f-doc">{e(doc)}</p>' if doc else ""
+    return (f'<div class="f"><div class="f-k"><span class="f-name"{t}>{e(name)}</span>{ty}'
+            f"{source}</div>{about}<div class=\"f-v\">{value}</div></div>")
+
+
 def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
-    """Everything about one step: header (its id and fn live here), then what matters now
-    (error, progress), what it produced, its messages, its prompt, its inputs, its stderr and
-    its attempts. The `step-detail` part of the drawer and of the step page."""
+    """Everything about one step, the way a run history reads: the step and a summary of its
+    run (status, fn, started, duration, cost, session), then what matters now (error,
+    progress), what it produced, its messages, its prompt and other inputs (where each comes
+    from), its log output and, when it ran more than once, its attempts. Types show on demand
+    (the Types switch; always in a name's title). The `step-detail` part of the drawer and of
+    the step page."""
     board = load_board(store, project)
     b = board.blocks.get(sid)
     if b is None:
         raise NotFound(f"the plan of project {project} has no step {sid!r}")
-    sections = []
-    meta = [e(b.fn), e(WORDS.get(b.mark, b.status))]
+    outs_all = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else {}
+    facts = [("Status", e(WORDS.get(b.mark, b.status))), ("Function", f"<code>{e(b.fn)}</code>")]
     if "total" in b.entry:
-        meta.append(f"{int(b.entry.get('done') or 0)} of {int(b.entry['total'])} runs")
+        facts.append(("Runs", f"{int(b.entry.get('done') or 0)} of {int(b.entry['total'])}"))
+    if b.entry.get("started"):
+        facts.append(("Started", _when(b.entry["started"])))
     if _elapsed(b):
-        meta.append(_elapsed(b))
+        facts.append(("Duration", _elapsed(b)))
     if b.cost is not None:
-        meta.append(e(_money(b.cost)))
-    session = (b.entry.get("outputs") or {}).get("session") \
-        if isinstance(b.entry.get("outputs"), dict) else None
+        facts.append(("Cost", e(_money(b.cost))))
+    session = outs_all.get("session")
     if isinstance(session, str) and session:
-        meta.append(f'session <code title="{e(session)}">{e(session[:8])}</code>')
+        facts.append(("Session", f'<code title="{e(session)}">{e(session[:8])}</code>'))
     doc = f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>' if b.doc.strip() else ""
-    head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(sid)}</h2>'
-            f'</div>{doc}<p class="meta">{" · ".join(meta)}</p></header>')
+    grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
+    head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(sid)}</h2></div>'
+            f'{doc}<dl class="facts">{grid}</dl></header>')
+    sections = []
 
-    def section(title: str, body: str, cls: str = "") -> None:
-        sections.append(f'<section class="d-sec {cls}">{_label(title)}{body}</section>')
+    def section(title: str, body: str, extra: str = "") -> None:
+        sections.append(f'<section class="d-sec"><div class="d-sec-h">{_label(title)}{extra}'
+                        f"</div>{body}</section>")
 
+    types_switch = ('<button type="button" class="types-toggle" aria-pressed="false" '
+                    'title="Show the types of the values">Types</button>')
     if b.entry.get("error"):
         section("Error", f'<pre class="err">{e(b.entry["error"])}</pre>')
     tail = ""
@@ -1067,8 +1120,9 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         if "total" in b.entry and len(b.run_ids) > 1 else ""
     if b.status == "running":
         section("Progress" + which, f'<pre class="tail">{e(tail)}</pre>' if tail else
-                '<p class="quiet">Nothing written to stderr yet.</p>')
-    outs = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else None
+                '<p class="quiet">Nothing written yet.</p>')
+    # outputs: what it produced (its declared ones first); session and cost are run facts
+    outs: dict[str, Any] | None = outs_all if isinstance(b.entry.get("outputs"), dict) else None
     declared = b.outputs
     title = "Outputs"
     raw = b.raw.get("outputs")
@@ -1079,22 +1133,18 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
             got = read_json(d / "submitted.json") if d else None
         except (OSError, ValueError):
             got = None
-        if isinstance(got, dict):  # only the step's declared outputs until the fn exits
+        if isinstance(got, dict):
             outs, title, declared = got, "Outputs submitted so far", own
     if outs is not None:
-        rows = []
-        for n in dict.fromkeys([*declared, *outs]):
-            if n in RUN_FACTS:  # in the header: they describe the run, not its product
-                continue
-            t = f' <span class="type">{e(declared[n])}</span>' if n in declared else ""
-            doc = f'<p class="meta">{e(b.output_docs[n])}</p>' if b.output_docs.get(n) else ""
-            v = _value(outs[n]) if n in outs else '<span class="quiet">none</span>'
-            rows.append(f"<dt>{e(n)}{t}</dt><dd>{doc}{v}</dd>")
-        section(title, f'<dl class="kv">{"".join(rows)}</dl>')
+        fields = [_field(n, field_value(outs[n]) if n in outs else
+                         '<span class="quiet">none</span>', declared.get(n, ""),
+                         b.output_docs.get(n, ""))
+                  for n in dict.fromkeys([*declared, *outs]) if n not in RUN_FACTS]
+        if fields:
+            section(title, f'<div class="fields">{"".join(fields)}</div>', types_switch)
     elif own:
-        names = ", ".join(f"{e(n)} <span class=\"type inline\">{e(t)}</span>"
-                          for n, t in own.items())
-        section("Outputs", f'<p class="quiet">None yet. Declared: {names}</p>')
+        names = ", ".join(e(n) for n in own)
+        section("Outputs", f'<p class="quiet">None yet. It hands on: {names}.</p>')
     thread = f"step-{sid}"
     msgs = L.read(store.log_dir(project), kinds=["message"], threads=[thread])["records"]
     if msgs:
@@ -1131,37 +1181,40 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
 
     if prompt:
         ok, v = resolved(prompt)
-        body = f'<div class="prompt">{e(v if isinstance(v, str) else json.dumps(v))}</div>' \
-            if ok else '<p class="quiet">Not resolved yet.</p>'
-        section(prompt.capitalize(), f'<p class="meta">{_source(project, b, prompt, live)}</p>'
-                + body)
-    rows = []
+        text = v if isinstance(v, str) else json.dumps(v)
+        body = (_fold(f'<div class="clip prose prompt">{e(text)}</div>', "prose")
+                if ok and text.count("\n") + len(text) // 90 > FOLD_LINES else
+                f'<div class="prompt">{e(text)}</div>' if ok else
+                '<p class="quiet">Not resolved yet.</p>')
+        section(prompt.capitalize(), _from(project, b, prompt, live) + body)
+    fields = []
     for n in b.bindings:
         if n == prompt:
             continue
-        t = b.fn_inputs.get(n, "")
         ok, v = resolved(n)
-        where = _source(project, b, n, live)
-        val = _value(v) if ok else '<span class="quiet">no value yet</span>'
-        rows.append(f'<dt>{e(n)}{f' <span class="type">{e(t)}</span>' if t else ""}</dt>'
-                    f'<dd><p class="meta">{where}</p>{val}</dd>')
-    if rows:
-        section("Inputs", f'<dl class="kv">{"".join(rows)}</dl>')
+        fields.append(_field(n, field_value(v) if ok else '<span class="quiet">no value yet</span>',
+                             b.fn_inputs.get(n, ""), source=_from(project, b, n, live)))
+    if fields:
+        section("Inputs", f'<div class="fields">{"".join(fields)}</div>', types_switch)
     if tail and b.status != "running":
-        section("Stderr" + which, f'<details data-preserve-attr="open"><summary>Last '
-                f"{len(tail.splitlines())} lines</summary><pre class=\"tail\">{e(tail)}</pre>"
-                f"</details>")
+        lines = tail.splitlines()
+        body = f'<pre class="tail">{e(tail)}</pre>'
+        if len(lines) > FOLD_LINES:
+            body = (f'<details data-preserve-attr="open"><summary>Show {len(lines)} lines'
+                    f"</summary>{body}</details>")
+        section("Log output" + which, body)
     runs = _runs(store, project, sid)
-    if runs:
+    if len(runs) > 1:
         items = []
-        for r in reversed(runs):
+        for i, r in enumerate(reversed(runs)):
             start, end = _parse_iso(r.get("started")), _parse_iso(r.get("finished"))
             took = dur((end - start).total_seconds()) if start and end else ""
-            note = f' <span class="quiet">{e(r["note"])}</span>' if r.get("note") else ""
-            items.append(f"<tr><td>{_when(r['started'])}</td><td>{e(r['outcome'])}{note}</td>"
-                         f'<td class="num">{e(took)}</td></tr>')
-        section("Runs", f'<div class="scroll"><table class="runs">{"".join(items)}</table>'
-                "</div>")
+            note = f'<span class="quiet">{e(r["note"])}</span>' if r.get("note") else ""
+            items.append(f'<li><span class="a-n">{len(runs) - i}</span>'
+                         f'<span class="a-o a-{e(r["outcome"].split()[0])}">{e(r["outcome"])}'
+                         f'</span>{note}<span class="a-t">{_when(r["started"])}'
+                         f'{" · " + e(took) if took else ""}</span></li>')
+        section("Attempts", f'<ol class="attempts">{"".join(items)}</ol>')
     return f'{head}{"".join(sections)}'
 
 

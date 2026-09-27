@@ -206,19 +206,27 @@ def test_a_steps_detail(store):
     html = views.step_detail(store, "v", "agent")
     head = html[:html.index("</header>")]
     assert "<h2>agent</h2>" in head and '<p class="d-doc">Write &lt;the&gt; thing</p>' in head
-    assert "test.open · succeeded · 1m 30s · $0.12" in head  # the run's facts, cost as money
+    facts = dict(re.findall(r"<div><dt>([^<]+)</dt><dd>(.*?)</dd></div>", head))
+    assert facts["Status"] == "succeeded" and facts["Function"] == "<code>test.open</code>"
+    assert facts["Duration"] == "1m 30s" and facts["Cost"] == "$0.12"  # cost as money
     sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
-    assert sections == ["Outputs", "Messages", "Prompt", "Inputs", "Stderr", "Runs"]
-    assert ('<dt>answer <span class="type">string</span></dt><dd><p class="meta">What it '
-            'found</p><span class="v">&lt;i&gt;42&lt;/i&gt;</span></dd>') in html
+    assert sections == ["Outputs", "Messages", "Prompt", "Inputs", "Log output", "Attempts"]
+    # a named value: its name (type on demand, and in the name's title), its doc, its value
+    assert ('<span class="f-name" title="string">answer</span><span class="f-type">string'
+            '</span></div><p class="f-doc">What it found</p><div class="f-v"><div class="v '
+            'prose"><p>&lt;i&gt;42&lt;/i&gt;</p></div></div>') in html
+    assert '<button type="button" class="types-toggle" aria-pressed="false"' in html
     assert "0.123457" not in html  # cost is a fact of the run, in the header, not an output
     assert '<div class="prompt">Do &lt;b&gt;it&lt;/b&gt;\nthen stop</div>' in html
-    assert ('<dt>made <span class="type">int</span></dt><dd><p class="meta">from <a href="/projects/v/steps/make" '
-            'data-step="make">make/sum</a></p><code class="v">2</code></dd>') in html
+    # an input says where it comes from, as a link; a value set in the plan says nothing
+    assert ('<span class="f-name" title="int">made</span><span class="f-type">int</span>'
+            '<span class="f-from">← <a href="/projects/v/steps/make" data-step="make">'
+            'make/sum</a></span></div><div class="f-v"><code class="v">2</code></div>') in html
+    assert "set in the plan" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html and "<script>" not in html
     assert "agent → orchestrator" in html and "Which &lt;file&gt;?" in html
     assert "not here" not in html
-    runs = html[html.index("Runs</h3>"):]
+    runs = html[html.index("Attempts</h3>"):]
     assert runs.index("succeeded") < runs.index("failed")  # newest first
     assert "exit code 2" in runs
     assert "<i>" not in html and "<b>it" not in html
@@ -235,13 +243,14 @@ def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
         store.write_state("v", {"inputs": {}, "steps": {"agent": {
             "status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"}}})
     html = views.step_detail(store, "v", "agent")
-    assert '<h3 class="label">Progress</h3><pre class="tail">thinking</pre>' in html
-    outputs = html[html.index("Outputs submitted so far"):html.index("</dl>")]
-    assert "<dt>answer" in outputs and "so far" in outputs
-    assert "<dt>ports" not in outputs and "<dt>results" not in outputs  # the fn's own: later
+    assert '<h3 class="label">Progress</h3></div><pre class="tail">thinking</pre>' in html
+    outputs = html[html.index("Outputs submitted so far"):html.index("</section>",
+                                                                     html.index("so far"))]
+    assert ">answer</span>" in outputs and "so far" in outputs
+    assert ">ports</span>" not in outputs and ">results</span>" not in outputs  # the fn's own
     (run / "submitted.json").unlink()
     html = views.step_detail(store, "v", "agent")
-    assert "None yet. Declared: answer" in html and "ports" not in html
+    assert "None yet. It hands on: answer." in html and "ports" not in html
 
 
 # ---- what needs a person ------------------------------------------------------------------
