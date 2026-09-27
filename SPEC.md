@@ -396,8 +396,8 @@ prints the result as JSON. On `Transient` it sleeps `backoff` s (env `SLUICE_BAC
 and calls `main` again, up to `retries` times; any other exception, or running out of retries,
 prints the traceback and exits 1. `sh(argv, cwd=None, check=True, env=None, timeout=None,
 input=None)` runs a command and raises `ShError` on a non-zero exit when `check`.
-`sh_stream(argv, on_line=echo_line, cwd=None, check=True, env=None, follow=None)` does the same
-but calls `on_line(line, source)` for each line as it arrives (`source` `stdout`, `stderr`, or
+`sh_stream(argv, on_line=echo_line, cwd=None, check=True, env=None, follow=None, input=None)`
+does the same (`input` is written to the command's stdin) but calls `on_line(line, source)` for each line as it arrives (`source` `stdout`, `stderr`, or
 `follow` for lines appended to the file `follow`); the default echoes each line to stderr, cut
 to 200 chars, so a long-running tool shows live progress in the run's `stderr.log`.
 Both run the command in `child_env(env)`: the fn's environment with `PATH`, `PYTHONPATH` and
@@ -617,11 +617,11 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `projects_list` | – | `[{name, description, rev, counts, archived, paused}]` |
 | `project_create` | `name, description?` | `{name}` (with an empty plan) |
 | `project_update` | `name, description?, archived?, paused?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6) |
-| `project_delete` | `name` | `{deleted}`: removes the project's directory (plan, state, log, inbox, runs); refused (`bad_request`) unless it is archived and none of its steps is running |
+| `project_delete` | `name` | `{deleted}`: removes the project's directory (plan, state, log, inbox, runs); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
-| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s. `direct: true` runs it in the calling process to the end instead (no runner needed) |
+| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed) |
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's latest record |
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
@@ -637,7 +637,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `step_retry` | `project, steps?, tags?, reason?` | `{steps}` (each failed, stale or manual) |
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
-| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
+| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
 | `status` | `project, steps?, tags?, brief? = false` | only the steps selected by id and/or tag when given; with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |

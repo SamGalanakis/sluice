@@ -223,10 +223,12 @@ def sh_stream(
     check: bool = True,
     env: dict[str, str] | None = None,
     follow: str | Path | None = None,
+    input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a command like sh(), but call on_line(line, source) for each line as it arrives:
     source "stdout" or "stderr", or "follow" for a line appended to the file `follow` (a tool
-    that logs to a file). The default echoes each line to stderr. stdin is /dev/null. Returns
+    that logs to a file). The default echoes each line to stderr. stdin is /dev/null, or `input`
+    is written to it when given (a prompt kept off argv). Returns
     the full stdout and stderr; raises ShError on a non-zero exit when `check`. It runs in
     child_env() with `env` on top."""
     print(f"$ {' '.join(argv)}" + (f"  (in {cwd})" if cwd else ""), file=sys.stderr, flush=True)
@@ -246,11 +248,18 @@ def sh_stream(
     if follow is not None:  # where the file ends before the command can write to it
         follow = Path(follow)
         start = follow.stat().st_size if follow.exists() else 0
-    p = subprocess.Popen(argv, cwd=cwd, env=full_env, stdin=subprocess.DEVNULL,
+    p = subprocess.Popen(argv, cwd=cwd, env=full_env,
+                         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          errors="replace", bufsize=1)
     done = threading.Event()
     threads = [threading.Thread(target=pump, args=(p.stderr, "stderr"), daemon=True)]
+    if input is not None:
+        def feed() -> None:
+            with contextlib.suppress(OSError):  # the command may not read it all
+                p.stdin.write(input)
+                p.stdin.close()
+        threads.append(threading.Thread(target=feed, daemon=True))
     if follow is not None:
         threads.append(threading.Thread(
             target=_follow, args=(follow, start, done, lambda s: emit(s, "follow")),

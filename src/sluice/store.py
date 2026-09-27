@@ -227,10 +227,10 @@ class Store:
                 raise BadRequest(f"project {name!r} already exists")
             doc = copy.deepcopy(P.EMPTY)
             (d / L.FILE).unlink(missing_ok=True)
-            self._log(name, 1, author, reason or "project created",
-                      [{"op": "add", "path": "", "value": doc}])
             atomic_write_json(d / "plan.json", {**doc, "rev": 1})
             atomic_write_json(d / "project.json", {"name": name, "description": description})
+            self._log(name, 1, author, reason or "project created",
+                      [{"op": "add", "path": "", "value": doc}])
         self.notify()
         return {"name": name}
 
@@ -259,7 +259,8 @@ class Store:
 
     def delete_project(self, name: str) -> dict[str, Any]:
         """Delete a project and everything it holds (plan, state, log, inbox, runs). Refused
-        unless it is archived first and none of its steps is running."""
+        unless it is archived first, none of its steps is running and no non-direct call on
+        it is pending or running (a direct call runs in the caller's own process)."""
         with self.lock(name):
             if not self.archived(name):
                 raise BadRequest(f"archive project {name!r} before deleting it")
@@ -268,6 +269,14 @@ class Store:
             if running:
                 raise BadRequest(f"project {name!r} has running steps: {', '.join(running)}")
             d = self.project_dir(name)
+            latest: dict[str, dict[str, Any]] = {}
+            for rec in L.read(d, kinds=["call"])["records"]:
+                latest[rec["call"]] = rec
+            live = sorted(f"{c} ({r['status']})" for c, r in latest.items()
+                          if r.get("status") in L.LIVE and not r.get("direct"))
+            if live:
+                raise BadRequest(
+                    f"project {name!r} has pending or running calls: {', '.join(live)}")
             (d / "project.json").unlink()  # first: from here on it is not a project
             shutil.rmtree(d)
         self._parsed.pop(name, None)
@@ -348,8 +357,8 @@ class Store:
                     errs.append(f"steps.{sid}: cannot change a running step (only pause it)")
             if errs:
                 raise InvalidPlan(errs)
-            self._log(project, rev + 1, author, reason, ops)
             atomic_write_json(self.project_dir(project) / "plan.json", {**new, "rev": rev + 1})
+            self._log(project, rev + 1, author, reason, ops)
         self.notify()
         return rev + 1
 

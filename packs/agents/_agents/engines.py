@@ -146,10 +146,11 @@ def _error_text(ev):
 
 
 def claude(prompt, model, cwd, session=None):
-    """Run claude -p, echo its progress to stderr as it happens, return its result event."""
+    """Run claude -p with the prompt on stdin (off argv, where it would land in stderr.log and
+    ps), echo its progress to stderr as it happens, return its result event."""
     argv = [
         os.environ.get("SLUICE_CLAUDE_BIN", "claude"),
-        "-p", prompt,
+        "-p",
         "--model", model,
         "--output-format", "stream-json",
         "--verbose",
@@ -173,7 +174,7 @@ def claude(prompt, model, cwd, session=None):
         for text in _progress(ev):
             print(text, file=sys.stderr, flush=True)
 
-    p = sh_stream(argv, on_line, cwd=cwd, check=False)
+    p = sh_stream(argv, on_line, cwd=cwd, check=False, input=prompt)
     failed = p.returncode != 0 or not results or results[-1].get("is_error")
     if failed:
         seen = (p.stderr + "\n" + "\n".join(errors)).lower()

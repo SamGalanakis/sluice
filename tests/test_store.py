@@ -6,8 +6,10 @@ import threading
 import jsonpatch
 import pytest
 
+from sluice import log as L
 from sluice.errors import BadRequest, Conflict, InvalidPlan, NotFound
 from sluice.store import Store
+from sluice.util import read_json
 from tests.conftest import add, create, d
 
 
@@ -64,6 +66,24 @@ def test_an_invalid_edit_writes_nothing(store):
                     "me", "bad")
     assert e.value.errors == ["steps.a.run: unknown fn 'no.such'"]
     assert store.get("p")["rev"] == 1 and len(store.history("p")) == 1
+
+
+def test_the_plan_lands_on_disk_before_its_edit_record(store, monkeypatch):
+    """plan.json is the truth: at the moment a plan.edit record is appended, the plan file
+    already holds the rev the record names."""
+    revs = []
+    real_append = L.append
+
+    def spy(directory, records, cap):
+        plan = store.project_dir("p") / "plan.json"
+        revs.append(read_json(plan)["rev"] if plan.exists() else None)
+        return real_append(directory, records, cap)
+
+    monkeypatch.setattr(L, "append", spy)
+    store.create_project("p")
+    store.patch("p", 1, [{"op": "add", "path": "/steps/a", "value": add(d(1), d(2))}],
+                "me", "add a")
+    assert revs == [1, 2]  # rev 1 for the project's own record, 2 for the edit's
 
 
 def test_patch_is_compare_and_swap(store):

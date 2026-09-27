@@ -18,9 +18,15 @@ def main(inp, ctx):
     out_file = ctx.run_dir / "out.json"
     out_file.unlink(missing_ok=True)
     env = {"OUT": str(out_file)}
+    seen = {}
     for name in ctx.extra_inputs:
+        var = re.sub(r"\W", "_", name)
+        if var in seen:
+            raise RuntimeError(
+                f"inputs {seen[var]!r} and {name!r} share the environment variable {var}")
+        seen[var] = name
         if (value := inp.get(name)) is not None:
-            env[re.sub(r"\W", "_", name)] = env_value(value)
+            env[var] = env_value(value)
     res = sh_stream(["bash", "-e", "-o", "pipefail", "-c", inp["code"]], cwd=inp.get("cwd"),
                     check=inp.get("check") is not False, env=env)
     outputs = {"stdout": res.stdout, "stderr": res.stderr, "code": res.returncode}

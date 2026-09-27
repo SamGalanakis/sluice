@@ -5,9 +5,15 @@
 """gh.pr_wait: poll a PR until checks settle, it merges/closes/conflicts, or timeout."""
 
 import json
+import sys
 import time
+from pathlib import Path
 
 from sluice.fn import ShError, Transient, run, sh
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _git.refs import ref
 
 FIELDS = "state,mergeable,headRefOid,url,statusCheckRollup"
 FAILED_CONCLUSIONS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED",
@@ -19,7 +25,7 @@ def pr_data(inp):
     """One `gh pr view` poll; a failing call is worth a retry."""
     try:
         return json.loads(
-            sh(["gh", "pr", "view", inp["pr"], "--json", FIELDS],
+            sh(["gh", "pr", "view", ref("pr", inp["pr"]), "--json", FIELDS],
                cwd=inp["path"]).stdout)
     except ShError as e:
         raise Transient(f"gh pr view failed: {e}") from e

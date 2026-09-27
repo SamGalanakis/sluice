@@ -640,3 +640,64 @@ def test_run_cancel_other_failure(call_fn, fake_bin, tmp_path):
         path=bin_dir)
     assert code == 1
     assert out is None
+
+
+# ---- a plan-supplied ref that looks like an option is refused before the tool runs --------
+
+
+def make_git(tmp_path, fake_bin):
+    """A fake git that records argv (one call per line); it must never be invoked."""
+    argv_file = tmp_path / "git.argv"
+    script = ("#!/bin/sh\n"
+              f"printf '%s\\0' \"$@\" >> \"{argv_file}\"\n"
+              f"printf '\\n' >> \"{argv_file}\"\n")
+    return fake_bin("git", script), argv_file
+
+
+@pytest.mark.parametrize("fn,inputs", [
+    ("git.push", {"path": ".", "branch": "--upload-pack=touch-pwned"}),
+    ("git.push", {"path": ".", "branch": "main", "remote": "--all"}),
+    ("git.rebase", {"path": ".", "onto": "--exec=touch-pwned"}),
+    ("git.merge", {"repo": ".", "source": "-m pwned", "target": "main"}),
+    ("git.merge", {"repo": ".", "source": "feat", "target": "--detach"}),
+    ("git.worktree", {"repo": ".", "base": "main", "branch": "-b"}),
+    ("git.worktree", {"repo": ".", "base": "--orphan", "branch": "feat"}),
+])
+def test_git_fns_refuse_refs_that_look_like_options(call_fn, fake_bin, tmp_path,
+                                                    fn, inputs):
+    bin_dir, argv_file = make_git(tmp_path, fake_bin)
+    code, out, err = call_fn(GIT / fn, inputs, path=bin_dir)
+    assert code == 1
+    assert "may not start with '-'" in err
+    assert out is None
+    assert not argv_file.exists()  # git never ran
+
+
+@pytest.mark.parametrize("fn,inputs", [
+    ("gh.pr", {"path": ".", "base": "main", "head": "--repo=o/r",
+               "title": "t", "body": "b"}),
+    ("gh.pr", {"path": ".", "base": "--repo=o/r", "head": "feat",
+               "title": "t", "body": "b"}),
+    ("gh.pr_wait", {"path": ".", "pr": "--repo=o/r", "until": "checks",
+                    "timeout": 0}),
+    ("gh.run_latest", {"path": ".", "branch": "--limit"}),
+])
+def test_gh_fns_refuse_refs_that_look_like_options(call_fn, fake_bin, tmp_path,
+                                                   fn, inputs):
+    bin_dir, argv_file = make_gh(tmp_path, fake_bin)
+    code, out, err = call_fn(GIT / fn, inputs, path=bin_dir)
+    assert code == 1
+    assert "may not start with '-'" in err
+    assert out is None
+    assert not argv_file.exists()  # gh never ran
+
+
+def test_run_cancel_refuses_a_negative_run_id(call_fn, fake_bin, tmp_path):
+    bin_dir, argv_file = make_gh_runs(tmp_path, fake_bin)
+    code, out, err = call_fn(
+        GIT / "gh.run_cancel", {"path": str(tmp_path), "run_id": -1},
+        path=bin_dir)
+    assert code == 1
+    assert "may not start with '-'" in err
+    assert out is None
+    assert not argv_file.exists()  # gh never ran

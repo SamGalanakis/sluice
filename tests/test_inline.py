@@ -32,6 +32,14 @@ def test_bash_sees_extra_inputs_as_env_and_returns_what_it_printed(store, runner
     assert steps["c"]["status"] == "succeeded" and steps["c"]["outputs"]["code"] == 7
 
 
+def test_bash_refuses_extra_inputs_that_share_an_env_var(store, runner):
+    """`a-b` and `a_b` would both become $a_b: refuse rather than let one win."""
+    create(store, "p", {"a": bash("true", **{"a-b": d(1), "a_b": d(2)})})
+    steps = settle(runner, store, "p")
+    assert steps["a"]["status"] == "failed"
+    assert "a-b" in steps["a"]["error"] and "a_b" in steps["a"]["error"]
+
+
 def test_bash_declared_outputs_come_from_the_out_file(store, runner):
     create(store, "p", {
         "a": bash('printf \'{"sha": "abc", "n": 2, "other": 1}\' > "$OUT"',

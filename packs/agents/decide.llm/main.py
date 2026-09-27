@@ -44,13 +44,13 @@ def main(inp, ctx):
         question=inp["question"], context=context, options=", ".join(options))
     argv = [
         os.environ.get("SLUICE_CLAUDE_BIN", "claude"),
-        "-p", prompt,
+        "-p",  # the prompt goes on stdin, not argv (stderr.log echoes argv, ps shows it)
         "--model", os.environ.get("SLUICE_DECIDE_MODEL", "haiku"),
         "--output-format", "json",
         "--json-schema", json.dumps(schema),
         "--dangerously-skip-permissions",
     ]
-    p = sh(argv, check=False)
+    p = sh(argv, check=False, input=prompt)
     if p.returncode != 0:
         if any(m in p.stderr for m in CLAUDE_TRANSIENT):
             raise Transient("claude hit a rate limit or capacity error")

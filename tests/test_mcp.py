@@ -6,6 +6,8 @@ import anyio
 import pytest
 from mcp import Client
 
+from sluice import calls
+from sluice import log as L
 from sluice.mcp_server import build_server
 from sluice.runner import Runner
 from tests.conftest import add, create, d
@@ -103,6 +105,51 @@ async def test_project_delete_needs_archiving_and_removes_everything(store):
         assert (await fail(c, "status", project="p"))["error"] == "not_found"
         await ok(c, "project_create", name="p")  # the name is free again
         assert (await ok(c, "plan_get", project="p"))["rev"] == 1
+
+
+async def test_project_delete_refuses_live_calls(store):
+    """A pending or running non-direct call blocks deletion (the runner would recreate the
+    project's log and run dirs); a direct call does not — it lives in the caller's process."""
+    store.create_project("p")
+    direct = calls.create(store, "test.add", {"a": 1, "b": 2}, "p", direct=True)
+    queued = calls.create(store, "test.add", {"a": 3, "b": 4}, "p")
+    store.update_project("p", archived=True)
+    async with Client(build_server(store)) as c:
+        err = await fail(c, "project_delete", name="p")
+        assert err["error"] == "bad_request" and queued in err["message"]
+        assert direct not in err["message"]  # direct calls don't block
+        store.append("p", {"kind": "call", "call": queued, "fn": "test.add",
+                           "status": "succeeded", "outputs": {"sum": 7}})
+        assert await ok(c, "project_delete", name="p") == {"deleted": "p"}
+
+
+async def test_waits_are_capped_at_3600(store, monkeypatch):
+    """log_wait's timeout and fn_call's wait hold a call open an hour at most."""
+    timeouts = []
+    monkeypatch.setattr(L, "wait", lambda *a: timeouts.append(a[5]) or
+                        {"records": [], "held": [], "last_seq": 0})
+    now = [0.0]
+    real_sleep = anyio.sleep
+
+    async def tick(_seconds):  # the 0.1 s poll, as 2000 s of fake time
+        now[0] += 2000.0
+        await real_sleep(0)
+
+    polls = []
+    monkeypatch.setattr(anyio, "current_time", lambda: now[0])
+    monkeypatch.setattr(anyio, "sleep", tick)
+    monkeypatch.setattr(calls, "latest", lambda *a: polls.append(1) or
+                        {"call": "c", "status": "pending"})
+    async with Client(build_server(store)) as c:
+        assert await ok(c, "log_wait", since_seq=0, timeout=999999) == {
+            "records": [], "last_seq": 0}
+        assert await ok(c, "log_wait", since_seq=0, timeout=30) == {
+            "records": [], "last_seq": 0}
+        res = await ok(c, "fn_call", name="test.add", inputs={"a": 1, "b": 2},
+                       wait=999999)
+        assert res["status"] == "pending"  # gave up waiting, did not hold
+    assert timeouts == [3600, 30]
+    assert len(polls) <= 3  # two fake sleeps ≈ 3600 s — not the wait asked for
 
 
 async def test_step_tools_edit_one_step_at_the_current_rev(store):

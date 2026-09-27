@@ -27,6 +27,7 @@ from .store import Store
 
 AUTHOR = "mcp"
 DOCS = Path(__file__).resolve().parent / "docs"
+WAIT_CAP = 3600  # the most a tool waits: log_wait's timeout, fn_call's wait (seconds)
 
 
 def doc_topics() -> dict[str, str]:
@@ -166,8 +167,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
     @tool
     def project_delete(name: str) -> Any:
         """Delete a project and everything it holds: plan, state, log, inbox and runs. Cannot
-        be undone. Refused unless it is archived first and none of its steps is running.
-        Returns {deleted}.
+        be undone. Refused unless it is archived first, none of its steps is running and no
+        non-direct call on it is pending or running. Returns {deleted}.
 
         Args:
             name: the project.
@@ -223,7 +224,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 before anything runs (an `invalid` error lists every mismatch with its path).
             project: run it in this project (its functions and .env); leave out for none.
             wait: how many seconds to wait for the result, a number such as 60 (default 0:
-                return at once).
+                return at once; capped at 3600).
             direct: run it here and now, to the end, instead of queueing it for the runner
                 (for use without a runner, e.g. from the command line); ignores `wait`.
         """
@@ -232,7 +233,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
         store.notify()
         if direct:
             return await anyio.to_thread.run_sync(runner.run_call_direct, store, call, project)
-        deadline = anyio.current_time() + wait
+        deadline = anyio.current_time() + min(wait, WAIT_CAP)
         while True:
             rec = await anyio.to_thread.run_sync(calls.latest, store, call, project)
             if rec["status"] in calls.DONE or anyio.current_time() >= deadline:
@@ -493,7 +494,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
             project: the project's log; leave out for the home log.
             kinds: only these kinds (as in log_read).
             threads: only messages on these threads (as in log_read).
-            timeout: seconds to wait at most (default 300).
+            timeout: seconds to wait at most (default 300; capped at 3600).
             limit: at most this many records (default 200).
             wake: "any" (default) or "questions": a note (a message posted with needs_reply
                 false) does not end the wait; it comes back with the next record that does,
@@ -502,7 +503,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
         d = _log_args(project, kinds, limit)
         res = await anyio.to_thread.run_sync(
             functools.partial(L.wait, d, since_seq, kinds, threads, wake,
-                              max(0, timeout), 0.25, limit))
+                              min(max(0, timeout), WAIT_CAP), 0.25, limit))
         return {"records": res["records"] + res["held"], "last_seq": res["last_seq"]}
 
     @tool

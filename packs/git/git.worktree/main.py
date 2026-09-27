@@ -4,14 +4,20 @@
 # ///
 """git.worktree: add a worktree for a branch, creating the branch at base if needed."""
 
+import sys
 from pathlib import Path
 
 from sluice.fn import run, sh
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _git.refs import ref
+
 
 def main(inp, ctx):
     repo = Path(inp["repo"]).resolve()
-    branch = inp["branch"]
+    branch = ref("branch", inp["branch"])
+    base = ref("base", inp["base"])
     if inp.get("path"):
         path = Path(inp["path"])
         if not path.is_absolute():
@@ -29,7 +35,7 @@ def main(inp, ctx):
         sh(["git", "-C", str(repo), "worktree", "add", str(path), branch])
     else:
         sh(["git", "-C", str(repo), "worktree", "add",
-            "-b", branch, str(path), inp["base"]])
+            "-b", branch, str(path), base])
     sha = sh(["git", "-C", str(path), "rev-parse", "HEAD"]).stdout.strip()
     return {"path": str(path), "branch": branch, "sha": sha}
 

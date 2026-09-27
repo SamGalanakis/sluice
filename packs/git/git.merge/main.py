@@ -4,7 +4,14 @@
 # ///
 """git.merge: merge source into target inside a temporary worktree under the run dir."""
 
+import sys
+from pathlib import Path
+
 from sluice.fn import ShError, run, sh
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _git.refs import ref
 
 
 def _checked_out(repo, branch):
@@ -18,8 +25,8 @@ def _checked_out(repo, branch):
 
 def main(inp, ctx):
     repo = inp["repo"]
-    source = inp["source"]
-    target = inp["target"]
+    source = ref("source", inp["source"])
+    target = ref("target", inp["target"])
     wt = ctx.run_dir / "merge-wt"
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
     old_sha = sh(["git", "-C", repo, "rev-parse", target]).stdout.strip()

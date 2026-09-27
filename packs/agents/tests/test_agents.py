@@ -376,13 +376,15 @@ def claude_stream(result_ev=None):
 
 def make_claude(tmp_path, fake_bin, *, code=0, stdout_obj=None, events=None,
                 stderr_text="", wait_for=None):
-    """A fake claude: prints `stdout_obj` as one JSON object (--output-format json), or
-    `events` one per line (stream-json). With `wait_for`, it stops after the fourth event
-    until that file exists (exit 3 after 10 s)."""
+    """A fake claude: reads its prompt on stdin into claude.stdin, prints `stdout_obj` as one
+    JSON object (--output-format json), or `events` one per line (stream-json). With
+    `wait_for`, it stops after the fourth event until that file exists (exit 3 after 10 s)."""
     argv_file = tmp_path / "claude.argv"
+    stdin_file = tmp_path / "claude.stdin"
     script = (
         "#!/bin/sh\n"
         f"printf '%s\\0' \"$@\" > \"{argv_file}\"\n"
+        f"cat > \"{stdin_file}\"\n"
     )
     if stderr_text:
         script += f"printf '{stderr_text}' >&2\n"
@@ -398,6 +400,12 @@ def make_claude(tmp_path, fake_bin, *, code=0, stdout_obj=None, events=None,
     return bin_dir, argv_file
 
 
+def claude_stdin(tmp_path):
+    """The prompt the fake claude got on stdin (kept off argv so stderr.log and ps stay
+    free of it)."""
+    return (tmp_path / "claude.stdin").read_text()
+
+
 def test_claude_success(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=claude_stream())
     code, out, err = call_fn(
@@ -407,15 +415,41 @@ def test_claude_success(call_fn, fake_bin, tmp_path):
     )
     assert code == 0, err
     assert out == {"result": "did it", "session": "s-1", "cost_usd": 0.02}
-    argv = read_argv(argv_file)
-    assert argv[0] == "-p"
-    assert argv[1].startswith("do the thing")
-    assert argv[2:] == [
+    assert read_argv(argv_file) == [
+        "-p",
         "--model", "opus",
         "--output-format", "stream-json",
         "--verbose",
         "--dangerously-skip-permissions",
     ]
+    assert claude_stdin(tmp_path).startswith("do the thing")
+
+
+def test_the_prompt_goes_on_stdin_never_on_argv(call_fn, fake_bin, tmp_path):
+    """The echoed `$ ...` line in stderr.log and `ps` carry no prompt."""
+    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event()])
+    code, _out, err = call_fn(
+        AGENTS / "agent.claude",
+        {"cwd": str(tmp_path), "prompt": "the-secret-prompt"},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert "the-secret-prompt" not in read_argv(argv_file)
+    echoed = next(l for l in err.splitlines() if l.startswith("$ "))
+    assert "the-secret-prompt" not in echoed
+    assert claude_stdin(tmp_path).startswith("the-secret-prompt")
+
+    make_claude(tmp_path, fake_bin, stdout_obj=claude_decide("a", 0.9))
+    code, _out, err = call_fn(
+        AGENTS / "decide.llm",
+        {"question": "the-secret-prompt", "options": ["a", "b"]},
+        path=bin_dir,
+    )
+    assert code == 0, err
+    assert "the-secret-prompt" not in read_argv(argv_file)
+    echoed = next(l for l in err.splitlines() if l.startswith("$ "))
+    assert "the-secret-prompt" not in echoed
+    assert "the-secret-prompt" in claude_stdin(tmp_path)
 
 
 def test_claude_streams_progress_while_it_runs(call_fn, fake_bin, tmp_path):
@@ -522,9 +556,11 @@ def test_review(call_fn, fake_bin, tmp_path):
     before = repo.git("rev-parse", "HEAD")
 
     argv_file = tmp_path / "claude.argv"
+    stdin_file = tmp_path / "claude.stdin"
     script = (
         "#!/bin/sh\n"
         f"printf '%s\\0' \"$@\" > \"{argv_file}\"\n"
+        f"cat > \"{stdin_file}\"\n"
         'echo "z" >> f.txt\n'
         "git add f.txt\n"
         'git -c user.email=r@e -c user.name=R commit -q -m "Fix f.txt"\n'
@@ -543,10 +579,11 @@ def test_review(call_fn, fake_bin, tmp_path):
     assert out["summary"] == "fixed it"
     argv = read_argv(argv_file)
     assert argv[0] == "-p"
-    assert "git diff base...HEAD" in argv[1]
-    assert str(repo.path / "STANDARDS.md") in argv[1]
-    assert "be strict" in argv[1]
-    assert "step-test-step" in argv[1]
+    prompt = stdin_file.read_text()
+    assert "git diff base...HEAD" in prompt
+    assert str(repo.path / "STANDARDS.md") in prompt
+    assert "be strict" in prompt
+    assert "step-test-step" in prompt
     assert out["session"] == "rs" and "--resume" not in argv
 
     code, out, err = call_fn(
@@ -774,10 +811,9 @@ def test_run_claude(call_fn, fake_bin, tmp_path):
     assert code == 0, err
     assert out == {"final": "done", "report": "REP", "session": "s-42"}
     assert "tool Read /w/a.py" in err.splitlines()
-    argv = read_argv(argv_file)
-    assert argv[0] == "-p"
-    assert argv[1].startswith("the prompt")
-    assert argv[2:] == [
+    assert read_argv(argv_file)[0] == "-p"
+    assert claude_stdin(tmp_path).startswith("the prompt")
+    assert read_argv(argv_file)[1:] == [
         "--model", "opus",
         "--output-format", "stream-json",
         "--verbose",
@@ -904,26 +940,25 @@ def test_step_thread_codex(call_fn, fake_bin, tmp_path):
 
 
 def test_step_thread_claude(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
+    bin_dir, _ = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
     code, _out, err = call_fn(
         AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
         path=bin_dir)
     assert code == 0, err
-    prompt = read_argv(argv_file)[1]
+    prompt = claude_stdin(tmp_path)
     assert "sluice thread `step-test-step`" in prompt
     assert '"since_seq": 0}' in prompt  # no log yet
 
 
 def test_step_thread_run(call_fn, fake_bin, tmp_path):
     """agent.run appends the section once, whatever the engine."""
-    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
+    bin_dir, _ = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "s"},
         path=bin_dir)
     assert code == 0, err
-    argv = read_argv(argv_file)
-    assert "sluice thread `step-test-step`" in argv[argv.index("-p") + 1]
+    assert "sluice thread `step-test-step`" in claude_stdin(tmp_path)
 
     make_devin(tmp_path, fake_bin)
     code, _out, err = call_fn(
@@ -954,11 +989,10 @@ BLOCK_INPUTS = {"interface": "docs/api.md\nsecond line", "branches": ["a", "b"]}
 
 
 def prompt_of(name, call_fn, argv_file):
-    """The task text an agent fn handed its CLI: spec.md for the harnesses, else claude's -p
-    argument."""
+    """The task text an agent fn handed its CLI: spec.md for the harnesses, else claude's
+    prompt on stdin."""
     if name in ("agent.claude", "agent.review", "agent.run"):
-        argv = read_argv(argv_file)
-        return argv[argv.index("-p") + 1]
+        return argv_file.with_name("claude.stdin").read_text()
     return spec_of(call_fn)
 
 
@@ -1033,7 +1067,7 @@ placeholders and runs it through the sluice CLI, then reports a result."""
 import json, re, sys
 from sluice.cli import main
 
-prompt = sys.argv[sys.argv.index("-p") + 1]
+prompt = sys.stdin.read()
 submit = {submit!r}
 if submit:
     cmd = re.search(r"sluice tool step_submit '(.*?)'`", prompt).group(1)

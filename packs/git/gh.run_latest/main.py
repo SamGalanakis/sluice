@@ -5,15 +5,21 @@
 """gh.run_latest: the latest GitHub Actions run on a branch, with its failed jobs."""
 
 import json
+import sys
+from pathlib import Path
 
 from sluice.fn import run, sh
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _git.refs import ref
 
 FAILED = {"failure", "cancelled", "timed_out"}
 
 
 def main(inp, ctx):
     path = inp["path"]
-    branch = inp.get("branch") or "main"
+    branch = ref("branch", inp.get("branch") or "main")
     argv = ["gh", "run", "list", "--branch", branch]
     if inp.get("workflow"):
         argv += ["--workflow", inp["workflow"]]

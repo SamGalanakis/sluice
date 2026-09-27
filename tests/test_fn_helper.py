@@ -97,6 +97,15 @@ def test_sh_stream_follows_a_log_file_and_raises_on_failure(tmp_path):
     assert follow == ["first", "second", "no newline"]
 
 
+def test_sh_stream_feeds_input_to_the_commands_stdin(tmp_path, capfd):
+    """input= keeps a prompt off argv and feeds it on stdin instead."""
+    out_file = tmp_path / "stdin.txt"
+    p = sh_stream(["sh", "-c", f"cat > '{out_file}'"], input="the-secret-prompt\n")
+    assert p.returncode == 0
+    assert out_file.read_text() == "the-secret-prompt\n"
+    assert "the-secret-prompt" not in capfd.readouterr().err  # the echoed argv carries none
+
+
 def test_sh_stream_echoes_one_trimmed_line_per_line_by_default(tmp_path, capfd):
     p = sh_stream(["sh", "-c", "printf 'a  b\\tc\\n'; head -c 500 /dev/zero | tr '\\0' x"],
                   check=False)
