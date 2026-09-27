@@ -229,8 +229,12 @@ amber; Failed in ink; Message in blue), the text on one line, its age in meta.
 
 ### Step drawer
 Right-hand panel (680px) over the board without a scrim on desktop, full-screen with a scrim on
-phones. Header: glyph and the step id (20px), its doc, then fn, status, time, cost and session. Sections under meta labels in need order:
-Error, Progress, Outputs, Messages, Prompt, Inputs, Stderr (folded), Runs.
+phones, read like a run history (Temporal's event view is the reference): the step id (20px)
+and its doc, then a quiet grid of facts (status, function, started, duration, cost, session).
+Sections under small labels in need order: Error, Progress, Outputs, Messages, Prompt, Inputs,
+Log output, Attempts (only past one). A value is a field: its name in 600, a small `← source`
+link, its doc in meta, the value under it. Types are noise until asked for: in the name's
+title, and beside every name with the Types switch. Long values fold under a fade.
 
 ## Do's and Don'ts
 
