@@ -1259,9 +1259,8 @@ def _value(value: Any, long_at: int = 160) -> str:
     return f'<pre class="v long">{_json(value)}</pre>'
 
 
-def _runs(store: Store, project: str, sid: str) -> list[dict[str, Any]]:
+def _runs(recs: list[dict[str, Any]], sid: str) -> list[dict[str, Any]]:
     """The step's attempts from its step.status records: started, finished, outcome."""
-    recs = L.read(store.log_dir(project), kinds=["step.status", "step.output"])["records"]
     runs: list[dict[str, Any]] = []
     for r in recs:
         if r.get("step") != sid:
@@ -1380,7 +1379,9 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         facts.insert(1, ("Waits on", links))
     grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
     thread = f"step-{sid}"  # its conversation with the orchestrator, on the Threads tab
-    msgs = L.read(store.log_dir(project), kinds=["message"], threads=[thread])["records"]
+    recs = L.read(store.log_dir(project), threads=[thread],
+                  kinds=["step.status", "step.output", "message"])["records"]
+    msgs = [r for r in recs if r.get("kind") == "message"]
     talk = ""
     if msgs and live:
         waiting = len(_awaiting(msgs, board.blocks))
@@ -1481,7 +1482,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
             body = (f'<details data-preserve-attr="open"><summary>Show {len(lines)} lines'
                     f"</summary>{body}</details>")
         section("Log output" + which, body)
-    runs = _runs(store, project, sid)
+    runs = _runs(recs, sid)
     if len(runs) > 1:
         items = []
         for i, r in enumerate(reversed(runs)):

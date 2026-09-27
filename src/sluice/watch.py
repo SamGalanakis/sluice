@@ -7,7 +7,6 @@ reads the log file only (no runner or server needed) through the same filter as 
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import IO
@@ -26,12 +25,11 @@ def follow(directory: Path, out: IO[str], kinds: Iterable[str] | None = None,
     seq = L.last_seq(directory) if since_seq is None else since_seq
     held: list[str] = []
     while not stop():
-        res = L.read(directory, seq, kinds, threads)
-        for rec in res["records"]:
-            held.append(json.dumps(rec, ensure_ascii=False) + "\n")
-            if L.wakes(rec, wake):
-                out.write("".join(held))
-                out.flush()
-                held.clear()
+        res = L.wait(directory, seq, kinds, threads, wake, interval, interval)
         seq = res["last_seq"]
-        time.sleep(interval)
+        if res["records"]:
+            out.write("".join(held) + "".join(json.dumps(r, ensure_ascii=False) + "\n"
+                                              for r in res["records"]))
+            out.flush()
+            held.clear()
+        held += [json.dumps(r, ensure_ascii=False) + "\n" for r in res["held"]]

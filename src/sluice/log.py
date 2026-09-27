@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import time
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -102,16 +103,6 @@ def _parse(line: bytes) -> dict[str, Any] | None:
     return rec if isinstance(rec, dict) and isinstance(rec.get("seq"), int) else None
 
 
-def _all(path: Path) -> list[dict[str, Any]]:
-    """Every complete record, oldest first (a half-written last line is left out)."""
-    try:
-        data = path.read_bytes()
-    except FileNotFoundError:
-        return []
-    lines = data.split(b"\n")[:-1]  # the part after the last newline is not complete yet
-    return [r for r in map(_parse, lines) if r is not None]
-
-
 def _backwards(path: Path) -> Iterator[dict[str, Any]]:
     """Complete records from the newest back, reading the file in blocks from its end so a
     reader interested in the latest records pays only for those."""
@@ -173,10 +164,16 @@ def read(directory: Path, since_seq: int | None = None, kinds: Iterable[str] | N
     """
     path = Path(directory) / FILE
     if since_seq is None:
-        recs = _all(path)
-        last = recs[-1]["seq"] if recs else 0
-        found = [r for r in recs if matches(r, kinds, threads)]
-        return {"records": found[-limit:] if limit else found, "last_seq": last}
+        found: list[dict[str, Any]] = []
+        last = 0
+        for rec in _backwards(path):
+            last = last or rec["seq"]
+            if matches(rec, kinds, threads):
+                found.append(rec)
+                if limit and len(found) >= limit:
+                    break
+        found.reverse()
+        return {"records": found, "last_seq": last}
     recs, last = _after(path, since_seq)
     found = [r for r in recs if matches(r, kinds, threads)]
     if limit and len(found) > limit:
@@ -226,6 +223,42 @@ def latest_call(directory: Path, call: str) -> dict[str, Any] | None:
         if rec.get("kind") == "call" and rec.get("call") == call:
             return rec
     return None
+
+
+def wait(directory: Path, since_seq: int | None, kinds: Iterable[str] | None = None,
+         threads: Iterable[str] | None = None, wake: str = "any", timeout: float = 300,
+         interval: float = 0.25, limit: int | None = None) -> dict[str, Any]:
+    """Wait for records after `since_seq`: `{records, held, last_seq}`.
+
+    Polls the file every `interval` seconds, the cursor moving with each poll so every
+    record is read once, until a record wakes (`wakes`), `limit` records have
+    accumulated, or `timeout` seconds pass. `records` ends at the last record that
+    wakes; what follows it is `held` (with wake "questions", trailing notes), still to
+    come back with a later wait's records. `last_seq` is past everything read, so
+    passing it back keeps watching.
+    """
+    seq = since_seq or 0
+    deadline = time.monotonic() + max(0.0, timeout)
+    found: list[dict[str, Any]] = []
+    while True:
+        left = None if limit is None else limit - len(found)
+        res = read(directory, seq, kinds, threads, left)
+        found += res["records"]
+        seq = max(seq, res["last_seq"])
+        if (found and (any(wakes(r, wake) for r in found)
+                       or (limit is not None and len(found) >= limit))
+                or time.monotonic() >= deadline):
+            if limit is not None and len(found) > limit:
+                seq = found[limit - 1]["seq"]
+                found = found[:limit]
+            held = 0
+            for r in reversed(found):
+                if wakes(r, wake):
+                    break
+                held += 1
+            return {"records": found[:len(found) - held], "held": found[len(found) - held:],
+                    "last_seq": seq}
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 
 # ---- writing --------------------------------------------------------------------------------

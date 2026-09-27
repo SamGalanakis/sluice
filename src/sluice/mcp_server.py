@@ -234,10 +234,9 @@ def build_server(store: Store, stop: threading.Event | None = None,
             return await anyio.to_thread.run_sync(runner.run_call_direct, store, call, project)
         deadline = anyio.current_time() + wait
         while True:
-            res = await anyio.to_thread.run_sync(calls.status, store, call, project)
-            res.pop("stderr_tail", None)
-            if res["status"] in calls.DONE or anyio.current_time() >= deadline:
-                return res
+            rec = await anyio.to_thread.run_sync(calls.latest, store, call, project)
+            if rec["status"] in calls.DONE or anyio.current_time() >= deadline:
+                return calls.result(rec)
             await anyio.sleep(0.1)
 
     @tool
@@ -501,14 +500,10 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 or once `timeout` passes.
         """
         d = _log_args(project, kinds, limit)
-        deadline = anyio.current_time() + max(0, timeout)
-        while True:
-            res = await anyio.to_thread.run_sync(L.read, d, since_seq, kinds, threads, limit)
-            recs = res["records"]
-            if (any(L.wakes(r, wake) for r in recs) or (limit and len(recs) >= limit)
-                    or anyio.current_time() >= deadline):
-                return res
-            await anyio.sleep(min(0.25, max(0.0, deadline - anyio.current_time())))
+        res = await anyio.to_thread.run_sync(
+            functools.partial(L.wait, d, since_seq, kinds, threads, wake,
+                              max(0, timeout), 0.25, limit))
+        return {"records": res["records"] + res["held"], "last_seq": res["last_seq"]}
 
     @tool
     def verify(project: str | None = None) -> Any:

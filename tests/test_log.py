@@ -229,6 +229,36 @@ def test_log_wait_sees_an_append_from_another_process(live, home):
     anyio.run(main)
 
 
+def test_wait_accumulates_and_holds_notes_until_a_waking_record(store):
+    store.create_project("p")
+    d = store.project_dir("p")
+    note = {"kind": "message", "thread": "t", "from": "w", "body": "fyi",
+            "needs_reply": False}
+    store.append("p", note)
+    t0 = time.monotonic()
+    res = L.wait(d, 1, ["message"], wake="questions", timeout=0.2, interval=0.02)
+    assert time.monotonic() - t0 >= 0.19  # a note alone does not wake it
+    assert res["records"] == [] and res["last_seq"] == 2
+    assert [r["body"] for r in res["held"]] == ["fyi"]  # it comes back at the timeout
+
+    def later():
+        time.sleep(0.1)
+        store.append("p", {"kind": "message", "thread": "t", "from": "w",
+                           "body": "which db?", "needs_reply": True},
+                     {**note, "body": "meanwhile"})
+
+    threading.Thread(target=later, daemon=True).start()
+    res = L.wait(d, 1, ["message"], wake="questions", timeout=10, interval=0.02)
+    assert [r["body"] for r in res["records"]] == ["fyi", "which db?"]
+    assert [r["body"] for r in res["held"]] == ["meanwhile"]  # after the waking record
+    assert res["last_seq"] == 4
+    res = L.wait(d, res["last_seq"], ["message"], timeout=0.1, interval=0.02)
+    assert res == {"records": [], "held": [], "last_seq": 4}
+    res = L.wait(d, 1, ["message"], timeout=5, interval=0.02, limit=2)
+    assert [r["body"] for r in res["records"]] == ["fyi", "which db?"]
+    assert res["held"] == [] and res["last_seq"] == 3  # the limit ends the wait early
+
+
 @pytest.fixture
 def live(store):
     from sluice.runner import Runner

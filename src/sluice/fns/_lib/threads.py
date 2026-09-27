@@ -72,9 +72,9 @@ def wait(thread: str, since_seq: int | None = None, to: str | None = None,
     deadline = time.monotonic() + max(0.0, timeout)
     found: list[dict[str, Any]] = []
     while True:
-        res = L.read(d, seq, ["message"], [thread])
-        found += [m for m in res["records"] if addressed(m, to)]
-        seq = max(seq, res["last_seq"])
+        res = L.wait(d, seq, ["message"], [thread], wake,
+                     deadline - time.monotonic(), interval)
+        found += [m for m in res["records"] + res["held"] if addressed(m, to)]
+        seq = res["last_seq"]
         if any(L.wakes(m, wake) for m in found) or time.monotonic() >= deadline:
             return {"messages": found, "last_seq": seq}
-        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
