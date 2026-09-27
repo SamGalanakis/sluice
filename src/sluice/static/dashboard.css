@@ -171,21 +171,6 @@ details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 .flip { animation: flip 220ms cubic-bezier(.2, .8, .2, 1); }
 @keyframes flip { from { transform: rotateX(90deg); opacity: .2; } }
 
-/* ---- needs you ---------------------------------------------------------------------- */
-.needs { margin: 16px 0 20px; }
-.needs ul { list-style: none; margin: 0; padding: 0; background: var(--card);
-            border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.needs li + li { border-top: 1px solid var(--border); }
-.needs a { display: flex; gap: 14px; align-items: baseline; padding: 12px 16px;
-           text-decoration: none; }
-.needs a:hover { background: var(--muted); }
-.needs .k { flex: none; width: 72px; font-size: 13px; line-height: 18px; font-weight: 600;
-            color: var(--status-attention); }
-.needs .k-failed { color: var(--foreground); }
-.needs .k-message { color: var(--status-active); }
-.needs .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.needs .when { font-size: 13px; color: var(--muted-foreground); margin-left: 6px; }
-
 /* ---- the project summary, its result ---------------------------------------------- */
 #summary { display: grid; gap: 6px; }
 .about { color: var(--muted-foreground); max-width: 72ch; }
@@ -349,8 +334,39 @@ code.v { border: 0; background: none; padding: 0; }
                padding: 10px 12px; background: var(--muted); border: 1px solid var(--border);
                border-radius: 8px; max-width: 72ch; }
 .type.inline { display: inline; }
-.msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
-.msg { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; }
+/* ---- messages: a step's thread with the orchestrator -------------------------------- */
+.msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.m { padding-left: 12px; border-left: 2px solid var(--border-strong); min-width: 0; }
+.m-lead { margin-left: 28px; border-left-color: color-mix(in oklch, var(--status-active) 55%, transparent); }
+.m-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13px;
+          line-height: 18px; color: var(--muted-foreground); }
+.m-from { font-weight: 600; color: var(--foreground); }
+.m-tag { font-size: 12px; line-height: 16px; padding: 0 6px; border-radius: 6px;
+         border: 1px solid var(--border); color: var(--muted-foreground); }
+.m-tag.await { color: var(--status-attention);
+               border-color: color-mix(in oklch, var(--status-attention) 45%, transparent); }
+.m-body { margin-top: 4px; max-width: 72ch; overflow-wrap: anywhere; }
+.m-body p { margin: 0; }
+.m-body p + p, .m-body ul, .m-body ol, .m-body pre { margin-top: 8px; }
+.threads { margin-top: 32px; display: grid; gap: 10px; }
+.threads > .label { margin: 0 0 2px; }
+details.thread { border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+details.thread > summary { display: grid; gap: 4px; padding: 12px 16px; list-style: none;
+                           color: var(--foreground); }
+details.thread > summary::-webkit-details-marker { display: none; }
+details.thread > summary:hover { background: var(--muted); border-radius: 10px; }
+details.thread[open] > summary { margin-bottom: 0; border-bottom: 1px solid var(--border);
+                                 border-radius: 10px 10px 0 0; }
+.th-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.th-name { font-weight: 600; }
+.th-doc { color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis;
+          white-space: nowrap; flex: 1 1 200px; }
+.th-meta { font-size: 13px; color: var(--muted-foreground); }
+.th-last { font-size: 14px; color: var(--muted-foreground); overflow: hidden;
+           text-overflow: ellipsis; white-space: nowrap; }
+details.thread[open] .th-last { display: none; }
+details.thread > .msgs { padding: 14px 16px 4px; }
+details.thread > .more { padding: 0 16px 12px; }
 .more { font-size: 12.5px; margin-top: 8px; }
 details > summary { cursor: pointer; color: var(--muted-foreground); }
 details[open] > summary { margin-bottom: 6px; }
@@ -477,6 +493,8 @@ main > .phead + * { margin-top: 0; }
 
 /* ---- narrow screens: one card per line, no edges; the drawer is a sheet ------------- */
 @media (max-width: 720px) {
+  .m-lead { margin-left: 14px; }
+  details.thread > summary, details.thread > .msgs { padding-left: 12px; padding-right: 12px; }
   :root { --gutter: 16px; --nav-pad: 8px; }
   body { font-size: 15px; }
   main { padding: 16px 0 40px; }
@@ -492,10 +510,6 @@ main > .phead + * { margin-top: 0; }
   #nav-inbox .badge { margin-left: 2px; }
   .rows { gap: 28px; }
   .row { gap: 8px 10px; }
-  .needs .k { width: 60px; }
-  .needs a { flex-wrap: wrap; row-gap: 0; }
-  .needs .t { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical;
-              -webkit-line-clamp: 2; line-clamp: 2; flex: 1 1 200px; }
   .drawer { width: 100vw; border-left: 0; padding: 16px 16px 40px; }
   .scrim { position: fixed; inset: 0; z-index: 19; background: var(--scrim); }
   dl.kv { grid-template-columns: 1fr; gap: 2px; }

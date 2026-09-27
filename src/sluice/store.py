@@ -222,7 +222,7 @@ class Store:
                        archived: bool | None = None, paused: bool | None = None
                        ) -> dict[str, str]:
         """Replace the description and/or set `archived` (an archived project stays whole and
-        keeps running; the dashboard lists it apart and leaves it out of "Needs you") and/or
+        keeps running; the dashboard lists it apart) and/or
         `paused` (no step of it starts until unpaused; running ones finish)."""
         if description is not None and not isinstance(description, str):
             raise BadRequest("description: expected a string")
@@ -696,31 +696,6 @@ class Store:
                           sender)
         self.notify()
         return item
-
-    def waiting_inputs(self, project: str | None = None) -> list[dict[str, Any]]:
-        """Plan inputs that hold up a step and have no value yet, nor an open inbox item that
-        would set them: [{project, name, type, doc?, steps}] (the steps reading it that have not
-        run). What the Inbox page shows as waiting on a person."""
-        out = []
-        for name in [project] if project else self.project_names():
-            try:
-                _, plan = self.plan(name)
-            except (InvalidPlan, NotFound):  # a broken plan waits on its fix, shown elsewhere
-                continue
-            state = self.read_state(name)
-            asked = {i.get("input") for i in I.items(self.project_dir(name))
-                     if i["status"] == "open"}
-            for n, t in plan.inputs.items():
-                if n in state["inputs"] or n in asked or isinstance(t, T.Optional):
-                    continue
-                steps = [s.id for s in plan.steps.values() if any(
-                    r.step is None and r.name == n for r in s.reads) and state["steps"].get(
-                    s.id, {"status": "pending"})["status"] == "pending"]
-                if steps:
-                    row = {"project": name, "name": n, "type": str(t), "steps": steps}
-                    out.append({**row, **({"doc": plan.input_docs[n]}
-                                          if n in plan.input_docs else {})})
-        return out
 
     def _open_item(self, project: str, item_id: str) -> dict[str, Any]:
         """The item, refusing an unknown one (NotFound) or one that is not open (NotOpen).

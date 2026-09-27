@@ -35,7 +35,9 @@ def _step_thread(ctx, listen):
         f"as `since_seq`. Follow instructions addressed to you; ignore records not on "
         f"your thread. If you hit a question you cannot settle within your task, post "
         f"it with `sluice tool fn_call '{post}'` and continue with anything not blocked "
-        f"by it."
+        f"by it. For a note that needs no answer (a decision you have already made, a "
+        f"heads-up), add `\"needs_reply\": false` to the inputs. Post questions and changes "
+        f"of scope, not progress."
     )
 
 

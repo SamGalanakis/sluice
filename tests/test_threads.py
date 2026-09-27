@@ -52,6 +52,15 @@ def test_posts_append_messages_in_seq_order(store):
     assert (msgs[1]["to"], msgs[1]["data"]) == ("worker", {"why": "ops"})
 
 
+def test_a_post_says_whether_it_needs_a_reply(store):
+    store.create_project("p")
+    post(store, "p", thread="step-a", body="which db?", to="orchestrator", **{"from": "a"})
+    post(store, "p", thread="step-a", body="moving the helpers", to="orchestrator",
+         needs_reply=False, **{"from": "a"})
+    msgs = L.read(store.project_dir("p"), threads=["step-a"])["records"]
+    assert [m["needs_reply"] for m in msgs] == [True, False]  # a watcher can wake on questions
+
+
 def test_concurrent_posters_in_processes_get_unique_seqs(store):
     store.create_project("p")
     code = ("import sys\nfrom sluice.fns._lib.threads import post\n"

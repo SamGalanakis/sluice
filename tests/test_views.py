@@ -210,7 +210,7 @@ def test_a_steps_detail(store):
     assert facts["Status"] == "succeeded" and facts["Function"] == "<code>test.open</code>"
     assert facts["Duration"] == "1m 30s" and facts["Cost"] == "$0.12"  # cost as money
     sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
-    assert sections == ["Outputs", "Messages", "Prompt", "Inputs", "Log output", "Attempts"]
+    assert sections == ["Messages", "Outputs", "Prompt", "Inputs", "Log output", "Attempts"]
     # a named value: its name (type on demand, and in the name's title), its doc, its value
     assert ('<span class="f-name" title="string">answer</span><span class="f-type">string'
             '</span></div><p class="f-doc">What it found</p><div class="f-v"><div class="v '
@@ -224,7 +224,8 @@ def test_a_steps_detail(store):
             'make/sum</a></span></div><div class="f-v"><code class="v">2</code></div>') in html
     assert "set in the plan" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html and "<script>" not in html
-    assert "agent → orchestrator" in html and "Which &lt;file&gt;?" in html
+    assert ('<span class="m-from">agent</span><span class="m-to">→ orchestrator</span>' in html
+            and "Which &lt;file&gt;?" in html)
     assert "not here" not in html
     runs = html[html.index("Attempts</h3>"):]
     assert runs.index("succeeded") < runs.index("failed")  # newest first
@@ -271,35 +272,35 @@ def test_long_descriptions_fold_and_inputs_show_their_docs(store):
     assert page.index('id="graph"') < page.index('<h2 class="label">Inputs</h2>')
 
 
-def test_needs_you_lists_answers_inputs_failures_and_unanswered_messages(store):
-    create(store, "v", {"a": {"run": "test.add", "in": {"a": src("who"), "b": d(1)}},
-                        "c": {"run": "test.boom", "in": {}, "doc": "Break <it>"}},
-           inputs={"who": {"type": "int", "doc": "Who <b>counts</b>"}})
-    with store.lock("v"):
-        store.write_state("v", {"inputs": {}, "steps": {
-            "c": {"status": "failed", "error": "exit code 1\nmore", "finished":
-                  "2026-01-01T10:00:00Z"}}})
-    store.inbox_post("v", "Pick <one>")
-    store.append("v", {"kind": "message", "thread": "step-c", "from": "c", "to": "orchestrator",
-                       "body": "Help <please>"},
-                 {"kind": "message", "thread": "t", "from": "c", "to": "sam", "body": "done?"},
-                 {"kind": "message", "thread": "t", "from": "sam", "body": "yes"},
+def test_messages_are_threads_with_notes_and_open_questions_marked(store):
+    create(store, "v", {"c": {"run": "test.boom", "in": {}, "doc": "Break <it>"},
+                        "a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    store.append("v",
+                 {"kind": "message", "thread": "step-c", "from": "c", "to": "orchestrator",
+                  "body": "Which **DB**?", "needs_reply": True},
+                 {"kind": "message", "thread": "step-a", "from": "a", "to": "orchestrator",
+                  "body": "Moving the helpers\nrather than deleting them", "needs_reply": False},
+                 {"kind": "message", "thread": "step-a", "from": "a", "to": "orchestrator",
+                  "body": "Keep the old names?"},  # no needs_reply: a question
                  {"kind": "message", "thread": "step-a", "from": "orchestrator", "to": "a",
-                  "body": "for the step, not for you"})
-    items = views.needs(store, "v")
-    assert [i["kind"] for i in items] == ["Answer", "Input", "Failed", "Message"]
-    assert "Pick &lt;one&gt;" in items[0]["text"] and items[0]["href"] == \
-        "/projects/v/inbox#item-v-i1"
-    assert "<b>who</b> has no value — Who &lt;b&gt;counts&lt;/b&gt;" in items[1]["text"]
-    assert items[2]["step"] == "c" and items[2]["href"] == "/projects/v/steps/c"
-    assert "Break &lt;it&gt;: " in items[2]["text"] and "exit code 1…" in items[2]["text"]
-    assert items[3]["step"] == "c" and "c → orchestrator: Help &lt;please&gt;" in \
-        items[3]["text"]
-    band = views.needs_band(items)
-    assert '<h2 class="label attn" id="needs-h">Needs you (4)</h2>' in band
-    assert 'class="badge"' not in band  # the one red badge stays the nav's
-    create(store, "calm", {})
-    assert views.needs(store, "calm") == [] and views.needs_band([]) == ""
+                  "body": "No shims."})
+    board = views.load_board(store, "v")
+    panel = views.messages_panel(store, board)
+    # threads, latest first; one waiting on a reply opens, an answered one stays folded
+    assert panel.index('id="th-step-a"') < panel.index('id="th-step-c"')
+    assert 'id="th-step-c" data-preserve-attr="open" open>' in panel
+    assert 'id="th-step-a" data-preserve-attr="open">' in panel
+    assert '<span class="m-tag await">1 awaiting reply</span>' in panel
+    assert '<span class="th-doc">Break &lt;it&gt;</span>' in panel
+    assert "<strong>DB</strong>" in panel  # markdown bodies render
+    assert "Moving the helpers<br>rather than deleting them" in panel
+    assert '<span class="m-tag">note</span>' in panel
+    assert '<li class="m m-lead">' in panel and '<li class="m m-step">' in panel
+    page = views.project_page(store, "v", ver="x")  # questions for the orchestrator are not
+    assert "Needs you" not in page and '<div id="messages">' in page  # a person's to answer
+    detail = views.step_detail(store, "v", "a")  # its conversation comes before its inputs
+    assert detail.index(">Messages</h3>") < detail.index(">Inputs</h3>")
+    assert "Awaiting reply" in views.step_detail(store, "v", "c")
 
 
 # ---- the index ----------------------------------------------------------------------------
@@ -322,8 +323,7 @@ def test_the_project_index(store):
     assert '<span class="meta">1 of 3</span>' in page
     assert '<a href="/projects/v#step:a">' in page and "Add &lt;them&gt;" in page
     assert "No steps yet." in page  # w
-    needs = page[page.index('<div id="needs">'):page.index('<div id="projects">')]
-    assert '<span class="k">v</span><span class="t">1 failed step</span>' in needs
+    assert "Needs you" not in page  # what asks for a person is the inbox alone
     assert re.search(r'<time datetime="\d{4}-\d\d-\d\dT[\d:]+Z"', page)
     assert '<a href="/fns">Functions</a>' in page and '<a href="/" aria-current="page">' in page
 

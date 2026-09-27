@@ -1,8 +1,9 @@
 """Views (SPEC §8): the HTML of the dashboard `sluice serve` renders, and `plan_view`.
 
 - `mermaid(plan, state)`: the plan as a Mermaid flowchart (plan_view's text format, for agents).
-- `index`: every project as one row, under the compact "Needs you" lines of every project.
-- `project_page`: the project's "Needs you" lines, then its plan as a board of cards laid out by
+- `index`: every project as one row. What waits on a person is the inbox alone (its count is
+  the nav's red badge); nothing else asks for them.
+- `project_page`: the project's description, then its plan as a board of cards laid out by
   dependency depth (plan inputs left, plan outputs right, edges as inline SVG), drawn entirely
   on the server; a card opens the step's detail (`step_detail`): a drawer on the live page, a
   page of its own without JavaScript. `render()` serves the standalone page to `plan_view`.
@@ -621,18 +622,18 @@ def block_line(store: Store, board: Board, block: Block) -> tuple[str, str]:
     return "", ""
 
 
-# ---- what needs a person ----------------------------------------------------------------
+# ---- messages -------------------------------------------------------------------------
 
 
-def _unanswered(store: Store, project: str, steps: Iterable[str]) -> list[dict[str, Any]]:
-    """Messages addressed to the orchestrator or a person (anyone but a step of the plan) with
-    no later message from that addressee on the same thread."""
-    msgs = L.read(store.log_dir(project), kinds=["message"])["records"]
+def _awaiting(msgs: list[dict[str, Any]], steps: Iterable[str]) -> list[dict[str, Any]]:
+    """The questions still open: messages that ask for a reply (`needs_reply`, true unless
+    the sender marked a note), addressed to someone other than a step of the plan (the
+    orchestrator, a person), with no later message from that addressee on the same thread."""
     steps = set(steps)
     out = []
     for i, m in enumerate(msgs):
         to = m.get("to")
-        if not to or to in steps:
+        if not to or to in steps or m.get("needs_reply") is False:
             continue
         if not any(x.get("thread") == m.get("thread") and x.get("from") == to
                    for x in msgs[i + 1:]):
@@ -649,57 +650,78 @@ def _thread_step(thread: Any, steps: Mapping[str, Any]) -> str | None:
     return t[5:] if t.startswith("step-") and t[5:] in steps else None
 
 
-def needs(store: Store, project: str) -> list[dict[str, str]]:
-    """What waits on a person in one project, most actionable first: open inbox items, plan
-    inputs that hold up a step, failed steps, unanswered messages. Each {kind, text (HTML),
-    href, step?}."""
-    out: list[dict[str, str]] = []
-    base = f"/projects/{quote(project)}/inbox"
-    for item in store.inbox(project):
-        out.append({"kind": "Answer", "href": f"{base}#item-{e(project)}-{e(item['id'])}",
-                    "text": f"{e(item['title'])} <span class=\"when\">asked "
-                            f"{_when(item['created'])}</span>"})
-    for w in store.waiting_inputs(project):
-        doc = f" — {e(_line(w['doc'], 120))}" if w.get("doc") else ""
-        out.append({"kind": "Input", "href": base,
-                    "text": f"<b>{e(w['name'])}</b> has no value{doc}"})
-    try:
-        board = load_board(store, project)
-    except SluiceError:  # e.g. a plan that no longer validates: its fix is the orchestrator's
-        return out
-    for b in board.blocks.values():
-        if b.status == "failed":
-            when = f' <span class="when">{_when(b.entry["finished"])}</span>' \
-                if b.entry.get("finished") else ""
-            out.append({"kind": "Failed", "href": step_href(project, b.sid), "step": b.sid,
-                        "text": f"{e(b.title)}: <span class=\"err\">"
-                                f"{e(_line(b.entry.get('error') or 'failed', 140))}</span>{when}"})
-    for m in _unanswered(store, project, board.blocks):
-        sid = _thread_step(m.get("thread"), board.blocks)
-        href = step_href(project, sid) if sid else \
-            f"/projects/{quote(project)}/log?thread={quote(str(m.get('thread') or ''))}"
-        item = {"kind": "Message", "href": href,
-                "text": f"{e(str(m.get('from') or '?'))} → {e(str(m.get('to')))}: "
-                        f"{e(_line(m.get('body', ''), 140))} "
-                        f"<span class=\"when\">{_when(m.get('at', ''))}</span>"}
-        if sid:
-            item["step"] = sid
-        out.append(item)
-    return out
+MSG_FOLD_LINES = 8
+THREADS_SHOWN = 8
 
 
-def needs_band(items: list[dict[str, str]], link_steps: bool = True) -> str:
-    """The "Needs you" lines (none when nothing waits)."""
-    if not items:
+def _body_html(body: str) -> str:
+    """A message body: markdown when it looks like markdown, else paragraphs with their line
+    breaks; a long one folds."""
+    if MARKDOWN_HINT.search(body):
+        html = markdown(body)
+    else:
+        html = "".join(f"<p>{e(p).replace(chr(10), '<br>')}</p>"
+                       for p in body.strip().split("\n\n") if p.strip())
+    lines = body.count("\n") + len(body) // 90
+    inner = f'<div class="clip md m-body">{html}</div>'
+    return _fold(inner, "md") if lines > MSG_FOLD_LINES else inner
+
+
+def message_html(m: dict[str, Any], steps: Iterable[str], awaiting: bool) -> str:
+    """One message: who to whom and when, whether it waits on a reply or is only a note, then
+    the body. A step's messages sit on the left, everyone else's (the orchestrator) indented."""
+    sender, to = str(m.get("from") or "?"), m.get("to")
+    who = "step" if sender in set(steps) else "lead"
+    tag = ('<span class="m-tag await">Awaiting reply</span>' if awaiting else
+           '<span class="m-tag">note</span>' if m.get("needs_reply") is False else "")
+    head = (f'<div class="m-head"><span class="m-from">{e(sender)}</span>'
+            + (f'<span class="m-to">→ {e(str(to))}</span>' if to else "")
+            + f'<span class="m-when">{_when(m.get("at", ""))}</span>{tag}</div>')
+    return f'<li class="m m-{who}">{head}{_body_html(str(m.get("body", "")))}</li>'
+
+
+def messages_panel(store: Store, board: Board, live: bool = True) -> str:
+    """The project's conversations (the `messages` part): one per thread, the latest first,
+    each folded to its last message unless a question on it still waits for a reply."""
+    msgs = L.read(store.log_dir(board.project), kinds=["message"])["records"]
+    if not msgs:
         return ""
-    rows = "".join(
-        f'<li><a href="{it["href"]}"'
-        + (f' data-step="{e(it["step"])}"' if link_steps and it.get("step") else "")
-        + f'><span class="k k-{it["kind"].lower()}">{it["kind"]}</span>'
-          f'<span class="t">{it["text"]}</span></a></li>' for it in items)
-    return (f'<section class="needs" aria-labelledby="needs-h">'
-            f'<h2 class="label attn" id="needs-h">Needs you ({len(items)})</h2>'
-            f"<ul>{rows}</ul></section>")
+    waiting = {m["seq"] for m in _awaiting(msgs, board.blocks)}
+    threads: dict[str, list[dict[str, Any]]] = {}
+    for m in msgs:
+        threads.setdefault(str(m.get("thread") or ""), []).append(m)
+    order = sorted(threads, key=lambda t: threads[t][-1]["seq"], reverse=True)
+    cards = []
+    for t in order[:THREADS_SHOWN]:
+        ms = threads[t]
+        sid = _thread_step(t, board.blocks)
+        if sid:
+            b = board.blocks[sid]
+            name = f'{glyph(b.mark)}<span class="th-name">{e(sid)}</span>'
+            name += f'<span class="th-doc">{e(b.title)}</span>' if b.doc.strip() else ""
+        else:
+            name = f'<span class="th-name">{e(t)}</span>'
+        open_q = sum(1 for m in ms if m["seq"] in waiting)
+        tag = (f'<span class="m-tag await">{open_q} awaiting reply</span>' if open_q else "")
+        last = ms[-1]
+        preview = (f'<span class="th-last"><b>{e(str(last.get("from") or "?"))}:</b> '
+                   f'{e(_line(str(last.get("body", "")), 160))}</span>')
+        count = f'{len(ms)} message{"s" if len(ms) != 1 else ""}'
+        summary = (f'<summary><span class="th-top">{name}<span class="th-meta">{count} · '
+                   f'{_when(last.get("at", ""))}</span>{tag}</span>{preview}</summary>')
+        items = "".join(message_html(m, board.blocks, m["seq"] in waiting) for m in ms)
+        link = (f'<p class="more"><a href="{e(step_href(board.project, sid))}" '
+                f'data-step="{e(sid)}">Open {e(sid)}</a></p>' if sid and live else "")
+        cards.append(f'<details class="thread" id="th-{e(t)}" data-preserve-attr="open"'
+                     f'{" open" if open_q else ""}>{summary}<ol class="msgs">{items}</ol>'
+                     f"{link}</details>")
+    more = ""
+    if len(order) > THREADS_SHOWN and live:
+        log = f"/projects/{quote(board.project)}/log?kind=message"
+        more = (f'<p class="more"><a href="{log}">{len(order) - THREADS_SHOWN} older '
+                f"threads in the log</a></p>")
+    return (f'<section class="threads" aria-labelledby="threads-h"><h2 class="label" '
+            f'id="threads-h">Messages</h2>{"".join(cards)}{more}</section>')
 
 
 # ---- the board: rows by dependency depth, inside the column -----------------------------
@@ -927,29 +949,6 @@ def _project_row(store: Store, name: str) -> str:
             f"{now}</li>")
 
 
-def _index_needs(store: Store) -> str:
-    """The compact "Needs you" lines of the index: one per project that has something."""
-    rows = []
-    for name in store.project_names():
-        if store.archived(name):
-            continue
-        items = needs(store, name)
-        if not items:
-            continue
-        kinds: dict[str, int] = {}
-        for it in items:
-            kinds[it["kind"]] = kinds.get(it["kind"], 0) + 1
-        what = {"Answer": ("answer", "answers"), "Input": ("input", "inputs"),
-                "Failed": ("failed step", "failed steps"), "Message": ("message", "messages")}
-        text = " · ".join(f"{n} {what[k][n != 1]}" for k, n in kinds.items())
-        rows.append(f'<li><a href="/projects/{quote(name)}"><span class="k">{e(name)}</span>'
-                    f'<span class="t">{e(text)}</span></a></li>')
-    if not rows:
-        return ""
-    return (f'<section class="needs" aria-labelledby="needs-h"><h2 class="label attn" '
-            f'id="needs-h">Needs you</h2><ul>{"".join(rows)}</ul></section>')
-
-
 def index_parts(store: Store) -> dict[str, str]:
     names = store.project_names()
     active = [n for n in names if not store.archived(n)]
@@ -963,14 +962,14 @@ def index_parts(store: Store) -> dict[str, str]:
         body += (f'<details class="archived" data-preserve-attr="open"><summary>Archived '
                  f'({len(old)})</summary><ul class="projects">'
                  f'{"".join(_project_row(store, n) for n in old)}</ul></details>')
-    return {"needs": _part("needs", _index_needs(store)), "projects": _part("projects", body),
+    return {"projects": _part("projects", body),
             "nav-inbox": nav_inbox(open_count(store))}
 
 
 def index(store: Store, ver: str | None = None) -> str:
     """The project index; live (streaming from /stream) when given the home's version `ver`."""
     parts = index_parts(store)
-    return layout("Projects", f'<h1 class="vh">Projects</h1>{parts["needs"]}'
+    return layout("Projects", f'<h1 class="vh">Projects</h1>'
                   f'{parts["projects"]}', stream="/stream" if ver else None,
                   signals={"ver": ver} if ver else None, inbox=open_count(store), here="/",
                   store=store,
@@ -1012,7 +1011,7 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     paused = board.info.get("paused") is True
     note = '<p class="attn-note">Paused: no step starts until you resume it.</p>' \
         if paused else ""
-    note += '<p class="attn-note">Archived: listed apart and left out of Needs you.</p>' \
+    note += '<p class="attn-note">Archived: listed apart from the other projects.</p>' \
         if archived else ""
     line = f'<p class="meta sum">{_summary_line(board, last_change(store, project))}</p>'
     if live:
@@ -1022,8 +1021,8 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     # archive switch, sit under the board.
     about_plan = (result_panel(board) + inputs_strip(board) + line)
     parts = {"summary": _part("summary", note + _about(about)),
-             "needs": _part("needs", needs_band(needs(store, project)) if live else ""),
              "graph": _part("graph", board_html(store, board, live)),
+             "messages": _part("messages", messages_panel(store, board, live)),
              "result": _part("result", about_plan, "section", "plan-facts")}
     if live:
         parts["nav-inbox"] = nav_inbox(open_count(store))
@@ -1055,8 +1054,8 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     every step's detail in a disclosure)."""
     live = ver is not None
     p = _project(store, project, live)
-    body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}{p["needs"]}'
-            f'{p["graph"]}{p["result"]}')
+    body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}'
+            f'{p["graph"]}{p["messages"]}{p["result"]}')
     if live:
         body += _drawer(project)
     else:
@@ -1241,6 +1240,12 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
                     'title="Show the types of the values">Types</button>')
     if b.entry.get("error"):
         section("Error", f'<pre class="err">{e(b.entry["error"])}</pre>')
+    thread = f"step-{sid}"  # its conversation with the orchestrator: what matters right now
+    msgs = L.read(store.log_dir(project), kinds=["message"], threads=[thread])["records"]
+    if msgs:
+        waiting = {m["seq"] for m in _awaiting(msgs, board.blocks)}
+        items = "".join(message_html(m, board.blocks, m["seq"] in waiting) for m in msgs)
+        section("Messages", f'<ol class="msgs">{items}</ol>')
     tail = ""
     if b.run_ids:
         d = _run_dir(store, project, b.run_ids[-1])
@@ -1274,17 +1279,6 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     elif own:
         names = ", ".join(e(n) for n in own)
         section("Outputs", f'<p class="quiet">None yet. It hands on: {names}.</p>')
-    thread = f"step-{sid}"
-    msgs = L.read(store.log_dir(project), kinds=["message"], threads=[thread])["records"]
-    if msgs:
-        items = "".join(
-            f'<li><p class="meta">{e(str(m.get("from") or "?"))}'
-            + (f" → {e(str(m['to']))}" if m.get("to") else "")
-            + f' · {_when(m.get("at", ""))}</p><div class="msg">{e(str(m.get("body", "")))}</div>'
-              f"</li>" for m in msgs)
-        log = f"/projects/{quote(project)}/log?thread={quote(thread)}"
-        section("Messages", f'<ul class="msgs">{items}</ul>'
-                + (f'<p class="more"><a href="{log}">Thread in the log</a></p>' if live else ""))
     # the run's own input.json when there is one, else what the bindings resolve to now
     ran: dict[str, Any] = {}
     if b.run_ids:
@@ -1663,21 +1657,6 @@ def _item(item: dict[str, Any], back: str, all_projects: bool) -> str:
     return f'<article class="item" id="item-{e(p)}-{e(iid)}">{"".join(out)}</article>'
 
 
-def _waiting(store: Store, project: str | None) -> str:
-    """Unset plan inputs that hold up a step (and no open item asks for): read-only, since a
-    value comes through an inbox item or plan_set_input."""
-    rows = [f'<tr><td><a href="/projects/{e(w["project"])}">{e(w["project"])}</a></td>'
-            f'<td><code>{e(w["name"])}</code></td><td><code>{e(w["type"])}</code></td>'
-            f'<td>{e(w.get("doc", ""))}</td><td>{e(", ".join(w["steps"]))}</td></tr>'
-            for w in store.waiting_inputs(project)]
-    if not rows:
-        return ""
-    return ('<h2>Waiting on a person</h2><p class="quiet">Plan inputs with no value; set one '
-            "with <code>plan_set_input</code>, or post an item with its input.</p>"
-            '<div class="scroll"><table><tr><th>project</th><th>input</th><th>type</th>'
-            f'<th>doc</th><th>steps waiting</th></tr>{"".join(rows)}</table></div>')
-
-
 def inbox_parts(store: Store, project: str | None, status: str) -> dict[str, str]:
     """The inbox page's parts: its items (open ones oldest first, the rest newest first), on
     the open view the plan inputs waiting on a person, and the nav badge."""
@@ -1687,8 +1666,6 @@ def inbox_parts(store: Store, project: str | None, status: str) -> dict[str, str
     empty = {"open": "Nothing is waiting on you."}.get(status, f"No {status} items.")
     body = "".join(_item(i, back, project is None) for i in items) \
         or f'<p class="empty">{e(empty)}</p>'
-    if status == "open":
-        body += _waiting(store, project)
     return {"inbox-items": _part("inbox-items", body),
             "nav-inbox": nav_inbox(open_count(store), project is None)}
 

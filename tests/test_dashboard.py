@@ -190,13 +190,11 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
     graph = next(p for p in sent if p.startswith('elements <div id="graph">'))
     assert 'class="node card is-failed" id="n-a"' in graph
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in graph and "<script>alert" not in graph
-    needs = next(p for p in sent if p.startswith('elements <div id="needs">'))
-    assert "Failed" in needs and "<script>alert" not in needs
     new_ver = [ev for ev in events if ev["event"] == "datastar-patch-signals"][-1]["data"]
     assert new_ver != [f'signals {{"ver":"{ver}"}}'] and new_ver[0].startswith('signals {"ver"')
     # a client with an old version gets every part at once, then nothing more
     stale = stream(port, "/projects/p/stream", {"ver": ver}, seconds=0.8)
-    assert len(patches(stale)) == 5  # summary, needs, result, graph and the nav badge
+    assert len(patches(stale)) == 5  # summary, graph, messages, result and the nav badge
 
 
 def test_a_running_steps_stderr_moves_its_progress_line(store, port):

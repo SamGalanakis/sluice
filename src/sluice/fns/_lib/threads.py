@@ -1,5 +1,6 @@
 """Threads (SPEC §10), shared by the thread.* fns: messages are `message` records in the
-project's log (`{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "data"?}`), so
+project's log (`{"seq", "at", "kind": "message", "thread", "from", "to"?, "body",
+"needs_reply", "data"?}`), so
 a thread is the log filtered by kind and thread name. Standard library only.
 """
 
@@ -37,13 +38,16 @@ def check_thread(name: Any) -> str:
 
 
 def post(thread: str, body: str, sender: str, to: str | None = None,
-         data: Any = None) -> int:
-    """Append one message; returns its seq (distinct and increasing across processes)."""
+         data: Any = None, needs_reply: bool = True) -> int:
+    """Append one message; returns its seq (distinct and increasing across processes).
+    `needs_reply` false marks a note (a heads-up, a decision already made) rather than a
+    question; the record always says which."""
     d, home = project_log()
     rec: dict[str, Any] = {"kind": "message", "thread": check_thread(thread), "from": sender}
     if to is not None:
         rec["to"] = to
     rec["body"] = body
+    rec["needs_reply"] = needs_reply is not False
     if data is not None:
         rec["data"] = data
     return L.append_locked(d, [rec], L.cap_of(home))[0]

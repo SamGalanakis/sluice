@@ -66,7 +66,7 @@ progress line and its typed outputs, with the one human decision point (the Inbo
 
 ## Product Principles
 
-1. Needs-you first: anything waiting on a person is the first thing on the page.
+1. One place asks the person: the inbox, with the one red badge. Nothing else calls for them.
 2. The plan is the page: show the graph of work, not a table about it.
 3. Every block explains itself: prompt in, progress now, typed outputs out.
 4. Calm when healthy: colour marks state, never decoration; red is reserved.

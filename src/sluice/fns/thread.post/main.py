@@ -10,7 +10,7 @@ from sluice.fns._lib.threads import post
 
 def main(inp, ctx):
     return {"seq": post(inp["thread"], inp["body"], inp["from"], inp.get("to"),
-                        inp.get("data"))}
+                        inp.get("data"), inp.get("needs_reply") is not False)}
 
 
 if __name__ == "__main__":

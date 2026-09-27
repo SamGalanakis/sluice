@@ -60,10 +60,9 @@ def test_the_project_page_shows_the_docs(store, port):
     create(store, "p", {"s": echo("who", "Echo <i>it</i>")},
            inputs={"who": {"type": "string", "doc": "Who <b>signs</b> off"}})
     page = get(port, "/projects/p")[1]
-    # the input's doc in the plan inputs and on its "Needs you" line; the step's doc on its
-    # card (a glue chip carries it as its title)
+    # the input's doc in the plan inputs; the step's doc on its card (a glue chip carries it
+    # as its title)
     assert '<p class="meta">Who &lt;b&gt;signs&lt;/b&gt; off</p></dd>' in page
-    assert "<b>who</b> has no value — Who &lt;b&gt;signs&lt;/b&gt; off" in page
     assert 'title="Echo &lt;i&gt;it&lt;/i&gt; — Waits for who"' in page  # doc, then why it waits
     assert "<i>it" not in page and "<b>signs" not in page
 
@@ -73,23 +72,3 @@ def test_an_input_item_without_a_body_takes_the_input_doc(store):
     assert store.inbox_post("p", "Who?", input="who")["body"] == "Who signs **off**"
     assert store.inbox_post("p", "Who?", body="mine", input="who")["body"] == "mine"
     assert "body" not in store.inbox_post("p", "Who?")
-
-
-def test_the_inbox_lists_inputs_that_hold_up_a_step(store, port):
-    create(store, "p", {"s": echo("who"), "t": echo("n"), "u": echo("free")},
-           inputs={"who": {"type": "string", "doc": "Who signs <b>off</b>"},
-                   "n": "int?", "free": "string"})
-    store.set_input("p", "free", "x", "test", "")
-    assert store.waiting_inputs() == [{"project": "p", "name": "who", "type": "string",
-                                       "steps": ["s"], "doc": "Who signs <b>off</b>"}]
-    page = get(port, "/inbox")[1]
-    assert "Waiting on a person" in page and "<code>who</code>" in page
-    assert "Who signs &lt;b&gt;off&lt;/b&gt;" in page
-    assert "Waiting on a person" not in get(port, "/inbox?status=all")[1]
-    i = store.inbox_post("p", "Who?", input="who")["id"]  # an open item asks for it now
-    assert store.waiting_inputs("p") == []
-    store.inbox_close("p", i, None, "test")
-    assert [w["name"] for w in store.waiting_inputs("p")] == ["who"]
-    store.set_input("p", "who", "Sam", "test", "")
-    assert store.waiting_inputs() == []
-    assert "Waiting on a person" not in get(port, "/projects/p/inbox")[1]

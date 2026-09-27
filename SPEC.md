@@ -444,21 +444,27 @@ raw HTML escaped, unsafe link schemes refused).
   per source ref labelled with the output name, one colour class per status (pending grey,
   running blue, succeeded green, failed red, stale amber, manual outlined; a stale manual step
   shows as stale).
-- **Needs you**: what waits on a person, most actionable first: open inbox items ("Answer"),
-  plan inputs that hold up a step with no value and no open item asking for them ("Input"),
-  failed steps ("Failed", with the first line of the error) and messages addressed to anyone
-  but a step of the plan (the orchestrator, a person) that no later message on the same thread
-  from that addressee answers ("Message"). Shown only when something waits; its count is not
-  red.
-- `GET /`: the compact "Needs you" lines (one per project that is not archived: what kinds
-  wait, how many), then one row per active project, and the archived ones folded under
+- **What waits on a person is the inbox alone** (§8a): its open items, counted by the nav's
+  red badge. The orchestrator posts there whatever it needs from a person. Failed steps,
+  missing inputs and messages between agents are the orchestrator's: they show on the board,
+  in the summary line and under Messages, never as a call to the person.
+- **Messages**: the project page's conversations, one per thread, the latest first, under the
+  board. A thread shows its step (glyph, id, doc) or its name, how many messages, when the last
+  came and a line of it; it opens to the messages, each with sender → recipient, when, and its
+  body (markdown rendered, a long one folded). A step's messages sit on the left, everyone
+  else's indented. A message that asks for a reply (`needs_reply`, true unless the sender
+  marked a note) from someone other than a step of the plan, with no later message from that
+  addressee on the thread, is marked "Awaiting reply" (amber, not red) and keeps its thread
+  open; a note is marked "note". The eight latest threads show, older ones are in the log. A
+  step's detail shows its own thread (`step-<id>`) the same way, right after its error.
+- `GET /`: one row per active project, and the archived ones folded under
   "Archived (n)"; each row: name, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
 - `GET /projects/<name>`: under the nav naming the project (its History section is the log
   filtered to the history kinds; Functions the functions as the project sees them), the
   description (two lines, then
-  "Show more"; an archived project says so), the "Needs you" lines, then the **board**: one
+  "Show more"; an archived project says so), then the **board**: one
   row per dependency depth, top to bottom, inside the page's column, each step a compact
   bubble: its status glyph, its id and, small, how long it ran (live while running) and
   `done/total` for a scattered step; its tooltip is its doc and what it says now (a running
@@ -529,10 +535,7 @@ Streams end when the server shuts down; the client reconnects with backoff.
   An open item has an answer box that works without JavaScript (a form POST of `text`, then a
   303 back); with it, `/static/inbox.js` draws the item's `ui` (§8a) above the box, and folds
   the box away when the program has buttons. An answered item shows its answer, a closed one
-  its reason. Below the open items, a read-only "Waiting on a person" table lists the plan
-  inputs that hold up a step: required, no value, read by a step that has not run, and no open
-  item names them (project, input, type, doc, the steps waiting). A value for one comes through
-  an inbox item or `plan_set_input`; the table has no write of its own. The page streams like
+  its reason. The page streams like
   the index (`/inbox/stream`, `/projects/<name>/inbox/stream`,
   parts: the items and the nav badge); each open item's answer area carries
   `data-ignore-morph`, so a patch never resets what a person is typing. An answer the server
@@ -547,8 +550,7 @@ Streams end when the server shuts down; the client reconnects with backoff.
   request whose `Origin` is not this host is refused (403).
 - `POST /projects/<name>/archive`: the other write. A form `archived` ("1" or "0") calls the
   store's `update_project`, the `project_update` tool's own code path, then redirects (303) to
-  the project. An archived project keeps running; it is listed apart and left out of the
-  index's "Needs you". Same refusals as the answer route (404, 403 for another `Origin`).
+  the project. An archived project keeps running; it is listed apart. Same refusals as the answer route (404, 403 for another `Origin`).
 - `POST /projects/<name>/pause` and `POST /projects/<name>/steps/<id>/pause`: a form `paused`
   ("1" or "0") calls `update_project` or `pause_steps` (the `project_update` and `step_pause`
   tools' code paths), then redirects (303) to the project, with the step's drawer open
@@ -573,7 +575,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `docs` | `topic?` | the index, or one page as markdown |
 | `projects_list` | – | `[{name, description, rev, counts, archived, paused}]` |
 | `project_create` | `name, description?` | `{name}` (with an empty plan) |
-| `project_update` | `name, description?, archived?, paused?` | `{name}`; `archived: true` lists the project apart on the dashboard and leaves it out of the index's "Needs you" (nothing stops); `paused: true` starts none of its steps until `false` (§6) |
+| `project_update` | `name, description?, archived?, paused?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6) |
 | `project_delete` | `name` | `{deleted}`: removes the project's directory (plan, state, log, inbox, runs); refused (`bad_request`) unless it is archived and none of its steps is running |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |

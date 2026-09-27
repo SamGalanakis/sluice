@@ -24,9 +24,11 @@ A thread is a named conversation in the project's log: its `message` records. Na
 lowercase letters, digits, `-` and `_`.
 - Post: `fn_call("thread.post", {"thread": "questions", "from": "worker-1", "body": "Which DB?",
   "to": "lead"}, project="myproj", wait=10)` → `{"seq": 42}`. `to` and `data` (any JSON) are
-  optional.
+  optional. `needs_reply` (default true) says whether it asks something: set it false for a
+  note, a heads-up or a decision already made. The record always carries it, so a watcher can
+  wake only on questions; the dashboard marks an unanswered question "Awaiting reply".
 - Read or wait: `log_wait("myproj", since_seq=42, threads=["questions"])`. A message is
-  `{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "data"?}`.
+  `{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "needs_reply", "data"?}`.
 - Thread functions need a project: `fn_call` them with `project`, or use them as plan steps.
 
 In a plan, `thread.wait` blocks a step until a message arrives (`to` keeps only messages
@@ -49,7 +51,10 @@ addressed to it or to nobody; `timeout` defaults to 300 s, then `messages` is em
 The agents pack (`agent.devin`, `agent.codex`, `agent.claude`, `agent.review`, and so
 `agent.run`) gives every agent running as a plan step its own thread, `step-<id>`, and
 tells it in the spec to check that thread at natural checkpoints and to post questions to
-`orchestrator` there (pass `listen: false` to a step to leave the section out).
+`orchestrator` there, with notes (decisions already made) marked `needs_reply: false` and no
+progress reports (pass `listen: false` to a step to leave the section out). A person is never
+asked through a thread: when the orchestrator needs one, it posts to the inbox
+(`docs("inbox")`).
 
 - To steer a running step, post on its thread with `to` set to the step id:
   `fn_call("thread.post", {"thread": "step-work", "from": "orchestrator", "to": "work",

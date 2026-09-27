@@ -1,6 +1,6 @@
 ---
 name: sluice dashboard
-description: A calm board for one person supervising many agents: what needs you, what is running, what each block produced.
+description: A calm board for one person supervising many agents: what is running, what each block produced, and an inbox for what needs you.
 colors:
   canvas: "oklch(0.975 0.008 190)"
   ink: "oklch(0.23 0.018 220)"
@@ -143,7 +143,7 @@ light set plus the dark canvas, ink, card, muted ink and primary).
 
 ### Status ramp
 - **Active blue** running, **success green** succeeded and set by hand, **attention amber**
-  stale and "Needs you", **idle grey** pending, **ink** failed.
+  stale and a message awaiting a reply, **idle grey** pending and skipped, **ink** failed.
 
 ### Named Rules
 **The One Red Rule.** Red (`badge`) is the open-inbox count in the nav and nothing else. A
@@ -235,15 +235,21 @@ Primary is green on its own ink; others are card-coloured with an input hairline
 - **Status filter** (inbox): a small segmented control, the current status in the secondary
   fill with a strong hairline; a filter, so it does not look like the sections.
 
-### Needs you
-One bordered list, one row per thing that waits: a 72px kind word (Answer, Input in
-amber; Failed in ink; Message in blue), the text on one line, its age in meta.
+### Messages
+Under the board, one bordered card per thread, the latest first: the step's glyph, id and
+doc (or the thread name), "n messages · when", an "awaiting reply" tag in amber when a
+question waits, and a muted line of the last message; open, a hairline under the summary and
+the messages. A message is a 2px left rule and a small head (sender in ink, → recipient and
+when in muted ink, a "note" or "Awaiting reply" tag), then its body at reading size. A step's
+messages sit on the left with a strong-hairline rule; the orchestrator's are indented 28px
+(14px on a phone) with a blue rule, so a conversation reads at a glance. Nothing else on the
+page asks the person for anything: that is the inbox.
 
 ### Step drawer
 Right-hand panel (680px) over the board without a scrim on desktop, full-screen with a scrim on
 phones, read like a run history (Temporal's event view is the reference): the step id (20px)
 and its doc, then a quiet grid of facts (status, function, started, duration, cost, session).
-Sections under small labels in need order: Error, Progress, Outputs, Messages, Prompt, Inputs,
+Sections under small labels in need order: Error, Messages, Progress, Outputs, Prompt, Inputs,
 Log output, Attempts (only past one). A value is a field: its name in 600, a small `← source`
 link, its doc in meta, the value under it. Types are noise until asked for: in the name's
 title, and beside every name with the Types switch. Long values fold under a fade.

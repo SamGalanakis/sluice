@@ -156,8 +156,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
         Args:
             name: the project.
             description: the new description (leave out to keep it).
-            archived: true to archive (the dashboard lists it apart and leaves it out of
-                "Needs you"; nothing stops or changes), false to bring it back.
+            archived: true to archive (the dashboard lists it apart; nothing stops or
+                changes), false to bring it back.
             paused: true to pause the whole project: no step of it starts, however ready,
                 until false again; running steps finish.
         """
