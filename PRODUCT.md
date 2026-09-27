@@ -45,7 +45,8 @@ progress line and its typed outputs, with the one human decision point (the Inbo
 
 - Read-only except answering inbox items (the one write, shared with the MCP tool).
 - Server-rendered HTML; every page works without JavaScript; Datastar SSE streams patch only the
-  parts that changed. External assets only from cdn.jsdelivr.net.
+  parts that changed. Every script is served by sluice itself (vendored); only the font comes
+  from cdn.jsdelivr.net.
 - Every value is untrusted and HTML-escaped.
 - Statuses: pending, running, succeeded, failed, stale; a succeeded step may be manual (value set
   by hand). Scatter steps report done/total.

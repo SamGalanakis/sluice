@@ -48,9 +48,9 @@ CLASSES = {"pending": "fill:#f1f1f1,stroke:#999,color:#333",
            "skipped": "fill:#fff,stroke:#999,color:#777,stroke-dasharray:3 3",
            "manual": "fill:#fff,stroke:#16a34a,stroke-width:3px,stroke-dasharray:6 3"}
 STATUSES = S.STATUSES
-# Datastar with Rocket (web components); static/sluice.js imports the same module
-DATASTAR_JS = ("https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/"
-               "datastar-rocket.js")
+# Datastar with Rocket (web components), served from static/ like every script the dashboard
+# runs; static/sluice.js imports the same module
+DATASTAR_JS = "/static/datastar-rocket-1.0.4.js"
 FONT_CSS = "https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/index.css"
 # Keep the stream open across server restarts and network blips (Datastar backs off to 30 s).
 # Reconnect for good, and within 3 s once the server is back (Datastar backs off to 30 s).

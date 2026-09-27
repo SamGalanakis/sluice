@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from sluice.dashboard import STATIC_TYPES
 from sluice.mcp_server import DOCS
 from tests.browser import Chrome, find_chrome
 from tests.conftest import create
@@ -194,8 +195,9 @@ def test_the_renderer_draws_exactly_the_vocabulary():
     js = (STATIC / "inbox.js").read_text()
     block = js.split("const RENDERERS = {", 1)[1].split("\n};", 1)[0]
     assert re.findall(r"^  (\w+):", block, re.MULTILINE) == [c["name"] for c in VOCAB["components"]]
-    assert re.search(r'"https://cdn\.jsdelivr\.net/npm/@openuidev/lang-core@\d+\.\d+\.\d+/\+esm"',
-                     js), "lang-core must be pinned to an exact version"
+    # lang-core is vendored, pinned by the version in its name, and served like our own scripts
+    pinned = re.search(r'"/static/(lang-core-\d+\.\d+\.\d+\.js)"', js)
+    assert pinned and pinned[1] in STATIC_TYPES and (STATIC / pinned[1]).exists()
 
 
 def examples():
@@ -213,24 +215,10 @@ def test_the_doc_examples_use_only_the_vocabulary():
 # ---- the renderer in a browser ------------------------------------------------------------
 
 CHROME = find_chrome()
-LANG_CORE = re.search(r'"(https://cdn\.jsdelivr\.net/npm/@openuidev/lang-core@[^"]+)"',
-                      (STATIC / "inbox.js").read_text())[1]
-
-
-def cdn_reachable() -> bool:
-    try:
-        urllib.request.urlopen(LANG_CORE, timeout=10).close()
-    except OSError:
-        return False
-    return True
-
-
 @pytest.fixture
 def chrome():
     if CHROME is None:
         pytest.skip("no Chromium (set SLUICE_CHROME)")
-    if not cdn_reachable():
-        pytest.skip("cdn.jsdelivr.net is not reachable")
     c = Chrome(CHROME)
     yield c
     c.close()

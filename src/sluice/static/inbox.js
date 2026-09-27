@@ -4,7 +4,7 @@
 // the parser cannot use is dropped and counted in a visible note. A Button answers the item
 // with {action, params, values}, POSTed as JSON to the same route the no-JS text box posts to.
 import { createParser, parseRules, validate } from
-  "https://cdn.jsdelivr.net/npm/@openuidev/lang-core@0.3.0/+esm";
+  "/static/lang-core-0.3.0.js";
 
 const VOCAB = await (await fetch("/static/openui.json")).json();
 

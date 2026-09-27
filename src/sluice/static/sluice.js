@@ -14,7 +14,7 @@
 // and the Types switch shows the types of values.
 
 import { rocket } from
-  "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar-rocket.js";
+  "/static/datastar-rocket-1.0.4.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];

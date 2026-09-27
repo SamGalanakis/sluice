@@ -437,10 +437,13 @@ dashboard's one red badge (none when nothing waits); nothing else is red. A step
 drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
 hand, circular arrow stale, cross failed, ring with two bars paused, dashed ring with a slash
 skipped) with its word for assistive technology, never colour
-alone. The only external assets come from cdn.jsdelivr.net: Datastar v1.0.4, the Inter font
-(`@fontsource-variable/inter@5.3.0`; the system sans without it), and, on inbox pages,
-`@openuidev/lang-core@0.3.0/+esm` (jsDelivr's ESM build; it imports `zod@4.6.5` from the same
-CDN). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
+alone. Every script the dashboard runs is served by sluice from `static/`: its own, and
+vendored copies (the version in each name) of Datastar v1.0.4 (`datastar-rocket-1.0.4.js`)
+and, on inbox pages, `@openuidev/lang-core@0.3.0` (jsDelivr's ESM build, with its imports of
+`zod@4.6.5` and `ci-info@4.4.0` rewritten to the vendored files next to it), so no third-party
+script runs with the dashboard's origin, which can reach `/mcp`. The one external asset is the
+Inter font's stylesheet from cdn.jsdelivr.net (`@fontsource-variable/inter@5.3.0`; the system
+sans without it). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
 raw HTML escaped, unsafe link schemes refused).
 - Mermaid (`flowchart LR`, `plan_view`'s text format for agents; the dashboard does not use it):
   plan inputs as rounded nodes, steps as boxes labelled

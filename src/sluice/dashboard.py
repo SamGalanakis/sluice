@@ -39,8 +39,13 @@ from .util import read_json
 
 PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE, I.FILE)
 STATIC = Path(__file__).resolve().parent / "static"
+# the dashboard's own scripts, then the vendored ones (from jsDelivr, the versions in their
+# names; lang-core's imports rewritten to these files), so no third-party script runs here
 STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json",
-                "sluice.js": "text/javascript", "nav.js": "text/javascript"}
+                "sluice.js": "text/javascript", "nav.js": "text/javascript",
+                **dict.fromkeys(["datastar-rocket-1.0.4.js", "lang-core-0.3.0.js",
+                                 "zod-4.6.5-v4.js", "zod-4.6.5-v4-core.js", "ci-info-4.4.0.js"],
+                                "text/javascript")}
 AUTHOR = "dashboard"
 HTTP_STATUS = {"not_found": 404, "conflict": 409}
 
