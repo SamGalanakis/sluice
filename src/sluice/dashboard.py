@@ -17,6 +17,7 @@ tool. The other is archiving a project (Store.update_project, like project_updat
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import threading
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -48,6 +49,38 @@ STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json"
                                 "text/javascript")}
 AUTHOR = "dashboard"
 HTTP_STATUS = {"not_found": 404, "conflict": 409}
+# the Host names this machine answers to on a loopback socket (the SDK's list for /mcp)
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _local_host(request: Request) -> bool:
+    """The dashboard's DNS-rebinding guard (/mcp has the SDK's own): a request that arrived
+    on a loopback socket must be addressed to this machine. A deliberate non-loopback bind
+    lifts the check."""
+    server = request.scope.get("server")
+    if not server:
+        loopback = True  # no socket to ask: treat as local
+    else:
+        try:
+            loopback = ipaddress.ip_address(server[0]).is_loopback
+        except ValueError:
+            loopback = server[0] == "localhost"
+    if not loopback:
+        return True
+    try:
+        host = urlsplit(f"//{request.headers.get('host', '')}").hostname
+    except ValueError:
+        return False
+    return host in LOCAL_HOSTS
+
+
+def _local(handler: Callable) -> Callable:
+    """403 a request that reached a loopback socket under a foreign Host."""
+    async def route(request: Request) -> Response:
+        if not _local_host(request):
+            return Response("requests under a foreign Host are refused", status_code=403)
+        return await handler(request)
+    return route
 
 
 def _stat(path: Path) -> tuple[int, int] | None:
@@ -63,9 +96,11 @@ def _digest(value: Any) -> str:
 
 
 def index_ver(store: Store) -> str:
-    """The version of the index and inbox pages: the stats of every project's files."""
-    return _digest([(n, [_stat(store.project_dir(n) / f) for f in PROJECT_FILES])
-                    for n in store.project_names()])
+    """The version of the index and inbox pages: the runner's liveness and the stats of
+    every project's files."""
+    return _digest([views.runner_state(store.home)]
+                   + [(n, [_stat(store.project_dir(n) / f) for f in PROJECT_FILES])
+                      for n in store.project_names()])
 
 
 def _running_stderr(store: Store, project: str) -> list[Path]:
@@ -87,7 +122,8 @@ def project_ver(store: Store, project: str) -> str:
     inbox (for the nav's badge) and of the running steps' stderr (their progress lines)."""
     d = store.project_dir(project)
     inboxes = [_stat(store.project_dir(n) / I.FILE) for n in store.project_names()]
-    return _digest([[_stat(d / f) for f in PROJECT_FILES], inboxes,
+    return _digest([views.runner_state(store.home),
+                    [_stat(d / f) for f in PROJECT_FILES], inboxes,
                     [_stat(p) for p in _running_stderr(store, project)]])
 
 
@@ -324,7 +360,9 @@ class Dashboard:
                 form = await request.form()
                 answer = {"action": "answer", "text": str(form.get("text") or "")}
                 nxt = str(form.get("next") or "")
-                back = nxt if nxt.startswith("/") and not nxt.startswith("//") else back
+                where = urlsplit(nxt)
+                back = nxt if nxt and not where.scheme and not where.netloc \
+                    and "\\" not in nxt else back
             item = await anyio.to_thread.run_sync(self.store.inbox_answer, name, item_id,
                                                   answer, AUTHOR)
         except SluiceError as err:
@@ -387,7 +425,8 @@ class Dashboard:
                                 request.query_params.get("project") or None)
 
     def add_routes(self, server: Any) -> None:
-        """Register every route on the MCP server (FastMCP `custom_route`)."""
+        """Register every route on the MCP server (FastMCP `custom_route`), each behind the
+        Host allowlist."""
         for path, handler in (("/", self.index), ("/stream", self.index_stream),
                               ("/projects/{name}", self.project),
                               ("/projects/{name}/stream", self.project_stream),
@@ -403,10 +442,13 @@ class Dashboard:
                               ("/projects/{name}/inbox", self.inbox),
                               ("/projects/{name}/inbox/stream", self.inbox_stream),
                               ("/static/{file}", self.static)):
-            server.custom_route(path, methods=["GET"])(handler)
-        server.custom_route("/projects/{name}/inbox/{id}/answer", methods=["POST"])(self.answer)
-        server.custom_route("/projects/{name}/archive", methods=["POST"])(self.archive)
-        server.custom_route("/projects/{name}/pause", methods=["POST"])(self.pause)
+            server.custom_route(path, methods=["GET"])(_local(handler))
+        server.custom_route("/projects/{name}/inbox/{id}/answer",
+                            methods=["POST"])(_local(self.answer))
+        server.custom_route("/projects/{name}/archive",
+                            methods=["POST"])(_local(self.archive))
+        server.custom_route("/projects/{name}/pause",
+                            methods=["POST"])(_local(self.pause))
         server.custom_route("/projects/{name}/steps/{sid}/pause",
-                            methods=["POST"])(self.pause_step)
+                            methods=["POST"])(_local(self.pause_step))
 

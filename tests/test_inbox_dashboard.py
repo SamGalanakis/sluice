@@ -130,6 +130,24 @@ def test_the_form_answers_through_the_store_and_a_second_post_is_refused(store, 
     assert code == 409
 
 
+def test_the_next_redirect_stays_a_local_path(store, port):
+    """`next` is used only when it is a bare path: no scheme, no netloc, no backslash."""
+    create(store, "p", {})
+
+    def location(nxt):
+        i = store.inbox_post("p", "q")["id"]
+        code, headers, _ = post(port, f"/projects/p/inbox/{i}/answer",
+                                {"text": "x", "next": nxt}, json_body=False)
+        assert code == 303, nxt
+        return headers["location"]
+
+    assert location("/ok") == "/ok"
+    assert location("/\\evil.example") == "/inbox"
+    assert location("//x") == "/inbox"
+    assert location("https://evil.example/x") == "/inbox"
+    assert location("") == "/inbox"
+
+
 def test_json_answers_and_their_refusals(store, port):
     create(store, "p", {}, inputs={"n": "int"})
     i = store.inbox_post("p", "How many?", input="n")["id"]

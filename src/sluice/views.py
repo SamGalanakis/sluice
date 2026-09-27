@@ -1041,6 +1041,42 @@ def _summary_line(board: Board, updated: str = "") -> str:
 # ---- the project index ------------------------------------------------------------------
 
 
+RUNNER_STALE = 15  # seconds without a beat before the runner counts as down
+
+
+def _runner_beat(home: Path) -> tuple[str, str]:
+    """The runner's liveness and its last beat. The runner heartbeats
+    SLUICE_HOME/runner.json ({"pid", "started", "beat"}) about once a second and leaves it
+    behind when it exits: ("live", beat) while the beat is fresh, ("stale", beat) past
+    RUNNER_STALE seconds, ("none", "") when no runner has run in this home."""
+    try:
+        beat = str(read_json(home / "runner.json").get("beat") or "")
+    except (OSError, ValueError, AttributeError):
+        return "none", ""
+    then = _parse_iso(beat)
+    if then is None:
+        return "none", ""
+    if (_now() - then).total_seconds() <= RUNNER_STALE:
+        return "live", beat
+    return "stale", beat
+
+
+def runner_state(home: Path) -> str:
+    """The liveness alone ("live"/"stale"/"none"), for the streams' version: not the beat
+    itself, or a page would re-render on every heartbeat."""
+    return _runner_beat(home)[0]
+
+
+def runner_note(store: Store) -> str:
+    """The 'runner down' line of the index and a project page's summary, in the attention
+    voice: only for a stale beat. No runner.json says nothing (a runner from before the
+    heartbeat writes none, so its absence is not evidence)."""
+    state, beat = _runner_beat(store.home)
+    if state == "stale":
+        return f'<p class="attn">Runner stopped · last seen {_when(beat)}</p>'
+    return ""
+
+
 def last_change(store: Store, project: str) -> str:
     """The later of the last log record and the last state.json write."""
     times = []
@@ -1116,7 +1152,7 @@ def index_parts(store: Store) -> dict[str, str]:
         body += (f'<details class="archived" data-preserve-attr="open"><summary>Archived '
                  f'({len(old)})</summary><ul class="projects">'
                  f'{"".join(_project_row(store, n) for n in old)}</ul></details>')
-    return {"projects": _part("projects", body),
+    return {"projects": _part("projects", runner_note(store) + body),
             "nav-inbox": nav_inbox(open_count(store))}
 
 
@@ -1163,7 +1199,8 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     about = board.info.get("description") or ""
     archived = board.info.get("archived") is True
     paused = board.info.get("paused") is True
-    note = '<p class="attn-note">Paused: no step starts until you resume it.</p>' \
+    note = runner_note(store)
+    note += '<p class="attn-note">Paused: no step starts until you resume it.</p>' \
         if paused else ""
     note += '<p class="attn-note">Archived: listed apart from the other projects.</p>' \
         if archived else ""

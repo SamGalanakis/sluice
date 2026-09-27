@@ -1,6 +1,7 @@
 """The dashboard (SPEC §8 Views): pages over HTTP, the log viewer's pages and filters, and the
 Datastar streams that patch a page only when what it shows has changed."""
 
+import datetime as dt
 import html
 import json
 import re
@@ -11,12 +12,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from sluice import util
 from tests.conftest import create, d, message
 
 
-def get(port, path):
+def get(port, path, host=None):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+                                 headers={"Host": host} if host else {})
     try:
-        r = urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10)
+        r = urllib.request.urlopen(req, timeout=10)
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()
     return r.status, r.read().decode()
@@ -32,8 +36,8 @@ def stream(port, path, signals=None, seconds=1.5, action=None):
     query = ("?datastar=" + urllib.parse.quote(json.dumps(signals))) if signals is not None \
         else ""
     with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
-        s.sendall(f"GET {path}{query} HTTP/1.1\r\nHost: x\r\nDatastar-Request: true\r\n"
-                  f"Accept: text/event-stream\r\n\r\n".encode())
+        s.sendall(f"GET {path}{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                  f"Datastar-Request: true\r\nAccept: text/event-stream\r\n\r\n".encode())
         data = b""
         while b"\r\n\r\n" not in data:
             data += s.recv(65536)
@@ -69,6 +73,47 @@ def patches(events):
 
 def later(fn, delay=0.4):
     return lambda: threading.Timer(delay, fn).start()
+
+
+def write_beat(home, beat):
+    util.atomic_write_json(home / "runner.json",
+                           {"pid": 1, "started": util.now_iso(), "beat": beat})
+
+
+def fresh_beat():
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---- the Host allowlist (the loopback trust boundary) --------------------------------------
+
+
+def test_a_request_on_a_loopback_socket_must_be_addressed_to_this_machine(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    for host in ("evil.example:7420", "192.168.1.5:7420"):
+        code, body = get(port, "/", host=host)
+        assert code == 403 and "foreign Host" in body, host
+    for host in (f"127.0.0.1:{port}", f"localhost:{port}", "[::1]"):
+        assert get(port, "/", host=host)[0] == 200, host
+    # a page, a stream, a static file and a POST all refuse it
+    assert get(port, "/projects/p", host="evil.example:7420")[0] == 403
+    assert get(port, "/static/sluice.js", host="evil.example:7420")[0] == 403
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"GET /stream HTTP/1.1\r\nHost: evil.example:7420\r\n"
+                  b"Datastar-Request: true\r\n\r\n")
+        assert s.recv(4096).startswith(b"HTTP/1.1 403")
+    body = urllib.parse.urlencode({"paused": "1"}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/projects/p/pause", data=body,
+                                 method="POST",
+                                 headers={"Host": "evil.example:7420",
+                                          "Origin": "http://evil.example:7420",
+                                          "content-type":
+                                          "application/x-www-form-urlencoded"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        assert False, "a POST under a foreign Host was answered"
+    except urllib.error.HTTPError as e:
+        assert e.code == 403
+    assert not store.paused("p")
 
 
 # ---- pages ------------------------------------------------------------------------------
@@ -247,6 +292,39 @@ def test_the_index_stream_shows_a_new_project(store, port):
                     action=later(lambda: store.create_project("fresh", "new one")))
     [table] = patches(events)
     assert '<a href="/projects/fresh">fresh</a>' in table and "new one" in table
+
+
+def test_the_runner_indicator_follows_the_heartbeat(store, port):
+    """No runner.json and a fresh beat show nothing; a stale one says when the runner was last seen, live over the stream (the liveness is in `ver`,
+    not the beat itself)."""
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    write_beat(store.home, fresh_beat())
+    index = get(port, "/")[1]
+    assert "No runner is running" not in index and "Runner stopped" not in index
+    write_beat(store.home, "2026-01-01T10:00:00Z")  # long past the 15 s
+    code, index = get(port, "/")
+    assert code == 200 and "Runner stopped · last seen" in index
+    assert "Runner stopped · last seen" in get(port, "/projects/p")[1]
+    (store.home / "runner.json").unlink()
+    assert "Runner stopped" not in get(port, "/")[1]  # no heartbeat file is not evidence
+    write_beat(store.home, "2026-01-01T10:00:00Z")  # stopped again; the stream sees it come back
+
+    ver = signals_of(get(port, "/")[1])["ver"]
+
+    def beat():
+        write_beat(store.home, fresh_beat())
+
+    sent = patches(stream(port, "/stream", {"ver": ver}, action=later(beat)))
+    [projects] = [p for p in sent if p.startswith('elements <div id="projects">')]
+    assert "Runner stopped" not in projects
+    ver = signals_of(get(port, "/projects/p")[1])["ver"]
+
+    def stop():
+        write_beat(store.home, "2026-01-01T10:00:00Z")
+
+    sent = patches(stream(port, "/projects/p/stream", {"ver": ver}, action=later(stop)))
+    [summary] = [p for p in sent if p.startswith('elements <div id="summary">')]
+    assert "Runner stopped · last seen" in summary
 
 
 def test_the_log_stream_prepends_new_matching_records_on_the_newest_page(store, port):

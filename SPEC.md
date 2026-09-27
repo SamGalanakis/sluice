@@ -424,7 +424,10 @@ pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe eve
 Validation errors carry the path and what was expected.
 
 **Views.** A dashboard that only reads, with three exceptions: answering an inbox item (§8a),
-archiving a project, and pausing or resuming a project or a step.
+archiving a project, and pausing or resuming a project or a step. On a loopback bind every
+route refuses (403, plain text) a request whose `Host` does not name this machine
+(`127.0.0.1`, `localhost`, `[::1]`); a deliberate non-loopback bind lifts that, and the
+write routes still refuse a foreign `Origin` (DNS rebinding satisfies `Origin == Host`).
 Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
 `prefers-color-scheme`, usable at phone width, keyboard reachable), every page on one centred
 column that the top nav's content shares, one nav and no second row: a project switcher whose
@@ -477,6 +480,10 @@ raw HTML escaped, unsafe link schemes refused).
   "Archived (n)"; each row: name, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
+  When the runner's heartbeat (`SLUICE_HOME/runner.json`'s `beat`) is older than 15 s, the
+  index and each project page's summary line say so in the attention voice ("Runner stopped ·
+  last seen …"); no heartbeat file says nothing (a runner from before it writes none). The
+  streams carry the liveness, not the beat.
 - `GET /projects/<name>`: under the nav naming the project (its sections: Plan, Threads,
   History, the log filtered to the history kinds, Log, and Functions, the functions as the
   project sees them), first whether the work moves: a progress bar by status and one line
@@ -578,7 +585,7 @@ Streams end when the server shuts down; the client reconnects with backoff.
   badge drops.
 - `POST /projects/<name>/inbox/<id>/answer`: the first write. A JSON body is the answer object;
   a form body (`text`, `next`) becomes `{"action": "answer", "text"}` and redirects to `next` (a
-  local path) on success. Both call the store's `inbox_answer`, the tool's own code path, with
+  local path: no scheme, no netloc, no backslash) on success. Both call the store's `inbox_answer`, the tool's own code path, with
   author `dashboard`. Refusals map to 404 (`not_found`), 409 (`conflict`: already answered or
   closed) and 400 (`invalid`, `bad_request`); JSON gets the error payload, a form an HTML page. A
   request whose `Origin` is not this host is refused (403).

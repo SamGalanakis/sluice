@@ -178,7 +178,8 @@ two steps without passing data), threading an edge that passes rows through thei
 never hides behind a card. A quiet legend under the board names the two lines. The head of a
 project page says first whether the work moves (progress bar, counts, Pause and Archive), then
 what the project is (its description, folded to its opening); what the plan took and produced
-follows the board. Text blocks hold a 68-75ch measure.
+follows the board. When the runner is down (its heartbeat stale), the index and that
+line say so first, in the attention amber. Text blocks hold a 68-75ch measure.
 
 ### Named Rules
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at

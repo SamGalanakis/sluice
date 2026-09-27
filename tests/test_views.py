@@ -1,12 +1,13 @@
 """The dashboard's views (SPEC §8): the Mermaid text plan_view gives agents, the board of step
 cards and its layout, a step's detail, the "Needs you" lines, the index, and escaping."""
 
+import datetime as dt
 import html
 import json
 import re
 
 from sluice import log as L
-from sluice import views
+from sluice import util, views
 from tests.conftest import create, d, src, write_fn
 
 
@@ -195,6 +196,27 @@ def test_a_pending_step_says_what_it_waits_on_and_the_next_ones_stand_out(store)
     assert ('<dt>Waits on</dt><dd><a href="/projects/v/steps/a" data-step="a">a</a> '
             '<span class="quiet">(running)</span></dd>') in head
     assert "Waits on" not in views.step_detail(store, "v", "a")
+
+
+def test_a_missing_or_stale_runner_beat_says_so_on_the_index_and_project(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    # no runner.json says nothing: its absence is not evidence the runner is down
+    for page in (views.index(store), views.project_page(store, "v", "x")):
+        assert "Runner stopped" not in page
+    assert views.runner_state(store.home) == "none"
+    beat = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    util.atomic_write_json(store.home / "runner.json",
+                           {"pid": 1, "started": beat, "beat": beat})
+    for page in (views.index(store), views.project_page(store, "v", "x")):
+        assert "No runner is running" not in page and "Runner stopped" not in page
+    assert views.runner_state(store.home) == "live"
+    util.atomic_write_json(store.home / "runner.json",
+                           {"pid": 1, "started": beat, "beat": "2026-01-01T10:00:00Z"})
+    assert views.runner_state(store.home) == "stale"
+    for page in (views.index(store), views.project_page(store, "v", "x")):
+        assert ('<p class="attn">Runner stopped · last seen '
+                '<time datetime="2026-01-01T10:00:00Z"') in page
+        assert "ago</time>" in page
 
 
 def test_answers_show_what_was_chosen_and_markdown_is_rendered():
