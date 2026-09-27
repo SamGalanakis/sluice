@@ -107,6 +107,8 @@ def test_every_page_renders(store, port):
     assert get(port, "/projects/nope")[0] == 404
     assert get(port, "/projects/nope/log")[0] == 404
     assert get(port, "/projects/nope/stream")[0] == 404
+    assert get(port, "/projects/nope/threads/stream")[0] == 404
+    assert get(port, "/projects/nope/inbox/stream")[0] == 404
     assert get(port, "/projects/p/log?kind=bogus")[0] == 400
     assert get(port, "/projects/p/log?before=x")[0] == 400
     assert get(port, "/projects/p/log?before=3&after=1")[0] == 400

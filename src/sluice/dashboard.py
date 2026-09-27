@@ -185,6 +185,25 @@ class Dashboard:
             if not await self._tick():
                 return
 
+    async def _stream(self, request: Request, ver: Callable[[], str],
+                      parts: Callable[[], dict[str, str]], signal: str = "ver",
+                      exists: Callable[[], Any] | None = None) -> Response:
+        """One page's stream route: `exists` checked off the event loop (-> 404), the
+        client's signals, then the SSE response patching `parts` as `ver` moves."""
+        if exists is not None:
+            try:
+                await anyio.to_thread.run_sync(exists)
+            except SluiceError as err:
+                return Response(err.message, status_code=404)
+        signals = await _signals(request)
+        return DatastarResponse(self._parts_stream(signals.get(signal), ver, parts,
+                                                   signal=signal))
+
+    def _has_step(self, name: str, sid: str) -> None:
+        """The step stream's existence probe: the step in the plan (not a full render)."""
+        if sid not in self.store.plan(name)[1].steps:
+            raise NotFound(f"the plan of project {name} has no step {sid!r}")
+
     # ---- routes ----
 
     async def _page(self, render: Callable[..., str], *args: Any) -> Response:
@@ -207,24 +226,17 @@ class Dashboard:
         return await self._page(self._index)
 
     async def index_stream(self, request: Request) -> Response:
-        signals = await _signals(request)
-        return DatastarResponse(self._parts_stream(
-            signals.get("ver"), lambda: index_ver(self.store),
-            lambda: views.index_parts(self.store)))
+        return await self._stream(request, lambda: index_ver(self.store),
+                                  lambda: views.index_parts(self.store))
 
     async def project(self, request: Request) -> Response:
         return await self._page(self._project, request.path_params["name"])
 
     async def project_stream(self, request: Request) -> Response:
         name = request.path_params["name"]
-        try:
-            await anyio.to_thread.run_sync(self.store.project, name)
-        except SluiceError as err:
-            return Response(err.message, status_code=404)
-        signals = await _signals(request)
-        return DatastarResponse(self._parts_stream(
-            signals.get("ver"), lambda: project_ver(self.store, name),
-            lambda: views.project_parts(self.store, name)))
+        return await self._stream(request, lambda: project_ver(self.store, name),
+                                  lambda: views.project_parts(self.store, name),
+                                  exists=lambda: self.store.project(name))
 
     def _threads(self, name: str) -> str:
         self.store.project(name)
@@ -235,14 +247,9 @@ class Dashboard:
 
     async def threads_stream(self, request: Request) -> Response:
         name = request.path_params["name"]
-        try:
-            await anyio.to_thread.run_sync(self.store.project, name)
-        except SluiceError as err:
-            return Response(err.message, status_code=404)
-        signals = await _signals(request)
-        return DatastarResponse(self._parts_stream(
-            signals.get("ver"), lambda: project_ver(self.store, name),
-            lambda: views.threads_parts(self.store, name)))
+        return await self._stream(request, lambda: project_ver(self.store, name),
+                                  lambda: views.threads_parts(self.store, name),
+                                  exists=lambda: self.store.project(name))
 
     def _step(self, name: str, sid: str) -> str:
         return views.step_page(self.store, name, sid, step_ver(self.store, name, sid))
@@ -253,14 +260,9 @@ class Dashboard:
 
     async def step_stream(self, request: Request) -> Response:
         name, sid = request.path_params["name"], request.path_params["sid"]
-        try:
-            await anyio.to_thread.run_sync(views.step_parts, self.store, name, sid)
-        except SluiceError as err:
-            return Response(err.message, status_code=404)
-        signals = await _signals(request)
-        return DatastarResponse(self._parts_stream(
-            signals.get("sver"), lambda: step_ver(self.store, name, sid),
-            lambda: views.step_parts(self.store, name, sid), signal="sver"))
+        return await self._stream(request, lambda: step_ver(self.store, name, sid),
+                                  lambda: views.step_parts(self.store, name, sid), "sver",
+                                  exists=lambda: self._has_step(name, sid))
 
     def _log(self, project: str | None, params: dict[str, list[str]]) -> str:
         return views.log_page(self.store, project, views.LogQuery.parse(params))
@@ -292,14 +294,10 @@ class Dashboard:
         signals = await _signals(request)
         status = signals.get("status") if signals.get("status") in views.INBOX_FILTERS \
             else "open"
-        try:
-            if name is not None:
-                await anyio.to_thread.run_sync(self.store.project, name)
-        except SluiceError as err:
-            return Response(err.message, status_code=404)
-        return DatastarResponse(self._parts_stream(
-            signals.get("ver"), lambda: index_ver(self.store),
-            lambda: views.inbox_parts(self.store, name, status)))
+        return await self._stream(
+            request, lambda: index_ver(self.store),
+            lambda: views.inbox_parts(self.store, name, status),
+            exists=(lambda: self.store.project(name)) if name is not None else None)
 
     async def answer(self, request: Request) -> Response:
         """Answer an inbox item: a JSON answer {action, params?, values?, text?} (from

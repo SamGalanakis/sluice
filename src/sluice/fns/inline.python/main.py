@@ -12,8 +12,6 @@ import sys
 
 from sluice.fn import child_env, run, sh
 
-FIXED = {"code", "cwd"}
-
 
 class Tee(io.StringIO):
     """Keeps what the code prints and echoes it to stderr, so it shows as progress."""
@@ -30,7 +28,7 @@ def main(inp, ctx):
     os.environ.clear()
     os.environ.update(env)
     scope = {"__name__": "__inline__", "inp": inp, "ctx": ctx, "sh": sh}
-    scope |= {re.sub(r"\W", "_", k): v for k, v in inp.items() if k not in FIXED}
+    scope |= {re.sub(r"\W", "_", k): inp.get(k) for k in ctx.extra_inputs}
     printed = Tee()
     with contextlib.redirect_stdout(printed):
         exec(compile(inp["code"], "<inline>", "exec"), scope)  # noqa: S102 - its purpose

@@ -21,6 +21,7 @@ def test_bash_sees_extra_inputs_as_env_and_returns_what_it_printed(store, runner
     create(store, "p", {
         "a": bash('echo "$name-$count-$my_list"; echo oops >&2; pwd',
                   name=d("x y"), count=d(3), **{"my-list": d([1, 2])}, cwd=d(str(tmp_path))),
+        "none": bash('echo "seen${maybe+x}end"', maybe=d(None)),
         "b": bash("echo hi | false; echo unreachable"),
         "c": bash("exit 7", check=d(False)),
     })
@@ -28,6 +29,7 @@ def test_bash_sees_extra_inputs_as_env_and_returns_what_it_printed(store, runner
     out = steps["a"]["outputs"]
     assert out["stdout"] == f"x y-3-[1, 2]\n{tmp_path}\n" and out["stderr"] == "oops\n"
     assert out["code"] == 0
+    assert steps["none"]["outputs"]["stdout"] == "seenend\n"  # a null extra is not exported
     assert steps["b"]["status"] == "failed" and "exit code" in steps["b"]["error"]
     lines = steps["b"]["error"].splitlines()
     assert "unreachable" not in lines  # pipefail and errexit stopped it before the echo

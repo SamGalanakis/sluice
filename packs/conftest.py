@@ -1,7 +1,7 @@
 """Shared fixtures for pack tests.
 
 call_fn runs a fn's main.py through `uv run --script` exactly like the runner
-(SPEC §4.1): JSON on stdin, SLUICE_* env, cwd = the run dir. fake_bin writes an
+(SPEC §4.1): JSON on stdin, the runner's fn_env, cwd = the run dir. fake_bin writes an
 executable fake tool into a directory the test prepends to PATH.
 """
 
@@ -14,8 +14,9 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[1]
-SRC = REPO / "src"
+from sluice import runner
+from sluice.registry import parse_fn
+from sluice.store import Store
 
 
 def pytest_configure(config):
@@ -26,6 +27,7 @@ def pytest_configure(config):
 @pytest.fixture
 def call_fn(tmp_path):
     run_dirs = []
+    store = Store(tmp_path / "sluice-home")
 
     def _call(fn_dir, inp, env=None, path=None, watch=None):
         """Run the fn; returns (exit code, parsed stdout or None, stderr). With `watch`, the
@@ -33,22 +35,18 @@ def call_fn(tmp_path):
         watch(stderr so far) is called every 0.05 s while it runs."""
         run_dir = Path(tempfile.mkdtemp(prefix="run-", dir=tmp_path))
         run_dirs.append(run_dir)
-        e = {
-            **os.environ,
-            "PYTHONPATH": str(SRC),
-            "SLUICE_HOME": str(tmp_path / "sluice-home"),
-            "SLUICE_PROJECT": "test-project",
-            "SLUICE_STEP": "test-step",
-            "SLUICE_RUN_ID": "test-run",
-            "SLUICE_RUN_DIR": str(run_dir),
-            "SLUICE_BACKOFF": "0",
-            "SLUICE_FN_DIR": str(fn_dir),
-        }
+        fn, errs = parse_fn(json.loads((Path(fn_dir) / "fn.json").read_text()),
+                            Path(fn_dir))
+        assert fn is not None, errs
+        e = runner.fn_env(store, "test-project", fn, "test-step", "test-run", run_dir)
+        e["SLUICE_BACKOFF"] = "0"
         if env:
             e.update({k: str(v) for k, v in env.items()})
         if path:
             dirs = [path] if isinstance(path, (str, Path)) else list(path)
-            e["PATH"] = os.pathsep.join([*(str(d) for d in dirs), e["PATH"]])
+            # the fake tools are on the host's PATH as well (what child_env restores)
+            e["PATH"] = e["SLUICE_HOST_PATH"] = \
+                os.pathsep.join([*(str(d) for d in dirs), e["PATH"]])
         argv = ["uv", "run", "--quiet", "--script", str(Path(fn_dir) / "main.py")]
         if watch is None:
             p = subprocess.run(argv, input=json.dumps(inp), text=True, capture_output=True,
