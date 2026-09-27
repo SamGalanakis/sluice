@@ -134,7 +134,7 @@ def test_retry_after_a_failure(store, runner, home):
                         "after": {"run": "core.echo", "in": {"value": src("boom/done")}}})
     settle(runner, store, "p", until=lambda s: s["boom"]["status"] == "failed")
     (home / "boom-ok").write_text("")
-    store.retry("p", "boom", "test", "fixed")
+    store.retry("p", "boom", author="test", reason="fixed")
     steps = settle(runner, store, "p")
     assert steps["boom"]["status"] == "succeeded" and steps["after"]["outputs"] == {"value": True}
 

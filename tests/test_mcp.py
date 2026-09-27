@@ -129,13 +129,13 @@ async def test_step_tools_edit_one_step_at_the_current_rev(store):
         assert plan["steps"]["a"] == add(d(5), d(6))  # null removed the doc
         err = await fail(c, "step_update", project="p", step="a", changes={"run": "no.such"})
         assert err["error"] == "invalid"
-        err = await fail(c, "step_remove", project="p", step="a")  # b still reads it
+        err = await fail(c, "step_remove", project="p", steps="a")  # b still reads it
         assert err["error"] == "invalid"
-        await ok(c, "step_remove", project="p", step="b")
-        assert await ok(c, "step_remove", project="p", step="a") == {"rev": 7}
+        assert await ok(c, "step_remove", project="p", steps=["b", "a"]) == {
+            "rev": 6, "steps": ["a", "b"]}  # one edit, in plan order
         assert (await ok(c, "plan_get", project="p"))["plan"]["steps"] == {}
         history = await ok(c, "plan_history", project="p")
-        assert [h["reason"] for h in history][-2:] == ["remove step b", "remove step a"]
+        assert history[-1]["reason"] == "remove a, b"
 
 
 async def test_fn_tools(store):
@@ -250,7 +250,7 @@ async def test_status_manual_outputs_and_retry(live):
                              "outputs": {"sum": 2}, "manual": False}
         assert "about to explode" in rows["boom"]["error"]
 
-        running = await fail(c, "step_retry", project="p", step="a")
+        running = await fail(c, "step_retry", project="p", steps="a")
         assert running["error"] == "bad_request"
         assert await ok(c, "step_set_output", project="p", step="boom", outputs={"done": True},
                         reason="done by hand") == {"ok": True}
@@ -260,8 +260,8 @@ async def test_status_manual_outputs_and_retry(live):
                                                                      {"done": True})
         bad = await fail(c, "step_set_output", project="p", step="boom", outputs={"done": 1})
         assert bad["errors"] == ["outputs.done: expected boolean, got 1"]
-        assert await ok(c, "step_retry", project="p", step="boom", reason="really run") == {
-            "ok": True}
+        assert await ok(c, "step_retry", project="p", steps=["boom"], reason="really run") == {
+            "steps": ["boom"]}
         await until(c, "p", lambda st: st["boom"] == "failed")
         assert (await fail(c, "status", project="zz"))["error"] == "not_found"
 
@@ -302,3 +302,24 @@ async def test_plan_view(store):
         page = await c.call_tool("plan_view", {"project": "p", "format": "html"})
         assert page.content[0].text.startswith("<!doctype html>")
         assert (await fail(c, "plan_view", project="p", format="png"))["error"] == "bad_request"
+
+
+async def test_every_tool_refuses_an_argument_it_does_not_take(store):
+    store.create_project("p", "t")
+    store.patch("p", 1, [{"op": "add", "path": "/steps/a", "value": add(d(1), d(2))},
+                         {"op": "add", "path": "/steps/b",
+                          "value": {**add(d(1), d(1)), "tags": ["e2e"]}}], "t", "t")
+    async with Client(build_server(store)) as c:
+        err = await fail(c, "status", project="p", step="a")
+        assert err["error"] == "bad_request"
+        assert err["message"] == ("status takes no argument 'step'; its arguments are "
+                                  "project, steps, tags")
+        err = await fail(c, "projects_list", verbose=True)
+        assert "its arguments are none" in err["message"]
+        assert [s["id"] for s in (await ok(c, "status", project="p", steps=["a"]))["steps"]] \
+            == ["a"]
+        assert [s["id"] for s in (await ok(c, "status", project="p", tags=["e2e"]))["steps"]] \
+            == ["b"]
+        assert (await fail(c, "status", project="p", steps=["zz"]))["error"] == "not_found"
+        # a keyword-named argument is still accepted under its own name
+        await ok(c, "inbox_post", project="p", title="t", **{"from": "me"})

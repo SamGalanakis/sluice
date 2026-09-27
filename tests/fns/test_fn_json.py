@@ -23,7 +23,7 @@ EXPECTED = {
                   {"answer": {"type": "record", "fields": {
                       "action": "string", "params": "Any?", "values": "Any?",
                       "text": "string?"}}}],
-    "inline.bash": [{"script": "string", "cwd": "string?", "check": "boolean?"},
+    "inline.bash": [{"code": "string", "cwd": "string?", "check": "boolean?"},
                     {"stdout": "string", "stderr": "string", "code": "int"}],
     "inline.python": [{"code": "string", "cwd": "string?"},
                       {"value": "Any?", "stdout": "string"}],

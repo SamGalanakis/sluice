@@ -117,9 +117,9 @@ def test_cancel_stops_a_running_step(store, runner):
     create(store, "p", {"w": window(30), "x": add(d(1), d(1))})
     settle(runner, store, "p", until=lambda s: s["w"]["status"] == "running"
            and s["x"]["status"] == "succeeded")
-    with pytest.raises(BadRequest, match="step x is succeeded, not running"):
-        store.cancel_step("p", "x", "t", "")
-    store.cancel_step("p", "w", "t", "too slow")
+    with pytest.raises(BadRequest, match="only a running step can be cancelled: x is succeeded"):
+        store.cancel_steps("p", "x", author="t")
+    store.cancel_steps("p", "w", author="t", reason="too slow")
     steps = settle(runner, store, "p", timeout=10)
     assert (steps["w"]["status"], steps["w"]["error"]) == ("failed", "cancelled: too slow")
     assert not runner.active
@@ -137,3 +137,18 @@ def test_the_board_draws_after_edges_and_the_drawer_shows_tags_and_reason(store)
     detail = views.step_detail(store, "p", "b")
     assert "host busy" in detail and "<dt>After</dt>" in detail and "<dt>Tags</dt>" in detail
     assert "s0 -.->|after| s1" in views.render(store, "p", "mermaid")
+
+
+def test_retry_and_cancel_take_a_selection(store, runner):
+    create(store, "p", {"w1": window(30, tags=["slow"]), "w2": window(30, tags=["slow"]),
+                        "x": add(d(1), d(1))})
+    settle(runner, store, "p", until=lambda s: s["w1"]["status"] == "running"
+           and s["w2"]["status"] == "running" and s["x"]["status"] == "succeeded")
+    assert store.cancel_steps("p", tags="slow", author="t") == ["w1", "w2"]
+    steps = settle(runner, store, "p", timeout=10)
+    assert steps["w1"]["error"] == steps["w2"]["error"] == "cancelled"
+    with pytest.raises(BadRequest, match="step x is succeeded"):
+        store.retry("p", ["w1", "x"], author="t")  # refused as a whole
+    assert statuses(store, "p")["w1"] == "failed"
+    assert store.retry("p", tags=["slow"], author="t", reason="again") == ["w1", "w2"]
+    assert statuses(store, "p")["w1"] == "pending"

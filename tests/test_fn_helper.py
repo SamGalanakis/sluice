@@ -103,3 +103,23 @@ def test_sh_stream_echoes_one_trimmed_line_per_line_by_default(tmp_path, capfd):
     assert p.returncode == 0
     err = capfd.readouterr().err.splitlines()
     assert err[1:] == ["a b c", "x" * 200]
+
+
+def test_child_env_drops_the_fns_own_environment(monkeypatch, tmp_path):
+    import sys
+
+    from sluice.fn import child_env
+    venv = str(sys.prefix)
+    monkeypatch.setenv("VIRTUAL_ENV", venv)
+    monkeypatch.setenv("PATH", f"{venv}/bin:/usr/bin")
+    for k in ("PATH", "PYTHONPATH", "VIRTUAL_ENV"):
+        monkeypatch.delenv(f"SLUICE_HOST_{k}", raising=False)
+    env = child_env({"X": "1"})
+    assert "VIRTUAL_ENV" not in env and env["PATH"] == "/usr/bin" and env["X"] == "1"
+    monkeypatch.setenv("SLUICE_HOST_PATH", "/host/bin")
+    monkeypatch.setenv("SLUICE_HOST_PYTHONPATH", "")
+    monkeypatch.setenv("SLUICE_HOST_VIRTUAL_ENV", "/host/venv")
+    monkeypatch.setenv("PYTHONPATH", "/sluice/src")
+    env = child_env()
+    assert (env["PATH"], env["VIRTUAL_ENV"]) == ("/host/bin", "/host/venv")
+    assert "PYTHONPATH" not in env

@@ -107,7 +107,7 @@ def test_a_project_fn_colliding_with_a_global_one_blocks_that_project(store, run
     assert "function problems block edits and runs" in e.value.message
     assert e.value.errors == [f"{problem['where']}: {problem['message']}"]
     for refused in (lambda: store.set_output("p", "a", {"value": 1}, "t", "x"),
-                    lambda: store.retry("p", "a", "t", "x")):
+                    lambda: store.retry("p", "a", author="t", reason="x")):
         with pytest.raises(InvalidPlan):
             refused()
     runner.tick()

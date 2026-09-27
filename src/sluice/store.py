@@ -370,18 +370,24 @@ class Store:
                               [{"op": "replace", "path": f"/steps/{sid}", "value": new}],
                               author, reason or f"update step {sid}")
 
-    def remove_step(self, project: str, sid: str, author: str, reason: str) -> int:
+    def remove_steps(self, project: str, steps: Any = None, tags: Any = None,
+                     author: str = "", reason: str = "") -> dict[str, Any]:
+        """Remove the selected steps in one edit. Returns {rev, steps}."""
         with self.lock(project):
+            chosen = self.select_steps(project, steps, tags)
             cur = self.get(project)
-            if sid not in cur["steps"]:
-                raise NotFound(f"the plan of project {project} has no step {sid!r}")
-            return self.patch(project, cur["rev"], [{"op": "remove", "path": f"/steps/{sid}"}],
-                              author, reason or f"remove step {sid}")
+            rev = self.patch(project, cur["rev"],
+                             [{"op": "remove", "path": f"/steps/{sid}"} for sid in chosen],
+                             author, reason or f"remove {', '.join(chosen)}")
+        return {"rev": rev, "steps": chosen}
 
     def select_steps(self, project: str, steps: Any = None, tags: Any = None,
                      subtree: bool = False) -> list[str]:
         """Step ids by id and/or tag, with everything downstream of them when `subtree` (the
-        steps that read from or run after them, transitively), in plan order."""
+        steps that read from or run after them, transitively), in plan order. A single id or
+        tag counts as a list of one."""
+        steps = [steps] if isinstance(steps, str) else steps
+        tags = [tags] if isinstance(tags, str) else tags
         for name, v in (("steps", steps), ("tags", tags)):
             if v is not None and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
                 raise BadRequest(f"{name}: expected an array of strings")
@@ -434,22 +440,25 @@ class Store:
                              reason or f"{what} {', '.join(chosen)}")
         return {"rev": rev, "steps": chosen}
 
-    def cancel_step(self, project: str, sid: str, author: str, reason: str) -> None:
-        """Ask the runner to stop a running step: it kills the step's processes and fails it
-        with `cancelled` (and the reason). Refused unless the step is running."""
+    def cancel_steps(self, project: str, steps: Any = None, tags: Any = None,
+                     author: str = "", reason: str = "") -> list[str]:
+        """Ask the runner to stop the selected running steps: it kills their processes and
+        fails them with `cancelled` (and the reason). Refused unless every one is running."""
         with self.lock(project):
-            _, plan = self.plan(project)
-            if sid not in plan.steps:
-                raise NotFound(f"the plan of project {project} has no step {sid!r}")
+            chosen = self.select_steps(project, steps, tags)
             state = self.read_state(project)
-            e = state["steps"].get(sid, {"status": "pending"})
-            if e["status"] != "running":
-                raise BadRequest(f"step {sid} is {e['status']}, not running")
-            e["cancel"] = reason or "cancelled"
+            idle = [f"{s} is {state['steps'].get(s, {'status': 'pending'})['status']}"
+                    for s in chosen
+                    if state["steps"].get(s, {"status": "pending"})["status"] != "running"]
+            if idle:
+                raise BadRequest(f"only a running step can be cancelled: {', '.join(idle)}")
+            for sid in chosen:
+                state["steps"][sid]["cancel"] = reason or "cancelled"
             self.write_state(project, state)
-            self.append(project, {"kind": "step.cancel", "step": sid, "author": author,
-                                  "reason": reason})
+            self.append(project, *({"kind": "step.cancel", "step": sid, "author": author,
+                                    "reason": reason} for sid in chosen))
         self.notify()
+        return chosen
 
     def _log(self, project: str, rev: int, author: str, reason: str, ops: list | None = None,
              kind: str = "plan.edit", **fields: Any) -> None:
@@ -480,7 +489,9 @@ class Store:
         """Callers hold the project lock."""
         atomic_write_json(self.project_dir(project) / "state.json", state)
 
-    def status(self, project: str) -> dict[str, Any]:
+    def status(self, project: str, steps: Any = None, tags: Any = None) -> dict[str, Any]:
+        """The plan's inputs, outputs and steps (with `steps` and/or `tags`, only those)."""
+        only = set(self.select_steps(project, steps, tags)) if steps or tags else None
         doc, plan = self.plan(project)
         state = self.read_state(project)
         project_paused = self.paused(project)
@@ -488,8 +499,10 @@ class Store:
         for name, ref in plan.outputs.items():
             ok, v = P.value_of(ref, plan, state)
             outputs[name] = v if ok else None
-        steps = []
+        rows = []
         for sid, step in plan.steps.items():
+            if only is not None and sid not in only:
+                continue
             e = state["steps"].get(sid, {"status": "pending"})
             row = {"id": sid, "run": step.fn.name, "status": e["status"],
                    "started": e.get("started"), "finished": e.get("finished")}
@@ -503,12 +516,12 @@ class Store:
                         if step.paused else [])
                 held += ["the project is paused"] if project_paused else []
                 row["waiting"] = held + P.not_ready(step, plan, state)
-            steps.append({**row, "manual": bool(e.get("manual"))})
+            rows.append({**row, "manual": bool(e.get("manual"))})
         out = {"rev": doc["rev"], "paused": project_paused,
                "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}
         if plan.input_docs:
             out["input_docs"] = dict(plan.input_docs)
-        return {**out, "outputs": outputs, "steps": steps}
+        return {**out, "outputs": outputs, "steps": rows}
 
     # ---- manual values (SPEC §6) ----
 
@@ -584,22 +597,28 @@ class Store:
             self._status_change(project, step, before, "succeeded")
         self.notify()
 
-    def retry(self, project: str, step: str, author: str, reason: str) -> None:
-        """step_retry: a failed, stale or manually set step goes back to pending."""
+    def retry(self, project: str, steps: Any = None, tags: Any = None, author: str = "",
+              reason: str = "") -> list[str]:
+        """step_retry: the selected steps, each failed, stale or manually set, go back to
+        pending (refused, changing nothing, unless every one of them is)."""
         with self.lock(project):
-            doc, plan = self._plan_for_write(project)
-            if step not in plan.steps:
-                raise NotFound(f"the plan of project {project} has no step {step!r}")
+            doc, _ = self._plan_for_write(project)
+            chosen = self.select_steps(project, steps, tags)
             state = self.read_state(project)
-            e = state["steps"].get(step, {"status": "pending"})
-            if e["status"] not in ("failed", "stale") and not e.get("manual"):
-                raise BadRequest(f"step {step} is {e['status']}; only a failed, stale or "
-                                 "manually set step can be retried")
-            state["steps"][step] = {"status": "pending"}
+            was = {s: state["steps"].get(s, {"status": "pending"}) for s in chosen}
+            bad = [f"step {s} is {e['status']}" for s, e in was.items()
+                   if e["status"] not in ("failed", "stale") and not e.get("manual")]
+            if bad:
+                raise BadRequest(f"{'; '.join(bad)}; only a failed, stale or manually set step "
+                                 "can be retried")
+            for sid in chosen:
+                state["steps"][sid] = {"status": "pending"}
             self.write_state(project, state)
-            self._log(project, doc["rev"], author, reason, kind="step.retry", step=step)
-            self._status_change(project, step, e["status"], "pending")
+            for sid, e in was.items():
+                self._log(project, doc["rev"], author, reason, kind="step.retry", step=sid)
+                self._status_change(project, sid, e["status"], "pending")
         self.notify()
+        return chosen
 
     def submit(self, project: str, step: str, outputs: Any,
                run: str | None = None) -> dict[str, Any]:

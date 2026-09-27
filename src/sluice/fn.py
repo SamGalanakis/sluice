@@ -133,6 +133,31 @@ def run(
     real_stdout.flush()
 
 
+HOST_VARS = ("PATH", "PYTHONPATH", "VIRTUAL_ENV")
+
+
+def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment for a tool a fn starts: the fn's own, but with PATH, PYTHONPATH and
+    VIRTUAL_ENV as they were before `uv run` set them up for the fn's interpreter, so a
+    `python3` the tool runs is the host's, not the fn's isolated one. The runner records the
+    originals (SLUICE_HOST_*); without them, the fn's environment is stripped out of PATH and
+    VIRTUAL_ENV. Then `extra` on top."""
+    env = dict(os.environ)
+    if all(f"SLUICE_HOST_{k}" in env for k in HOST_VARS):
+        for k in HOST_VARS:
+            host = env[f"SLUICE_HOST_{k}"]
+            if host:
+                env[k] = host
+            else:
+                env.pop(k, None)
+    elif env.get("VIRTUAL_ENV") and Path(env["VIRTUAL_ENV"]).resolve() == \
+            Path(sys.prefix).resolve():
+        venv_bin = str(Path(env.pop("VIRTUAL_ENV")) / "bin")
+        env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
+                                      if p.rstrip("/") != venv_bin.rstrip("/"))
+    return {**env, **(extra or {})}
+
+
 def sh(
     argv: list[str],
     cwd: str | Path | None = None,
@@ -141,9 +166,10 @@ def sh(
     timeout: float | None = None,
     input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command, echo it and a tail of its output to stderr, raise ShError on failure."""
+    """Run a command, echo it and a tail of its output to stderr, raise ShError on failure. It
+    runs in child_env() with `env` on top."""
     print(f"$ {' '.join(argv)}" + (f"  (in {cwd})" if cwd else ""), file=sys.stderr, flush=True)
-    full_env = {**os.environ, **env} if env else None
+    full_env = child_env(env)
     p = subprocess.run(argv, cwd=cwd, env=full_env, timeout=timeout, input=input,
                        text=True, capture_output=True, check=False)
     for stream in (p.stdout, p.stderr):
@@ -198,9 +224,10 @@ def sh_stream(
     """Run a command like sh(), but call on_line(line, source) for each line as it arrives:
     source "stdout" or "stderr", or "follow" for a line appended to the file `follow` (a tool
     that logs to a file). The default echoes each line to stderr. stdin is /dev/null. Returns
-    the full stdout and stderr; raises ShError on a non-zero exit when `check`."""
+    the full stdout and stderr; raises ShError on a non-zero exit when `check`. It runs in
+    child_env() with `env` on top."""
     print(f"$ {' '.join(argv)}" + (f"  (in {cwd})" if cwd else ""), file=sys.stderr, flush=True)
-    full_env = {**os.environ, **env} if env else None
+    full_env = child_env(env)
     lock = threading.Lock()
     out: dict[str, list[str]] = {"stdout": [], "stderr": []}
 

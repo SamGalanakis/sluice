@@ -208,8 +208,8 @@ def test_set_output_and_retry(store):
     e = store.read_state("p")["steps"]["a"]
     assert (e["status"], e["outputs"], e["manual"]) == ("succeeded", {"sum": 5}, True)
     assert store.history("p")[-1]["kind"] == "step.output"
-    store.retry("p", "a", "me", "run it for real")
+    store.retry("p", "a", author="me", reason="run it for real")
     assert store.read_state("p")["steps"]["a"] == {"status": "pending"}
     assert store.history("p")[-1]["kind"] == "step.retry"
     with pytest.raises(BadRequest, match="step a is pending"):
-        store.retry("p", "a", "me", "again")
+        store.retry("p", "a", author="me", reason="again")

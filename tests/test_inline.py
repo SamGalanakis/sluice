@@ -8,7 +8,7 @@ def d(x):
 
 
 def bash(script, outputs=None, **extra_in):
-    step = {"run": "inline.bash", "in": {"script": d(script), **extra_in}}
+    step = {"run": "inline.bash", "in": {"code": d(script), **extra_in}}
     return {**step, "outputs": outputs} if outputs else step
 
 
@@ -67,3 +67,25 @@ def test_python_sees_inputs_sets_out_and_its_prints_are_stdout(store, runner, tm
     assert steps["c"]["outputs"] == {"value": 9}
     assert steps["boom"]["status"] == "failed" and "ValueError: nope" in steps["boom"]["error"]
     assert steps["short"]["status"] == "failed" and "set `out` to a dict" in steps["short"]["error"]
+
+
+def test_tools_a_fn_starts_get_the_hosts_python_not_the_fns(store, runner):
+    import os
+    import shutil
+    probe = ('python3 -c "import sys; print(sys.prefix)"; echo "venv=$VIRTUAL_ENV"; '
+             'echo "pp=$PYTHONPATH"')
+    create(store, "p", {
+        "b": bash(probe),
+        "py": python("import subprocess\nout = subprocess.run(['python3', '-c', "
+                     "'import sys; print(sys.prefix)'], capture_output=True, text=True)"
+                     ".stdout.strip()"),
+    })
+    steps = settle(runner, store, "p")
+    host_prefix = __import__("subprocess").run(
+        [shutil.which("python3"), "-c", "import sys; print(sys.prefix)"],
+        capture_output=True, text=True).stdout.strip()
+    lines = steps["b"]["outputs"]["stdout"].splitlines()
+    assert lines == [host_prefix, f"venv={os.environ.get('VIRTUAL_ENV', '')}",
+                     f"pp={os.environ.get('PYTHONPATH', '')}"]
+    assert "environments-v2" not in steps["b"]["outputs"]["stdout"]
+    assert steps["py"]["outputs"]["value"] == host_prefix

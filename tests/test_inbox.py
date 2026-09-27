@@ -240,7 +240,7 @@ def test_inbox_ask_after_a_restart_waits_on_the_same_item(store, runner):
         a.kill()
     runner.active.clear()
     settle(runner, store, "p", until=lambda s: s["ask"]["status"] == "failed")
-    store.retry("p", "ask", "test", "runner restarted")
+    store.retry("p", "ask", author="test", reason="runner restarted")
 
     def waiting(steps):  # the new run has found the item (it says so on stderr)
         runs = steps["ask"].get("run_ids") or []

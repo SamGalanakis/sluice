@@ -130,8 +130,8 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
         assert queued["status"] == "succeeded" and queued["outputs"] == {"sum": 2}
         assert json_out(sluice.tool("step_set_output", project="demo", step="boom",
                                     outputs={"done": True})) == {"ok": True}
-        assert json_out(sluice.tool("step_retry", project="demo", step="boom",
-                                    reason="run it")) == {"ok": True}
+        assert json_out(sluice.tool("step_retry", project="demo", steps="boom",
+                                    reason="run it")) == {"steps": ["boom"]}
     finally:
         loop.send_signal(signal.SIGTERM)
         assert loop.wait(timeout=20) == 0
@@ -144,7 +144,7 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
     assert view.stdout.startswith("flowchart LR\n")
     page = sluice.tool("plan_view", project="demo", format="html")
     assert '<div class="plane"' in page.stdout and "<nav" not in page.stdout
-    missing = sluice.tool("step_retry", project="demo", step="zz", check=False)
+    missing = sluice.tool("step_retry", project="demo", steps="zz", check=False)
     assert json.loads(missing.stderr)["error"] == "not_found"
 
 

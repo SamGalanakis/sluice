@@ -287,8 +287,9 @@ record):
   (deliberately bypassing a broken upstream; the step then records unknown inputs and turns
   `stale` once those values are all there). It is never run afterwards unless retried. Record
   `step.output` `{step, outputs, force?}`.
-- `step_retry(step)`: sets a `failed`, `stale` or manual step back to `pending`. Its succeeded
-  dependents turn `stale` when it produces a different result. Record `step.retry` `{step}`.
+- `step_retry(steps?, tags?)`: sets the selected steps, each `failed`, `stale` or manual, back to
+  `pending` (refused, changing nothing, unless every one is). Their succeeded dependents turn
+  `stale` when they produce a different result. Record `step.retry` `{step}` per step.
 - Setting a step's input by hand is an edit: `step_set_input(step, input, value)` patches its
   binding to `{"default": value}`.
 
@@ -384,6 +385,10 @@ input=None)` runs a command and raises `ShError` on a non-zero exit when `check`
 but calls `on_line(line, source)` for each line as it arrives (`source` `stdout`, `stderr`, or
 `follow` for lines appended to the file `follow`); the default echoes each line to stderr, cut
 to 200 chars, so a long-running tool shows live progress in the run's `stderr.log`.
+Both run the command in `child_env(env)`: the fn's environment with `PATH`, `PYTHONPATH` and
+`VIRTUAL_ENV` as they were before `uv run` and sluice set them up for the fn's own interpreter
+(the runner passes the originals as `SLUICE_HOST_*`; without them the fn's environment is
+stripped out), so a tool the fn starts runs the host's `python3`, not the fn's isolated one.
 
 ## 8. MCP server
 
@@ -547,6 +552,11 @@ Streams end when the server shuts down; the client reconnects with backoff.
 document from the same renderer: the summary and the board (cards without links), then every
 step's detail in a disclosure (no nav, no drawer, no stream, no script).
 
+Every tool refuses an argument it does not take (`bad_request`, naming it and the arguments
+the tool does take) rather than ignore it. A tool that changes one step's contents takes
+`step`; a tool that acts on a selection (`step_pause`, `step_retry`, `step_cancel`,
+`step_remove`, `status`) takes `steps` (ids; a single id is a list of one) and/or `tags`.
+
 | Tool | Args | Returns |
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
@@ -563,20 +573,20 @@ step's detail in a disclosure (no nav, no drawer, no stream, no script).
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
 | `step_add` | `project, step, spec, reason?, start? = false` | `{rev}`: `plan_patch` adding one step at the current rev |
 | `step_update` | `project, step, changes, reason?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
-| `step_remove` | `project, step, reason?` | `{rev}`; refused while it runs or something reads it |
+| `step_remove` | `project, steps?, tags?, reason?` | `{rev, steps}`: removes the selected steps in one edit; refused while one runs or something left reads it |
 | `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
-| `step_cancel` | `project, step, reason?` | `{ok}`: marks a running step for the runner to kill; it fails with `cancelled: <reason>` (`step_retry` runs it again); refused unless running |
+| `step_cancel` | `project, steps?, tags?, reason?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); refused unless every one is running |
 | `plan_history` | `project, since_rev?` | the `plan.edit`, `plan.input`, `step.output` and `step.retry` records still in the log (with `rev` > `since_rev`) |
 | `plan_set_input` | `project, name, value, reason?` | `{ok}` |
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
 | `step_set_output` | `project, step, outputs, reason?, force?` | `{ok}` (§6: refused while what it reads is not ready, unless `force`) |
-| `step_retry` | `project, step, reason?` | `{ok}` (a failed, stale or manual step) |
+| `step_retry` | `project, steps?, tags?, reason?` | `{steps}` (each failed, stale or manual) |
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty) |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
-| `status` | `project` | `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, waiting?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
+| `status` | `project, steps?, tags?` | only the steps selected by id and/or tag when given; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, waiting?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
 | `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
@@ -685,8 +695,8 @@ log's. Agents post through `fn_call` (any harness) and read with `log_read`/`log
 transform no fn exists for. Both are open (§5): each extra input the step binds is visible to the
 code by its name (`-` becomes `_`), and a step that declares outputs gets them from the code
 itself, not from `step_submit` (a declared output the fn returns needs no submitting).
-`inline.bash` inputs `{script: string, cwd: string?, check: boolean?}`, outputs `{stdout: string,
-stderr: string, code: int}`: runs `bash -e -o pipefail -c script`; extra inputs are environment
+`inline.bash` inputs `{code: string, cwd: string?, check: boolean?}`, outputs `{stdout: string,
+stderr: string, code: int}`: runs `bash -e -o pipefail -c code`; extra inputs are environment
 variables (strings as they are, anything else as JSON); declared outputs come from one JSON
 object the script writes to the file `$OUT`; a non-zero exit fails the step unless `check` is
 false. `inline.python` inputs `{code: string, cwd: string?}`, outputs `{value: Any?, stdout:

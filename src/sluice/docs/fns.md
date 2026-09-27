@@ -12,7 +12,7 @@ extra inputs; the code sees them by name. Declare `outputs` to give the step typ
 
 ```json
 "on-main": {"run": "inline.bash",
-            "in": {"script": {"default": "git -C \"$repo\" fetch -q origin && git -C \"$repo\" merge-base --is-ancestor \"$sha\" origin/main && printf '{\"on_main\": true}' > \"$OUT\""},
+            "in": {"code": {"default": "git -C \"$repo\" fetch -q origin && git -C \"$repo\" merge-base --is-ancestor \"$sha\" origin/main && printf '{\"on_main\": true}' > \"$OUT\""},
                    "repo": {"source": "repo"}, "sha": {"source": "land/sha"}},
             "outputs": {"on_main": "boolean"}},
 "count":   {"run": "inline.python",

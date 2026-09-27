@@ -10,7 +10,7 @@ import os
 import re
 import sys
 
-from sluice.fn import run
+from sluice.fn import child_env, run, sh
 
 FIXED = {"code", "cwd"}
 
@@ -26,7 +26,10 @@ class Tee(io.StringIO):
 def main(inp, ctx):
     if inp.get("cwd"):
         os.chdir(inp["cwd"])
-    scope = {"__name__": "__inline__", "inp": inp, "ctx": ctx}
+    env = child_env()  # what the code starts sees the host's python3, not this interpreter's
+    os.environ.clear()
+    os.environ.update(env)
+    scope = {"__name__": "__inline__", "inp": inp, "ctx": ctx, "sh": sh}
     scope |= {re.sub(r"\W", "_", k): v for k, v in inp.items() if k not in FIXED}
     printed = Tee()
     with contextlib.redirect_stdout(printed):

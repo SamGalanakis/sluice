@@ -53,14 +53,21 @@ KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
 # ---- one fn execution (SPEC §4 process contract) ----------------------------------------
 
 
+HOST_VARS = ("PATH", "PYTHONPATH", "VIRTUAL_ENV")  # what `uv run` and sluice change for a fn
+
+
 def fn_env(store: Store, project: str | None, fn: Fn, step: str, run_id: str,
            run_dir: Path, ports: dict[str, Any] | None = None) -> dict[str, str]:
     """os.environ, then the home .env, then the project's .env, then the SLUICE_* variables
-    (with `ports`, an open fn's step: SLUICE_STEP_INPUTS and SLUICE_STEP_OUTPUTS)."""
+    (with `ports`, an open fn's step: SLUICE_STEP_INPUTS and SLUICE_STEP_OUTPUTS).
+    SLUICE_HOST_PATH, SLUICE_HOST_PYTHONPATH and SLUICE_HOST_VIRTUAL_ENV keep those three as
+    they were before `uv run` and sluice changed them for the fn's own interpreter, so the
+    tools a fn starts get them back (sluice.fn.child_env; "" means unset)."""
     pythonpath = os.pathsep.join(filter(None, [SRC_DIR, os.environ.get("PYTHONPATH")]))
     env = {**os.environ, **read_dotenv(store.home / ".env")}
     if project:
         env.update(read_dotenv(store.project_dir(project) / ".env"))
+    env.update({f"SLUICE_HOST_{k}": env.get(k, "") for k in HOST_VARS})
     env.update({"SLUICE_HOME": str(store.home), "SLUICE_PROJECT": project or "",
                 "SLUICE_STEP": step, "SLUICE_RUN_ID": run_id, "SLUICE_RUN_DIR": str(run_dir),
                 "SLUICE_FN_DIR": str(fn.dir), "PYTHONPATH": pythonpath})

@@ -45,7 +45,7 @@ main_py, project="fixes")`, then use `"run": "text.upper"` in that project's pla
 ## A step that failed
 1. `status("fixes")` shows `fix` failed with its error and stderr tail.
 2. Either fix the cause (e.g. `plan_patch` to change an input, with the current `rev`) and
-   `step_retry("fixes", "fix")`, or record the result yourself with
+   `step_retry("fixes", steps=["fix"])`, or record the result yourself with
    `step_set_output("fixes", "fix", {...})`.
 
 ## A step that went stale

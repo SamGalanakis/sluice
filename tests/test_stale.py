@@ -49,7 +49,7 @@ def test_retrying_an_upstream_reruns_it_and_its_result_decides(store, runner, tm
     settle(runner, store, "p")
     # a manual result for a, then a retry: a runs again and produces "one" as before
     store.set_output("p", "a", {"text": "one"}, "test", "known")
-    store.retry("p", "a", "test", "run it for real")
+    store.retry("p", "a", author="test", reason="run it for real")
     steps = settle(runner, store, "p")
     assert statuses(store, "p") == dict.fromkeys(["a", "b", "c", "other"], "succeeded")
     assert steps["b"]["outputs"] == {"value": "one"}
@@ -57,7 +57,7 @@ def test_retrying_an_upstream_reruns_it_and_its_result_decides(store, runner, tm
 
     source.write_text("two")  # the next run of a gives a different result
     store.set_output("p", "a", {"text": "one"}, "test", "known")
-    store.retry("p", "a", "test", "run it again")
+    store.retry("p", "a", author="test", reason="run it again")
     steps = settle(runner, store, "p", until=until_status(a="succeeded", b="stale", c="stale"))
     assert statuses(store, "p")["other"] == "succeeded"  # not downstream of a
     assert steps["b"]["outputs"] == {"value": "one"}  # kept for inspection
@@ -120,12 +120,12 @@ def test_manual_values_need_finished_upstreams_unless_forced(store, runner):
     assert statuses(store, "p")["d"] == "pending"
 
     # retrying the stale step runs it again and clears it; c computed from 100 stays stale
-    store.retry("p", "b", "test", "recompute from a")
+    store.retry("p", "b", author="test", reason="recompute from a")
     steps = settle(runner, store, "p", until=until_status(b="succeeded", d="succeeded"))
     assert steps["b"]["outputs"] == {"sum": 2} and steps["b"].get("manual") is None
     assert steps["d"]["outputs"] == {"sum": 2}
     assert statuses(store, "p")["c"] == "stale"
-    store.retry("p", "c", "test", "recompute from b")
+    store.retry("p", "c", author="test", reason="recompute from b")
     steps = settle(runner, store, "p")
     assert statuses(store, "p") == dict.fromkeys("abcd", "succeeded")
     assert steps["c"]["outputs"] == {"sum": 3}
@@ -146,7 +146,7 @@ def test_only_failed_stale_or_manual_steps_can_be_retried(store, runner):
     create(store, "p", {"a": add(d(1), d(1))})
     settle(runner, store, "p")
     with pytest.raises(BadRequest, match="only a failed, stale or manually set step"):
-        store.retry("p", "a", "test", "no")
+        store.retry("p", "a", author="test", reason="no")
 
 
 def test_status_and_views_show_stale_steps(store, runner):

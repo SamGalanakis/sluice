@@ -1,9 +1,9 @@
 {
   "name": "inline.bash",
-  "doc": "Run a bash script given as a string (with errexit and pipefail). Each extra input the step binds is an environment variable of its name (- becomes _; strings as they are, anything else as JSON). A step that declares outputs gets them from a JSON object the script writes to the file $OUT. Fails on a non-zero exit unless check is false.",
+  "doc": "Run bash code given as a string (`code`, the same name as for inline.python), with errexit and pipefail. Each extra input the step binds is an environment variable of its name (- becomes _; strings as they are, anything else as JSON). A step that declares outputs gets them from a JSON object the script writes to the file $OUT. Fails on a non-zero exit unless check is false.",
   "open": true,
   "inputs": {
-    "script": "string",
+    "code": "string",
     "cwd": "string?",
     "check": "boolean?"
   },

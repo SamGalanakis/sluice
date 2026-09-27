@@ -5,12 +5,11 @@
 """inline.bash: run a bash script given as a string."""
 
 import json
-import os
 import re
 
 from sluice.fn import run, sh_stream
 
-FIXED = {"script", "cwd", "check"}
+FIXED = {"code", "cwd", "check"}
 
 
 def env_value(value):
@@ -24,8 +23,8 @@ def main(inp, ctx):
     for name, value in inp.items():
         if name not in FIXED and value is not None:
             env[re.sub(r"\W", "_", name)] = env_value(value)
-    res = sh_stream(["bash", "-e", "-o", "pipefail", "-c", inp["script"]], cwd=inp.get("cwd"),
-                    check=inp.get("check") is not False, env={**os.environ, **env})
+    res = sh_stream(["bash", "-e", "-o", "pipefail", "-c", inp["code"]], cwd=inp.get("cwd"),
+                    check=inp.get("check") is not False, env=env)
     outputs = {"stdout": res.stdout, "stderr": res.stderr, "code": res.returncode}
     if ctx.outputs:
         if not out_file.exists():

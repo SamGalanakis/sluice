@@ -104,7 +104,7 @@ with a different result, you changed a plan input or a step's binding, or an ups
 bypassed with `force` finished), the step turns `stale`, and so does every succeeded step
 downstream of it. A stale step keeps its outputs so you can look at them, but it never re-runs
 by itself, and steps reading it wait. You decide:
-- `step_retry(project, step)` runs it again with the current inputs (then retry its stale
+- `step_retry(project, steps=[...])` runs it again with the current inputs (then retry its stale
   dependents, or they come back by themselves if its new result is the same as before);
 - `step_set_output(project, step, outputs)` accepts a result by hand.
 If the inputs change back to what the step was computed from, it is `succeeded` again.
@@ -125,9 +125,14 @@ JSON Patch ops against the plan without `rev`:
  {"op": "remove", "path": "/steps/old-step"}]
 ```
 
-One step at a time, without a `rev`: `step_add(project, step, spec)`,
-`step_update(project, step, changes)` (each key replaces that field, null removes it) and
-`step_remove(project, step)`. They are the same edit, validated the same way.
+Without a `rev`: `step_add(project, step, spec)`, `step_update(project, step, changes)` (each
+key replaces that field, null removes it) and `step_remove(project, steps=[...])`. They are the
+same edit, validated the same way.
+
+Tools that change one step's contents take `step` (`step_add`, `step_update`, `step_set_input`,
+`step_set_output`, `step_submit`); tools that act on a selection take `steps` (ids; one id is
+fine too) and/or `tags`: `step_pause`, `step_retry`, `step_cancel`, `step_remove` and the
+`status` filter. A tool refuses an argument it does not take, naming the ones it does.
 
 You cannot remove or change a running step (only pause it). Every edit needs a short `reason`;
 it goes into the plan's history (`plan_history`).
@@ -142,7 +147,7 @@ too, including steps that only become ready later. A paused step does not start,
 ready its inputs; pausing never stops a running one (it finishes, and its next start is
 held). The step keeps `"paused": "<reason>"` (or `true`), and `status` lists, for each pending
 step, why it is `waiting`. `project_update(name, paused=true)` holds the whole project.
-`step_cancel(project, step, reason)` stops a running step; it fails with
+`step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with
 `cancelled: <reason>` and `step_retry` runs it again.
 
 ## Ordering and tags
@@ -162,7 +167,7 @@ steps so you can pause or release them together.
   scattered step, each output is an array. Refused while a step it reads has not succeeded or a
   plan input it reads has no value (the error names them); `force: true` sets it anyway, and the
   step turns stale once those values are all there.
-- `step_retry(project, step)`: run a failed, stale or manually set step again.
+- `step_retry(project, steps=[...])`: run failed, stale or manually set steps again.
 
 Every edit, manual value and step status change is a record in the project's log:
 `plan_history(project)` shows the edits and manual values, `log_read(project)` everything

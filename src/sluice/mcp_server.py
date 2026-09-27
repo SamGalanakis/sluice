@@ -84,7 +84,15 @@ def _tool(fn):
 
 
 class _Server(MCPServer):
+    params: dict[str, list[str]]  # each tool's argument names, as callers spell them
+
     async def call_tool(self, name, arguments, context=None):
+        known = self.params.get(name)
+        unknown = [k for k in arguments or {} if known is not None and k not in known]
+        if unknown:  # every tool refuses what it does not take, rather than drop it
+            return _error(BadRequest(
+                f"{name} takes no argument {', '.join(map(repr, unknown))}; its arguments "
+                f"are {', '.join(known) or 'none'}"))
         try:
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError:
@@ -102,9 +110,12 @@ def build_server(store: Store, stop: threading.Event | None = None,
     """The MCP server with the dashboard's routes; `stop` ends the dashboard's streams and
     `interval` is how often they poll for changes (seconds)."""
     mcp = _Server("sluice", instructions=doc_page("instructions"))
+    mcp.params = {}
 
     def tool(fn):
         mcp.add_tool(_tool(fn), name=fn.__name__, description=inspect.getdoc(fn))
+        mcp.params[fn.__name__] = [p.rstrip("_") if keyword.iskeyword(p.rstrip("_")) else p
+                                   for p in inspect.signature(fn).parameters]
         return fn
 
     for topic, title in doc_topics().items():
@@ -211,7 +222,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
             inputs: an object keyed by the function's input names; checked against its types
                 before anything runs (an `invalid` error lists every mismatch with its path).
             project: run it in this project (its functions and .env); leave out for none.
-            wait: seconds to wait for the result (default 0: return at once).
+            wait: how many seconds to wait for the result, a number such as 60 (default 0:
+                return at once).
             direct: run it here and now, to the end, instead of queueing it for the runner
                 (for use without a runner, e.g. from the command line); ignores `wait`.
         """
@@ -297,19 +309,23 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return {"rev": store.update_step(project, step, changes, AUTHOR, reason)}
 
     @tool
-    def step_remove(project: str, step: str, reason: str = "") -> Any:
-        """Remove one step from a plan. Refused (`invalid`) while another step or a plan
-        output still reads it, or while it runs. Returns {rev}.
+    def step_remove(project: str, steps: list[str] | str | None = None,
+                    tags: list[str] | str | None = None, reason: str = "") -> Any:
+        """Remove steps from a plan in one edit, selected by ids and/or tags. Refused
+        (`invalid`) while a step left or a plan output still reads one, or while one runs.
+        Returns {rev, steps}.
 
         Args:
             project: the project.
-            step: the step id.
+            steps: step ids (one id is fine too).
+            tags: every step carrying any of these tags.
             reason: why, recorded in the plan's history.
         """
-        return {"rev": store.remove_step(project, step, AUTHOR, reason)}
+        return store.remove_steps(project, steps, tags, AUTHOR, reason)
 
     @tool
-    def step_pause(project: str, steps: list[str] | None = None, tags: list[str] | None = None,
+    def step_pause(project: str, steps: list[str] | str | None = None,
+                   tags: list[str] | str | None = None,
                    subtree: bool = False, paused: bool = True, reason: str = "") -> Any:
         """Pause or unpause steps in one edit. A paused step does not start, however ready
         its inputs, until unpaused; a running one finishes (pausing never stops it: see
@@ -319,7 +335,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
         Args:
             project: the project.
-            steps: step ids.
+            steps: step ids (one id is fine too).
             tags: select every step carrying any of these tags.
             subtree: include everything downstream of the selected steps.
             paused: true to pause, false to let them start.
@@ -328,18 +344,19 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return store.pause_steps(project, steps, tags, subtree, paused, AUTHOR, reason)
 
     @tool
-    def step_cancel(project: str, step: str, reason: str = "") -> Any:
-        """Stop a running step: the runner kills its processes and fails it with
-        `cancelled: <reason>`; step_retry runs it again. Refused unless it is running.
-        Returns {ok}.
+    def step_cancel(project: str, steps: list[str] | str | None = None,
+                    tags: list[str] | str | None = None, reason: str = "") -> Any:
+        """Stop running steps, selected by ids and/or tags: the runner kills their processes
+        and fails each with `cancelled: <reason>`; step_retry runs them again. Refused unless
+        every selected step is running. Returns {steps}.
 
         Args:
             project: the project.
-            step: the running step.
-            reason: why, in its error and a `step.cancel` log record.
+            steps: step ids (one id is fine too).
+            tags: every step carrying any of these tags.
+            reason: why, in their errors and `step.cancel` log records.
         """
-        store.cancel_step(project, step, AUTHOR, reason)
-        return {"ok": True}
+        return {"steps": store.cancel_steps(project, steps, tags, AUTHOR, reason)}
 
     @tool
     def plan_history(project: str, since_rev: int | None = None) -> Any:
@@ -400,17 +417,20 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return {"ok": True}
 
     @tool
-    def step_retry(project: str, step: str, reason: str = "") -> Any:
-        """Set a failed, stale or manually set step back to pending so it runs again. Its
-        succeeded dependents turn stale if it produces a different result. Returns {ok}.
+    def step_retry(project: str, steps: list[str] | str | None = None,
+                   tags: list[str] | str | None = None, reason: str = "") -> Any:
+        """Set failed, stale or manually set steps back to pending so they run again,
+        selected by ids and/or tags (refused, changing nothing, unless every one is failed,
+        stale or manual). Their succeeded dependents turn stale if they produce a different
+        result. Returns {steps}.
 
         Args:
             project: the project.
-            step: the step id.
+            steps: step ids (one id is fine too).
+            tags: every step carrying any of these tags.
             reason: why, recorded in the plan's history.
         """
-        store.retry(project, step, AUTHOR, reason)
-        return {"ok": True}
+        return {"steps": store.retry(project, steps, tags, AUTHOR, reason)}
 
     @tool
     def step_submit(project: str, step: str, outputs: dict[str, Any],
@@ -507,17 +527,21 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return views.render(store, project, format)
 
     @tool
-    def status(project: str) -> Any:
-        """Return {rev, inputs, outputs, steps: [{id, run, status, started, finished,
-        outputs?, error?, manual}]}. inputs and outputs map names to values (null if unset).
-        A step's status is pending, running, succeeded, failed or stale (its result was
-        computed from inputs that have changed since; it waits for step_retry or
-        step_set_output, and so do the steps reading it).
+    def status(project: str, steps: list[str] | str | None = None,
+               tags: list[str] | str | None = None) -> Any:
+        """Return {rev, paused, inputs, outputs, steps: [{id, run, status, started, finished,
+        outputs?, error?, doc?, paused?, tags?, after?, waiting?, manual}]}. inputs and outputs
+        map names to values (null if unset). A step's status is pending, running, succeeded,
+        failed or stale (its result was computed from inputs that have changed since; it waits
+        for step_retry or step_set_output, and so do the steps reading it). `waiting`, on a
+        pending step, says why it has not started.
 
         Args:
             project: the project.
+            steps: only these steps (ids).
+            tags: only steps carrying any of these tags (with steps: either).
         """
-        return store.status(project)
+        return store.status(project, steps, tags)
 
     @tool
     def inbox_post(project: str, title: str, body: str | None = None, ui: str | None = None,

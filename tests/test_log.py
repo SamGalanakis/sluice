@@ -36,7 +36,7 @@ def test_one_log_holds_every_kind_in_seq_order(store, runner):
     store.set_input("p", "n", 1, "me", "go")
     settle(runner, store, "p")
     store.set_output("p", "boom", {"done": True}, "me", "by hand")
-    store.retry("p", "boom", "me", "again")
+    store.retry("p", "boom", author="me", reason="again")
     recs = L.read(store.project_dir("p"))["records"]
     assert [r["seq"] for r in recs] == list(range(1, len(recs) + 1))
     assert all(set(r) >= {"seq", "at", "kind"} for r in recs)
