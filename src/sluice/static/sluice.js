@@ -229,6 +229,14 @@ function nearestCard(here, evt) {
   return best;
 }
 
+// A lane that wrapped onto a line below the first starts at its own first row (CSS), since
+// there is nothing beside it to line its depths up with.
+function markWrapped(host) {
+  const lanes = $$(".lane", host);
+  const top = lanes[0]?.offsetTop ?? 0;
+  for (const lane of lanes) lane.classList.toggle("wrapped", lane.offsetTop > top + 1);
+}
+
 rocket("sluice-board", {
   mode: "light",
   props: ({ json }) => ({ edges: json.default([]) }),
@@ -237,6 +245,7 @@ rocket("sluice-board", {
     const redraw = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
+        markWrapped(host);
         drawEdges(host, props.edges);
         const held = $(".node:hover, .node:focus-visible", host);  // new paths: keep it lit
         if (held) trace(host, held);
@@ -297,6 +306,7 @@ rocket("sluice-board", {
     });
   },
   onFirstRender({ host, props }) {
+    markWrapped(host);
     drawEdges(host, props.edges);
   },
 });

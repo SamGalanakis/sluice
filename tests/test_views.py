@@ -65,7 +65,7 @@ def lanes(page):
     for lane in re.findall(r'<li class="lane"[^>]*><ol class="rows">(.*?)</ol></li>', page,
                            re.DOTALL):
         out.append({int(r): re.findall(r'id="n-([^"]+)"', cards) for r, cards in
-                    re.findall(r'<li class="row" style="--r:(\d+)">(.*?)</li>', lane,
+                    re.findall(r'<li class="row" style="--r:(\d+);[^"]*">(.*?)</li>', lane,
                                re.DOTALL)})
     return out
 
@@ -146,7 +146,9 @@ def test_the_board_lays_steps_out_in_lanes_of_rows_by_dependency_depth(store):
     page = views.project_page(store, "v", ver="abc")
     # the steps joined by handoffs make one lane; c hands nothing on, so it stands apart
     assert lanes(page) == [{1: ["a"], 2: ["fmt", "b", "each"], 3: ["late"]}, {1: ["c"]}]
-    assert '<li class="lane" style="--rows:3">' in page  # a lane has the rows it uses
+    assert '<li class="lane" style="--rows:3;--own:3">' in page  # a lane has the rows it uses
+    # each row knows its depth, and its place in a lane that wraps onto a line of its own
+    assert '<li class="row" style="--r:3;--q:3">' in page
     # the edges, one per handoff, named by their ports, for <sluice-board> to draw
     assert board_edges(page) == {
         ("s:a", "s:fmt"): "sum → values", ("s:a", "s:b"): "sum → a",
@@ -201,7 +203,9 @@ def test_answers_show_what_was_chosen_and_markdown_is_rendered():
     assert views.answer_text({"action": "answer", "text": "yes"}) == "yes"
     assert views.answer_text("not an answer") is None
     assert views._value(ans) == '<span class="v">Retro NES</span>'
-    assert '<div class="v long md"><h2>Recheck</h2>' in views._value("## Recheck\n\nok")
+    # its headings sit under the page's own: its top heading is an h4, the rest follow
+    assert '<div class="v long md"><h4>Recheck</h4>' in views._value("## Recheck\n\nok")
+    assert "<h4>A</h4>\n<h6>B</h6>" in views.markdown("# A\n### B")
     assert views._value("two\nlines").startswith('<div class="v long text">')
 
 
@@ -263,9 +267,10 @@ def test_a_steps_detail(store):
             'make/sum</a></span></div><div class="f-v"><code class="v">2</code></div>') in html
     assert "set in the plan" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html and "<script>" not in html
-    # its conversation is on the Threads tab: the head links to it
-    assert ('<a class="d-thread" href="/projects/v/threads#th-step-agent">Thread · 1 message · '
-            '<span class="attn">1 awaiting reply</span></a>') in head
+    # its conversation is on the Threads tab: the head links to it; the step has finished, so
+    # its unanswered question no longer waits on anyone
+    assert ('<a class="d-thread" href="/projects/v/threads#th-step-agent">Thread · 1 message'
+            '</a>') in head
     assert "Which &lt;file&gt;?" not in html and "not here" not in html
     runs = html[html.index("Attempts</h3>"):]
     assert runs.index("succeeded") < runs.index("failed")  # newest first
@@ -326,7 +331,9 @@ def test_messages_are_threads_with_notes_and_open_questions_marked(store):
                  {"kind": "message", "thread": "step-a", "from": "a", "to": "orchestrator",
                   "body": "Keep the old names?"},  # no needs_reply: a question
                  {"kind": "message", "thread": "step-a", "from": "orchestrator", "to": "a",
-                  "body": "No shims."})
+                  "body": "No shims."},
+                 {"kind": "message", "thread": "step-gone", "from": "gone", "to": "orchestrator",
+                  "body": "Still there?"})
     board = views.load_board(store, "v")
     panel = views.threads_panel(store, board)
     # threads, latest first; one waiting on a reply opens, an answered one stays folded
@@ -337,6 +344,9 @@ def test_messages_are_threads_with_notes_and_open_questions_marked(store):
             'data-preserve-attr="class data-rocket-host">') in panel
     assert '<span class="th-new" data-ignore-morph></span>' in panel  # the component's count
     assert '<span class="m-tag await">1 awaiting reply</span>' in panel
+    assert panel.count("awaiting reply") == 1  # a step that left the plan waits on nothing
+    assert ('<span class="th-name">gone</span><span class="th-doc">no longer in the plan'
+            '</span>') in panel
     assert '<span class="th-doc">Break &lt;it&gt;</span>' in panel
     assert "<strong>DB</strong>" in panel  # markdown bodies render
     assert "Moving the helpers<br>rather than deleting them" in panel
@@ -504,7 +514,7 @@ def test_the_functions_page_groups_by_scope_and_shows_collisions(store):
     assert "&lt;i&gt;mine&lt;/i&gt;" in sections["Global"]
     project = sections["Project (v)"]
     assert "<b>v.local</b>" in project
-    clash = project[project.index('<div class="fn problem">'):]
+    clash = project[project.index('<div class="fn problem" id="fn-'):]
     assert "<b>test.add</b>" in clash and "fn test.add collides with the global fn" in clash
     plain = views.fns_page(store)
     assert "Project (" not in plain and "v.local" not in plain

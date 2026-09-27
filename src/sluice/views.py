@@ -74,7 +74,14 @@ INBOX_FILTERS = ("open", "answered", "closed", "all")
 
 
 def markdown(text: str) -> str:
-    return MARKDOWN.render(text)
+    """Rendered markdown whose top heading is an h4: under the page's own h1, the drawer's h2
+    and its h3 labels, so a spec's `# Title` does not claim the page outline."""
+    tokens = MARKDOWN.parse(text)
+    heads = [t for t in tokens if t.type in ("heading_open", "heading_close")]
+    shift = 4 - min((int(t.tag[1]) for t in heads), default=4)
+    for t in heads:
+        t.tag = f"h{min(6, int(t.tag[1]) + shift)}"
+    return MARKDOWN.renderer.render(tokens, MARKDOWN.options, {})
 
 
 # ---- Mermaid (plan_view's text format) ----------------------------------------------------
@@ -631,15 +638,20 @@ def block_line(store: Store, board: Board, block: Block) -> tuple[str, str]:
 # ---- messages -------------------------------------------------------------------------
 
 
-def _awaiting(msgs: list[dict[str, Any]], steps: Iterable[str]) -> list[dict[str, Any]]:
+def _awaiting(msgs: list[dict[str, Any]], blocks: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The questions still open: messages that ask for a reply (`needs_reply`, true unless
     the sender marked a note), addressed to someone other than a step of the plan (the
-    orchestrator, a person), with no later message from that addressee on the same thread."""
-    steps = set(steps)
+    orchestrator, a person), with no later message from that addressee on the same thread.
+    On a step's thread, only while that step is in the plan and not finished: once it has
+    succeeded, failed or been skipped (or left the plan), nobody is waiting on the answer."""
     out = []
     for i, m in enumerate(msgs):
         to = m.get("to")
-        if not to or to in steps or m.get("needs_reply") is False:
+        if not to or to in blocks or m.get("needs_reply") is False:
+            continue
+        t = str(m.get("thread") or "")
+        if t.startswith("step-") and (t[5:] not in blocks or blocks[t[5:]].status
+                                      in ("succeeded", "failed", "skipped")):
             continue
         if not any(x.get("thread") == m.get("thread") and x.get("from") == to
                    for x in msgs[i + 1:]):
@@ -704,6 +716,9 @@ def thread_html(board: Board, thread: str, ms: list[dict[str, Any]], waiting: se
         b = board.blocks[sid]
         name = f'{glyph(b.mark)}<span class="th-name">{e(sid)}</span>'
         name += f'<span class="th-doc">{e(b.title)}</span>' if b.doc.strip() else ""
+    elif thread.startswith("step-"):
+        name = (f'<span class="th-name">{e(thread[5:])}</span>'
+                f'<span class="th-doc">no longer in the plan</span>')
     else:
         name = f'<span class="th-name">{e(thread)}</span>'
     open_q = [i for i, m in enumerate(ms) if m["seq"] in waiting]
@@ -936,8 +951,10 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
     groups, _ = lanes(board)
     html = []
     for rows in groups:
-        html.append(f'<li class="lane" style="--rows:{max(rows) + 1}"><ol class="rows">' + "".join(
-            f'<li class="row" style="--r:{d + 1}">'
+        top = min(rows)  # a lane that wraps to a line of its own starts there (sluice.js)
+        html.append(f'<li class="lane" style="--rows:{max(rows) + 1};--own:{max(rows) - top + 1}">'
+                    '<ol class="rows">' + "".join(
+            f'<li class="row" style="--r:{d + 1};--q:{d - top + 1}">'
             f'{"".join(_card(store, board, board.blocks[sid], live) for sid in rows[d])}</li>'
             for d in sorted(rows)) + "</ol></li>")
     es = edges(board)
@@ -1739,11 +1756,13 @@ def _ports(ports: Any) -> str:
 def fns_page(store: Store, project: str | None = None) -> str:
     reg = store.registry(project)
     groups: dict[str, list[str]] = {}
+    names: dict[str, list[str]] = {}
     for x in reg.listing():
+        names.setdefault(x["scope"], []).append(x["name"])
         cls = "fn problem" if x.get("error") else "fn"
         err = f'<p class="err">{e(x["error"])}</p>' if x.get("error") else ""
         groups.setdefault(x["scope"], []).append(
-            f'<div class="{cls}"><div class="fn-head"><b>{e(x["name"])}</b> '
+            f'<div class="{cls}" id="fn-{e(x["name"])}"><div class="fn-head"><b>{e(x["name"])}</b> '
             f'<span class="quiet">{e(x.get("doc") or "")}</span></div>{err}'
             f'<div class="ports"><div><span class="label">Inputs</span>'
             f"<p>{_ports(x.get('inputs'))}</p></div><div><span class=\"label\">Outputs</span>"
@@ -1761,7 +1780,10 @@ def fns_page(store: Store, project: str | None = None) -> str:
             continue
         title = SCOPE_TITLES[scope] + (f" ({e(project)})" if scope == "project" else "")
         cards = "".join(groups.get(scope, [])) or '<p class="quiet">none</p>'
-        sections.append(f"<h2>{title}</h2>{cards}")
+        index = "".join(f'<a href="#fn-{e(n)}">{e(n)}</a>' for n in names.get(scope, []))
+        index = f'<nav class="fn-index" aria-label="{e(SCOPE_TITLES[scope])}">{index}</nav>' \
+            if len(names.get(scope, [])) > 3 else ""
+        sections.append(f"<h2>{title}</h2>{index}{cards}")
     extra = "".join(f'<p class="fn problem err">{e(p["where"])}: {e(p["message"])}</p>'
                     for p in other)
     title = '<h1 class="vh">Functions</h1>' if project is None else project_head(project, "fns")

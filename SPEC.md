@@ -461,11 +461,15 @@ raw HTML escaped, unsafe link schemes refused).
   open question on). A step's messages sit on the left, everyone else's indented. A message that
   asks for a reply (`needs_reply`, true unless the sender marked a note) from someone other
   than a step of the plan, with no later message from that addressee on the thread, is marked
-  "Awaiting reply" (amber, not red) and keeps its thread open; a note is marked "note". The
+  "Awaiting reply" (amber, not red) and keeps its thread open, but on a step's thread only while
+  that step is in the plan and has not succeeded, failed or been skipped (then nobody waits on
+  the answer); a note is marked "note". A thread whose step has left the plan shows its id and
+  "no longer in the plan". The
   component counts the messages this browser has not seen ("n new", from localStorage; a
   thread never seen counts as read), marks them while the thread is open, and opens the thread
   the address names (`#th-<thread>`). A step's detail links to its thread (`step-<id>`) with
-  its count of messages and of open questions.
+  its count of messages and of open questions. Markdown anywhere on the dashboard (a spec, a
+  message, a value) has its top heading shifted to an h4, under the page's own headings.
 - `GET /`: one row per active project, and the archived ones folded under
   "Archived (n)"; each row: name, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
@@ -525,6 +529,8 @@ raw HTML escaped, unsafe link schemes refused).
 - `GET /fns?project=<name>` (project optional): every function that context sees, grouped by
   scope, with doc and typed inputs and outputs (`string[]`, `enum(a|b)`, `{field: type}`,
   `T?`); a function with a problem (e.g. a collision) is shown in red with the verify message.
+  A scope with more than three functions opens with an index of their names, each a link to
+  the function (`#fn-<name>`).
 
 **Live updates.** Every page renders completely on first load and works without JavaScript
 (the log filter is a plain GET form; a card is a link to its step's page). The index, project

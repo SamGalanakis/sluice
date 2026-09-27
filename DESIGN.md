@@ -170,7 +170,8 @@ is 13px meta in muted ink, sentence case. Nothing is uppercase; no kickers or ey
 The plan reads top to bottom, inside the column, in lanes: the steps joined by handoffs stand
 in one column, independent lanes side by side (36px apart, 18px on a phone, wrapping), each a
 stack of rows by dependency depth with 40px between rows (28px on a phone) for the edges; rows
-line up across lanes, and a lane keeps only the rows it uses. The server lays the board out;
+line up across lanes, and a lane keeps only the rows it uses; a lane that wraps onto a line
+of its own has nothing to line up with, so it starts at its first step. The server lays the board out;
 the `<sluice-board>` component draws the edges between measured cards (bottom to top, spread
 when several share a side, an arrowhead at the end; dashed for an `after` edge, which orders
 two steps without passing data), threading an edge that passes rows through their gaps so it
@@ -241,8 +242,9 @@ Primary is green on its own ink; others are card-coloured with an input hairline
 
 ### Threads
 The Threads tab, one bordered card per thread, the latest first: the step's glyph, id and
-doc (or the thread name), "n messages · when", an "awaiting reply" tag in amber when a
-question waits, and a muted line of the last message; open, a hairline under the summary and
+doc (or the thread name; "no longer in the plan" when its step has gone), "n messages ·
+when", an "awaiting reply" tag in amber when a question waits on a step still to finish (or on
+a thread of no step), and a muted line of the last message; open, a hairline under the summary and
 the messages, all but the last three folded under an "n earlier messages" link. A small blue
 "n new" pill counts what arrived since this browser last opened the thread, and a blue dot
 marks those messages while it is open. A message is a 2px left rule and a small head (sender in ink, → recipient and

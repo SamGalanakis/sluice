@@ -206,7 +206,7 @@ details.about[open] > summary::after { content: "Show less"; }
 .md p, .md ul, .md ol { margin: 0 0 10px; }
 .md ul, .md ol { padding-left: 20px; }
 .md li + li { margin-top: 4px; }
-.md h1, .md h2, .md h3 { font-size: 15px; line-height: 22px; margin: 14px 0 6px; }
+.md :is(h4, h5, h6) { font-size: 15px; line-height: 22px; margin: 14px 0 6px; }
 .md code { font-size: 12.5px; }
 details.fold > summary { list-style: none; display: block; color: inherit; cursor: pointer; }
 details.fold > summary::-webkit-details-marker { display: none; }
@@ -236,6 +236,10 @@ sluice-drawer { display: contents; }
                 grid-template-rows: repeat(var(--rows), minmax(var(--node-h), auto)); }
 .row { grid-row: var(--r); display: flex; flex-wrap: wrap; justify-content: center;
        align-items: flex-start; gap: 12px 14px; }
+/* a lane on a line of its own (sluice.js marks it) has no neighbour to line up with: it
+   starts at its first step instead of below the empty rows of the lanes above */
+.lane.wrapped > .rows { grid-template-rows: repeat(var(--own), minmax(var(--node-h), auto)); }
+.lane.wrapped .row { grid-row: var(--q); }
 .legend { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
           gap: 4px 8px; margin-top: 20px; font-size: 12.5px; line-height: 16px;
           color: var(--muted-foreground); }
@@ -490,6 +494,12 @@ table.log .s-stale { color: var(--status-attention); }
 .fn { padding: 12px 0; border-top: 1px solid var(--border); }
 .fn-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
 .fn-head b { font: 600 12.5px var(--font-mono); }
+.fn .ports p { overflow-wrap: anywhere; }
+.fn-index { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 0 0 10px;
+            font: 12.5px/20px var(--font-mono); }
+.fn-index a { color: var(--muted-foreground); text-underline-offset: 3px; }
+.fn-index a:hover { color: var(--foreground); }
+.fn:target { scroll-margin-top: 16px; }
 .fn .ports { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 6px;
              font-size: 12.5px; }
 .fn .ports .label { display: block; margin: 0 0 2px; }
@@ -537,7 +547,8 @@ main > .phead + * { margin-top: 0; }
   details.switcher { margin-right: 4px; }
   details.switcher > summary { max-width: 120px; gap: 4px; padding: 0 6px 0 8px; }
   nav.top { font-size: 14px; }
-  nav.top .links { --nav-pad: 5px; }
+  nav.top .links { --nav-pad: 5px; padding-right: 18px;  /* the last section scrolls clear */
+                   mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); }
   #nav-inbox .tray { display: block; }
   #nav-inbox .t { position: absolute; width: 1px; height: 1px; overflow: hidden;
                   clip-path: inset(50%); white-space: nowrap; }
