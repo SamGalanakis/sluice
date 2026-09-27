@@ -701,8 +701,10 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   Each takes `session?` and returns `session` (empty when the harness wrote none): binding a
   later step's `session` to an earlier step's `session` output continues that agent.
   Claude always runs Opus. Codex (`agent.codex`, or `agent.run` with engine `codex`) takes
-  `model` `sol` (the default), `astra` or `luna` and `effort` (`minimal` to `max`), whose
-  default is `high` for sol and astra and `max` for luna; both always reach the harness.
+  `model` `sol` (the default) or `astra` and `effort` (`minimal` to `max`), whose default is
+  `high`; both always reach the harness. A codex run's echo folds the diff codex prints after
+  every patch into one line (the harness log keeps it), and its `final` is the agent's last
+  message from the session's rollout.
 - `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
   `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)
 - `packs/jev/`: `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` (Jev, TypeSafe's System One

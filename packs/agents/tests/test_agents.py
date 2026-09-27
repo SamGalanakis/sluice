@@ -275,18 +275,38 @@ def test_codex_final_ignores_a_previous_turns_message(call_fn, fake_bin, tmp_pat
     assert out["final"].endswith("ENDTAIL\n") and len(out["final"]) == 4000  # the fallback
 
 
+@pytest.mark.parametrize("fn", ["agent.codex", "agent.run"])
+def test_codex_diffs_fold_to_one_line_in_the_echo(call_fn, fake_bin, tmp_path, fn):
+    body = ("exec\\nls\\napply patch\\ndiff --git a/x b/x\\nindex 1..2\\n--- a/x\\n+++ b/x\\n"
+            "@@ -1 +1 @@\\n-old\\n+new\\n\\ndiff --git a/y b/y\\n+more\\ncodex\\nDone.\\n")
+    bin_dir, _ = make_codex(tmp_path, fake_bin, log_body=body)
+    inp = {"cwd": str(tmp_path), "spec": "s"}
+    code, _out, err = call_fn(AGENTS / fn, {**inp, "engine": "codex"} if fn == "agent.run"
+                              else inp,
+                              env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")})
+    assert code == 0, err
+    lines = err.splitlines()
+    assert "(a diff of 2 files, 10 lines: in the log)" in lines
+    assert "+new" not in lines and "diff --git a/y b/y" not in lines
+    assert lines.index("apply patch") < lines.index("(a diff of 2 files, 10 lines: in the log)") \
+        < lines.index("Done.")
+    assert "+new" in (call_fn.run_dirs[-1] / "codex.log").read_text()  # the log keeps it
+
+
 def test_codex_model_and_effort_defaults(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_codex(tmp_path, fake_bin)
     env = {"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
-    for extra, model, effort in (({}, "sol", "high"), ({"model": "luna"}, "luna", "max"),
-                                 ({"model": "astra"}, "astra", "high"),
-                                 ({"model": "luna", "effort": "medium"}, "luna", "medium")):
+    for extra, model, effort in (({}, "sol", "high"), ({"model": "astra"}, "astra", "high"),
+                                 ({"model": "astra", "effort": "max"}, "astra", "max")):
         code, _out, err = call_fn(AGENTS / "agent.codex",
                                   {"cwd": str(tmp_path), "spec": "s", **extra}, env=env)
         assert code == 0, err
         argv = read_argv(argv_file)
         assert (argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]) == \
             (model, effort)
+    code, _, err = call_fn(AGENTS / "agent.codex",  # luna is gone: long work goes to Devin
+                           {"cwd": str(tmp_path), "spec": "s", "model": "luna"}, env=env)
+    assert code == 1 and "codex models are sol, astra, got 'luna'" in err
 
 
 def test_codex_session(call_fn, fake_bin, tmp_path):
@@ -696,7 +716,7 @@ def test_run_codex(call_fn, fake_bin, tmp_path):
     bin_dir, argv_file = make_codex(tmp_path, fake_bin)
     code, out, err = call_fn(
         AGENTS / "agent.run",
-        {"engine": "codex", "cwd": str(tmp_path), "spec": "s", "model": "luna"},
+        {"engine": "codex", "cwd": str(tmp_path), "spec": "s", "model": "astra"},
         env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
     )
     run_dir = call_fn.run_dirs[-1]
@@ -706,8 +726,8 @@ def test_run_codex(call_fn, fake_bin, tmp_path):
     argv = read_argv(argv_file)
     assert argv[:4] == [
         "--cd", str(tmp_path), "--spec", str(run_dir / "spec.md")]
-    assert argv[argv.index("--model") + 1] == "luna"
-    assert argv[argv.index("--effort") + 1] == "max"
+    assert argv[argv.index("--model") + 1] == "astra"
+    assert argv[argv.index("--effort") + 1] == "high"
 
 
 def test_run_codex_refuses_another_model_and_effort_elsewhere(call_fn, fake_bin, tmp_path):
@@ -715,7 +735,7 @@ def test_run_codex_refuses_another_model_and_effort_elsewhere(call_fn, fake_bin,
     env = {"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
     code, _, err = call_fn(AGENTS / "agent.run", {"engine": "codex", "cwd": str(tmp_path),
                                                   "spec": "s", "model": "gpt-4"}, env=env)
-    assert code == 1 and "codex models are sol, astra, luna" in err
+    assert code == 1 and "codex models are sol, astra, got 'gpt-4'" in err
     code, _, err = call_fn(AGENTS / "agent.run", {"engine": "devin", "cwd": str(tmp_path),
                                                   "spec": "s", "effort": "max"}, env=env)
     assert code == 1 and "effort is for the codex engine" in err

@@ -17,7 +17,7 @@ from sluice.log import last_seq
 CODEX_BIN = str(Path.home() / ".codex" / "bin" / "codex-harness-run")
 CLAUDE_TRANSIENT = ("rate limit", "rate_limit", "overloaded", "529")
 CODEX_TRANSIENT = ("rate limit", "429", "capacity")
-CODEX_EFFORT = {"sol": "high", "astra": "high", "luna": "max"}  # each model's default effort
+CODEX_EFFORT = {"sol": "high", "astra": "high"}  # each model's default effort
 
 
 def _type(form):
@@ -123,7 +123,9 @@ def _codex(inp, ctx):
         argv += ["--resume", inp["session"]]
     try:
         since = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S")
-        sh_stream(argv, follow=log)  # the harness writes its progress to the log
+        fold = DiffFold()
+        sh_stream(argv, on_line=fold, follow=log)  # the harness writes its progress to the log
+        fold.flush()
     except ShError as e:
         tail = log.read_text()[-3000:] if log.exists() else (e.stdout + e.stderr)[-3000:]
         if any(m in tail for m in CODEX_TRANSIENT):
@@ -139,6 +141,34 @@ def _session(log):
 
 CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
 TAIL = 4000  # of the log, when codex recorded no final message
+
+DIFF_LINE = ("diff --git ", "index ", "--- ", "+++ ", "@@", "+", "-", " ", "new file mode",
+             "deleted file mode", "old mode", "new mode", "similarity index", "rename from",
+             "rename to", "Binary files", "\\ No newline")
+
+
+class DiffFold:
+    """sh_stream's on_line for a codex run: echoes each line as echo_line does, except the
+    diff codex prints after every patch (the whole turn's diff so far, again and again: most
+    of a long run's log), which becomes one line naming how many files and lines it held. The
+    log keeps it all."""
+
+    def __init__(self):
+        self.files = self.lines = 0
+
+    def __call__(self, line, source):
+        if line.startswith("diff --git "):
+            self.files += 1
+        if self.files and (line.startswith(DIFF_LINE) or not line.strip()):
+            self.lines += 1
+            return
+        self.flush()
+        echo_line(line, source)
+
+    def flush(self):
+        if self.files:
+            echo_line(f"(a diff of {self.files} files, {self.lines} lines: in the log)", "")
+            self.files = self.lines = 0
 
 
 def _codex_final(log, since):

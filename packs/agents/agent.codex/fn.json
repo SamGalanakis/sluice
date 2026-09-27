@@ -1,6 +1,6 @@
 {
   "name": "agent.codex",
-  "doc": "Run a Codex session on a spec text in a working directory. Models: sol (default), astra, luna; effort defaults to high for sol and astra, max for luna.",
+  "doc": "Run a Codex session on a spec text in a working directory. Models: sol (default) and astra; effort defaults to high.",
   "open": true,
   "inputs": {
     "cwd": "string",
@@ -11,8 +11,7 @@
         "type": "enum",
         "symbols": [
           "sol",
-          "astra",
-          "luna"
+          "astra"
         ]
       }
     ],

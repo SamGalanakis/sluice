@@ -21,9 +21,9 @@ section (every extra input with its type and value), an `## Outputs you must sub
 to submit them) and the step-thread note (`listen: false` drops only the note). The step fails
 if the agent finishes without submitting a required output.
 
-Claude always runs Opus. Codex takes `model` `sol` (default), `astra` or `luna`, and `effort`
-(`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high` for sol and
-astra and `max` for luna.
+Claude always runs Opus. Codex takes `model` `sol` (default) or `astra`, and `effort`
+(`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high`. Long,
+grinding work goes to Devin, not to a bigger codex effort.
 
 Every agent function takes `session?: string` and returns `session: string` (Claude's session
 id, or the id the Devin or Codex harness writes to `<log>.session`; empty when there is none).
