@@ -18,6 +18,7 @@
   --input: oklch(0.205 0.02 286 / 18%);
   --ring: oklch(0.54 0.12 158);
   --edge: oklch(0.49 0.035 205 / 45%);
+  --edge-head: oklch(0.49 0.035 205 / 70%);
   --status-active: oklch(0.52 0.12 221);
   --status-idle: oklch(0.55 0 0);
   --status-success: oklch(0.52 0.17 149);
@@ -46,6 +47,7 @@
     --input: oklch(1 0 0 / 16%);
     --ring: oklch(0.84 0.1 158);
     --edge: oklch(0.79 0.022 175 / 45%);
+    --edge-head: oklch(0.79 0.022 175 / 70%);
     --status-active: oklch(0.72 0.115 221);
     --status-idle: oklch(0.65 0 0);
     --status-success: oklch(0.72 0.185 150);
@@ -229,12 +231,13 @@ details.fold[open] > summary::after { content: "Show less"; }
 .wires path { fill: none; stroke: var(--edge); stroke-width: 1.5;
               transition: opacity 150ms, stroke 150ms; }
 .wires path.order { stroke-dasharray: 4 4; }
-.edges marker path { fill: var(--edge); stroke: none; }
+.wires path.head { fill: var(--edge-head); stroke: none; }
 .names text { font: 500 12px var(--font-sans); fill: var(--foreground); text-anchor: middle;
               opacity: 0; paint-order: stroke; stroke: var(--background); stroke-width: 6px;
               stroke-linejoin: round; pointer-events: none; }
 .plane.tracing .wires path { opacity: .15; }
 .plane.tracing .wires path.on { opacity: 1; stroke: var(--foreground); stroke-width: 2; }
+.plane.tracing .wires path.head.on { fill: var(--foreground); stroke: none; }
 .plane.tracing .names text.on { opacity: 1; }
 .plane.tracing .node:not(.near) { opacity: .45; }
 .node { display: inline-flex; align-items: center; gap: 8px; max-width: 100%;

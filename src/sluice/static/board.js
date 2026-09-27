@@ -217,28 +217,30 @@ function drawEdges(plane) {
   }
   const outX = new Map([...outs].map(([k, v]) => [k, spread(k, v)]));
   const inX = new Map([...ins].map(([k, v]) => [k, spread(k, v)]));
-  const marker = svgEl("marker", { id: "arrow", viewBox: "0 0 10 10", refX: "8", refY: "5",
-                                   markerWidth: "8", markerHeight: "8",
-                                   orient: "auto-start-reverse" });
-  marker.append(svgEl("path", { d: "M0 1L9 5L0 9z" }));
-  const defs = svgEl("defs", {});
-  defs.append(marker);
+  // The arrowhead is a shape of its own, not an SVG marker: a marker scales with the line's
+  // width and keeps its own colour, so it grew and stayed grey on a traced edge. The line
+  // ends at the head's base and the head's tip touches the card, so nothing overlaps.
+  const HEAD_W = 3.5, HEAD_H = 6;
   const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
+  const f = (n) => n.toFixed(1);
   for (const [a, b, label] of ends) {
     const x1 = outX.get(a).get(b) - box.left, y1 = rect.get(a).bottom - box.top;
-    const x2 = inX.get(b).get(a) - box.left, y2 = rect.get(b).top - box.top - 1;
-    const dy = Math.max((y2 - y1) / 2, 14);
-    const d = `M${x1.toFixed(1)} ${y1.toFixed(1)}C${x1.toFixed(1)} ${(y1 + dy).toFixed(1)} `
-      + `${x2.toFixed(1)} ${(y2 - dy).toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
-    const attrs = { "data-from": a, "data-to": b, d, "marker-end": "url(#arrow)" };
+    const x2 = inX.get(b).get(a) - box.left, tip = rect.get(b).top - box.top - 1;
+    const y2 = tip - HEAD_H;  // the curve ends straight down, into the head's base
+    const dy = Math.max((y2 - y1) / 2, 12);
+    const d = `M${f(x1)} ${f(y1)}C${f(x1)} ${f(y1 + dy)} ${f(x2)} ${f(y2 - dy)} ${f(x2)} ${f(y2)}`;
+    const attrs = { "data-from": a, "data-to": b, d };
     if (label === "after") attrs.class = "order";  // an ordering edge carries no data
     wires.append(svgEl("path", attrs));
+    wires.append(svgEl("path", { "data-from": a, "data-to": b, class: "head",
+                                 d: `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(tip)}`
+                                    + `L${f(x2 + HEAD_W)} ${f(y2)}z` }));
     const text = svgEl("text", { "data-from": a, "data-to": b, x: ((x1 + x2) / 2).toFixed(1),
                                  y: ((y1 + y2) / 2 + 4).toFixed(1) });
     text.textContent = label;
     names.append(text);
   }
-  svg.replaceChildren(defs, wires, names);
+  svg.replaceChildren(wires, names);
 }
 
 let pending = 0;
