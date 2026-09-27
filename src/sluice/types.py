@@ -117,6 +117,27 @@ def form(t: Type) -> Any:
     return {"type": "record", "fields": {k: form(v) for k, v in t.fields}}
 
 
+def parse_decl(form: Any, path: str, errs: list[str]) -> tuple[Type | None, str]:
+    """A declaration (a plan input, a step's declared or an open fn's submitted output): a
+    type, or `{"type": T, "doc": "..."}` (CWL's object form; no type form has only these
+    keys). Returns (its type, its doc)."""
+    doc = ""
+    if isinstance(form, dict) and form.keys() <= {"type", "doc"}:
+        if "type" not in form:
+            errs.append(f"{path}.type: required")
+            return None, ""
+        doc = form.get("doc", "")
+        if not isinstance(doc, str):
+            errs.append(f"{path}.doc: expected a string")
+            doc = ""
+        form, path = form["type"], f"{path}.type"
+    try:
+        return parse(form, path), doc
+    except TypeSyntaxError as e:
+        errs.append(str(e))
+        return None, doc
+
+
 # ---- fits -------------------------------------------------------------------------------
 
 
@@ -207,6 +228,12 @@ def _check(t: Type, v: Any, p: str, errs: list[str]) -> None:
 # ---- navigation -------------------------------------------------------------------------
 
 
+def _index(f: str) -> bool:
+    """Whether a path segment selects a list item: isdecimal, exactly what int() accepts
+    (isdigit also takes '²', which int() rejects)."""
+    return f.isdecimal()
+
+
 def navigate(t: Type, fields: tuple[str, ...] | list[str]) -> tuple[Type | None, str]:
     """The type of `value.f1.f2...` (a digit selects a list item). Returns (type, error)."""
     maybe = False
@@ -217,7 +244,7 @@ def navigate(t: Type, fields: tuple[str, ...] | list[str]) -> tuple[Type | None,
             return ANY, ""
         if isinstance(t, Record) and (ft := t.field(f)) is not None:
             t = ft
-        elif isinstance(t, List) and f.isdigit():
+        elif isinstance(t, List) and _index(f):
             t = t.of  # an index past the end yields null, caught by the runtime input check
         else:
             return None, f"cannot read {f} of {t}"
@@ -229,7 +256,7 @@ def navigate_value(value: Any, fields: tuple[str, ...] | list[str]) -> Any:
     for f in fields:
         if isinstance(value, dict):
             value = value.get(f)
-        elif isinstance(value, list) and f.isdigit() and int(f) < len(value):
+        elif isinstance(value, list) and _index(f) and int(f) < len(value):
             value = value[int(f)]
         else:
             return None

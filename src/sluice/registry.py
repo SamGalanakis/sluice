@@ -17,7 +17,23 @@ from typing import Any
 from . import types as T
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "fns"
-NATIVE = {"core.echo", "core.collect", "core.format"}  # built-ins run inline; no main.py
+
+
+def _format(inp: dict[str, Any]) -> dict[str, Any]:
+    def show(v: Any) -> str:
+        return v if isinstance(v, str) else json.dumps(v)
+
+    values = inp["values"]
+    if isinstance(values, list):
+        return {"text": inp["template"].format(*map(show, values))}
+    if isinstance(values, dict):
+        return {"text": inp["template"].format(**{k: show(v) for k, v in values.items()})}
+    return {"text": inp["template"].format(show(values))}
+
+
+NATIVE = {"core.echo": lambda inp: {"value": inp["value"]},
+          "core.collect": lambda inp: {"items": inp["items"]},
+          "core.format": _format}  # built-ins run inline; no main.py
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 KEYS = {"name", "doc", "inputs", "outputs", "open", "submits"}
 SCOPES = ("builtin", "global", "project")
@@ -121,20 +137,14 @@ def _submits(raw: dict[str, Any], outputs: dict[str, T.Type],
         errs.append("submits needs open: true (an open fn's agent submits outputs)")
     types, docs = {}, {}
     for port, form in spec.items():
-        path = f"submits.{port}"
         if port in outputs:
-            errs.append(f"{path}: already an output of the fn")
+            errs.append(f"submits.{port}: already an output of the fn")
             continue
-        if isinstance(form, dict) and "type" in form and form.keys() <= {"type", "doc"}:
-            if not isinstance(form.get("doc", ""), str):
-                errs.append(f"{path}.doc: expected a string")
-            elif form.get("doc"):
-                docs[port] = form["doc"]
-            form, path = form["type"], f"{path}.type"
-        try:
-            types[port] = T.parse(form, path)
-        except T.TypeSyntaxError as e:
-            errs.append(str(e))
+        t, doc = T.parse_decl(form, f"submits.{port}", errs)
+        if t is not None:
+            types[port] = t
+        if doc:
+            docs[port] = doc
     return types, docs
 
 

@@ -73,6 +73,9 @@ def test_a_valid_plan(reg):
      "steps.b.in.a: step a (fn test.add) has no output nope"),
     ({"steps": {"a": add(ONE, ONE), "b": add({"source": "a/sum.x"}, ONE)}},
      "steps.b.in.a: a/sum.x: cannot read x of int"),
+    ({"steps": {"s": {"run": "test.split", "in": {"text": {"default": "x"}}},
+                "a": add({"source": "s/parts.²"}, ONE)}},
+     "steps.a.in.a: s/parts.²: cannot read ² of string[]"),
     ({"outputs": {"o": {"source": "zz/x"}}, "steps": {}}, "outputs.o: unknown step zz"),
     ({"outputs": {"o": {"default": 1}}, "steps": {}}, 'outputs.o: expected {"source": "<ref>"}'),
     # types fit

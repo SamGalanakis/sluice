@@ -34,28 +34,11 @@ from .plan import (
     settle_skips,
     topo_order,
 )
-from .registry import Fn
+from .registry import NATIVE, Fn
 from .store import SUBMITTED, Store
 from .util import atomic_write_json, canonical, now_iso, read_dotenv, tail_text
 
 SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
-
-
-def _format(inp: dict[str, Any]) -> dict[str, Any]:
-    def show(v: Any) -> str:
-        return v if isinstance(v, str) else json.dumps(v)
-
-    values = inp["values"]
-    if isinstance(values, list):
-        return {"text": inp["template"].format(*map(show, values))}
-    if isinstance(values, dict):
-        return {"text": inp["template"].format(**{k: show(v) for k, v in values.items()})}
-    return {"text": inp["template"].format(show(values))}
-
-
-NATIVE = {"core.echo": lambda inp: {"value": inp["value"]},
-          "core.collect": lambda inp: {"items": inp["items"]},
-          "core.format": _format}
 RESTARTED = "runner restarted"
 KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
 

@@ -83,7 +83,8 @@ def _check_project(store: Store, r: Report, name: str) -> None:
     if not found:
         return
     if not isinstance(info, dict):
-        r.add(f"{show}/project.json", "expected an object {name, description}")
+        r.add(f"{show}/project.json",
+              "expected an object {name, description?, archived?, paused?}")
     else:
         for k in info:
             if k not in PROJECT_KEYS:

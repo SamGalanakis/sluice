@@ -71,6 +71,13 @@ def test_project_json_and_env_files(store):
         "projects/stray/project.json": "missing"}
 
 
+def test_an_archived_and_paused_project_verifies_clean(store):
+    create(store, "p", {})
+    store.update_project("p", archived=True, paused=True)
+    assert verify(store, "p") == {"ok": True, "problems": []}
+    assert verify(store) == {"ok": True, "problems": []}
+
+
 def test_the_plan_is_fully_validated(store):
     create(store, "p", {"a": {"run": "test.add", "in": {"a": {"default": 1},
                                                         "b": {"default": 1}}}})

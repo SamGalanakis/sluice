@@ -125,6 +125,12 @@ def test_navigate_types_and_values():
     assert T.navigate_value(v, ["n", "x"]) is None
 
 
+def test_a_digit_that_is_not_decimal_is_not_an_index():
+    # "²".isdigit() but not .isdecimal(): int() would reject it
+    assert T.navigate(p("string[]"), ["²"]) == (None, "cannot read ² of string[]")
+    assert T.navigate_value(["a", "b"], ["²"]) is None
+
+
 @pytest.mark.parametrize("form", [
     "string", "Any", "int?", "string[]", "float[]?",
     ["null", {"type": "enum", "symbols": ["a", "b"]}],

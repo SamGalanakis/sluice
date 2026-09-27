@@ -42,7 +42,7 @@ log.jsonl                   the home log: fn_call runs without a project (§6b)
 runs/<call_id>/             input.json, output.json, stderr.log of those calls
 .lock                       flock target for appends to the home log
 projects/<name>/
-  project.json              {"name", "description"}
+  project.json              {"name", "description", "archived"?, "paused"?}
   plan.json                 the project's plan (current truth)
   state.json                runner-owned: plan input values, step status and outputs (current truth)
   log.jsonl                 the project's log (§6b): edits, manual values, step status changes,
@@ -326,7 +326,8 @@ files. Without a project it checks the built-in and global scopes and every dire
   for an open fn, `submits`; nothing else), the name
   matching its directory, every type parsing, `main.py` present for non-built-ins;
 - name collisions across scopes (see §2);
-- `project.json` shape (`name` equal to its directory, optional string `description`), `.env`
+- `project.json` shape (`name` equal to its directory, optional string `description`,
+  optional booleans `archived` and `paused`), `.env`
   files parsing as `KEY=value` lines (blank lines, `#` comments and `export ` allowed);
 - the plan: full validation (§5) against the project's functions;
 - `state.json` agreeing with the plan (no state for unknown steps or undeclared plan inputs,

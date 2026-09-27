@@ -260,6 +260,12 @@ def test_submits_is_for_open_fns_and_names_new_outputs(tmp_path):
     _, errs = parse_fn({**base, "open": True, "submits": {"final": "string", "n": "nope"}},
                        tmp_path, check_dir=False)
     assert errs[0] == "submits.final: already an output of the fn" and "submits.n" in errs[1]
+    # a {"doc": ...} with no "type" reads the same for a submit and a plan input
+    _, errs = parse_fn({**base, "open": True, "submits": {"summary": {"doc": "x"}}},
+                       tmp_path, check_dir=False)
+    assert errs == ["submits.summary.type: required"]
+    errs, _ = validate({}, inputs={"x": {"doc": "x"}})
+    assert errs == ["inputs.x.type: required"]
     fn, errs = parse_fn({**base, "open": True, "submits": {"summary": "string"}}, tmp_path,
                         check_dir=False)
     assert errs == [] and str(fn.submits["summary"]) == "string"

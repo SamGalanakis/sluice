@@ -15,7 +15,6 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
 STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "when"}
-INPUT_KEYS = {"type", "doc"}  # a plan input's or step output's object form {"type": T, "doc"}
 
 
 @dataclass(frozen=True)
@@ -101,26 +100,6 @@ class Plan:
     outputs: dict[str, Ref]
     steps: dict[str, Step]
     input_docs: dict[str, str] = field(default_factory=dict)  # only inputs that have one
-
-
-def parse_input(form: Any, path: str, errs: list[str]) -> tuple[T.Type | None, str]:
-    """A plan input or step output declaration: a type, or `{"type": T, "doc": "..."}` (CWL's
-    object form; no type form has only these keys). Returns (its type, its doc)."""
-    doc = ""
-    if isinstance(form, dict) and form.keys() <= INPUT_KEYS:
-        if "type" not in form:
-            errs.append(f"{path}.type: required")
-            return None, ""
-        doc = form.get("doc", "")
-        if not isinstance(doc, str):
-            errs.append(f"{path}.doc: expected a string")
-            doc = ""
-        form, path = form["type"], f"{path}.type"
-    try:
-        return T.parse(form, path), doc
-    except T.TypeSyntaxError as e:
-        errs.append(str(e))
-        return None, doc
 
 
 def parse_ref(text: Any) -> tuple[Ref | None, str]:
@@ -248,7 +227,7 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
     errs = [("rev: maintained by the store" if k == "rev" else f"{k}: unknown key")
             for k in doc if k not in DOC_KEYS]
     for name, form in _ids(doc.get("inputs", {}), "inputs", errs).items():
-        t, text = parse_input(form, f"inputs.{name}", errs)
+        t, text = T.parse_decl(form, f"inputs.{name}", errs)
         if t is not None:
             plan.inputs[name] = t
             if text:
@@ -324,7 +303,7 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
                         errs.append(f"{p}.outputs.{name}: fn {fn.name} already has an output "
                                     f"{name}")
                         continue
-                    t, out_doc = parse_input(form, f"{p}.outputs.{name}", errs)
+                    t, out_doc = T.parse_decl(form, f"{p}.outputs.{name}", errs)
                     if t is not None:
                         step.declared[name] = t
                         if out_doc:
