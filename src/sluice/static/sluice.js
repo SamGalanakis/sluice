@@ -308,6 +308,7 @@ rocket("sluice-drawer", {
   setup({ host, cleanup }) {
     const drawer = $("#drawer", host);
     let opener = null, stream = null;
+    let pinned = true;  // the log follows its newest line until the reader scrolls up
     // the drawer's stream: each call ends the previous one (Datastar's requestCancellation)
     window.sluiceStream = () => {
       stream?.abort();
@@ -331,6 +332,7 @@ rocket("sluice-drawer", {
       if (detail && detail.dataset.step !== sid) {
         detail.replaceChildren();  // no stale detail while the new one streams in
         detail.dataset.step = sid;
+        pinned = true;  // a new step's log starts following again
       }
       requestAnimationFrame(() => drawer.focus({ preventScroll: true }));
     };
@@ -345,7 +347,6 @@ rocket("sluice-drawer", {
     const escape = (evt) => {
       if (evt.key === "Escape" && location.hash.startsWith("#step:")) window.sluiceClose();
     };
-    let pinned = true;  // the log follows its newest line until the reader scrolls up
     const scrolled = (evt) => {
       const pre = evt.target;
       if (pre.classList?.contains("tail")) {
