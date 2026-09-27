@@ -447,45 +447,59 @@ raw HTML escaped, unsafe link schemes refused).
 - **What waits on a person is the inbox alone** (§8a): its open items, counted by the nav's
   red badge. The orchestrator posts there whatever it needs from a person. Failed steps,
   missing inputs and messages between agents are the orchestrator's: they show on the board,
-  in the summary line and under Messages, never as a call to the person.
-- **Messages**: the project page's conversations, one per thread, the latest first, under the
-  board. A thread shows its step (glyph, id, doc) or its name, how many messages, when the last
-  came and a line of it; it opens to the messages, each with sender → recipient, when, and its
-  body (markdown rendered, a long one folded). A step's messages sit on the left, everyone
-  else's indented. A message that asks for a reply (`needs_reply`, true unless the sender
-  marked a note) from someone other than a step of the plan, with no later message from that
-  addressee on the thread, is marked "Awaiting reply" (amber, not red) and keeps its thread
-  open; a note is marked "note". The eight latest threads show, older ones are in the log. A
-  step's detail shows its own thread (`step-<id>`) the same way, right after its error.
+  in the summary line and on the Threads tab, never as a call to the person.
+- `GET /projects/<name>/threads` (**Threads**, a tab of the project): every conversation of
+  the project, one per thread, the latest first, each a `<sluice-thread>`. A thread shows its
+  step (glyph, id, doc) or its name, how many messages, when the last came and a line of it; it
+  opens to the messages, each with sender → recipient, when, and its body (markdown rendered, a
+  long one folded); all but the last three fold under "n earlier messages" (none from its first
+  open question on). A step's messages sit on the left, everyone else's indented. A message that
+  asks for a reply (`needs_reply`, true unless the sender marked a note) from someone other
+  than a step of the plan, with no later message from that addressee on the thread, is marked
+  "Awaiting reply" (amber, not red) and keeps its thread open; a note is marked "note". The
+  component counts the messages this browser has not seen ("n new", from localStorage; a
+  thread never seen counts as read), marks them while the thread is open, and opens the thread
+  the address names (`#th-<thread>`). A step's detail links to its thread (`step-<id>`) with
+  its count of messages and of open questions.
 - `GET /`: one row per active project, and the archived ones folded under
   "Archived (n)"; each row: name, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
-- `GET /projects/<name>`: under the nav naming the project (its History section is the log
-  filtered to the history kinds; Functions the functions as the project sees them), the
-  description (two lines, then
-  "Show more"; an archived project says so), then the **board**: one
-  row per dependency depth, top to bottom, inside the page's column, each step a compact
-  bubble: its status glyph, its id and, small, how long it ran (live while running) and
-  `done/total` for a scattered step; its tooltip is its doc and what it says now (a running
-  step's last non-empty stderr line, a failed step's error, why a pending step waits, "its
-  inputs changed" when stale). Everything else is one click away in the step's detail.
-  Built-ins that run inline (`core.*`) are dashed bubbles. The server lays out the rows, so
-  the order reads without JavaScript; `board.js` draws an edge per handoff from the bottom of a
-  bubble to the top of the one it feeds, with an arrowhead, several edges on one side spread
-  along it (from the plane's `data-edges`: `[from, to, "output → input"]`). Hovering or
-  focusing a bubble traces it: its edges light up and name their ports, the rest dims; the
-  arrow keys move between bubbles. A bubble links to the step's page; with JavaScript it opens
-  the step in a drawer instead (the address becomes `#step:<id>`, so Back and a shared link
-  work; Escape closes it). Under the board: the **Result** (the plan's outputs that have a
-  value; a long text folds to its first lines, markdown rendered), the plan's inputs (name,
-  value, doc), and one line (succeeded of total, running, stale, failed, total `cost_usd`,
-  last activity) with the Archive switch.
+- `GET /projects/<name>`: under the nav naming the project (its sections: Plan, Threads,
+  History, the log filtered to the history kinds, Log, and Functions, the functions as the
+  project sees them), first whether the work moves: a progress bar by status and one line
+  (succeeded of total, running, stale, failed, total `cost_usd`, last activity) with the Pause
+  and Archive switches; then the description (markdown, folded to its opening, then "Show
+  more"; a paused or archived project says so), then the **board**. Its **lanes** are the
+  steps joined by handoffs (an edge that carries a value; `after` only orders), so independent
+  pieces of work stand side by side, in the plan's order, and wrap on a narrow screen. Each
+  lane is a column of rows by dependency depth (`after` counts), and rows line up across lanes;
+  inside a lane, each row is sorted by where its neighbours sit, a few sweeps down and up, so
+  edges seldom cross. Each step is a compact bubble: its status glyph, its id and, small, how
+  long it ran (live while running) and `done/total` for a scattered step; its tooltip is its
+  doc and what it says now (a running step's last non-empty stderr line, a failed step's
+  error, what a pending step waits on, "its inputs changed" when stale). A pending step whose
+  unfinished upstream steps are all running is next in line and reads at full strength;
+  pending steps further off are faint. Everything else is one click away in the step's detail.
+  Built-ins that run inline (`core.*`) are dashed bubbles. The server lays out the board, so
+  the order reads without JavaScript; the `<sluice-board>` component draws an edge per handoff
+  from the bottom of a bubble to the top of the one it feeds, with an arrowhead, several edges
+  on one side spread along it (from its `edges` attribute: `[from, to, "output → input"]`); an
+  edge that passes rows of bubbles runs through the nearest gap in each, never behind a bubble.
+  A legend under the board names the solid (hands on a value) and dashed (runs after) lines.
+  Hovering or focusing a bubble traces it: its edges light up and name their ports, each name
+  by the bubble at the other end, and the rest dims; the arrow keys move between bubbles. A
+  bubble links to the step's page; with JavaScript it opens the step in a drawer (the
+  `<sluice-drawer>`) instead (the address becomes `#step:<id>`, so Back and a shared link work;
+  Escape closes it). Under the board: the **Result** (the plan's outputs that have a value; a
+  long text folds to its first lines, markdown rendered) and the plan's inputs (name, value,
+  doc).
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
-  read like a run history: its id and doc, then a grid of facts (status, fn, runs done of total
-  for a scattered step, started, duration, cost as money, session); its error; its progress
-  (the tail of the current run's stderr, while running); its outputs (while running, what the
-  agent has submitted so far), its messages (the `step-<id>` thread), its prompt (the binding
+  read like a run history: its id and doc, then a grid of facts (status, what a pending step
+  waits on, each a link to that step with its status, fn, runs done of total for a scattered
+  step, started, duration, cost as money, session), the Pause switch and a link to its thread
+  on the Threads tab; its error; its progress (the tail of the current run's stderr, while
+  running); its outputs (while running, what the agent has submitted so far), its prompt (the binding
   named `prompt`, `spec`, `task`, `instructions` or `brief`) and its other inputs (the run's
   own `input.json`, else what the binding resolves to now), each value under its name with
   its doc and, for an input, where it comes from as a small link (`← step/output`, or
@@ -518,13 +532,19 @@ the stats (mtime, size) of the files they read (`project.json`, `plan.json`, `st
 step's runs, so a progress line moves while an agent works; a step's version adds the step and
 the stderr of its runs. The server polls those stats about once a second off the event loop
 (never blocking the runner or the MCP tools); when they change it re-renders the page's parts
-(each an element with an id: the project page's summary, needs, result, graph and nav badge) and sends
+(each an element with an id: the project page's summary, graph, result and nav badge; the
+Threads tab's threads and nav badge) and sends
 a `datastar-patch-elements` event for each part that differs, then the new version. An idle
 page receives nothing; a client whose version is not current (e.g. reconnecting) first gets
-every part. Parts are morphed, so an expanded disclosure stays open. `/static/board.js` keeps
-relative and running times current, opens and closes the drawer, draws and traces the edges
-(redrawn when the board changes or resizes), moves between cards with the arrow keys, and flips
-a glyph whose status changes. On the log page, changing the filter updates the `kinds`/`thread` signals and
+every part. Parts are morphed, so an expanded disclosure stays open. The page loads Datastar
+from its Rocket bundle (`datastar-rocket.js`, which adds web components) and
+`/static/sluice.js`, which keeps relative and running times current and defines three
+components in the light DOM around what the server rendered (their hosts keep Rocket's
+attributes through a morph with `data-preserve-attr`): `<sluice-board>` draws and traces the
+edges (redrawn when its `edges` or the board changes or it resizes; the SVG it draws into is
+`data-ignore-morph`), moves between cards with the arrow keys and flips a glyph whose status
+changes; `<sluice-drawer>` opens and closes the drawer; `<sluice-thread>` marks unseen
+messages. On the log page, changing the filter updates the `kinds`/`thread` signals and
 reconnects the stream, which sends the new table and rewrites the address bar to the filter's
 query string; on the newest page, new matching records are prepended as they are appended.
 Streams end when the server shuts down; the client reconnects with backoff.
@@ -559,7 +579,7 @@ Streams end when the server shuts down; the client reconnects with backoff.
   its name with a Resume switch next to Archive. An `after` edge is drawn dashed; the drawer
   lists a step's After and Tags.
 - `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
-  `GET /static/board.js`: the board's script.
+  `GET /static/sluice.js`: the dashboard's script and components.
 
 `plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML
 document from the same renderer: the summary and the board (cards without links), then every

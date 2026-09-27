@@ -131,7 +131,7 @@ def test_the_board_draws_after_edges_and_the_drawer_shows_tags_and_reason(store)
     create(store, "p", {"a": add(d(1), d(1)),
                         "b": add(d(1), d(1), after=["a"], tags=["heavy"], paused="host busy")})
     page = views.project_page(store, "p", ver="x")
-    edges = json.loads(views.html.unescape(page.split('data-edges="', 1)[1].split('"', 1)[0]))
+    edges = json.loads(views.html.unescape(page.split(' edges="', 1)[1].split('"', 1)[0]))
     assert ["s:a", "s:b", "after"] in edges
     assert 'title="paused: host busy"' in page and "is-paused" in page
     detail = views.step_detail(store, "p", "b")

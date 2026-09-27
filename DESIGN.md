@@ -167,13 +167,17 @@ is 13px meta in muted ink, sentence case. Nothing is uppercase; no kickers or ey
 
 ## Layout
 
-The plan reads top to bottom, inside the column: one row per dependency depth, up to four cards
-side by side (more wrap within the row), 44px between rows for the edges, cards in a row of
-equal height. The server lays out the rows; board.js draws the edges between measured cards
-(bottom centre to top centre, spread when several share a side, an arrowhead at the end;
-dashed for an `after` edge, which orders two steps without passing data). The
-head of a project page is its name and description only; what the plan took, produced and cost
-follows the board. Text blocks hold a 72-75ch measure.
+The plan reads top to bottom, inside the column, in lanes: the steps joined by handoffs stand
+in one column, independent lanes side by side (36px apart, 18px on a phone, wrapping), each a
+stack of rows by dependency depth with 40px between rows (28px on a phone) for the edges; rows
+line up across lanes, and a lane keeps only the rows it uses. The server lays the board out;
+the `<sluice-board>` component draws the edges between measured cards (bottom to top, spread
+when several share a side, an arrowhead at the end; dashed for an `after` edge, which orders
+two steps without passing data), threading an edge that passes rows through their gaps so it
+never hides behind a card. A quiet legend under the board names the two lines. The head of a
+project page says first whether the work moves (progress bar, counts, Pause and Archive), then
+what the project is (its description, folded to its opening); what the plan took and produced
+follows the board. Text blocks hold a 68-75ch measure.
 
 ### Named Rules
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
@@ -207,11 +211,11 @@ work.
 - **Step bubble**: a pill with the status glyph, the step id (14.5px, 550) and, in 12px meta,
   its time (and `done/total` when scattered). Nothing else: the doc and what it says now are
   its tooltip, and everything it took and produced is in the drawer. Running bubbles take an
-  active-blue border, failed a full-ink one, stale an amber one; pending ids dim. Glue steps
+  active-blue border, failed a full-ink one, stale an amber one. A pending step next in line (its unfinished upstream all running) keeps a strong hairline and ink id; pending steps further off lose their border and dim, so what starts next stands out. Glue steps
   (`core.*`) are dashed and muted.
 - **Under the board**: the Result (`name value` rows; long text folds to 132px under a fade with
-  "Show all"), the plan inputs (name, value, doc), then one meta line of counts, cost and last
-  activity with the Archive switch.
+  "Show all") and the plan inputs (name, value, doc). The counts line (with the bar, Pause and
+  Archive) heads the page instead.
 
 ### Buttons
 Primary is green on its own ink; others are card-coloured with an input hairline.
@@ -225,8 +229,8 @@ Primary is green on its own ink; others are card-coloured with an input hairline
   projects") and a chevron; it opens a menu of All projects, then every project with its status
   glyph, the archived ones last under a label. A `<details>`, so it works without script;
   `nav.js` closes it on a click elsewhere or Escape.
-- **Sections** follow the switcher: in a project, Plan, Log, History, Functions; with none
-  chosen, Projects, Log, Functions. The current one is ink with a 2px ink bar on the bar's
+- **Sections** follow the switcher: in a project, Plan, Threads, Log, History, Functions; with
+  none chosen, Log, Functions (the switcher's "All projects" is the index). The current one is ink with a 2px ink bar on the bar's
   bottom hairline and `aria-current` (`page`, or `true` on a page inside it: a step is inside
   Plan); the rest are muted ink, with a quiet fill on hover.
 - **Phone** (below 720px): the mark gives way to the switcher (whose menu leads to All
@@ -235,21 +239,24 @@ Primary is green on its own ink; others are card-coloured with an input hairline
 - **Status filter** (inbox): a small segmented control, the current status in the secondary
   fill with a strong hairline; a filter, so it does not look like the sections.
 
-### Messages
-Under the board, one bordered card per thread, the latest first: the step's glyph, id and
+### Threads
+The Threads tab, one bordered card per thread, the latest first: the step's glyph, id and
 doc (or the thread name), "n messages · when", an "awaiting reply" tag in amber when a
 question waits, and a muted line of the last message; open, a hairline under the summary and
-the messages. A message is a 2px left rule and a small head (sender in ink, → recipient and
+the messages, all but the last three folded under an "n earlier messages" link. A small blue
+"n new" pill counts what arrived since this browser last opened the thread, and a blue dot
+marks those messages while it is open. A message is a 2px left rule and a small head (sender in ink, → recipient and
 when in muted ink, a "note" or "Awaiting reply" tag), then its body at reading size. A step's
 messages sit on the left with a strong-hairline rule; the orchestrator's are indented 28px
-(14px on a phone) with a blue rule, so a conversation reads at a glance. Nothing else on the
-page asks the person for anything: that is the inbox.
+(14px on a phone) with a blue rule, so a conversation reads at a glance. Nothing there asks
+the person for anything: that is the inbox.
 
 ### Step drawer
 Right-hand panel (680px) over the board without a scrim on desktop, full-screen with a scrim on
 phones, read like a run history (Temporal's event view is the reference): the step id (20px)
-and its doc, then a quiet grid of facts (status, function, started, duration, cost, session).
-Sections under small labels in need order: Error, Messages, Progress, Outputs, Prompt, Inputs,
+and its doc, then a quiet grid of facts (status, what a pending step waits on, function,
+started, duration, cost, session), the Pause switch and a muted link to its thread.
+Sections under small labels in need order: Error, Progress, Outputs, Prompt, Inputs,
 Log output, Attempts (only past one). A value is a field: its name in 600, a small `← source`
 link, its doc in meta, the value under it. Types are noise until asked for: in the name's
 title, and beside every name with the Types switch. Long values fold under a fade.

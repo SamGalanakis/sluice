@@ -194,7 +194,24 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
     assert new_ver != [f'signals {{"ver":"{ver}"}}'] and new_ver[0].startswith('signals {"ver"')
     # a client with an old version gets every part at once, then nothing more
     stale = stream(port, "/projects/p/stream", {"ver": ver}, seconds=0.8)
-    assert len(patches(stale)) == 5  # summary, graph, messages, result and the nav badge
+    assert len(patches(stale)) == 4  # summary, graph, result and the nav badge
+
+
+def test_the_threads_tab_streams_its_conversations(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    status, page = get(port, "/projects/p/threads")
+    assert status == 200 and "No messages yet." in page
+    ver = signals_of(page)["ver"]
+
+    def post():
+        store.append("p", {"kind": "message", "thread": "step-a", "from": "a",
+                           "to": "orchestrator", "body": "Which <db>?"})
+
+    sent = patches(stream(port, "/projects/p/threads/stream", {"ver": ver},
+                          action=later(post)))
+    threads = next(p for p in sent if p.startswith('elements <div id="threads">'))
+    assert 'id="th-step-a"' in threads and "Which &lt;db&gt;?" in threads
+    assert get(port, "/projects/nope/threads")[0] == 404
 
 
 def test_a_running_steps_stderr_moves_its_progress_line(store, port):

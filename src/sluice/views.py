@@ -47,7 +47,9 @@ CLASSES = {"pending": "fill:#f1f1f1,stroke:#999,color:#333",
            "skipped": "fill:#fff,stroke:#999,color:#777,stroke-dasharray:3 3",
            "manual": "fill:#fff,stroke:#16a34a,stroke-width:3px,stroke-dasharray:6 3"}
 STATUSES = ("pending", "running", "succeeded", "skipped", "stale", "failed")
-DATASTAR_JS = "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/datastar.js"
+# Datastar with Rocket (web components); static/sluice.js imports the same module
+DATASTAR_JS = ("https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.4/bundles/"
+               "datastar-rocket.js")
 FONT_CSS = "https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/index.css"
 # Keep the stream open across server restarts and network blips (Datastar backs off to 30 s).
 # Reconnect for good, and within 3 s once the server is back (Datastar backs off to 30 s).
@@ -190,7 +192,7 @@ def _age(iso: str, now: dt.datetime | None = None) -> str:
 
 
 def _when(iso: str) -> str:
-    """A relative time the page keeps current (`data-ago`, static/board.js)."""
+    """A relative time the page keeps current (`data-ago`, static/sluice.js)."""
     return f'<time datetime="{e(iso)}" title="{e(iso)}" data-ago>{e(_age(iso))}</time>'
 
 
@@ -271,7 +273,7 @@ def nav_inbox(count: int | None, current: bool = False) -> str:
     return f'<a id="nav-inbox" href="/inbox"{cur}>{TRAY}<span class="t">Inbox</span>{badge}</a>'
 
 
-NAV = (("/", "Projects"), ("/log", "Log"), ("/fns", "Functions"))  # with no project chosen
+NAV = (("/log", "Log"), ("/fns", "Functions"))  # with no project chosen; "/" is the switcher's
 # The wordmark's mark: a gate across a channel, in ink.
 BRAND_MARK = ('<svg class="mark" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">'
               '<rect width="20" height="20" rx="5" fill="currentColor"/>'
@@ -282,7 +284,7 @@ BRAND_MARK = ('<svg class="mark" viewBox="0 0 20 20" width="20" height="20" aria
 CHEVRON = ('<svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
            '<path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" '
            'stroke-linecap="round" stroke-linejoin="round"/></svg>')
-PROJECT_TABS = ("plan", "log", "history", "fns")  # a project's sections, in the nav
+PROJECT_TABS = ("plan", "threads", "log", "history", "fns")  # a project's sections, in the nav
 
 
 def project_head(project: str, tab: str | None) -> str:
@@ -336,11 +338,13 @@ def project_switcher(store: Store, project: str | None) -> str:
 def top_nav(store: Store | None, project: str | None, tab: str | None, here: str,
             inbox: int | None, sub: bool = False) -> str:
     """The one nav: the mark, the project switcher, the sections of the chosen project (Plan,
-    Log, History, Functions) or of all of them (Projects, Log, Functions), and the Inbox with
-    the one red badge."""
+    Threads, Log, History, Functions) or of all of them (Log, Functions; the switcher's "All
+    projects" is the index), and the Inbox with the one red badge."""
     if project is not None:
         p = quote(project)
-        hrefs = {"plan": (f"/projects/{p}", "Plan"), "log": (f"/projects/{p}/log", "Log"),
+        hrefs = {"plan": (f"/projects/{p}", "Plan"),
+                 "threads": (f"/projects/{p}/threads", "Threads"),
+                 "log": (f"/projects/{p}/log", "Log"),
                  "history": (f"/projects/{p}/log?{HISTORY_QUERY}", "History"),
                  "fns": (f"/fns?project={p}", "Functions")}
         links = "".join(f'<a href="{e(href)}"{_current(t, tab or "", sub)}>{text}</a>'
@@ -364,10 +368,11 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
     `inbox` is the count of open items for the nav's badge; `script` a module to load; `here`
     the nav entry of this page, `project` and `tab` the chosen project and its section (`sub`:
     a page inside that entry, as a step is inside Plan); `store` lists the projects for the
-    nav's switcher; `board` loads the board's script (times, drawer, tracing)."""
+    nav's switcher; `board` loads static/sluice.js (times, and the board, drawer and thread
+    components)."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
     scripts = "".join(f'<script type="module" src="{e(s)}"></script>'
-                      for s in (script, "/static/board.js" if board else "",
+                      for s in (script, "/static/sluice.js" if board else "",
                                 "/static/nav.js" if nav else "") if s)
     top = top_nav(store, project, tab, here, inbox, sub) if nav else ""
     body_attrs = f' data-signals="{_signals(signals)}"' if signals else ""
@@ -651,7 +656,6 @@ def _thread_step(thread: Any, steps: Mapping[str, Any]) -> str | None:
 
 
 MSG_FOLD_LINES = 8
-THREADS_SHOWN = 8
 
 
 def _body_html(body: str) -> str:
@@ -677,61 +681,96 @@ def message_html(m: dict[str, Any], steps: Iterable[str], awaiting: bool) -> str
     head = (f'<div class="m-head"><span class="m-from">{e(sender)}</span>'
             + (f'<span class="m-to">→ {e(str(to))}</span>' if to else "")
             + f'<span class="m-when">{_when(m.get("at", ""))}</span>{tag}</div>')
-    return f'<li class="m m-{who}">{head}{_body_html(str(m.get("body", "")))}</li>'
+    return (f'<li class="m m-{who}" data-seq="{e(str(m.get("seq", "")))}">{head}'
+            f'{_body_html(str(m.get("body", "")))}</li>')
 
 
-def messages_panel(store: Store, board: Board, live: bool = True) -> str:
-    """The project's conversations (the `messages` part): one per thread, the latest first,
-    each folded to its last message unless a question on it still waits for a reply."""
+def threads_href(project: str, thread: str) -> str:
+    return f"/projects/{quote(project)}/threads#th-{quote(thread)}"
+
+
+THREAD_KEEP = 3  # a thread's last messages shown; the earlier ones fold
+
+
+def thread_html(board: Board, thread: str, ms: list[dict[str, Any]], waiting: set[int],
+                live: bool) -> str:
+    """One thread as a <sluice-thread>: a summary (the step it belongs to, how many messages,
+    the last one), then its messages, the earlier ones folded (from its first open question
+    on, none are). Open when a question on it waits for a reply. The component marks what
+    arrived since this browser last opened it."""
+    sid = _thread_step(thread, board.blocks)
+    if sid:
+        b = board.blocks[sid]
+        name = f'{glyph(b.mark)}<span class="th-name">{e(sid)}</span>'
+        name += f'<span class="th-doc">{e(b.title)}</span>' if b.doc.strip() else ""
+    else:
+        name = f'<span class="th-name">{e(thread)}</span>'
+    open_q = [i for i, m in enumerate(ms) if m["seq"] in waiting]
+    tag = f'<span class="m-tag await">{len(open_q)} awaiting reply</span>' if open_q else ""
+    last = ms[-1]
+    preview = (f'<span class="th-last"><b>{e(str(last.get("from") or "?"))}:</b> '
+               f'{e(_line(str(last.get("body", "")), 160))}</span>')
+    count = f'{len(ms)} message{"s" if len(ms) != 1 else ""}'
+    summary = (f'<summary><span class="th-top">{name}<span class="th-meta">{count}'
+               f'<span class="th-when"> · {_when(last.get("at", ""))}</span></span>'
+               f'<span class="th-new" data-ignore-morph></span>{tag}</span>{preview}</summary>')
+    cut = max(0, min([len(ms) - THREAD_KEEP, *open_q]))
+    items = [message_html(m, board.blocks, m["seq"] in waiting) for m in ms]
+    body = ""
+    if cut:
+        body += (f'<details class="earlier" data-preserve-attr="open"><summary>{cut} earlier '
+                 f'message{"s" if cut != 1 else ""}</summary><ol class="msgs">'
+                 f'{"".join(items[:cut])}</ol></details>')
+    body += f'<ol class="msgs">{"".join(items[cut:])}</ol>'
+    if sid and live:
+        body += (f'<p class="more"><a href="/projects/{e(quote(board.project))}#step:'
+                 f'{e(quote(sid))}">Open {e(sid)} on the plan</a></p>')
+    return (f'<sluice-thread project="{e(board.project)}" thread="{e(thread)}" '
+            f'last="{last["seq"]}" data-preserve-attr="class data-rocket-host">'
+            f'<details class="thread" id="th-{e(thread)}" data-preserve-attr="open"'
+            f'{" open" if open_q else ""}>{summary}{body}</details></sluice-thread>')
+
+
+def threads_panel(store: Store, board: Board, live: bool = True) -> str:
+    """Every conversation of the project (the `threads` part of the Threads tab), the latest
+    first."""
     msgs = L.read(store.log_dir(board.project), kinds=["message"])["records"]
     if not msgs:
-        return ""
+        return ('<p class="empty">No messages yet. Agents running as steps post to their '
+                "thread (<code>step-&lt;id&gt;</code>) and the orchestrator answers there.</p>")
     waiting = {m["seq"] for m in _awaiting(msgs, board.blocks)}
     threads: dict[str, list[dict[str, Any]]] = {}
     for m in msgs:
         threads.setdefault(str(m.get("thread") or ""), []).append(m)
     order = sorted(threads, key=lambda t: threads[t][-1]["seq"], reverse=True)
-    cards = []
-    for t in order[:THREADS_SHOWN]:
-        ms = threads[t]
-        sid = _thread_step(t, board.blocks)
-        if sid:
-            b = board.blocks[sid]
-            name = f'{glyph(b.mark)}<span class="th-name">{e(sid)}</span>'
-            name += f'<span class="th-doc">{e(b.title)}</span>' if b.doc.strip() else ""
-        else:
-            name = f'<span class="th-name">{e(t)}</span>'
-        open_q = sum(1 for m in ms if m["seq"] in waiting)
-        tag = (f'<span class="m-tag await">{open_q} awaiting reply</span>' if open_q else "")
-        last = ms[-1]
-        preview = (f'<span class="th-last"><b>{e(str(last.get("from") or "?"))}:</b> '
-                   f'{e(_line(str(last.get("body", "")), 160))}</span>')
-        count = f'{len(ms)} message{"s" if len(ms) != 1 else ""}'
-        summary = (f'<summary><span class="th-top">{name}<span class="th-meta">{count} · '
-                   f'{_when(last.get("at", ""))}</span>{tag}</span>{preview}</summary>')
-        items = "".join(message_html(m, board.blocks, m["seq"] in waiting) for m in ms)
-        link = (f'<p class="more"><a href="{e(step_href(board.project, sid))}" '
-                f'data-step="{e(sid)}">Open {e(sid)}</a></p>' if sid and live else "")
-        cards.append(f'<details class="thread" id="th-{e(t)}" data-preserve-attr="open"'
-                     f'{" open" if open_q else ""}>{summary}<ol class="msgs">{items}</ol>'
-                     f"{link}</details>")
-    more = ""
-    if len(order) > THREADS_SHOWN and live:
-        log = f"/projects/{quote(board.project)}/log?kind=message"
-        more = (f'<p class="more"><a href="{log}">{len(order) - THREADS_SHOWN} older '
-                f"threads in the log</a></p>")
-    return (f'<section class="threads" aria-labelledby="threads-h"><h2 class="label" '
-            f'id="threads-h">Messages</h2>{"".join(cards)}{more}</section>')
+    return (f'<div class="threads">'
+            f'{"".join(thread_html(board, t, threads[t], waiting, live) for t in order)}</div>')
 
 
-# ---- the board: rows by dependency depth, inside the column -----------------------------
+def threads_parts(store: Store, project: str) -> dict[str, str]:
+    board = load_board(store, project)
+    return {"threads": _part("threads", threads_panel(store, board)),
+            "nav-inbox": nav_inbox(open_count(store))}
 
-ROW_MAX = 4  # cards side by side in one row; more wrap onto another line of the same row
+
+def threads_page(store: Store, project: str, ver: str) -> str:
+    """The Threads tab: the project's conversations, live."""
+    parts = threads_parts(store, project)
+    return layout(f"Threads · {project}",
+                  f'<h1 class="vh">Threads · {e(project)}</h1>{parts["threads"]}',
+                  stream=f"/projects/{project}/threads/stream", signals={"ver": ver},
+                  inbox=open_count(store), here="/", board=True, store=store,
+                  project=project, tab="threads")
+
+
+# ---- the board: lanes of rows by dependency depth ----------------------------------------
+
 RUN_FACTS = ("session", "cost_usd")  # what a run says about itself, not what it produced
+SWEEPS = 4  # ordering passes down and up a lane
 
 
 def depths(board: Board) -> dict[str, int]:
-    """Each step's row: 0 for a step that reads no other step, else one below its deepest
+    """Each step's row: 0 for a step that waits on no other step, else one below its deepest
     upstream."""
     depth: dict[str, int] = {}
 
@@ -745,6 +784,59 @@ def depths(board: Board) -> dict[str, int]:
     for sid in board.blocks:
         row_of(sid)
     return depth
+
+
+def lanes(board: Board) -> tuple[list[dict[int, list[str]]], dict[str, int]]:
+    """The board's lanes, left to right, each {row: step ids left to right}, and each step's
+    row. A lane is the steps joined by handoffs (edges that carry a value; `after` only
+    orders), so independent pieces of work stand side by side instead of interleaving. Lanes
+    keep the plan's order; inside one, each row is sorted by where its neighbours sit
+    (a few sweeps down and up), which undoes most crossings."""
+    depth = depths(board)
+    ids = list(board.blocks)
+    parent = {sid: sid for sid in ids}
+
+    def root(sid: str) -> str:
+        while parent[sid] != sid:
+            parent[sid] = parent[parent[sid]]
+            sid = parent[sid]
+        return sid
+
+    up: dict[str, list[str]] = {sid: [] for sid in ids}
+    down: dict[str, list[str]] = {sid: [] for sid in ids}
+    for a, b, label in edges(board):
+        up[b].append(a)
+        down[a].append(b)
+        if label != "after":
+            parent[root(a)] = root(b)
+    groups: dict[str, list[str]] = {}
+    for sid in ids:
+        groups.setdefault(root(sid), []).append(sid)
+    out = []
+    for members in groups.values():
+        rows: dict[int, list[str]] = {}
+        for sid in members:
+            rows.setdefault(depth[sid], []).append(sid)
+        pos = {sid: (i + .5) / len(r) for r in rows.values() for i, sid in enumerate(r)}
+        order = sorted(rows)
+        for _ in range(SWEEPS):
+            for d in order[1:]:
+                _by_neighbours(rows[d], up, pos)
+            for d in reversed(order[:-1]):
+                _by_neighbours(rows[d], down, pos)
+        out.append(rows)
+    return out, depth
+
+
+def _by_neighbours(row: list[str], near: dict[str, list[str]], pos: dict[str, float]) -> None:
+    """Sort a row by the mean place (0-1 across their row) of each step's neighbours in its
+    lane (`pos` holds the lane's steps), then record the new places."""
+    def key(sid: str) -> float:
+        xs = [pos[n] for n in near[sid] if n in pos]
+        return sum(xs) / len(xs) if xs else pos[sid]
+    row.sort(key=key)
+    for i, sid in enumerate(row):
+        pos[sid] = (i + .5) / len(row)
 
 
 def edges(board: Board) -> list[tuple[str, str, str]]:
@@ -777,20 +869,45 @@ def answer_text(value: Any) -> str | None:
     return str(value["action"])
 
 
+def waits_on(board: Board, b: Block) -> list[tuple[str, str]]:
+    """(step, status) of each step a pending one still waits for: those not yet succeeded or
+    skipped."""
+    if b.status != "pending":
+        return []
+    return [(d, board.blocks[d].mark) for d in b.deps
+            if d in board.blocks and board.blocks[d].status not in ("succeeded", "skipped")]
+
+
+def is_next(board: Board, b: Block) -> bool:
+    """A pending step that starts as soon as the steps it waits for, all running now,
+    finish: the board sets it apart from pending steps further off."""
+    waits = waits_on(board, b)
+    return (b.mark == "pending" and bool(waits)
+            and all(board.blocks[d].status == "running" for d, _ in waits))
+
+
+def _waits_text(waits: list[tuple[str, str]]) -> str:
+    return "waits on " + ", ".join(f"{d} ({WORDS.get(m, m)})" for d, m in waits)
+
+
 def _card(store: Store, board: Board, b: Block, live: bool) -> str:
     """A step on the board: a compact bubble with its status glyph, its id and, small, how long
     it ran (and `done of total` for a scattered step). Everything else is one click away in the
-    drawer; the doc and what it says now (progress, error) are its tooltip."""
+    drawer; the doc and what it says now (progress, error, what it waits on) are its tooltip.
+    A pending step next in line (`is-next`) reads at full strength."""
     tag = "a" if live else "div"
     href = f' href="{e(step_href(board.project, b.sid))}" data-step="{e(b.sid)}"' if live else ""
     kind, text = block_line(store, board, b)
     now = text if kind != "output" else ""  # what it produced is in the drawer
     if b.mark == "paused":
         now = f"paused: {b.pause_reason}" if b.pause_reason else "paused"
+    elif waits_on(board, b) and not now:
+        now = _waits_text(waits_on(board, b))
     tip = " — ".join(t for t in (" ".join(b.doc.split()), now) if t)
     title = f' title="{e(tip)}"' if tip else ""
-    attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}" id="n-{e(b.sid)}" '
-             f'data-node="s:{e(b.sid)}"{href}{title}')
+    nxt = " is-next" if is_next(board, b) else ""
+    attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}{nxt}" '
+             f'id="n-{e(b.sid)}" data-node="s:{e(b.sid)}"{href}{title}')
     small = []
     if "total" in b.entry:
         small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
@@ -800,25 +917,40 @@ def _card(store: Store, board: Board, b: Block, live: bool) -> str:
     return f'<{tag} {attrs}>{glyph(b.mark)}<span class="sid">{e(b.sid)}</span>{tail}</{tag}>'
 
 
+LEGEND_DATA = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20" '
+               'stroke="var(--edge-head)" stroke-width="1.5"/></svg>')
+LEGEND_AFTER = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20" '
+                'stroke="var(--edge-head)" stroke-width="1.5" stroke-dasharray="4 4"/></svg>')
+
+
 def board_html(store: Store, board: Board, live: bool = True) -> str:
-    """The plan as a board (the `graph` part): one row per dependency depth, top to bottom,
-    inside the page's column. The server lays out the rows (the order reads without
-    JavaScript); static/board.js draws the edges between the cards from `data-edges`."""
+    """The plan as a board (the `graph` part): lanes side by side (they wrap on a narrow
+    screen), each a column of rows by dependency depth; rows line up across lanes. The server
+    lays the cards out (the order reads without JavaScript); the <sluice-board> component
+    (static/sluice.js) draws the edges between them from its `edges` attribute, around the
+    cards they would cross."""
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
-    depth = depths(board)
-    rows: dict[int, list[str]] = {}
-    for sid, b in board.blocks.items():
-        rows.setdefault(depth[sid], []).append(_card(store, board, b, live))
-    html_rows = "".join(
-        f'<li class="row" style="--n:{min(len(cards), ROW_MAX)}">{"".join(cards)}</li>'
-        for _, cards in sorted(rows.items()))
-    data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in edges(board)],
-                      ensure_ascii=False)
-    return (f'<div class="board" role="region" aria-label="Plan">'
-            f'<div class="plane" data-edges="{e(data)}"><svg class="edges" aria-hidden="true">'
-            f'</svg><ol class="rows">{html_rows}</ol></div></div>')
+    groups, _ = lanes(board)
+    html = []
+    for rows in groups:
+        html.append(f'<li class="lane" style="--rows:{max(rows) + 1}"><ol class="rows">' + "".join(
+            f'<li class="row" style="--r:{d + 1}">'
+            f'{"".join(_card(store, board, board.blocks[sid], live) for sid in rows[d])}</li>'
+            for d in sorted(rows)) + "</ol></li>")
+    es = edges(board)
+    data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in es], ensure_ascii=False)
+    legend = ""
+    if es:
+        after = any("after" in label.split(", ") for _, _, label in es)
+        legend = (f'<p class="legend">{LEGEND_DATA}hands on a value'
+                  + (f"{LEGEND_AFTER}runs after" if after else "") + "</p>")
+    return (f'<sluice-board class="board" role="region" aria-label="Plan" edges="{e(data)}" '
+            f'data-preserve-attr="data-rocket-host"><div class="plane">'
+            f'<svg class="edges" aria-hidden="true" data-ignore-morph></svg>'
+            f'<ol class="lanes">{"".join(html)}</ol>'
+            f"</div>{legend}</sluice-board>")
 
 
 def result_panel(board: Board) -> str:
@@ -863,13 +995,22 @@ def inputs_strip(board: Board) -> str:
 
 
 def _about(text: str) -> str:
-    """A description: two lines, and a disclosure to read the rest when it is longer."""
+    """A description: short, as it is; longer, as markdown folded to its first lines, with a
+    disclosure for the rest."""
     if not text:
         return ""
     if len(text) <= 200 and "\n" not in text:
         return f'<p class="about">{e(text)}</p>'
-    return (f'<details class="about" data-preserve-attr="open"><summary><span class="clamp">'
-            f"{e(text)}</span></summary></details>")
+    lines = min(3, max(1, -(-len(first_paragraph(text)) // 80)))  # its opening, about
+    return (f'<details class="about" data-preserve-attr="open"><summary><div class="clip md" '
+            f'style="--lines:{lines}">{markdown(text)}</div></summary></details>')
+
+
+def first_paragraph(text: str) -> str:
+    """A description's opening, as plain text for one line of a list: up to its first blank
+    line or list, whitespace collapsed."""
+    head = re.split(r"\n\s*\n|\n\s*(?:[-*]|\d+\.)\s", text.strip(), maxsplit=1)[0]
+    return " ".join(head.split())
 
 
 def _summary_line(board: Board, updated: str = "") -> str:
@@ -913,7 +1054,7 @@ def _bar(counts: Mapping[str, int], total: int) -> str:
 def _project_row(store: Store, name: str) -> str:
     info = store.project(name)
     href = f"/projects/{quote(name)}"
-    about = f'<p class="about">{e(info.get("description") or "")}</p>' \
+    about = f'<p class="about">{e(first_paragraph(info["description"]))}</p>' \
         if info.get("description") else ""
     when = last_change(store, name)
     try:
@@ -1013,39 +1154,43 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
         if paused else ""
     note += '<p class="attn-note">Archived: listed apart from the other projects.</p>' \
         if archived else ""
-    line = f'<p class="meta sum">{_summary_line(board, last_change(store, project))}</p>'
+    counts, total = board.counts, len(board.blocks)
+    line = (f'<div class="sumline">{_bar(counts, total)}<p class="meta sum">'
+            f'{_summary_line(board, last_change(store, project))}</p>')
     if live:
-        line = (f'<div class="sumline">{line}<div class="switches">'
-                f"{_pause_form(project, paused)}{_archive_form(project, archived)}</div></div>")
-    # the head is the project: its description. What the plan took, produced and cost, and the
-    # archive switch, sit under the board.
-    about_plan = (result_panel(board) + inputs_strip(board) + line)
-    parts = {"summary": _part("summary", note + _about(about)),
+        line += (f'<div class="switches">{_pause_form(project, paused)}'
+                 f"{_archive_form(project, archived)}</div>")
+    line += "</div>"
+    # first whether the work is moving (and the switches), then what the project is; what the
+    # plan took and produced sits under the board
+    parts = {"summary": _part("summary", line + note + _about(about)),
              "graph": _part("graph", board_html(store, board, live)),
-             "messages": _part("messages", messages_panel(store, board, live)),
-             "result": _part("result", about_plan, "section", "plan-facts")}
+             "result": _part("result", result_panel(board) + inputs_strip(board), "section",
+                             "plan-facts")}
     if live:
         parts["nav-inbox"] = nav_inbox(open_count(store))
     return parts
 
 
 def _drawer(project: str) -> str:
-    """The step drawer: `$step` (from the address's `#step:<id>`) opens it and streams that
-    step's detail into it; static/board.js keeps `$step` and the address in step."""
+    """The step drawer, a <sluice-drawer>: `$step` (from the address's `#step:<id>`) opens it
+    and streams that step's detail into it; the component (static/sluice.js) opens it from a
+    step link, closes it (Escape, the close button, the scrim) and gives focus back."""
     url = f"'/projects/{quote(project)}/steps/' + encodeURIComponent($step) + '/stream'"
     effect = (f"$step ? @get({url}, {{retry: 'always', retryMaxCount: 1000000, "
               f"requestCancellation: window.sluiceStream ? window.sluiceStream() : 'auto'}}) "
               f": window.sluiceStream && window.sluiceStream()")
     hash_to_step = ("$step = location.hash.startsWith('#step:') ? "
                     "decodeURIComponent(location.hash.slice(6)) : ''")
-    return (f'<div class="scrim" style="display:none" data-show="$step != \'\'" '
+    return (f'<sluice-drawer data-preserve-attr="data-rocket-host">'
+            f'<div class="scrim" style="display:none" data-show="$step != \'\'" '
             f'data-on:click="window.sluiceClose && window.sluiceClose()"></div>'
             f'<aside id="drawer" class="drawer" style="display:none" tabindex="-1" '
             f'aria-label="Step" data-show="$step != \'\'" data-effect="{e(effect)}" '
             f'data-init="{e(hash_to_step)}" data-on:hashchange__window="{e(hash_to_step)}">'
             f'<button type="button" class="close" aria-label="Close" '
             f'data-on:click="window.sluiceClose && window.sluiceClose()">{X_ICON}</button>'
-            f'<div id="step-detail"></div></aside>')
+            f'<div id="step-detail"></div></aside></sluice-drawer>')
 
 
 def project_page(store: Store, project: str, ver: str | None = None) -> str:
@@ -1055,7 +1200,7 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     live = ver is not None
     p = _project(store, project, live)
     body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}'
-            f'{p["graph"]}{p["messages"]}{p["result"]}')
+            f'{p["graph"]}{p["result"]}')
     if live:
         body += _drawer(project)
     else:
@@ -1192,8 +1337,8 @@ def _field(name: str, value: str, type_: str = "", doc: str = "", source: str = 
 
 def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     """Everything about one step, the way a run history reads: the step and a summary of its
-    run (status, fn, started, duration, cost, session), then what matters now (error,
-    progress), what it produced, its messages, its prompt and other inputs (where each comes
+    run (status, fn, what it waits on, started, duration, cost, session; a link to its thread),
+    then what matters now (error, progress), what it produced, its prompt and other inputs (where each comes
     from), its log output and, when it ran more than once, its attempts. Types show on demand
     (the Types switch; always in a name's title). The `step-detail` part of the drawer and of
     the step page."""
@@ -1225,8 +1370,24 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         doc += f'<p class="d-doc">Skipped: {e(b.entry.get("skipped") or "")}</p>'
     if b.paused and b.status != "running":
         doc += f'<p class="d-doc attn-note">Paused{": " + e(b.pause_reason) if b.pause_reason else ""}</p>'
+    waits = waits_on(board, b)
+    if waits:
+        links = ", ".join(
+            (f'<a href="{e(step_href(project, d))}" data-step="{e(d)}">{e(d)}</a>' if live
+             else e(d)) + f' <span class="quiet">({e(WORDS.get(m, m))})</span>'
+            for d, m in waits)
+        facts.insert(1, ("Waits on", links))
     grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
-    switch = f'<div class="d-actions">{_pause_form(project, b.paused, sid)}' \
+    thread = f"step-{sid}"  # its conversation with the orchestrator, on the Threads tab
+    msgs = L.read(store.log_dir(project), kinds=["message"], threads=[thread])["records"]
+    talk = ""
+    if msgs and live:
+        waiting = len(_awaiting(msgs, board.blocks))
+        n = f'{len(msgs)} message{"s" if len(msgs) != 1 else ""}'
+        n += f' · <span class="attn">{waiting} awaiting reply</span>' if waiting else ""
+        talk = (f'<a class="d-thread" href="{e(threads_href(project, thread))}">Thread · {n}'
+                f"</a>")
+    switch = f'<div class="d-actions">{_pause_form(project, b.paused, sid)}{talk}' \
         "</div>" if live else ""
     head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(sid)}</h2></div>'
             f'{doc}<dl class="facts">{grid}</dl>{switch}</header>')
@@ -1240,12 +1401,6 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
                     'title="Show the types of the values">Types</button>')
     if b.entry.get("error"):
         section("Error", f'<pre class="err">{e(b.entry["error"])}</pre>')
-    thread = f"step-{sid}"  # its conversation with the orchestrator: what matters right now
-    msgs = L.read(store.log_dir(project), kinds=["message"], threads=[thread])["records"]
-    if msgs:
-        waiting = {m["seq"] for m in _awaiting(msgs, board.blocks)}
-        items = "".join(message_html(m, board.blocks, m["seq"] in waiting) for m in msgs)
-        section("Messages", f'<ol class="msgs">{items}</ol>')
     tail = ""
     if b.run_ids:
         d = _run_dir(store, project, b.run_ids[-1])

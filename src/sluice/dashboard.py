@@ -40,7 +40,7 @@ from .util import read_json
 PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE, I.FILE)
 STATIC = Path(__file__).resolve().parent / "static"
 STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json",
-                "board.js": "text/javascript", "nav.js": "text/javascript"}
+                "sluice.js": "text/javascript", "nav.js": "text/javascript"}
 AUTHOR = "dashboard"
 HTTP_STATUS = {"not_found": 404, "conflict": 409}
 
@@ -226,6 +226,24 @@ class Dashboard:
             signals.get("ver"), lambda: project_ver(self.store, name),
             lambda: views.project_parts(self.store, name)))
 
+    def _threads(self, name: str) -> str:
+        self.store.project(name)
+        return views.threads_page(self.store, name, project_ver(self.store, name))
+
+    async def threads(self, request: Request) -> Response:
+        return await self._page(self._threads, request.path_params["name"])
+
+    async def threads_stream(self, request: Request) -> Response:
+        name = request.path_params["name"]
+        try:
+            await anyio.to_thread.run_sync(self.store.project, name)
+        except SluiceError as err:
+            return Response(err.message, status_code=404)
+        signals = await _signals(request)
+        return DatastarResponse(self._parts_stream(
+            signals.get("ver"), lambda: project_ver(self.store, name),
+            lambda: views.threads_parts(self.store, name)))
+
     def _step(self, name: str, sid: str) -> str:
         return views.step_page(self.store, name, sid, step_ver(self.store, name, sid))
 
@@ -370,6 +388,8 @@ class Dashboard:
         for path, handler in (("/", self.index), ("/stream", self.index_stream),
                               ("/projects/{name}", self.project),
                               ("/projects/{name}/stream", self.project_stream),
+                              ("/projects/{name}/threads", self.threads),
+                              ("/projects/{name}/threads/stream", self.threads_stream),
                               ("/projects/{name}/steps/{sid}", self.step),
                               ("/projects/{name}/steps/{sid}/stream", self.step_stream),
                               ("/projects/{name}/log", self.log),

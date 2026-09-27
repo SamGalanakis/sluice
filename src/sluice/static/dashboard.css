@@ -174,21 +174,23 @@ details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 @keyframes flip { from { transform: rotateX(90deg); opacity: .2; } }
 
 /* ---- the project summary, its result ---------------------------------------------- */
-#summary { display: grid; gap: 6px; }
+#summary { display: grid; gap: 10px; }
 .about { color: var(--muted-foreground); max-width: 72ch; }
-.sumline { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-           margin-top: 4px; }
-.sum { margin: 0; }
+.sumline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.sum { margin: 0; flex: 1 1 auto; min-width: 0; }
 .switches { display: flex; gap: 8px; }
 form.switch button { font-size: 13px; padding: 3px 10px; color: var(--muted-foreground); }
 form.switch button:hover { color: var(--foreground); }
 .attn-note { font-size: 13px; color: var(--status-attention); }
-.d-actions { display: flex; gap: 8px; margin-top: 10px; }
+.d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; }
+.d-thread { font-size: 13px; color: var(--muted-foreground); }
+.d-thread:hover { color: var(--foreground); }
 details.about > summary { list-style: none; cursor: pointer; color: var(--muted-foreground); }
 details.about > summary::-webkit-details-marker { display: none; }
-details.about .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-                       line-clamp: 2; overflow: hidden; }
-details.about[open] .clamp { display: block; }
+details.about .clip { max-width: 72ch; max-height: calc(var(--lines, 2) * 22px);
+                      overflow: hidden; }
+details.about[open] .clip { max-height: none; }
+details.about[open] > summary { margin-bottom: 0; }
 details.about > summary::after { content: "Show more"; font-size: 13px;
                                  text-decoration: underline; text-underline-offset: 3px;
                                  text-decoration-color: var(--border-strong); }
@@ -217,15 +219,28 @@ details.fold > summary::after { content: "Show all"; display: inline-block; marg
                                 text-decoration-color: var(--border-strong); }
 details.fold[open] > summary::after { content: "Show less"; }
 
-/* ---- the board: rows by dependency depth, inside the column ---------------------------
-   Each depth is a row of compact bubbles, centred; board.js draws the edges from
-   `data-edges` into the SVG under them. Details live in the drawer, one click away. */
-#graph { margin-top: 8px; }
-.board { position: relative; padding: 8px 0 16px; }
+/* ---- the board: lanes of rows by dependency depth, inside the column -----------------
+   Each lane (steps joined by handoffs) is a column of rows of compact bubbles; lanes stand
+   side by side and wrap, and every lane has the same rows, so depths line up across them.
+   <sluice-board> draws the edges into the SVG under the cards. Details live in the drawer. */
+#graph { margin-top: 20px; }
+sluice-board, sluice-thread { display: block; }
+sluice-drawer { display: contents; }
+.board { position: relative; padding: 8px 0 12px; --node-h: 36px; --row-gap: 40px; }
 .plane { position: relative; }
-.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 40px; position: relative;
-        z-index: 1; }
-.row { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 14px; }
+.lanes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap;
+         justify-content: center; align-items: flex-start; gap: var(--row-gap) 36px;
+         position: relative; z-index: 1; }
+.lane { min-width: 0; }
+.lane > .rows { list-style: none; margin: 0; padding: 0; display: grid; row-gap: var(--row-gap);
+                grid-template-rows: repeat(var(--rows), minmax(var(--node-h), auto)); }
+.row { grid-row: var(--r); display: flex; flex-wrap: wrap; justify-content: center;
+       align-items: flex-start; gap: 12px 14px; }
+.legend { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
+          gap: 4px 8px; margin-top: 20px; font-size: 12.5px; line-height: 16px;
+          color: var(--muted-foreground); }
+.legend svg + * , .legend svg { flex: none; }
+.legend svg:not(:first-child) { margin-left: 10px; }
 .edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible;
          pointer-events: none; z-index: 0; }
 .wires path { fill: none; stroke: var(--edge); stroke-width: 1.5;
@@ -250,6 +265,10 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
        text-overflow: ellipsis; white-space: nowrap; }
 .node .dur { font-size: 12px; line-height: 16px; }
 .is-pending .sid, .is-skipped .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
+.node.is-pending { border-color: transparent;
+                   background: color-mix(in oklch, var(--card) 55%, transparent); }
+.node.is-pending.is-next { border-color: var(--border-strong); background: var(--card); }
+.node.is-pending.is-next .sid { color: var(--foreground); }
 .node.is-skipped { border-style: dashed; }
 .node.is-running { border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
 .node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground); }
@@ -348,11 +367,10 @@ code.v { border: 0; background: none; padding: 0; }
          border: 1px solid var(--border); color: var(--muted-foreground); }
 .m-tag.await { color: var(--status-attention);
                border-color: color-mix(in oklch, var(--status-attention) 45%, transparent); }
-.m-body { margin-top: 4px; max-width: 72ch; overflow-wrap: anywhere; }
+.m-body { margin-top: 4px; max-width: 68ch; overflow-wrap: anywhere; }
 .m-body p { margin: 0; }
 .m-body p + p, .m-body ul, .m-body ol, .m-body pre { margin-top: 8px; }
-.threads { margin-top: 32px; display: grid; gap: 10px; }
-.threads > .label { margin: 0 0 2px; }
+.threads { display: grid; gap: 10px; }
 details.thread { border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
 details.thread > summary { display: grid; gap: 4px; padding: 12px 16px; list-style: none;
                            color: var(--foreground); }
@@ -365,6 +383,18 @@ details.thread[open] > summary { margin-bottom: 0; border-bottom: 1px solid var(
 .th-doc { color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis;
           white-space: nowrap; flex: 1 1 200px; }
 .th-meta { font-size: 13px; color: var(--muted-foreground); }
+details.thread[open] .th-when { display: none; }  /* each message says when */
+.th-new:empty { display: none; }
+.th-new { font-size: 12px; line-height: 16px; padding: 0 6px; border-radius: 6px; font-weight: 600;
+          color: var(--status-active);
+          background: color-mix(in oklch, var(--status-active) 12%, transparent); }
+details.earlier { padding: 12px 16px 0; }
+details.earlier > summary { display: inline-block; list-style: none; font-size: 13px;
+                            text-decoration: underline; text-underline-offset: 3px;
+                            text-decoration-color: var(--border-strong); }
+details.earlier > summary::-webkit-details-marker { display: none; }
+details.earlier[open] > summary { margin-bottom: 14px; }
+details.earlier > .msgs { padding-bottom: 14px; border-bottom: 1px dashed var(--border); }
 .th-last { font-size: 14px; color: var(--muted-foreground); overflow: hidden;
            text-overflow: ellipsis; white-space: nowrap; }
 details.thread[open] .th-last { display: none; }
@@ -497,7 +527,8 @@ main > .phead + * { margin-top: 0; }
 /* ---- narrow screens: one card per line, no edges; the drawer is a sheet ------------- */
 @media (max-width: 720px) {
   .m-lead { margin-left: 14px; }
-  details.thread > summary, details.thread > .msgs { padding-left: 12px; padding-right: 12px; }
+  details.thread > summary, details.thread > .msgs, details.earlier {
+    padding-left: 12px; padding-right: 12px; }
   :root { --gutter: 16px; --nav-pad: 8px; }
   body { font-size: 15px; }
   main { padding: 16px 0 40px; }
@@ -511,8 +542,11 @@ main > .phead + * { margin-top: 0; }
   #nav-inbox .t { position: absolute; width: 1px; height: 1px; overflow: hidden;
                   clip-path: inset(50%); white-space: nowrap; }
   #nav-inbox .badge { margin-left: 2px; }
-  .rows { gap: 28px; }
+  .board { --row-gap: 28px; }
+  .lanes { column-gap: 18px; }
   .row { gap: 8px 10px; }
+  .legend { justify-content: flex-start; }
+  details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
   .drawer { width: 100vw; border-left: 0; padding: 16px 16px 40px; }
   .scrim { position: fixed; inset: 0; z-index: 19; background: var(--scrim); }
   dl.kv { grid-template-columns: 1fr; gap: 2px; }

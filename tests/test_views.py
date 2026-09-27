@@ -67,10 +67,21 @@ def card(page, sid):
     return m[0]
 
 
-def rows(page):
-    """The step ids on the board, row by row."""
-    return [re.findall(r'id="n-([^"]+)"', r)
-            for r in re.findall(r'<li class="row"[^>]*>(.*?)</li>', page, re.DOTALL)]
+def lanes(page):
+    """The step ids on the board, lane by lane, each {row: ids}."""
+    out = []
+    for lane in re.findall(r'<li class="lane"[^>]*><ol class="rows">(.*?)</ol></li>', page,
+                           re.DOTALL):
+        out.append({int(r): re.findall(r'id="n-([^"]+)"', cards) for r, cards in
+                    re.findall(r'<li class="row" style="--r:(\d+)">(.*?)</li>', lane,
+                               re.DOTALL)})
+    return out
+
+
+def board_edges(page):
+    """The edges the board draws: {(from, to): names}."""
+    data = json.loads(html.unescape(re.search(r'<sluice-board [^>]*edges="([^"]*)"', page)[1]))
+    return {(f, t): n for f, t, n in data}
 
 
 def board_project(store):
@@ -118,42 +129,78 @@ def test_the_board_shows_each_step_as_a_bubble(store):
     assert 'data-since="2026-01-01T10:12:05Z"' in each  # its running time stays current
     assert "is-stale" in card(page, "late") and "Its inputs changed" in card(page, "late")
     assert card(page, "fmt").startswith('<a class="node chip is-succeeded"')  # glue: dashed
-    # the head is the project; the plan's result, its inputs, counts and cost follow the
-    # board (plan inputs and outputs are not board nodes)
+    # first whether the work moves (counts, the switches), then the board; the plan's result
+    # and inputs follow it (plan inputs and outputs are not board nodes)
+    summary = page[page.index('<div id="summary">'):page.index('id="graph"')]
+    assert "3 of 6 succeeded · 1 running · 1 stale · 1 failed" in summary
+    assert '<span class="bar" role="img"' in summary and ">Pause</button>" in summary
     facts = page[page.index('<section id="result" class="plan-facts">'):]
     assert page.index('id="graph"') < page.index('id="result"')
     assert "<dt>total</dt><dd><code class=\"v\">4</code></dd>" in facts
     assert "<dt>n</dt><dd><code class=\"v\">1</code></dd>" in facts
     assert 'data-node="o:' not in page and 'data-node="i:' not in page
-    # the page: its counts, the drawer that shows a step, and the live stream
-    assert "3 of 6 succeeded · 1 running · 1 stale · 1 failed" in facts
+    # the page: the drawer that shows a step, and the live stream
+    assert '<sluice-drawer data-preserve-attr="data-rocket-host"><div class="scrim"' in page
     assert 'id="drawer"' in page
     assert "'/projects/v/steps/' + encodeURIComponent($step)" in html.unescape(page)
     assert "data-init=\"@get('/projects/v/stream', {retry: 'always'" in page
-    assert '<script type="module" src="/static/board.js">' in page
+    assert '<script type="module" src="/static/sluice.js">' in page
+    assert "bundles/datastar-rocket.js" in page
     assert "mermaid" not in page
 
 
-def test_the_board_lays_steps_out_in_rows_by_dependency_depth(store):
+def test_the_board_lays_steps_out_in_lanes_of_rows_by_dependency_depth(store):
     board_project(store)
     page = views.project_page(store, "v", ver="abc")
-    assert rows(page) == [["a", "c"], ["fmt", "b", "each"], ["late"]]
-    assert '<li class="row" style="--n:3">' in page
-    # the edges, one per handoff, named by their ports, for board.js to draw
-    data = json.loads(html.unescape(re.search(r'<div class="plane" data-edges="([^"]*)"',
-                                              page)[1]))
-    assert {(f, t): n for f, t, n in data} == {
+    # the steps joined by handoffs make one lane; c hands nothing on, so it stands apart
+    assert lanes(page) == [{1: ["a"], 2: ["fmt", "b", "each"], 3: ["late"]}, {1: ["c"]}]
+    assert '<li class="lane" style="--rows:3">' in page  # a lane has the rows it uses
+    # the edges, one per handoff, named by their ports, for <sluice-board> to draw
+    assert board_edges(page) == {
         ("s:a", "s:fmt"): "sum → values", ("s:a", "s:b"): "sum → a",
         ("s:a", "s:each"): "sum → tag", ("s:a", "s:late"): "sum → a",
         ("s:b", "s:late"): "sum → b"}
-    # more than four side by side wrap inside their row
-    create(store, "wide", {f"s{i}": {"run": "test.add", "in": {"a": d(i), "b": d(1)}}
-                           for i in range(6)})
-    assert '<li class="row" style="--n:4">' in views.project_page(store, "wide", ver="x")
+    assert '<svg class="edges" aria-hidden="true" data-ignore-morph>' in page  # drawn, kept
+    assert "hands on a value" in page and "runs after" not in page  # the legend
+    # an `after` orders lanes without joining them; rows still line up across lanes
+    create(store, "two", {
+        "a1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "a2": {"run": "test.add", "in": {"a": src("a1/sum"), "b": d(1)}},
+        "b1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "after": ["a2"]},
+        "b2": {"run": "test.add", "in": {"a": src("b1/sum"), "b": d(1)}}})
+    two = views.project_page(store, "two", ver="x")
+    assert lanes(two) == [{1: ["a1"], 2: ["a2"]}, {3: ["b1"], 4: ["b2"]}]
+    assert board_edges(two)[("s:a2", "s:b1")] == "after" and "runs after" in two
+    # inside a lane, a row follows the row above it: crossings undone
+    create(store, "cross", {
+        "l": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "r": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "under_r": {"run": "test.add", "in": {"a": src("r/sum"), "b": d(1)}},
+        "under_l": {"run": "test.add", "in": {"a": src("l/sum"), "b": d(1)}},
+        "join": {"run": "test.add", "in": {"a": src("under_l/sum"), "b": src("under_r/sum")}}})
+    assert lanes(views.project_page(store, "cross", ver="x")) == [
+        {1: ["l", "r"], 2: ["under_l", "under_r"], 3: ["join"]}]
     # nothing at all yet: a placeholder that says how steps arrive
     create(store, "empty", {})
     empty = views.project_page(store, "empty", ver="x")
     assert "No steps yet." in empty and 'class="plane"' not in empty
+
+
+def test_a_pending_step_says_what_it_waits_on_and_the_next_ones_stand_out(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
+                        "c": {"run": "test.add", "in": {"a": src("b/sum"), "b": d(1)}}})
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a": {"status": "running", "started": "2026-01-01T10:00:00Z"}}})
+    page = views.project_page(store, "v", ver="x")
+    assert 'class="node card is-pending is-next" id="n-b"' in page  # starts once a finishes
+    assert 'class="node card is-pending" id="n-c"' in page  # further off
+    assert 'title="waits on b (pending)"' in card(page, "c")
+    head = views.step_detail(store, "v", "b").split("</header>")[0]
+    assert ('<dt>Waits on</dt><dd><a href="/projects/v/steps/a" data-step="a">a</a> '
+            '<span class="quiet">(running)</span></dd>') in head
+    assert "Waits on" not in views.step_detail(store, "v", "a")
 
 
 def test_answers_show_what_was_chosen_and_markdown_is_rendered():
@@ -210,7 +257,7 @@ def test_a_steps_detail(store):
     assert facts["Status"] == "succeeded" and facts["Function"] == "<code>test.open</code>"
     assert facts["Duration"] == "1m 30s" and facts["Cost"] == "$0.12"  # cost as money
     sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
-    assert sections == ["Messages", "Outputs", "Prompt", "Inputs", "Log output", "Attempts"]
+    assert sections == ["Outputs", "Prompt", "Inputs", "Log output", "Attempts"]
     # a named value: its name (type on demand, and in the name's title), its doc, its value
     assert ('<span class="f-name" title="string">answer</span><span class="f-type">string'
             '</span></div><p class="f-doc">What it found</p><div class="f-v"><div class="v '
@@ -224,9 +271,10 @@ def test_a_steps_detail(store):
             'make/sum</a></span></div><div class="f-v"><code class="v">2</code></div>') in html
     assert "set in the plan" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html and "<script>" not in html
-    assert ('<span class="m-from">agent</span><span class="m-to">→ orchestrator</span>' in html
-            and "Which &lt;file&gt;?" in html)
-    assert "not here" not in html
+    # its conversation is on the Threads tab: the head links to it
+    assert ('<a class="d-thread" href="/projects/v/threads#th-step-agent">Thread · 1 message · '
+            '<span class="attn">1 awaiting reply</span></a>') in head
+    assert "Which &lt;file&gt;?" not in html and "not here" not in html
     runs = html[html.index("Attempts</h3>"):]
     assert runs.index("succeeded") < runs.index("failed")  # newest first
     assert "exit code 2" in runs
@@ -263,8 +311,11 @@ def test_long_descriptions_fold_and_inputs_show_their_docs(store):
     store.update_project("v", "A long description. " * 12)
     store.set_input("v", "k", 3, "test", "")
     page = views.project_page(store, "v", ver="x")
-    assert '<details class="about" data-preserve-attr="open"><summary><span class="clamp">' \
-        "A long description." in page
+    assert ('<details class="about" data-preserve-attr="open"><summary><div class="clip md" '
+            'style="--lines:3"><p>A long description.') in page
+    # markdown renders, and a list of projects shows its opening only
+    assert views.first_paragraph("Lash: the workspace.\nHow work is done:\n- rules\n- more") \
+        == "Lash: the workspace. How work is done:"
     # plan inputs sit under the board: name, value (an unset one marked), doc
     assert ('<dt>who</dt><dd><span class="attn">not set</span><p class="meta">Who &lt;b&gt;'
             'counts&lt;/b&gt;</p></dd>') in page
@@ -285,22 +336,45 @@ def test_messages_are_threads_with_notes_and_open_questions_marked(store):
                  {"kind": "message", "thread": "step-a", "from": "orchestrator", "to": "a",
                   "body": "No shims."})
     board = views.load_board(store, "v")
-    panel = views.messages_panel(store, board)
+    panel = views.threads_panel(store, board)
     # threads, latest first; one waiting on a reply opens, an answered one stays folded
     assert panel.index('id="th-step-a"') < panel.index('id="th-step-c"')
     assert 'id="th-step-c" data-preserve-attr="open" open>' in panel
     assert 'id="th-step-a" data-preserve-attr="open">' in panel
+    assert ('<sluice-thread project="v" thread="step-a" last="6" '
+            'data-preserve-attr="class data-rocket-host">') in panel
+    assert '<span class="th-new" data-ignore-morph></span>' in panel  # the component's count
     assert '<span class="m-tag await">1 awaiting reply</span>' in panel
     assert '<span class="th-doc">Break &lt;it&gt;</span>' in panel
     assert "<strong>DB</strong>" in panel  # markdown bodies render
     assert "Moving the helpers<br>rather than deleting them" in panel
     assert '<span class="m-tag">note</span>' in panel
-    assert '<li class="m m-lead">' in panel and '<li class="m m-step">' in panel
-    page = views.project_page(store, "v", ver="x")  # questions for the orchestrator are not
-    assert "Needs you" not in page and '<div id="messages">' in page  # a person's to answer
-    detail = views.step_detail(store, "v", "a")  # its conversation comes before its inputs
-    assert detail.index(">Messages</h3>") < detail.index(">Inputs</h3>")
-    assert "Awaiting reply" in views.step_detail(store, "v", "c")
+    assert '<li class="m m-lead" data-seq="6">' in panel and 'class="m m-step"' in panel
+    assert '<a href="/projects/v#step:a">Open a on the plan</a>' in panel
+    # a long thread folds all but its last three messages, from its first open question on
+    for i in range(5):
+        store.append("v", {"kind": "message", "thread": "long", "from": "x", "body": f"m{i}",
+                           "needs_reply": False})
+    store.append("v", {"kind": "message", "thread": "ask", "from": "x", "to": "orchestrator",
+                       "body": "q?"})
+    for i in range(4):
+        store.append("v", {"kind": "message", "thread": "ask", "from": "x", "body": f"n{i}",
+                           "needs_reply": False})
+    panel = views.threads_panel(store, views.load_board(store, "v"))
+    long = panel[panel.index('id="th-long"'):panel.index("</sluice-thread>",
+                                                          panel.index('id="th-long"'))]
+    assert "<summary>2 earlier messages</summary>" in long
+    ask = panel[panel.index('id="th-ask"'):panel.index("</sluice-thread>",
+                                                        panel.index('id="th-ask"'))]
+    assert "earlier" not in ask  # its open question stays in view
+    # the plan page has no messages; the Threads tab has them, live
+    page = views.project_page(store, "v", ver="x")
+    assert "Needs you" not in page and "th-step" not in page
+    tab = views.threads_page(store, "v", ver="x")
+    assert '<a href="/projects/v/threads" aria-current="page">Threads</a>' in tab
+    assert "data-init=\"@get('/projects/v/threads/stream'" in tab and 'id="th-step-c"' in tab
+    create(store, "quiet", {})
+    assert "No messages yet." in views.threads_panel(store, views.load_board(store, "quiet"))
 
 
 # ---- the index ----------------------------------------------------------------------------
@@ -325,7 +399,8 @@ def test_the_project_index(store):
     assert "No steps yet." in page  # w
     assert "Needs you" not in page  # what asks for a person is the inbox alone
     assert re.search(r'<time datetime="\d{4}-\d\d-\d\dT[\d:]+Z"', page)
-    assert '<a href="/fns">Functions</a>' in page and '<a href="/" aria-current="page">' in page
+    assert '<a href="/fns">Functions</a>' in page
+    assert '<a href="/" class="all" aria-current="page">All projects</a>' in page
 
 
 
@@ -347,7 +422,8 @@ def test_one_nav_whose_switcher_names_the_project_and_whose_sections_follow_it(s
     board = views.project_page(store, "v", ver="x")
     assert len(nav(board)) == 1 and 'class="ptabs"' not in board
     assert button(board) == "v" and '<h1 class="vh">v</h1>' in board
-    assert links(board) == [("page", "Plan"), ("", "Log"), ("", "History"), ("", "Functions")]
+    assert links(board) == [("page", "Plan"), ("", "Threads"), ("", "Log"), ("", "History"),
+                            ("", "Functions")]
     menu = re.search(r'<div class="menu">(.*?)</div></details>', board)[1]
     assert menu.index('href="/projects/v" aria-current="page"') < menu.index("Archived") \
         < menu.index('href="/projects/w"')  # archived projects come last
@@ -360,7 +436,7 @@ def test_one_nav_whose_switcher_names_the_project_and_whose_sections_follow_it(s
     assert button(step) == "v" and ("true", "Plan") in links(step)
     home = views.index(store)
     assert button(home) == "All projects"
-    assert links(home) == [("page", "Projects"), ("", "Log"), ("", "Functions")]
+    assert links(home) == [("", "Log"), ("", "Functions")]  # the switcher says where
     inbox = views.inbox_page(store, None, "open", "x")
     assert '<a id="nav-inbox" href="/inbox" aria-current="page">' in inbox
     assert nav(views.project_page(store, "v")) == []  # the standalone plan_view has none
@@ -384,7 +460,7 @@ def test_values_are_escaped(store):
                        "body": "<script>alert(3)</script>"})
     pages = [views.project_page(store, "v", ver="x"), views.index(store, ver="x"),
              views.log_page(store, "v", views.LogQuery()), views.render(store, "v", "html"),
-             views.step_detail(store, "v", "a")]
+             views.step_detail(store, "v", "a"), views.threads_page(store, "v", "x")]
     for page in pages:
         assert "<script>alert" not in page and "<b>bold" not in page
         assert "<script>x" not in page and "<script>doc" not in page
@@ -393,7 +469,7 @@ def test_values_are_escaped(store):
     assert '<details class="about"' not in pages[0]  # a short description is not folded
     assert 'title="&lt;script&gt;doc&lt;/script&gt;"' in pages[0]  # a's chip
     assert "&lt;script&gt;doc&lt;/script&gt;" in pages[4]  # its detail
-    assert "&lt;script&gt;alert(3)&lt;/script&gt;" in pages[0]  # the unanswered message
+    assert "&lt;script&gt;alert(3)&lt;/script&gt;" in pages[5]  # the message, on Threads
     assert "&lt;b&gt;bold&lt;/b&gt;" in pages[3]
     log = pages[2]
     assert "t from &lt;i&gt;me&lt;/i&gt; → &lt;u&gt;you&lt;/u&gt;: &lt;script&gt;alert(3)" in log
