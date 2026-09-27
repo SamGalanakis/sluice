@@ -13,11 +13,7 @@ from mcp import Client
 from sluice import log as L
 from sluice.mcp_server import build_server
 from sluice.store import Store
-from tests.conftest import create, settle, write_config
-
-
-def add(a, b=1):
-    return {"run": "test.add", "in": {"a": {"default": a}, "b": {"default": b}}}
+from tests.conftest import add, create, d, settle, write_config
 
 
 def kinds(records):
@@ -31,7 +27,7 @@ def _post(home: str, n: int, tag: str) -> None:
 
 
 def test_one_log_holds_every_kind_in_seq_order(store, runner):
-    create(store, "p", {"a": add(1), "boom": {"run": "test.boom", "in": {}}},
+    create(store, "p", {"a": add(d(1), d(1)), "boom": {"run": "test.boom", "in": {}}},
            inputs={"n": "int"})
     store.set_input("p", "n", 1, "me", "go")
     settle(runner, store, "p")
@@ -67,20 +63,20 @@ def test_read_filters_by_kind_group_thread_since_and_limit(store):
     for i in range(6):
         store.append("p", {"kind": "message", "thread": "ab"[i % 2], "from": "x", "body": str(i)})
     store.append("p", {"kind": "step.status", "step": "s", "from": None, "to": "pending"})
-    d = store.project_dir("p")
-    assert kinds(L.read(d, kinds=["step"])["records"]) == ["step.status"]
-    assert kinds(L.read(d, kinds=["plan"])["records"]) == ["plan.edit"]
-    a = L.read(d, threads=["a"])  # threads alone: only messages on them
+    ld = store.project_dir("p")
+    assert kinds(L.read(ld, kinds=["step"])["records"]) == ["step.status"]
+    assert kinds(L.read(ld, kinds=["plan"])["records"]) == ["plan.edit"]
+    a = L.read(ld, threads=["a"])  # threads alone: only messages on them
     assert [r["body"] for r in a["records"]] == ["0", "2", "4"] and a["last_seq"] == 8
-    both = L.read(d, kinds=["message", "step.status"], threads=["b"])["records"]
+    both = L.read(ld, kinds=["message", "step.status"], threads=["b"])["records"]
     assert [r.get("body", r["kind"]) for r in both] == ["1", "3", "5", "step.status"]
-    tail = L.read(d, limit=2)  # without since_seq: the last `limit`
+    tail = L.read(ld, limit=2)  # without since_seq: the last `limit`
     assert [r["seq"] for r in tail["records"]] == [7, 8] and tail["last_seq"] == 8
-    page = L.read(d, since_seq=2, kinds=["message"], limit=2)  # with it: the next `limit`
+    page = L.read(ld, since_seq=2, kinds=["message"], limit=2)  # with it: the next `limit`
     assert [r["seq"] for r in page["records"]] == [3, 4] and page["last_seq"] == 4
-    rest = L.read(d, since_seq=page["last_seq"], kinds=["message"], limit=10)
+    rest = L.read(ld, since_seq=page["last_seq"], kinds=["message"], limit=10)
     assert [r["seq"] for r in rest["records"]] == [5, 6, 7] and rest["last_seq"] == 8
-    assert L.read(d, since_seq=8) == {"records": [], "last_seq": 8}
+    assert L.read(ld, since_seq=8) == {"records": [], "last_seq": 8}
     assert L.check_kinds(["step", "message", "nope"]) == [
         "unknown kind 'nope'; kinds: " + ", ".join((*L.KINDS, *L.GROUPS))]
 
@@ -100,11 +96,11 @@ def test_reading_backwards_across_blocks(store, monkeypatch):
     for i in range(5):
         store.append("p", {"kind": "message", "thread": "t", "from": "x",
                            "body": "y" * 150 + str(i)})
-    d = store.project_dir("p")
-    res = L.read(d, since_seq=3)
+    ld = store.project_dir("p")
+    res = L.read(ld, since_seq=3)
     assert [r["seq"] for r in res["records"]] == [4, 5, 6] and res["last_seq"] == 6
     assert res["records"][-1]["body"].endswith("4")
-    assert L.last_record(d)["seq"] == 6
+    assert L.last_record(ld)["seq"] == 6
 
 
 def test_the_cap_keeps_run_dirs_that_state_still_uses(tmp_path):
@@ -114,7 +110,7 @@ def test_the_cap_keeps_run_dirs_that_state_still_uses(tmp_path):
     from sluice.runner import Runner
 
     runner = Runner(store)
-    create(store, "p", {"a": add(1)})
+    create(store, "p", {"a": add(d(1), d(1))})
     settle(runner, store, "p")
     [run_id] = store.read_state("p")["steps"]["a"]["run_ids"]
     for i in range(12):
@@ -231,12 +227,12 @@ def test_log_wait_sees_an_append_from_another_process(live, home):
 
 def test_wait_accumulates_and_holds_notes_until_a_waking_record(store):
     store.create_project("p")
-    d = store.project_dir("p")
+    ld = store.project_dir("p")
     note = {"kind": "message", "thread": "t", "from": "w", "body": "fyi",
             "needs_reply": False}
     store.append("p", note)
     t0 = time.monotonic()
-    res = L.wait(d, 1, ["message"], wake="questions", timeout=0.2, interval=0.02)
+    res = L.wait(ld, 1, ["message"], wake="questions", timeout=0.2, interval=0.02)
     assert time.monotonic() - t0 >= 0.19  # a note alone does not wake it
     assert res["records"] == [] and res["last_seq"] == 2
     assert [r["body"] for r in res["held"]] == ["fyi"]  # it comes back at the timeout
@@ -248,13 +244,13 @@ def test_wait_accumulates_and_holds_notes_until_a_waking_record(store):
                      {**note, "body": "meanwhile"})
 
     threading.Thread(target=later, daemon=True).start()
-    res = L.wait(d, 1, ["message"], wake="questions", timeout=10, interval=0.02)
+    res = L.wait(ld, 1, ["message"], wake="questions", timeout=10, interval=0.02)
     assert [r["body"] for r in res["records"]] == ["fyi", "which db?"]
     assert [r["body"] for r in res["held"]] == ["meanwhile"]  # after the waking record
     assert res["last_seq"] == 4
-    res = L.wait(d, res["last_seq"], ["message"], timeout=0.1, interval=0.02)
+    res = L.wait(ld, res["last_seq"], ["message"], timeout=0.1, interval=0.02)
     assert res == {"records": [], "held": [], "last_seq": 4}
-    res = L.wait(d, 1, ["message"], timeout=5, interval=0.02, limit=2)
+    res = L.wait(ld, 1, ["message"], timeout=5, interval=0.02, limit=2)
     assert [r["body"] for r in res["records"]] == ["fyi", "which db?"]
     assert res["held"] == [] and res["last_seq"] == 3  # the limit ends the wait early
 
@@ -273,7 +269,7 @@ def live(store):
 
 
 def test_page_pages_newest_first_by_seq_with_the_filter(store):
-    d = store.home
+    ld = store.home
     for i in range(1, 13):  # seqs 1..12: messages on a (odd) and b (even), a step change at 12
         rec = ({"kind": "step.status", "step": "s", "from": None, "to": "pending"} if i == 12
                else {"kind": "message", "thread": "a" if i % 2 else "b", "from": "t",
@@ -283,24 +279,24 @@ def test_page_pages_newest_first_by_seq_with_the_filter(store):
     def seqs(res):
         return [r["seq"] for r in res["records"]]
 
-    newest = L.page(d, size=5)
+    newest = L.page(ld, size=5)
     assert seqs(newest) == [12, 11, 10, 9, 8] and not newest["newer"] and newest["older"]
     assert newest["last_seq"] == 12
-    older = L.page(d, before=8, size=5)
+    older = L.page(ld, before=8, size=5)
     assert seqs(older) == [7, 6, 5, 4, 3] and older["newer"] and older["older"]
-    last = L.page(d, before=3, size=5)
+    last = L.page(ld, before=3, size=5)
     assert seqs(last) == [2, 1] and last["newer"] and not last["older"]
-    assert seqs(L.page(d, before=1, size=5)) == []
-    exact = L.page(d, before=6, size=5)
+    assert seqs(L.page(ld, before=1, size=5)) == []
+    exact = L.page(ld, before=6, size=5)
     assert seqs(exact) == [5, 4, 3, 2, 1] and not exact["older"]
-    newer = L.page(d, after=2, size=5)
+    newer = L.page(ld, after=2, size=5)
     assert seqs(newer) == [7, 6, 5, 4, 3] and newer["newer"] and newer["older"]
-    top = L.page(d, after=7, size=5)
+    top = L.page(ld, after=7, size=5)
     assert seqs(top) == [12, 11, 10, 9, 8] and not top["newer"] and top["older"]
-    assert seqs(L.page(d, after=12, size=5)) == []
-    a = L.page(d, threads=["a"], size=3)
+    assert seqs(L.page(ld, after=12, size=5)) == []
+    a = L.page(ld, threads=["a"], size=3)
     assert seqs(a) == [11, 9, 7] and a["older"] and not a["newer"]
-    assert seqs(L.page(d, threads=["a"], before=7, size=3)) == [5, 3, 1]
-    assert seqs(L.page(d, kinds=["step"])) == [12]
-    both = L.page(d, kinds=["step", "message"], threads=["b"], size=3)
+    assert seqs(L.page(ld, threads=["a"], before=7, size=3)) == [5, 3, 1]
+    assert seqs(L.page(ld, kinds=["step"])) == [12]
+    both = L.page(ld, kinds=["step", "message"], threads=["b"], size=3)
     assert seqs(both) == [12, 10, 8] and both["older"]

@@ -8,11 +8,7 @@ import pytest
 
 from sluice.errors import BadRequest, Conflict, InvalidPlan, NotFound
 from sluice.store import Store
-from tests.conftest import create
-
-
-def add(a, b=1):
-    return {"run": "test.add", "in": {"a": {"default": a}, "b": {"default": b}}}
+from tests.conftest import add, create, d
 
 
 def replay(store, project):
@@ -28,11 +24,11 @@ def replay(store, project):
 
 def test_a_project_starts_with_an_empty_plan_at_rev_1(store):
     assert store.create_project("p", "does things", "me", "start") == {"name": "p"}
-    d = store.project_dir("p")
-    assert json.loads((d / "project.json").read_text()) == {"name": "p",
-                                                            "description": "does things"}
+    pd = store.project_dir("p")
+    assert json.loads((pd / "project.json").read_text()) == {"name": "p",
+                                                             "description": "does things"}
     empty = {"inputs": {}, "outputs": {}, "steps": {}}
-    assert json.loads((d / "plan.json").read_text()) == {**empty, "rev": 1}
+    assert json.loads((pd / "plan.json").read_text()) == {**empty, "rev": 1}
     [entry] = store.history("p")
     assert (entry["rev"], entry["author"], entry["reason"]) == (1, "me", "start")
     assert entry["ops"] == [{"op": "add", "path": "", "value": empty}]
@@ -44,7 +40,7 @@ def test_a_project_starts_with_an_empty_plan_at_rev_1(store):
 
 
 def test_projects_are_listed_and_updated(store):
-    create(store, "b", {"a": add(1), "c": add(2)})
+    create(store, "b", {"a": add(d(1), d(1)), "c": add(d(2), d(1))})
     store.create_project("a", "")
     store.update_project("a", "now described")
     with store.lock("b"):
@@ -71,9 +67,9 @@ def test_an_invalid_edit_writes_nothing(store):
 
 
 def test_patch_is_compare_and_swap(store):
-    create(store, "p", {"a": add(1)})
-    assert store.patch("p", 2, [{"op": "add", "path": "/steps/b", "value": add(2)}], "me",
-                       "more") == 3
+    create(store, "p", {"a": add(d(1), d(1))})
+    assert store.patch("p", 2, [{"op": "add", "path": "/steps/b",
+                                 "value": add(d(2), d(1))}], "me", "more") == 3
     with pytest.raises(Conflict) as e:
         store.patch("p", 2, [{"op": "remove", "path": "/steps/b"}], "me", "stale")
     assert e.value.payload() == {"error": "conflict", "message": "plan is at rev 3",
@@ -82,7 +78,7 @@ def test_patch_is_compare_and_swap(store):
 
 
 def test_patch_rejects_invalid_results_and_bad_ops(store):
-    create(store, "p", {"a": add(1)})
+    create(store, "p", {"a": add(d(1), d(1))})
     with pytest.raises(InvalidPlan) as e:
         store.patch("p", 2, [{"op": "replace", "path": "/steps/a/in/a/default", "value": "x"}],
                     "me", "bad type")
@@ -100,7 +96,7 @@ def test_patch_rejects_invalid_results_and_bad_ops(store):
 
 
 def test_running_steps_cannot_be_removed_or_changed(store):
-    create(store, "p", {"a": add(1), "b": add(2)})
+    create(store, "p", {"a": add(d(1), d(1)), "b": add(d(2), d(1))})
     with store.lock("p"):
         store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "running"}}})
     with pytest.raises(InvalidPlan) as e:
@@ -114,8 +110,8 @@ def test_running_steps_cannot_be_removed_or_changed(store):
 
 
 def test_the_log_replays_to_the_snapshot(store):
-    create(store, "p", {"a": add(1)}, inputs={"n": "int"})
-    store.patch("p", 2, [{"op": "add", "path": "/steps/b", "value": add(2)}], "me", "b")
+    create(store, "p", {"a": add(d(1), d(1))}, inputs={"n": "int"})
+    store.patch("p", 2, [{"op": "add", "path": "/steps/b", "value": add(d(2), d(1))}], "me", "b")
     store.set_input("p", "n", 4, "me", "a manual value between edits")
     store.patch("p", 3, [{"op": "add", "path": "/inputs/m", "value": "string"},
                          {"op": "remove", "path": "/steps/a"}], "me", "c")
@@ -129,7 +125,8 @@ def _patcher(home: str, n: int, tag: str) -> None:
         while True:
             try:
                 s.patch("p", s.get("p")["rev"],
-                        [{"op": "add", "path": f"/steps/{tag}-{i}", "value": add(i)}], tag, "go")
+                        [{"op": "add", "path": f"/steps/{tag}-{i}",
+                          "value": add(d(i), d(1))}], tag, "go")
                 break
             except Conflict:
                 pass
@@ -182,7 +179,7 @@ def test_set_input_is_typed_logged_and_may_change_after_a_read(store):
 
 
 def test_step_set_input_is_an_edit(store):
-    create(store, "p", {"a": add(1)})
+    create(store, "p", {"a": add(d(1), d(1))})
     assert store.set_step_input("p", "a", "b", 7, "me", "by hand") == 3
     assert store.get("p")["steps"]["a"]["in"]["b"] == {"default": 7}
     assert store.history("p")[-1]["ops"] == [
@@ -194,7 +191,7 @@ def test_step_set_input_is_an_edit(store):
 
 
 def test_set_output_and_retry(store):
-    create(store, "p", {"a": add(1),
+    create(store, "p", {"a": add(d(1), d(1)),
                         "t": {"run": "test.window", "scatter": "tag",
                               "in": {"seconds": {"default": 0}, "tag": {"default": [1, 2]}}}})
     with pytest.raises(InvalidPlan) as e:

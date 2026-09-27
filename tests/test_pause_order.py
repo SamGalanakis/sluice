@@ -8,23 +8,7 @@ import pytest
 from sluice import log as L
 from sluice import views
 from sluice.errors import BadRequest, InvalidPlan
-from tests.conftest import create, settle, statuses
-
-
-def d(x):
-    return {"default": x}
-
-
-def src(ref):
-    return {"source": ref}
-
-
-def add(a, b, **extra):
-    return {"run": "test.add", "in": {"a": a, "b": b}, **extra}
-
-
-def window(seconds, **extra):
-    return {"run": "test.window", "in": {"seconds": d(seconds)}, **extra}
+from tests.conftest import add, create, d, echo, settle, src, statuses, window
 
 
 def status_of(store, project):
@@ -152,10 +136,6 @@ def test_retry_and_cancel_take_a_selection(store, runner):
     assert statuses(store, "p")["w1"] == "failed"
     assert store.retry("p", tags=["slow"], author="t", reason="again") == ["w1", "w2"]
     assert statuses(store, "p")["w1"] == "pending"
-
-
-def echo(ref):
-    return {"run": "core.echo", "in": {"value": src(ref)}}
 
 
 def test_when_runs_or_skips_a_step_and_skipping_follows_data_not_order(store, runner):

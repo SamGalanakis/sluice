@@ -11,15 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from tests.conftest import create
-
-
-def d(x):
-    return {"default": x}
-
-
-def message(thread, body, frm="t"):
-    return {"kind": "message", "thread": thread, "from": frm, "body": body}
+from tests.conftest import create, d, message
 
 
 def get(port, path):

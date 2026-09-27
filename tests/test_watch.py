@@ -9,15 +9,7 @@ import threading
 import time
 
 from sluice.watch import follow
-from tests.conftest import create, settle
-
-
-def add(a, b=1):
-    return {"run": "test.add", "in": {"a": {"default": a}, "b": {"default": b}}}
-
-
-def message(thread, body):
-    return {"kind": "message", "thread": thread, "from": "t", "body": body}
+from tests.conftest import add, create, d, message, settle
 
 
 def test_follow_prints_matching_records_from_now_or_since_a_seq(store):
@@ -65,7 +57,7 @@ def test_follow_holds_notes_until_a_question_when_waking_on_questions(store):
 
 
 def test_sluice_watch_streams_messages_and_step_changes(store, runner, home):
-    create(store, "p", {"a": add(1), "b": {"run": "test.add",
+    create(store, "p", {"a": add(d(1), d(1)), "b": {"run": "test.add",
                                            "in": {"a": {"source": "a/sum"}, "b": {"default": 1}}}})
     proc = subprocess.Popen(
         [sys.executable, "-m", "sluice.cli", "watch", "-p", "p", "--kinds",

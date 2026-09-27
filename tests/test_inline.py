@@ -1,10 +1,6 @@
 """inline.bash and inline.python: code given as a string, run by the runner like any fn."""
 
-from tests.conftest import create, settle
-
-
-def d(x):
-    return {"default": x}
+from tests.conftest import create, d, settle
 
 
 def bash(script, outputs=None, **extra_in):

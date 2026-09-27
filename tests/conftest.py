@@ -64,6 +64,39 @@ def runner(store: Store):
         a.kill()
 
 
+def d(x):
+    return {"default": x}
+
+
+def src(ref):
+    return {"source": ref}
+
+
+def add(a, b, **extra):
+    """A test.add step: a and b are bindings, `extra` adds keys to the step."""
+    return {"run": "test.add", "in": {"a": a, "b": b}, **extra}
+
+
+def echo(ref, doc=None, **extra):
+    """A core.echo step of the value at `ref`."""
+    spec = {"run": "core.echo", "in": {"value": src(ref)}}
+    if doc is not None:
+        spec["doc"] = doc
+    return {**spec, **extra}
+
+
+def window(seconds, tag=None, **extra):
+    """A test.window step of `seconds` s, optionally binding its `tag` input."""
+    spec = {"run": "test.window", "in": {"seconds": d(seconds)}}
+    if tag is not None:
+        spec["in"]["tag"] = tag
+    return {**spec, **extra}
+
+
+def message(thread, body, frm="t"):
+    return {"kind": "message", "thread": thread, "from": frm, "body": body}
+
+
 def create(store: Store, project: str, steps: dict, **doc) -> int:
     """A project whose plan is `steps` plus `inputs`/`outputs` (one edit: rev 2)."""
     store.create_project(project, f"the {project} project", "test", "test")
@@ -76,13 +109,13 @@ def write_fn(root: Path, dirname: str, inputs: dict | None = None, outputs: dict
              main: str | None = "", spec: dict | None = None) -> Path:
     """A fn dir root/<dirname>/ with fn.json named after it (`spec` overrides keys) and main.py
     (unless main is None)."""
-    d = root / dirname
-    d.mkdir(parents=True, exist_ok=True)
+    fn_dir = root / dirname
+    fn_dir.mkdir(parents=True, exist_ok=True)
     spec = {"name": dirname, "inputs": inputs or {}, "outputs": outputs or {}, **(spec or {})}
-    (d / "fn.json").write_text(json.dumps(spec))
+    (fn_dir / "fn.json").write_text(json.dumps(spec))
     if main is not None:
-        (d / "main.py").write_text(main)
-    return d
+        (fn_dir / "main.py").write_text(main)
+    return fn_dir
 
 
 def statuses(store: Store, project: str) -> dict[str, str]:

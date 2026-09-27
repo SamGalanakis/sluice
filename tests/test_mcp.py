@@ -8,7 +8,7 @@ from mcp import Client
 
 from sluice.mcp_server import build_server
 from sluice.runner import Runner
-from tests.conftest import create
+from tests.conftest import add, create, d
 
 TOOLS = {"docs", "projects_list", "project_create", "project_update", "fn_list", "fn_get",
          "fn_save", "fn_call", "call_status", "plan_get", "plan_patch", "plan_history",
@@ -20,14 +20,6 @@ UPPER = """from sluice.fn import run
 
 run(lambda inp, ctx: {"text": inp["text"].upper()})
 """
-
-
-def d(x):
-    return {"default": x}
-
-
-def add(a, b):
-    return {"run": "test.add", "in": {"a": a, "b": b}}
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@ import pytest
 
 from sluice import plan as P
 from sluice.registry import BUILTIN_DIR, Registry, load
-from tests.conftest import TESTPACK
+from tests.conftest import TESTPACK, add
 
 
 @pytest.fixture(scope="module")
@@ -12,10 +12,6 @@ def reg() -> Registry:
 
 def v(doc, reg):
     return P.validate(doc, reg)[0]
-
-
-def add(a, b):
-    return {"run": "test.add", "in": {"a": a, "b": b}}
 
 
 ONE = {"default": 1}

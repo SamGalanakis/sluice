@@ -5,29 +5,13 @@ import pytest
 from sluice import log as L
 from sluice.errors import BadRequest, InvalidPlan
 from sluice.plan import inputs_hash
-from tests.conftest import create, settle, statuses, write_fn
+from tests.conftest import add, create, d, echo, settle, src, statuses, write_fn
 
 CAT = """from pathlib import Path
 from sluice.fn import run
 
 run(lambda inp, ctx: {"text": Path(inp["path"]).read_text()})
 """
-
-
-def d(x):
-    return {"default": x}
-
-
-def src(ref):
-    return {"source": ref}
-
-
-def add(a, b):
-    return {"run": "test.add", "in": {"a": a, "b": b}}
-
-
-def echo(ref):
-    return {"run": "core.echo", "in": {"value": src(ref)}}
 
 
 def until_status(**want):

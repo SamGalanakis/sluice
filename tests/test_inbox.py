@@ -12,11 +12,7 @@ from sluice import log as L
 from sluice.errors import BadRequest, InvalidPlan, NotFound, NotOpen
 from sluice.mcp_server import build_server
 from sluice.store import Store
-from tests.conftest import create, settle, statuses, write_config
-
-
-def src(ref):
-    return {"source": ref}
+from tests.conftest import create, settle, src, statuses, write_config
 
 
 def kinds(store, project):

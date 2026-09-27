@@ -7,23 +7,7 @@ import pytest
 
 from sluice.errors import InvalidPlan
 from sluice.runner import RESTARTED, Runner
-from tests.conftest import create, settle, statuses
-
-
-def d(x):
-    return {"default": x}
-
-
-def src(ref):
-    return {"source": ref}
-
-
-def add(a, b):
-    return {"run": "test.add", "in": {"a": a, "b": b}}
-
-
-def window(seconds, **extra_in):
-    return {"run": "test.window", "in": {"seconds": d(seconds), **extra_in}}
+from tests.conftest import add, create, d, settle, src, statuses, window
 
 
 def overlap(a, b) -> bool:

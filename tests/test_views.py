@@ -7,15 +7,7 @@ import re
 
 from sluice import log as L
 from sluice import views
-from tests.conftest import create, write_fn
-
-
-def d(x):
-    return {"default": x}
-
-
-def src(ref):
-    return {"source": ref}
+from tests.conftest import create, d, src, write_fn
 
 
 def test_mermaid_shows_inputs_steps_outputs_edges_and_status_classes(store):

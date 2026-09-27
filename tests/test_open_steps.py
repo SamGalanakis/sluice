@@ -9,17 +9,9 @@ import pytest
 from sluice import plan as P
 from sluice.errors import BadRequest, InvalidPlan, NotFound
 from sluice.registry import BUILTIN_DIR, load
-from tests.conftest import TESTPACK, create, settle
+from tests.conftest import TESTPACK, create, d, settle, src
 
 REG = load({"builtin": [BUILTIN_DIR], "global": [TESTPACK]})
-
-
-def d(x):
-    return {"default": x}
-
-
-def src(ref):
-    return {"source": ref}
 
 
 def block(outputs=None, attempts=None, **extra):
@@ -218,11 +210,11 @@ def summing_fn(root):
     spec = json.loads((TESTPACK / "test.open" / "fn.json").read_text())
     spec.update(name="test.summed", submits={
         "summary": {"type": "string", "doc": "What the agent did"}, "notes": "string?"})
-    d = root / "test.summed"
-    d.mkdir(parents=True)
-    (d / "fn.json").write_text(json.dumps(spec))
-    (d / "main.py").write_text(main)
-    return d
+    fn_dir = root / "test.summed"
+    fn_dir.mkdir(parents=True)
+    (fn_dir / "fn.json").write_text(json.dumps(spec))
+    (fn_dir / "main.py").write_text(main)
+    return fn_dir
 
 
 def test_an_open_fn_declares_what_its_agent_submits_on_every_step(store, runner):

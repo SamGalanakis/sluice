@@ -4,15 +4,10 @@ they validate, and where they show: status, plan_view, the dashboard and the inb
 from sluice import plan as P
 from sluice.registry import BUILTIN_DIR, load
 from sluice.views import mermaid
-from tests.conftest import create
+from tests.conftest import create, echo
 from tests.test_dashboard import get
 
 REG = load({"builtin": [BUILTIN_DIR]})
-
-
-def echo(ref, doc=None):
-    step = {"run": "core.echo", "in": {"value": {"source": ref}}}
-    return {**step, "doc": doc} if doc is not None else step
 
 
 def test_input_and_step_docs_validate():
