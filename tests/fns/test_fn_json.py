@@ -17,7 +17,7 @@ EXPECTED = {
                      "to": "string?", "data": "Any?"},
                     {"seq": "int"}],
     "thread.wait": [{"thread": "string", "since_seq": "int?", "to": "string?",
-                     "timeout": "int?"},
+                     "timeout": "int?", "wake": "string?"},
                     {"messages": "Any[]", "last_seq": "int"}],
     "inbox.ask": [{"title": "string", "body": "string?", "ui": "string?"},
                   {"answer": {"type": "record", "fields": {

@@ -43,6 +43,27 @@ def test_follow_prints_matching_records_from_now_or_since_a_seq(store):
     assert [json.loads(x)["body"] for x in out.getvalue().splitlines()] == ["before", "after"]
 
 
+def test_follow_holds_notes_until_a_question_when_waking_on_questions(store):
+    store.create_project("p")
+    out = io.StringIO()
+    rounds = iter(range(4))
+    seen = []
+
+    def stop():  # a note, then a question: nothing is printed until the question
+        i = next(rounds, None)
+        seen.append(out.getvalue().count("\n"))
+        if i == 0:
+            store.append("p", {**message("q", "fyi"), "needs_reply": False})
+        if i == 2:
+            store.append("p", {**message("q", "which db?"), "needs_reply": True})
+        return i is None
+
+    follow(store.project_dir("p"), out, threads=["q"], since_seq=1, interval=0, stop=stop,
+           wake="questions")
+    assert seen[:3] == [0, 0, 0]
+    assert [json.loads(x)["body"] for x in out.getvalue().splitlines()] == ["fyi", "which db?"]
+
+
 def test_sluice_watch_streams_messages_and_step_changes(store, runner, home):
     create(store, "p", {"a": add(1), "b": {"run": "test.add",
                                            "in": {"a": {"source": "a/sum"}, "b": {"default": 1}}}})

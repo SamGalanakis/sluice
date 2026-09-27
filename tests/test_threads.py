@@ -113,6 +113,23 @@ def test_wait_returns_on_a_post_from_another_process(store):
     assert out["last_seq"] >= seq
 
 
+def test_wait_on_questions_lets_notes_ride_with_the_next_question(store):
+    store.create_project("p")
+    post(store, "p", thread="t", body="fyi", needs_reply=False, **{"from": "w"})
+    t0 = time.monotonic()
+    code, out, err = run_fn(store, "thread.wait", {"thread": "t", "wake": "questions",
+                                                   "timeout": 2})
+    assert code == 0, err
+    assert time.monotonic() - t0 >= 2  # a note alone does not wake it
+    assert [m["body"] for m in out["messages"]] == ["fyi"]  # but comes back at the timeout
+    post(store, "p", thread="t", body="which db?", **{"from": "w"})
+    code, out, err = run_fn(store, "thread.wait", {"thread": "t", "wake": "questions",
+                                                   "timeout": 30})
+    assert [m["body"] for m in out["messages"]] == ["fyi", "which db?"]
+    code, _, err = run_fn(store, "thread.wait", {"thread": "t", "wake": "nope", "timeout": 1})
+    assert code == 1 and "wake: expected one of any, questions" in err
+
+
 def test_wait_times_out_empty(store):
     store.create_project("p")
     t0 = time.monotonic()

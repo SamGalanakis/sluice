@@ -483,7 +483,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
     @tool
     async def log_wait(since_seq: int, project: str | None = None,
                        kinds: list[str] | None = None, threads: list[str] | None = None,
-                       timeout: int = 300, limit: int = 200) -> Any:
+                       timeout: int = 300, limit: int = 200,
+                       wake: Literal["any", "questions"] = "any") -> Any:
         """Wait for log records after since_seq: returns {records, last_seq} as soon as at least
         one matching record exists, or with no records once `timeout` seconds pass. Call it
         again with the last_seq it returned to keep watching.
@@ -495,12 +496,17 @@ def build_server(store: Store, stop: threading.Event | None = None,
             threads: only messages on these threads (as in log_read).
             timeout: seconds to wait at most (default 300).
             limit: at most this many records (default 200).
+            wake: "any" (default) or "questions": a note (a message posted with needs_reply
+                false) does not end the wait; it comes back with the next record that does,
+                or once `timeout` passes.
         """
         d = _log_args(project, kinds, limit)
         deadline = anyio.current_time() + max(0, timeout)
         while True:
             res = await anyio.to_thread.run_sync(L.read, d, since_seq, kinds, threads, limit)
-            if res["records"] or anyio.current_time() >= deadline:
+            recs = res["records"]
+            if (any(L.wakes(r, wake) for r in recs) or (limit and len(recs) >= limit)
+                    or anyio.current_time() >= deadline):
                 return res
             await anyio.sleep(min(0.25, max(0.0, deadline - anyio.current_time())))
 

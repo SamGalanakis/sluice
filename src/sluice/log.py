@@ -80,6 +80,17 @@ def matches(rec: dict[str, Any], kinds: Iterable[str] | None = None,
     return not (threads and kind == "message" and rec.get("thread") not in threads)
 
 
+WAKES = ("any", "questions")
+
+
+def wakes(rec: dict[str, Any], wake: str = "any") -> bool:
+    """Whether a record ends a wait. With wake "questions", a note (a message posted with
+    needs_reply false) does not: it comes back with the next record that does, or at the
+    timeout. Every other record wakes."""
+    return (wake != "questions" or rec.get("kind") != "message"
+            or rec.get("needs_reply", True) is not False)
+
+
 # ---- reading --------------------------------------------------------------------------------
 
 

@@ -59,17 +59,22 @@ def addressed(rec: dict[str, Any], to: str | None) -> bool:
 
 
 def wait(thread: str, since_seq: int | None = None, to: str | None = None,
-         timeout: float = 300, interval: float = 0.5) -> dict[str, Any]:
+         timeout: float = 300, interval: float = 0.5, wake: str = "any") -> dict[str, Any]:
     """Messages on the thread after since_seq (optionally only those for `to`), waiting until
-    there is at least one or `timeout` seconds pass: {messages, last_seq}."""
+    there is at least one or `timeout` seconds pass: {messages, last_seq}. With wake
+    "questions", notes (needs_reply false) do not end the wait; they come back with the next
+    question, or at the timeout."""
     d, _ = project_log()
     check_thread(thread)
+    if wake not in L.WAKES:
+        raise ValueError(f"wake: expected one of {', '.join(L.WAKES)}, got {wake!r}")
     seq = since_seq or 0
     deadline = time.monotonic() + max(0.0, timeout)
+    found: list[dict[str, Any]] = []
     while True:
         res = L.read(d, seq, ["message"], [thread])
-        found = [m for m in res["records"] if addressed(m, to)]
+        found += [m for m in res["records"] if addressed(m, to)]
         seq = max(seq, res["last_seq"])
-        if found or time.monotonic() >= deadline:
+        if any(L.wakes(m, wake) for m in found) or time.monotonic() >= deadline:
             return {"messages": found, "last_seq": seq}
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))

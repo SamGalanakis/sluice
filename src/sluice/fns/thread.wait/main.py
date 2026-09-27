@@ -11,7 +11,7 @@ from sluice.fns._lib.threads import wait
 def main(inp, ctx):
     timeout = inp.get("timeout")
     return wait(inp["thread"], inp.get("since_seq"), inp.get("to"),
-                300 if timeout is None else timeout)
+                300 if timeout is None else timeout, wake=inp.get("wake") or "any")
 
 
 if __name__ == "__main__":

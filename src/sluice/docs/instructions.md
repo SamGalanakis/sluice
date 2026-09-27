@@ -34,7 +34,8 @@ When you need a person (a decision, an approval, a missing value), post to the i
 (`inbox_post`, or an `inbox.ask` step in a plan) and wait with `log_wait(project, since_seq,
 kinds=["inbox"])`; see `docs("inbox")`. The inbox is the only place the person looks for what
 needs them: failed steps and workers' questions are yours to handle, not theirs. Answer a
-worker's question on its thread; a note (`needs_reply: false`) needs no answer.
+worker's question on its thread; a note (`needs_reply: false`) needs no answer, and
+`log_wait(..., wake="questions")` lets notes wait for your next wake instead of waking you.
 
 Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
 plan.

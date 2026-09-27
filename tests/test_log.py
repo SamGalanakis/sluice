@@ -177,6 +177,39 @@ def test_log_read_and_log_wait_tools(live):
     anyio.run(main)
 
 
+def test_log_wait_on_questions_is_not_woken_by_a_note(live):
+    live.create_project("p")
+    live.append("p", {"kind": "message", "thread": "q", "from": "w", "body": "fyi",
+                      "needs_reply": False})
+
+    async def main():
+        async with Client(build_server(live)) as c:
+            async def wait(**args):
+                r = await c.call_tool("log_wait", {"project": "p", "since_seq": 1,
+                                                   "threads": ["q"], **args})
+                return json.loads(r.content[0].text)
+
+            res = await wait(timeout=5)  # by default a note wakes it
+            assert [r["body"] for r in res["records"]] == ["fyi"]
+            t0 = time.monotonic()
+            res = await wait(timeout=1, wake="questions")
+            assert time.monotonic() - t0 >= 0.9
+            assert [r["body"] for r in res["records"]] == ["fyi"]  # returned at the timeout
+
+            def later():
+                time.sleep(0.8)
+                live.append("p", {"kind": "message", "thread": "q", "from": "w",
+                                  "body": "which db?", "needs_reply": True})
+
+            threading.Thread(target=later, daemon=True).start()
+            t0 = time.monotonic()
+            res = await wait(timeout=20, wake="questions")
+            assert time.monotonic() - t0 < 10
+            assert [r["body"] for r in res["records"]] == ["fyi", "which db?"]
+
+    anyio.run(main)
+
+
 def test_log_wait_sees_an_append_from_another_process(live, home):
     live.create_project("p")
 

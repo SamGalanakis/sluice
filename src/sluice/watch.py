@@ -17,15 +17,21 @@ from . import log as L
 
 def follow(directory: Path, out: IO[str], kinds: Iterable[str] | None = None,
            threads: Iterable[str] | None = None, since_seq: int | None = None,
-           interval: float = 0.5, stop: Callable[[], bool] = lambda: False) -> None:
+           interval: float = 0.5, stop: Callable[[], bool] = lambda: False,
+           wake: str = "any") -> None:
     """Print records after `since_seq` (default: from now on) as they are appended, flushing
-    each line, until `stop()` is true."""
+    each line, until `stop()` is true. With wake "questions", notes (needs_reply false) are
+    held and printed just before the next record that wakes (L.wakes)."""
     kinds, threads = list(kinds or ()), list(threads or ())
     seq = L.last_seq(directory) if since_seq is None else since_seq
+    held: list[str] = []
     while not stop():
         res = L.read(directory, seq, kinds, threads)
         for rec in res["records"]:
-            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            out.flush()
+            held.append(json.dumps(rec, ensure_ascii=False) + "\n")
+            if L.wakes(rec, wake):
+                out.write("".join(held))
+                out.flush()
+                held.clear()
         seq = res["last_seq"]
         time.sleep(interval)

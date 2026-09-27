@@ -132,7 +132,7 @@ def cmd_watch(a: argparse.Namespace, store: Store) -> int:
         raise BadRequest("; ".join(errs))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     with contextlib.suppress(KeyboardInterrupt, BrokenPipeError):
-        follow(store.log_dir(a.project), sys.stdout, kinds, threads, a.since_seq)
+        follow(store.log_dir(a.project), sys.stdout, kinds, threads, a.since_seq, wake=a.wake)
     return 0
 
 
@@ -162,6 +162,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--kinds", help="comma-separated kinds, e.g. step.status,message")
     s.add_argument("--threads", help="comma-separated thread names (messages on these only)")
     s.add_argument("--since-seq", type=int, help="start after this seq (default: from now)")
+    s.add_argument("--wake", choices=("any", "questions"), default="any",
+                   help="questions: hold notes (needs_reply false) and print them with the "
+                   "next record that is not one")
     return p
 
 

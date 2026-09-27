@@ -596,7 +596,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `step_retry` | `project, steps?, tags?, reason?` | `{steps}` (each failed, stale or manual) |
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
-| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty) |
+| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
 | `status` | `project, steps?, tags?` | only the steps selected by id and/or tag when given; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
@@ -698,11 +698,13 @@ log's. Agents post through `fn_call` (any harness) and read with `log_read`/`log
 - `thread.post`: inputs `{thread: string, body: string, from: string, to: string?, data: Any?}`,
   outputs `{seq: int}`. Appends under the project's flock, so concurrent posters get distinct,
   increasing seqs.
-- `thread.wait`: inputs `{thread: string, since_seq: int?, to: string?, timeout: int?}`, outputs
-  `{messages: Any[], last_seq: int}`: the messages after `since_seq` (default 0: all) and, with
-  `to`, only those addressed to it or to nobody; blocks (polling the log every 0.5 s) until there
-  is at least one or `timeout` s (default 300) pass, then `messages` is empty. `last_seq` is the
-  log's last seq, to pass back as `since_seq`.
+- `thread.wait`: inputs `{thread: string, since_seq: int?, to: string?, timeout: int?,
+  wake: string?}`, outputs `{messages: Any[], last_seq: int}`: the messages after `since_seq`
+  (default 0: all) and, with `to`, only those addressed to it or to nobody; blocks (polling the
+  log every 0.5 s) until there is at least one or `timeout` s (default 300) pass, then
+  `messages` is empty. With `wake: "questions"` a note (`needs_reply` false) does not end the
+  wait: it comes back with the next question, or at the timeout. `last_seq` is the log's last
+  seq, to pass back as `since_seq`.
 
 **`inline.bash`** and **`inline.python`**: code given as a string, for a check or a small
 transform no fn exists for. Both are open (§5): each extra input the step binds is visible to the
@@ -728,9 +730,10 @@ project.
 
 **Watching.** Agents watch through MCP: `log_wait` in a loop, passing back `last_seq`. For
 harnesses with monitors (e.g. Claude Code's Monitor tool) the shell form is `sluice watch [-p P]
-[--kinds k1,k2] [--threads a,b] [--since-seq N]`: it follows the project's log (the home log
+[--kinds k1,k2] [--threads a,b] [--since-seq N] [--wake questions]`: it follows the project's log (the home log
 without `-p`) with the same filter as `log_read`, from the end of the log (or after `--since-seq`),
-printing each matching record as one JSON line (flushed) as it is appended, and never exits. It
+printing each matching record as one JSON line (flushed) as it is appended, and never exits
+(`--wake questions` holds notes and prints them with the next record that is not one). It
 reads the file only; it needs no runner or server.
 
 ## 11. Conventions

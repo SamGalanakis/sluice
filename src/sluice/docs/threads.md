@@ -25,10 +25,13 @@ lowercase letters, digits, `-` and `_`.
 - Post: `fn_call("thread.post", {"thread": "questions", "from": "worker-1", "body": "Which DB?",
   "to": "lead"}, project="myproj", wait=10)` → `{"seq": 42}`. `to` and `data` (any JSON) are
   optional. `needs_reply` (default true) says whether it asks something: set it false for a
-  note, a heads-up or a decision already made. The record always carries it, so a watcher can
-  wake only on questions; the dashboard marks an unanswered question "Awaiting reply".
+  note, a heads-up or a decision already made. The dashboard marks an unanswered question
+  "Awaiting reply".
 - Read or wait: `log_wait("myproj", since_seq=42, threads=["questions"])`. A message is
   `{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "needs_reply", "data"?}`.
+- Wake only on questions: `log_wait(..., wake="questions")` (and `thread.wait`'s `wake`
+  input) does not return for a note; notes come back with the next question or record that
+  does wake it, or when `timeout` passes, so nothing is lost and nothing wakes you early.
 - Thread functions need a project: `fn_call` them with `project`, or use them as plan steps.
 
 In a plan, `thread.wait` blocks a step until a message arrives (`to` keeps only messages
@@ -60,7 +63,7 @@ asked through a thread: when the orchestrator needs one, it posts to the inbox
   `fn_call("thread.post", {"thread": "step-work", "from": "orchestrator", "to": "work",
   "body": "skip the Windows build"}, project="myproj", direct=True)`.
 - To read what the step asks back, watch the same thread:
-  `log_wait(project="myproj", since_seq=<last>, threads=["step-work"])`.
+  `log_wait(project="myproj", since_seq=<last>, threads=["step-work"], wake="questions")`.
 
 ## Watching from a shell
 `sluice watch -p myproj [--kinds k1,k2] [--threads a,b] [--since-seq N]` follows the log from now
