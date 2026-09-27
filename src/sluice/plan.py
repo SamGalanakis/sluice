@@ -312,13 +312,15 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
             sid, fn, sources, scatter, text, paused=paused is True or isinstance(paused, str),
             pause_reason=paused if isinstance(paused, str) else "",
             after=list(dict.fromkeys(after)), tags=list(dict.fromkeys(tags)), when=when)
+        step.declared.update(fn.submits)  # what the fn's agent submits on every step (§5)
+        step.output_docs.update(fn.submit_docs)
         if "outputs" in raw:
             if not fn.open:
                 errs.append(f"{p}.outputs: fn {fn.name} is not open; only a step running an "
                             "open fn declares outputs")
             else:
                 for name, form in _ids(raw["outputs"], f"{p}.outputs", errs).items():
-                    if name in fn.outputs:
+                    if name in fn.outputs or name in fn.submits:
                         errs.append(f"{p}.outputs.{name}: fn {fn.name} already has an output "
                                     f"{name}")
                         continue

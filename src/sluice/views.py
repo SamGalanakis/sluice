@@ -415,6 +415,7 @@ class Block:
     fn_inputs: dict[str, str]  # its fn's inputs, then any extra ones it binds (open fns)
     fn_outputs: dict[str, str]  # its declared outputs first (open fns), then its fn's
     output_docs: dict[str, str] = dataclasses.field(default_factory=dict)
+    submitted: frozenset[str] = frozenset()  # its outputs the agent submits (declared, submits)
 
     @property
     def status(self) -> str:
@@ -553,7 +554,7 @@ def load_board(store: Store, project: str) -> Board:
             state["steps"].get(sid, {"status": "pending"}), step.fn.native,
             {k: str(v) for k, v in {**step.fn.inputs, **extra}.items()},
             {k: str(v) for k, v in {**declared, **step.fn.outputs}.items()},
-            dict(step.output_docs))
+            dict(step.output_docs), frozenset(step.declared))
     return Board(project, info, doc, plan, state, blocks)
 
 
@@ -1414,8 +1415,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     outs: dict[str, Any] | None = outs_all if isinstance(b.entry.get("outputs"), dict) else None
     declared = b.outputs
     title = "Outputs"
-    raw = b.raw.get("outputs")
-    own = {n: t for n, t in declared.items() if isinstance(raw, dict) and n in raw}
+    own = {n: t for n, t in declared.items() if n in b.submitted}
     if outs is None and b.status == "running" and b.run_ids:
         d = _run_dir(store, project, b.run_ids[-1])
         try:  # what the agent has submitted so far (step_submit), before the fn exits

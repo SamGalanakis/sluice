@@ -19,7 +19,7 @@ from . import types as T
 BUILTIN_DIR = Path(__file__).resolve().parent / "fns"
 NATIVE = {"core.echo", "core.collect", "core.format"}  # built-ins run inline; no main.py
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
-KEYS = {"name", "doc", "inputs", "outputs", "open"}
+KEYS = {"name", "doc", "inputs", "outputs", "open", "submits"}
 SCOPES = ("builtin", "global", "project")
 
 Show = Callable[[Path], str]
@@ -35,6 +35,9 @@ class Fn:
     dir: Path
     scope: str = "global"
     open: bool = False  # a step running it may bind extra inputs and declare outputs (§5)
+    # an open fn's outputs its agent submits (step_submit): every step running it declares them
+    submits: dict[str, T.Type] = field(default_factory=dict)
+    submit_docs: dict[str, str] = field(default_factory=dict)
 
     @property
     def native(self) -> bool:
@@ -43,6 +46,8 @@ class Fn:
     def summary(self) -> dict[str, Any]:
         out = {"name": self.name, "doc": self.doc, "inputs": self.raw["inputs"],
                "outputs": self.raw["outputs"], "scope": self.scope}
+        if self.submits:
+            out["submits"] = self.raw["submits"]
         return {**out, "open": True} if self.open else out
 
 
@@ -69,7 +74,7 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
              check_dir: bool = True) -> tuple[Fn | None, list[str]]:
     """Validate one fn.json (SPEC §4, §6a). Returns (fn or None, every problem found)."""
     if not isinstance(raw, dict):
-        return None, ["expected an object {name, doc?, inputs, outputs, open?}"]
+        return None, ["expected an object {name, doc?, inputs, outputs, open?, submits?}"]
     errs = [f"unknown key {k!r}" for k in raw if k not in KEYS]
     name = raw.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
@@ -92,13 +97,45 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
                 ports[key][port] = T.parse(form, f"{key}.{port}")
             except T.TypeSyntaxError as e:
                 errs.append(str(e))
+    submits, submit_docs = _submits(raw, ports.get("outputs", {}), errs)
     if check_dir and not (scope == "builtin" and name in NATIVE) \
             and not (fn_dir / "main.py").is_file():
         errs.append("main.py is missing")
     if errs:
         return None, errs
     return Fn(name, raw.get("doc", ""), ports["inputs"], ports["outputs"], raw, fn_dir,
-              scope, raw.get("open", False)), []
+              scope, raw.get("open", False), submits, submit_docs), []
+
+
+def _submits(raw: dict[str, Any], outputs: dict[str, T.Type],
+             errs: list[str]) -> tuple[dict[str, T.Type], dict[str, str]]:
+    """An open fn's `submits`: {name: type or {"type", "doc"}}, outputs its agent submits
+    with step_submit, as if every step running it declared them (SPEC §5)."""
+    spec = raw.get("submits")
+    if spec is None:
+        return {}, {}
+    if not isinstance(spec, dict):
+        errs.append("submits must be an object of name -> type")
+        return {}, {}
+    if raw.get("open") is not True:
+        errs.append("submits needs open: true (an open fn's agent submits outputs)")
+    types, docs = {}, {}
+    for port, form in spec.items():
+        path = f"submits.{port}"
+        if port in outputs:
+            errs.append(f"{path}: already an output of the fn")
+            continue
+        if isinstance(form, dict) and "type" in form and form.keys() <= {"type", "doc"}:
+            if not isinstance(form.get("doc", ""), str):
+                errs.append(f"{path}.doc: expected a string")
+            elif form.get("doc"):
+                docs[port] = form["doc"]
+            form, path = form["type"], f"{path}.type"
+        try:
+            types[port] = T.parse(form, path)
+        except T.TypeSyntaxError as e:
+            errs.append(str(e))
+    return types, docs
 
 
 def fingerprint(dirs: Iterable[Path]) -> tuple:

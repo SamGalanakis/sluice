@@ -77,6 +77,10 @@ if __name__ == "__main__":
   declare outputs, which whoever does the work submits with `step_submit` while the step runs
   (the env carries them as `SLUICE_STEP_INPUTS` / `SLUICE_STEP_OUTPUTS`, and `ctx` below). Tell
   the agent both, and the command; the agents pack shows how.
+- An open function can require outputs of its agent on every step: `"submits": {"summary":
+  {"type": "string", "doc": "What it did"}}` in fn.json. Each step running it declares them
+  as if it listed them under its `outputs` (so `step/summary` is a typed ref, and a required
+  one never submitted fails the step); they arrive in `SLUICE_STEP_OUTPUTS` like the rest.
 - `inp` holds the inputs by name (missing optional inputs are `None`). Return every output.
 - `sh(argv, cwd=...)` runs a command and raises on a non-zero exit.
 - Raise `Transient` for failures worth retrying (rate limits, capacity); `run(main, retries=N)`

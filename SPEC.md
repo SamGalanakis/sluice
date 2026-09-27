@@ -120,7 +120,11 @@ an open fn, §4) it is spelled back in the forms above, a string where one exist
 
 `name` (dotted lowercase), `inputs` and `outputs` are required; `doc` is optional, and so is
 `"open": true`: a step running an open fn may bind extra inputs and declare outputs of its own
-(§5). Agent fns are open; nothing else needs to be.
+(§5). Agent fns are open; nothing else needs to be. An open fn may also say what its agent
+submits on every step: `"submits": {name: type or {"type", "doc"}}`, names apart from its
+`outputs`. Every step running it declares those outputs as if it listed them itself (a step
+may not declare one again): they are typed for refs, required unless optional, told to the
+agent in `SLUICE_STEP_OUTPUTS`, and submitted with `step_submit`.
 
 **Process contract.** The runner runs `uv run --quiet --script <fn_dir>/main.py` with stdin = an
 object keyed by input name (unbound optional inputs are `null`); env `SLUICE_HOME`,
@@ -318,8 +322,8 @@ it, e.g. `projects/p/fns/x.y/fn.json`), followed by `#<path in the document>` fo
 (`projects/p/plan.json#steps.a.run`, `projects/p/state.json#inputs.n`) or `:<line>` for `.env`
 files. Without a project it checks the built-in and global scopes and every directory under
 `projects/`; with one, the built-in and global scopes and that project. It covers:
-- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc` and boolean `open`,
-  nothing else), the name
+- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, boolean `open` and,
+  for an open fn, `submits`; nothing else), the name
   matching its directory, every type parsing, `main.py` present for non-built-ins;
 - name collisions across scopes (see §2);
 - `project.json` shape (`name` equal to its directory, optional string `description`), `.env`
@@ -597,7 +601,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `project_create` | `name, description?` | `{name}` (with an empty plan) |
 | `project_update` | `name, description?, archived?, paused?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6) |
 | `project_delete` | `name` | `{deleted}`: removes the project's directory (plan, state, log, inbox, runs); refused (`bad_request`) unless it is archived and none of its steps is running |
-| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn; `error` marks a function with a problem |
+| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
 | `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s. `direct: true` runs it in the calling process to the end instead (no runner needed) |

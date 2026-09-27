@@ -207,3 +207,63 @@ def test_submit_is_refused_unless_the_step_runs_and_declares_outputs(store, runn
         "outputs.results: step a declares no output results (the fn returns that one itself)",
         "outputs.more: step a declares no output more"]
     assert store.submit("p", "a", {"word": "x"}, "r2") == {"ok": True, "run": "r2"}
+
+
+# ---- outputs an open fn's agent submits on every step (fn.json `submits`) ------------------
+
+def summing_fn(root):
+    """test.summed: test.open, but its fn.json says its agent submits a `summary` on every
+    step (and an optional `notes`)."""
+    main = (TESTPACK / "test.open" / "main.py").read_text()
+    spec = json.loads((TESTPACK / "test.open" / "fn.json").read_text())
+    spec.update(name="test.summed", submits={
+        "summary": {"type": "string", "doc": "What the agent did"}, "notes": "string?"})
+    d = root / "test.summed"
+    d.mkdir(parents=True)
+    (d / "fn.json").write_text(json.dumps(spec))
+    (d / "main.py").write_text(main)
+    return d
+
+
+def test_an_open_fn_declares_what_its_agent_submits_on_every_step(store, runner):
+    store.create_project("p", "", "t", "t")
+    summing_fn(store.project_dir("p") / "fns")
+    fns = {f["name"]: f for f in store.registry("p").listing()}
+    assert fns["test.summed"]["submits"]["summary"] == {"type": "string",
+                                                         "doc": "What the agent did"}
+    create_steps = {
+        "a": {"run": "test.summed", "in": {"attempts": d([{"summary": "done it"}])},
+              "outputs": {"word": "string?"}},  # its own outputs add to the fn's
+        "b": {"run": "core.echo", "in": {"value": src("a/summary")}},
+        "c": {"run": "test.summed", "in": {"attempts": d([])}},
+    }
+    ops = [{"op": "replace", "path": "/steps", "value": create_steps}]
+    store.patch("p", 1, ops, "t", "t")
+    step = store.plan("p")[1].steps["a"]
+    assert set(step.declared) == {"summary", "notes", "word"}
+    assert step.output_docs["summary"] == "What the agent did"
+    steps = settle(runner, store, "p")
+    assert steps["a"]["status"] == "succeeded", steps["a"].get("error")
+    assert steps["a"]["outputs"]["summary"] == "done it"
+    assert steps["a"]["outputs"]["ports"]["outputs"]["summary"] == {
+        "type": "string", "doc": "What the agent did"}  # the agent is told to submit it
+    assert steps["b"]["outputs"] == {"value": "done it"}
+    assert steps["c"]["status"] == "failed"  # required on every step running the fn
+    assert steps["c"]["error"].startswith("declared outputs not submitted: summary ")
+
+
+def test_submits_is_for_open_fns_and_names_new_outputs(tmp_path):
+    from sluice.registry import parse_fn
+    base = {"name": "x.y", "inputs": {}, "outputs": {"final": "string"}}
+    _, errs = parse_fn({**base, "submits": {"summary": "string"}}, tmp_path, check_dir=False)
+    assert errs == ["submits needs open: true (an open fn's agent submits outputs)"]
+    _, errs = parse_fn({**base, "open": True, "submits": {"final": "string", "n": "nope"}},
+                       tmp_path, check_dir=False)
+    assert errs[0] == "submits.final: already an output of the fn" and "submits.n" in errs[1]
+    fn, errs = parse_fn({**base, "open": True, "submits": {"summary": "string"}}, tmp_path,
+                        check_dir=False)
+    assert errs == [] and str(fn.submits["summary"]) == "string"
+    reg = load({"builtin": [BUILTIN_DIR], "global": [TESTPACK, summing_fn(tmp_path).parent]})
+    errs, _ = P.validate({"inputs": {}, "outputs": {}, "steps": {
+        "a": {"run": "test.summed", "in": {}, "outputs": {"summary": "string"}}}}, reg)
+    assert errs == ["steps.a.outputs.summary: fn test.summed already has an output summary"]
