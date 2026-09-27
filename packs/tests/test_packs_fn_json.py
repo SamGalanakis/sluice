@@ -38,8 +38,7 @@ EXPECTED = {
                         "type": "enum",
                         "symbols": [
                             "sol",
-                            "astra",
-                            "luna"
+                            "astra"
                         ]
                     }
                 ],
