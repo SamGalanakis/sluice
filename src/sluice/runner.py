@@ -310,8 +310,6 @@ class Runner:
                     step = plan.steps[sid]
                     if st[sid]["status"] != "pending" or not is_ready(step, plan, state):
                         continue
-                    if not step.fn.native and self._procs() >= self.store.config["max_parallel"]:
-                        continue  # stays pending until a process slot frees up
                     self._begin(project, step, plan, state)
                     self._launch(project, st)
                     progress = True
@@ -357,8 +355,7 @@ class Runner:
                     _finish(rec, error=C.GONE)
             elif rec["status"] == "running":
                 self._poll(akey, rec)
-            elif rec["status"] == "pending" and \
-                    self._procs() < self.store.config["max_parallel"]:
+            elif rec["status"] == "pending":
                 self._start_call(akey, rec, project)
             if rec["status"] != before:
                 C.record(self.store, project, rec)
@@ -418,16 +415,12 @@ class Runner:
             return _finish(e, outputs=a.outputs())
         self.active[("step", project, step.id)] = a
 
-    def _procs(self) -> int:
-        return sum(len(a.procs) for a in self.active.values())
-
     def _launch(self, project: str, st: dict[str, Any]) -> None:
-        """Start queued runs of this project's steps while under max_parallel processes."""
-        limit = self.store.config["max_parallel"]
+        """Start the queued runs of this project's scattered steps."""
         for key, a in list(self.active.items()):
             if key[0] != "step" or key[1] != project:
                 continue
-            while a.launched < len(a.inputs) and self._procs() < limit:
+            while a.launched < len(a.inputs):
                 i, a.launched = a.launched, a.launched + 1
                 try:
                     st[a.step]["run_ids"].append(self._spawn_run(a, i))

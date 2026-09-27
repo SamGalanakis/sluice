@@ -33,7 +33,7 @@ change.
 `SLUICE_HOME` (default `~/.sluice`):
 
 ```
-config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8,
+config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                              "log_max": 10000}
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 .env                        global secrets (KEY=value lines)
@@ -225,8 +225,8 @@ changing a running step is refused.
 `{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
 "outputs", "error", "manual", "inputs_hash"}}}` with status `pending`, `running`, `succeeded`,
 `failed`, `stale`. A
-scattered step also records `done` and `total` runs. A step waiting for a process slot stays
-`pending`; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
+scattered step also records `done` and `total` runs. There is no limit on how many run at
+once: every ready step starts, and a scattered step starts all its runs; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
 
 **Staleness.** A result is only valid for the inputs it was computed from. When a step starts
 (and so when it succeeds) or is set by hand, its state records `inputs_hash`: a hash of the
@@ -250,13 +250,11 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    that declares outputs, merged with what its agent submitted, §5); otherwise `failed` with
    `error` (exit code, type errors or declared outputs not submitted, plus the stderr tail).
    A scattered step collects its runs as they finish.
-3. Mark stale steps (above), then start ready `pending` steps, at most `max_parallel` processes
-   across all projects. Built-in fns run inline; staleness is re-checked after each round of
+3. Mark stale steps (above), then start every ready `pending` step. Built-in fns run inline; staleness is re-checked after each round of
    inline results, so nothing starts from a result that no longer holds.
 4. If anything changed, write `state.json`, then append a `step.status` record per step whose
    status changed in this pass (§6b).
-5. Calls: follow the log's `call` records; start `pending` calls within the same `max_parallel`
-   budget and log each status change (§6b). `call_status` reads a call's latest record.
+5. Calls: follow the log's `call` records; start `pending` calls and log each status change (§6b). `call_status` reads a call's latest record.
 
 On startup, steps and calls left `running` by a previous runner are marked `failed` with
 `error: "runner restarted"`. A `direct` call (§8 `fn_call`) is run by the process that made it,

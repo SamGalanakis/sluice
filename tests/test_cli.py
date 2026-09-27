@@ -57,8 +57,7 @@ def json_out(p):
 def test_the_first_run_writes_the_default_config_and_lists_the_tools(sluice):
     listing = sluice("tool").stdout
     assert json.loads((sluice.home / "config.json").read_text()) == {
-        "fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "max_parallel": 8,
-        "log_max": 10000}
+        "fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "log_max": 10000}
     names = [line.split()[0] for line in listing.splitlines()]
     assert {"projects_list", "plan_patch", "fn_call", "verify", "status"} <= set(names)
     assert any(line.startswith("verify ") and "Check functions" in line

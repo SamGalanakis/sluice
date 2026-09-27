@@ -17,7 +17,7 @@ DONE = ("succeeded", "failed")
 
 def write_config(home: Path, **extra) -> None:
     home.mkdir(parents=True, exist_ok=True)
-    cfg = {"fn_dirs": [str(TESTPACK)], "max_parallel": 8, **extra}
+    cfg = {"fn_dirs": [str(TESTPACK)], **extra}
     (home / "config.json").write_text(json.dumps(cfg))
 
 

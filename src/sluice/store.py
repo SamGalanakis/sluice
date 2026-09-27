@@ -24,7 +24,7 @@ from .errors import BadRequest, Conflict, InvalidPlan, NotFound, NotOpen
 from .util import atomic_write_json, atomic_write_text, now_iso, read_json
 
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
-                                  "max_parallel": 8, "log_max": L.DEFAULT_MAX}
+                                  "log_max": L.DEFAULT_MAX}
 PROJECT_KEYS = {"name", "description"}
 SUBMITTED = "submitted.json"  # in a run dir: the outputs its agent submitted (step_submit)
 ANSWER_KEYS = {"action": str, "params": dict, "values": dict, "text": str}

@@ -7,8 +7,7 @@ import pytest
 
 from sluice.errors import InvalidPlan
 from sluice.runner import RESTARTED, Runner
-from sluice.store import Store
-from tests.conftest import create, settle, statuses, write_config
+from tests.conftest import create, settle, statuses
 
 
 def d(x):
@@ -154,19 +153,16 @@ def test_plan_inputs_and_manual_outputs_unblock_steps(store, runner):
     assert statuses(store, "p")["a"] == "succeeded"  # a manual step is never run
 
 
-def test_max_parallel_limits_processes_across_projects(tmp_path):
-    home = tmp_path / "home"
-    write_config(home, max_parallel=1)
-    store = Store(home)
-    runner = Runner(store)
-    create(store, "p", {"w1": window(0.3), "w2": window(0.3)})
-    create(store, "q", {"w3": window(0.3)})
+def test_every_ready_step_starts_at_once_across_projects(store, runner):
+    steps = {f"w{i}": window(0.5) for i in range(10)}
+    create(store, "p", steps)
+    create(store, "q", {"w": window(0.5)})
     runner.tick()
-    assert sum(s == "running" for p in ("p", "q") for s in statuses(store, p).values()) == 1
+    assert set(statuses(store, "p").values()) == {"running"}
+    assert statuses(store, "q") == {"w": "running"}
     settle(runner, store, "p")
-    settle(runner, store, "q")
-    ws = [outputs(store, "p", "w1"), outputs(store, "p", "w2"), outputs(store, "q", "w3")]
-    assert not any(overlap(ws[i], ws[j]) for i in range(3) for j in range(i + 1, 3))
+    ws = [outputs(store, "p", sid) for sid in steps]
+    assert all(overlap(ws[0], w) for w in ws[1:])
 
 
 def test_a_new_runner_marks_leftover_running_steps_failed(store, runner):
