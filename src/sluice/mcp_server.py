@@ -250,8 +250,10 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def plan_patch(project: str, rev: int, ops: list[dict[str, Any]], reason: str,
-                   author: str = AUTHOR) -> Any:
-        """Edit a project's plan with RFC 6902 JSON Patch ops. Returns {rev}.
+                   author: str = AUTHOR, start: bool = False) -> Any:
+        """Edit a project's plan with RFC 6902 JSON Patch ops. A step it adds comes in
+        paused (so a drafted plan starts nothing) unless start is true or the step sets
+        `paused` itself; unpause with step_pause. Returns {rev}.
 
         Args:
             project: the project.
@@ -262,21 +264,24 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 an `invalid` error lists every problem with its path.
             reason: why, recorded in the plan's history.
             author: who is editing (default "mcp").
+            start: let the steps it adds start as soon as they are ready.
         """
-        return {"rev": store.patch(project, rev, ops, author, reason)}
+        return {"rev": store.patch(project, rev, ops, author, reason, start)}
 
     @tool
-    def step_add(project: str, step: str, spec: dict[str, Any], reason: str = "") -> Any:
-        """Add one step to a plan: plan_patch for a single step, at the current rev.
-        Validated like any edit. Returns {rev}.
+    def step_add(project: str, step: str, spec: dict[str, Any], reason: str = "",
+                 start: bool = False) -> Any:
+        """Add one step to a plan: plan_patch for a single step, at the current rev. It
+        comes in paused unless start is true (or the spec sets `paused`). Returns {rev}.
 
         Args:
             project: the project.
             step: the new step's id.
-            spec: the step, {run, in, scatter?, doc?, outputs?, paused?}.
+            spec: the step, {run, in, scatter?, doc?, outputs?, paused?, after?, tags?}.
             reason: why, recorded in the plan's history.
+            start: let it start as soon as it is ready.
         """
-        return {"rev": store.add_step(project, step, spec, AUTHOR, reason)}
+        return {"rev": store.add_step(project, step, spec, AUTHOR, reason, start)}
 
     @tool
     def step_update(project: str, step: str, changes: dict[str, Any], reason: str = "") -> Any:
@@ -304,18 +309,37 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return {"rev": store.remove_step(project, step, AUTHOR, reason)}
 
     @tool
-    def step_pause(project: str, step: str, paused: bool = True, reason: str = "") -> Any:
-        """Pause a step: it does not start, however ready its inputs, until unpaused
-        (paused: false); what it would read is held until then. Pausing a running step lets
-        it finish and holds only its next start. Returns {rev}.
+    def step_pause(project: str, steps: list[str] | None = None, tags: list[str] | None = None,
+                   subtree: bool = False, paused: bool = True, reason: str = "") -> Any:
+        """Pause or unpause steps in one edit. A paused step does not start, however ready
+        its inputs, until unpaused; a running one finishes (pausing never stops it: see
+        step_cancel). Select by ids and/or tags; with subtree, also everything downstream
+        (steps that read from or run after them, transitively), including those that become
+        ready later. Returns {rev, steps}: the steps selected.
 
         Args:
             project: the project.
-            step: the step id.
-            paused: true to pause, false to let it start again.
-            reason: why, recorded in the plan's history.
+            steps: step ids.
+            tags: select every step carrying any of these tags.
+            subtree: include everything downstream of the selected steps.
+            paused: true to pause, false to let them start.
+            reason: why; kept on each paused step (status shows it) and in the history.
         """
-        return {"rev": store.pause_step(project, step, paused, AUTHOR, reason)}
+        return store.pause_steps(project, steps, tags, subtree, paused, AUTHOR, reason)
+
+    @tool
+    def step_cancel(project: str, step: str, reason: str = "") -> Any:
+        """Stop a running step: the runner kills its processes and fails it with
+        `cancelled: <reason>`; step_retry runs it again. Refused unless it is running.
+        Returns {ok}.
+
+        Args:
+            project: the project.
+            step: the running step.
+            reason: why, in its error and a `step.cancel` log record.
+        """
+        store.cancel_step(project, step, AUTHOR, reason)
+        return {"ok": True}
 
     @tool
     def plan_history(project: str, since_rev: int | None = None) -> Any:

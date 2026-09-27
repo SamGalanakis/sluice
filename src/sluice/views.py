@@ -120,6 +120,7 @@ def mermaid(plan: Plan, state: dict[str, Any]) -> str:
 
     for sid, step in plan.steps.items():
         lines.extend(dict.fromkeys(edge(r, ids["step", sid]) for r in step.reads))
+        lines.extend(f"  {ids['step', a]} -.->|after| {ids['step', sid]}" for a in step.after)
     for n, ref in plan.outputs.items():
         lines.append(edge(ref, ids["out", n]))
     for cls, style in CLASSES.items():
@@ -413,10 +414,30 @@ class Block:
     def mark(self) -> str:
         """The glyph's status: `manual` for a value set by hand, `paused` for a held step that
         has not started."""
-        if self.raw.get("paused") is True and self.status == "pending":
+        if self.paused and self.status == "pending":
             return "paused"
         return "manual" if self.entry.get("manual") and self.status == "succeeded" \
             else self.status
+
+    @property
+    def paused(self) -> bool:
+        p = self.raw.get("paused")
+        return p is True or isinstance(p, str) and bool(p.strip())
+
+    @property
+    def pause_reason(self) -> str:
+        p = self.raw.get("paused")
+        return p.strip() if isinstance(p, str) else ""
+
+    @property
+    def after(self) -> list[str]:
+        a = self.raw.get("after")
+        return [x for x in a if isinstance(x, str)] if isinstance(a, list) else []
+
+    @property
+    def tags(self) -> list[str]:
+        t = self.raw.get("tags")
+        return [x for x in t if isinstance(x, str)] if isinstance(t, list) else []
 
     @property
     def title(self) -> str:
@@ -437,8 +458,9 @@ class Block:
 
     @property
     def deps(self) -> list[str]:
-        return list(dict.fromkeys(r.step for n in self.bindings for r in self.refs(n)
-                                  if r.step))
+        """The steps it waits for: those it reads from, then those it runs after."""
+        return list(dict.fromkeys([*(r.step for n in self.bindings for r in self.refs(n)
+                                     if r.step), *self.after]))
 
     @property
     def outputs(self) -> dict[str, str]:
@@ -691,7 +713,8 @@ def depths(board: Board) -> dict[str, int]:
 
 
 def edges(board: Board) -> list[tuple[str, str, str]]:
-    """(from step, to step, "output → input" names) for every handoff between steps."""
+    """(from step, to step, "output → input" names) for every handoff between steps, and
+    "after" for an ordering edge (`after`), which carries nothing."""
     pairs: dict[tuple[str, str], list[str]] = {}
     for sid, b in board.blocks.items():
         for name in b.bindings:
@@ -699,6 +722,9 @@ def edges(board: Board) -> list[tuple[str, str, str]]:
                 if r.step and r.step in board.blocks:
                     label = r.name if r.name == name else f"{r.name} → {name}"
                     pairs.setdefault((r.step, sid), []).append(label)
+        for a in b.after:
+            if a in board.blocks:
+                pairs.setdefault((a, sid), []).append("after")
     return [(a, b, ", ".join(dict.fromkeys(ls))) for (a, b), ls in pairs.items()]
 
 
@@ -722,6 +748,8 @@ def _card(store: Store, board: Board, b: Block, live: bool) -> str:
     href = f' href="{e(step_href(board.project, b.sid))}" data-step="{e(b.sid)}"' if live else ""
     kind, text = block_line(store, board, b)
     now = text if kind != "output" else ""  # what it produced is in the drawer
+    if b.mark == "paused":
+        now = f"paused: {b.pause_reason}" if b.pause_reason else "paused"
     tip = " — ".join(t for t in (" ".join(b.doc.split()), now) if t)
     title = f' title="{e(tip)}"' if tip else ""
     attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}" id="n-{e(b.sid)}" '
@@ -1161,6 +1189,10 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         raise NotFound(f"the plan of project {project} has no step {sid!r}")
     outs_all = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else {}
     facts = [("Status", e(WORDS.get(b.mark, b.status))), ("Function", f"<code>{e(b.fn)}</code>")]
+    if b.after:
+        facts.append(("After", ", ".join(f"<code>{e(a)}</code>" for a in b.after)))
+    if b.tags:
+        facts.append(("Tags", ", ".join(e(t) for t in b.tags)))
     if "total" in b.entry:
         facts.append(("Runs", f"{int(b.entry.get('done') or 0)} of {int(b.entry['total'])}"))
     if b.entry.get("started"):
@@ -1173,8 +1205,10 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     if isinstance(session, str) and session:
         facts.append(("Session", f'<code title="{e(session)}">{e(session[:8])}</code>'))
     doc = f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>' if b.doc.strip() else ""
+    if b.paused and b.status != "running":
+        doc += f'<p class="d-doc attn-note">Paused{": " + e(b.pause_reason) if b.pause_reason else ""}</p>'
     grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
-    switch = f'<div class="d-actions">{_pause_form(project, b.raw.get("paused") is True, sid)}' \
+    switch = f'<div class="d-actions">{_pause_form(project, b.paused, sid)}' \
         "</div>" if live else ""
     head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(sid)}</h2></div>'
             f'{doc}<dl class="facts">{grid}</dl>{switch}</header>')

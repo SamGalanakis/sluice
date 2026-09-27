@@ -302,8 +302,11 @@ class Store:
             hit = self._parsed[project] = (key, plan)
         return doc, hit[1]
 
-    def patch(self, project: str, rev: int, ops: Any, author: str, reason: str) -> int:
-        """Apply an RFC 6902 patch at `rev`. Raises Conflict, InvalidPlan or NotFound."""
+    def patch(self, project: str, rev: int, ops: Any, author: str, reason: str,
+              start: bool = True) -> int:
+        """Apply an RFC 6902 patch at `rev`. Unless `start`, a step it adds comes in paused
+        (unless the step itself says `paused`); that pause is one more op in the history.
+        Raises Conflict, InvalidPlan or NotFound."""
         with self.lock(project):
             cur = self.get(project)
             if rev != cur["rev"]:
@@ -311,6 +314,13 @@ class Store:
             reg = self.usable_registry(project)
             old = _body(cur)
             new = apply_ops(old, ops)
+            if not start and isinstance(new.get("steps"), dict):
+                held = [{"op": "add", "path": f"/steps/{sid}/paused", "value": True}
+                        for sid, s in new["steps"].items()
+                        if sid not in old["steps"] and isinstance(s, dict) and "paused" not in s]
+                if held:
+                    ops = [*ops, *held]
+                    new = apply_ops(new, held)
             errs, _ = P.validate(new, reg)
             new_steps = new.get("steps") if isinstance(new.get("steps"), dict) else {}
             for sid, e in self.read_state(project)["steps"].items():
@@ -329,7 +339,8 @@ class Store:
 
     # ---- one step of the plan: plan_patch for a single step, at the current rev ----
 
-    def add_step(self, project: str, sid: str, step: Any, author: str, reason: str) -> int:
+    def add_step(self, project: str, sid: str, step: Any, author: str, reason: str,
+                 start: bool = False) -> int:
         if not isinstance(sid, str) or not P.ID_RE.match(sid):
             raise BadRequest(f"step ids match {P.ID_RE.pattern}, got {sid!r}")
         with self.lock(project):
@@ -338,7 +349,7 @@ class Store:
                 raise BadRequest(f"step {sid!r} already exists (step_update changes it)")
             return self.patch(project, cur["rev"],
                               [{"op": "add", "path": f"/steps/{sid}", "value": step}],
-                              author, reason or f"add step {sid}")
+                              author, reason or f"add step {sid}", start)
 
     def update_step(self, project: str, sid: str, changes: Any, author: str,
                     reason: str) -> int:
@@ -367,12 +378,78 @@ class Store:
             return self.patch(project, cur["rev"], [{"op": "remove", "path": f"/steps/{sid}"}],
                               author, reason or f"remove step {sid}")
 
-    def pause_step(self, project: str, sid: str, paused: bool, author: str,
-                   reason: str) -> int:
+    def select_steps(self, project: str, steps: Any = None, tags: Any = None,
+                     subtree: bool = False) -> list[str]:
+        """Step ids by id and/or tag, with everything downstream of them when `subtree` (the
+        steps that read from or run after them, transitively), in plan order."""
+        for name, v in (("steps", steps), ("tags", tags)):
+            if v is not None and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+                raise BadRequest(f"{name}: expected an array of strings")
+        if not steps and not tags:
+            raise BadRequest("select steps by `steps` (ids) and/or `tags`")
+        _, plan = self.plan(project)
+        missing = [s for s in steps or [] if s not in plan.steps]
+        if missing:
+            raise NotFound(f"the plan of project {project} has no step {', '.join(missing)}")
+        chosen = set(steps or []) | {s.id for s in plan.steps.values()
+                                     if set(s.tags) & set(tags or [])}
+        if subtree:
+            below: dict[str, list[str]] = {}
+            for s in plan.steps.values():
+                for w in s.waits:
+                    below.setdefault(w, []).append(s.id)
+            todo = list(chosen)
+            while todo:
+                for d in below.get(todo.pop(), []):
+                    if d not in chosen:
+                        chosen.add(d)
+                        todo.append(d)
+        return [sid for sid in plan.steps if sid in chosen]
+
+    def pause_steps(self, project: str, steps: Any = None, tags: Any = None,
+                    subtree: bool = False, paused: bool = True, author: str = "",
+                    reason: str = "") -> dict[str, Any]:
+        """Pause (or unpause) the selected steps in one edit: `paused` becomes the reason when
+        one is given, else true; unpausing removes it. Returns {rev, steps}."""
         if not isinstance(paused, bool):
             raise BadRequest("paused: expected true or false")
-        return self.update_step(project, sid, {"paused": True if paused else None}, author,
-                                reason or f"{'pause' if paused else 'unpause'} step {sid}")
+        with self.lock(project):
+            chosen = self.select_steps(project, steps, tags, subtree)
+            cur = self.get(project)
+            mark: Any = (reason.strip() or True) if paused else None
+            ops = []
+            for sid in chosen:
+                if cur["steps"][sid].get("paused", False) not in (False, None) and paused and \
+                        not reason.strip():
+                    continue  # already paused: keep its reason
+                if mark is None:
+                    if "paused" in cur["steps"][sid]:
+                        ops.append({"op": "remove", "path": f"/steps/{sid}/paused"})
+                elif cur["steps"][sid].get("paused") != mark:
+                    ops.append({"op": "add", "path": f"/steps/{sid}/paused", "value": mark})
+            if not ops:
+                return {"rev": cur["rev"], "steps": chosen}
+            what = "pause" if paused else "unpause"
+            rev = self.patch(project, cur["rev"], ops, author,
+                             reason or f"{what} {', '.join(chosen)}")
+        return {"rev": rev, "steps": chosen}
+
+    def cancel_step(self, project: str, sid: str, author: str, reason: str) -> None:
+        """Ask the runner to stop a running step: it kills the step's processes and fails it
+        with `cancelled` (and the reason). Refused unless the step is running."""
+        with self.lock(project):
+            _, plan = self.plan(project)
+            if sid not in plan.steps:
+                raise NotFound(f"the plan of project {project} has no step {sid!r}")
+            state = self.read_state(project)
+            e = state["steps"].get(sid, {"status": "pending"})
+            if e["status"] != "running":
+                raise BadRequest(f"step {sid} is {e['status']}, not running")
+            e["cancel"] = reason or "cancelled"
+            self.write_state(project, state)
+            self.append(project, {"kind": "step.cancel", "step": sid, "author": author,
+                                  "reason": reason})
+        self.notify()
 
     def _log(self, project: str, rev: int, author: str, reason: str, ops: list | None = None,
              kind: str = "plan.edit", **fields: Any) -> None:
@@ -406,6 +483,7 @@ class Store:
     def status(self, project: str) -> dict[str, Any]:
         doc, plan = self.plan(project)
         state = self.read_state(project)
+        project_paused = self.paused(project)
         outputs = {}
         for name, ref in plan.outputs.items():
             ok, v = P.value_of(ref, plan, state)
@@ -417,9 +495,16 @@ class Store:
                    "started": e.get("started"), "finished": e.get("finished")}
             row.update({k: e[k] for k in ("outputs", "error") if e.get(k) is not None})
             row.update({"doc": step.doc} if step.doc else {})
-            row.update({"paused": True} if step.paused else {})
+            row.update({"paused": step.pause_reason or True} if step.paused else {})
+            row.update({"tags": step.tags} if step.tags else {})
+            row.update({"after": step.after} if step.after else {})
+            if e["status"] == "pending":  # why it has not started
+                held = ([f"paused: {step.pause_reason}" if step.pause_reason else "paused"]
+                        if step.paused else [])
+                held += ["the project is paused"] if project_paused else []
+                row["waiting"] = held + P.not_ready(step, plan, state)
             steps.append({**row, "manual": bool(e.get("manual"))})
-        out = {"rev": doc["rev"], "paused": self.paused(project),
+        out = {"rev": doc["rev"], "paused": project_paused,
                "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}
         if plan.input_docs:
             out["input_docs"] = dict(plan.input_docs)

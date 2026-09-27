@@ -14,7 +14,7 @@ from .util import canonical
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
-STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused"}
+STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags"}
 INPUT_KEYS = {"type", "doc"}  # a plan input's or step output's object form {"type": T, "doc"}
 
 
@@ -54,6 +54,9 @@ class Step:
     declared: dict[str, T.Type] = field(default_factory=dict)  # declared output -> type
     output_docs: dict[str, str] = field(default_factory=dict)  # only outputs that have one
     paused: bool = False  # held: it does not start, even when ready, until unpaused
+    pause_reason: str = ""  # why, when `paused` was given as a string
+    after: list[str] = field(default_factory=list)  # steps it waits for without reading them
+    tags: list[str] = field(default_factory=list)  # free-form labels to select steps by
 
     @property
     def inputs(self) -> dict[str, T.Type]:
@@ -69,7 +72,13 @@ class Step:
 
     @property
     def deps(self) -> list[str]:
+        """The steps it reads from (a data dependency: their staleness is its staleness)."""
         return list(dict.fromkeys(r.step for r in self.reads if r.step))
+
+    @property
+    def waits(self) -> list[str]:
+        """Every step it waits for: those it reads from, then those it runs `after`."""
+        return list(dict.fromkeys([*self.deps, *self.after]))
 
     def output_type(self, name: str) -> T.Type | None:
         t = self.outputs.get(name)
@@ -246,7 +255,8 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
     for sid, raw in _ids(doc.get("steps", {}), "steps", errs).items():
         p = f"steps.{sid}"
         if not isinstance(raw, dict):
-            errs.append(f"{p}: a step is {{run, in, scatter?, doc?, outputs?, paused?}}")
+            errs.append(f"{p}: a step is {{run, in, scatter?, doc?, outputs?, paused?, after?, "
+                        "tags?}")
             continue
         errs.extend(f"{p}.{k}: unknown key" for k in raw if k not in STEP_KEYS)
         text = raw.get("doc", "")
@@ -278,9 +288,21 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
             errs.append(f"{p}.scatter: {scatter!r} is not a bound input of the step")
             scatter = None
         paused = raw.get("paused", False)
-        if not isinstance(paused, bool):
-            errs.append(f"{p}.paused: expected true or false")
-        step = plan.steps[sid] = Step(sid, fn, sources, scatter, text, paused=paused is True)
+        if not (isinstance(paused, bool) or isinstance(paused, str) and paused.strip()):
+            errs.append(f"{p}.paused: expected true, false or the reason (a string)")
+        after = raw.get("after", [])
+        if not (isinstance(after, list) and all(isinstance(a, str) for a in after)):
+            errs.append(f"{p}.after: expected an array of step ids")
+            after = []
+        tags = raw.get("tags", [])
+        if not (isinstance(tags, list) and all(isinstance(t, str) and ID_RE.match(t)
+                                               for t in tags)):
+            errs.append(f"{p}.tags: expected an array of tags matching {ID_RE.pattern}")
+            tags = []
+        step = plan.steps[sid] = Step(
+            sid, fn, sources, scatter, text, paused=paused is True or isinstance(paused, str),
+            pause_reason=paused if isinstance(paused, str) else "",
+            after=list(dict.fromkeys(after)), tags=list(dict.fromkeys(tags)))
         if "outputs" in raw:
             if not fn.open:
                 errs.append(f"{p}.outputs: fn {fn.name} is not open; only a step running an "
@@ -322,7 +344,13 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
                         errs.append(f"{path}: the scatter input needs an array, not {t}")
                     t = inner.of if isinstance(inner, T.List) else T.ANY
                 step.extra[k] = t
-    cycle = find_cycle({s.id: s.deps for s in plan.steps.values()})
+    for step in plan.steps.values():
+        for a in step.after:
+            if a == step.id:
+                errs.append(f"steps.{step.id}.after: a step cannot run after itself")
+            elif a not in plan.steps and a not in doc.get("steps", {}):
+                errs.append(f"steps.{step.id}.after: no step {a}")
+    cycle = find_cycle({s.id: s.waits for s in plan.steps.values()})
     if cycle:
         errs.append(f"steps.{cycle[0]}: dependency cycle {' -> '.join(cycle)}")
     return errs, plan
@@ -353,8 +381,10 @@ def source_value(src: Source, plan: Plan, state: dict[str, Any]) -> Any:
 
 
 def is_ready(step: Step, plan: Plan, state: dict[str, Any]) -> bool:
-    """Every plan input the step reads has a value and every step it reads has succeeded."""
-    return all(value_of(r, plan, state)[0] for r in step.reads)
+    """Every plan input the step reads has a value, and every step it reads or runs after has
+    succeeded."""
+    return all(value_of(r, plan, state)[0] for r in step.reads) and all(
+        state["steps"].get(a, {}).get("status") == "succeeded" for a in step.after)
 
 
 def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
@@ -368,6 +398,10 @@ def not_ready(step: Step, plan: Plan, state: dict[str, Any]) -> list[str]:
         else:
             status = state["steps"].get(r.step, {}).get("status", "pending")
             out.append(f"step {r.step} is {status}")
+    for a in step.after:
+        status = state["steps"].get(a, {}).get("status", "pending")
+        if status != "succeeded":
+            out.append(f"after step {a}, which is {status}")
     return list(dict.fromkeys(out))
 
 
@@ -393,7 +427,7 @@ def topo_order(plan: Plan) -> list[str]:
         if sid in seen:
             return
         seen.add(sid)
-        for dep in plan.steps[sid].deps:
+        for dep in plan.steps[sid].waits:
             if dep in plan.steps:
                 visit(dep)
         order.append(sid)

@@ -230,7 +230,9 @@ function drawEdges(plane) {
     const dy = Math.max((y2 - y1) / 2, 14);
     const d = `M${x1.toFixed(1)} ${y1.toFixed(1)}C${x1.toFixed(1)} ${(y1 + dy).toFixed(1)} `
       + `${x2.toFixed(1)} ${(y2 - dy).toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
-    wires.append(svgEl("path", { "data-from": a, "data-to": b, d, "marker-end": "url(#arrow)" }));
+    const attrs = { "data-from": a, "data-to": b, d, "marker-end": "url(#arrow)" };
+    if (label === "after") attrs.class = "order";  // an ordering edge carries no data
+    wires.append(svgEl("path", attrs));
     const text = svgEl("text", { "data-from": a, "data-to": b, x: ((x1 + x2) / 2).toFixed(1),
                                  y: ((y1 + y2) / 2 + 4).toFixed(1) });
     text.textContent = label;

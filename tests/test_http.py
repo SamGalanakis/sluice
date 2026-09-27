@@ -39,7 +39,8 @@ async def drive(url: str) -> None:
         steps = {"a": {"run": "test.add", "in": {"a": {"default": 1}, "b": {"default": 2}}},
                  "b": {"run": "test.add", "in": {"a": {"source": "a/sum"},
                                                  "b": {"default": 3}}}}
-        r = await c.call_tool("plan_patch", {"project": "web", "rev": 1, "reason": "smoke", "ops": [
+        r = await c.call_tool("plan_patch", {"project": "web", "rev": 1, "reason": "smoke",
+                                             "start": True, "ops": [
             {"op": "replace", "path": "/steps", "value": steps},
             {"op": "replace", "path": "/outputs", "value": {"total": {"source": "b/sum"}}}]})
         assert json.loads(r.content[0].text) == {"rev": 2}
@@ -104,7 +105,8 @@ def test_a_server_restart_leaves_steps_of_a_separate_runner_running(home):
     async def plan(url: str) -> None:
         async with Client(url) as c:
             await c.call_tool("project_create", {"name": "slow"})
-            await c.call_tool("plan_patch", {"project": "slow", "rev": 1, "reason": "t", "ops": [
+            await c.call_tool("plan_patch", {"project": "slow", "rev": 1, "reason": "t",
+                                             "start": True, "ops": [
                 {"op": "replace", "path": "/steps", "value": {
                     "w": {"run": "test.window", "in": {"seconds": {"default": 3}}}}}]})
 

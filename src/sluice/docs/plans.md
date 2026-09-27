@@ -133,10 +133,23 @@ You cannot remove or change a running step (only pause it). Every edit needs a s
 it goes into the plan's history (`plan_history`).
 
 ## Pausing
-`step_pause(project, step)` holds a step: it does not start, however ready its inputs, until
-`step_pause(project, step, paused=false)`; everything after it waits too. It is the step's
-`"paused": true`. Pausing a running step lets it finish and holds its next start.
-`project_update(name, paused=true)` holds every step of the project the same way.
+Steps you add come in **paused**, so a drafted plan starts nothing until you let it:
+`plan_patch(..., start=true)` or `step_add(..., start=true)` lets them start at once.
+
+`step_pause(project, steps=[...], tags=[...], subtree=false, paused=true, reason="")` holds
+or releases steps in one edit, by id and/or tag; `subtree=true` takes everything downstream
+too, including steps that only become ready later. A paused step does not start, however
+ready its inputs; pausing never stops a running one (it finishes, and its next start is
+held). The step keeps `"paused": "<reason>"` (or `true`), and `status` lists, for each pending
+step, why it is `waiting`. `project_update(name, paused=true)` holds the whole project.
+`step_cancel(project, step, reason)` stops a running step; it fails with
+`cancelled: <reason>` and `step_retry` runs it again.
+
+## Ordering and tags
+`"after": ["a"]` makes a step wait for `a` to succeed without reading anything from it: for
+two steps that must not overlap (both edit one file) or must happen in order. It is not a
+data edge, so `a` turning stale does not make it stale. `"tags": ["e2e", "heavy"]` label
+steps so you can pause or release them together.
 
 ## Manual values
 - `plan_set_input(project, name, value)`: provide a plan input the plan is waiting on. Changing

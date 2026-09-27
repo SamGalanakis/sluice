@@ -173,7 +173,7 @@ def test_a_paused_step_holds_its_inputs_until_unpaused(store, runner):
         runner.tick()
     assert statuses(store, "p") == {"a": "succeeded", "b": "pending", "c": "pending"}
     assert store.status("p")["steps"][1]["paused"] is True
-    store.pause_step("p", "b", False, "test", "")
+    store.pause_steps("p", ["b"], paused=False, author="test")
     assert "paused" not in store.get("p")["steps"]["b"]
     steps = settle(runner, store, "p")
     assert steps["c"]["outputs"] == {"value": 13}
@@ -184,7 +184,7 @@ def test_a_paused_project_starts_nothing_and_a_running_step_can_be_paused(store,
     create(store, "q", {"a": add(d(1), d(2))})
     store.update_project("q", paused=True)
     settle(runner, store, "p", until=lambda s: s["w"]["status"] == "running")
-    assert store.pause_step("p", "w", True, "test", "") == 3  # a running step takes a pause
+    assert store.pause_steps("p", ["w"], author="test") == {"rev": 3, "steps": ["w"]}
     with pytest.raises(InvalidPlan) as e:
         store.update_step("p", "w", {"doc": "no"}, "test", "")
     assert e.value.errors == ["steps.w: cannot change a running step (only pause it)"]

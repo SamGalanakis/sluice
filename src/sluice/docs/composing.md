@@ -10,7 +10,11 @@ it stays easy to read and to change.
   with a prompt, the typed inputs it needs and the typed outputs it must hand back
   (`docs("plans")`, agent blocks). Say what to achieve, not how to type the commands.
 - **An edge is a real handoff**: an interface, a branch, a finding, a decision. If nothing
-  meaningful passes between two steps, they need no edge.
+  meaningful passes between two steps, they need no edge, unless they must not overlap (both
+  change the same file): then `"after": ["<step>"]` orders them without passing anything.
+- **Draft, then release.** Steps you add come in paused; add the next handoffs, read them
+  over, then `step_pause(steps=[...], subtree=true, paused=false)` to start them. Pause by
+  tag to back off when the machine is busy.
 - **Agents do their own mechanics.** Worktrees, branches, merges, rebases, commit messages,
   formatting a prompt, reading a sha: all of it happens inside the agent that needs it. Tell an
   agent that works next to others to use a worktree and branch of its own.

@@ -351,7 +351,7 @@ class Dashboard:
         name, sid = request.path_params["name"], request.path_params["sid"]
         return await self._switch(
             request, "paused",
-            lambda on: self.store.pause_step(name, sid, on, AUTHOR, ""),
+            lambda on: self.store.pause_steps(name, [sid], paused=on, author=AUTHOR),
             f"/projects/{views.quote(name)}#step:{views.quote(sid)}")
 
     async def static(self, request: Request) -> Response:

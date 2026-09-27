@@ -298,7 +298,12 @@ class Runner:
             for sid in plan.steps:
                 st.setdefault(sid, {"status": "pending"})
             for sid, e in st.items():
-                if e["status"] == "running":
+                if e["status"] == "running" and "cancel" in e:  # step_cancel asked to stop it
+                    if (a := self.active.pop(("step", project, sid), None)) is not None:
+                        a.kill()
+                    why = e.pop("cancel")
+                    _finish(e, error="cancelled" + (f": {why}" if why != "cancelled" else ""))
+                elif e["status"] == "running":
                     self._poll(("step", project, sid), e)
             held = self.store.paused(project)  # a paused project starts nothing
             self._launch(project, st)  # queued scatter runs first

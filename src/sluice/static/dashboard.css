@@ -243,6 +243,7 @@ details.fold[open] > summary::after { content: "Show less"; }
          pointer-events: none; z-index: 0; }
 .wires path { fill: none; stroke: var(--edge); stroke-width: 1.5;
               transition: opacity 150ms, stroke 150ms; }
+.wires path.order { stroke-dasharray: 4 4; }
 .edges marker path { fill: var(--edge); stroke: none; }
 .names text { font: 500 12px var(--font-sans); fill: var(--foreground); text-anchor: middle;
               opacity: 0; paint-order: stroke; stroke: var(--background); stroke-width: 6px;

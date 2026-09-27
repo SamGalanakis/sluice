@@ -166,10 +166,16 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
 
 - Project names, step ids, plan input and output names match `^[a-z0-9][a-z0-9_-]*$`. The plan's
   `rev` is store-maintained and returned by `plan_get`/`status`.
+- **Holding and ordering.** A step may carry `"paused": true` or `"paused": "<reason>"` to
+  hold it (§6); `"after": ["<step>", ...]` to wait for steps it reads nothing from (an
+  ordering edge: it is ready only once they have succeeded, it is never stale because of
+  them, and it counts for cycles); and `"tags": ["<tag>", ...]` (tags match the id pattern)
+  to select steps by. A step that `plan_patch` or `step_add` adds comes in with
+  `"paused": true` unless the call passes `start: true` or the step sets `paused` itself;
+  that pause is one more op in the edit's history.
 - **Docs.** A plan input is declared by its type, or, as in CWL, by `{"type": <type>, "doc":
   "..."}` (both keys only; no type form has just these keys, so the two never clash). A step
-  may carry `"doc": "..."` next to `run`, `in` and `scatter`, and `"paused": true` to hold it
-  (§6). Docs are optional strings that say
+  may carry `"doc": "..."` next to `run`, `in` and `scatter`. Docs are optional strings that say
   what a value or a step is for; `status` returns them (`input_docs`, a step's `doc`), the
   Mermaid view puts a step's doc on a second line of its label, the dashboard shows a step's doc
   as its card's title and an input's doc on its node, and an
@@ -251,9 +257,10 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    that declares outputs, merged with what its agent submitted, §5); otherwise `failed` with
    `error` (exit code, type errors or declared outputs not submitted, plus the stderr tail).
    A scattered step collects its runs as they finish.
-3. Mark stale steps (above), then start every ready `pending` step that is not paused (a step's
-   `"paused": true`, or its project's `paused` in `project.json`: it stays `pending`, whatever
-   it would read held, until unpaused; a running one finishes). Built-in fns run inline;
+3. Mark stale steps (above), then start every ready `pending` step (what it reads is there,
+   what it runs `after` has succeeded) that is not paused (a step's `paused`, or its project's
+   `paused` in `project.json`: it stays `pending`, whatever it would read held, until
+   unpaused; pausing never stops a running step). Built-in fns run inline;
    staleness is re-checked after each round of inline results, so nothing starts from a result
    that no longer holds.
 4. If anything changed, write `state.json`, then append a `step.status` record per step whose
@@ -327,6 +334,7 @@ fn process posting to a thread) get distinct, increasing seqs; the file is in se
 | `plan.input` | `rev, author, reason, name, value` | `plan_set_input` |
 | `step.output` | `rev, author, reason, step, outputs, force?` | `step_set_output` |
 | `step.retry` | `rev, author, reason, step` | `step_retry` |
+| `step.cancel` | `step, author, reason` | `step_cancel`: the runner then kills the step and fails it with `cancelled: <reason>` |
 | `step.submit` | `step, run, outputs` | every accepted `step_submit` (§5) |
 | `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per pass (`from` is the status before the pass, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
 | `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` |
@@ -526,10 +534,12 @@ Streams end when the server shuts down; the client reconnects with backoff.
   the project. An archived project keeps running; it is listed apart and left out of the
   index's "Needs you". Same refusals as the answer route (404, 403 for another `Origin`).
 - `POST /projects/<name>/pause` and `POST /projects/<name>/steps/<id>/pause`: a form `paused`
-  ("1" or "0") calls `update_project` or `pause_step` (the `project_update` and `step_pause`
+  ("1" or "0") calls `update_project` or `pause_steps` (the `project_update` and `step_pause`
   tools' code paths), then redirects (303) to the project, with the step's drawer open
   (`#step:<id>`) for a step. Same refusals. A paused step that has not started shows a pause
-  glyph; a paused project says so under its name with a Resume switch next to Archive.
+  glyph (its reason in its tooltip and the drawer's Status); a paused project says so under
+  its name with a Resume switch next to Archive. An `after` edge is drawn dashed; the drawer
+  lists a step's After and Tags.
 - `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
   `GET /static/board.js`: the board's script.
 
@@ -550,11 +560,12 @@ step's detail in a disclosure (no nav, no drawer, no stream, no script).
 | `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s. `direct: true` runs it in the calling process to the end instead (no runner needed) |
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's latest record |
 | `plan_get` | `project` | `{rev, plan}` |
-| `plan_patch` | `project, rev, ops, reason, author?` | `{rev}` |
-| `step_add` | `project, step, spec, reason?` | `{rev}`: `plan_patch` adding one step at the current rev |
+| `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
+| `step_add` | `project, step, spec, reason?, start? = false` | `{rev}`: `plan_patch` adding one step at the current rev |
 | `step_update` | `project, step, changes, reason?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
 | `step_remove` | `project, step, reason?` | `{rev}`; refused while it runs or something reads it |
-| `step_pause` | `project, step, paused? = true, reason?` | `{rev}`: sets or clears the step's `paused` (§6) |
+| `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
+| `step_cancel` | `project, step, reason?` | `{ok}`: marks a running step for the runner to kill; it fails with `cancelled: <reason>` (`step_retry` runs it again); refused unless running |
 | `plan_history` | `project, since_rev?` | the `plan.edit`, `plan.input`, `step.output` and `step.retry` records still in the log (with `rev` > `since_rev`) |
 | `plan_set_input` | `project, name, value, reason?` | `{ok}` |
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
@@ -565,7 +576,7 @@ step's detail in a disclosure (no nav, no drawer, no stream, no script).
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty) |
 | `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
-| `status` | `project` | `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc) |
+| `status` | `project` | `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, waiting?, manual}]}` (status: pending, running, succeeded, failed or stale; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
 | `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |

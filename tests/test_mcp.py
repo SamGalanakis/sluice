@@ -15,7 +15,7 @@ TOOLS = {"docs", "projects_list", "project_create", "project_update", "fn_list",
          "plan_set_input", "step_set_input", "step_set_output", "step_retry", "verify",
          "plan_view", "status", "log_read", "log_wait", "inbox_post", "inbox_list",
          "inbox_answer", "inbox_close", "step_submit", "project_delete", "step_add",
-         "step_update", "step_remove", "step_pause"}
+         "step_update", "step_remove", "step_pause", "step_cancel"}
 UPPER = """from sluice.fn import run
 
 run(lambda inp, ctx: {"text": inp["text"].upper()})
@@ -116,8 +116,10 @@ async def test_project_delete_needs_archiving_and_removes_everything(store):
 async def test_step_tools_edit_one_step_at_the_current_rev(store):
     async with Client(build_server(store)) as c:
         await ok(c, "project_create", name="p")
-        assert await ok(c, "step_add", project="p", step="a", spec=add(d(1), d(2))) == {"rev": 2}
-        await ok(c, "step_add", project="p", step="b", spec=add({"source": "a/sum"}, d(3)))
+        assert await ok(c, "step_add", project="p", step="a", spec=add(d(1), d(2)),
+                        start=True) == {"rev": 2}
+        await ok(c, "step_add", project="p", step="b", spec=add({"source": "a/sum"}, d(3)),
+                 start=True)
         assert (await fail(c, "step_add", project="p", step="a", spec=add(d(1), d(2))))[
             "error"] == "bad_request"
         await ok(c, "step_update", project="p", step="a",
@@ -195,7 +197,7 @@ async def test_plan_editing_and_error_payloads(store):
         assert (await fail(c, "plan_get", project="nope"))["error"] == "not_found"
         plan = {"inputs": {"n": "int"}, "outputs": {},
                 "steps": {"a": add({"source": "n"}, d(1))}}
-        assert await ok(c, "plan_patch", project="p", rev=1, reason="start", ops=[
+        assert await ok(c, "plan_patch", project="p", rev=1, reason="start", start=True, ops=[
             {"op": "replace", "path": "/inputs", "value": plan["inputs"]},
             {"op": "replace", "path": "/steps", "value": plan["steps"]}]) == {"rev": 2}
         assert await ok(c, "plan_get", project="p") == {"rev": 2, "plan": plan}

@@ -169,7 +169,8 @@ is 13px meta in muted ink, sentence case. Nothing is uppercase; no kickers or ey
 The plan reads top to bottom, inside the column: one row per dependency depth, up to four cards
 side by side (more wrap within the row), 44px between rows for the edges, cards in a row of
 equal height. The server lays out the rows; board.js draws the edges between measured cards
-(bottom centre to top centre, spread when several share a side, an arrowhead at the end). The
+(bottom centre to top centre, spread when several share a side, an arrowhead at the end;
+dashed for an `after` edge, which orders two steps without passing data). The
 head of a project page is its name and description only; what the plan took, produced and cost
 follows the board. Text blocks hold a 72-75ch measure.
 
