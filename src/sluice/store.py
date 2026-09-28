@@ -804,7 +804,7 @@ class Store:
                 raise InvalidPlan(waiting, f"step {step} reads values that are not ready; "
                                   "pass force: true to set its outputs anyway (it turns stale "
                                   "once they are)")
-            h = None if waiting else P.inputs_hash(P.resolved_inputs(s, plan, state))
+            h = None if waiting else P.inputs_hash(s, plan, state)
             state["steps"][step] = S.manual(outputs, h)
             self.write_state(project, state)
             extra = {"force": True} if force else {}

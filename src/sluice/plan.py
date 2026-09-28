@@ -461,9 +461,12 @@ def resolved_inputs(step: Step, plan: Plan, state: dict[str, Any]) -> dict[str, 
     return inp
 
 
-def inputs_hash(inp: dict[str, Any]) -> str:
-    """SPEC §6 staleness: a hash of the canonical JSON of the resolved inputs."""
-    return hashlib.sha256(canonical(inp).encode()).hexdigest()[:32]
+def inputs_hash(step: Step, plan: Plan, state: dict[str, Any]) -> str:
+    """SPEC §6 staleness: a hash of the canonical JSON of the inputs the step binds. An
+    optional input it leaves unbound is not in it, so adding one to a fn does not make the
+    steps that already ran with it stale."""
+    bound = {k: source_value(s, plan, state) for k, s in step.sources.items()}
+    return hashlib.sha256(canonical(bound).encode()).hexdigest()[:32]
 
 
 def topo_order(plan: Plan) -> list[str]:
@@ -501,7 +504,7 @@ def mark_stale(plan: Plan, state: dict[str, Any]) -> bool:
         upstream_stale = any(S.entry_of(state, d).get("status") == "stale"
                              for d in step.deps)
         ready = not upstream_stale and is_ready(step, plan, state)
-        h = inputs_hash(resolved_inputs(step, plan, state)) if ready else None
+        h = inputs_hash(step, plan, state) if ready else None
         if e["status"] == "succeeded":
             if upstream_stale:
                 e["status"] = "stale"

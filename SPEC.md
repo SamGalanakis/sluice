@@ -311,8 +311,9 @@ re-run only what failed.
 
 **Staleness.** A result is only valid for the inputs it was computed from. When a step starts
 (and so when it succeeds) or is set by hand, its state records `inputs_hash`: a hash of the
-canonical JSON of its resolved inputs (the object it runs with, unbound optional inputs null; for
-a scattered step the whole array), or null for a step set by hand with `force` while what it
+canonical JSON of the inputs it binds (for a scattered step the whole array; an optional input
+it leaves unbound is not in it, so a fn gaining an optional input leaves the steps that already
+ran alone), or null for a step set by hand with `force` while what it
 reads was not ready ("inputs unknown"). Each tick, in dependency order, a `succeeded` step becomes
 `stale` when a step it reads is stale, or when its inputs are all available and hash differently
 (an upstream re-ran with a different result, a plan input changed, its bindings were edited, or

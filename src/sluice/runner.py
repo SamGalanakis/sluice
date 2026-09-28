@@ -943,7 +943,7 @@ class Runner:
         kept item of a retried scatter keeping its own) — and returned, to be started once
         the reservation is committed. Bad inputs fail it at once."""
         inp = resolved_inputs(step, plan, state)
-        h = inputs_hash(inp)
+        h = inputs_hash(step, plan, state)
         kept = state["steps"][step.id].get("kept")  # a retried scatter's finished items
         e = state["steps"][step.id] = S.running(h)
         runs = [inp]

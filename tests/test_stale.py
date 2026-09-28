@@ -1,10 +1,12 @@
 """Staleness (SPEC §6): a result holds only for the inputs it was computed from."""
 
+import hashlib
+
 import pytest
 
 from sluice import log as L
 from sluice.errors import BadRequest, InvalidPlan
-from sluice.plan import inputs_hash
+from sluice.util import canonical
 from tests.conftest import add, create, d, echo, settle, src, statuses, write_fn
 
 CAT = """from pathlib import Path
@@ -123,7 +125,27 @@ def test_a_manual_value_with_finished_upstreams_records_their_hash(store, runner
         runner.tick()
     e = store.read_state("p")["steps"]["b"]
     assert (e["status"], e["outputs"]) == ("succeeded", {"sum": 7})
-    assert e["inputs_hash"] == inputs_hash({"a": 2, "b": 1})
+    assert e["inputs_hash"] == hashlib.sha256(canonical({"a": 2, "b": 1}).encode()).hexdigest()[:32]
+
+
+def test_a_new_optional_input_on_a_fn_leaves_the_steps_that_ran_alone(store, runner, tmp_path):
+    source = tmp_path / "source.txt"
+    source.write_text("one")
+    fns = store.project_dir("p") / "fns"
+    write_fn(fns, "p.cat", {"path": "string"}, {"text": "string"}, main=CAT)
+    create(store, "p", {"a": {"run": "p.cat", "in": {"path": d(str(source))}},
+                        "b": echo("a/text")})
+    settle(runner, store, "p")
+    # the fn gains an optional input no step binds: nothing it already ran turns stale
+    write_fn(fns, "p.cat", {"path": "string", "base": "string?"}, {"text": "string"}, main=CAT)
+    for _ in range(3):
+        runner.tick()
+    assert statuses(store, "p") == {"a": "succeeded", "b": "succeeded"}
+    # binding it is an edit of what the step reads, so that one does
+    store.update_step("p", "a", {"in": {"path": d(str(source)), "base": d("x")}}, "test", "bind")
+    for _ in range(3):
+        runner.tick()
+    assert statuses(store, "p")["a"] == "stale"
 
 
 def test_only_failed_stale_or_manual_steps_can_be_retried(store, runner):
