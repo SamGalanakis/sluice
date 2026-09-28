@@ -981,7 +981,9 @@ def test_a_failure_blocks_the_steps_downstream_and_the_page_says_so(store):
     assert summary.index('class="stuck"') < summary.index('class="sumline"')
     assert ('Stopped: <a href="/projects/v/steps/lint" data-step="lint">lint</a> failed, '
             "blocking 2 steps · 2 paused") in summary
-    # blocked cards say so, not in red; a paused one keeps its own look
+    # blocked cards say so, not in red; a paused one keeps its own look (the board shows
+    # them once it shows every step: they can't run)
+    page = views.project_page(store, "v", ver="x", view=views.BoardView(steps="all"))
     fix = card(page, "fix")
     assert 'class="node card is-pending is-blocked"' in fix and ">blocked</span>" in fix
     assert "is-blocked" not in card(page, "notes") and "is-paused" in card(page, "notes")
@@ -1305,9 +1307,142 @@ def test_the_board_view_reads_and_writes_its_query():
         views.BoardView(show="done", tag="x")
     assert views.BoardView.from_signals({"board": "show=bogus"}) == views.BoardView()
     assert views.BoardView.from_signals({}) == views.BoardView()
-    for bad in ({"order": ["sideways"]}, {"show": ["some"]}):
+    for bad in ({"order": ["sideways"]}, {"show": ["some"]}, {"steps": ["few"]}):
         try:
             views.BoardView.parse(bad)
         except views.BadRequest:
             continue
         raise AssertionError(bad)
+    # the steps shown: those that can run by default, `steps=all` for every one
+    assert views.BoardView.parse({"steps": ["all"], "show": ["done"]}).query() == \
+        "show=done&steps=all"
+    assert views.BoardView.parse({"steps": ["runnable"]}).query() == ""
+    assert views.BoardView.from_signals({"board": "steps=all"}) == views.BoardView(steps="all")
+
+
+# ---- the steps that can't run ----------------------------------------------------------------
+
+
+def unreachable_project(store):
+    """Five pieces of work. `f` failed: `f1` and `f2` wait behind it, and `fp`, paused, waits
+    behind `f1` with `fp1` after it. `p` is paused (in the plan) with `p1`, stale, reading
+    it. `w` reads the plan input `n`, which has no value, and `w1` runs after it. `s` was
+    skipped. `ok` succeeded and `r` reads it, ready to run."""
+    one = {"run": "test.add", "in": {"a": d(1), "b": d(1)}}
+
+    def reads(sid):
+        return {"run": "test.add", "in": {"a": src(f"{sid}/sum"), "b": d(1)}}
+
+    create(store, "v", {
+        "f": one, "f1": reads("f"), "f2": reads("f1"), "fp": {**reads("f1"), "paused": True},
+        "fp1": {**one, "after": ["fp"]},
+        "p": {**one, "paused": "not yet"}, "p1": reads("p"),
+        "w": {"run": "test.add", "in": {"a": src("n"), "b": d(1)}},
+        "w1": {**one, "after": ["w"]},
+        "s": one, "ok": one, "r": reads("ok")}, inputs={"n": "int"})
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "f": {"status": "failed", "error": "boom"},
+            "p1": {"status": "stale", "outputs": {"sum": 1}},
+            "s": {"status": "skipped", "skipped": "go is false"},
+            "ok": {"status": "succeeded", "outputs": {"sum": 2}}}})
+
+
+def test_a_step_cant_run_behind_a_failure_a_pause_or_a_missing_input(store):
+    unreachable_project(store)
+    board = views.load_board(store, "v")
+    hidden = board.unreachable
+    # each cause holds up what is behind it, transitively through handoffs and `after`; a
+    # stale step counts as not run; every skipped step is in
+    assert hidden == {"f1", "f2", "fp", "fp1", "p1", "w1", "s"}
+    # the frontier stays: what a person acts on (the failed, the paused, the step waiting on
+    # an input), and what can run (ready or done)
+    assert {"f", "p", "w", "ok", "r"}.isdisjoint(hidden)
+    assert [sid for sid in board.blocks if board.halts(sid)] == ["f", "fp", "p", "w"]
+    # a paused step behind a failure is not the frontier: the failure comes first
+    assert "fp" in hidden
+    # closed downstream: no step left on the board waits on a hidden one
+    for sid, b in board.blocks.items():
+        if sid not in hidden:
+            assert not set(b.waits) & hidden, sid
+    # a project's pause does not count
+    store.update_project("v", paused=True)
+    assert views.load_board(store, "v").unreachable == hidden
+    # a healthy board hides nothing: a failure or a missing input with nothing behind it
+    create(store, "fine", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                           "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
+    assert views.load_board(store, "fine").unreachable == frozenset()
+    create(store, "lone", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                           "b": {"run": "test.add", "in": {"a": src("n"), "b": d(1)}}},
+           inputs={"n": "int"})
+    with store.lock("lone"):
+        store.write_state("lone", {"inputs": {}, "steps": {"a": {"status": "failed"}}})
+    assert views.load_board(store, "lone").unreachable == frozenset()
+
+
+def test_the_board_hides_the_steps_that_cant_run_and_says_so(store):
+    unreachable_project(store)
+    board = views.load_board(store, "v")
+
+    def show(**kw):
+        html_ = views.board_html(store, board, True, views.BoardView(**kw))
+        note = re.search(r'<p class="hidden-note">(.*?)</p>', html_)
+        cards = re.findall(r' id="n-([^"]+)" data-node=', html_)
+        return set(cards), note and html.unescape(re.sub(r"<[^>]+>", "", note[1])), html_
+
+    cards, note, page = show()
+    assert cards == {"f", "p", "w", "ok", "r"}
+    assert note == "7 steps that can't run hidden · show"
+    assert '<a href="/projects/v?steps=all">show</a>' in page
+    # a box left with no step goes, like a filtered one (its step is counted above)
+    assert box_ids(page) == ["f", "w", "p", "ok"] and 'id="box-s"' not in page
+    # nothing dangles: every edge joins two cards on the board
+    assert set(board_edges(page)) == {("s:ok", "s:r")}
+    # the frontier says what waits behind it, quietly in its small line
+    assert "+4 behind" in card(page, "f") and "+1 behind" in card(page, "p")
+    assert "+1 behind" in card(page, "w")
+    assert "behind" not in card(page, "ok") and "behind" not in card(page, "r")
+    # the control: which steps show, after which boxes and before the order
+    tools = page[page.index('<form class="board-tools"'):page.index("</form>")]
+    assert ('<fieldset class="seg"><legend class="vh">Steps</legend><label><input '
+            'type="radio" name="steps" value="runnable" checked>Runnable</label><label><input '
+            'type="radio" name="steps" value="all">All steps</label></fieldset>') in tools
+    assert tools.index('name="show"') < tools.index('name="steps"') < tools.index('name="order"')
+    # the box counts leave out the box the steps filter empties
+    assert 'value="done">Done<span class="n">0</span>' in tools
+    # every step, laid out as before: the cards, edges and no cue
+    cards, note, page = show(steps="all")
+    assert cards == set(board.blocks) and note is None
+    assert 'name="steps" value="all" checked' in page and "behind" not in page
+    assert ("s:f", "s:f1") in board_edges(page) and box_ids(page)[-1] == "s"
+    # with a box filter too, one line says both, its link showing everything
+    cards, note, page = show(show="active")
+    assert note == "1 done box and 6 steps that can't run hidden · show"
+    assert '<a href="/projects/v?steps=all">show</a>' in page
+    cards, note, page = show(show="active", order="plan")
+    assert '<a href="/projects/v?order=plan&amp;steps=all">show</a>' in page
+    # the standalone page shows every step (it has no toolbar to show them with)
+    assert 'id="n-f1"' in views.render(store, "v", "html")
+
+
+def test_a_board_of_one_box_offers_only_the_steps_filter(store):
+    create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
+                        "c": {"run": "test.add", "in": {"a": src("b/sum"), "b": d(1)}}})
+    with store.lock("w"):
+        store.write_state("w", {"inputs": {}, "steps": {"a": {"status": "failed",
+                                                              "error": "boom"}}})
+    page = views.project_page(store, "w", ver="x", view=views.BoardView(show="done"))
+    start = page.index('<form class="board-tools"')
+    tools = page[start:page.index("</form>", start)]
+    assert 'name="steps"' in tools and 'name="show"' not in tools and 'name="order"' not in tools
+    assert "2 steps that can't run hidden" in tools
+    assert 'id="n-a"' in page and 'id="n-b"' not in page and "+2 behind" in card(page, "a")
+    # the stuck sentence and the bar count every step still
+    assert "blocking 2 steps" in page and 'aria-label="1 failed, 2 blocked"' in page
+    # a board where every step is hidden says so
+    create(store, "x", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    with store.lock("x"):
+        store.write_state("x", {"inputs": {}, "steps": {"a": {"status": "skipped",
+                                                              "skipped": "no"}}})
+    assert '<p class="empty">No step can run.</p>' in views.project_page(store, "x", ver="x")

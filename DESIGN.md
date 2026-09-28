@@ -357,7 +357,10 @@ per tab, a reload). No edge crosses between boxes, so a folded one hides only it
 With several boxes a toolbar (below) orders them live first by default (what needs
 attention, then what runs, what is ready, what is held, what is done; the plan's order within
 each) or in the plan's order, and filters them; the cards inside a box keep the plan's
-layout. The head of a
+layout. By default the board leaves out the steps that can't run (behind a failure, a paused
+step or a plan input with no value, and every skipped step): the step a person acts on stays,
+with "+12 behind" in its small muted line, and the box lays out again without the rest, so a
+long chain waiting on one failure reads as that failure. The head of a
 project page says first whether the work moves (progress bar, counts, Pause and Archive), then
 what the project is (its description, folded to its opening); what the plan took and produced
 follows the board. When the runner is down (its heartbeat stale), the index and that
@@ -483,15 +486,18 @@ phone), its segments 2px apart: green, blue, gold, ink, then the track.
   project's last one or two, at 390px).
 - **Status filter** (inbox): a small segmented control, the current status in the secondary
   fill with a strong hairline; a filter, so it does not look like the sections.
-- **Board toolbar** (a project page with several boxes, 12px above the board): one line of
-  small quiet controls in 13px, what shows first: a segmented control of All · Active ·
-  Attention · Done, each but All with its box count in 12px muted numerals; "Tag" in muted
-  500 before a select (only when the plan tags steps; "any" by default); a segmented control
-  of Live first · Plan order. Segments as the status filter's (radios, the current one in
-  the secondary fill with a strong hairline, the one ring around a focused segment), 30px
-  tall. When a filter hides boxes, "9 done boxes hidden · show" in muted meta ends the line,
-  its link back to all. A GET form: its Apply button is in a `<noscript>`. On a phone, two
-  lines: the show control across the width, then the tag and the order, every target 44px.
+- **Board toolbar** (a project page with several boxes, or with steps that can't run; 12px
+  above the board): one line of small quiet controls in 13px, what shows first: a segmented
+  control of All · Active · Attention · Done, each but All with its box count in 12px muted
+  numerals; a segmented control of Runnable · All steps (only when some step can't run; the
+  one control on a board of one box); "Tag" in muted 500 before a select (only when the plan
+  tags steps; "any" by default); a segmented control of Live first · Plan order. Segments as
+  the status filter's (radios, the current one in the secondary fill with a strong hairline,
+  the one ring around a focused segment), 30px tall. When a filter hides boxes or steps, "9
+  done boxes hidden · show" or "14 steps that can't run hidden · show" (one sentence when
+  both) in muted meta ends the line, its link showing them. A GET form: its Apply button is
+  in a `<noscript>`. On a phone the show control takes the width, then the steps, the tag
+  and the order wrap under it, every target 44px.
 
 ### Threads
 The Threads tab, one bordered card per thread, the latest first: the step's glyph, id and

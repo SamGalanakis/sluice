@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 
 from sluice import util, views
-from tests.conftest import create, d, message
+from tests.conftest import create, d, message, src
 
 
 def get(port, path, host=None):
@@ -474,6 +474,36 @@ def test_the_boards_order_and_filters_round_trip_through_the_page_and_its_stream
                           action=later(finish)))
     graph = next(p for p in sent if p.startswith('elements <div id="graph"'))
     assert boxes(graph) == ["c"] and "2 done boxes hidden" in graph
+
+
+def test_the_steps_that_cant_run_round_trip_through_the_page_and_its_stream(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}},
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(2)}},
+                        "c": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    with store.lock("p"):
+        store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "failed",
+                                                              "error": "boom"}}})
+    # by default the board hides b, which can't run behind a's failure
+    page = get(port, "/projects/p")[1]
+    assert 'id="n-a"' in page and 'id="n-b"' not in page and signals_of(page)["board"] == ""
+    assert "1 step that can't run hidden" in page
+    assert '<a href="/projects/p?steps=all">show</a>' in page
+    page = get(port, "/projects/p?steps=all")[1]
+    assert 'id="n-b"' in page and signals_of(page)["board"] == "steps=all"
+    assert 'name="steps" value="all" checked' in page
+    # the form sends the default too: the address becomes the clean query
+    code, headers, _ = send(port, "GET", "/projects/p?order=live&show=all&tag=&steps=runnable")
+    assert code == 303 and headers["location"] == "/projects/p"
+    code, headers, _ = send(port, "GET", "/projects/p?steps=all&show=all")
+    assert code == 303 and headers["location"] == "/projects/p?steps=all"
+    assert get(port, "/projects/p?steps=some")[0] == 400
+    # the stream renders the board with the page's choice of steps (a client behind the
+    # current version gets every part at once)
+    for board, shown in (("steps=all", True), ("", False)):
+        sent = patches(stream(port, "/projects/p/stream", {"ver": "old", "board": board},
+                              seconds=0.8))
+        graph = next(p for p in sent if p.startswith('elements <div id="graph"'))
+        assert ('id="n-b"' in graph) is shown and 'id="n-c"' in graph
 
 
 def test_the_threads_tab_streams_its_conversations(store, port):

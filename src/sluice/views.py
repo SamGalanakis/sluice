@@ -689,6 +689,34 @@ class Board:
     def failed(self) -> list[str]:
         return [sid for sid, b in self.blocks.items() if b.status == "failed"]
 
+    def halts(self, sid: str) -> bool:
+        """Whether a person must act on this step itself before the steps behind it can run:
+        it failed, or it has not run and is paused (in the plan; a project's pause does not
+        count) or pending on a plan input with no value."""
+        b = self.blocks[sid]
+        return b.status == "failed" or b.status in ("pending", "stale") and (
+            b.paused or b.status == "pending" and bool(_missing_inputs(self, b)))
+
+    @functools.cached_property
+    def unreachable(self) -> frozenset[str]:
+        """The steps that can't run given the board as it stands: every skipped step (it never
+        runs), and each step that has not run (pending or stale) with a step upstream of it,
+        through handoffs and `after`, that `halts` or is unreachable itself. What halts is
+        the frontier a person acts on, so it stays unless something above it halts too; and
+        a step behind an unreachable one is unreachable, so none left waits on one of them."""
+        memo: dict[str, bool] = {}
+
+        def held(sid: str) -> bool:
+            if sid not in memo:
+                memo[sid] = False  # (the plan is acyclic; this only guards the recursion)
+                memo[sid] = self.blocks[sid].status in ("pending", "stale") and any(
+                    self.halts(d) or held(d) for d in self.blocks[sid].waits
+                    if d in self.blocks)
+            return memo[sid]
+
+        return frozenset(sid for sid, b in self.blocks.items()
+                         if b.status == "skipped" or held(sid))
+
 
 def load_board(store: Store, project: str) -> Board:
     info = store.project(project)
@@ -1102,13 +1130,14 @@ ROOM = 960 - 36  # px a row of a box has: the column, less the box's padding
 CARD_GAP, LANE_GAP = 14, 36  # px between cards in a row, and before the next lane's first
 
 
-def _card_width(board: Board, b: Block, quiet: bool = False) -> float:
+def _card_width(board: Board, b: Block, quiet: bool = False, behind: int = 0) -> float:
     """About how wide a step's card is drawn (px): its id in 14.5px Archivo, in 12px what it
-    says small (blocked, runs done, its time), and a `quiet 42m` badge."""
+    says small (blocked, runs done, its time, the steps hidden behind it), and a `quiet 42m`
+    badge."""
     small = " · ".join(t for t in (
         "blocked" if board.blocked(b.sid) else "",
         f"{b.entry.get('done') or 0}/{b.entry['total']}" if "total" in b.entry else "",
-        re.sub(r"<[^>]+>", "", _elapsed(b))) if t)
+        re.sub(r"<[^>]+>", "", _elapsed(b)), f"+{behind} behind" if behind else "") if t)
     return (50 + 7.7 * len(b.sid) + (8 + 6.7 * len(small) if small else 0)
             + (84 if quiet else 0))
 
@@ -1126,7 +1155,8 @@ def _ups(board: Board, groups: list[dict[int, list[str]]],
 
 def _shifts(board: Board, groups: list[dict[int, list[str]]], box: list[int],
             depth: dict[str, int], room: float = ROOM,
-            quiet: frozenset[str] = frozenset()) -> dict[int, int]:
+            quiet: frozenset[str] = frozenset(),
+            behind: Mapping[str, int] | None = None) -> dict[int, int]:
     """How many rows each lane of a box moves down, so that each lane's cards stay together:
     a lane that would crowd a row it shares past the box's width (`room`) starts below the
     lanes placed before it instead of wrapping in among their rows. Lanes are placed in the
@@ -1141,7 +1171,8 @@ def _shifts(board: Board, groups: list[dict[int, list[str]]], box: list[int],
 
     used: dict[int, float] = {}  # each row's width so far
     for i in box:
-        wide = {d: sum(_card_width(board, board.blocks[sid], sid in quiet) for sid in r)
+        wide = {d: sum(_card_width(board, board.blocks[sid], sid in quiet,
+                                   (behind or {}).get(sid, 0)) for sid in r)
                 + CARD_GAP * (len(r) - 1) for d, r in groups[i].items()}
         k, clear = max(least(i), 0), max(used, default=-1) + 1 - min(wide)
         while k < clear and any(used.get(d + k, -LANE_GAP) + LANE_GAP + w > room
@@ -1248,14 +1279,15 @@ def _waits_text(waits: list[tuple[str, str]]) -> str:
 
 
 def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = False,
-          order: int | None = None, lane_top: bool = False) -> str:
+          order: int | None = None, lane_top: bool = False, behind: int = 0) -> str:
     """A step on the board: a compact bubble with its status glyph, its id and, small, how long
     it ran (and `done of total` for a scattered step), then a `quiet 42m` badge once a running
     step has gone quiet. Everything else is one click away in the
     drawer; the doc and what it says now (progress, error, what it waits on) are its accessible
     description (no hover tooltip).
     A pending step next in line (`is-next`) reads at full strength; one a failed step holds up
-    (`is-blocked`) says "blocked". Its accessible name reads "failed, a, 1h 14m"."""
+    (`is-blocked`) says "blocked". When the board hides the steps that can't run, a step they
+    wait behind says how many (`+12 behind`). Its accessible name reads "failed, a, 1h 14m"."""
     tag = "a" if live else "div"
     href = f' href="{e(step_href(board.project, b.sid))}" data-step="{e(b.sid)}"' if live else ""
     kind, text = block_line(store, board, b)
@@ -1277,6 +1309,8 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
         small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
     if _elapsed(b):
         small.append(_elapsed(b))
+    if behind:
+        small.append(f"+{behind} behind")
     inner = " · ".join(small)
     tail = (f'<span class="dur">{inner}</span>' if inner else "") \
         + quiet_badge(store, board.project, b)
@@ -1295,23 +1329,26 @@ LEGEND_AFTER = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20"
 
 ORDERS = {"live": "Live first", "plan": "Plan order"}  # the first is the default
 SHOWS = {"all": "All", "active": "Active", "attention": "Attention", "done": "Done"}
+STEPS = {"runnable": "Runnable", "all": "All steps"}  # the first hides what can't run
 RANKS = ("attention", "running", "ready", "held", "done")  # most urgent first
 
 
 @dataclasses.dataclass(frozen=True)
 class BoardView:
-    """How the board orders and filters its boxes, from the page's query (`?order=plan`,
-    `?show=active|attention|done`, `?tag=<tag>`; the defaults, live first, all and any tag,
-    leave it clean) and, on its stream, the `board` signal holding that query."""
+    """How the board orders and filters its boxes and steps, from the page's query
+    (`?order=plan`, `?show=active|attention|done`, `?tag=<tag>`, `?steps=all`; the defaults,
+    live first, all, any tag and the steps that can run, leave it clean) and, on its stream,
+    the `board` signal holding that query."""
 
     order: str = "live"
     show: str = "all"
     tag: str = ""
+    steps: str = "runnable"
 
     @classmethod
     def parse(cls, params: Mapping[str, list[Any]]) -> BoardView:
         """From query parameters (the last of each counts; empty is the default); raises
-        BadRequest for an order or show it does not know."""
+        BadRequest for an order, show or steps it does not know."""
         def last(name: str, default: str) -> str:
             values = params.get(name) or []
             return str(values[-1]).strip() if values and str(values[-1]).strip() else default
@@ -1320,7 +1357,10 @@ class BoardView:
             raise BadRequest(f"order: expected one of {', '.join(ORDERS)}, got {order!r}")
         if show not in SHOWS:
             raise BadRequest(f"show: expected one of {', '.join(SHOWS)}, got {show!r}")
-        return cls(order, show, last("tag", ""))
+        steps = last("steps", "runnable")
+        if steps not in STEPS:
+            raise BadRequest(f"steps: expected one of {', '.join(STEPS)}, got {steps!r}")
+        return cls(order, show, last("tag", ""), steps)
 
     @classmethod
     def from_signals(cls, signals: Mapping[str, Any]) -> BoardView:
@@ -1335,9 +1375,9 @@ class BoardView:
     def query(self, **change: Any) -> str:
         """The canonical query string (defaults left out), with `change`d fields."""
         v = dataclasses.replace(self, **change)
-        return urlencode([(k, x) for k, x, default in (("order", v.order, "live"),
-                                                       ("show", v.show, "all"),
-                                                       ("tag", v.tag, "")) if x != default])
+        fields = (("order", v.order, "live"), ("show", v.show, "all"), ("tag", v.tag, ""),
+                  ("steps", v.steps, "runnable"))
+        return urlencode([(k, x) for k, x, default in fields if x != default])
 
 
 DEFAULT_VIEW = BoardView()
@@ -1378,14 +1418,16 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 'es' if word.endswith('x') else 's'}"
 
 
-def board_tools(board: Board, view: BoardView, ranks: list[int], tagged: list[bool],
-                hidden: int) -> str:
-    """The board's toolbar: which boxes show (all, active, attention, done, each with how
-    many of the boxes the tag lets through), a tag when the plan tags steps, and the order
-    (live first, the plan's). A GET form to the page: without JavaScript its Apply button
-    sends it (the server takes the address back to the clean query); with it, a choice
-    applies at once (static/sluice.js). Then, when a filter hides boxes, one quiet line
-    saying how many, with a link that shows them."""
+def board_tools(board: Board, view: BoardView, ranks: list[int], kept: list[bool],
+                hidden: int, hidden_steps: int, several: bool) -> str:
+    """The board's toolbar: with `several` boxes, which boxes show (all, active, attention,
+    done, each with how many of the boxes `kept` by the tag and the steps shown), a tag when
+    the plan tags steps, and the order (live first, the plan's); and, when some step can't
+    run, which steps show (those that can run, or all). A GET form to the page: without
+    JavaScript its Apply button sends it (the server takes the address back to the clean
+    query); with it, a choice applies at once (static/sluice.js). Then, when a filter hides
+    boxes (`hidden`) or steps (`hidden_steps`), one quiet line saying how many, with a link
+    that shows them."""
     base = f"/projects/{quote(board.project)}"
 
     def seg(name: str, options: dict[str, str], chosen: str, counts: dict[str, int]) -> str:
@@ -1396,30 +1438,64 @@ def board_tools(board: Board, view: BoardView, ranks: list[int], tagged: list[bo
             for k, text in options.items())
         return f'<fieldset class="seg"><legend class="vh">{name.capitalize()}</legend>{opts}</fieldset>'
 
-    let = [r for r, t in zip(ranks, tagged, strict=True) if t]
-    counts = {k: sum(_shows(k, r) for r in let) for k in SHOWS if k != "all"}
-    tags = list(dict.fromkeys(t for b in board.blocks.values() for t in b.tags))
-    if view.tag and view.tag not in tags:
-        tags.append(view.tag)  # a tag the plan no longer uses still reads as chosen
-    select = ""
-    if tags:
-        options = "".join(f'<option value="{e(t)}"{" selected" if t == view.tag else ""}>'
-                          f"{e(t)}</option>" for t in tags)
-        select = (f'<label class="tag-pick">Tag <select name="tag">'
-                  f'<option value="">any</option>{options}</select></label>')
-    note = ""
+    steps = seg("steps", STEPS, view.steps, {}) \
+        if board.unreachable or view.steps != DEFAULT_VIEW.steps else ""
+    show = select = order = ""
+    if several:
+        let = [r for r, k in zip(ranks, kept, strict=True) if k]
+        show = seg("show", SHOWS, view.show, {k: sum(_shows(k, r) for r in let)
+                                              for k in SHOWS if k != "all"})
+        order = seg("order", ORDERS, view.order, {})
+        tags = list(dict.fromkeys(t for b in board.blocks.values() for t in b.tags))
+        if view.tag and view.tag not in tags:
+            tags.append(view.tag)  # a tag the plan no longer uses still reads as chosen
+        if tags:
+            options = "".join(f'<option value="{e(t)}"{" selected" if t == view.tag else ""}>'
+                              f"{e(t)}</option>" for t in tags)
+            select = (f'<label class="tag-pick">Tag <select name="tag">'
+                      f'<option value="">any</option>{options}</select></label>')
+    note, said = "", []
     if hidden:
         what = {"active": "done ", "done": "unfinished ", "attention": "other "}
-        text = (_plural(hidden, what[view.show] + "box") if not view.tag
-                else f"{_plural(hidden, 'box')} not tagged {e(view.tag)}"
-                if view.show == "all" else _plural(hidden, "box"))
-        href = base + (f"?{q}" if (q := view.query(show="all", tag="")) else "")
-        note = (f'<p class="hidden-note">{text} hidden · '
+        said.append(_plural(hidden, what[view.show] + "box") if not view.tag
+                    else f"{_plural(hidden, 'box')} not tagged {e(view.tag)}"
+                    if view.show == "all" else _plural(hidden, "box"))
+    if hidden_steps:
+        said.append(f"{_plural(hidden_steps, 'step')} that can't run")
+    if said:
+        q = view.query(**({"show": "all", "tag": ""} if hidden else {}),
+                       **({"steps": "all"} if hidden_steps else {}))
+        href = base + (f"?{q}" if q else "")
+        note = (f'<p class="hidden-note">{" and ".join(said)} hidden · '
                 f'<a href="{e(href)}">show</a></p>')
     return (f'<form class="board-tools" method="get" action="{e(base)}" '
-            f'aria-label="Order and filter the plan">'
-            f'{seg("show", SHOWS, view.show, counts)}{select}{seg("order", ORDERS, view.order, {})}'
+            f'aria-label="Order and filter the plan">{show}{steps}{select}{order}'
             f'<noscript><button type="submit">Apply</button></noscript>{note}</form>')
+
+
+def _behind(board: Board, hidden: frozenset[str]) -> dict[str, int]:
+    """How many hidden steps wait behind each step on the board that `halts`: those
+    downstream of it through hidden steps (a skipped one is hidden for itself, and nothing
+    waits behind it)."""
+    down: dict[str, list[str]] = {sid: [] for sid in board.blocks}
+    for sid, b in board.blocks.items():
+        for d in b.waits:
+            if d in down:
+                down[d].append(sid)
+    out = {}
+    for sid in board.blocks:
+        if sid in hidden or not board.halts(sid):
+            continue
+        seen: set[str] = set()
+        todo = list(down[sid])
+        while todo:
+            n = todo.pop()
+            if n in hidden and n not in seen and board.blocks[n].status != "skipped":
+                seen.add(n)
+                todo += down[n]
+        if seen:
+            out[sid] = len(seen)
+    return out
 
 
 def board_html(store: Store, board: Board, live: bool = True,
@@ -1433,33 +1509,53 @@ def board_html(store: Store, board: Board, live: bool = True,
     without JavaScript); the <sluice-board> component (static/sluice.js) draws the edges
     between them from its `edges` attribute, around the cards they would cross.
     With several boxes, `view` orders them (live first: by `rank`, the plan's order within
-    one; or the plan's order) and filters them (by rank and by tag), and the live page leads
-    with the toolbar that chooses it (`board_tools`). Each box's id is its first step's, so a
-    live update that moves a box moves it whole, open or not."""
+    one; or the plan's order) and filters them (by rank and by tag). The live board also
+    hides the steps that can't run (`Board.unreachable`) unless `view` shows all steps: the
+    boxes keep the plan's pieces of work, their cards laid out again without them, and a box
+    left with none goes. The live page leads with the toolbar that chooses all this
+    (`board_tools`). Each box's id is its first step's, so a live update that moves a box
+    moves it whole, open or not."""
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
     groups, depth = lanes(board)
-    boxes = _boxes(board, groups)
+    boxes, rows_of = _boxes(board, groups), depth
+    several = len(boxes) > 1
+    members = [{sid for i in box for r in groups[i].values() for sid in r} for box in boxes]
+    hide = board.unreachable if live and view.steps == "runnable" else frozenset()
+    seen, behind = board, {}
+    if hide:  # lay out what is left, in the same boxes
+        seen = dataclasses.replace(board, blocks={sid: b for sid, b in board.blocks.items()
+                                                  if sid not in hide})
+        behind = _behind(board, hide)
+        groups, depth = lanes(seen)
+        box_of = {sid: n for n, ids in enumerate(members) for sid in ids}
+        boxes = [[i for i, rows in enumerate(groups)
+                  if box_of[next(iter(rows.values()))[0]] == n] for n in range(len(members))]
     quiet = frozenset(sid for sid, b in board.blocks.items()
                       if _is_quiet(store, board.project, b))
     asking = frozenset(str(i.get("from")) for i in store.inbox(board.project))
     order = {sid: n for n, sid in enumerate(board.blocks)}
     shown: list[tuple[int, int, str, list[str]]] = []  # (rank, plan place, html, ids)
-    ranks, tagged = [], []
-    for place, box in enumerate(boxes):
-        shift = _shifts(board, groups, box, depth, ROOM if len(boxes) > 1 else ROOM + 36,
-                        quiet)
+    ranks, kept = [], []
+    hidden = hidden_steps = 0
+    for place, (box, whole) in enumerate(zip(boxes, members, strict=True)):
+        r = rank(board, whole, quiet, asking)
+        tag = not view.tag or any(view.tag in board.blocks[sid].tags for sid in whole)
+        ranks.append(r)
+        kept.append(tag and bool(box))
+        if several and not (tag and _shows(view.show, r)):
+            hidden += 1
+            continue
+        hidden_steps += len(whole & hide)
+        if not box:
+            continue
+        shift = _shifts(seen, groups, box, depth, ROOM if several else ROOM + 36, quiet,
+                        behind)
         at = sorted({d + shift[i] for i in box for d in groups[i]})  # the box's rows
-        seats = _seats(board, groups, box, shift, at)
+        seats = _seats(seen, groups, box, shift, at)
         top = at[0]
         ids = [sid for v in at for i in seats[v] for sid in groups[i][v - shift[i]]]
-        r = rank(board, ids, quiet, asking)
-        tag = not view.tag or any(view.tag in board.blocks[sid].tags for sid in ids)
-        ranks.append(r)
-        tagged.append(tag)
-        if len(boxes) > 1 and not (tag and _shows(view.show, r)):
-            continue
         rows = []
         for v in at:
             cards = []
@@ -1468,29 +1564,33 @@ def board_html(store: Store, board: Board, live: bool = True,
                 for k, sid in enumerate(groups[i].get(d, [])):
                     # the first card of the next lane in this row marks where it begins; on a
                     # phone the box stacks its lanes one after another (`--o`: lane, then row)
-                    cards.append(_card(store, board, board.blocks[sid], live,
+                    cards.append(_card(store, seen, seen.blocks[sid], live,
                                        lane_start=k == 0 and bool(cards),
                                        order=n * 1000 + v - top if len(box) > 1 else None,
-                                       lane_top=n > 0 and k == 0 and d == min(groups[i])))
+                                       lane_top=n > 0 and k == 0 and d == min(groups[i]),
+                                       behind=behind.get(sid, 0)))
             rows.append(f'<li class="row" style="--r:{v - top + 1}">{"".join(cards)}</li>')
         inner = (f'<ol class="rows" style="--rows:{at[-1] - top + 1}">'
                  f'{"".join(rows)}</ol>')
-        bid = f' id="box-{e(min(ids, key=order.__getitem__))}"'
-        if len(boxes) > 1 and len(ids) > 1 and _done(board, ids):
-            item = f'<li class="box done"{bid}>{_folded(board, ids, inner)}</li>'
+        bid = f' id="box-{e(min(whole, key=order.__getitem__))}"'
+        # a finished box folds to a line about all of its work, the skipped steps it hides too
+        work = ids if len(ids) == len(whole) else \
+            sorted(whole, key=lambda sid: (rows_of[sid], order[sid]))
+        if several and len(work) > 1 and _done(board, work):
+            item = f'<li class="box done"{bid}>{_folded(board, work, inner)}</li>'
         else:
             item = f'<li class="box"{bid}>{inner}</li>'
         shown.append((r, place, item, ids))
     tools = empty = ""
-    if len(boxes) > 1:
-        if view.order == "live":
-            shown.sort(key=lambda x: x[:2])
-        tools = board_tools(board, view, ranks, tagged, len(boxes) - len(shown)) if live \
-            else ""
-        if not shown:
-            empty = {"attention": "Nothing needs attention.", "active": "Every box has finished.",
-                     "done": "No box has finished yet."}.get(view.show, "")
-            empty = f'<p class="empty">{empty or "No box matches."}</p>'
+    if several and view.order == "live":
+        shown.sort(key=lambda x: x[:2])
+    if live and (several or board.unreachable or view.steps != DEFAULT_VIEW.steps):
+        tools = board_tools(board, view, ranks, kept, hidden, hidden_steps, several)
+    if not shown:
+        empty = "No step can run." if hidden_steps and not hidden else \
+            {"attention": "Nothing needs attention.", "active": "Every box has finished.",
+             "done": "No box has finished yet."}.get(view.show, "No box matches.")
+        empty = f'<p class="empty">{empty}</p>'
     visible = {sid for x in shown for sid in x[3]}
     es = [(a, b, label) for a, b, label in edges(board) if a in visible and b in visible]
     data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in es], ensure_ascii=False)

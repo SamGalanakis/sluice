@@ -599,7 +599,7 @@ raw HTML escaped, unsafe link schemes refused).
   its own edges. With several boxes, a toolbar above the board orders and filters them, a
   plain GET form whose choices live in the query, so a reload, Back and a shared link keep
   them (the defaults leave the address clean; any other spelling of a choice is sent on, 303,
-  to its clean query; an unknown `order` or `show` is a 400). The order (`order`) is live
+  to its clean query; an unknown `order`, `show` or `steps` is a 400). The order (`order`) is live
   first by default: each box ranks by its most urgent step, 1 attention (failed; running but
   quiet; asking in an open inbox item, whose `from` is the step; pending on a plan input
   with no value), 2 running, 3 ready (pending or paused), 4 held (blocked by a failure, or
@@ -607,13 +607,30 @@ raw HTML escaped, unsafe link schemes refused).
   when its rank changes; `?order=plan` is the plan's order. `?show=` filters by rank:
   `active` (not done), `attention` or `done` (default all); `?tag=<tag>` (a select, shown
   when the plan tags steps) keeps the boxes with any step so tagged. Each choice of what
-  shows counts the boxes it would show within the tag. Boxes a filter hides are said in one
-  quiet line at the toolbar's end ("9 done boxes hidden · show", its link back to all), and
-  their edges go with them; with none left, the board says so. Without JavaScript the form
+  shows counts the boxes it would show within the tag and the steps shown. **What can't run**
+  is hidden by default (`?steps=all` shows every step; a segmented Runnable · All steps,
+  shown when some step can't run): every skipped step (it never runs), and each step that has
+  not run (pending or stale) with a step upstream of it, through handoffs and `after`, that
+  failed, that has not run and is paused (in the plan; a project's pause does not count), that
+  is pending on a plan input with no value, or that can't run itself. The failed, paused or
+  waiting step is where a person acts, so it stays unless something above it holds it too;
+  and a step behind one that can't run can't run, so no step left waits on a hidden one. The
+  boxes stay the plan's pieces of work, their cards laid out again without the hidden ones
+  (rows, lanes, wrapping) and their edges dropped; a box left with none goes; a finished box's
+  folded line still counts all its steps. A step that hidden steps wait behind says how many
+  in its small line (`+12 behind`). The stuck sentence, the bar and the index count every
+  step. Boxes a filter hides and steps it hides are said in one quiet line at the toolbar's
+  end ("9 done boxes hidden · show", "14 steps that can't run hidden · show", "1 done box and
+  6 steps that can't run hidden · show", its link showing them); their edges go with them;
+  with none left, the board says so ("No step can run." when only steps went). Without
+  JavaScript the form
   has an Apply button; with it a choice applies at once, keeping the open step's `#step:`.
   The page's `board` signal holds the query, so its stream renders the board the same way;
   each box's id is its first step's (`box-<id>`), so a live update moves a box whole (open,
-  folded, with the drawer's ring). A board of one box has no toolbar and ignores the query.
+  folded, with the drawer's ring). A board of one box ignores `order`, `show` and `tag`; its
+  toolbar, only when some step can't run, holds the steps choice alone. A `#step:` address of
+  a hidden step still opens its drawer. The standalone page (`plan_view` html) shows every
+  step.
   Inside a lane, each row is sorted by where its
   neighbours sit, a few sweeps down and up, so
   edges seldom cross. Each step is a compact bubble: its status glyph, its id and, small, how

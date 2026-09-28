@@ -190,8 +190,10 @@ def test_the_board_shows_a_skipped_step_and_a_finished_plan(store, runner):
     store.set_input("p", "go", False, "t", "t")
     settle(runner, store, "p", until=lambda s: s["a"]["status"] == "skipped"
            and s["b"]["status"] == "succeeded")
-    page = views.project_page(store, "p", ver="x")
-    assert "is-skipped" in page and 'class="g g-skipped"' in page
+    # a skipped step never runs: the board hides it unless it shows every step
+    assert 'id="n-a"' not in views.project_page(store, "p", ver="x")
+    page = views.project_page(store, "p", ver="x", view=views.BoardView(steps="all"))
+    assert 'is-skipped" id="n-a"' in page and 'class="g g-skipped"' in page
     assert 'aria-description="Skipped: go is false"' in page
     assert "Finished." in views.index(store)
     assert "<dt>When</dt>" in views.step_detail(store, "p", "a")
