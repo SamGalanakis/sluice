@@ -1,8 +1,9 @@
 # Threads, the log and watching
 
 Every project has one log: a record for each plan edit, manual value, step status change, call
-and thread message, in order, each with a `seq`. It is history (the oldest records are dropped
-past a cap); `status` and `plan_get` are the current truth.
+and thread message, in order, each with a `seq`. Seqs increase across the whole home, so one
+log's seqs have gaps: never count on the next one being yours plus one. It is history (the
+oldest records are dropped past a cap); `status` and `plan_get` are the current truth.
 
 ## Reading the log
 - `log_read(project, since_seq?, kinds?, threads?, limit?)` → `{records, last_seq}`. Without

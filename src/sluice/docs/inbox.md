@@ -16,7 +16,7 @@ nav; the person answers there (or anyone calls `inbox_answer`), and you read the
 - `inbox_close(project, id, reason?)` withdraws an item you no longer need.
 - Only an open item can be answered or closed. A second answer, or one after a close, is
   refused (`conflict` with the item's `status`), so a stale button can never answer twice.
-- Items live in the project's `inbox.json`, not in the log, so they outlast log trimming.
+- Items live in the project's inbox, not in the log, so they outlast log trimming.
 
 ## Setting a plan input
 With `input` (a declared plan input; anything else is refused at post), the answer sets that

@@ -178,8 +178,8 @@ steps so you can pause or release them together.
 - `step_retry(project, steps=[...])`: run failed, stale or manually set steps again.
 
 Every edit, manual value and step status change is a record in the project's log:
-`plan_history(project)` shows the edits and manual values, `log_read(project)` everything
-(`docs("threads")`).
+`plan_history(project)` shows every edit (back to rev 1) and the manual values the log still
+has, `log_read(project)` everything (`docs("threads")`).
 
 ## Validation errors
 Every edit is checked: functions exist (as the project sees them), required inputs are bound,
