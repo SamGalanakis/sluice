@@ -110,14 +110,16 @@ def test_the_board_shows_each_step_as_a_bubble(store):
     a = card(page, "a")
     assert a.startswith('<a class="node card is-succeeded" id="n-a" data-node="s:a" '
                         'href="/projects/v/steps/a" data-step="a" title="Add one to n">')
-    assert '<span class="vh">succeeded</span>' in a  # the glyph's word, for assistive tech
-    assert '<span class="sid">a</span><span class="dur">12m 4s</span>' in a
+    # the glyph's word, for assistive tech, then the id and its time: "succeeded, a, 12m 4s"
+    assert '<span class="vh">succeeded, </span>' in a
+    assert ('<span class="sid">a<span class="sep">,</span></span><span class="dur">12m 4s'
+            '</span>') in a
     # just the name and, small, its time: outputs, engine and cost are in the drawer
     assert "sum" not in a and "test.add" not in a and "$" not in a
     assert "title=" not in card(page, "b").split(">", 1)[0]  # no doc, nothing to say
     assert "is-manual" in card(page, "b")
-    c = card(page, "c")  # failed: its error is the tooltip
-    assert "is-failed" in c and 'title="exit code 1…"' in c
+    c = card(page, "c")  # failed: its error's last line (the exception) is the tooltip
+    assert "is-failed" in c and 'title="traceback &lt;here&gt;"' in c
     each = card(page, "each")  # running: its progress is the tooltip, done/total beside it
     assert "is-running" in each and 'title="halfway there"' in each and "1/3" in each
     assert 'data-since="2026-01-01T10:12:05Z"' in each  # its running time stays current
@@ -216,8 +218,10 @@ def test_a_pending_step_says_what_it_waits_on_and_the_next_ones_stand_out(store)
     assert 'class="node card is-pending" id="n-c"' in page  # further off
     assert 'title="waits on b (pending)"' in card(page, "c")
     head = views.step_detail(store, "v", "b").split("</header>")[0]
-    assert ('<dt>Waits on</dt><dd><a href="/projects/v/steps/a" data-step="a">a</a> '
-            '<span class="quiet">(running)</span></dd>') in head
+    # a row of its own, each step led by its status glyph
+    assert re.search(r'<div class="wide"><dt>Waits on</dt><dd><span class="dep"><span class="g '
+                     r'g-running".*?<span class="vh">running, </span></span><a href="/projects/v/'
+                     r'steps/a" data-step="a">a</a></span></dd></div>', head)
     assert "Waits on" not in views.step_detail(store, "v", "a")
 
 
@@ -293,7 +297,8 @@ def test_a_steps_detail(store):
                  {"kind": "message", "thread": "other", "from": "x", "body": "not here"})
     html = views.step_detail(store, "v", "agent")
     head = html[:html.index("</header>")]
-    assert "<h2>agent</h2>" in head and '<p class="d-doc">Write &lt;the&gt; thing</p>' in head
+    assert '<h2 id="d-title">agent</h2>' in head
+    assert '<p class="d-doc">Write &lt;the&gt; thing</p>' in head
     facts = dict(re.findall(r"<div><dt>([^<]+)</dt><dd>(.*?)</dd></div>", head))
     assert facts["Status"] == "succeeded" and facts["Function"] == "<code>test.open</code>"
     assert facts["Duration"] == "1m 30s" and facts["Cost"] == "$0.12"  # cost as money
@@ -533,7 +538,10 @@ def test_the_project_index(store):
             "a": {"status": "running", "started": "2026-01-01T10:00:00Z"},
             "b": {"status": "failed"}, "c": {"status": "succeeded"}}})
     page = views.index(store, ver="x")
-    assert '<a href="/projects/v">v</a>' in page and '<a href="/projects/w">w</a>' in page
+    # each row leads with the project's status glyph (its word read first, then the name)
+    assert re.search(r'<a href="/projects/v"><span class="g g-running".*?<span class="vh">'
+                     r'running, </span></span><span>v</span></a>', page)
+    assert re.search(r'<a href="/projects/w"><span class="g g-pending".*?<span>w</span></a>', page)
     assert '<p class="about">the v project</p>' in page and "second" in page
     assert '<span class="bar" role="img" aria-label="1 succeeded, 1 running, 1 failed">' in page
     assert '<span class="meta">1 of 3</span>' in page
@@ -658,3 +666,179 @@ def test_the_functions_page_groups_by_scope_and_shows_collisions(store):
     assert "<b>test.add</b>" in clash and "fn test.add collides with the global fn" in clash
     plain = views.fns_page(store)
     assert "Project (" not in plain and "v.local" not in plain
+
+
+# ---- what is stuck ------------------------------------------------------------------------
+
+
+def stuck_project(store, running=False):
+    """lint failed; fix reads it and ship reads fix (both blocked); notes reads lint but is
+    paused; later is paused on its own; go runs or waits apart."""
+    create(store, "v", {
+        "lint": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "fix": {"run": "test.add", "in": {"a": src("lint/sum"), "b": d(1)}},
+        "ship": {"run": "test.add", "in": {"a": src("fix/sum"), "b": d(1)}},
+        "notes": {"run": "test.add", "in": {"a": src("lint/sum"), "b": d(1)}, "paused": True},
+        "later": {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "paused": "not yet"},
+        "go": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "lint": {"status": "failed", "error": "exit code 1\nTraceback (most recent call last):"
+                     "\n  File x\nValueError: 3 lint errors\n\n"},
+            "go": {"status": "running" if running else "succeeded",
+                   "started": "2026-01-01T10:00:00Z"}}})
+
+
+def test_a_failure_blocks_the_steps_downstream_and_the_page_says_so(store):
+    stuck_project(store)
+    board = views.load_board(store, "v")
+    assert board.held == {"fix": ["lint"], "ship": ["lint"], "notes": ["lint"]}
+    assert board.stuck == {"blocked": 2, "paused": 2}  # notes counts as paused, not blocked
+    page = views.project_page(store, "v", ver="x")
+    summary = page[page.index('<div id="summary">'):page.index('id="graph"')]
+    assert "1 of 6 succeeded · 1 failed · 2 blocked · 2 paused" in summary
+    assert 'aria-label="1 succeeded, 1 failed, 2 blocked, 2 paused"' in summary
+    # the attention line leads the page, the failed step a link that opens its drawer
+    assert summary.index('class="stuck"') < summary.index('class="sumline"')
+    assert ('Stopped: <a href="/projects/v/steps/lint" data-step="lint">lint</a> failed, '
+            "blocking 2 steps · 2 paused") in summary
+    # blocked cards say so, not in red; a paused one keeps its own look
+    fix = card(page, "fix")
+    assert 'class="node card is-pending is-blocked"' in fix and ">blocked</span>" in fix
+    assert "is-blocked" not in card(page, "notes") and "is-paused" in card(page, "notes")
+    assert "is-blocked" not in card(page, "go")
+    assert 'title="waits on lint (failed)"' in fix
+    # the tab title leads with it, and the page carries the count for the live title
+    assert "<title>1 failed · v · sluice</title>" in page
+    assert '<span hidden data-title-failed="1"></span>' in page
+    # the index row: the project's glyph, then the same line (to the step on the project page)
+    index = views.index(store, ver="x")
+    assert re.search(r'<a href="/projects/v"><span class="g g-failed"', index)
+    assert ('<p class="stuck"><span>Stopped: <a href="/projects/v#step:lint">lint</a> failed, '
+            "blocking 2 steps · 2 paused</span></p>") in index
+    assert "nothing is running" not in index
+    assert "<title>1 failed · Projects · sluice</title>" in index
+
+
+def test_while_something_runs_the_attention_line_does_not_say_stopped(store):
+    stuck_project(store, running=True)
+    page = views.project_page(store, "v", ver="x")
+    assert "lint</a> failed, blocking 2 steps" in page and "Stopped:" not in page
+    create(store, "fine", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    fine = views.project_page(store, "fine", ver="x")
+    assert 'class="stuck"' not in fine and "<title>fine · sluice</title>" in fine
+
+
+def test_a_failed_steps_drawer_leads_with_its_exception_and_what_it_blocks(store):
+    stuck_project(store)
+    html_ = views.step_detail(store, "v", "lint")
+    head = html_[:html_.index("</header>")]
+    # Blocks: every step it holds up, paused ones too, each a link led by its glyph
+    blocks = re.search(r'<div class="wide"><dt>Blocks</dt><dd>(.*?)</dd></div>', head)[1]
+    assert re.findall(r'data-step="([^"]+)"', blocks) == ["fix", "ship", "notes"]
+    assert 'class="g g-paused"' in blocks
+    # the error: its last line first, then all of it in a box that starts at its end
+    assert ('<p class="err-line">ValueError: 3 lint errors</p><div class="err-box">'
+            '<pre class="err">') in html_
+    assert views.error_headline("one line") == "one line" and views.error_headline(None) == ""
+    # the same line in the card's tooltip and in the log
+    assert 'title="ValueError: 3 lint errors"' in card(views.project_page(store, "v", "x"), "lint")
+    rec = {"kind": "step.status", "step": "lint", "from": "running", "to": "failed",
+           "error": "exit code 1\nValueError: 3 lint errors"}
+    assert views.log_summary(rec).endswith(": ValueError: 3 lint errors")
+    assert "Blocks" not in views.step_detail(store, "v", "go")
+
+
+def test_pause_shows_only_where_it_acts(store):
+    stuck_project(store, running=True)
+    with store.lock("v"):
+        state = store.read_state("v")
+        state["steps"].update(ship={"status": "stale"}, fix={"status": "skipped",
+                                                              "skipped": "no"})
+        state["steps"]["done"] = {"status": "succeeded"}
+        store.write_state("v", state)
+
+    def switch(sid):
+        head = views.step_detail(store, "v", sid).split("</header>")[0]
+        m = re.search(r'<button type="submit">(\w+)</button>', head)
+        return m[1] if m else None
+
+    assert switch("lint") == "Pause"  # failed: a retry would start it
+    assert switch("ship") == "Pause"  # stale: it would re-run
+    assert switch("notes") == "Resume" and switch("later") == "Resume"  # paused
+    assert switch("go") is None  # running: pausing never stops a running step
+    assert switch("fix") is None  # skipped
+
+
+def test_the_drawer_is_a_labelled_region_with_one_types_switch(store):
+    board_project(store)
+    page = views.project_page(store, "v", ver="x")
+    # the drawer and the live region sit after main (main goes inert behind a phone's sheet)
+    tail = page[page.index("</main>"):]
+    assert '<aside id="drawer" class="drawer" style="display:none" tabindex="-1" ' \
+        'aria-labelledby="d-title"' in tail
+    assert '<div id="announce" class="vh" role="status" aria-live="polite"></div>' in tail
+    assert page.index('<a class="skip" href="#graph">Skip to plan</a>') < page.index("<nav")
+    # the standalone page has no drawer, and its step headings carry no shared id
+    assert 'id="d-title"' not in views.render(store, "v", "html")
+    detail = views.step_detail(store, "v", "each")
+    assert detail.count('class="types-toggle"') == 1
+
+
+def test_after_and_when_are_links_led_by_their_glyphs(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "after": ["a"]}})
+    head = views.step_detail(store, "v", "b").split("</header>")[0]
+    assert re.search(r'<div class="wide"><dt>After</dt><dd><span class="dep"><span class="g '
+                     r'g-pending".*?<a href="/projects/v/steps/a" data-step="a">a</a>', head)
+
+
+def test_a_finished_box_folds_to_one_line(store):
+    create(store, "v", {
+        "a1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "a2": {"run": "test.add", "in": {"a": src("a1/sum"), "b": d(1)}},
+        "a3": {"run": "test.add", "in": {"a": src("a2/sum"), "b": d(1)}},
+        "b1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "b2": {"run": "test.add", "in": {"a": src("b1/sum"), "b": d(1)}},
+        "c1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    ok = {"status": "succeeded", "outputs": {"sum": 2}}
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a1": ok, "a2": ok, "a3": {"status": "skipped", "skipped": "no"},
+            "b1": ok, "b2": {"status": "running"}, "c1": ok}})
+    page = views.project_page(store, "v", ver="x")
+    boxes = re.findall(r'<li class="box( done)?">', page)
+    assert boxes == [" done", "", ""]  # a's box folds; b's is still running; c is one step
+    start = page.index('<li class="box done">')
+    folded = page[start:page.index("</details>", start)]
+    assert '<details class="fold-box" data-preserve-attr="open" data-box="a1">' in folded
+    assert '<span class="sid">a1</span>' in folded
+    assert "a3 · 3 steps · 2 succeeded, 1 skipped" in folded
+    assert 'id="n-a2"' in folded  # its cards are inside, one click away
+    # a plan of one piece of work never folds
+    create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
+    with store.lock("w"):
+        store.write_state("w", {"inputs": {}, "steps": {"a": ok, "b": ok}})
+    assert '<details class="fold-box"' not in views.project_page(store, "w", ver="x")
+
+
+def test_the_log_says_what_run_records_mean():
+    s = views.log_summary
+    assert s({"kind": "run.adopt", "step": "a", "run": "r1", "outcome": "watching"}) == \
+        "a: run r1 still running; the new runner watches it"
+    assert s({"kind": "run.adopt", "call": "c1", "run": "c1", "outcome": "finished"}) == \
+        "call c1: run c1 had finished; its result was collected"
+    assert "restart" in s({"kind": "run.adopt", "step": "a", "run": "r", "outcome": "restarted"})
+    assert s({"kind": "run.orphan", "run": "r9"}) == "run r9 stopped: no step or call claimed it"
+    # a step's message on its own thread does not repeat the thread
+    assert s({"kind": "message", "thread": "step-a", "from": "a", "to": "orch",
+              "body": "hi"}) == "a → orch: hi"
+    assert s({"kind": "message", "thread": "t", "from": "a", "body": "hi"}) == "t from a: hi"
+
+
+def test_the_log_filter_folds_behind_a_summary_that_counts_kinds(store):
+    create(store, "v", {})
+    page = views.log_page(store, "v", views.LogQuery(kinds=("run", "message")))
+    assert '<details class="kinds" open><summary><span>Filter: 2 kinds</span>' in page
+    assert "<span>Filter: all kinds</span>" in views.log_page(store, "v", views.LogQuery())

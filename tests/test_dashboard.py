@@ -123,13 +123,14 @@ def test_every_page_renders(store, port):
     create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
     store.append("p", message("q", "hello"))
     code, index = get(port, "/")
-    assert code == 200 and '<a href="/projects/p">p</a>' in index
+    assert code == 200 and re.search(r'<a href="/projects/p"><span class="g g-pending".*?'
+                                     r'<span>p</span></a>', index)
     assert "@get('/stream'" in index and '<div id="projects">' in index
     code, page = get(port, "/projects/p")
     assert code == 200 and '<div id="graph">' in page and "@get('/projects/p/stream'" in page
     assert '<a href="/projects/p/log">Log</a>' in page and 'data-step="a"' in page
     code, step = get(port, "/projects/p/steps/a")
-    assert code == 200 and '<div id="step-detail">' in step and "<h2>a</h2>" in step
+    assert code == 200 and '<div id="step-detail">' in step and '<h2 id="d-title">a</h2>' in step
     assert "@get('/projects/p/steps/a/stream'" in step and '"sver"' in html.unescape(step)
     assert get(port, "/projects/p/steps/nope")[0] == 404
     assert get(port, "/projects/p/steps/nope/stream")[0] == 404
@@ -291,7 +292,8 @@ def test_the_index_stream_shows_a_new_project(store, port):
     events = stream(port, "/stream", {"ver": ver},
                     action=later(lambda: store.create_project("fresh", "new one")))
     [table] = patches(events)
-    assert '<a href="/projects/fresh">fresh</a>' in table and "new one" in table
+    assert re.search(r'<a href="/projects/fresh"><span class="g g-pending".*?<span>fresh</span>'
+                     r'</a>', table) and "new one" in table
 
 
 def test_the_runner_indicator_follows_the_heartbeat(store, port):

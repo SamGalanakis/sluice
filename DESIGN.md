@@ -51,6 +51,16 @@ typography:
     fontSize: "13px"
     fontWeight: 500
     lineHeight: "18px"
+  drawer-title:
+    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "20px"
+    fontWeight: 600
+    lineHeight: "26px"
+  title-phone:
+    fontFamily: "Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "22px"
+    fontWeight: 650
+    lineHeight: "28px"
   data:
     fontFamily: "ui-monospace, SFMono-Regular, Cascadia Code, Liberation Mono, Menlo, monospace"
     fontSize: "12px"
@@ -60,6 +70,7 @@ rounded:
   sm: "4px"
   md: "8px"
   lg: "0.625rem"
+  pill: "999px"
 spacing:
   xs: "4px"
   sm: "8px"
@@ -109,7 +120,7 @@ components:
   status-filter-current:
     backgroundColor: "{colors.secondary-fill}"
     textColor: "{colors.ink}"
-    rounded: "6px"
+    rounded: "{rounded.sm}"
     padding: "2px 10px"
 ---
 
@@ -143,7 +154,8 @@ light set plus the dark canvas, ink, card, muted ink and primary).
 
 ### Status ramp
 - **Active blue** running, **success green** succeeded and set by hand, **attention amber**
-  stale and a message awaiting a reply, **idle grey** pending and skipped, **ink** failed.
+  stale and a message awaiting a reply, **idle grey** pending and skipped, **ink** failed and
+  the pending steps a failure blocks.
 
 ### Named Rules
 **The One Red Rule.** Red (`badge`) is the open-inbox count in the nav and nothing else. A
@@ -158,8 +170,10 @@ dashed amber border.
 ## Typography
 
 One family, Inter Variable (the system sans without it), on a fixed ramp for a glance from a
-second screen: 26/32 page title, 17/24 section, 15/22 body, 14/20 card text, 13/18 meta. Monospace is for data only: stderr, fn
-names in the functions list, values, types. All numerals are tabular.
+second screen: 26/32 page title (22/28 on a phone), 20/26 the drawer's step id, 17/24
+section, 15/22 body, 14/20 card text, 13/18 meta, 12/18 data. Monospace is for data only:
+stderr, fn names in the functions list, values, types, the log's seq, time and kind. All
+numerals are tabular.
 
 ### Named Rules
 **The Meta Voice Rule.** What a run says about itself (times, costs, counts, engines, labels)
@@ -172,18 +186,30 @@ edge joins, handoff or `after`) is a quiet box when there are several (the muted
 0.625rem radius, 16px by 18px padding, 12px on a phone; 14px apart, 10px on a phone; no border:
 a region, not a card, since the bubbles carry the borders), so what belongs together reads
 without the edges; a plan of one piece has no box. A box is rows by dependency depth with 40px
-between rows (28px on a phone) for the edges, from its first step; in a row the cards stand
+between rows for the edges (10px on a phone, which draws none), from its first step; in a
+row the cards stand
 lane by lane (a lane: the steps joined by handoffs), the next lane's first card 22px apart,
 and a row too wide wraps within itself. On a phone a box stacks its lanes one after another,
 each reading straight down, a lane after the first 14px apart. The server lays the board out;
 the `<sluice-board>` component draws the edges between measured cards (bottom to top, spread
 when several share a side, an arrowhead at the end; dashed for an `after` edge, which orders
 two steps without passing data), threading an edge that passes rows through their gaps so it
-never hides behind a card. A quiet legend under the board names the two lines. The head of a
+never hides behind a card. A quiet legend under the board names the two lines. A box of
+several steps that have all succeeded (or been skipped, beside at least one success) folds to
+one 44px line: the success glyph, its first step's id, then in meta "… its last step · n steps
+· all succeeded"; a native `<details>` that opens to its cards (open through live updates and,
+per tab, a reload). No edge crosses between boxes, so a folded one hides only its own edges.
+The plan's order stays; nothing is sorted by attention. The head of a
 project page says first whether the work moves (progress bar, counts, Pause and Archive), then
 what the project is (its description, folded to its opening); what the plan took and produced
 follows the board. When the runner is down (its heartbeat stale), the index and that
-line say so first, in the attention amber. Text blocks hold a 68-75ch measure.
+line say so first, in the attention amber. A project with failed steps leads its page and its
+index row with one sentence in ink, weight 500 (not red: the failure is the orchestrator's to
+retry, and only the inbox asks the person): "Stopped: a and b failed, blocking 4 steps · 11
+paused", each failed step a link (to its drawer), "Stopped:" only while nothing runs. The
+counts line and the bar's label count the blocked and paused steps too; the index row leads
+with the project's status glyph, and the tab title with "n failed ·". Text blocks hold a
+68-75ch measure.
 
 ### Named Rules
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
@@ -191,34 +217,51 @@ least a 24px gutter, 16px below 720px): `main` is a three-track grid (gutter, co
 and everything goes in the middle track, the board included. The top nav's content aligns to
 the same edges (the mark on the left edge, Inbox ending on the right), so nav, title,
 lists, tables and cards share one left edge at every width. Nothing makes the page scroll
-sideways.
+sideways. While the step drawer is open from 1200px, the page makes room for it: nav and
+`main` take its width as right padding and the column keeps to the drawer's side (40px from
+it), so the column's left edge and the nav's still meet, and at 2560 the board stands beside
+the drawer instead of centred far from it.
 
 **The One Click Rule.** The board is names and states: compact bubbles you can take in at a
 glance. Everything else (outputs, prompts, costs, shas) is one click away in the drawer, or
 under the board for the plan as a whole.
 
-Below 720px the board stacks one card per line without edges, and the step drawer becomes a
-full-screen sheet over the scrim.
+Below 720px the board stacks one card per line without edges (and without their legend), and
+the step drawer becomes a full-screen sheet over the scrim.
 
 ## Elevation & Depth
 
-Flat by default: cards separate by hairline, not shadow. One lift, on the step drawer
-(`--lift`), because it floats over the board.
+Flat by default: cards separate by hairline, not shadow. One lift (`--lift`), on what floats
+over the page: the step drawer below 1200px (beside the page from there, it has only its
+hairline), the project switcher's menu and the focused skip link.
 
 ## Shapes
 
-Radius 0.625rem for cards, chips, the needs list and inbox items; 8px for controls and code
-blocks; 4px for inline code. Plan input and output nodes are dashed, since they are ends, not
-work.
+Radius 0.625rem for cards, chips, the needs list, inbox items and board boxes; 8px for
+controls and code blocks; 4px for inline code, tags, menu items, the segmented filter's
+current item and the nav's current bar. A pill (999px) is deliberate, and only for the step
+bubbles, the Types switch and the badge-like status pills: a bubble is a token of work, not a
+panel. Plan input and output nodes are dashed, since they are ends, not work.
 
 ## Components
 
 ### Cards / Containers
 - **Step bubble**: a pill with the status glyph, the step id (14.5px, 550) and, in 12px meta,
   its time (and `done/total` when scattered). Nothing else: the doc and what it says now are
-  its tooltip, and everything it took and produced is in the drawer. Running bubbles take an
-  active-blue border, failed a full-ink one, stale an amber one. A pending step next in line (its unfinished upstream all running) keeps a strong hairline and ink id; pending steps further off lose their border and dim, so what starts next stands out. Glue steps
-  (`core.*`) are dashed and muted.
+  its tooltip (a failed step's is its error's last line, the exception), and everything it
+  took and produced is in the drawer. Running bubbles take an active-blue border, failed a
+  full-ink one over a 6% ink fill, stale an amber one. A pending step a failure holds up
+  (directly or through other pending steps) is blocked: a dashed ink border at 45% and
+  "blocked" in ink where its time would be (not red; a paused one keeps the paused look and
+  counts as paused). A pending step next in line (its unfinished upstream all running) keeps
+  a strong hairline and ink id; pending steps further off lose their border and dim, so what
+  starts next stands out. Glue steps (`core.*`) are dashed and muted. The step in the drawer
+  wears the ring 2px outside its border (canvas, then ring), so it never reads as a status.
+  A bubble's accessible name is "failed, id, 1h 14m" (visually hidden commas).
+- **Tracing**: hovering or keyboard-focusing a bubble lights its edges and names; the other
+  bubbles lose their border and fill and their text turns muted ink, so they stay readable
+  (at least 3:1, measured 6.4:1). Opening the drawer clears any tracing; a focus given back
+  after a click does not trace.
 - **Under the board**: the Result (`name value` rows; long text folds to 132px under a fade with
   "Show all") and the plan inputs (name, value, doc). The counts line (with the bar, Pause and
   Archive) heads the page instead.
@@ -259,14 +302,37 @@ messages sit on the left with a strong-hairline rule; the orchestrator's are ind
 the person for anything: that is the inbox.
 
 ### Step drawer
-Right-hand panel (680px) over the board without a scrim on desktop, full-screen with a scrim on
-phones, read like a run history (Temporal's event view is the reference): the step id (20px)
-and its doc, then a quiet grid of facts (status, what a pending step waits on, function,
-started, duration, cost, session), the Pause switch and a muted link to its thread.
-Sections under small labels in need order: Error, Progress, Outputs, Prompt, Inputs,
-Log output, Attempts (only past one). A value is a field: its name in 600, a small `← source`
-link, its doc in meta, the value under it. Types are noise until asked for: in the name's
-title, and beside every name with the Types switch. Long values fold under a fade.
+A right-hand panel, full height. From 1200px it sits beside the page (`min(680px, 45vw)`, its
+hairline and no lift): nav and page make room for it in one reflow while the drawer slides in
+(180ms ease-out, transform and opacity), the board redraws its edges, and the opened card
+scrolls into view. From 721 to 1199px it is over
+the page (680px) on a scrim that closes it. Below 720px it is a full-screen sheet over the
+scrim and a modal dialog (the page behind it inert). Escape, the close button, the scrim or
+a click on the page around the board close it, and focus goes back to the card. A "Skip to
+plan" link is the page's first tab stop, and a polite live region says the statuses the live
+board moves ("a failed").
+It reads like a run history (Temporal's event view is the reference): the step id (20px) and
+its doc, then a quiet grid of facts (status, "blocked" for a blocked step, function, started,
+duration, cost, session; then, each a full row that wraps, what a pending step waits on, what
+it runs after, its `when`, and what a failed step blocks: steps as links led by their
+glyphs), the Pause switch (only where pausing acts: pending, failed, stale; Resume on any
+paused step) and a muted link to its thread. Sections under small labels in need order:
+Error (its last line in 600, then all of it in a box that opens scrolled to its end),
+Progress, Outputs, Prompt, Inputs, Log output, Attempts (only past one). A value is a field:
+its name in 600, a small `← source` link, its doc in meta, the value under it. Types are
+noise until asked for: in the name's title, and beside every name with the one Types switch
+(on the first section of values). Long values fold under a fade.
+
+### Log
+A table of seq, time, kind (12px data) and a one-line summary in plain words (a run the
+runner adopted or stopped reads as a sentence; a step's message on its own thread does not
+repeat the thread). On a phone the kind filter folds behind a 44px "Filter: all kinds" /
+"Filter: 3 kinds" summary, so the records start near the top; its labels are 44px tall.
+
+### Touch
+At phone width every control is at least 44px tall: Pause and Archive, the nav's sections,
+the log's filter labels and pager links, the inbox's status filter, a folded box's line;
+the Types pill keeps its size with a clear border that makes its target 44px.
 
 ## Do's and Don'ts
 
@@ -280,5 +346,6 @@ title, and beside every name with the Types switch. Long values fold under a fad
 - Don't spend red on anything but the open-inbox count.
 - Don't repeat on the page what another part of it already says (no inputs table next to input
   nodes, no history table next to the log).
-- Don't use uppercase labels, kickers, emoji icons or decorative motion; motion is the running
+- Don't use uppercase labels, kickers, emoji icons or decorative motion; motion is the drawer's
+  180ms slide in (the page makes room at once), the running
   spinner, the 220ms flip of a changed glyph and 150ms fades.

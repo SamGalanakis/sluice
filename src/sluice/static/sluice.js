@@ -2,17 +2,21 @@
 // components (Datastar's web components, from the bundle the page streams with), each in the
 // light DOM around what the server rendered:
 // - <sluice-board edges="[[from, to, names], ...]">: draws the edges between the cards, around
-//   the cards they would cross; hovering or focusing a card traces its edges and names them;
-//   the arrow keys move between cards; a status that changes flips its glyph once.
+//   the cards they would cross (none on a phone); hovering or focusing a card traces its edges
+//   and names them; the arrow keys move between cards; a status that changes flips its glyph
+//   once and is announced; a folded finished box remembers being opened in this tab.
 // - <sluice-drawer>: the step drawer. A step link opens it (`#step:<id>` in the address;
-//   Datastar turns that into `$step` and streams the step's detail in); Escape, the close
-//   button or the scrim close it, and focus goes back to the link. A running step's log keeps
-//   its newest line in view unless the reader scrolled up.
+//   Datastar turns that into `$step` and streams the step's detail in); from 1200px the page
+//   makes room for it beside the board. Escape, the close button, the scrim or a click on the
+//   page around the board close it, and focus goes back to the card. On a phone it is a modal
+//   dialog over an inert page. A running step's log keeps its newest line in view unless the
+//   reader scrolled up.
 // - <sluice-thread project thread last>: counts the messages this browser has not seen on a
 //   thread, marks them when it is opened, and opens the thread the address names.
 // On every page: relative times (`data-ago`), running times (`data-since`) and a running
 // step's quiet mark (`data-quiet`, `data-quiet-line`) stay current, and the Types switch
-// shows the types of values.
+// shows the types of values; the tab title leads with how many steps failed; on a phone the
+// log's kind filter folds behind its summary.
 
 import { rocket } from
   "/static/datastar-rocket-1.0.4.js";
@@ -71,8 +75,16 @@ function markOpen(sid) {
   for (const n of $$(".node.open")) {
     if (n.id !== `n-${sid}`) n.classList.remove("open");
   }
-  if (sid) document.getElementById(`n-${sid}`)?.classList.add("open");
+  const card = sid && document.getElementById(`n-${sid}`);
+  if (!card) return;
+  card.classList.add("open");
+  const box = card.closest("details.fold-box:not([open])");  // a finished box opens to it
+  if (box) box.open = true;
 }
+
+const PHONE = matchMedia("(max-width: 720px)");  // one card per line, no edges; drawer a sheet
+// not inside a folded box (a closed <details> hides its content, which keeps its boxes)
+const shown = (n) => (n.checkVisibility ? n.checkVisibility() : n.getClientRects().length > 0);
 
 // ---- <sluice-board> ---------------------------------------------------------------------------
 // Each edge leaves the bottom of a card and enters the top of the card it feeds, ending in an
@@ -135,10 +147,12 @@ function passAt(band, want, lo, hi, used, key) {
 function drawEdges(host, data) {
   const plane = $(".plane", host), svg = $("svg.edges", host);
   if (!plane || !svg) return;
+  if (PHONE.matches) { svg.replaceChildren(); return; }
   const box = plane.getBoundingClientRect();
   const boxed = $(".boxes", plane)?.classList.contains("boxed");
   const boxes = $$(".box", plane), rect = new Map();
   for (const n of $$(".node[data-node]", plane)) {
+    if (!shown(n)) continue;
     const r = n.getBoundingClientRect();
     rect.set(n.dataset.node, { left: r.left - box.left, right: r.right - box.left,
                                top: r.top - box.top, bottom: r.bottom - box.top,
@@ -239,22 +253,52 @@ function untrace(host) {
   for (const el of $$(".on, .near", host)) el.classList.remove("on", "near");
 }
 
-function nearestCard(here, evt) {
+// The card an arrow key goes to: left/right the nearest in the same row; down/up one in the
+// next row that way (the nearest row, never one further), one the card is joined to by an edge
+// when there is one, else the nearest across.
+function nearestCard(here, evt, edges) {
   const dir = { ArrowDown: [0, 1], ArrowUp: [0, -1], ArrowRight: [1, 0],
                 ArrowLeft: [-1, 0] }[evt.key];
   if (!dir) return null;
   const r = here.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
-  let best = null, bestScore = Infinity;
+  const cands = [];
   for (const n of $$(".node[data-node]", here.closest(".plane"))) {
-    if (n === here) continue;
+    if (n === here || !shown(n)) continue;
     const q = n.getBoundingClientRect(), nx = q.left + q.width / 2, ny = q.top + q.height / 2;
     const along = dir[0] ? (nx - x) * dir[0] : (ny - y) * dir[1];
     const across = dir[0] ? Math.abs(ny - y) : Math.abs(nx - x);
     if (along <= 4 || (dir[0] && across > r.height / 2)) continue;  // left/right: same row
-    const score = along + across * 2;
-    if (score < bestScore) { best = n; bestScore = score; }
+    cands.push({ n, along, across });
   }
-  return best;
+  if (!cands.length) return null;
+  const by = (a, b) => a.across - b.across;
+  if (dir[0]) return cands.sort((a, b) => a.along + a.across * 2 - b.along - b.across * 2)[0].n;
+  const first = Math.min(...cands.map((c) => c.along));
+  const row = cands.filter((c) => c.along < first + r.height / 2);
+  const key = here.dataset.node;
+  const joined = row.filter((c) => (Array.isArray(edges) ? edges : []).some(
+    ([a, b]) => (a === key && b === c.n.dataset.node) || (b === key && a === c.n.dataset.node)));
+  return (joined.length ? joined : row).sort(by)[0].n;
+}
+
+// A status the live board moved on, said once to a screen reader: "a failed".
+function announce(text) {
+  const live = document.getElementById("announce");
+  if (!live || !text) return;
+  live.textContent = "";
+  requestAnimationFrame(() => { live.textContent = text; });
+}
+
+// A folded finished box remembers, per tab, that it was opened.
+const BOXES = "sluice.boxes";
+function openBoxes() {
+  try { return JSON.parse(sessionStorage.getItem(BOXES) || "{}") || {}; } catch { return {}; }
+}
+function restoreBoxes(host) {
+  const open = openBoxes();
+  for (const d of $$("details.fold-box[data-box]", host)) {
+    if (open[`${location.pathname}:${d.dataset.box}`] && !d.open) d.open = true;
+  }
 }
 
 rocket("sluice-board", {
@@ -277,6 +321,7 @@ rocket("sluice-board", {
     // a patch of the board: redraw, keep the open card marked, flip a glyph whose status moved
     const changes = new MutationObserver((records) => {
       let board = false;
+      const said = [];
       for (const r of records) {
         if (r.target.closest?.("svg.edges")) continue;
         board = true;
@@ -287,9 +332,13 @@ rocket("sluice-board", {
           g?.classList.remove("flip");
           void g?.offsetWidth;
           g?.classList.add("flip");
+          const word = $(".g .vh", el)?.textContent.replace(/,\s*$/, "");
+          if (word) said.push(`${el.dataset.node.slice(2)} ${word}`);
         }
       }
       if (!board) return;
+      announce(said.join(". "));
+      restoreBoxes(host);
       const sid = currentStep();
       if (sid && !document.getElementById(`n-${sid}`)?.classList.contains("open")) markOpen(sid);
       redraw();
@@ -305,11 +354,15 @@ rocket("sluice-board", {
       const focused = document.activeElement?.closest?.(".node[data-node]");
       if (focused && host.contains(focused)) trace(host, focused); else untrace(host);
     };
-    const focus = (evt) => { const n = card(evt); if (n) trace(host, n); else untrace(host); };
+    // tracing follows the keyboard's focus, not a focus given back after a click
+    const focus = (evt) => {
+      const n = card(evt);
+      if (n && n.matches(":focus-visible")) trace(host, n); else untrace(host);
+    };
     const keys = (evt) => {
       const here = card(evt);
       if (!here || evt.altKey || evt.ctrlKey || evt.metaKey) return;
-      const next = nearestCard(here, evt);
+      const next = nearestCard(here, evt, props.edges);
       if (next) { evt.preventDefault(); next.focus(); }
     };
     host.addEventListener("pointerover", over);
@@ -317,11 +370,21 @@ rocket("sluice-board", {
     host.addEventListener("focusin", focus);
     host.addEventListener("focusout", (evt) => { if (!host.contains(evt.relatedTarget)) untrace(host); });
     host.addEventListener("keydown", keys);
+    host.addEventListener("toggle", (evt) => {
+      const d = evt.target;
+      if (!d.matches?.("details.fold-box[data-box]")) return;
+      const open = openBoxes(), k = `${location.pathname}:${d.dataset.box}`;
+      if (d.open) open[k] = 1; else delete open[k];
+      try { sessionStorage.setItem(BOXES, JSON.stringify(open)); } catch { /* no storage */ }
+    }, true);
+    PHONE.addEventListener("change", redraw);
+    restoreBoxes(host);
     markOpen(currentStep());
     cleanup(() => {
       cancelAnimationFrame(frame);
       sizes.disconnect();
       changes.disconnect();
+      PHONE.removeEventListener("change", redraw);
     });
   },
   onFirstRender({ host, props }) {
@@ -335,7 +398,7 @@ rocket("sluice-drawer", {
   mode: "light",
   setup({ host, cleanup }) {
     const drawer = $("#drawer", host);
-    let opener = null, stream = null;
+    let opener = null, stream = null, last = "";
     let pinned = true;  // the log follows its newest line until the reader scrolls up
     // the drawer's stream: each call ends the previous one (Datastar's requestCancellation)
     window.sluiceStream = () => {
@@ -348,14 +411,32 @@ rocket("sluice-drawer", {
       history.pushState(null, "", location.pathname + location.search);
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     };
+    // a phone's sheet is a modal dialog: the page behind it is inert; elsewhere the drawer is
+    // a region beside (or, below 1200px, over) the page
+    const modal = () => {
+      const on = Boolean(currentStep()) && PHONE.matches;
+      drawer.setAttribute("role", on ? "dialog" : "complementary");
+      drawer.toggleAttribute("aria-modal", on);
+      if (on) drawer.setAttribute("aria-modal", "true");
+      for (const el of document.body.children) {
+        if (el !== host && !el.contains(host) && el.id !== "announce"
+            && el.tagName !== "SCRIPT") el.inert = on;
+      }
+    };
     const open = () => {
       const sid = currentStep();
+      document.documentElement.classList.toggle("drawer-open", Boolean(sid));
+      modal();
       markOpen(sid);
+      for (const b of $$("sluice-board")) untrace(b);  // the drawer shows the step, undimmed
       if (!sid) {
-        opener?.focus({ preventScroll: true });
+        const card = last && document.getElementById(`n-${last}`);
+        (card || opener)?.focus({ preventScroll: true });
         opener = null;
+        last = "";
         return;
       }
+      last = sid;
       const detail = $("#step-detail", drawer);
       if (detail && detail.dataset.step !== sid) {
         detail.replaceChildren();  // no stale detail while the new one streams in
@@ -363,6 +444,11 @@ rocket("sluice-drawer", {
         pinned = true;  // a new step's log starts following again
       }
       requestAnimationFrame(() => drawer.focus({ preventScroll: true }));
+      // once the page has made room, bring the card into view beside the drawer
+      if (!PHONE.matches) {
+        setTimeout(() => document.getElementById(`n-${sid}`)
+          ?.scrollIntoView({ block: "nearest", inline: "nearest" }), 220);
+      }
     };
     const click = (evt) => {
       const a = evt.target.closest?.("a[data-step]");
@@ -374,6 +460,17 @@ rocket("sluice-drawer", {
     };
     const escape = (evt) => {
       if (evt.key === "Escape" && location.hash.startsWith("#step:")) window.sluiceClose();
+    };
+    // a click on the page around the board (not on a card, a control, the switcher or in the
+    // drawer, and not the end of selecting text) closes the drawer as Escape does
+    const INTERACTIVE = "a, button, summary, input, select, textarea, label, details.switcher, "
+      + ".node, .scrim, [data-step]";
+    const away = (evt) => {
+      const t = evt.target;
+      if (!currentStep() || evt.button !== 0 || !(t instanceof Element)) return;
+      if (drawer.contains(t) || t.closest(INTERACTIVE)) return;
+      if (getSelection && !getSelection().isCollapsed) return;
+      window.sluiceClose();
     };
     const scrolled = (evt) => {
       const pre = evt.target;
@@ -387,14 +484,18 @@ rocket("sluice-drawer", {
     });
     follow.observe(drawer, { childList: true, subtree: true, characterData: true });
     document.addEventListener("click", click);
+    document.addEventListener("click", away);
     document.addEventListener("keydown", escape);
     window.addEventListener("hashchange", open);
+    PHONE.addEventListener("change", modal);
     drawer.addEventListener("scroll", scrolled, true);
     open();
     cleanup(() => {
       document.removeEventListener("click", click);
+      document.removeEventListener("click", away);
       document.removeEventListener("keydown", escape);
       window.removeEventListener("hashchange", open);
+      PHONE.removeEventListener("change", modal);
       follow.disconnect();
       delete window.sluiceStream;
       delete window.sluiceClose;
@@ -498,3 +599,32 @@ new MutationObserver(() => {
     if (b.getAttribute("aria-pressed") !== String(typesOn)) b.setAttribute("aria-pressed", String(typesOn));
   }
 }).observe(document.body, { childList: true, subtree: true });
+
+// ---- the tab title: how many steps failed, first (`data-title-failed`, from the page) -------
+
+function retitle() {
+  const mark = $("[data-title-failed]");
+  if (!mark) return;
+  const n = Number(mark.dataset.titleFailed) || 0;
+  const base = document.title.replace(/^\d+ failed · /, "");
+  const want = n ? `${n} failed · ${base}` : base;
+  if (document.title !== want) document.title = want;
+}
+new MutationObserver(retitle).observe(document.body, { childList: true, subtree: true,
+                                                       attributes: true,
+                                                       attributeFilter: ["data-title-failed"] });
+
+// ---- the log's kind filter: folded behind its summary on a phone, which counts the kinds ----
+
+const kinds = $("details.kinds");
+if (kinds) {
+  const said = $("summary > span", kinds);
+  const count = () => {
+    const n = $$("input[name=kind]:checked", kinds).length;
+    said.textContent = n ? `Filter: ${n} kind${n === 1 ? "" : "s"}` : "Filter: all kinds";
+  };
+  const fit = () => { kinds.open = !PHONE.matches; };
+  kinds.addEventListener("input", count);
+  PHONE.addEventListener("change", fit);
+  fit();
+}

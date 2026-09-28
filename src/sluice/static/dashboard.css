@@ -30,6 +30,8 @@
   --gutter: 24px;   /* the least space beside it */
   --nav-pad: 10px;
   --plane-pad: 12px;
+  --drawer-w: min(680px, 45vw);  /* the step drawer beside the page, from 1200px */
+  --drawer-gap: 40px;            /* between the board and the drawer beside it */
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -118,7 +120,9 @@ nav.top .links > a:hover::before, #nav-inbox:hover::before { background: var(--m
 nav.top .links > a[aria-current], #nav-inbox[aria-current] { color: var(--foreground); }
 nav.top .links > a[aria-current]::after, #nav-inbox[aria-current]::after {
   content: ""; position: absolute; left: var(--nav-pad); right: var(--nav-pad); bottom: -1px;
-  height: 2px; border-radius: 2px 2px 0 0; background: var(--foreground); }
+  height: 2px; border-radius: 4px 4px 0 0; background: var(--foreground); }
+/* the sections scroll inside themselves, which would clip a ring drawn outside a link */
+nav.top .links > a:focus-visible, #nav-inbox:focus-visible { outline-offset: -4px; }
 nav.top a.brand { display: flex; align-items: center; margin-right: 6px; color: var(--foreground); }
 nav.top .mark { display: block; flex: none; }
 #nav-inbox { margin-left: auto; margin-right: calc(-1 * var(--nav-pad)); }
@@ -144,18 +148,23 @@ details.switcher .menu { position: absolute; top: calc(100% + 6px); left: 0; z-i
   min-width: 220px; max-width: min(360px, calc(100vw - 2 * var(--gutter)));
   max-height: min(70vh, 480px); overflow-y: auto; padding: 6px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--card);
-  box-shadow: 0 8px 24px oklch(0 0 0 / 0.14); }
+  box-shadow: var(--lift); }
 details.switcher .menu a { display: flex; align-items: center; gap: 8px; padding: 7px 10px;
-  border-radius: 6px; text-decoration: none; color: var(--foreground); white-space: nowrap; }
+  border-radius: 4px; text-decoration: none; color: var(--foreground); white-space: nowrap; }
 details.switcher .menu a span { overflow: hidden; text-overflow: ellipsis; }
 details.switcher .menu a .g { margin-top: 0; }
 details.switcher .menu a:hover { background: var(--muted); }
 details.switcher .menu a[aria-current] { background: var(--muted); font-weight: 600; }
 details.switcher .menu a.all { color: var(--muted-foreground); margin-bottom: 4px;
-  padding-bottom: 9px; border-radius: 6px 6px 0 0; box-shadow: 0 1px 0 var(--border); }
+  padding-bottom: 9px; border-radius: 4px 4px 0 0; box-shadow: 0 1px 0 var(--border); }
 details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 .menu-label { margin: 8px 10px 4px; font-size: 12px; font-weight: 600;
               color: var(--muted-foreground); }
+
+/* the first stop for a keyboard: past the nav to the plan */
+.skip { position: absolute; left: var(--gutter); top: 8px; z-index: 40; padding: 8px 12px;
+        border-radius: 8px; background: var(--card); transform: translateY(-300%); }
+.skip:focus { transform: none; box-shadow: var(--lift); }
 
 /* a project's title on its standalone page, which has no nav */
 .phead { margin: 8px 0 20px; }
@@ -182,6 +191,10 @@ details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 form.switch button { font-size: 13px; padding: 3px 10px; color: var(--muted-foreground); }
 form.switch button:hover { color: var(--foreground); }
 .attn-note { font-size: 13px; color: var(--status-attention); }
+/* a project whose work a failure has stopped: said first, in ink (failure is not red) */
+.stuck { display: flex; gap: 8px; align-items: flex-start; font-weight: 500; max-width: 72ch;
+         overflow-wrap: anywhere; }
+.stuck .g { margin-top: 3px; display: flex; }
 .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; }
 .d-thread { font-size: 13px; color: var(--muted-foreground); }
 .d-thread:hover { color: var(--foreground); }
@@ -211,7 +224,7 @@ details.about[open] > summary::after { content: "Show less"; }
 details.fold > summary { list-style: none; display: block; color: inherit; cursor: pointer; }
 details.fold > summary::-webkit-details-marker { display: none; }
 details.fold .clip { max-height: 132px; overflow: hidden; max-width: 72ch;
-                     mask-image: linear-gradient(to bottom, #000 60%, transparent); }
+                     mask-image: linear-gradient(to bottom, black 60%, transparent); }
 details.fold[open] .clip { max-height: none; mask-image: none; }
 details.fold > summary::after { content: "Show all"; display: inline-block; margin-top: 6px;
                                 font-size: 13px; color: var(--muted-foreground);
@@ -234,7 +247,22 @@ sluice-drawer { display: contents; }
          justify-content: center; align-items: flex-start; }
 .box { flex: 1 1 auto; min-width: 0; max-width: 100%; box-sizing: border-box; }
 .boxes.boxed > .box { padding: 16px 18px; border-radius: var(--radius); background: var(--muted); }
-.box > .rows { list-style: none; margin: 0; padding: 0; display: grid; row-gap: var(--row-gap);
+/* a finished piece of work, folded to one line; it opens to its cards */
+.boxes.boxed > .box.done { padding: 0; }
+.fold-box > summary { display: flex; align-items: center; gap: 8px; min-height: 44px;
+                      padding: 8px 14px 8px 18px; list-style: none; color: var(--foreground);
+                      border-radius: var(--radius); }
+.fold-box > summary::-webkit-details-marker { display: none; }
+.fold-box > summary:hover { background: var(--secondary); }
+.fold-box > summary .sid { flex: none; max-width: 40%; }
+.fb-meta { flex: 1 1 auto; min-width: 0; font-size: 13px; line-height: 18px;
+           color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis;
+           white-space: nowrap; }
+.fold-box .chev { margin-left: auto; }
+.fold-box[open] .chev { transform: rotate(180deg); }
+.fold-box[open] > summary { margin-bottom: 0; }
+.fold-box > .rows { padding: 8px 18px 16px; }
+.box .rows { list-style: none; margin: 0; padding: 0; display: grid; row-gap: var(--row-gap);
                 grid-template-columns: minmax(0, 1fr);  /* a long id ellipsizes, not overflows */
                 grid-template-rows: repeat(var(--rows), minmax(var(--node-h), auto)); }
 .row { grid-row: var(--r); min-width: 0; display: flex; flex-wrap: wrap; justify-content: center;
@@ -258,7 +286,11 @@ sluice-drawer { display: contents; }
 .plane.tracing .wires path.on { opacity: 1; stroke: var(--foreground); stroke-width: 2; }
 .plane.tracing .wires path.head.on { fill: var(--foreground); stroke: none; }
 .plane.tracing .names text.on { opacity: 1; }
-.plane.tracing .node:not(.near) { opacity: .45; }
+/* the rest recede by losing their chrome, not their text: an unrelated id stays muted ink */
+.plane.tracing .node:not(.near) { border-color: transparent; background: transparent;
+                                  box-shadow: none; }
+.plane.tracing .node:not(.near) :is(.sid, .dur) { color: var(--muted-foreground); }
+.plane.tracing .node:not(.near) .g { opacity: .5; }
 .node { position: relative; z-index: 2;  /* over the edges, which are over the boxes */
         display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
         padding: 7px 14px 7px 10px; border-radius: 999px; color: inherit;
@@ -269,6 +301,7 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .sid { font-weight: 550; font-size: 14.5px; line-height: 20px; min-width: 0; overflow: hidden;
        text-overflow: ellipsis; white-space: nowrap; }
 .node .dur { font-size: 12px; line-height: 16px; }
+.node .sep { font-size: 0; line-height: 0; vertical-align: top; }  /* read, not seen */
 .node .dur .quiet { color: var(--status-attention); }  /* a wedged run, in the attention voice */
 .is-pending .sid, .is-skipped .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
 .node.is-pending { border-color: transparent;
@@ -277,31 +310,57 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .node.is-pending.is-next .sid { color: var(--foreground); }
 .node.is-skipped { border-style: dashed; }
 .node.is-running { border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
-.node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground); }
+.node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground);
+                  background: color-mix(in oklch, var(--foreground) 6%, var(--card)); }
+/* a pending step a failure holds up: dashed in ink, and it says "blocked" */
+.node.is-blocked { border: 1px dashed color-mix(in oklch, var(--foreground) 45%, transparent); }
+.node.is-blocked .dur { color: var(--foreground); font-weight: 500; }
 .is-paused .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
 .node.is-paused { border-style: dashed;
                   border-color: color-mix(in oklch, var(--status-attention) 60%, transparent); }
 .node.is-stale { border-color: color-mix(in oklch, var(--status-attention) 60%, transparent); }
-.node.open { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
+/* the step in the drawer: a ring apart from the card, never its own border (a failed card's
+   ink border must not read as chosen) */
+.node.open { box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--ring); }
 .chip { border-style: dashed; border-color: var(--border-strong); background: transparent; }
 .chip .sid { font-weight: 500; font-size: 13.5px; color: var(--muted-foreground); }
 
 /* ---- the step drawer and page -------------------------------------------------------- */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 20; width: min(680px, 100vw);
           overflow-y: auto; background: var(--card); border-left: 1px solid var(--border);
-          box-shadow: var(--lift); padding: 20px 24px 40px; }
+          box-shadow: var(--lift); padding: 20px 24px 40px;
+          animation: drawer-in 180ms cubic-bezier(.2, .8, .2, 1); }
+@keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } }
 .drawer:focus { outline: none; }
+/* 721-1199px: the drawer is over the page, and a scrim under it closes it */
+@media (max-width: 1199px) {
+  .scrim { position: fixed; inset: 0; z-index: 19; background: var(--scrim); }
+}
+/* from 1200px the drawer sits beside the page: nav and page make room for it (the column keeps
+   to the drawer's side, so at 2560 the board stands next to it) and the board reflows at once,
+   one layout, not one per frame; the drawer's own slide (transform, opacity) is the motion */
+@media (min-width: 1200px) {
+  .scrim { display: none !important; }
+  .drawer { width: var(--drawer-w); box-shadow: none; }
+  html.drawer-open body { padding-right: var(--drawer-w); }
+  html.drawer-open main {
+    grid-template-columns: [full-start] minmax(var(--gutter), 1fr) [col-start]
+                           minmax(0, var(--column)) [col-end] minmax(var(--drawer-gap), 0fr)
+                           [full-end]; }
+  html.drawer-open nav.top {
+    padding-left: max(var(--gutter), calc(100% - var(--column) - var(--drawer-gap)));
+    padding-right: var(--drawer-gap); }
+}
 .drawer .close { position: sticky; top: 0; float: right; margin: -8px -12px 0 8px; width: 44px;
                  height: 44px; display: grid; place-items: center; border: 0; border-radius: 8px;
                  background: var(--card); color: var(--muted-foreground); cursor: pointer; }
 .drawer .close:hover { color: var(--foreground); background: var(--muted); }
-@media (min-width: 721px) { .scrim { display: none !important; } }
 .d-head { margin-bottom: 8px; }
 .d-head .hd { display: flex; gap: 10px; }
 .d-head h2 { margin: 0; font-size: 20px; line-height: 26px; }
 .d-doc { margin: 6px 0 0 26px; color: var(--muted-foreground); max-width: 72ch; }
 .d-head .meta { margin: 6px 0 0 26px; }
-.d-head code { font-size: 11px; }
+.d-head code { font-size: 12px; }
 .d-sec { margin-top: 26px; }
 .d-sec-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
            margin-bottom: 10px; }
@@ -312,6 +371,10 @@ dl.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px,
            gap: 10px 16px; margin: 16px 0 0; padding: 12px 14px; background: var(--muted);
            border: 1px solid var(--border); border-radius: var(--radius); }
 dl.facts > div { min-width: 0; }
+dl.facts > .wide { grid-column: 1 / -1; }
+dl.facts > .wide dd { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.dep { white-space: nowrap; }
+.dep .g { vertical-align: -3px; margin: 0 4px 0 0; }
 dl.facts dt { font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
 dl.facts dd { margin: 2px 0 0; font-size: 14px; line-height: 20px; white-space: nowrap;
               overflow: hidden; text-overflow: ellipsis; }
@@ -344,6 +407,12 @@ ol.attempts li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wra
 .prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; font-size: 14px;
           line-height: 21px; padding: 12px 14px; background: var(--muted);
           border-radius: var(--radius); }
+/* a failure's cause, then all it said, scrolled to its end (column-reverse starts there) */
+.err-line { font-weight: 600; overflow-wrap: anywhere; max-width: 72ch; }
+.err-box { display: flex; flex-direction: column-reverse; max-height: 360px; overflow: auto;
+           margin-top: 8px; background: var(--muted); border: 1px solid var(--border);
+           border-radius: 8px; }
+.err-box pre.err { max-height: none; overflow: visible; border: 0; background: none; }
 pre.tail, pre.v.long, pre.err, .log pre, .answered pre {
   max-height: 360px; overflow: auto; padding: 10px 12px; background: var(--muted);
   border: 1px solid var(--border); border-radius: 8px; }
@@ -369,7 +438,7 @@ code.v { border: 0; background: none; padding: 0; }
 .m-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13px;
           line-height: 18px; color: var(--muted-foreground); }
 .m-from { font-weight: 600; color: var(--foreground); }
-.m-tag { font-size: 12px; line-height: 16px; padding: 0 6px; border-radius: 6px;
+.m-tag { font-size: 12px; line-height: 16px; padding: 0 6px; border-radius: 4px;
          border: 1px solid var(--border); color: var(--muted-foreground); }
 .m-tag.await { color: var(--status-attention);
                border-color: color-mix(in oklch, var(--status-attention) 45%, transparent); }
@@ -391,7 +460,7 @@ details.thread[open] > summary { margin-bottom: 0; border-bottom: 1px solid var(
 .th-meta { font-size: 13px; color: var(--muted-foreground); }
 details.thread[open] .th-when { display: none; }  /* each message says when */
 .th-new:empty { display: none; }
-.th-new { font-size: 12px; line-height: 16px; padding: 0 6px; border-radius: 6px; font-weight: 600;
+.th-new { font-size: 12px; line-height: 16px; padding: 0 6px; border-radius: 4px; font-weight: 600;
           color: var(--status-active);
           background: color-mix(in oklch, var(--status-active) 12%, transparent); }
 details.earlier { padding: 12px 16px 0; }
@@ -425,12 +494,14 @@ details.std > summary::-webkit-details-marker { display: none; }
 .proj { padding: 16px 18px; display: grid; gap: 8px; }
 .proj + .proj { border-top: 1px solid var(--border); }
 .p-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-.p-head a { font-size: 17px; line-height: 24px; font-weight: 600; text-decoration: none; }
-.p-head a:hover { text-decoration: underline; }
+.p-head a { display: inline-flex; gap: 8px; align-items: center; min-width: 0;
+            font-size: 17px; line-height: 24px; font-weight: 600; text-decoration: none; }
+.p-head a .g { margin-top: 0; }
+.p-head a:hover span:not(.g, .vh) { text-decoration: underline; }
 .proj .about { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
                line-clamp: 2; overflow: hidden; }
 .p-state { display: flex; align-items: center; gap: 10px; }
-.bar { display: flex; width: 180px; height: 6px; border-radius: 3px; overflow: hidden; gap: 1px;
+.bar { display: flex; width: 180px; height: 6px; border-radius: 4px; overflow: hidden; gap: 1px;
        background: var(--secondary); }
 .bar i { display: block; min-width: 3px; }
 .b-succeeded { background: var(--status-success); }
@@ -456,8 +527,10 @@ form.filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: cente
                margin: 14px 0; font-size: 12.5px; }
 form.filters fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap;
                         gap: 4px 12px; align-items: center; }
-form.filters legend { float: left; margin-right: 8px; font-size: 11px; font-weight: 500;
-                      color: var(--muted-foreground); }
+form.filters legend { float: left; margin-right: 8px; font-size: 13px; line-height: 18px;
+                      font-weight: 500; color: var(--muted-foreground); }
+details.kinds > summary { display: none; }  /* a phone's; open elsewhere */
+details.kinds[open] > summary { margin-bottom: 0; }
 form.filters label { white-space: nowrap; }
 form.filters .kline { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
 form.filters .kg { font-weight: 600; }
@@ -476,7 +549,7 @@ button:disabled { opacity: .5; cursor: default; }
 nav.seg { justify-self: start; display: flex; gap: 2px; margin: 12px 0 0; padding: 2px;
           border: 1px solid var(--border); border-radius: 8px; background: var(--card);
           font-size: 12.5px; }
-nav.seg a { padding: 2px 10px; border-radius: 6px; text-decoration: none;
+nav.seg a { padding: 2px 10px; border-radius: 4px; text-decoration: none;
             color: var(--muted-foreground); font-weight: 500; }
 nav.seg a:hover { color: var(--foreground); }
 nav.seg a[aria-current] { color: var(--foreground); background: var(--secondary);
@@ -485,9 +558,10 @@ nav.seg a[aria-current] { color: var(--foreground); background: var(--secondary)
 table.log { font-size: 12.5px; }
 table.log td { padding: 5px 8px; vertical-align: baseline; }
 table.log td:last-child { min-width: 14rem; width: 100%; }
-table.log .num { color: var(--muted-foreground); font-size: 11px; }
-table.log .at { white-space: nowrap; color: var(--muted-foreground); font-size: 11px; }
-table.log .kind { font: 11px var(--font-mono); white-space: nowrap; color: var(--muted-foreground); }
+table.log .num { color: var(--muted-foreground); font-size: 12px; }
+table.log .at { white-space: nowrap; color: var(--muted-foreground); font-size: 12px; }
+table.log .kind { font: 12px var(--font-mono); white-space: nowrap;
+                 color: var(--muted-foreground); }
 table.log summary { color: var(--foreground); overflow-wrap: anywhere; }
 table.log .s-failed { font-weight: 600; }
 table.log .s-skipped { color: var(--muted-foreground); }
@@ -552,18 +626,22 @@ main > .phead + * { margin-top: 0; }
   details.switcher > summary { max-width: 120px; gap: 4px; padding: 0 6px 0 8px; }
   nav.top { font-size: 14px; }
   nav.top .links { --nav-pad: 5px; padding-right: 18px;  /* the last section scrolls clear */
-                   mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); }
+                   mask-image: linear-gradient(to right, black calc(100% - 18px), transparent); }
   #nav-inbox .tray { display: block; }
   #nav-inbox .t { position: absolute; width: 1px; height: 1px; overflow: hidden;
                   clip-path: inset(50%); white-space: nowrap; }
   #nav-inbox .badge { margin-left: 2px; }
-  .board { --row-gap: 28px; }
+  /* no edges on a phone: a lane reads straight down, its cards close together */
+  .board { --row-gap: 10px; }
+  .board svg.edges, .board .legend { display: none; }
   /* a box of several lanes stacks them, lane by lane (`--o`: lane, then depth), so each reads
      straight down; a lane after the first starts a little apart */
-  .box > .rows { display: flex; flex-direction: column; align-items: center; }
-  .box > .rows > .row { display: contents; }
-  .box > .rows .node { order: var(--o, 0); margin: 0 0 var(--row-gap); }
-  .box > .rows .node.lane-top { margin-top: 14px; }
+  .box .rows { display: flex; flex-direction: column; align-items: center; }
+  .box .rows > .row { display: contents; }
+  .box .rows .node { order: var(--o, 0); margin: 0 0 var(--row-gap); }
+  .box .rows .node.lane-top { margin-top: 14px; }
+  .fold-box > summary { padding: 8px 10px 8px 12px; }
+  .fold-box > .rows { padding: 8px 12px 12px; }
   .row .lane-start { margin-left: 0; }
   .boxes { gap: 10px; }
   .boxes.boxed > .box { padding: 12px; }
@@ -571,7 +649,20 @@ main > .phead + * { margin-top: 0; }
   .legend { justify-content: flex-start; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
   .drawer { width: 100vw; border-left: 0; padding: 16px 16px 40px; }
-  .scrim { position: fixed; inset: 0; z-index: 19; background: var(--scrim); }
+  /* tap targets at least 44px tall */
+  form.switch button, .pager a, nav.seg a, form.filters label, details.kinds > summary {
+    min-height: 44px; display: inline-flex; align-items: center; }
+  .pager a { padding: 0 6px; }
+  form.filters label { padding-right: 4px; }
+  details.kinds { flex-basis: 100%; }
+  details.kinds > summary { gap: 6px; padding: 0 12px; border: 1px solid var(--input);
+                            border-radius: 8px; color: var(--foreground); }
+  details.kinds[open] .chev { transform: rotate(180deg); }
+  details.kinds[open] > summary { margin-bottom: 8px; }
+  /* the Types pill keeps its size; a clear border makes its target 44px tall */
+  .types-toggle { border: 12px solid transparent; border-width: 12px 0;
+                  background-clip: padding-box; box-shadow: inset 0 0 0 1px var(--input);
+                  margin: -12px 0; }
   dl.kv { grid-template-columns: 1fr; gap: 2px; }
   dl.kv dd { margin-bottom: 10px; }
   .fn .ports { grid-template-columns: 1fr; gap: 6px; }
@@ -579,6 +670,6 @@ main > .phead + * { margin-top: 0; }
   .bar { width: 120px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .spin, .flip { animation: none; }
+  .spin, .flip, .drawer { animation: none; }
   * { transition: none !important; }
 }

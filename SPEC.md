@@ -535,8 +535,17 @@ raw HTML escaped, unsafe link schemes refused).
   the address names (`#th-<thread>`). A step's detail links to its thread (`step-<id>`) with
   its count of messages and of open questions. Markdown anywhere on the dashboard (a spec, a
   message, a value) has its top heading shifted to an h4, under the page's own headings.
+- **What is stuck.** A pending step that a failed step holds up, directly or through other
+  pending steps, is **blocked** (a paused one counts as paused instead). A project with failed
+  steps leads its page and its index row with one line: the failed steps (the first two, each
+  a link to its detail, then "n more"), "failed", how many steps they block and how many are
+  paused, after "Stopped:" when nothing is running (`Stopped: a and b failed, blocking 4
+  steps · 11 paused`). It reports; it does not ask (not red, not the inbox). The browser tab's
+  title leads with `n failed ·` (the project's, or on the index every active project's),
+  kept current as the page's parts update.
 - `GET /`: one row per active project, and the archived ones folded under
-  "Archived (n)"; each row: name, description (two lines), a progress bar by status with "n of m"
+  "Archived (n)"; each row: the project's status glyph and name, the line above when steps
+  failed, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time) or why nothing
   is, and the last activity (the later of the last log record and the last state write).
   When the runner's heartbeat (`SLUICE_HOME/runner.json`'s `beat`) is older than 15 s, the
@@ -546,7 +555,8 @@ raw HTML escaped, unsafe link schemes refused).
 - `GET /projects/<name>`: under the nav naming the project (its sections: Plan, Threads,
   History, the log filtered to the history kinds, Log, and Functions, the functions as the
   project sees them), first whether the work moves: a progress bar by status and one line
-  (succeeded of total, running, stale, failed, total `cost_usd`, last activity) with the Pause
+  (succeeded of total, skipped, running, stale, failed, blocked, paused, total `cost_usd`, last
+  activity; the bar's label counts the same) with the Pause
   and Archive switches; then the description (markdown, folded to its opening, then "Show
   more"; a paused or archived project says so), then the **board**. Its **lanes** are the
   steps joined by handoffs (an edge that carries a value; `after` only orders), so independent
@@ -554,14 +564,22 @@ raw HTML escaped, unsafe link schemes refused).
   independent piece of work, its own quiet box when there are several; the boxes wrap, in
   the plan's order, and no edge crosses between them. A box is rows by dependency depth
   (`after` counts) from its first step; in a row its cards stand lane by lane, and a row too
-  wide wraps within itself. On a phone a box stacks its lanes one after another. Inside a lane, each row is sorted by where its neighbours sit, a few sweeps down and up, so
+  wide wraps within itself. On a phone a box stacks its lanes one after another, and the
+  board draws no edges. A box of several steps that have all succeeded (skipped ones count
+  when the rest succeeded) folds to one line (`<details>`: the first step's id, "… last step
+  · n steps · all succeeded"), which opens to its cards; open, it stays open through live
+  updates and, per browser tab, a reload. No edge joins two boxes, so a folded box hides only
+  its own edges. The plan's order is kept. Inside a lane, each row is sorted by where its
+  neighbours sit, a few sweeps down and up, so
   edges seldom cross. Each step is a compact bubble: its status glyph, its id and, small, how
   long it ran (live while running) and `done/total` for a scattered step; its tooltip is its
   doc and what it says now (a running step's last non-empty stderr line, a failed step's
   error, what a pending step waits on, "its inputs changed" when stale). A running step that
   has written nothing for 15 minutes (the newest stderr.log mtime of its runs that have not
   finished, else their run dirs') is quiet: its card adds `· quiet 42m` and the line reads
-  `Quiet for 42m. Last output: …`. A pending step whose
+  `Quiet for 42m. Last output: …`. A blocked step's card says `blocked`. A failed step's
+  line (tooltip, log summary, the head of its Error) is its error's last non-empty line,
+  where a traceback names the exception. A pending step whose
   unfinished upstream steps are all running is next in line and reads at full strength;
   pending steps further off are faint. Everything else is one click away in the step's detail.
   Built-ins that run inline (`core.*`) are dashed bubbles. The server lays out the board, so
@@ -570,24 +588,37 @@ raw HTML escaped, unsafe link schemes refused).
   on one side spread along it (from its `edges` attribute: `[from, to, "output → input"]`); an
   edge that passes rows of bubbles runs through the nearest gap in each, never behind a bubble.
   A legend under the board names the solid (hands on a value) and dashed (runs after) lines.
-  Hovering or focusing a bubble traces it: its edges light up and name their ports, each name
-  by the bubble at the other end, and the rest dims; the arrow keys move between bubbles. A
+  Hovering or keyboard-focusing a bubble traces it: its edges light up and name their ports,
+  each name by the bubble at the other end, and the rest recede (their text stays at least
+  3:1); the arrow keys move between bubbles (Down and Up to the next row that way, a bubble
+  joined to this one by an edge first, else the nearest across). A bubble's accessible name is
+  its status, id and time (`failed, a, 1h 14m`). A
   bubble links to the step's page; with JavaScript it opens the step in a drawer (the
   `<sluice-drawer>`) instead (the address becomes `#step:<id>`, so Back and a shared link work;
-  Escape closes it). Under the board: the **Result** (the plan's outputs that have a value; a
+  Escape, the close button, the scrim or a click on the page around the board (not on a card,
+  link, control or the switcher) close it, and focus returns to the card). From 1200px the
+  drawer stands beside the page, which makes room for it (the board reflows, the opened card
+  scrolls into view); from 721px to 1199px it is over the page on a scrim; below 720px it is a
+  full-screen modal dialog and the page behind it is inert. The page's first tab stop is
+  "Skip to plan", and a polite live region announces status changes the stream brings
+  (`a failed`). Under the board: the **Result** (the plan's outputs that have a value; a
   long text folds to its first lines, markdown rendered) and the plan's inputs (name, value,
   doc).
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
-  read like a run history: its id and doc, then a grid of facts (status, what a pending step
-  waits on, each a link to that step with its status, fn, runs done of total for a scattered
-  step, started, duration, cost as money, session), the Pause switch and a link to its thread
-  on the Threads tab; its error; its progress (the tail of the current run's stderr, while
+  read like a run history: its id and doc, then a grid of facts (status, `blocked` for a
+  blocked step, fn, runs done of total for a scattered step, started, duration, cost as money,
+  session; then on rows of their own what a pending step waits on, what it runs after, its
+  `when`, and for a failed step the steps it blocks, each a link to that step led by its
+  status glyph), the Pause switch where pausing acts (a pending, failed or stale step; Resume
+  on any paused step; pausing never stops a running one) and a link to its thread on the
+  Threads tab; its error (its last line, then the whole text scrolled to its end); its
+  progress (the tail of the current run's stderr, while
   running); its outputs (while running, what the agent has submitted so far), its prompt (the binding
   named `prompt`, `spec`, `task`, `instructions` or `brief`) and its other inputs (the run's
   own `input.json`, else what the binding resolves to now), each value under its name with
   its doc and, for an input, where it comes from as a small link (`← step/output`, or
   `← input name`; nothing for a value set in the plan). Types show on demand: in the name's
-  title always, beside every name with the Types switch (remembered per browser). Text that
+  title always, beside every name with the one Types switch (remembered per browser). Text that
   reads as markdown is rendered, other multi-line text and structures read as code, an inbox
   answer as what was chosen; a long value folds to its first lines ("Show all"). Then the
   stderr of a finished run ("Log output", folded past six lines) and, when it ran more than
@@ -598,7 +629,10 @@ raw HTML escaped, unsafe link schemes refused).
   shareable: `kind` (repeated or comma-separated; exact kinds or the `step`/`plan` groups) and
   `thread` (comma-separated), the §6b filter `log_read` uses. A row shows seq, time, kind and a
   one-line summary (`s2 succeeded → stale`, `rev 7 by orch: reason (2 ops)`, `questions from
-  e2e: body…`, `<call> <fn> <status>`, `logic submitted interface, branch`) and expands to the full record as JSON. A
+  e2e: body…`, `e2e → orchestrator: body…` on a step's own thread, `<call> <fn> <status>`,
+  `logic submitted interface, branch`, `a: run r1 still running; the new runner watches it`,
+  `run r9 stopped: no step or call claimed it`) and expands to the full record as JSON. On a
+  phone the kind filter folds behind its summary (`Filter: all kinds`, `Filter: 3 kinds`). A
   `thread.post` call's `call` records are hidden unless the filter selects `call` (a failed
   one still shows); the tools list everything. Unknown kinds or a
   bad seq are a 400 page.

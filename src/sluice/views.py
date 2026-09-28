@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import functools
 import html
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -253,12 +254,13 @@ X_ICON = ('<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><p
           'stroke-linecap="round"/></svg>')
 
 
-def glyph(status: str) -> str:
-    """The status glyph with its word for assistive technology."""
+def glyph(status: str, sep: str = "") -> str:
+    """The status glyph with its word for assistive technology (then `sep`, e.g. ", ", so a
+    link that starts with it reads "failed, a" rather than "failed a")."""
     word = WORDS.get(status, status)
     return (f'<span class="g g-{e(status)}" title="{e(word)}"><svg viewBox="0 0 16 16" '
             f'width="16" height="16" aria-hidden="true">{GLYPHS.get(status, GLYPHS["pending"])}'
-            f'</svg><span class="vh">{e(word)}</span></span>')
+            f'</svg><span class="vh">{e(word + sep)}</span></span>')
 
 
 # ---- layout -----------------------------------------------------------------------------
@@ -305,14 +307,19 @@ def project_head(project: str, tab: str | None) -> str:
     return f'<h1 class="vh">{e(project)}</h1>'
 
 
-def _project_mark(counts: Mapping[str, int]) -> str:
-    """One glyph for a whole project: running, failed, stale, finished, or waiting."""
+def _project_status(counts: Mapping[str, int]) -> str:
+    """One status for a whole project: running, failed, stale, finished, or waiting."""
     total = sum(counts.values())
     for status in ("running", "failed", "stale"):
         if counts.get(status):
-            return glyph(status)
+            return status
     done = counts.get("succeeded", 0) + counts.get("skipped", 0)
-    return glyph("succeeded" if total and done == total else "pending")
+    return "succeeded" if total and done == total else "pending"
+
+
+def _project_mark(counts: Mapping[str, int]) -> str:
+    """One glyph for a whole project (the switcher's menu)."""
+    return glyph(_project_status(counts), ", ")
 
 
 def _current(item: str, here: str, sub: bool = False) -> str:
@@ -371,27 +378,32 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
            signals: Mapping[str, Any] | None = None, main_attrs: str = "",
            inbox: int | None = None, script: str = "", here: str = "", sub: bool = False,
            board: bool = False, store: Store | None = None, project: str | None = None,
-           tab: str | None = None) -> str:
+           tab: str | None = None, skip: tuple[str, str] | None = None, tail: str = "") -> str:
     """A page. With `stream`, Datastar opens that SSE stream once the page has loaded (with
     `signals`, the page's Datastar signals, sent along as the `datastar` query parameter).
     `inbox` is the count of open items for the nav's badge; `script` a module to load; `here`
     the nav entry of this page, `project` and `tab` the chosen project and its section (`sub`:
     a page inside that entry, as a step is inside Plan); `store` lists the projects for the
     nav's switcher; `board` loads static/sluice.js (times, and the board, drawer and thread
-    components)."""
+    components). `skip` is a (target id, text) link past the nav, the first thing a keyboard
+    reaches; `tail` goes after `main` (the step drawer, which must stay reachable when the
+    page is inert behind it)."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
     scripts = "".join(f'<script type="module" src="{e(s)}"></script>'
                       for s in (script, "/static/sluice.js" if board else "",
                                 "/static/nav.js" if nav else "") if s)
     top = top_nav(store, project, tab, here, inbox, sub) if nav else ""
     body_attrs = f' data-signals="{_signals(signals)}"' if signals else ""
+    if skip:
+        top = f'<a class="skip" href="#{e(skip[0])}">{e(skip[1])}</a>{top}'
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
     return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{e(title)} · sluice</title>"
             f'<link rel="stylesheet" href="{FONT_CSS}"><style>{CSS}</style>{head}</head>\n'
-            f"<body{body_attrs}>{top}<main{main_attrs}>\n{body}\n</main>{scripts}</body></html>\n")
+            f"<body{body_attrs}>{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"
+            "</body></html>\n")
 
 
 def _part(pid: str, inner: str, tag: str = "div", cls: str = "") -> str:
@@ -544,6 +556,50 @@ class Board:
         costs = [b.cost for b in self.blocks.values() if b.cost is not None]
         return sum(costs) if costs else None
 
+    @functools.cached_property
+    def held(self) -> dict[str, list[str]]:
+        """Each pending step a failure holds up: its id → the failed steps upstream of it,
+        directly or through other pending steps (paused ones too), in plan order."""
+        memo: dict[str, set[str]] = {}
+
+        def up(sid: str) -> set[str]:
+            if sid not in memo:
+                memo[sid] = set()  # (the plan is acyclic; this only guards the recursion)
+                out: set[str] = set()
+                for d in self.blocks[sid].waits:
+                    b = self.blocks.get(d)
+                    if b is None:
+                        continue
+                    if b.status == "failed":
+                        out.add(d)
+                    elif b.status == "pending":
+                        out |= up(d)
+                memo[sid] = out
+            return memo[sid]
+
+        order = list(self.blocks)
+        return {sid: sorted(up(sid), key=order.index) for sid, b in self.blocks.items()
+                if b.status == "pending" and up(sid)}
+
+    def blocked(self, sid: str) -> bool:
+        """A pending step a failed step holds up that is not paused itself (a paused one is
+        counted as paused)."""
+        return sid in self.held and self.blocks[sid].mark == "pending"
+
+    def blocks_of(self, failed: str) -> list[str]:
+        """The pending steps a failed step holds up, in plan order."""
+        return [sid for sid, ups in self.held.items() if failed in ups]
+
+    @property
+    def stuck(self) -> dict[str, int]:
+        """How many pending steps wait on a failure (`blocked`) or are paused (`paused`)."""
+        paused = sum(b.mark == "paused" for b in self.blocks.values())
+        return {"blocked": sum(map(self.blocked, self.blocks)), "paused": paused}
+
+    @property
+    def failed(self) -> list[str]:
+        return [sid for sid, b in self.blocks.items() if b.status == "failed"]
+
 
 def load_board(store: Store, project: str) -> Board:
     info = store.project(project)
@@ -609,6 +665,13 @@ def quiet_text(age: float, line: str) -> str:
     return f"Quiet for {dur(age)}. " + (f"Last output: {line}" if line else "No output yet.")
 
 
+def error_headline(error: Any, width: int = 200) -> str:
+    """What went wrong, in one line: an error's last non-empty line (a traceback, or a
+    command's output, ends with the exception), at most `width` characters."""
+    lines = [ln.strip() for ln in str(error or "").splitlines() if ln.strip()]
+    return _line(lines[-1], width) if lines else ""
+
+
 def _short(value: Any, width: int = 120) -> str:
     """A value in one line: text as it is, anything else as compact JSON."""
     if isinstance(value, str):
@@ -651,7 +714,7 @@ def block_line(store: Store, board: Board, block: Block) -> tuple[str, str]:
             return "progress", quiet_text(act[1], line)
         return "progress", line
     if status == "failed":
-        return "error", _line(block.entry.get("error") or "failed", 200)
+        return "error", error_headline(block.entry.get("error")) or "failed"
     if status == "stale":
         return "note", "Its inputs changed since it ran"
     if status == "skipped":
@@ -961,7 +1024,8 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
     """A step on the board: a compact bubble with its status glyph, its id and, small, how long
     it ran (and `done of total` for a scattered step). Everything else is one click away in the
     drawer; the doc and what it says now (progress, error, what it waits on) are its tooltip.
-    A pending step next in line (`is-next`) reads at full strength."""
+    A pending step next in line (`is-next`) reads at full strength; one a failed step holds up
+    (`is-blocked`) says "blocked". Its accessible name reads "failed, a, 1h 14m"."""
     tag = "a" if live else "div"
     href = f' href="{e(step_href(board.project, b.sid))}" data-step="{e(b.sid)}"' if live else ""
     kind, text = block_line(store, board, b)
@@ -973,11 +1037,12 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
     tip = " — ".join(t for t in (" ".join(b.doc.split()), now) if t)
     title = f' title="{e(tip)}"' if tip else ""
     nxt = " is-next" if is_next(board, b) else ""
+    nxt += " is-blocked" if board.blocked(b.sid) else ""
     attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}{nxt}'
              f'{" lane-start" if lane_start else ""}{" lane-top" if lane_top else ""}"'
              f'{"" if order is None else f' style="--o:{order}"'} '
              f'id="n-{e(b.sid)}" data-node="s:{e(b.sid)}"{href}{title}')
-    small = []
+    small = ["blocked"] if board.blocked(b.sid) else []
     if "total" in b.entry:
         small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
     if _elapsed(b):
@@ -988,7 +1053,11 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
         text = f"{' · ' if small else ''}quiet {dur(act[1])}" if act[1] >= QUIET else ""
         inner += f'<span class="quiet" data-quiet="{e(act[0])}">{e(text)}</span>'
     tail = f'<span class="dur">{inner}</span>' if inner else ""
-    return f'<{tag} {attrs}>{glyph(b.mark)}<span class="sid">{e(b.sid)}</span>{tail}</{tag}>'
+    # a comma for the accessible name, inline in the id's box (a hidden box of its own would
+    # read "a , 1h")
+    sep = '<span class="sep">,</span>' if inner else ""
+    return (f'<{tag} {attrs}>{glyph(b.mark, ", ")}<span class="sid">{e(b.sid)}{sep}</span>'
+            f"{tail}</{tag}>")
 
 
 LEGEND_DATA = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20" '
@@ -1002,9 +1071,10 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
     edge joins, handoff or `after`) its own box when there are several, the boxes wrapping.
     A box is rows by dependency depth from its first step; in a row, its cards stand grouped
     by lane (the steps joined by handoffs), lane by lane, and a row too wide wraps within
-    itself. The server lays the cards out (the order reads without JavaScript); the
-    <sluice-board> component (static/sluice.js) draws the edges between them from its `edges`
-    attribute, around the cards they would cross."""
+    itself. A box of several steps that have all succeeded (or were skipped) is folded to one
+    line, a <details> that opens to its cards. The server lays the cards out (the order reads
+    without JavaScript); the <sluice-board> component (static/sluice.js) draws the edges
+    between them from its `edges` attribute, around the cards they would cross."""
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
@@ -1026,8 +1096,13 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
                                        order=n * 1000 + d - top if len(box) > 1 else None,
                                        lane_top=n > 0 and k == 0 and d == min(groups[i])))
             rows.append(f'<li class="row" style="--r:{d - top + 1}">{"".join(cards)}</li>')
-        html.append(f'<li class="box"><ol class="rows" style="--rows:{depths_in[-1] - top + 1}">'
-                    f'{"".join(rows)}</ol></li>')
+        inner = (f'<ol class="rows" style="--rows:{depths_in[-1] - top + 1}">'
+                 f'{"".join(rows)}</ol>')
+        ids = [sid for d in depths_in for i in box for sid in groups[i].get(d, [])]
+        if len(boxes) > 1 and len(ids) > 1 and _done(board, ids):
+            html.append(f'<li class="box done">{_folded(board, ids, inner)}</li>')
+        else:
+            html.append(f'<li class="box">{inner}</li>')
     es = edges(board)
     data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in es], ensure_ascii=False)
     legend = ""
@@ -1040,6 +1115,25 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
             f'<svg class="edges" aria-hidden="true" data-ignore-morph></svg>'
             f'<ol class="boxes{" boxed" if len(boxes) > 1 else ""}">{"".join(html)}</ol>'
             f"</div>{legend}</sluice-board>")
+
+
+def _done(board: Board, ids: list[str]) -> bool:
+    """Whether a box's work is finished: every step succeeded (by hand too), or was skipped
+    while the rest succeeded."""
+    marks = {board.blocks[sid].status for sid in ids}
+    return marks <= {"succeeded", "skipped"} and "succeeded" in marks
+
+
+def _folded(board: Board, ids: list[str], inner: str) -> str:
+    """A finished box folded to one line: its first and last steps, how many, and how they
+    ended; it opens to its cards (open across live updates, and per tab in sessionStorage)."""
+    skipped = sum(board.blocks[sid].status == "skipped" for sid in ids)
+    ended = f"{len(ids) - skipped} succeeded, {skipped} skipped" if skipped else "all succeeded"
+    return (f'<details class="fold-box" data-preserve-attr="open" data-box="{e(ids[0])}">'
+            f'<summary>{glyph("succeeded", ", ")}<span class="sid">{e(ids[0])}</span>'
+            f'<span class="fb-meta"><span aria-hidden="true"> … </span><span class="vh"> to </span>'
+            f'{e(ids[-1])} · {len(ids)} steps · {ended}</span>{CHEVRON}</summary>'
+            f"{inner}</details>")
 
 
 def result_panel(board: Board) -> str:
@@ -1103,15 +1197,52 @@ def first_paragraph(text: str) -> str:
 
 
 def _summary_line(board: Board, updated: str = "") -> str:
-    counts, total = board.counts, len(board.blocks)
+    """Succeeded of total, then what else there is: skipped, running, stale, failed, and of
+    the pending steps those a failure blocks and those paused; the cost, the last activity."""
+    counts, total = {**board.counts, **board.stuck}, len(board.blocks)
     bits = [f"{counts.get('succeeded', 0)} of {total} succeeded"] if total else ["no steps"]
-    bits += [f"{counts[s]} {s}" for s in ("skipped", "running", "stale", "failed")
-             if counts.get(s)]
+    bits += [f"{counts[s]} {s}" for s in ("skipped", "running", "stale", "failed", "blocked",
+                                          "paused") if counts.get(s)]
     if board.cost is not None:
         bits.append(_money(board.cost))
     if updated:
         bits.append(f"updated {_when(updated)}")
     return " · ".join(bits)
+
+
+def attention(board: Board, link: Callable[[str], str], drawer: bool = False,
+              mark: bool = True) -> str:
+    """The line a project with failed steps leads with: which steps failed (each a link, from
+    `link(sid)`; with `drawer`, one that opens the step drawer; after the glyph unless not
+    `mark`), how many pending steps they block, how many are paused; "Stopped:" first when
+    nothing is running. Failures are the orchestrator's to retry, so this reports and does not
+    ask (the inbox asks). Empty for a project with none."""
+    failed, stuck = board.failed, board.stuck
+    if not failed:
+        return ""
+    names = [f'<a href="{e(link(sid))}"{f' data-step="{e(sid)}"' if drawer else ""}>{e(sid)}</a>'
+             for sid in failed[:2]]
+    if len(failed) > 2:
+        names.append(f"{len(failed) - 2} more")
+    text = (", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0])
+    text += " failed"
+    if stuck["blocked"]:
+        text += f', blocking {stuck["blocked"]} step{"s" if stuck["blocked"] != 1 else ""}'
+    if stuck["paused"]:
+        text += f' · {stuck["paused"]} paused'
+    lead = "" if board.counts.get("running") else "Stopped: "
+    icon = f'<span aria-hidden="true">{glyph("failed")}</span>' if mark else ""
+    return f'<p class="stuck">{icon}<span>{lead}{text}</span></p>'
+
+
+def failed_total(store: Store) -> int:
+    """How many steps have failed across the active projects (the index's tab title)."""
+    return sum(p["counts"].get("failed", 0) for p in store.projects() if not p["archived"])
+
+
+def _title_mark(failed: int) -> str:
+    """What the tab title leads with (`2 failed · `), kept current by static/sluice.js."""
+    return f'<span hidden data-title-failed="{failed}"></span>'
 
 
 # ---- the project index ------------------------------------------------------------------
@@ -1166,10 +1297,16 @@ def last_change(store: Store, project: str) -> str:
     return max(times) if times else ""
 
 
-def _bar(counts: Mapping[str, int], total: int) -> str:
-    """Progress by status, proportional, with the same counts as text for assistive tech."""
+def _bar(counts: Mapping[str, int], total: int,
+         stuck: Mapping[str, int] | None = None) -> str:
+    """Progress by status, proportional, with the same counts as text for assistive tech (the
+    pending ones split into blocked, paused and the rest, from `stuck`)."""
     order = ("succeeded", "skipped", "running", "stale", "failed", "pending")
-    said = ", ".join(f"{counts[s]} {s}" for s in order if counts.get(s))
+    said = ", ".join(f"{counts[s]} {s}" for s in order[:-1] if counts.get(s))
+    held = {k: n for k, n in (stuck or {}).items() if n}
+    rest = counts.get("pending", 0) - sum(held.values())
+    said = ", ".join(x for x in (said, *(f"{n} {k}" for k, n in held.items()),
+                                 f"{rest} pending" if rest else "") if x)
     segs = "".join(f'<i class="b-{s}" style="flex:{counts[s]}"></i>'
                    for s in order if counts.get(s))
     return f'<span class="bar" role="img" aria-label="{e(said or "no steps")}">{segs}</span>' \
@@ -1190,6 +1327,7 @@ def _project_row(store: Store, name: str) -> str:
                 f'{about}<p class="now attn">The plan does not validate: {e(_line(msg, 120))}'
                 f"</p></li>")
     counts, total = board.counts, len(board.blocks)
+    stuck = attention(board, lambda sid: f"{href}#step:{quote(sid)}", mark=False)
     running = [b for b in board.blocks.values() if b.status == "running"]
     if running:
         now = "".join(
@@ -1202,6 +1340,8 @@ def _project_row(store: Store, name: str) -> str:
         now = '<p class="now">Paused.</p>'
     elif total and counts.get("succeeded", 0) + counts.get("skipped", 0) == total:
         now = '<p class="now">Finished.</p>'
+    elif stuck:
+        now = ""  # the attention line says it
     elif counts.get("failed") or counts.get("stale"):
         now = '<p class="now">Stopped: nothing is running.</p>'
     elif total:
@@ -1209,10 +1349,11 @@ def _project_row(store: Store, name: str) -> str:
     else:
         now = '<p class="now">No steps yet.</p>'
     done = f"{counts.get('succeeded', 0)} of {total}" if total else ""
-    return (f'<li class="proj"><div class="p-head"><a href="{href}">{e(name)}</a>'
-            f'<span class="meta">{_when(when) if when else ""}</span></div>{about}'
-            f'<div class="p-state">{_bar(counts, total)}<span class="meta">{done}</span></div>'
-            f"{now}</li>")
+    last = f'<span class="meta">{_when(when)}</span>' if when else ""
+    return (f'<li class="proj"><div class="p-head"><a href="{href}">'
+            f'{glyph(_project_status(counts), ", ")}<span>{e(name)}</span></a>{last}</div>'
+            f'{stuck}{about}<div class="p-state">{_bar(counts, total, board.stuck)}'
+            f'<span class="meta">{done}</span></div>{now}</li>')
 
 
 def index_parts(store: Store) -> dict[str, str]:
@@ -1228,14 +1369,17 @@ def index_parts(store: Store) -> dict[str, str]:
         body += (f'<details class="archived" data-preserve-attr="open"><summary>Archived '
                  f'({len(old)})</summary><ul class="projects">'
                  f'{"".join(_project_row(store, n) for n in old)}</ul></details>')
-    return {"projects": _part("projects", runner_note(store) + body),
+    return {"projects": _part("projects", runner_note(store) + body
+                              + _title_mark(failed_total(store))),
             "nav-inbox": nav_inbox(open_count(store))}
 
 
 def index(store: Store, ver: str | None = None) -> str:
     """The project index; live (streaming from /stream) when given the home's version `ver`."""
     parts = index_parts(store)
-    return layout("Projects", f'<h1 class="vh">Projects</h1>'
+    failed = failed_total(store)
+    return layout(f"{failed} failed · Projects" if failed else "Projects",
+                  f'<h1 class="vh">Projects</h1>'
                   f'{parts["projects"]}', stream="/stream" if ver else None,
                   signals={"ver": ver} if ver else None, inbox=open_count(store), here="/",
                   store=store,
@@ -1281,7 +1425,9 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     note += '<p class="attn-note">Archived: listed apart from the other projects.</p>' \
         if archived else ""
     counts, total = board.counts, len(board.blocks)
-    line = (f'<div class="sumline">{_bar(counts, total)}<p class="meta sum">'
+    stuck = attention(board, lambda sid: step_href(project, sid), drawer=live) if live else \
+        attention(board, lambda sid: f"#step-{sid}")
+    line = (f'{stuck}<div class="sumline">{_bar(counts, total, board.stuck)}<p class="meta sum">'
             f'{_summary_line(board, last_change(store, project))}</p>')
     if live:
         line += (f'<div class="switches">{_pause_form(project, paused)}'
@@ -1289,7 +1435,8 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     line += "</div>"
     # first whether the work is moving (and the switches), then what the project is; what the
     # plan took and produced sits under the board
-    parts = {"summary": _part("summary", line + note + _about(about)),
+    parts = {"summary": _part("summary", line + note + _about(about)
+                              + _title_mark(len(board.failed))),
              "graph": _part("graph", board_html(store, board, live)),
              "result": _part("result", result_panel(board) + inputs_strip(board), "section",
                              "plan-facts")}
@@ -1301,7 +1448,10 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
 def _drawer(project: str) -> str:
     """The step drawer, a <sluice-drawer>: `$step` (from the address's `#step:<id>`) opens it
     and streams that step's detail into it; the component (static/sluice.js) opens it from a
-    step link, closes it (Escape, the close button, the scrim) and gives focus back."""
+    step link, closes it (Escape, the close button, the scrim, a click on the page around the
+    board) and gives focus back. A labelled region beside the page; on a phone a modal dialog
+    (the component sets its role and makes the page behind it inert). Then the polite live
+    region the board announces status changes in."""
     url = f"'/projects/{quote(project)}/steps/' + encodeURIComponent($step) + '/stream'"
     effect = (f"$step ? @get({url}, {{retry: 'always', retryMaxCount: 1000000, "
               f"requestCancellation: window.sluiceStream ? window.sluiceStream() : 'auto'}}) "
@@ -1312,11 +1462,12 @@ def _drawer(project: str) -> str:
             f'<div class="scrim" style="display:none" data-show="$step != \'\'" '
             f'data-on:click="window.sluiceClose && window.sluiceClose()"></div>'
             f'<aside id="drawer" class="drawer" style="display:none" tabindex="-1" '
-            f'aria-label="Step" data-show="$step != \'\'" data-effect="{e(effect)}" '
+            f'aria-labelledby="d-title" data-show="$step != \'\'" data-effect="{e(effect)}" '
             f'data-init="{e(hash_to_step)}" data-on:hashchange__window="{e(hash_to_step)}">'
             f'<button type="button" class="close" aria-label="Close" '
             f'data-on:click="window.sluiceClose && window.sluiceClose()">{X_ICON}</button>'
-            f'<div id="step-detail"></div></aside></sluice-drawer>')
+            f'<div id="step-detail"></div></aside></sluice-drawer>'
+            f'<div id="announce" class="vh" role="status" aria-live="polite"></div>')
 
 
 def project_page(store: Store, project: str, ver: str | None = None) -> str:
@@ -1327,19 +1478,20 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     p = _project(store, project, live)
     body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}'
             f'{p["graph"]}{p["result"]}')
-    if live:
-        body += _drawer(project)
-    else:
-        board = load_board(store, project)
+    board = load_board(store, project)
+    failed = len(board.failed)
+    if not live:
         body += "".join(
             f'<details class="std" id="step-{e(sid)}"><summary>{glyph(b.mark)}'
             f"<span>{e(b.title)}</span></summary>{step_detail(store, project, sid, False)}"
             f"</details>" for sid, b in board.blocks.items())
-    return layout(project, body, nav=live,
+    return layout(f"{failed} failed · {project}" if failed else project, body, nav=live,
                   stream=f"/projects/{project}/stream" if live else None,
                   signals={"ver": ver, "step": "", "sver": ""} if live else None,
                   inbox=open_count(store) if live else None, here="/", board=live,
-                  store=store, project=project, tab="plan")
+                  store=store, project=project, tab="plan",
+                  skip=("graph", "Skip to plan") if live else None,
+                  tail=_drawer(project) if live else "")
 
 
 def render(store: Store, project: str, fmt: str) -> str:
@@ -1472,11 +1624,26 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     if b is None:
         raise NotFound(f"the plan of project {project} has no step {sid!r}")
     outs_all = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else {}
-    facts = [("Status", e(WORDS.get(b.mark, b.status))), ("Function", f"<code>{e(b.fn)}</code>")]
+
+    def steps(ids: Iterable[str]) -> str:
+        """Steps as links (the drawer's, live), each led by its status glyph."""
+        return ", ".join(
+            f'<span class="dep">{glyph(board.blocks[d].mark, ", ")}'
+            + (f'<a href="{e(step_href(project, d))}" data-step="{e(d)}">{e(d)}</a>' if live
+               else e(d)) + "</span>" for d in ids if d in board.blocks)
+
+    status = "blocked" if board.blocked(sid) else WORDS.get(b.mark, b.status)
+    facts = [("Status", e(status)), ("Function", f"<code>{e(b.fn)}</code>")]
+    wide: list[tuple[str, str]] = []  # facts that take a row of their own and wrap
     if b.when is not None:
-        facts.append(("When", f"<code>{e(str(b.when))}</code>"))
+        ref = e(str(b.when))
+        if b.when.step in board.blocks:
+            ref = steps([b.when.step]).replace(f">{e(b.when.step)}</", f">{ref}</", 1)
+        wide.append(("When", ref))
     if b.after:
-        facts.append(("After", ", ".join(f"<code>{e(a)}</code>" for a in b.after)))
+        wide.append(("After", steps(b.after)))
+    if b.status == "failed" and (held := board.blocks_of(sid)):
+        wide.append(("Blocks", steps(held)))
     if b.tags:
         facts.append(("Tags", ", ".join(e(t) for t in b.tags)))
     if "total" in b.entry:
@@ -1497,12 +1664,9 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         doc += f'<p class="d-doc attn-note">Paused{": " + e(b.pause_reason) if b.pause_reason else ""}</p>'
     waits = waits_on(board, b)
     if waits:
-        links = ", ".join(
-            (f'<a href="{e(step_href(project, d))}" data-step="{e(d)}">{e(d)}</a>' if live
-             else e(d)) + f' <span class="quiet">({e(WORDS.get(m, m))})</span>'
-            for d, m in waits)
-        facts.insert(1, ("Waits on", links))
+        wide.insert(0, ("Waits on", steps(d for d, _ in waits)))
     grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
+    grid += "".join(f'<div class="wide"><dt>{k}</dt><dd>{v}</dd></div>' for k, v in wide)
     thread = f"step-{sid}"  # its conversation with the orchestrator, on the Threads tab
     recs = L.read(store.log_dir(project), threads=[thread],
                   kinds=["step.status", "step.output", "message"])["records"]
@@ -1514,20 +1678,31 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         n += f' · <span class="attn">{waiting} awaiting reply</span>' if waiting else ""
         talk = (f'<a class="d-thread" href="{e(threads_href(project, thread))}">Thread · {n}'
                 f"</a>")
-    switch = f'<div class="d-actions">{_pause_form(project, b.paused, sid)}{talk}' \
-        "</div>" if live else ""
-    head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2>{e(sid)}</h2></div>'
-            f'{doc}<dl class="facts">{grid}</dl>{switch}</header>')
+    # pausing holds a step that has not started; it never stops a running one (SPEC §6), and
+    # a finished one would not run again anyway: the switch shows only where it acts
+    pause = _pause_form(project, b.paused, sid) \
+        if b.paused or b.status in ("pending", "failed", "stale") else ""
+    switch = f'<div class="d-actions">{pause}{talk}</div>' if live and (pause or talk) else ""
+    hid = ' id="d-title"' if live else ""
+    head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2{hid}>{e(sid)}</h2>'
+            f'</div>{doc}<dl class="facts">{grid}</dl>{switch}</header>')
     sections = []
+    # one Types switch, on the first section of values
+    types = [('<button type="button" class="types-toggle" aria-pressed="false" '
+              'title="Show the types of the values">Types</button>')]
 
     def section(title: str, body: str, extra: str = "") -> None:
         sections.append(f'<section class="d-sec"><div class="d-sec-h">{_label(title)}{extra}'
                         f"</div>{body}</section>")
 
-    types_switch = ('<button type="button" class="types-toggle" aria-pressed="false" '
-                    'title="Show the types of the values">Types</button>')
+    def types_switch() -> str:
+        return types.pop() if types else ""
+
     if b.entry.get("error"):
-        section("Error", f'<pre class="err">{e(b.entry["error"])}</pre>')
+        err = str(b.entry["error"]).strip()
+        full = (f'<div class="err-box"><pre class="err">{e(err)}</pre></div>'
+                if "\n" in err else "")  # scrolled to its end: the cause is the last line
+        section("Error", f'<p class="err-line">{e(error_headline(err))}</p>{full}')
     tail = ""
     if b.run_ids:
         d = _run_dir(store, project, b.run_ids[-1])
@@ -1567,7 +1742,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
                          b.output_docs.get(n, ""))
                   for n in dict.fromkeys([*declared, *outs]) if n not in RUN_FACTS]
         if fields:
-            section(title, f'<div class="fields">{"".join(fields)}</div>', types_switch)
+            section(title, f'<div class="fields">{"".join(fields)}</div>', types_switch())
     elif own:
         names = ", ".join(e(n) for n in own)
         section("Outputs", f'<p class="quiet">None yet. It hands on: {names}.</p>')
@@ -1609,7 +1784,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         fields.append(_field(n, field_value(v) if ok else '<span class="quiet">no value yet</span>',
                              b.fn_inputs.get(n, ""), source=_from(project, b, n, live)))
     if fields:
-        section("Inputs", f'<div class="fields">{"".join(fields)}</div>', types_switch)
+        section("Inputs", f'<div class="fields">{"".join(fields)}</div>', types_switch())
     if tail and b.status != "running":
         lines = tail.splitlines()
         body = f'<pre class="tail">{e(tail)}</pre>'
@@ -1717,6 +1892,13 @@ def _st(status: Any) -> str:
     return f'<span class="s-{e(str(status))}">{e(str(status))}</span>'
 
 
+# what a restarted runner found of a leftover run (`run.adopt`'s outcome, SPEC §6)
+ADOPTED = {"watching": "still running; the new runner watches it",
+           "finished": "had finished; its result was collected",
+           "unknown": "had stopped without saying how it ended",
+           "restarted": "was lost in the restart"}
+
+
 def log_summary(rec: dict[str, Any]) -> str:
     """One line (HTML) saying what a log record is about."""
     kind = rec.get("kind")
@@ -1725,7 +1907,7 @@ def log_summary(rec: dict[str, Any]) -> str:
         by += f": {_line(rec['reason'], 80)}"
     if kind == "step.status":
         text = e(f"{rec.get('step')} {rec.get('from') or 'new'} → ") + _st(rec.get("to"))
-        return text + (e(": " + _line(rec["error"])) if rec.get("error") else "")
+        return text + (e(": " + error_headline(rec["error"], 120)) if rec.get("error") else "")
     if kind == "plan.edit":
         return e(f"{by} ({len(rec.get('ops') or [])} ops)")
     if kind == "plan.input":
@@ -1745,7 +1927,16 @@ def log_summary(rec: dict[str, Any]) -> str:
         return text + (e(": " + _line(rec["error"])) if rec.get("error") else "")
     if kind == "message":
         to = f" → {rec['to']}" if rec.get("to") else ""
-        return e(f"{rec.get('thread')} from {rec.get('from')}{to}: {_line(rec.get('body', ''))}")
+        # a step's own thread (`step-<id>`) goes without saying
+        who = str(rec.get("from")) if rec.get("thread") == f"step-{rec.get('from')}" \
+            else f"{rec.get('thread')} from {rec.get('from')}"
+        return e(f"{who}{to}: {_line(rec.get('body', ''))}")
+    if kind == "run.adopt":
+        who = rec.get("step") or f"call {rec.get('call')}"
+        how = ADOPTED.get(str(rec.get("outcome")), f"adopted ({rec.get('outcome')})")
+        return e(f"{who}: run {rec.get('run')} {how}")
+    if kind == "run.orphan":
+        return e(f"run {rec.get('run')} stopped: no step or call claimed it")
     if kind == "inbox.post":
         who = f" from {rec['from']}" if rec.get("from") else ""
         return e(f"{rec.get('item')}{who}: {_line(rec.get('title', ''))}")
@@ -1845,9 +2036,14 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
             lines.append((g, []))
         lines[-1][1].append(box(k, text, "kg" if k == g else ""))
     boxes = "".join(f'<span class="kline">{"".join(bs)}</span>' for _, bs in lines)
+    # on a phone the kinds fold behind a summary (static/sluice.js closes it there and keeps
+    # its count current), so the records start near the top; open without script
+    n = len(q.kinds)
+    said = f"Filter: {n} kind{'s' if n != 1 else ''}" if n else "Filter: all kinds"
     form = (f'<form class="filters" method="get" action="{e(base)}" '
             f'data-on:input__debounce.300ms="{e(apply)}" data-on:submit="{e(apply)}">'
-            f"<fieldset><legend>Kinds</legend>{boxes}</fieldset>"
+            f'<details class="kinds" open><summary><span>{said}</span>{CHEVRON}</summary>'
+            f"<fieldset><legend>Kinds</legend>{boxes}</fieldset></details>"
             f'<label class="thread">Threads <input name="thread" '
             f'value="{e(",".join(q.threads))}" placeholder="any" size="16" data-bind:thread>'
             f"</label><button>Apply</button></form>")
@@ -1864,7 +2060,7 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
     return layout(f"{project or 'home'} log", f"{title}{form}{view}",
                   stream=f"{base}/stream", signals=signals,
                   main_attrs=f' data-effect="{e(url)}"', inbox=open_count(store),
-                  here="/log" if project is None else "/",
+                  here="/log" if project is None else "/", board=True,
                   store=store, project=project,
                   tab=None if project is None else tab)
 
