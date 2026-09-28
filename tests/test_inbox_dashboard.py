@@ -391,7 +391,7 @@ def test_pause_switches_hold_a_project_or_a_step(store, port):
     code, headers, _ = post(port, "/projects/p/pause", {"paused": "1"}, json_body=False)
     assert code == 303 and store.paused("p")
     page = get(port, "/projects/p")[1]
-    assert "Paused: no step starts until you resume it." in page and ">Resume</button>" in page
+    assert "Paused: no step starts." in page and ">Resume</button>" in page
     assert "Paused." in get(port, "/")[1]
     code, headers, _ = post(port, "/projects/p/steps/a/pause", {"paused": "1"}, json_body=False)
     assert code == 303 and headers["location"] == "/projects/p#step:a"

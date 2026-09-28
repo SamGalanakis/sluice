@@ -14,7 +14,7 @@
 // - <sluice-thread project thread last>: counts the messages this browser has not seen on a
 //   thread, marks them when it is opened, and opens the thread the address names.
 // On every page: relative times (`data-ago`), running times (`data-since`) and a running
-// step's quiet mark (`data-quiet`, `data-quiet-line`) stay current, and the Types switch
+// step's quiet badge (`data-quiet`) stay current, and the Types switch
 // shows the types of values; the tab title leads with how many steps failed; on a phone the
 // log's kind filter folds behind its summary.
 
@@ -53,14 +53,12 @@ function tick() {
   for (const t of $$("time[data-ago]")) {
     t.textContent = ago((now - Date.parse(t.getAttribute("datetime"))) / 1000);
   }
-  for (const t of $$("[data-quiet]")) {
+  for (const t of $$("[data-quiet]")) {  // a badge, to the minute: `quiet 42m`
     const age = (now - Date.parse(t.dataset.quiet)) / 1000;
-    t.textContent = age >= QUIET ? `${t.previousSibling ? " · " : ""}quiet ${dur(age)}` : "";
-  }
-  for (const p of $$("[data-quiet-line]")) {
-    const age = (now - Date.parse(p.dataset.quietLine)) / 1000;
-    p.hidden = age < QUIET;
-    $(".q", p).textContent = age >= QUIET ? `Quiet for ${dur(age)}.` : "";
+    t.hidden = age < QUIET;
+    const text = age < QUIET ? "" : `quiet ${age >= 3600 ? dur(age) : `${Math.floor(age / 60)}m`}`;
+    const q = $(".qt", t);
+    if (q && q.textContent !== text) q.textContent = text;
   }
   retitle();
 }

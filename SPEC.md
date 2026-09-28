@@ -564,8 +564,8 @@ raw HTML escaped, unsafe link schemes refused).
 - `GET /`: one row per active project, and the archived ones folded under
   "Archived (n)"; each row: the project's status glyph, icon and name, the line above when steps
   failed, description (two lines), a progress bar by status with "n of m"
-  succeeded, what is running now (each running step's title and running time, and
-  `quiet 40m` as on its card) or why nothing is, and the last activity (the later of the last log record and the last state write).
+  succeeded, what is running now (each running step's title and running time, and its
+  `quiet 40m` badge as on its card) or why nothing is, and the last activity (the later of the last log record and the last state write).
   When the runner's heartbeat (`SLUICE_HOME/runner.json`'s `beat`) is older than 15 s, the
   index and each project page's summary line say so in the attention voice ("Runner stopped ·
   last seen …"); no heartbeat file says nothing (a runner from before it writes none). The
@@ -574,7 +574,8 @@ raw HTML escaped, unsafe link schemes refused).
   History, the log filtered to the history kinds, Log, and Functions, the functions as the
   project sees them), first whether the work moves: a progress bar by status and one line
   (succeeded of total, skipped, running, stale, failed, blocked, paused, total `cost_usd`, last
-  activity; the bar's label counts the same) with the Pause
+  activity; the failed, blocked and paused left to the stuck line when it leads the page; the
+  bar's label counts them all) with the Pause
   and Archive switches; then the description (markdown, folded to its opening, then "Show
   more"; a paused or archived project says so), then the **board**. Its **lanes** are the
   steps joined by handoffs (an edge that carries a value; `after` only orders), so independent
@@ -586,8 +587,8 @@ raw HTML escaped, unsafe link schemes refused).
   shares past the box's width starts below the lanes before it (never above a step it runs
   after), and a lane keeps its side of the box from row to row. On a phone a box stacks its lanes one after another, and the
   board draws no edges. A box of several steps that have all succeeded (skipped ones count
-  when the rest succeeded) folds to one line (`<details>`: the first step's id, "… last step
-  · n steps · all succeeded"; on a phone the first id in full and the count under it,
+  when the rest succeeded) folds to one line (`<details>`: the success glyph, the first step's id, "… last step
+  · n steps", with "n succeeded, m skipped" when some were skipped; on a phone the first id in full and the count under it,
   without the last id), which opens to its cards; open, it stays open through live
   updates and, per browser tab, a reload. No edge joins two boxes, so a folded box hides only
   its own edges. The plan's order is kept. Inside a lane, each row is sorted by where its
@@ -597,8 +598,9 @@ raw HTML escaped, unsafe link schemes refused).
   doc and what it says now (a running step's last non-empty stderr line, a failed step's
   error, what a pending step waits on, "its inputs changed" when stale). A running step that
   has written nothing for 15 minutes (the newest stderr.log mtime of its runs that have not
-  finished, else their run dirs') is quiet: its card adds `· quiet 42m` and the line reads
-  `Quiet for 42m. Last output: …`. A blocked step's card says `blocked`. A failed step's
+  finished, else their run dirs') is quiet: its card, its index row and its drawer's title
+  wear a `quiet 42m` badge in the attention voice, kept current to the minute (and nothing
+  more: its tooltip stays its last output, and its progress shows the tail). A blocked step's card says `blocked`. A failed step's
   line (tooltip, log summary, the head of its Error) is its error's last non-empty line,
   where a traceback names the exception, in sluice's words: without a leading exception class
   (`sluice.fn.ShError: `), the home directory as `~`, and an exit code of 128 + n (or -n)
@@ -638,11 +640,13 @@ raw HTML escaped, unsafe link schemes refused).
   file's mtime busts a stale cache), a text icon is escaped text in the same box, and an
   image icon is also the page's favicon.
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
-  read like a run history: its id and doc, then a grid of facts (status, `blocked` for a
-  blocked step, fn, runs done of total for a scattered step, started, duration, cost as money,
-  session; then on rows of their own what a pending step waits on, what it runs after, its
+  read like a run history: its id with its state as badges beside it (the status glyph and
+  word, `blocked` for a blocked step; runs done of total for a scattered step; how long it
+  ran, live while running, with when it started and ended as the time's tooltip; the quiet
+  badge; "ended 1h ago" once finished), its doc, one line of meta (fn, cost as money,
+  session, tags), then a row each for what a pending step waits on, what it runs after, its
   `when`, and for a failed step the steps it blocks, each a link to that step led by its
-  status glyph), the Pause switch where pausing acts (a pending, failed or stale step; Resume
+  status glyph, the Pause switch where pausing acts (a pending, failed or stale step; Resume
   on any paused step; pausing never stops a running one) and a link to its thread on the
   Threads tab; its error (its last line, then the whole text scrolled to its end); its
   progress (the tail of the current run's stderr, while
@@ -657,7 +661,8 @@ raw HTML escaped, unsafe link schemes refused).
   stderr of a finished run ("Log output", folded past six lines) and, when it ran more than
   once, its attempts from the log, oldest first so the current one closes the list: each its
   outcome (glyph and word), when it started (from the run id's stamp when the log no longer
-  holds its start; when it ended if neither says), how long it took (live while it runs) and,
+  holds its start; when it ended if neither says) and how long it took (the current run: its
+  live time alone, the start in its tooltip) and,
   for a failure, its headline with the whole error under "Show error".
 - `GET /projects/<name>/log` (and `GET /log` for the home log): the log viewer. Newest first, 50
   records per page; `?before=<seq>` shows the 50 matching records below that seq, `?after=<seq>`
@@ -666,7 +671,7 @@ raw HTML escaped, unsafe link schemes refused).
   `thread` (comma-separated), the §6b filter `log_read` uses. A row shows seq, time, kind and a
   one-line summary (`s2 succeeded → stale`, `rev 7 by orch: reason (2 ops)`, `questions from
   e2e: body…`, `e2e → orchestrator: body…` on a step's own thread, `<call> <fn> <status>`,
-  `logic submitted interface, branch`, `a: run r1 still running; the new runner watches it`,
+  `logic submitted interface, branch`, `a: run r1 kept through a runner restart`,
   `run r9 stopped: no step or call claimed it`) and expands to the full record as JSON. On a
   phone the kind filter folds behind its summary (`Filter: all kinds`, `Filter: 3 kinds`). A
   `thread.post` call's `call` records are hidden unless the filter selects `call` (a failed

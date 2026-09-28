@@ -269,9 +269,9 @@ when several share a side, an arrowhead at the end; dashed for an `after` edge, 
 two steps without passing data), threading an edge that passes rows through their gaps so it
 never hides behind a card. A quiet legend under the board names the two lines. A box of
 several steps that have all succeeded (or been skipped, beside at least one success) folds to
-one 44px line: the success glyph, its first step's id, then in meta "… its last step · n steps
-· all succeeded" (on a phone the first id in full, wrapping, and "n steps · all succeeded"
-under it; the last id gives way); a native `<details>` that opens to its cards (open through live updates and,
+one 44px line: the success glyph, its first step's id, then in meta "… its last step · n steps"
+(the glyph says they succeeded; "3 succeeded, 1 skipped" only when some were skipped; on a
+phone the first id in full, wrapping, and "n steps" under it; the last id gives way); a native `<details>` that opens to its cards (open through live updates and,
 per tab, a reload). No edge crosses between boxes, so a folded one hides only its own edges.
 The plan's order stays; nothing is sorted by attention. The head of a
 project page says first whether the work moves (progress bar, counts, Pause and Archive), then
@@ -282,9 +282,10 @@ index row with one sentence in ink, weight 500 (not coral: the failure is the or
 retry, and only the inbox asks the person): "Stopped: a and b failed, blocking 4 steps · 11
 paused", each failed step a link (to its drawer), "Stopped:" only while nothing runs; it
 takes the column's width, balanced when it wraps, and never breaks inside a step's id (on a
-phone a long one may). The counts line and the bar's label count the blocked and paused
-steps too; the index row leads with the project's status glyph, and a running step there
-adds "quiet 40m" as its card does. The tab title leads with "n failed · n quiet ·" (the
+phone a long one may). The bar's label counts the failed, blocked and paused steps too; the
+counts line leaves them to that sentence when it leads the page, so nothing is said twice.
+The index row leads with the project's status glyph, and a running step there wears the
+"quiet 40m" badge its card does. The tab title leads with "n failed · n quiet ·" (the
 quiet count grows as the page ages). Text blocks hold a 68-75ch measure.
 
 ### Named Rules
@@ -314,9 +315,9 @@ hairline), the project switcher's menu and the focused skip link.
 ## Shapes
 
 The mark's generous corner, scaled down. 14px (`--radius`) for regions: board boxes, the
-index's list, threads, inbox items, the drawer's facts, prompts; 10px (`--radius-md`) for
+index's list, threads, inbox items, prompts; 10px (`--radius-md`) for
 controls, the switcher and its menu, and code blocks; 5px (`--radius-sm`) for inline code,
-tags, menu items, the segmented filter's current item, the focus ring and the nav's current
+badges, menu items, the segmented filter's current item, the focus ring and the nav's current
 bar. A pill (999px) is deliberate, and only for the step bubbles, the progress bar, the inbox
 badge, the Types switch and the "n new" pill: a bubble is a token of work, not a panel. Plan input and output nodes are dashed, since they are ends, not work.
 
@@ -324,8 +325,9 @@ badge, the Types switch and the "n new" pill: a bubble is a token of work, not a
 
 ### Cards / Containers
 - **Step bubble**: a pill with the status glyph, the step id (14.5px, 550) and, in 12px meta,
-  its time (and `done/total` when scattered). Nothing else: the doc and what it says now are
-  its tooltip (a failed step's is its error's last line, the exception), and everything it
+  its time (and `done/total` when scattered), and once a running step has gone quiet the
+  "quiet 42m" badge after it. Nothing else: the doc and what it says now (for a quiet one
+  too, its last line) are its tooltip (a failed step's is its error's last line, the exception), and everything it
   took and produced is in the drawer. A failed step's line is said in sluice's words: no
   exception class, the home directory as `~`, and an exit code a signal caused explained
   ("exited 143 (terminated: SIGTERM)"); the error as raised stays in the drawer. Running bubbles take a blue border, failed a
@@ -338,7 +340,15 @@ badge, the Types switch and the "n new" pill: a bubble is a token of work, not a
   starts next stands out. Glue steps (`core.*`) are dashed and muted. The step in the drawer
   wears the ring 2px outside its border (canvas, then the blue ring: it is the selection), so
   it never reads as the card's own border.
-  A bubble's accessible name is "failed, id, 1h 14m" (visually hidden commas).
+  A bubble's accessible name is "failed, id, 1h 14m" (visually hidden commas; ", quiet
+  42m" after it when quiet).
+- **Badge** (`.tag`): a small fact set apart, never a sentence: 20px tall (24 by the drawer's
+  title), 12px text (13 there) at 500, a strong hairline and the 5px corner, ink on no fill.
+  In the attention gold (text and a 45% gold border) for "quiet 42m" and "n awaiting
+  reply"; muted for "note". The status badge leads with the glyph (its word is the badge's
+  own, so the glyph is hidden from assistive technology). A quiet badge is rendered hidden on
+  every running step and shown by the ticker once the run has written nothing for 15
+  minutes, to the minute ("quiet 42m", then "quiet 1h 5m").
 - **Tracing**: hovering or keyboard-focusing a bubble lights its edges and names; the other
   bubbles lose their border and fill and their text turns muted ink, so they stay readable
   (at least 3:1, measured 6.1:1 on the box). Opening the drawer clears any tracing; a focus given back
@@ -381,7 +391,7 @@ a thread of no step), and a muted line of the last message; open, a hairline und
 the messages, all but the last three folded under an "n earlier messages" link. A small blue
 "n new" pill counts what arrived since this browser last opened the thread, and a blue dot
 marks those messages while it is open. A message is a 2px left rule and a small head (sender in ink, → recipient and
-when in muted ink, a "note" or "Awaiting reply" tag), then its body at reading size. A step's
+when in muted ink, a "note" or "Awaiting reply" badge), then its body at reading size. A step's
 messages sit on the left with a strong-hairline rule; the orchestrator's are indented 28px
 (14px on a phone) with a blue rule, so a conversation reads at a glance. Nothing there asks
 the person for anything: that is the inbox.
@@ -398,16 +408,22 @@ drawer scrolls, so what passes under it is hidden whole. Escape, the close butto
 a click on the page around the board close it, and focus goes back to the card. A "Skip to
 plan" link is the page's first tab stop (it moves focus to the plan), and a polite live region says the statuses the live
 board moves ("a failed").
-It reads like a run history (Temporal's event view is the reference): the step id (20px) and
-its doc, then a quiet grid of facts (status, "blocked" for a blocked step, function, started,
-duration, cost, session; then, each a full row that wraps, what a pending step waits on, what
-it runs after, its `when`, and what a failed step blocks: steps as links led by their
-glyphs), the Pause switch (only where pausing acts: pending, failed, stale; Resume on any
-paused step) and a muted link to its thread. Sections under small labels in need order:
+It reads like a run history (Temporal's event view is the reference): the step id (22px)
+with its state beside it as badges, wrapping under a long id: the status glyph and word
+("blocked" for a blocked step), `done/total runs` when scattered, how long it ran (live while
+running; when it started and ended are its tooltip), the gold "quiet 42m" once quiet, and
+for a finished step "ended 1h ago" in meta. Then its doc, one line of meta (the fn in mono,
+the cost, "session" and its first 8 characters, its tags as badges), and, each a row that
+wraps under a muted label, what a pending step waits on, what it runs after, its `when`, and
+what a failed step blocks: steps as links led by their glyphs. No grid of facts: nothing
+there is a setting. Then the Pause switch (only where pausing acts: pending, failed, stale;
+Resume on any paused step) and a muted link to its thread with its gold "n awaiting reply"
+badge. Sections under small labels in need order:
 Error (its last line in 600, then all of it in a box that opens scrolled to its end),
 Progress, Outputs, Prompt, Inputs, Log output, Attempts (only past one: oldest first, each
 its number and outcome glyph in a column joined by a strong-hairline rail, the outcome word in
-600 and in meta "started 1h ago · took 54m", a failure's headline in ink at 500 with all of it
+600 and in meta "started 1h ago · took 54m" (the current run: its live time alone, "42m so
+far"), a failure's headline in ink at 500 with all of it
 under a "Show error" disclosure; the current attempt, last, on the secondary fill with its word
 in Archivo). A value is a field:
 its name in 600, a small `← source` link, its doc in meta, the value under it. Types are

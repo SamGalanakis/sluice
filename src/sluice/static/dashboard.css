@@ -101,6 +101,19 @@ p { margin: 0; }
 .label { font: 500 13px/18px var(--font-sans); color: var(--muted-foreground);
          margin: 0 0 6px; }
 .attn { color: var(--status-attention); }
+/* a badge: a small fact about a step or a message (its status, how long, "quiet 42m", "note"),
+   set apart from the text around it; in gold, the attention voice */
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px;
+       border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+       font: 500 12px/16px var(--font-sans); color: var(--foreground); white-space: nowrap;
+       vertical-align: middle; }
+.tag[hidden] { display: none; }
+.tag.muted { color: var(--muted-foreground); border-color: var(--border); }
+.tag.attn { color: var(--status-attention);
+            border-color: color-mix(in oklch, var(--status-attention) 45%, transparent); }
+.tag > span[aria-hidden] { display: flex; }  /* the glyph on the badge's centre line */
+.tag .g { margin: 0; width: 14px; height: 14px; }
+.tag .g svg { width: 14px; height: 14px; }
 .err { color: var(--foreground); font-weight: 500; }
 .empty { color: var(--muted-foreground); padding: 32px 0; max-width: 60ch; }
 .lead { font-size: 15px; line-height: 22px; }
@@ -219,7 +232,8 @@ form.switch button:hover { color: var(--foreground); }
          overflow-wrap: anywhere; text-wrap: balance; }
 .stuck .g { margin-top: 3px; display: flex; }
 .stuck a { white-space: nowrap; }  /* a step's id never breaks at its hyphens */
-.d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; }
+.d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; }
+.d-actions .tag { margin-left: -6px; }  /* with the thread link it counts for */
 .d-thread { font-size: 13px; color: var(--muted-foreground); }
 .d-thread:hover { color: var(--foreground); }
 details.about > summary { list-style: none; cursor: pointer; color: var(--muted-foreground); }
@@ -327,8 +341,7 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
        text-overflow: ellipsis; white-space: nowrap; }
 .node .dur { font-size: 12px; line-height: 16px; }
 .node .sep { font-size: 0; line-height: 0; vertical-align: top; }  /* read, not seen */
-.node .dur .quiet, ul.now .dur .quiet {  /* a wedged run, in the attention voice */
-  color: var(--status-attention); }
+.node .tag { margin-left: -2px; }
 /* two colours mix in sRGB: in oklch, navy and cream meet by way of teal */
 .is-pending .sid, .is-skipped .sid { color: color-mix(in srgb, var(--foreground) 72%, var(--card)); }
 .node.is-pending { border-color: transparent;
@@ -391,30 +404,32 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
                  background: var(--card); color: var(--muted-foreground); cursor: pointer; }
 .drawer .close:hover { color: var(--foreground); background: var(--muted); }
 .d-head { margin-bottom: 8px; }
-.d-head .hd { display: flex; gap: 10px; padding-right: 40px; }  /* clear of the close */
+/* the id and, beside it, the step's state as badges; they wrap under a long id */
+.d-head .hd { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+              padding-right: 40px; }  /* clear of the close */
 .d-head h2 { margin: 0; font-size: 22px; line-height: 26px; font-weight: 800;
-             overflow-wrap: anywhere; }
-.d-doc { margin: 6px 0 0 26px; color: var(--muted-foreground); max-width: 72ch; }
-.d-head .meta { margin: 6px 0 0 26px; }
-.d-head code { font-size: 12px; }
+             overflow-wrap: anywhere; min-width: 0; }
+.d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.d-badges .tag { height: 24px; padding: 0 8px; font-size: 13px; }
+.d-badges .tag .g, .d-badges .tag .g svg { width: 16px; height: 16px; }
+.d-ago { font-size: 13px; line-height: 18px; color: var(--muted-foreground); margin-left: 2px; }
+.d-doc { margin: 8px 0 0; color: var(--muted-foreground); max-width: 72ch; }
+.d-meta { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.d-meta code { font-size: 12.5px; border: 0; background: none; padding: 0; color: var(--foreground); }
 .d-sec { margin-top: 26px; }
 .d-sec-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
            margin-bottom: 10px; }
 .d-sec-h .label { margin: 0; }
 .d-sec .meta { margin-bottom: 4px; }
-/* the run at a glance: small facts in a grid */
-dl.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-           gap: 10px 16px; margin: 16px 0 0; padding: 12px 14px; background: var(--muted);
-           border: 1px solid var(--border); border-radius: var(--radius); }
-dl.facts > div { min-width: 0; }
-dl.facts > .wide { grid-column: 1 / -1; }
-dl.facts > .wide dd { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+/* how the step stands to the others: a label, then the steps as links led by their glyphs */
+dl.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px;
+           margin: 14px 0 0; font-size: 14px; line-height: 20px; }
+dl.facts > div { display: contents; }
+dl.facts dt { font-size: 13px; color: var(--muted-foreground); }
+dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
 .dep { white-space: nowrap; }
 .dep .g { vertical-align: -3px; margin: 0 4px 0 0; }
-dl.facts dt { font-size: 12px; line-height: 16px; color: var(--muted-foreground); }
-dl.facts dd { margin: 2px 0 0; font-size: 14px; line-height: 20px; white-space: nowrap;
-              overflow: hidden; text-overflow: ellipsis; }
-dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
 /* named values: name (type on demand), where it comes from, its doc, its value */
 .fields { display: grid; gap: 14px; }
 .f { min-width: 0; }
@@ -502,10 +517,6 @@ code.v { border: 0; background: none; padding: 0; }
 .m-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13px;
           line-height: 18px; color: var(--muted-foreground); }
 .m-from { font-weight: 600; color: var(--foreground); }
-.m-tag { font-size: 12px; line-height: 16px; padding: 0 6px; border-radius: var(--radius-sm);
-         border: 1px solid var(--border); color: var(--muted-foreground); }
-.m-tag.await { color: var(--status-attention);
-               border-color: color-mix(in oklch, var(--status-attention) 45%, transparent); }
 .m-body { margin-top: 4px; max-width: 68ch; overflow-wrap: anywhere; }
 .m-body p { margin: 0; }
 .m-body p + p, .m-body ul, .m-body ol, .m-body pre { margin-top: 8px; }
@@ -555,7 +566,7 @@ details.std > summary::-webkit-details-marker { display: none; }
 /* ---- the index ---------------------------------------------------------------------- */
 .projects { list-style: none; margin: 0; padding: 0; background: var(--card);
             border: 1px solid var(--border); border-radius: var(--radius); }
-.proj { padding: 16px 18px; display: grid; gap: 8px; }
+.proj { padding: 16px 18px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .proj + .proj { border-top: 1px solid var(--border); }
 .p-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .p-head a { display: inline-flex; gap: 8px; align-items: center; min-width: 0;
@@ -574,12 +585,15 @@ details.std > summary::-webkit-details-marker { display: none; }
 .b-failed { background: var(--foreground); }
 .b-pending { background: var(--secondary); }
 .b-skipped { background: color-mix(in srgb, var(--status-idle) 45%, var(--secondary)); }
-ul.now { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-ul.now li { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
+ul.now { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px;
+         grid-template-columns: minmax(0, 1fr); }
+/* a running step's title gives way, so its time and quiet badge stay on its line */
+ul.now li { display: flex; gap: 8px; align-items: center; font-size: 14px; }
 ul.now a { display: flex; gap: 6px; min-width: 0; text-decoration: none; }
+ul.now .ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ul.now li > .dur, ul.now li > .tag { flex: none; }
 ul.now a:hover .ttl { text-decoration: underline; }
 ul.now .g { margin-top: 1px; }
-ul.now .ttl { -webkit-line-clamp: 1; line-clamp: 1; }
 .dur { font-size: 13px; color: var(--muted-foreground); white-space: nowrap; }
 p.now { font-size: 14px; color: var(--muted-foreground); }
 details.archived { margin-top: 20px; }
@@ -739,6 +753,7 @@ main > .phead + * { margin-top: 0; }
   /* in the drawer: the steps it links to, its thread and its folded log output */
   .drawer dl.facts .dep a, .drawer .d-thread { display: inline-flex; align-items: center;
                                                min-height: 44px; }
+  .drawer dl.facts dt { line-height: 44px; }  /* level with the first line of links */
   .drawer .d-sec details:not(.fold) > summary { padding-block: 12px; }
   .drawer .d-sec details:not(.fold)[open] > summary { margin-bottom: 0; }
   /* the Types pill keeps its size; a clear border makes its target 44px tall */

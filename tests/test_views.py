@@ -128,7 +128,8 @@ def test_the_board_shows_each_step_as_a_bubble(store):
     # first whether the work moves (counts, the switches), then the board; the plan's result
     # and inputs follow it (plan inputs and outputs are not board nodes)
     summary = page[page.index('<div id="summary">'):page.index('id="graph"')]
-    assert "3 of 6 succeeded · 1 running · 1 stale · 1 failed" in summary
+    # the failed one is the stuck sentence's, above: the counts line leaves it out
+    assert "3 of 6 succeeded · 1 running · 1 stale · updated" in summary
     assert '<span class="bar" role="img"' in summary and ">Pause</button>" in summary
     facts = page[page.index('<section id="result" class="plan-facts">'):]
     assert page.index('id="graph"') < page.index('id="result"')
@@ -243,7 +244,7 @@ def test_a_pending_step_says_what_it_waits_on_and_the_next_ones_stand_out(store)
     assert 'title="waits on b (pending)"' in card(page, "c")
     head = views.step_detail(store, "v", "b").split("</header>")[0]
     # a row of its own, each step led by its status glyph
-    assert re.search(r'<div class="wide"><dt>Waits on</dt><dd><span class="dep"><span class="g '
+    assert re.search(r'<div><dt>Waits on</dt><dd><span class="dep"><span class="g '
                      r'g-running".*?<span class="vh">running, </span></span><a href="/projects/v/'
                      r'steps/a" data-step="a">a</a></span></dd></div>', head)
     assert "Waits on" not in views.step_detail(store, "v", "a")
@@ -323,9 +324,17 @@ def test_a_steps_detail(store):
     head = html[:html.index("</header>")]
     assert '<h2 id="d-title">agent</h2>' in head
     assert '<p class="d-doc">Write &lt;the&gt; thing</p>' in head
-    facts = dict(re.findall(r"<div><dt>([^<]+)</dt><dd>(.*?)</dd></div>", head))
-    assert facts["Status"] == "succeeded" and facts["Function"] == "<code>test.open</code>"
-    assert facts["Duration"] == "1m 30s" and facts["Cost"] == "$0.12"  # cost as money
+    # its state as badges by the title: the status (glyph and word) and how long it ran,
+    # when it started and ended in the time's tooltip, then how long ago it ended
+    badges = re.search(r'<p class="d-badges">(.*?)</p>', head)[1]
+    assert re.search(r'<span class="tag"><span aria-hidden="true"><span class="g g-succeeded"'
+                     r'.*?</span>succeeded</span>', badges)
+    assert ('<span class="tag" title="started 2026-01-01T10:00:00Z, ended '
+            '2026-01-01T10:01:30Z">1m 30s</span>') in badges
+    assert '<span class="d-ago">ended <time datetime="2026-01-01T10:01:30Z"' in badges
+    assert "<dt>Status</dt>" not in head and "<dt>Duration</dt>" not in head
+    # the fn and the cost (as money) are one line of meta under the doc
+    assert '<p class="d-meta meta"><code title="function">test.open</code> · $0.12</p>' in head
     sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
     assert sections == ["Outputs", "Prompt", "Inputs", "Log output", "Attempts"]
     # a named value: its name (type on demand, and in the name's title), its doc, its value
@@ -390,8 +399,10 @@ def test_attempts_read_oldest_first_each_with_its_start_and_its_whole_error(stor
     assert "took 1m" in lis[0]
     assert 'ended <time datetime="2026-01-01T09:30:00Z"' in lis[1]
     assert 'started <time datetime="2026-01-01T09:40:00Z"' in lis[2] and "took 10m 30s" in lis[2]
-    assert 'started <time datetime="2026-01-01T10:05:00Z"' in lis[3]
-    assert 'data-since="2026-01-01T10:05:00Z"' in lis[3] and "so far" in lis[3]
+    # the current run's live time says when it started (to the second in its title)
+    assert "started" not in lis[3]
+    assert '<time title="2026-01-01T10:05:00Z" datetime="2026-01-01T10:05:00Z" data-since=' \
+        in lis[3] and "so far" in lis[3]
     assert "kept through a runner restart" in lis[3]
     assert 'class="a-running a-now" aria-current="step"' in lis[3]
     # a failure: its headline, then all of it, whole and escaped, under "Show error"
@@ -417,15 +428,14 @@ def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
     html = views.step_detail(store, "v", "agent")
     progress = html[html.index('Progress</h3>'):html.index("</section>")]
     assert '<pre class="tail">thinking</pre>' in progress
-    assert 'data-quiet-line' in progress and ' hidden>' in progress \
-        and "Quiet for" not in progress  # still writing: the quiet line stays hidden
-    outputs = html[html.index("Outputs submitted so far"):html.index("</section>",
+    assert "quiet" not in progress.lower()  # the quiet badge is by the title, not here
+    outputs = html[html.index("Outputs so far"):html.index("</section>",
                                                                      html.index("so far"))]
     assert ">answer</span>" in outputs and "so far" in outputs
     assert ">ports</span>" not in outputs and ">results</span>" not in outputs  # the fn's own
     (run / "submitted.json").unlink()
     html = views.step_detail(store, "v", "agent")
-    assert "None yet. It hands on: answer." in html and "ports" not in html
+    assert "None yet: answer." in html and "ports" not in html
 
 
 def _ago(path, minutes):
@@ -433,7 +443,22 @@ def _ago(path, minutes):
     os.utime(path, (old, old))
 
 
-def test_a_running_step_gone_quiet_says_so_on_its_card_and_in_its_drawer(store):
+QUIET_BADGE = r'<span class="tag attn" data-quiet="[^"]+"( hidden)?><span class="vh">, </span>' \
+    r'<span class="qt">([^<]*)</span></span>'
+
+
+def quiet_badge(html_):
+    """The text of the one quiet badge in `html_`, '' while it is hidden; None without one."""
+    found = re.findall(QUIET_BADGE, html_)
+    assert len(found) <= 1
+    if not found:
+        return None
+    hidden, text = found[0]
+    assert bool(hidden) == (not text)  # hidden exactly while it says nothing
+    return text
+
+
+def test_a_running_step_gone_quiet_wears_a_quiet_badge_and_nothing_more(store):
     create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                         "each": {"run": "test.window", "scatter": "tag",
                                  "in": {"seconds": d(0), "tag": src(["a/sum"])}}})
@@ -454,32 +479,87 @@ def test_a_running_step_gone_quiet_says_so_on_its_card_and_in_its_drawer(store):
                   "started": "2026-01-01T10:00:00Z"},
             "each": {"status": "running", "run_ids": ["r2", "r3"], "done": 1, "total": 2,
                      "started": "2026-01-01T10:00:00Z"}}})
-    # still writing: no quiet mark on the card, none in the drawer
+    # still writing: the card and the drawer's title carry the badge hidden (the ticker shows
+    # it once the run goes quiet), and nothing says quiet
     page = views.project_page(store, "v", ver="x")
-    assert "quiet 5m" not in card(page, "a") and "Quiet for" not in card(page, "a")
+    assert quiet_badge(card(page, "a")) == ""
     assert 'title="halfway there"' in card(page, "a")
-    assert "Quiet for" not in views.step_detail(store, "v", "a")
-    # its stderr quiet 20 minutes: the card says so small, the tooltip and drawer say so
+    detail = views.step_detail(store, "v", "a")
+    assert quiet_badge(detail) == "" and "quiet" not in re.sub(QUIET_BADGE, "", detail).lower()
+    # its stderr quiet 20 minutes: a gold badge "quiet 20m" after the card's time, and the
+    # same by the drawer's title; no sentence, and the tooltip is still its last output
     _ago(run / "stderr.log", 20)
     page = views.project_page(store, "v", ver="x")
     a = card(page, "a")
-    assert ' · quiet 20m' in a and 'class="quiet" data-quiet=' in a
-    assert 'title="Quiet for 20m. Last output: halfway there"' in a
+    assert quiet_badge(a) == "quiet 20m" and "·" not in a
+    assert a.index('class="dur"') < a.index('class="tag attn"')
+    assert 'title="halfway there"' in a and "Quiet for" not in page
     detail = views.step_detail(store, "v", "a")
-    assert "Quiet for 20m." in detail and "Last output: halfway there" in detail
+    head = detail[:detail.index("</header>")]
+    assert quiet_badge(re.search(r'<p class="d-badges">(.*?)</p>', head)[1]) == "quiet 20m"
+    assert "Quiet for" not in detail and "Last output" not in detail
+    assert '<pre class="tail">halfway there</pre>' in detail  # the tail says what it last said
+    # to the minute under an hour, then hours and minutes
     _ago(run / "stderr.log", 65)
-    assert "quiet 1h 5m" in card(views.project_page(store, "v", ver="x"), "a")
+    assert quiet_badge(card(views.project_page(store, "v", ver="x"), "a")) == "quiet 1h 5m"
     # no stderr.log: the run dir's own mtime is the sign of life
     (run / "stderr.log").unlink()
     _ago(run, 20)
-    assert "quiet 20m" in card(views.project_page(store, "v", ver="x"), "a")
+    assert quiet_badge(card(views.project_page(store, "v", ver="x"), "a")) == "quiet 20m"
     detail = views.step_detail(store, "v", "a")
-    assert "Quiet for 20m." in detail and "No output yet." in detail
+    assert quiet_badge(detail) == "quiet 20m" and "Nothing written yet." in detail
     # a scattered step with one live run writing is not quiet, however old its finished runs
     each = card(views.project_page(store, "v", ver="x"), "each")
-    assert "Quiet for" not in each and "quiet 60m" not in each
+    assert quiet_badge(each) == ""
     _ago(live / "stderr.log", 20)
-    assert "quiet 20m" in card(views.project_page(store, "v", ver="x"), "each")
+    assert quiet_badge(card(views.project_page(store, "v", ver="x"), "each")) == "quiet 20m"
+    # a step that is not running has no badge at all
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {"a": {"status": "succeeded",
+                                                               "run_ids": ["r1"]}}})
+    assert quiet_badge(card(views.project_page(store, "v", ver="x"), "a")) is None
+    assert quiet_badge(views.step_detail(store, "v", "a")) is None
+
+
+def test_the_drawer_puts_the_status_and_the_duration_by_the_title(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": src("c/sum"), "b": d(1)}},
+                        "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    run = store.runs_dir("v") / "r1"
+    run.mkdir(parents=True)
+    (run / "stderr.log").write_text("working\n")
+    started = (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=74)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a": {"status": "running", "run_ids": ["r1"], "started": started},
+            "c": {"status": "failed", "error": "boom", "started": "2026-01-01T10:00:00Z",
+                  "finished": "2026-01-01T11:14:00Z"}}})
+
+    def badges(sid):
+        head = views.step_detail(store, "v", sid)
+        head = head[:head.index("</header>")]
+        assert re.search(r'<div class="hd"><h2 id="d-title">[^<]+</h2><p class="d-badges">',
+                         head)  # beside the title, in its line
+        assert "<dt>Status</dt>" not in head and "<dt>Duration</dt>" not in head \
+            and "<dt>Started</dt>" not in head  # no longer facts in a grid
+        return re.search(r'<p class="d-badges">(.*?)</p>', head)[1]
+
+    # running: its status, then its live time (the start in its tooltip); no "ago"
+    a = badges("a")
+    assert re.search(r'^<span class="tag"><span aria-hidden="true"><span class="g g-running"'
+                     r'.*?</span>running</span><span class="vh">, </span>', a)
+    assert re.search(rf'<span class="tag" title="started {started}"><time datetime="{started}"'
+                     rf' data-since="{started}">1h 14m</time></span>', a)
+    assert "data-ago" not in a and quiet_badge(a) == ""
+    # failed: its status, how long it ran, and how long ago it ended
+    c = badges("c")
+    assert "</span>failed</span>" in c
+    assert ('<span class="tag" title="started 2026-01-01T10:00:00Z, ended 2026-01-01T11:14:00Z">'
+            "1h 14m</span>") in c
+    assert '<span class="d-ago">ended <time datetime="2026-01-01T11:14:00Z"' in c
+    # pending (blocked by c): the status alone, as the word the board uses
+    b = badges("b")
+    assert "</span>blocked</span>" in b and "title=" not in b.replace('title="pending"', "")
 
 
 def test_the_index_and_the_tab_title_say_a_run_went_quiet(store):
@@ -494,19 +574,17 @@ def test_the_index_and_the_tab_title_say_a_run_went_quiet(store):
             "a": {"status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"},
             "b": {"status": "running", "run_ids": ["r2"], "started": "2026-01-01T10:00:00Z"},
             "c": {"status": "failed", "error": "boom"}}})
-    # both still writing: the index's running rows carry the live mark, nothing says quiet
+    # both still writing: the index's running rows carry the badge hidden, nothing says quiet
     index = views.index(store, ver="x")
     now = re.search(r'<ul class="now">(.*?)</ul>', index)[1]
-    assert now.count('<span class="quiet" data-quiet=') == 2 and "quiet" not in \
-        re.sub(r'class="quiet" data-quiet="[^"]*"', "", now)
+    assert len(re.findall(QUIET_BADGE, now)) == 2 and "quiet" not in re.sub(QUIET_BADGE, "", now)
     assert "<title>1 failed · Projects · sluice</title>" in index
     # a's stderr quiet 40 minutes: its row says so as its card does, and the titles count it
     _ago(store.runs_dir("v") / "r1" / "stderr.log", 40)
     index = views.index(store, ver="x")
     row = re.search(r'<li><a href="/projects/v#step:a">.*?</li>', index)[0]
-    assert re.search(r'<span class="quiet" data-quiet="[^"]+"> · quiet 40m</span>', row)
-    assert "quiet" not in re.sub(r'class="quiet" data-quiet="[^"]*"', "",
-                                 re.search(r'<li><a href="/projects/v#step:b">.*?</li>', index)[0])
+    assert quiet_badge(row) == "quiet 40m" and "·" not in row
+    assert quiet_badge(re.search(r'<li><a href="/projects/v#step:b">.*?</li>', index)[0]) == ""
     assert "<title>1 failed · 1 quiet · Projects · sluice</title>" in index
     page = views.project_page(store, "v", ver="x")
     assert "<title>1 failed · 1 quiet · v · sluice</title>" in page
@@ -597,16 +675,16 @@ def test_messages_are_threads_with_notes_and_open_questions_marked(store):
     assert ('<sluice-thread project="v" thread="step-a" last="6" '
             'data-preserve-attr="class data-rocket-host">') in panel
     assert '<span class="th-new" data-ignore-morph></span>' in panel  # the component's count
-    assert '<span class="m-tag await">1 awaiting reply</span>' in panel
+    assert '<span class="tag attn">1 awaiting reply</span>' in panel
     assert panel.count("awaiting reply") == 1  # a step that left the plan waits on nothing
     assert ('<span class="th-name">gone</span><span class="th-doc">no longer in the plan'
             '</span>') in panel
     assert '<span class="th-doc">Break &lt;it&gt;</span>' in panel
     assert "<strong>DB</strong>" in panel  # markdown bodies render
     assert "Moving the helpers<br>rather than deleting them" in panel
-    assert '<span class="m-tag">note</span>' in panel
+    assert '<span class="tag muted">note</span>' in panel
     assert '<li class="m m-lead" data-seq="6">' in panel and 'class="m m-step"' in panel
-    assert '<a href="/projects/v#step:a">Open a on the plan</a>' in panel
+    assert '<a href="/projects/v#step:a">Open on the plan</a>' in panel
     # a long thread folds all but its last three messages, from its first open question on
     for i in range(5):
         store.append("v", {"kind": "message", "thread": "long", "from": "x", "body": f"m{i}",
@@ -766,19 +844,19 @@ def test_the_functions_page_groups_by_scope_and_shows_collisions(store):
     page = views.fns_page(store, "v")
     sections = {m[0]: m[1] for m in re.findall(r"<h2>([^<]+)</h2>(.*?)(?=<h2>|</main>)", page,
                                                re.DOTALL)}
-    assert set(sections) == {"Built-in", "Global", "Project (v)"}
+    assert set(sections) == {"Built-in", "Global", "Project"}  # v is the picker's
     assert "<b>core.echo</b>" in sections["Built-in"] \
         and "<b>thread.post</b>" in sections["Built-in"]
     assert "<b>mine.fn</b>" in sections["Global"] and "<b>test.add</b>" in sections["Global"]
     assert "xs: <code>string[]</code>" in sections["Global"]
     assert "pick: <code>enum(a|b)</code>" in sections["Global"]
     assert "&lt;i&gt;mine&lt;/i&gt;" in sections["Global"]
-    project = sections["Project (v)"]
+    project = sections["Project"]
     assert "<b>v.local</b>" in project
     clash = project[project.index('<div class="fn problem" id="fn-'):]
     assert "<b>test.add</b>" in clash and "fn test.add collides with the global fn" in clash
     plain = views.fns_page(store)
-    assert "Project (" not in plain and "v.local" not in plain
+    assert "<h2>Project</h2>" not in plain and "v.local" not in plain
 
 
 # ---- what is stuck ------------------------------------------------------------------------
@@ -809,7 +887,9 @@ def test_a_failure_blocks_the_steps_downstream_and_the_page_says_so(store):
     assert board.stuck == {"blocked": 2, "paused": 2}  # notes counts as paused, not blocked
     page = views.project_page(store, "v", ver="x")
     summary = page[page.index('<div id="summary">'):page.index('id="graph"')]
-    assert "1 of 6 succeeded · 1 failed · 2 blocked · 2 paused" in summary
+    # the stuck sentence counts the failed, blocked and paused steps; the counts line does
+    # not say them again (the bar's label still counts them all)
+    assert re.search(r'<p class="meta sum">1 of 6 succeeded · updated <time', summary)
     assert 'aria-label="1 succeeded, 1 failed, 2 blocked, 2 paused"' in summary
     # the attention line leads the page, the failed step a link that opens its drawer
     assert summary.index('class="stuck"') < summary.index('class="sumline"')
@@ -847,7 +927,7 @@ def test_a_failed_steps_drawer_leads_with_its_cause_and_what_it_blocks(store):
     html_ = views.step_detail(store, "v", "lint")
     head = html_[:html_.index("</header>")]
     # Blocks: every step it holds up, paused ones too, each a link led by its glyph
-    blocks = re.search(r'<div class="wide"><dt>Blocks</dt><dd>(.*?)</dd></div>', head)[1]
+    blocks = re.search(r'<div><dt>Blocks</dt><dd>(.*?)</dd></div>', head)[1]
     assert re.findall(r'data-step="([^"]+)"', blocks) == ["fix", "ship", "notes"]
     assert 'class="g g-paused"' in blocks
     # the error: its last line first (without the exception's class), then all of it as it
@@ -933,7 +1013,7 @@ def test_after_and_when_are_links_led_by_their_glyphs(store):
     create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                         "b": {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "after": ["a"]}})
     head = views.step_detail(store, "v", "b").split("</header>")[0]
-    assert re.search(r'<div class="wide"><dt>After</dt><dd><span class="dep"><span class="g '
+    assert re.search(r'<div><dt>After</dt><dd><span class="dep"><span class="g '
                      r'g-pending".*?<a href="/projects/v/steps/a" data-step="a">a</a>', head)
 
 
@@ -985,7 +1065,7 @@ def test_the_log_says_what_run_records_mean():
         "w cancelled by me: x"
     assert s({"kind": "step.cancel", "step": "w"}) == "w cancelled"
     assert s({"kind": "run.adopt", "step": "a", "run": "r1", "outcome": "watching"}) == \
-        "a: run r1 still running; the new runner watches it"
+        "a: run r1 kept through a runner restart"
     assert s({"kind": "run.adopt", "call": "c1", "run": "c1", "outcome": "finished"}) == \
         "call c1: run c1 had finished; its result was collected"
     assert "restart" in s({"kind": "run.adopt", "step": "a", "run": "r", "outcome": "restarted"})

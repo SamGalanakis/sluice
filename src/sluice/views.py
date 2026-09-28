@@ -671,15 +671,27 @@ def _activity(store: Store, project: str, block: Block) -> tuple[str, float] | N
     return act.strftime("%Y-%m-%dT%H:%M:%SZ"), (_now() - act).total_seconds()
 
 
-def quiet_mark(store: Store, project: str, block: Block, after: bool) -> str:
-    """A running step's `quiet 42m` once it has written nothing for QUIET seconds (` · ` first
-    when it comes `after` something), kept current by the ticker (static/sluice.js) from
-    `data-quiet`; '' for a step with no live run."""
+def quiet_dur(seconds: float) -> str:
+    """How long a run has been quiet, to the minute: `42m`, `1h 5m`."""
+    return dur(seconds) if seconds >= 3600 else f"{int(seconds // 60)}m"
+
+
+def quiet_badge(store: Store, project: str, block: Block) -> str:
+    """A running step's `quiet 42m` badge in the attention voice, hidden until it has written
+    nothing for QUIET seconds; the ticker (static/sluice.js) keeps it current from
+    `data-quiet`. '' for a step with no live run."""
     act = _activity(store, project, block)
     if act is None:
         return ""
-    text = f"{' · ' if after else ''}quiet {dur(act[1])}" if act[1] >= QUIET else ""
-    return f'<span class="quiet" data-quiet="{e(act[0])}">{e(text)}</span>'
+    quiet = act[1] >= QUIET
+    text = f"quiet {quiet_dur(act[1])}" if quiet else ""
+    return (f'<span class="tag attn" data-quiet="{e(act[0])}"{"" if quiet else " hidden"}>'
+            f'<span class="vh">, </span><span class="qt">{e(text)}</span></span>')
+
+
+def _is_quiet(store: Store, project: str, block: Block) -> bool:
+    act = _activity(store, project, block)
+    return act is not None and act[1] >= QUIET
 
 
 def quiet_since(store: Store, board: Board) -> list[str]:
@@ -687,11 +699,6 @@ def quiet_since(store: Store, board: Board) -> list[str]:
     those gone quiet, as the page ages."""
     acts = (_activity(store, board.project, b) for b in board.blocks.values())
     return [a[0] for a in acts if a is not None]
-
-
-def quiet_text(age: float, line: str) -> str:
-    """A quiet running step's "what it says now" line: `Quiet for 42m. Last output: …`."""
-    return f"Quiet for {dur(age)}. " + (f"Last output: {line}" if line else "No output yet.")
 
 
 EXC_CLASS = re.compile(r"^(?:[A-Za-z_]\w*\.)*[A-Z]\w*(?:Error|Exception|Exit|Interrupt|Failure)"
@@ -767,12 +774,8 @@ def block_line(store: Store, board: Board, block: Block) -> tuple[str, str]:
     """(kind, text) of the card's one line: progress while running, the error when failed,
     what it produced when done, why it waits when a plan input holds it up."""
     status = block.status
-    if status == "running":
-        line = progress_line(store, board.project, block)
-        act = _activity(store, board.project, block)
-        if act is not None and act[1] >= QUIET:
-            return "progress", quiet_text(act[1], line)
-        return "progress", line
+    if status == "running":  # gone quiet or not: its quiet badge says which
+        return "progress", progress_line(store, board.project, block)
     if status == "failed":
         return "error", error_headline(block.entry.get("error")) or "failed"
     if status == "stale":
@@ -841,8 +844,8 @@ def message_html(m: dict[str, Any], steps: Iterable[str], awaiting: bool) -> str
     the body. A step's messages sit on the left, everyone else's (the orchestrator) indented."""
     sender, to = str(m.get("from") or "?"), m.get("to")
     who = "step" if sender in set(steps) else "lead"
-    tag = ('<span class="m-tag await">Awaiting reply</span>' if awaiting else
-           '<span class="m-tag">note</span>' if m.get("needs_reply") is False else "")
+    tag = ('<span class="tag attn">Awaiting reply</span>' if awaiting else
+           '<span class="tag muted">note</span>' if m.get("needs_reply") is False else "")
     head = (f'<div class="m-head"><span class="m-from">{e(sender)}</span>'
             + (f'<span class="m-to">→ {e(str(to))}</span>' if to else "")
             + f'<span class="m-when">{_when(m.get("at", ""))}</span>{tag}</div>')
@@ -874,7 +877,7 @@ def thread_html(board: Board, thread: str, ms: list[dict[str, Any]], waiting: se
     else:
         name = f'<span class="th-name">{e(thread)}</span>'
     open_q = [i for i, m in enumerate(ms) if m["seq"] in waiting]
-    tag = f'<span class="m-tag await">{len(open_q)} awaiting reply</span>' if open_q else ""
+    tag = f'<span class="tag attn">{len(open_q)} awaiting reply</span>' if open_q else ""
     last = ms[-1]
     preview = (f'<span class="th-last"><b>{e(str(last.get("from") or "?"))}:</b> '
                f'{e(_line(str(last.get("body", "")), 160))}</span>')
@@ -892,7 +895,7 @@ def thread_html(board: Board, thread: str, ms: list[dict[str, Any]], waiting: se
     body += f'<ol class="msgs">{"".join(items[cut:])}</ol>'
     if sid and live:
         body += (f'<p class="more"><a href="/projects/{e(quote(board.project))}#step:'
-                 f'{e(quote(sid))}">Open {e(sid)} on the plan</a></p>')
+                 f'{e(quote(sid))}">Open on the plan</a></p>')
     return (f'<sluice-thread project="{e(board.project)}" thread="{e(thread)}" '
             f'last="{last["seq"]}" data-preserve-attr="class data-rocket-host">'
             f'<details class="thread" id="th-{e(thread)}" data-preserve-attr="open"'
@@ -1021,14 +1024,15 @@ ROOM = 960 - 36  # px a row of a box has: the column, less the box's padding
 CARD_GAP, LANE_GAP = 14, 36  # px between cards in a row, and before the next lane's first
 
 
-def _card_width(board: Board, b: Block) -> float:
-    """About how wide a step's card is drawn (px): its id in 14.5px Inter, and in 12px what
-    it says small (blocked, runs done, its time)."""
+def _card_width(board: Board, b: Block, quiet: bool = False) -> float:
+    """About how wide a step's card is drawn (px): its id in 14.5px Archivo, in 12px what it
+    says small (blocked, runs done, its time), and a `quiet 42m` badge."""
     small = " · ".join(t for t in (
         "blocked" if board.blocked(b.sid) else "",
         f"{b.entry.get('done') or 0}/{b.entry['total']}" if "total" in b.entry else "",
         re.sub(r"<[^>]+>", "", _elapsed(b))) if t)
-    return 50 + 7.7 * len(b.sid) + (8 + 6.7 * len(small) if small else 0)
+    return (50 + 7.7 * len(b.sid) + (8 + 6.7 * len(small) if small else 0)
+            + (84 if quiet else 0))
 
 
 def _ups(board: Board, groups: list[dict[int, list[str]]],
@@ -1043,7 +1047,8 @@ def _ups(board: Board, groups: list[dict[int, list[str]]],
 
 
 def _shifts(board: Board, groups: list[dict[int, list[str]]], box: list[int],
-            depth: dict[str, int], room: float = ROOM) -> dict[int, int]:
+            depth: dict[str, int], room: float = ROOM,
+            quiet: frozenset[str] = frozenset()) -> dict[int, int]:
     """How many rows each lane of a box moves down, so that each lane's cards stay together:
     a lane that would crowd a row it shares past the box's width (`room`) starts below the
     lanes placed before it instead of wrapping in among their rows. Lanes are placed in the
@@ -1058,7 +1063,7 @@ def _shifts(board: Board, groups: list[dict[int, list[str]]], box: list[int],
 
     used: dict[int, float] = {}  # each row's width so far
     for i in box:
-        wide = {d: sum(_card_width(board, board.blocks[sid]) for sid in r)
+        wide = {d: sum(_card_width(board, board.blocks[sid], sid in quiet) for sid in r)
                 + CARD_GAP * (len(r) - 1) for d, r in groups[i].items()}
         k, clear = max(least(i), 0), max(used, default=-1) + 1 - min(wide)
         while k < clear and any(used.get(d + k, -LANE_GAP) + LANE_GAP + w > room
@@ -1167,7 +1172,8 @@ def _waits_text(waits: list[tuple[str, str]]) -> str:
 def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = False,
           order: int | None = None, lane_top: bool = False) -> str:
     """A step on the board: a compact bubble with its status glyph, its id and, small, how long
-    it ran (and `done of total` for a scattered step). Everything else is one click away in the
+    it ran (and `done of total` for a scattered step), then a `quiet 42m` badge once a running
+    step has gone quiet. Everything else is one click away in the
     drawer; the doc and what it says now (progress, error, what it waits on) are its tooltip.
     A pending step next in line (`is-next`) reads at full strength; one a failed step holds up
     (`is-blocked`) says "blocked". Its accessible name reads "failed, a, 1h 14m"."""
@@ -1192,8 +1198,9 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
         small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
     if _elapsed(b):
         small.append(_elapsed(b))
-    inner = " · ".join(small) + quiet_mark(store, board.project, b, bool(small))
-    tail = f'<span class="dur">{inner}</span>' if inner else ""
+    inner = " · ".join(small)
+    tail = (f'<span class="dur">{inner}</span>' if inner else "") \
+        + quiet_badge(store, board.project, b)
     # a comma for the accessible name, inline in the id's box (a hidden box of its own would
     # read "a , 1h")
     sep = '<span class="sep">,</span>' if inner else ""
@@ -1221,9 +1228,12 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
                 "<code>plan_patch</code>.</p>")
     groups, depth = lanes(board)
     boxes = _boxes(board, groups)
+    quiet = frozenset(sid for sid, b in board.blocks.items()
+                      if _is_quiet(store, board.project, b))
     html = []
     for box in boxes:
-        shift = _shifts(board, groups, box, depth, ROOM if len(boxes) > 1 else ROOM + 36)
+        shift = _shifts(board, groups, box, depth, ROOM if len(boxes) > 1 else ROOM + 36,
+                        quiet)
         at = sorted({d + shift[i] for i in box for d in groups[i]})  # the box's rows
         seats = _seats(board, groups, box, shift, at)
         top = at[0]
@@ -1272,13 +1282,14 @@ def _folded(board: Board, ids: list[str], inner: str) -> str:
     """A finished box folded to one line: its first and last steps, how many, and how they
     ended; it opens to its cards (open across live updates, and per tab in sessionStorage)."""
     skipped = sum(board.blocks[sid].status == "skipped" for sid in ids)
-    ended = f"{len(ids) - skipped} succeeded, {skipped} skipped" if skipped else "all succeeded"
+    # the success glyph says how they ended; only a skip is worth words
+    ended = f" · {len(ids) - skipped} succeeded, {skipped} skipped" if skipped else ""
     # on a phone the first id takes the line and the count goes under it; the last id hides
     return (f'<details class="fold-box" data-preserve-attr="open" data-box="{e(ids[0])}">'
             f'<summary>{glyph("succeeded", ", ")}<span class="sid">{e(ids[0])}</span>'
             f'<span class="fb-meta"><span class="fb-last"><span aria-hidden="true"> … </span>'
             f'<span class="vh"> to </span>{e(ids[-1])}<span class="fb-dot"> · </span></span>'
-            f'<span class="fb-n">{len(ids)} steps · {ended}</span></span>{CHEVRON}</summary>'
+            f'<span class="fb-n">{len(ids)} steps{ended}</span></span>{CHEVRON}</summary>'
             f"{inner}</details>")
 
 
@@ -1344,11 +1355,14 @@ def first_paragraph(text: str) -> str:
 
 def _summary_line(board: Board, updated: str = "") -> str:
     """Succeeded of total, then what else there is: skipped, running, stale, failed, and of
-    the pending steps those a failure blocks and those paused; the cost, the last activity."""
+    the pending steps those a failure blocks and those paused; the cost, the last activity.
+    With failed steps, the stuck sentence above already counts the failed, blocked and paused
+    ones, so this line leaves them out."""
     counts, total = {**board.counts, **board.stuck}, len(board.blocks)
     bits = [f"{counts.get('succeeded', 0)} of {total} succeeded"] if total else ["no steps"]
+    said = ("failed", "blocked", "paused") if board.failed else ()
     bits += [f"{counts[s]} {s}" for s in ("skipped", "running", "stale", "failed", "blocked",
-                                          "paused") if counts.get(s)]
+                                          "paused") if counts.get(s) and s not in said]
     if board.cost is not None:
         bits.append(_money(board.cost))
     if updated:
@@ -1492,8 +1506,8 @@ def _project_row(store: Store, name: str, since: list[str] | None = None) -> str
     if running:
         now = "".join(
             f'<li><a href="{href}#step:{quote(b.sid)}">{glyph("running")}'
-            f'<span class="ttl">{e(b.title)}</span></a><span class="dur">{_elapsed(b)}'
-            f"{quiet_mark(store, name, b, bool(_elapsed(b)))}</span></li>" for b in running[:4])
+            f'<span class="ttl">{e(b.title)}</span></a><span class="dur">{_elapsed(b)}</span>'
+            f"{quiet_badge(store, name, b)}</li>" for b in running[:4])
         more = f'<li class="more">and {len(running) - 4} more</li>' if len(running) > 4 else ""
         now = f'<ul class="now">{now}{more}</ul>'
     elif info.get("paused") is True:
@@ -1586,7 +1600,7 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     archived = board.info.get("archived") is True
     paused = board.info.get("paused") is True
     note = runner_note(store)
-    note += '<p class="attn-note">Paused: no step starts until you resume it.</p>' \
+    note += '<p class="attn-note">Paused: no step starts.</p>' \
         if paused else ""
     note += '<p class="attn-note">Archived: listed apart from the other projects.</p>' \
         if archived else ""
@@ -1772,11 +1786,13 @@ def _attempt(n: int, run: dict[str, Any], now: bool) -> str:
     started, finished = run.get("started"), run.get("finished")
     if outcome == "manual":
         when = [f"set {_when(finished)}"]
+    elif outcome == "running" and _parse_iso(started):
+        # its live time says when it started (to the second, in the time's title)
+        when = [_span(started, None, True).replace("<time ", f'<time title="{e(started)}" ', 1)
+                + " so far"]
     elif started:
-        took = _span(started, finished, outcome == "running")
-        when = [f"started {_when(started)}"]
-        if took:
-            when.append(f"{took} so far" if outcome == "running" else f"took {took}")
+        took = _span(started, finished, False)
+        when = [f"started {_when(started)}"] + ([f"took {took}"] if took else [])
     else:
         when = [f"ended {_when(finished)}"] if finished else []
     if run.get("adopted"):
@@ -1858,9 +1874,75 @@ def _field(name: str, value: str, type_: str = "", doc: str = "", source: str = 
             f"{source}</div>{about}<div class=\"f-v\">{value}</div></div>")
 
 
+def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable[str]], str],
+                 live: bool) -> str:
+    """The drawer's title: the step's id with its state as badges beside it (the status glyph
+    and word, `done/total runs` when scattered, how long it ran, live while it runs, and a
+    `quiet 42m` badge once a running step has gone quiet; when it started and ended are the
+    time's tooltip, and a finished step says how long ago it ended), then its doc and, as one
+    line of meta, its fn, cost, session and tags."""
+    status = "blocked" if board.blocked(b.sid) else WORDS.get(b.mark, b.status)
+    badges = [(f'<span class="tag"><span aria-hidden="true">{glyph(b.mark)}</span>'
+               f"{e(status)}</span>")]
+    if "total" in b.entry:
+        badges.append(f'<span class="tag">{int(b.entry.get("done") or 0)}/'
+                      f'{int(b.entry["total"])} runs</span>')
+    started, finished = b.entry.get("started"), b.entry.get("finished")
+    if took := _elapsed(b):
+        tip = f"started {started}" + (f", ended {finished}"
+                                      if finished and b.status != "running" else "")
+        badges.append(f'<span class="tag" title="{e(tip)}">{took}</span>')
+    badges.append(quiet_badge(store, board.project, b))
+    if b.status != "running" and finished and _parse_iso(finished):
+        badges.append(f'<span class="d-ago">ended {_when(finished)}</span>')
+    sep = '<span class="vh">, </span>'
+    hid = ' id="d-title"' if live else ""
+    out = (f'<div class="hd"><h2{hid}>{e(b.sid)}</h2><p class="d-badges">'
+           f'{sep.join(x for x in badges if x)}</p></div>')
+    if b.doc.strip():
+        out += f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>'
+    if b.status == "skipped" and b.entry.get("skipped"):
+        out += f'<p class="d-doc">Skipped: {e(b.entry["skipped"])}</p>'
+    # a pending one's badge already says paused; a failed or stale one it holds does not
+    if b.paused and b.status != "running" and (b.pause_reason or b.mark != "paused"):
+        why = f": {e(b.pause_reason)}" if b.pause_reason else ""
+        out += f'<p class="d-doc attn-note">Paused{why}</p>'
+    meta = [f'<code title="function">{e(b.fn)}</code>']
+    if b.cost is not None:
+        meta.append(e(_money(b.cost)))
+    outs = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else {}
+    if isinstance(session := outs.get("session"), str) and session:
+        meta.append(f'session <code title="{e(session)}">{e(session[:8])}</code>')
+    if b.tags:
+        meta.append("".join(f'<span class="tag">{e(t)}</span>' for t in b.tags))
+    return out + f'<p class="d-meta meta">{" · ".join(meta)}</p>'
+
+
+def _relations(board: Board, b: Block, steps: Callable[[Iterable[str]], str]) -> str:
+    """How the step stands to the others, each a row of step links led by their glyphs: what
+    a pending step waits on, what it runs after, its `when`, what a failed one blocks."""
+    rows: list[tuple[str, str]] = []
+    if waits := waits_on(board, b):
+        rows.append(("Waits on", steps(d for d, _ in waits)))
+    if b.after:
+        rows.append(("After", steps(b.after)))
+    if b.when is not None:
+        ref = e(str(b.when))
+        if b.when.step in board.blocks:
+            ref = steps([b.when.step]).replace(f">{e(b.when.step)}</", f">{ref}</", 1)
+        rows.append(("When", ref))
+    if b.status == "failed" and (held := board.blocks_of(b.sid)):
+        rows.append(("Blocks", steps(held)))
+    if not rows:
+        return ""
+    return ('<dl class="facts">'
+            + "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in rows) + "</dl>")
+
+
 def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
-    """Everything about one step, the way a run history reads: the step and a summary of its
-    run (status, fn, what it waits on, started, duration, cost, session; a link to its thread),
+    """Everything about one step, the way a run history reads: the step with its state as
+    badges (status, duration, quiet), its doc, fn, cost and session, how it stands to the
+    other steps (what it waits on, what it blocks) and a link to its thread,
     then what matters now (error, progress), what it produced, its prompt and other inputs (where each comes
     from), its log output and, when it ran more than once, its attempts. Types show on demand
     (the Types switch; always in a name's title). The `step-detail` part of the drawer and of
@@ -1878,41 +1960,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
             + (f'<a href="{e(step_href(project, d))}" data-step="{e(d)}">{e(d)}</a>' if live
                else e(d)) + "</span>" for d in ids if d in board.blocks)
 
-    status = "blocked" if board.blocked(sid) else WORDS.get(b.mark, b.status)
-    facts = [("Status", e(status)), ("Function", f"<code>{e(b.fn)}</code>")]
-    wide: list[tuple[str, str]] = []  # facts that take a row of their own and wrap
-    if b.when is not None:
-        ref = e(str(b.when))
-        if b.when.step in board.blocks:
-            ref = steps([b.when.step]).replace(f">{e(b.when.step)}</", f">{ref}</", 1)
-        wide.append(("When", ref))
-    if b.after:
-        wide.append(("After", steps(b.after)))
-    if b.status == "failed" and (held := board.blocks_of(sid)):
-        wide.append(("Blocks", steps(held)))
-    if b.tags:
-        facts.append(("Tags", ", ".join(e(t) for t in b.tags)))
-    if "total" in b.entry:
-        facts.append(("Runs", f"{int(b.entry.get('done') or 0)} of {int(b.entry['total'])}"))
-    if b.entry.get("started"):
-        facts.append(("Started", _when(b.entry["started"])))
-    if _elapsed(b):
-        facts.append(("Duration", _elapsed(b)))
-    if b.cost is not None:
-        facts.append(("Cost", e(_money(b.cost))))
-    session = outs_all.get("session")
-    if isinstance(session, str) and session:
-        facts.append(("Session", f'<code title="{e(session)}">{e(session[:8])}</code>'))
-    doc = f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>' if b.doc.strip() else ""
-    if b.status == "skipped":
-        doc += f'<p class="d-doc">Skipped: {e(b.entry.get("skipped") or "")}</p>'
-    if b.paused and b.status != "running":
-        doc += f'<p class="d-doc attn-note">Paused{": " + e(b.pause_reason) if b.pause_reason else ""}</p>'
-    waits = waits_on(board, b)
-    if waits:
-        wide.insert(0, ("Waits on", steps(d for d, _ in waits)))
-    grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
-    grid += "".join(f'<div class="wide"><dt>{k}</dt><dd>{v}</dd></div>' for k, v in wide)
+    head = _detail_head(store, board, b, steps, live) + _relations(board, b, steps)
     thread = f"step-{sid}"  # its conversation with the orchestrator, on the Threads tab
     recs = L.read(store.log_dir(project), threads=[thread],
                   kinds=["step.status", "step.output", "run.adopt", "message"])["records"]
@@ -1921,17 +1969,15 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     if msgs and live:
         waiting = len(_awaiting(msgs, board.blocks))
         n = f'{len(msgs)} message{"s" if len(msgs) != 1 else ""}'
-        n += f' · <span class="attn">{waiting} awaiting reply</span>' if waiting else ""
         talk = (f'<a class="d-thread" href="{e(threads_href(project, thread))}">Thread · {n}'
                 f"</a>")
+        talk += f'<span class="tag attn">{waiting} awaiting reply</span>' if waiting else ""
     # pausing holds a step that has not started; it never stops a running one (SPEC §6), and
     # a finished one would not run again anyway: the switch shows only where it acts
     pause = _pause_form(project, b.paused, sid) \
         if b.paused or b.status in ("pending", "failed", "stale") else ""
     switch = f'<div class="d-actions">{pause}{talk}</div>' if live and (pause or talk) else ""
-    hid = ' id="d-title"' if live else ""
-    head = (f'<header class="d-head"><div class="hd">{glyph(b.mark)}<h2{hid}>{e(sid)}</h2>'
-            f'</div>{doc}<dl class="facts">{grid}</dl>{switch}</header>')
+    head = f'<header class="d-head">{head}{switch}</header>'
     sections = []
     # one Types switch, on the first section of values
     types = [('<button type="button" class="types-toggle" aria-pressed="false" '
@@ -1957,20 +2003,9 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         tail = tail_text(d / "stderr.log", TAIL).strip() if d else ""
     which = f" (run {len(b.run_ids)} of {int(b.entry['total'])})" \
         if "total" in b.entry and len(b.run_ids) > 1 else ""
-    if b.status == "running":
-        line, quiet = "", False
-        if (act := _activity(store, project, b)) is not None:
-            quiet = act[1] >= QUIET
-            last = progress_line(store, project, b)
-            # the ticker (static/sluice.js) fills the line in and unhides it when the run
-            # crosses QUIET without another write
-            line = (f'<p class="attn" data-quiet-line="{e(act[0])}"'
-                    f'{"" if quiet else " hidden"}><span class="q">'
-                    f'{e(f"Quiet for {dur(act[1])}.") if quiet else ""}</span> '
-                    f'{e("Last output: " + last if last else "No output yet.")}</p>')
-        line += (f'<pre class="tail">{e(tail)}</pre>' if tail else
-                 "" if quiet else '<p class="quiet">Nothing written yet.</p>')
-        section("Progress" + which, line)
+    if b.status == "running":  # gone quiet or not: the quiet badge by the title says which
+        section("Progress" + which, f'<pre class="tail">{e(tail)}</pre>' if tail else
+                '<p class="quiet">Nothing written yet.</p>')
     # outputs: what it produced (its declared ones first); session and cost are run facts
     outs: dict[str, Any] | None = outs_all if isinstance(b.entry.get("outputs"), dict) else None
     declared = b.outputs
@@ -1983,7 +2018,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         except (OSError, ValueError):
             got = None
         if isinstance(got, dict):
-            outs, title, declared = got, "Outputs submitted so far", own
+            outs, title, declared = got, "Outputs so far", own
     if outs is not None:
         fields = [_field(n, field_value(outs[n]) if n in outs else
                          '<span class="quiet">none</span>', declared.get(n, ""),
@@ -1993,7 +2028,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
             section(title, f'<div class="fields">{"".join(fields)}</div>', types_switch())
     elif own:
         names = ", ".join(e(n) for n in own)
-        section("Outputs", f'<p class="quiet">None yet. It hands on: {names}.</p>')
+        section("Outputs", f'<p class="quiet">None yet: {names}.</p>')
     # the run's own input.json when there is one, else what the bindings resolve to now
     ran: dict[str, Any] = {}
     if b.run_ids:
@@ -2022,7 +2057,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         body = (_fold(f'<div class="clip prose prompt">{e(text)}</div>', "prose")
                 if ok and text.count("\n") + len(text) // 90 > FOLD_LINES else
                 f'<div class="prompt">{e(text)}</div>' if ok else
-                '<p class="quiet">Not resolved yet.</p>')
+                '<p class="quiet">No value yet.</p>')
         section(prompt.capitalize(), _from(project, b, prompt, live) + body)
     fields = []
     for n in b.bindings:
@@ -2133,7 +2168,7 @@ def _st(status: Any) -> str:
 
 
 # what a restarted runner found of a leftover run (`run.adopt`'s outcome, SPEC §6)
-ADOPTED = {"watching": "still running; the new runner watches it",
+ADOPTED = {"watching": "kept through a runner restart",
            "finished": "had finished; its result was collected",
            "unknown": "had stopped without saying how it ended",
            "restarted": "was lost in the restart"}
@@ -2149,7 +2184,8 @@ def log_summary(rec: dict[str, Any]) -> str:
         text = e(f"{rec.get('step')} {rec.get('from') or 'new'} → ") + _st(rec.get("to"))
         return text + (e(": " + error_headline(rec["error"], 120)) if rec.get("error") else "")
     if kind == "plan.edit":
-        return e(f"{by} ({len(rec.get('ops') or [])} ops)")
+        n = len(rec.get("ops") or [])
+        return e(f"{by} ({n} op{'s' if n != 1 else ''})")
     if kind == "plan.input":
         value = _line(json.dumps(rec.get("value"), ensure_ascii=False), 60)
         return e(f"{rec.get('name')} = {value} · {by}")
@@ -2362,7 +2398,7 @@ def fns_page(store: Store, project: str | None = None) -> str:
     for scope in ("builtin", "global", "project"):
         if scope == "project" and project is None:
             continue
-        title = SCOPE_TITLES[scope] + (f" ({e(project)})" if scope == "project" else "")
+        title = SCOPE_TITLES[scope]  # the project is the picker's, above
         cards = "".join(groups.get(scope, [])) or '<p class="quiet">none</p>'
         index = "".join(f'<a href="#fn-{e(n)}">{e(n)}</a>' for n in names.get(scope, []))
         index = f'<nav class="fn-index" aria-label="{e(SCOPE_TITLES[scope])}">{index}</nav>' \
@@ -2408,9 +2444,11 @@ def _item(item: dict[str, Any], back: str, all_projects: bool) -> str:
     elif item["status"] == "answered":
         answer = item.get("answer") or {}
         text = f"<blockquote>{e(answer['text'])}</blockquote>" if answer.get("text") else ""
+        # the action is worth saying only when it is not the plain answer the text shows
+        how = "" if answer.get("action") == "answer" and text else \
+            f' with <code>{e(str(answer.get("action")))}</code>'
         out.append(f'<div class="answered"><p class="meta">answered '
-                   f'{_when(item.get("answered", ""))} with <code>'
-                   f'{e(str(answer.get("action")))}</code></p>{text}'
+                   f'{_when(item.get("answered", ""))}{how}</p>{text}'
                    f'<details><summary>Answer as sent</summary><pre>{_json(answer)}</pre>'
                    f"</details></div>")
     else:

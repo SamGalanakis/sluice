@@ -119,7 +119,8 @@ def test_the_board_draws_after_edges_and_the_drawer_shows_tags_and_reason(store)
     assert ["s:a", "s:b", "after"] in edges
     assert 'title="paused: host busy"' in page and "is-paused" in page
     detail = views.step_detail(store, "p", "b")
-    assert "host busy" in detail and "<dt>After</dt>" in detail and "<dt>Tags</dt>" in detail
+    assert "host busy" in detail and "<dt>After</dt>" in detail
+    assert '<span class="tag">heavy</span>' in detail  # its tags, in the meta line
     assert "s0 -.->|after| s1" in views.render(store, "p", "mermaid")
 
 
