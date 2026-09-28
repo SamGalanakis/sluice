@@ -1,8 +1,10 @@
 """verify (SPEC §6a): check functions, .env files, plans and state; report every problem found
-with where it is, and leftover project directories as warnings. Changes nothing."""
+with where it is, and leftover project directories and missing files that file bindings name
+as warnings. Changes nothing."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +84,13 @@ def _check_project(store: Store, r: Report, name: str) -> None:
     body = {k: v for k, v in doc.items() if k != "rev"}
     errs, plan = P.validate(body, reg)
     r.add_path_errors(f"project {name}: plan", errs)
+    for sid, step in plan.steps.items():  # a file binding is read when its step starts
+        for k, src in step.sources.items():
+            if src.file is not None and not (os.path.isfile(src.file)
+                                             and os.access(src.file, os.R_OK)):
+                r.warn(f"project {name}: plan#steps.{sid}.in.{k}.file",
+                       f"no readable file at {src.file} now (the step reads it when it "
+                       "starts, and fails if it is still missing)")
     where = f"project {name}: state"
     if not isinstance(state.get("inputs"), dict) or not isinstance(state.get("steps"), dict):
         r.add(where, "expected an object {inputs, steps}")

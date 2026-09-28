@@ -2466,8 +2466,9 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         src = b.step.sources.get(name)
         if src is None:
             return False, None
-        if not src.refs:
+        if not src.refs and src.file is None:
             return True, src.default
+        # a file binding shows as {"file": path} until a run's input.json holds its text
         ok = all(value_of(r, board.plan, board.state)[0] for r in src.refs)
         return ok, source_value(src, board.plan, board.state)
 

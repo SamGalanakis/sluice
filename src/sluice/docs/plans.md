@@ -46,6 +46,11 @@ a step and has no value yet, with its doc.
 - `{"source": "work/final"}`: another step's output. Add `.field` or `.0` to reach inside:
   `"review/report.summary"`, `"gate/items.0"`.
 - `{"source": ["a/out", "b/out"]}`: fan-in, the step gets an array of those values in order.
+- `{"file": "/abs/path/spec.md"}`: the file's text, a `string`, read when the step starts (each
+  start, a retry's too). Keep a long spec in a file instead of pasting it into the plan: edit
+  the file until the step starts, and that text runs. A missing file fails the step, naming
+  it; `verify` warns about one missing now. Editing the file after the step succeeded does not
+  make it stale (only the path counts); the new text runs the next time the step starts.
 - Optional function inputs (`T?`) may be left out.
 
 ## Agent blocks: typed inputs and outputs

@@ -34,6 +34,7 @@ from .plan import (
     inputs_hash,
     is_ready,
     mark_stale,
+    read_files,
     resolved_inputs,
     settle_skip,
     settle_skips,
@@ -941,11 +942,16 @@ class Runner:
         """A ready step, inside the tick's transaction: a built-in runs inline and finishes;
         anything else is reserved — running, with a fresh run id per run (index-aligned, a
         kept item of a retried scatter keeping its own) — and returned, to be started once
-        the reservation is committed. Bad inputs fail it at once."""
+        the reservation is committed. Bad inputs, or a file binding it cannot read, fail it
+        at once."""
         inp = resolved_inputs(step, plan, state)
-        h = inputs_hash(step, plan, state)
+        h = inputs_hash(step, plan, state)  # a file binding hashes as its path, not its content
         kept = state["steps"][step.id].get("kept")  # a retried scatter's finished items
         e = state["steps"][step.id] = S.running(h)
+        inp, err = read_files(step, inp)  # each start reads the files afresh
+        if err:
+            _finish(e, error=err)
+            return None
         runs = [inp]
         if step.scatter:
             items = inp[step.scatter]

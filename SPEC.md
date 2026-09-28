@@ -140,7 +140,7 @@ required field of `inp` exists in `out` and fits, extra fields in `out` are fine
 Types are written on fn inputs and outputs, plan inputs and the outputs a step of an open fn
 declares (§5). An extra input of such a step has no written type: it takes its source's (a
 ref's type; for a list source an array of the refs' type, `Any[]` when they differ; `Any` for a
-`default`; the item type when it is the scatter input). Where a type is handed on (the env of
+`default`; `string` for a `file`; the item type when it is the scatter input). Where a type is handed on (the env of
 an open fn, §4) it is spelled back in the forms above, a string where one exists.
 
 ## 4. Functions
@@ -247,7 +247,13 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   as its card's title and an input's doc on its node, and an
   inbox item posted for an input without a body takes that input's doc as its body (§8a).
 - **Step inputs** (`in`): `{"default": <json>}` a literal; `{"source": "<ref>"}` one value;
-  `{"source": ["<ref>", ...]}` fan-in: an array of the values, in order. A ref is a plan input
+  `{"source": ["<ref>", ...]}` fan-in: an array of the values, in order; `{"file": "<absolute
+  path>"}` the file's text (UTF-8), a `string` (an input declared otherwise refuses it at
+  validation), read when the step **starts** — each start, a retry's too, so a spec edited
+  before the step starts is what runs. A file missing or unreadable then fails the step
+  (`input spec: cannot read the file /abs/spec.md: No such file or directory`) without
+  starting it; `verify` warns about one missing now. The run's `input.json` holds the text;
+  anywhere else the binding shows its path. A ref is a plan input
   name (`repo`) or `<step>/<output>`, optionally followed by `.<field or index>...` to reach
   inside a value. Optional fn inputs may be omitted.
 - **Fan-out:** several steps read the same output. **Fan-in:** a list `source`, or several inputs
@@ -313,7 +319,9 @@ re-run only what failed.
 (and so when it succeeds) or is set by hand, its state records `inputs_hash`: a hash of the
 canonical JSON of the inputs it binds (for a scattered step the whole array; an optional input
 it leaves unbound is not in it, so a fn gaining an optional input leaves the steps that already
-ran alone), or null for a step set by hand with `force` while what it
+ran alone; a `file` binding as `{"file": <path>}`: its path, not its content, so editing a file
+after its step succeeded does not make the step stale, and the new text runs only when the step
+runs again), or null for a step set by hand with `force` while what it
 reads was not ready ("inputs unknown"). Each tick, in dependency order, a `succeeded` step becomes
 `stale` when a step it reads is stale, or when its inputs are all available and hash differently
 (an upstream re-ran with a different result, a plan input changed, its bindings were edited, or
@@ -453,7 +461,8 @@ that project. It covers:
 - `.env` files parsing as `KEY=value` lines (blank lines, `#` comments and `export `
   allowed);
 - the plan: full validation (§5) against the project's functions (a plan can stop validating
-  when a function it uses changes);
+  when a function it uses changes), and a warning for each `file` binding whose file is not
+  there (or not readable) now;
 - the state agreeing with the plan (no state for unknown steps or undeclared plan inputs,
   valid statuses, outputs of succeeded steps passing their output types, plan input values
   passing their types).

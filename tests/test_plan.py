@@ -53,7 +53,7 @@ def test_a_valid_plan(reg):
     ({"nodes": {}}, "nodes: unknown key"),
     ({}, "steps: required"),
     ({"steps": {"a": add({"default": 1, "source": "x"}, ONE)}},
-     'steps.a.in.a: expected {"default": ...} or {"source": ...}'),
+     'steps.a.in.a: expected {"default": ...}, {"source": ...} or {"file": "/abs/path"}'),
     ({"steps": {"a": add({"source": "a.b/c"}, ONE)}}, "steps.a.in.a.source: bad ref 'a.b/c'"),
     # every run exists
     ({"steps": {"a": {"run": "no.such"}}}, "steps.a.run: unknown fn 'no.such'"),

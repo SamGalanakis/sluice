@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from . import state as S
@@ -16,6 +18,7 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
 STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "when"}
+STRING = T.Prim("string")
 
 
 @dataclass(frozen=True)
@@ -33,11 +36,13 @@ class Ref:
 
 @dataclass(frozen=True)
 class Source:
-    """`{"default": v}` (no refs), `{"source": "ref"}` or `{"source": [refs]}` (fan-in)."""
+    """`{"default": v}` (no refs), `{"source": "ref"}`, `{"source": [refs]}` (fan-in) or
+    `{"file": "/abs/path"}`: a string, the file's text, read when the step starts."""
 
     default: Any = None
     refs: tuple[Ref, ...] = ()
     fan_in: bool = False
+    file: str | None = None
 
 
 @dataclass
@@ -115,11 +120,19 @@ def parse_ref(text: Any) -> tuple[Ref | None, str]:
 
 
 def parse_source(raw: Any, path: str, errs: list[str]) -> Source | None:
-    if not isinstance(raw, dict) or len(raw) != 1 or next(iter(raw)) not in ("default", "source"):
-        errs.append(f'{path}: expected {{"default": ...}} or {{"source": ...}}')
+    if not isinstance(raw, dict) or len(raw) != 1 or \
+            next(iter(raw)) not in ("default", "source", "file"):
+        errs.append(f'{path}: expected {{"default": ...}}, {{"source": ...}} or '
+                    f'{{"file": "/abs/path"}}')
         return None
     if "default" in raw:
         return Source(default=raw["default"])
+    if "file" in raw:
+        f = raw["file"]
+        if not isinstance(f, str) or not os.path.isabs(f):
+            errs.append(f"{path}.file: expected an absolute path (a string), got {f!r}")
+            return None
+        return Source(file=f)
     src = raw["source"]
     refs = []
     for i, text in enumerate(src if isinstance(src, list) else [src]):
@@ -149,7 +162,10 @@ def ref_type(ref: Ref, plan: Plan) -> tuple[T.Type | None, str]:
 
 def source_type(s: Source, plan: Plan, path: str, errs: list[str]) -> T.Type:
     """The type an extra input takes from its source: a ref's type, an array of the refs'
-    type for a list source (`Any[]` when they differ), `Any` for a default."""
+    type for a list source (`Any[]` when they differ), `Any` for a default, `string` for a
+    file."""
+    if s.file is not None:
+        return STRING
     if not s.refs and not s.fan_in:
         return T.ANY
     found = []
@@ -164,6 +180,12 @@ def source_type(s: Source, plan: Plan, path: str, errs: list[str]) -> T.Type:
 
 
 def check_source(s: Source, target: T.Type, plan: Plan, path: str, errs: list[str]) -> None:
+    if s.file is not None:
+        ok, reason = T.fits(STRING, target)
+        if not ok:
+            errs.append(f"{path}: a file binding is a string, which does not fit {target}: "
+                        f"{reason}")
+        return
     if not s.refs and not s.fan_in:
         errs.extend(T.check_value(target, s.default, path))
         return
@@ -373,6 +395,10 @@ def value_of(ref: Ref, plan: Plan, state: dict[str, Any]) -> tuple[bool, Any]:
 
 
 def source_value(src: Source, plan: Plan, state: dict[str, Any]) -> Any:
+    """A binding's value now. A file binding stands as `{"file": path}` (what its step's
+    inputs hash covers: the path, not the content); `read_files` reads it at the start."""
+    if src.file is not None:
+        return {"file": src.file}
     if not src.refs and not src.fan_in:
         return src.default
     values = [value_of(r, plan, state)[1] for r in src.refs]
@@ -459,6 +485,22 @@ def resolved_inputs(step: Step, plan: Plan, state: dict[str, Any]) -> dict[str, 
     inp: dict[str, Any] = {k: None for k in step.inputs}
     inp.update({k: source_value(s, plan, state) for k, s in step.sources.items()})
     return inp
+
+
+def read_files(step: Step, inp: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """The input object a step starts with: each file binding's `{"file": path}` replaced by
+    the file's text (UTF-8), read now. Returns (inputs, "") or (inputs, why a file could not
+    be read)."""
+    out = dict(inp)
+    for name, src in step.sources.items():
+        if src.file is None:
+            continue
+        try:
+            out[name] = Path(src.file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            why = e.strerror if isinstance(e, OSError) and e.strerror else str(e)
+            return out, f"input {name}: cannot read the file {src.file}: {why}"
+    return out, ""
 
 
 def inputs_hash(step: Step, plan: Plan, state: dict[str, Any]) -> str:
