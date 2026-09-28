@@ -16,6 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .processes import engine_env, find_argv, record, scope_command, start_time
 from .supervisor import Adapter, Snapshot
 from .tmux import _alive, descendants
 
@@ -31,10 +32,15 @@ def _private_config(source, model, effort, search):
     names = set()
     out = []
     parent = False
+    skip_table = False
     for line in lines:
-        header = re.match(r"^\s*\[mcp_servers\.([^].]+)(?:\.[^]]+)?\]\s*(?:#.*)?$", line)
+        header = re.match(r"^\s*\[mcp_servers\.([^].]+)(?:\.([^]]+))?\]\s*(?:#.*)?$", line)
         if header:
             name = header.group(1)
+            skip_table = header.group(2) in ("env", "http_headers")
+            if skip_table:
+                parent = False
+                continue
             if name not in names:
                 names.add(name)
                 if "." not in line.split("]", 1)[0][13:]:
@@ -44,7 +50,10 @@ def _private_config(source, model, effort, search):
             parent = line.strip() == f"[mcp_servers.{name}]"
         elif line.lstrip().startswith("["):
             parent = False
-        if parent and re.match(r"^\s*enabled\s*=", line):
+            skip_table = False
+        if skip_table:
+            continue
+        if parent and re.match(r"^\s*(?:enabled|env|http_headers)(?:\.[^=]+)?\s*=", line):
             continue
         out.append(line)
     prefix = [f'model = "{model}"', f'model_reasoning_effort = "{effort}"']
@@ -83,6 +92,7 @@ class Rpc:
             raise RuntimeError(f"Codex app-server WebSocket handshake failed: {head[:200]!r}")
         self.next_id = 0
         self.events = []
+        self.fragments = bytearray()
 
     def close(self):
         self.sock.close()
@@ -96,34 +106,55 @@ class Rpc:
         self.sock.sendall(b"\x81" + bytes([size[0] | 128]) + size[1:] + mask
                           + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
 
-    def _read(self, n):
-        while len(self.buffer) < n:
-            chunk = self.sock.recv(max(4096, n - len(self.buffer)))
-            if not chunk:
-                raise ConnectionError("Codex app-server closed the connection")
-            self.buffer += chunk
-        data, self.buffer = self.buffer[:n], self.buffer[n:]
-        return data
+    def _frames(self):
+        """Parse only complete frames; leave a partial header or payload in the buffer."""
+        out = []
+        while len(self.buffer) >= 2:
+            first, second = self.buffer[:2]
+            n, offset = second & 127, 2
+            if n == 126:
+                if len(self.buffer) < 4:
+                    break
+                n, offset = struct.unpack("!H", self.buffer[2:4])[0], 4
+            elif n == 127:
+                if len(self.buffer) < 10:
+                    break
+                n, offset = struct.unpack("!Q", self.buffer[2:10])[0], 10
+            masked = bool(second & 128)
+            end = offset + (4 if masked else 0) + n
+            if len(self.buffer) < end:
+                break
+            mask = self.buffer[offset:offset + 4] if masked else None
+            data = self.buffer[offset + (4 if masked else 0):end]
+            self.buffer = self.buffer[end:]
+            if mask:
+                data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+            opcode = first & 15
+            if opcode == 8:
+                raise ConnectionError("Codex app-server closed the WebSocket")
+            if opcode == 9:
+                reply_mask = os.urandom(4)
+                self.sock.sendall(b"\x8a" + bytes([len(data) | 128]) + reply_mask
+                                  + bytes(b ^ reply_mask[i % 4] for i, b in enumerate(data)))
+                continue
+            if opcode == 10:
+                continue
+            if opcode not in (0, 1) or (opcode == 1 and self.fragments):
+                raise ConnectionError("invalid Codex WebSocket frame sequence")
+            self.fragments.extend(data)
+            if first & 128:
+                out.append(json.loads(self.fragments))
+                self.fragments.clear()
+        return out
 
-    def _recv(self):
-        first, second = self._read(2)
-        n = second & 127
-        if n == 126:
-            n = struct.unpack("!H", self._read(2))[0]
-        elif n == 127:
-            n = struct.unpack("!Q", self._read(8))[0]
-        mask = self._read(4) if second & 128 else None
-        data = self._read(n)
-        if mask:
-            data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
-        if first & 15 == 8:
-            raise ConnectionError("Codex app-server closed the WebSocket")
-        if first & 15 == 9:
-            reply_mask = os.urandom(4)
-            self.sock.sendall(b"\x8a" + bytes([len(data) | 128]) + reply_mask
-                              + bytes(b ^ reply_mask[i % 4] for i, b in enumerate(data)))
-            return self._recv()
-        return json.loads(data)
+    def _read_available(self, timeout):
+        if not select.select([self.sock], [], [], timeout)[0]:
+            return False
+        chunk = self.sock.recv(65536)
+        if not chunk:
+            raise ConnectionError("Codex app-server closed the connection")
+        self.buffer += chunk
+        return True
 
     def request(self, method, params=None, timeout=30):
         self.next_id += 1
@@ -131,19 +162,21 @@ class Rpc:
         self._send({"id": rid, "method": method, "params": params or {}})
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            self.sock.settimeout(max(0.1, deadline - time.monotonic()))
-            msg = self._recv()
-            if msg.get("id") == rid and "method" not in msg:
-                if msg.get("error"):
-                    raise RuntimeError(f"Codex {method}: {msg['error']}")
-                return msg.get("result") or {}
-            self.events.append(msg)
+            frames = self._frames()
+            for index, msg in enumerate(frames):
+                if msg.get("id") == rid and "method" not in msg:
+                    self.events.extend(frames[index + 1:])
+                    if msg.get("error"):
+                        raise RuntimeError(f"Codex {method}: {msg['error']}")
+                    return msg.get("result") or {}
+                self.events.append(msg)
+            self._read_available(max(0, deadline - time.monotonic()))
         raise TimeoutError(f"Codex {method} timed out")
 
     def drain(self):
-        while self.buffer or select.select([self.sock], [], [], 0)[0]:
-            self.sock.settimeout(0.1)
-            self.events.append(self._recv())
+        self.events.extend(self._frames())
+        while self._read_available(0):
+            self.events.extend(self._frames())
         out, self.events = self.events, []
         return out
 
@@ -162,8 +195,11 @@ class Codex(Adapter):
             raise ValueError(f"invalid codex effort {self.effort!r}")
         self.thread = self.turn = self.message = self.error = ""
         self.turns = self.version = 0
+        self.starts = 0
         self.lines = []
         self.server = self.rpc = self.log_file = None
+        self.app_pid = None
+        self.app_start = None
         self.busy = False
 
     def session_cwd(self, session):
@@ -175,7 +211,10 @@ class Codex(Adapter):
                 f"*/*/*/rollout-*-{session}.jsonl"):
             with path.open(errors="replace") as stream:
                 for line in stream:
-                    rec = json.loads(line)
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
                     if rec.get("type") == "session_meta":
                         return rec.get("payload", {}).get("cwd")
         return None
@@ -189,16 +228,33 @@ class Codex(Adapter):
                              / "codex-native-sessions")
         self.registry_dir.mkdir(parents=True, exist_ok=True)
         meta = self.registry_dir / f"{session}.json" if session else None
-        private = Path(json.loads(meta.read_text())["home"]) if meta and meta.exists() \
-            else self.run_dir / "codex-home"
-        private.mkdir(exist_ok=True)
+        homes = self.registry_dir.parent / "codex-native-homes"
+        homes.mkdir(parents=True, exist_ok=True)
+        if meta and meta.exists():
+            private = Path(json.loads(meta.read_text())["home"])
+            if not private.is_dir():
+                raise FileNotFoundError(f"Codex session {session} home is missing: {private}")
+            target = homes / session
+            if private != target:
+                if not target.exists():
+                    shutil.copytree(private, target, symlinks=True,
+                                    ignore=lambda root, names: ({"config.toml"}
+                                                                if Path(root) == private else set()))
+                private = target
+        else:
+            private = homes / (session or f"pending-{self.run_dir.name}")
+            private.mkdir(parents=True, exist_ok=True)
         source = Path.home() / ".codex"
         if session and (not meta or not meta.exists()):
+            found = False
             for rollout in (source / "sessions").glob(f"*/*/*/rollout-*-{session}.jsonl"):
                 target = private / "sessions" / rollout.relative_to(source / "sessions")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(rollout, target)
+                found = True
                 break
+            if not found:
+                raise FileNotFoundError(f"Codex session {session} has no saved rollout or home")
         for name in ("auth.json", "skills", "memories", "rules", "prompts", "plugins",
                      "AGENTS.md", "AGENTS.override.md"):
             src, dest = source / name, private / name
@@ -206,9 +262,11 @@ class Codex(Adapter):
                 dest.symlink_to(src, target_is_directory=src.is_dir())
         search = os.environ.get("SLUICE_CODEX_SEARCH") == "1"
         config = (source / "config.toml").read_text() if (source / "config.toml").exists() else ""
-        (private / "config.toml").write_text(_private_config(config, self.model, self.effort,
-                                                                search))
-        self._env = dict(os.environ, CODEX_HOME=str(private))
+        fd = os.open(private / "config.toml", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(_private_config(config, self.model, self.effort, search))
+        self._env = {**engine_env(), "CODEX_HOME": str(private)}
         env_file = Path(cwd) / "env.sh"
         if not env_file.exists() and Path(cwd).name == "merged":
             env_file = Path(cwd).parent / "env.sh"
@@ -222,16 +280,21 @@ class Codex(Adapter):
                          CARGO_PROFILE_TEST_DEBUG="line-tables-only")
         self.log_file = (self.run_dir / "app-server.log").open("w")
         self.progress_file = (self.run_dir / "codex.log").open("w")
+        cmd = [os.environ.get("SLUICE_CODEX_CLI", "codex"), "app-server", "--listen",
+               f"unix://{self.socket_path}"]
         self.server = subprocess.Popen(
-            [os.environ.get("SLUICE_CODEX_CLI", "codex"), "app-server", "--listen",
-             f"unix://{self.socket_path}"], cwd=cwd, env=self._env, stdin=subprocess.DEVNULL,
+            scope_command(cmd), cwd=cwd, env=self._env, stdin=subprocess.DEVNULL,
             stdout=self.log_file, stderr=subprocess.STDOUT, start_new_session=True)
+        record(self.run_dir, "app_scope", self.server.pid)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             if self.server.poll() is not None:
                 raise RuntimeError("Codex app-server exited: "
                                    + (self.run_dir / "app-server.log").read_text()[-1000:])
             if self.socket_path.exists():
+                self.app_pid = find_argv(f"unix://{self.socket_path}")
+                self.app_start = start_time(self.app_pid) if self.app_pid else None
+                record(self.run_dir, "app_server", self.app_pid)
                 try:
                     self.rpc = Rpc(self.socket_path)
                     break
@@ -249,6 +312,18 @@ class Codex(Adapter):
                                                          "approvalPolicy": "never",
                                                          "sandbox": "danger-full-access"})
             self.thread = result["thread"]["id"]
+            self._save_home()
+
+    def _save_home(self):
+        if self.private.name.startswith("pending-"):
+            target = self.private.parent / self.thread
+            old = self.private
+            old.rename(target)
+            old.symlink_to(target, target_is_directory=True)
+            self.pending_link = old
+            self.private = target
+        (self.registry_dir / f"{self.thread}.json").write_text(json.dumps(
+            {"home": str(self.private), "cwd": self.cwd}))
 
     def argv(self):
         cmd = [os.environ.get("SLUICE_CODEX_CLI", "codex")]
@@ -269,8 +344,7 @@ class Codex(Adapter):
                 if event.get("method") == "thread/started" and not self.thread:
                     self.thread = (event.get("params", {}).get("thread") or {}).get("id", "")
                     if self.thread:
-                        (self.registry_dir / f"{self.thread}.json").write_text(json.dumps(
-                            {"home": str(self.private), "cwd": self.cwd}))
+                        self._save_home()
             if self.thread and "›" in tmux.capture():
                 return
             time.sleep(0.2)
@@ -279,10 +353,18 @@ class Codex(Adapter):
     def deliver(self, tmux, text):
         input_items = [{"type": "text", "text": text}]
         if self.busy and self.turn:
-            self.rpc.request("turn/steer", {"threadId": self.thread,
-                                             "expectedTurnId": self.turn,
-                                             "input": input_items})
-        else:
+            try:
+                self.rpc.request("turn/steer", {"threadId": self.thread,
+                                                 "expectedTurnId": self.turn,
+                                                 "input": input_items})
+            except RuntimeError:
+                self.poll(tmux)
+                if self.busy:
+                    raise
+            else:
+                self.version += 1
+                return
+        if not self.busy:
             result = self.rpc.request("turn/start", {"threadId": self.thread,
                                                       "input": input_items,
                                                       "model": self.model,
@@ -320,6 +402,7 @@ class Codex(Adapter):
             if params.get("threadId") not in (None, self.thread):
                 continue
             if method == "turn/started":
+                self.starts += 1
                 self.busy = True
                 self.turn = (params.get("turn") or {}).get("id", self.turn)
             elif method in ("turn/completed", "turn/failed"):
@@ -351,7 +434,8 @@ class Codex(Adapter):
             return Snapshot("exited", self.turns, progress=self.version, error=self.error,
                             exit_status=str(self.server.returncode or tmux.dead()))
         return Snapshot("busy" if self.busy else "idle" if self.turns else "starting",
-                        self.turns, progress=self.version, error=self.error)
+                        self.turns, progress=self.version, error=self.error,
+                        starts=self.starts)
 
     def progress(self):
         lines, self.lines = self.lines, []
@@ -375,17 +459,28 @@ class Codex(Adapter):
             with contextlib.suppress(OSError):
                 self.rpc.close()
         if self.server:
-            children = descendants(self.server.pid)
+            app_pid = self.app_pid
+            if app_pid and start_time(app_pid) != self.app_start:
+                app_pid = None
+            if not app_pid and hasattr(self, "socket_path"):
+                app_pid = find_argv(f"unix://{self.socket_path}")
+            children = descendants(app_pid) if app_pid else descendants(self.server.pid)
             for pid in children:
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(pid, signal.SIGTERM)
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.server.pid, signal.SIGTERM)
+            if app_pid:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(app_pid, signal.SIGTERM)
             try:
-                self.server.wait(timeout=3)
+                self.server.wait(timeout=0.75)
             except subprocess.TimeoutExpired:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(self.server.pid, signal.SIGKILL)
+                if app_pid:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(app_pid, signal.SIGKILL)
                 self.server.wait()
             for pid in children:
                 if _alive(pid):

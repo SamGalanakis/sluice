@@ -22,19 +22,24 @@ from sluice.store import Store
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _agents.native.codex import Codex, Rpc, _private_config
+from _agents.native.processes import SCOPE, scope_command
 from _agents.native.tmux import _alive, descendants
 
 
 def test_private_config_disables_every_mcp_and_pins_model():
     source = ('model = "old"\n[mcp_servers.a]\ncommand = "a"\nenabled = true\n'
               '[mcp_servers.a.env]\nTOKEN = "x"\n[mcp_servers.b]\ncommand = "b"\n'
+              '[mcp_servers.b.http_headers]\nAuthorization = "secret"\n'
+              '[mcp_servers.c]\ncommand = "c"\nenv = { TOKEN = "inline" }\n'
               '[profiles.work]\nmodel = "profile"\n')
     got = tomllib.loads(_private_config(source, "gpt-6-astra", "max", True))
     assert got["model"] == "gpt-6-astra" and got["model_reasoning_effort"] == "max"
     assert got["web_search"] == "live"
     assert got["mcp_servers"]["a"]["enabled"] is False
     assert got["mcp_servers"]["b"]["enabled"] is False
-    assert got["mcp_servers"]["a"]["env"]["TOKEN"] == "x"
+    assert "env" not in got["mcp_servers"]["a"]
+    assert "http_headers" not in got["mcp_servers"]["b"]
+    assert "env" not in got["mcp_servers"]["c"]
     assert got["profiles"]["work"]["model"] == "profile"
 
 
@@ -84,6 +89,146 @@ def test_turn_start_steer_and_completed_message(tmp_path):
     assert "Finished." in (tmp_path / "progress.log").read_text()
 
 
+def test_failed_steer_after_turn_end_starts_a_new_turn():
+    codex = Codex()
+    codex.thread, codex.turn, codex.busy, codex.resuming = "t", "old", True, True
+
+    class RpcRace(FakeRpc):
+        def request(self, method, params):
+            self.calls.append((method, params))
+            if method == "turn/steer":
+                self.events = [{"method": "turn/completed", "params": {
+                    "threadId": "t", "turn": {"id": "old", "status": "completed"}}}]
+                raise RuntimeError("turn already completed")
+            return {"turn": {"id": "new"}}
+
+    class Pane:
+        def dead(self):
+            return None
+
+    class Server:
+        def poll(self):
+            return None
+
+    codex.rpc, codex.server = RpcRace(), Server()
+    codex.deliver(Pane(), "answer")
+    assert [m for m, _ in codex.rpc.calls] == ["turn/steer", "turn/start"]
+    assert codex.turn == "new"
+
+
+def test_codex_home_and_engine_environment(tmp_path, monkeypatch):
+    import _agents.native.codex as mod
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SLUICE_HOME", str(tmp_path / "sluice"))
+    monkeypatch.setenv("SLUICE_HOST_PATH", "/usr/bin")
+    monkeypatch.setenv("SLUICE_HOST_PYTHONPATH", "")
+    monkeypatch.setenv("SLUICE_HOST_VIRTUAL_ENV", "")
+    monkeypatch.setenv("PATH", "/wrong/venv/bin:/usr/bin")
+    monkeypatch.setenv("PYTHONPATH", "/wrong/sluice/src")
+    monkeypatch.setenv("VIRTUAL_ENV", "/wrong/venv")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    source = tmp_path / ".codex"
+    source.mkdir()
+    (source / "config.toml").write_text("[mcp_servers.x]\ncommand = 'x'\n"
+                                        "[mcp_servers.x.env]\nTOKEN = 'secret'\n")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    class Server:
+        pid = 999999999
+        def poll(self):
+            return None
+
+    class RpcStub(FakeRpc):
+        def __init__(self, path):
+            super().__init__()
+        def _send(self, obj):
+            pass
+        def request(self, method, params):
+            if method == "thread/resume":
+                return {"thread": {"id": params["threadId"]}}
+            return {}
+
+    def popen(argv, **kw):
+        socket_arg = next(a for a in argv if a.startswith("unix://"))
+        Path(socket_arg[7:]).touch()
+        return Server()
+
+    monkeypatch.setattr(mod, "Rpc", RpcStub)
+    monkeypatch.setattr(mod.subprocess, "Popen", popen)
+    monkeypatch.setattr(mod, "scope_command", lambda argv: argv)
+    monkeypatch.setattr(mod, "find_argv", lambda token: None)
+    codex = Codex()
+    codex.prepare(run_dir, str(tmp_path), None)
+    codex.rpc.events = [{"method": "thread/started", "params": {"thread": {"id": "thread-1"}}}]
+
+    class Pane:
+        def dead(self):
+            return None
+        def capture(self):
+            return "›"
+
+    codex.wait_ready(Pane(), 1)
+    private = tmp_path / "sluice/codex-native-homes/thread-1"
+    assert private.is_dir() and codex.private == private
+    assert json.loads((tmp_path / "sluice/codex-native-sessions/thread-1.json").read_text())[
+        "home"] == str(private)
+    assert private.joinpath("config.toml").stat().st_mode & 0o777 == 0o600
+    assert "env" not in tomllib.loads(private.joinpath("config.toml").read_text())[
+        "mcp_servers"]["x"]
+    assert codex.env()["PATH"] == "/usr/bin"
+    assert "PYTHONPATH" not in codex.env() and "VIRTUAL_ENV" not in codex.env()
+    assert "CLAUDECODE" not in codex.env()
+    pending_alias = codex.pending_link
+    codex.server = codex.rpc = None
+    codex.close()
+    assert pending_alias.is_symlink() and pending_alias.resolve() == private
+    old = run_dir / "codex-home"
+    old.mkdir()
+    (old / "sessions").mkdir()
+    (old / "sessions/old.jsonl").write_text("saved\n")
+    (old / "config.toml").write_text("TOKEN = 'old'\n")
+    (old / "config.toml").chmod(0o664)
+    (tmp_path / "sluice/codex-native-sessions/legacy.json").write_text(json.dumps(
+        {"home": str(old), "cwd": str(tmp_path)}))
+    resumed = Codex()
+    resumed.prepare(run_dir, str(tmp_path), "legacy")
+    assert resumed.private == tmp_path / "sluice/codex-native-homes/legacy"
+    assert resumed.private.joinpath("sessions/old.jsonl").read_text() == "saved\n"
+    assert resumed.private.joinpath("config.toml").stat().st_mode & 0o777 == 0o600
+    assert "old" not in resumed.private.joinpath("config.toml").read_text()
+    assert json.loads((tmp_path / "sluice/codex-native-sessions/legacy.json").read_text())[
+        "home"] == str(resumed.private)
+    resumed.log_file.close()
+    resumed.progress_file.close()
+
+
+def test_missing_codex_private_home_is_clear(tmp_path, monkeypatch):
+    monkeypatch.setenv("SLUICE_HOME", str(tmp_path))
+    registry = tmp_path / "codex-native-sessions"
+    registry.mkdir()
+    (registry / "t.json").write_text(json.dumps({"home": str(tmp_path / "gone"),
+                                                  "cwd": str(tmp_path)}))
+    with pytest.raises(FileNotFoundError, match="home is missing"):
+        Codex().prepare(tmp_path, str(tmp_path), "t")
+
+
+def test_corrupt_codex_rollout_line_does_not_hide_cwd(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SLUICE_HOME", str(tmp_path / "sluice"))
+    rollout = tmp_path / ".codex/sessions/2026/09/28/rollout-a-t.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text('bad json\n{"type":"session_meta","payload":{"cwd":"/work"}}\n')
+    assert Codex().session_cwd("t") == "/work"
+
+
+def test_systemd_scope_uses_lane_weights(monkeypatch):
+    import _agents.native.processes as mod
+    monkeypatch.setattr(mod, "_scope_ok", True)
+    assert scope_command(["tmux", "new-session"]) == [*SCOPE, "tmux", "new-session"]
+
+
 def test_rpc_handshake_request_and_notification(tmp_path):
     path = tmp_path / "app.sock"
     listener = socket.socket(socket.AF_UNIX)
@@ -128,6 +273,52 @@ def test_rpc_handshake_request_and_notification(tmp_path):
     listener.close()
     assert seen == [{"id": 1, "method": "initialize", "params":
                      {"clientInfo": {"name": "test"}}}]
+
+
+@pytest.mark.parametrize("continuation", [False, True])
+def test_rpc_drain_buffers_a_slow_partial_frame_and_continuation(tmp_path, continuation):
+    path = tmp_path / "app.sock"
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(path))
+    listener.listen()
+
+    def frame(opcode, data, fin=True):
+        return bytes([(128 if fin else 0) | opcode, 127]) + struct.pack("!Q", len(data)) + data
+
+    def server():
+        conn, _ = listener.accept()
+        with conn:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += conn.recv(4096)
+            key = request.split(b"Sec-WebSocket-Key: ", 1)[1].split(b"\r\n", 1)[0]
+            accept = base64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-"
+                                                   b"C5AB0DC85B11").digest())
+            conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: "
+                         + accept + b"\r\n\r\n")
+            time.sleep(0.05)
+            body = json.dumps({"method": "item/completed", "params": {"text": "x" * 300000}}).encode()
+            first = frame(1, body[:150000], False) if continuation else frame(1, body)
+            conn.sendall(first[:len(first) // 2])
+            time.sleep(0.3)
+            conn.sendall(first[len(first) // 2:])
+            if continuation:
+                conn.sendall(frame(0, body[150000:]))
+            time.sleep(0.5)
+
+    worker = threading.Thread(target=server)
+    worker.start()
+    rpc = Rpc(path)
+    time.sleep(0.1)
+    started = time.monotonic()
+    assert rpc.drain() == []
+    assert time.monotonic() - started < 0.15
+    time.sleep(0.4)
+    events = rpc.drain()
+    assert len(events) == 1 and len(events[0]["params"]["text"]) == 300000
+    rpc.close()
+    worker.join(timeout=2)
+    listener.close()
 
 
 def test_close_ends_the_app_server_process_tree(tmp_path):

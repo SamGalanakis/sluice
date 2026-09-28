@@ -154,6 +154,8 @@ after (so a fn that outlives its shim can still be found and stopped), and once 
 exits writes `exit.json` `{code, signal, finished}` — `code` 127 with an `error` when the
 fn could not even be started — the only evidence a run is done (`output.json` alone never
 is) — then exits as the fn did.
+Agent fns also record their tmux server, engine and app-server pids with `/proc` start times
+in `native-processes.json`, so the runner can reap them after a fn is killed without cleanup.
 The fn runs with stdin = an object keyed by input name (unbound optional inputs are `null`),
 stdout to `output.json`, stderr to `stderr.log`; env `SLUICE_HOME`,
 `SLUICE_PROJECT`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
@@ -338,7 +340,9 @@ restarted`. Adoption kills use the recorded shim pid only while its lock is held
 still leads a live process group, so a reused or tampered pid's group is never signalled;
 `step_cancel` and a step removed from the plan stop an adopted run like one this runner
 started — and a running entry no Active could be built for is still killed by its recorded
-shim pids. Each adopted run appends `run.adopt` `{step or call, run, outcome}`
+shim pids. The runner kills a native session's recorded tmux server and engine process trees
+when it stops, adopts or finishes the run, checking each pid's `/proc` start time before
+signalling it. Each adopted run appends `run.adopt` `{step or call, run, outcome}`
 (`watching`/`finished`/`unknown`/`restarted`), and a run dir whose shim lives — or whose
 recorded fn child lives on past it — but which no running step or call references (the old
 runner died between spawning it and recording it) is killed and logged `run.orphan` `{run}`
@@ -899,8 +903,10 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   after the engine submits all of them; an idle turn with missing outputs gets a bounded
   series of nudges, then a clear failure. Claude's background shell and scheduled-wakeup
   signals keep its session waiting. Messages addressed to the step arrive in the live session
-  without polling. A `session` resumes only in its original directory. Cancel ends the tmux
-  server and its process tree (`packs/README.md`, "Agent functions and live sessions").
+  without polling. A `session` resumes only in its original directory. A delivered message
+  must start a turn within 60 seconds or it is retried once, then fails; waiting background
+  work is nudged after 90 minutes by default. Cancel and runner adoption end the tmux server
+  and its process tree (`packs/README.md`, "Agent functions and live sessions").
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.
   Codex (`agent.codex`, or
   `agent.run` with engine `codex`) uses the same supervisor with `codex app-server` JSON-RPC

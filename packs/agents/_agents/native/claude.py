@@ -243,6 +243,7 @@ class Claude(Adapter):
         self.model = model
         self.lines = []
         self.turns = 0
+        self.starts = 0
         self.last_event = ""
         self.turn_end = None  # the payload of the latest Stop or StopFailure
         self.sid = ""
@@ -278,7 +279,8 @@ class Claude(Adapter):
 
     def argv(self):
         argv = [os.environ.get("SLUICE_CLAUDE_BIN", "claude"), "--model", self.model,
-                "--dangerously-skip-permissions", "--settings", str(self.settings)]
+                "--dangerously-skip-permissions", "--disallowedTools", "AskUserQuestion",
+                "--settings", str(self.settings)]
         return argv + (["--resume", self.resume] if self.resume else [])
 
     def env(self):
@@ -312,6 +314,8 @@ class Claude(Adapter):
             if event in ("Stop", "StopFailure"):
                 self.turns += 1
                 self.turn_end = rec
+            if event == "UserPromptSubmit":
+                self.starts += 1
             if event in HOOKS:
                 self.last_event = event
 
@@ -409,7 +413,9 @@ class Claude(Adapter):
         if dead is not None:
             return Snapshot("exited", self.turns, progress=progress, error=error,
                             exit_status=dead)
-        if status in ("busy", "waiting"):
+        if status == "waiting":
+            state = "blocked"
+        elif status == "busy":
             state = "busy"
         elif status in ("idle", "shell") or self.last_event in ("Stop", "StopFailure"):
             state = "idle"
@@ -426,7 +432,8 @@ class Claude(Adapter):
         if self.last_event != "UserPromptSubmit":
             self.unstopped = None
         waiting = self._waiting(status) if state == "idle" else ""
-        return Snapshot(state, self.turns, waiting=waiting, progress=progress, error=error)
+        return Snapshot(state, self.turns, waiting=waiting, progress=progress, error=error,
+                        starts=self.starts)
 
     def progress(self):
         out, self.lines = self.lines, []

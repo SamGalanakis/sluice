@@ -172,7 +172,7 @@ class Model(Adapter):
 
     def __init__(self, on_turn=None, state=None):
         self.on_turn = on_turn or (lambda m, n, text: None)
-        self.sent, self.turns, self.waiting, self.error = [], 0, "", ""
+        self.sent, self.turns, self.starts, self.waiting, self.error = [], 0, 0, "", ""
         self.state = state  # a fixed state, else idle once a turn ended
         self.progress_marker = 0
         self.resumed = None
@@ -190,6 +190,9 @@ class Model(Adapter):
 
     def deliver(self, tmux, text):
         self.sent.append(text)
+        if getattr(self, "never_start", False):
+            return
+        self.starts += 1
         self.turns += 1
         self.on_turn(self, self.turns, text)
 
@@ -202,7 +205,7 @@ class Model(Adapter):
             self.progress_marker += 1
             state = "busy"
         return Snapshot(state, self.turns, waiting=self.waiting, error=self.error,
-                        progress=self.progress_marker)
+                        progress=self.progress_marker, starts=self.starts)
 
     def session_id(self):
         return "s-1"
@@ -258,6 +261,20 @@ def test_a_nudge_that_gets_the_outputs_ends_the_step(tmp_path):
     out, lines = run(model, tmp_path)
     assert out["final"] == "reply 2"
     assert "nudge 1/2: not submitted: word" in lines
+
+
+def test_a_nudge_not_delivered_on_first_try_is_retried(tmp_path):
+    class Flaky(Model):
+        failed = False
+        def deliver(self, tmux, text):
+            if text.startswith("Your turn ended") and not self.failed:
+                self.failed = True
+                raise paste.NotDelivered("composer busy")
+            super().deliver(tmux, text)
+
+    model = Flaky(lambda m, n, text: m.submit(word="done") if n == 2 else None)
+    run(model, tmp_path)
+    assert model.failed and len(model.sent) == 2
 
 
 def test_a_session_waiting_on_its_background_work_is_not_nudged(tmp_path):
@@ -317,6 +334,55 @@ def test_no_progress_while_busy_ends_the_run(tmp_path):
     limits = Limits(nudges=2, wall=30, stall=0.4, settle=0.2, grace=0.2, poll=0.02, ready=10)
     with pytest.raises(RuntimeError, match="no progress for"):
         run(Model(state="busy"), tmp_path, limits=limits)
+
+
+def test_a_message_that_never_starts_a_turn_is_delivered_twice_then_fails(tmp_path):
+    model = Model(state="starting")
+    model.never_start = True
+    limits = Limits(wall=5, stall=3, turn_start=0.15, poll=0.02)
+    with pytest.raises(RuntimeError, match="did not start a turn.*delivery and retry"):
+        run(model, tmp_path, limits=limits)
+    assert model.sent == ["the task", "the task"]
+
+
+def test_no_progress_while_starting_ends_at_stall_cap(tmp_path):
+    model = Model(state="starting")
+    limits = Limits(wall=5, stall=0.2, turn_start=3, poll=0.02)
+    with pytest.raises(RuntimeError, match="no progress.*while starting"):
+        run(model, tmp_path, limits=limits)
+
+
+def test_waiting_cap_nudges_with_background_work_named(tmp_path):
+    def on_turn(m, n, text):
+        m.waiting = "a background shell is running"
+        if n == 2:
+            m.waiting = ""
+            m.submit(word="done")
+
+    model = Model(on_turn)
+    limits = Limits(wall=5, stall=3, wait=0.2, settle=0.01, poll=0.02)
+    run(model, tmp_path, limits=limits)
+    assert "a background shell is running" in model.sent[1]
+
+
+def test_interactive_dialog_is_dismissed_and_nudged(tmp_path):
+    def on_turn(m, n, text):
+        if n == 2:
+            m.state = "idle"
+            m.submit(word="done")
+
+    model = Model(on_turn, state="blocked")
+    limits = Limits(wall=5, stall=3, dialog=0.2, poll=0.02)
+    run(model, tmp_path, limits=limits)
+    assert "Nobody can answer here" in model.sent[1]
+
+
+def test_submitted_outputs_win_over_a_transient_final_message(tmp_path):
+    def on_turn(m, n, text):
+        m.submit(word="done")
+        m.error = "HTTP status 529"
+
+    run(Model(on_turn), tmp_path)
 
 
 def test_a_transient_error_ending_a_turn_raises_transient(tmp_path):
@@ -379,6 +445,9 @@ class Feed:
         out, self.items = self.items, []
         return out
 
+    def unread(self, item):
+        self.items.insert(0, item)
+
 
 def test_thread_messages_are_typed_into_the_session(tmp_path):
     def on_turn(m, n, text):
@@ -399,6 +468,21 @@ def test_thread_messages_are_typed_into_the_session(tmp_path):
     assert message.read_text() == ("Message from orchestrator on your sluice thread "
                                    '`step-s`: line one\nline two\n\ndata: {"k": 1}')
     assert "thread message from orchestrator typed into the session" in lines
+
+
+def test_thread_delivery_rpc_error_is_requeued(tmp_path):
+    class Flaky(Model):
+        failed = False
+        def deliver(self, tmux, text):
+            if text.startswith("Message from") and not self.failed:
+                self.failed = True
+                raise RuntimeError("turn already ended")
+            super().deliver(tmux, text)
+
+    model = Flaky(lambda m, n, text: m.submit(word="done") if n == 2 else None)
+    feed = Feed({"seq": 7, "from": "orchestrator", "body": "finish"})
+    run(model, tmp_path, feed=feed)
+    assert model.failed and len(model.sent) == 2
 
 
 def test_the_thread_feed_reads_messages_for_the_step(tmp_path):
@@ -491,6 +575,11 @@ def claude(tmp_path, monkeypatch):
 
     hook("SessionStart", source="startup")
     return SimpleNamespace(a=a, status=status, hook=hook, entry=entry, C=C)
+
+
+def test_claude_disallows_interactive_questions(claude):
+    argv = claude.a.argv()
+    assert argv[argv.index("--disallowedTools") + 1] == "AskUserQuestion"
 
 
 def test_a_background_shell_keeps_an_idle_session_waiting(claude):

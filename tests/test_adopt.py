@@ -19,8 +19,12 @@ from sluice import log as L
 from sluice.runner import (
     RESTARTED,
     UNKNOWN,
+    Run,
     Runner,
+    _probe,
+    _proc_identity,
     fn_env,
+    kill,
     lock_held,
     read_run,
     spawn,
@@ -178,6 +182,66 @@ def test_a_run_whose_shim_died_fails_unknown(store, kills):
     assert (steps["w"]["status"], steps["w"]["error"]) == ("failed", UNKNOWN)
     [rec] = run_records(store, "p")
     assert (rec["kind"], rec["outcome"]) == ("run.adopt", "unknown")
+
+
+@pytest.mark.parametrize("adopt", [False, True])
+def test_runner_reaps_native_processes_after_fn_is_gone(tmp_path, adopt):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    command = [sys.executable, "-c", ("import subprocess,time; "
+                                           "subprocess.Popen(['sleep','60']); time.sleep(60)")]
+    tmux = subprocess.run(["tmux", "-S", "tmux.sock", "new-session", "-d", "--", *command],
+                          cwd=run_dir, capture_output=True, text=True, check=False)
+    assert tmux.returncode == 0, tmux.stderr
+    server = int(subprocess.run(["tmux", "-S", "tmux.sock", "display-message", "-p", "#{pid}"],
+                                cwd=run_dir, capture_output=True, text=True,
+                                check=True).stdout)
+    engine = int(subprocess.run(["tmux", "-S", "tmux.sock", "display-message", "-p",
+                                 "#{pane_pid}"], cwd=run_dir, capture_output=True, text=True,
+                                check=True).stdout)
+    app = subprocess.Popen(command, start_new_session=True)
+    try:
+        deadline = time.time() + 3
+        children = []
+        while time.time() < deadline:
+            children = [int(d.name) for d in Path("/proc").iterdir() if d.name.isdigit()
+                        and (ident := _proc_identity(int(d.name))) and ident[1] in (engine, app.pid)]
+            if len(children) >= 2:
+                break
+            time.sleep(0.05)
+        assert len(children) >= 2
+        (run_dir / "native-processes.json").write_text(json.dumps({
+            "tmux_server": {"pid": server, "start_time": _proc_identity(server)[0]},
+            "engine": {"pid": engine, "start_time": _proc_identity(engine)[0]},
+            "app_server": {"pid": app.pid, "start_time": _proc_identity(app.pid)[0]}}))
+        if adopt:
+            assert _probe(run_dir)[0] == "restarted"
+        else:
+            kill(Run({}, run_dir=run_dir), grace=0)
+        assert wait_gone([server, engine, app.pid, *children]) == []
+        assert not (run_dir / "tmux.sock").exists()
+    finally:
+        subprocess.run(["tmux", "-S", "tmux.sock", "kill-server"], cwd=run_dir,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        for pid in [server, engine, app.pid, *children]:
+            if pid_alive(pid):
+                os.kill(pid, signal.SIGKILL)
+        app.wait(timeout=5)
+
+
+def test_runner_does_not_signal_a_reused_native_pid(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    app = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        started = _proc_identity(app.pid)[0]
+        (run_dir / "native-processes.json").write_text(json.dumps({
+            "app_server": {"pid": app.pid, "start_time": started + 1}}))
+        kill(Run({}, run_dir=run_dir), grace=0)
+        assert pid_alive(app.pid)
+    finally:
+        app.kill()
+        app.wait()
 
 
 def test_an_unreferenced_live_run_is_killed_at_startup(store, kills):
@@ -442,3 +506,25 @@ def test_a_direct_call_record_with_a_wrong_start_time_is_gone(store, runner):
     assert calls.status(store, call, None)["status"] == "failed"
     runner.tick()
     assert calls.status(store, call, None)["error"] == calls.GONE
+
+
+def test_runner_reaps_native_session_of_a_gone_direct_call(store, runner):
+    call = calls.create(store, "test.add", {"a": 1, "b": 1}, None, direct=True)
+    rec = calls.latest(store, call, None)
+    if rec.get("pid_start") is None:
+        pytest.skip("no /proc")
+    run_dir = store.runs_dir(None) / call
+    run_dir.mkdir(parents=True)
+    app = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        (run_dir / "native-processes.json").write_text(json.dumps({
+            "app_server": {"pid": app.pid, "start_time": _proc_identity(app.pid)[0]}}))
+        store.append(None, {k: v for k, v in rec.items() if k not in ("seq", "at")}
+                     | {"pid_start": "1"})
+        runner.tick()
+        assert calls.status(store, call, None)["error"] == calls.GONE
+        assert wait_gone([app.pid]) == []
+    finally:
+        if pid_alive(app.pid):
+            app.kill()
+        app.wait()

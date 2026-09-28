@@ -70,7 +70,7 @@ def main():
                     draw([turn.get("stderr", "")])
                     sys.exit(turn["exit"])
                 hook(config, "Stop", sid, last_assistant_message=turn.get("reply", "ok"),
-                     prompt_id=str(index))
+                     prompt_id=str(index), **({"error": turn["error"]} if "error" in turn else {}))
                 Path(arg(argv, "--export")).write_text(json.dumps({
                     "session_id": sid, "steps": [{"source": "agent",
                                                    "message": turn.get("reply", "ok")}] }))

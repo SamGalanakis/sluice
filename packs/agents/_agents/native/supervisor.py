@@ -36,12 +36,18 @@ from sluice import types as T
 from sluice.fn import Transient
 
 from .paste import NotDelivered, tail
+from .processes import engine_env
 from .tmux import Tmux
 
 NUDGE = ("Your turn ended but these outputs are not submitted: {names}. If you are waiting on "
          "something, wait for it in this turn. Otherwise finish and submit them with the "
          "command from your task, or submit what you have and explain the blocker in "
          "`unresolved`.")
+WAIT_NUDGE = ("Your step is still waiting on {work}, and these outputs are not submitted: "
+              "{names}. Stop or finish that background work, then submit the outputs. "
+              "If it cannot finish, submit what you have and explain the blocker in `unresolved`.")
+DIALOG_NUDGE = ("Nobody can answer here. Decide, or post the question with thread.post and "
+                "continue the task.")
 POINTER = "Your task is in {path}; read it fully, then do it."
 MESSAGE = "Message from {frm} on your sluice thread `{thread}`: {body}"
 MESSAGE_FILE = "A message from {frm} on your sluice thread `{thread}` is in {path}; read it now."
@@ -68,6 +74,9 @@ class Limits:
     grace: float = 10 * 60.0
     poll: float = 0.5
     ready: float = 180.0
+    turn_start: float = 60.0
+    wait: float = 90 * 60.0
+    dialog: float = 60.0
 
     @classmethod
     def from_env(cls):
@@ -78,6 +87,8 @@ class Limits:
             settle=_env_float("SLUICE_AGENT_SETTLE_S", 10),
             grace=_env_float("SLUICE_AGENT_GRACE_MIN", 10) * 60,
             poll=_env_float("SLUICE_AGENT_POLL_S", 0.5),
+            turn_start=_env_float("SLUICE_AGENT_TURN_START_S", 60),
+            wait=_env_float("SLUICE_AGENT_WAIT_MIN", 90) * 60,
         )
 
 
@@ -97,6 +108,7 @@ class Snapshot:
     progress: object = None
     error: str = ""
     exit_status: str = ""
+    starts: int = 0
 
 
 class Adapter:
@@ -116,7 +128,7 @@ class Adapter:
 
     def env(self):
         """The environment the engine runs in."""
-        return dict(os.environ)
+        return engine_env()
 
     def wait_ready(self, tmux, timeout):
         """Block until the engine takes input, answering startup dialogs it knows."""
@@ -199,7 +211,8 @@ def thread_note(ctx, delivery="pasted"):
             f'"to": "orchestrator", "body": "..."}}}}')
     return (
         f"Messages for you on sluice thread `{thread}` of project `{ctx.project}` are "
-        f"{delivery} into this session as they arrive; you need not poll for them. Follow "
+        f"{delivery} into this session as they arrive when they are addressed to this step "
+        f"(or to nobody); you need not poll for them. Follow "
         f"instructions addressed to you. If you hit a question you cannot settle within your "
         f"task, post it with `sluice tool fn_call '{post}'` and continue with anything not "
         f"blocked by it. For a note that needs no answer (a decision you have already made, a "
@@ -251,6 +264,25 @@ class _Run:
     limits: Limits
     log: object
     record: dict = field(default_factory=dict)
+    pending_text: str = ""
+    await_base: int = 0
+    await_at: float | None = None
+    redelivered: bool = False
+
+    def expect_start(self, text, starts):
+        self.pending_text = text
+        self.await_base = starts
+        self.await_at = time.monotonic()
+        self.redelivered = False
+
+    def deliver(self, text, starts):
+        self.expect_start(text, starts)
+        try:
+            self.adapter.deliver(self.tmux, text)
+        except NotDelivered:
+            self.log("message not delivered; retrying once")
+            self.adapter.deliver(self.tmux, text)
+            self.await_at = time.monotonic()
 
     def note_session(self):
         sid = self.adapter.session_id()
@@ -260,9 +292,11 @@ class _Run:
 
     def transient(self, text):
         low = text.lower()
-        return any(m in low for m in self.adapter.transient)
+        return (any(m in low for m in self.adapter.transient)
+                or (self.adapter.name == "devin" and bool(re.search(
+                    r"\b(?:http|status(?:_code)?)\s*[:=]?\s*529\b", low))))
 
-    def forward(self):
+    def forward(self, snap=None):
         """Type the step's new thread messages into the session; returns whether one was
         delivered."""
         sent = False
@@ -275,8 +309,10 @@ class _Run:
                              self.run_dir / "messages" / f"{rec.get('seq')}.md", MESSAGE_FILE,
                              frm=frm, thread=thread)
             try:
+                if snap is not None and snap.state != "busy":
+                    self.expect_start(text, snap.starts)
                 self.adapter.deliver(self.tmux, text)
-            except NotDelivered as e:
+            except (NotDelivered, RuntimeError, TimeoutError) as e:
                 self.log(f"thread message from {frm} not delivered yet: {e}")
                 self.feed.unread(rec)
                 break
@@ -291,12 +327,16 @@ class _Run:
         base, nudges = 0, 0  # base: the turn ends seen when we last spoke
         marker, moved = None, start
         idle_since, said = None, ""
+        wait_since = dialog_since = None
         while True:
             snap = a.poll(self.tmux)
             for line in a.progress():
                 self.log(line)
             self.note_session()
             now = time.monotonic()
+            complete = self.required and all(n in submitted(self.run_dir) for n in self.required)
+            if complete and snap.state == "idle" and snap.turns > base:
+                return
             if snap.error and snap.turns > base and self.transient(snap.error):
                 raise Transient(f"{a.name} hit a rate limit or capacity error: "
                                 f"{snap.error[:300]}")
@@ -311,11 +351,33 @@ class _Run:
             if now - start > lim.wall:
                 raise RuntimeError(f"{a.name} ran past the wall-clock cap of "
                                    f"{lim.wall / 60:.0f} min (SLUICE_AGENT_MAX_MIN)")
-            if snap.state == "busy" and now - moved > lim.stall:
+            if snap.state != "idle" and now - moved > lim.stall:
                 raise RuntimeError(f"{a.name} made no progress for {lim.stall / 60:.0f} min "
-                                   "while busy (SLUICE_AGENT_STALL_MIN)")
-            if self.forward():
+                                   f"while {snap.state} (SLUICE_AGENT_STALL_MIN)")
+            if self.await_at is not None:
+                if snap.starts > self.await_base:
+                    self.await_at = None
+                elif now - self.await_at > lim.turn_start:
+                    if self.redelivered:
+                        raise RuntimeError(f"{a.name} did not start a turn within "
+                                           f"{lim.turn_start:.0f} s after delivery and retry")
+                    self.log(f"{a.name} did not start a turn; delivering the message once more")
+                    a.deliver(self.tmux, self.pending_text)
+                    self.redelivered = True
+                    self.await_at = time.monotonic()
+                    self.await_base = snap.starts
+            if self.forward(snap):
                 base, idle_since = snap.turns, None
+            if snap.state == "blocked":
+                dialog_since = dialog_since or now
+                if now - dialog_since > lim.dialog:
+                    self.tmux.keys("Escape")
+                    self.log("interactive dialog stayed open; asking the agent to decide")
+                    self.deliver(DIALOG_NUDGE, snap.starts)
+                    base, dialog_since = snap.turns, None
+                time.sleep(lim.poll)
+                continue
+            dialog_since = None
             if not (snap.state == "idle" and snap.turns > base):
                 idle_since = None
                 time.sleep(lim.poll)
@@ -327,10 +389,22 @@ class _Run:
                 if snap.waiting != said:
                     self.log(f"waiting: {snap.waiting}")
                     said = snap.waiting
+                    wait_since = now
+                if wait_since is not None and now - wait_since > lim.wait:
+                    if nudges >= lim.nudges:
+                        raise RuntimeError(f"{a.name} waited on {snap.waiting} for "
+                                           f"{lim.wait / 60:.0f} min without submitting "
+                                           f"{', '.join(missing)}")
+                    nudges += 1
+                    self.log(f"nudge {nudges}/{lim.nudges}: waiting on {snap.waiting}")
+                    self.deliver(WAIT_NUDGE.format(work=snap.waiting,
+                                                   names=", ".join(missing)), snap.starts)
+                    base, wait_since, said = snap.turns, None, ""
                 idle_since = None
                 time.sleep(lim.poll)
                 continue
             said = ""
+            wait_since = None
             idle_since = idle_since or now
             pause = lim.grace if not a.wait_signal and nudges == 0 else lim.settle
             if now - idle_since < pause:
@@ -345,7 +419,7 @@ class _Run:
                     f"(nudged {nudges} times). Its last message: {last or '(none)'}")
             nudges += 1
             self.log(f"nudge {nudges}/{lim.nudges}: not submitted: {', '.join(missing)}")
-            a.deliver(self.tmux, NUDGE.format(names=", ".join(missing)))
+            self.deliver(NUDGE.format(names=", ".join(missing)), snap.starts)
             base, idle_since = snap.turns, None
             time.sleep(lim.poll)
 
@@ -389,7 +463,7 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
         run.tmux.start(adapter.argv(), cwd, adapter.env())
         log(f"attach: {run.tmux.attach}")
         adapter.wait_ready(run.tmux, limits.ready)
-        adapter.deliver(run.tmux, message)
+        run.deliver(message, getattr(adapter, "starts", 0))
         log(f"task delivered ({len(message)} chars)")
         run.loop()
         final, sid = adapter.final(), adapter.session_id()

@@ -127,7 +127,7 @@ def test_devin_log_and_report_path(call_fn, tmp_path):
 
 
 def test_devin_transient(call_fn, tmp_path):
-    env, _ = make_devin(tmp_path, [{"reply": "capacity issues"}] * 4)
+    env, _ = make_devin(tmp_path, [{"reply": "", "error": "HTTP 529"}] * 4)
     code, out, err = call_fn(AGENTS / "agent.devin",
                              {"cwd": str(tmp_path), "spec": "s"}, env=env)
     assert code == 1 and out is None
@@ -195,6 +195,7 @@ def test_claude_success(call_fn, tmp_path):
     assert out == {"result": "did it", "session": session_of(call_fn), "cost_usd": 0.02}
     assert out["session"]
     assert rec.argv() == ["--model", "opus", "--dangerously-skip-permissions",
+                          "--disallowedTools", "AskUserQuestion",
                           "--settings", str(run_dir / "claude-settings.json")]
     settings = json.loads((run_dir / "claude-settings.json").read_text())
     assert sorted(settings) == ["hooks"]
@@ -827,7 +828,7 @@ def test_run_session(call_fn, tmp_path):
 
 
 def test_run_transient_per_engine(call_fn, tmp_path):
-    env, _ = make_devin(tmp_path, [{"reply": "capacity issues"}] * 5)
+    env, _ = make_devin(tmp_path, [{"reply": "", "error": "capacity issues"}] * 5)
     code, out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "devin", "cwd": str(tmp_path), "spec": "s"}, env=env)
@@ -873,7 +874,8 @@ def test_step_thread_claude(call_fn, tmp_path):
     assert code == 0, err
     prompt = rec.prompts()[0]
     assert ("Messages for you on sluice thread `step-test-step` of project `test-project` "
-            "are pasted into this session as they arrive; you need not poll") in prompt
+            "are pasted into this session as they arrive when they are addressed to this step "
+            "(or to nobody); you need not poll") in prompt
     assert "log_read" not in prompt
     assert '"name": "thread.post"' in prompt and '"from": "test-step"' in prompt
     assert '"to": "orchestrator"' in prompt and "sluice tool fn_call" in prompt

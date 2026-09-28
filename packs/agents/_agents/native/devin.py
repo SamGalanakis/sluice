@@ -5,23 +5,23 @@ import os
 import shlex
 import shutil
 import sqlite3
-import sys
 import time
 from pathlib import Path
 
 from . import paste
 from .claude import Tail
+from .processes import engine_env
 from .supervisor import Adapter, Snapshot
 
 HOOKS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop",
          "PostCompaction", "SessionEnd")
 READY = ("Ask Devin to build features, fix bugs, or work on your code",
          "Guide Devin while it works")
-TRANSIENT = ("capacity issues", "rate limit", "rate_limit", "overloaded", "529")
+TRANSIENT = ("capacity issues", "rate limit", "rate_limit", "overloaded")
 GUARDRAIL = ("You are running as a delegated worker. Nobody can answer questions, so make "
              "reasonable choices and record unresolved questions in your report. Follow "
              "AGENTS.md and CLAUDE.md. Work only in the requested directory. Never add "
-             "co-author trailers or tool attribution. Never push or merge.")
+             "co-author trailers or tool attribution. Never merge a PR and never push to main.")
 
 
 def _config_path():
@@ -127,6 +127,7 @@ class Devin(Adapter):
         self.log = Path(log) if log else None
         self.sid = ""
         self.turns = 0
+        self.starts = 0
         self.active = False
         self.last = ""
         self.lines = []
@@ -146,9 +147,8 @@ class Devin(Adapter):
         self.log = self.log or self.run_dir / "devin.log"
         self.log.parent.mkdir(parents=True, exist_ok=True)
         self.log.write_text("")
-        cmd = " ".join(shlex.quote(s) for s in
-                       (sys.executable, str(Path(__file__).with_name("devin_hook.py")),
-                        str(self.hooks_file)))
+        target = shlex.quote(str(self.hooks_file))
+        cmd = "/bin/sh -c " + shlex.quote(f"cat >> {target}; printf '\n' >> {target}")
         cfg = _read_config()
         hooks = cfg.get("hooks")
         if hooks is not None and not isinstance(hooks, dict):
@@ -158,8 +158,13 @@ class Devin(Adapter):
             hooks[event] = [*(hooks.get(event) or []), *entries]
         cfg["hooks"] = hooks
         self.config_file = self.run_dir / "devin-config.json"
-        self.config_file.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-        self.config_file.chmod(0o600)
+        fd = os.open(self.config_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+
+    def env(self):
+        return engine_env()
 
     def argv(self):
         args = [os.environ.get("SLUICE_DEVIN_BIN", "devin"), "--config", str(self.config_file),
@@ -187,14 +192,17 @@ class Devin(Adapter):
             if rec.get("session_id"):
                 self.sid = rec["session_id"]
             if event == "UserPromptSubmit":
+                self.starts += 1
                 self.active = True
+                self.error = ""
             elif event == "Stop":
                 self.turns += 1
                 self.active = False
                 self.last = str(rec.get("last_assistant_message") or self.last)
                 self.lines.append(" ".join(self.last.split())[:160])
-                if any(t in self.last.lower() for t in TRANSIENT):
-                    self.error = self.last
+                failure = str(rec.get("error") or "")
+                if failure:
+                    self.error = failure
             elif event == "SessionEnd":
                 self.ended = True
             elif event == "PreToolUse":
@@ -226,7 +234,7 @@ class Devin(Adapter):
             state = "starting"
         sizes = tuple(p.stat().st_size if p.exists() else 0
                       for p in (self.hooks_file, self.export_file))
-        return Snapshot(state, self.turns, progress=sizes, error=self.error,
+        return Snapshot(state, self.turns, progress=sizes, error=self.error, starts=self.starts,
                         exit_status=str(dead or ""))
 
     def progress(self):
@@ -261,6 +269,8 @@ class Devin(Adapter):
 
     def close(self):
         """Keep transcript and session artifacts even when the step fails."""
+        if not hasattr(self, "export_file"):
+            return
         if self.export_file.exists():
             shutil.copyfile(self.export_file, Path(str(self.log) + ".json"))
         Path(str(self.log) + ".final").write_text(self.final())

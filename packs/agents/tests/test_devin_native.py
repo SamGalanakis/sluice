@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -15,7 +16,7 @@ from sluice.store import Store
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _agents.native.devin import Composer, Devin
+from _agents.native.devin import GUARDRAIL, Composer, Devin
 
 
 def test_devin_config_keeps_user_settings_and_registers_hooks(tmp_path, monkeypatch):
@@ -40,6 +41,13 @@ def test_devin_config_keeps_user_settings_and_registers_hooks(tmp_path, monkeypa
     assert devin.argv()[-4:] == ["--permission-mode", "dangerous",
                                  "--respect-workspace-trust", "false"]
     assert devin.config_file.stat().st_mode & 0o777 == 0o600
+    assert "/bin/sh -c 'cat >>" in cfg["hooks"]["Stop"][-1]["hooks"][0]["command"]
+    assert "Never merge a PR and never push to main" in GUARDRAIL
+    command = cfg["hooks"]["Stop"][-1]["hooks"][0]["command"]
+    for _ in range(2):
+        subprocess.run(["sh", "-c", command], input='{"hook_event_name":"Stop"}',
+                       text=True, check=True)
+    assert len(devin.hooks.read()) == 2
 
 
 def test_hook_stream_tracks_turns_progress_and_final(tmp_path):
@@ -71,6 +79,43 @@ def test_hook_stream_tracks_turns_progress_and_final(tmp_path):
     devin.close()
     assert Path(str(devin.log) + ".final").read_text() == "Finished."
     assert Path(str(devin.log) + ".session").read_text() == "sess-1\n"
+
+
+def test_transient_comes_from_error_channel_and_clears_each_turn(tmp_path):
+    devin = Devin()
+    devin.prepare(tmp_path, str(tmp_path), None)
+    class Pane:
+        def dead(self):
+            return None
+    with devin.hooks_file.open("a") as f:
+        f.write(json.dumps({"hook_event_name": "Stop",
+                            "last_assistant_message": "Landed a529f1c; 1529 tests pass"}) + "\n")
+    assert devin.poll(Pane()).error == ""
+    with devin.hooks_file.open("a") as f:
+        f.write(json.dumps({"hook_event_name": "UserPromptSubmit"}) + "\n")
+        f.write(json.dumps({"hook_event_name": "Stop", "error": "HTTP status 529"}) + "\n")
+    assert devin.poll(Pane()).error == "HTTP status 529"
+    with devin.hooks_file.open("a") as f:
+        f.write(json.dumps({"hook_event_name": "UserPromptSubmit"}) + "\n")
+    assert devin.poll(Pane()).error == ""
+
+
+def test_devin_close_before_prepare_is_safe():
+    Devin().close()
+
+
+def test_devin_uses_host_environment(monkeypatch):
+    monkeypatch.setenv("SLUICE_HOST_PATH", "/usr/bin")
+    monkeypatch.setenv("SLUICE_HOST_PYTHONPATH", "")
+    monkeypatch.setenv("SLUICE_HOST_VIRTUAL_ENV", "")
+    monkeypatch.setenv("PATH", "/fn/bin:/usr/bin")
+    monkeypatch.setenv("PYTHONPATH", "/fn/src")
+    monkeypatch.setenv("VIRTUAL_ENV", "/fn")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    env = Devin().env()
+    assert env["PATH"] == "/usr/bin"
+    assert "PYTHONPATH" not in env and "VIRTUAL_ENV" not in env
+    assert "CLAUDECODE" not in env
 
 
 def test_devin_composer_reads_only_current_draft():

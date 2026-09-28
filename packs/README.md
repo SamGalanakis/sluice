@@ -52,19 +52,27 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   required outputs is done once the session is idle with nothing pending, after the grace
   period for an engine that cannot report pending work.
 - Messages addressed to the step on its thread (`thread.post` to `step-<id>`, to the step
-  or to nobody) are delivered to the live session as they arrive, so the step-thread note no
+  or to nobody) are delivered to the live session as they arrive. Messages addressed to
+  another recipient are not forwarded. The step-thread note no
   longer asks the agent to poll `log_read`. `listen: false` turns this off.
 - Caps: `SLUICE_AGENT_MAX_MIN` (600) minutes of wall clock; `SLUICE_AGENT_STALL_MIN` (30)
-  minutes busy with no transcript growth. `SLUICE_AGENT_SETTLE_S` (10) seconds of idle before
+  minutes in any non-idle state with no transcript growth. A delivered message must start
+  a turn within `SLUICE_AGENT_TURN_START_S` (60) seconds; it is delivered once more, then
+  fails if the turn still does not start. A Claude dialog open for 60 seconds is dismissed
+  and nudged; an idle session waiting on background work is nudged after
+  `SLUICE_AGENT_WAIT_MIN` (90) minutes. `SLUICE_AGENT_SETTLE_S` (10) seconds of idle before
   a nudge. `SLUICE_AGENT_GRACE_MIN` (10) minutes of idle before the first nudge, for an engine
   with no waiting signal (Codex and Devin have none; Claude has one).
   `SLUICE_AGENT_POLL_S` (0.5) sets the state-check interval.
 - `session` resumes the session, and only from the directory it was started in; another cwd
   fails the step before anything starts. Codex keeps its private `CODEX_HOME` per thread and
-  a registry at `<SLUICE_HOME>/codex-native-sessions/`. A rate limit or
+  a registry at `<SLUICE_HOME>/codex-native-sessions/`, with homes under
+  `<SLUICE_HOME>/codex-native-homes/<thread>`. A rate limit or
   capacity error raises `Transient`; the retry resumes the session and tells it to continue.
 - `step_cancel` (SIGTERM) ends the tmux server, the engine and every process it started,
-  background shells included.
+  background shells included. The run dir records the tmux server, pane engine and app-server
+  pids with `/proc` start times; the runner finds their children and reaps them if the fn is
+  SIGKILLed before its cleanup runs.
 
 ### Claude: idle is not done
 

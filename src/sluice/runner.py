@@ -44,6 +44,7 @@ SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
 RESTARTED = "runner restarted"
 UNKNOWN = "run outcome unknown (its supervisor died)"
 KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
+NATIVE_PROCESSES = "native-processes.json"
 
 
 # ---- one fn execution (SPEC §4 process contract) ----------------------------------------
@@ -188,7 +189,76 @@ def _target_pgid(run: Run) -> int | None:
 def _run_alive(run_dir: Path) -> bool:
     """Whether a run dir still has processes to stop: a held shim.lock, or a recorded fn
     child that outlived its shim."""
-    return lock_held(run_dir / "shim.lock") or _survivor_pgid(run_dir) is not None
+    return (lock_held(run_dir / "shim.lock") or _survivor_pgid(run_dir) is not None
+            or bool(_native_roots(run_dir)))
+
+
+def _proc_identity(pid: int) -> tuple[int, int, str] | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        fields = stat[stat.rindex(")") + 2:].split()
+        return int(fields[19]), int(fields[1]), fields[0]
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _native_roots(run_dir: Path) -> dict[int, int]:
+    """Only the recorded native processes whose /proc start time still matches."""
+    data = _run_json(run_dir, NATIVE_PROCESSES) or {}
+    roots = {}
+    for name in ("tmux_server", "engine", "app_scope", "app_server"):
+        item = data.get(name)
+        if not isinstance(item, dict):
+            continue
+        pid, started = item.get("pid"), item.get("start_time")
+        if not isinstance(pid, int) or not isinstance(started, int):
+            continue
+        identity = _proc_identity(pid)
+        if identity and identity[0] == started and identity[2] != "Z":
+            roots[pid] = started
+    return roots
+
+
+def _reap_native(run_dir: Path | None) -> None:
+    """Reap a native session even if its fn was SIGKILLed before its finally block."""
+    if run_dir is None or not (run_dir / NATIVE_PROCESSES).exists():
+        return
+    roots = _native_roots(run_dir)
+    data = _run_json(run_dir, NATIVE_PROCESSES) or {}
+    tmux_rec = data.get("tmux_server")
+    tmux_pid = tmux_rec.get("pid") if isinstance(tmux_rec, dict) else None
+    tree = dict(roots)
+    children: dict[int, list[tuple[int, int]]] = {}
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        pid = int(d.name)
+        if identity := _proc_identity(pid):
+            started, parent, state = identity
+            if state != "Z":
+                children.setdefault(parent, []).append((pid, started))
+    todo = list(roots)
+    while todo:
+        for pid, started in children.get(todo.pop(), []):
+            if pid not in tree:
+                tree[pid] = started
+                todo.append(pid)
+    if tmux_pid in roots:
+        try:
+            subprocess.run(["tmux", "-S", "tmux.sock", "kill-server"], cwd=run_dir,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=0.75, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for pid, started in tree.items():
+        identity = _proc_identity(pid)
+        if identity and identity[0] == started and identity[2] != "Z":
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    if tmux_pid in roots:
+        (run_dir / "tmux.sock").unlink(missing_ok=True)
 
 
 def kill(*runs: Run, grace: float = KILL_GRACE) -> list[Run]:
@@ -215,7 +285,10 @@ def kill(*runs: Run, grace: float = KILL_GRACE) -> list[Run]:
     for _, run in targets:
         if run.proc is not None:
             run.proc.wait()
-    return [run for _, run in targets]
+    native = [run for run in runs if run.run_dir and _native_roots(run.run_dir)]
+    for run in runs:
+        _reap_native(run.run_dir)
+    return list({id(run): run for run in [*(r for _, r in targets), *native]}.values())
 
 
 def _read_exit(run_dir: Path) -> int | None:
@@ -255,13 +328,16 @@ def _run_code(run: Run) -> int | str | None:
             run.proc = proc
             return None  # running
         code = _read_exit(run.run_dir)
+        _reap_native(run.run_dir)
         return code if code is not None else UNKNOWN
     code = _read_exit(run.run_dir)
     if code is not None:
+        _reap_native(run.run_dir)
         return code
     if lock_held(run.run_dir / "shim.lock"):
         return None  # running under another runner's shim
     code = _read_exit(run.run_dir)
+    _reap_native(run.run_dir)
     return code if code is not None else UNKNOWN
 
 
@@ -270,17 +346,21 @@ def _probe(run_dir: Path) -> tuple[str, int | None]:
     restarted — the last meaning a pre-shim run dir (SPEC §6). exit.json first and last; the
     shim may still be starting, so a bare dir gets one recheck before `restarted`."""
     if (code := _read_exit(run_dir)) is not None:
+        _reap_native(run_dir)
         return "finished", code
     for attempt in range(2):
         has_shim = (run_dir / "shim.json").exists()
         if lock_held(run_dir / "shim.lock"):
             return "watching", None
         if (code := _read_exit(run_dir)) is not None:
+            _reap_native(run_dir)
             return "finished", code
         if has_shim:
+            _reap_native(run_dir)
             return "unknown", None
         if attempt == 0:
             time.sleep(0.3)
+    _reap_native(run_dir)
     return "restarted", None
 
 
@@ -343,7 +423,9 @@ def run_call_direct(store: Store, call: str, project: str | None) -> dict[str, A
     else:
         d = store.runs_dir(project) / call
         proc = spawn(fn, inp, d, fn_env(store, project, fn, "", call, d))
-        outputs, err = read_run(fn, d, proc.wait())
+        code = proc.wait()
+        _reap_native(d)
+        outputs, err = read_run(fn, d, code)
     _finish(rec, outputs=outputs, error=err or None)
     C.record(store, project, rec)
     return C.result(rec)
@@ -732,6 +814,7 @@ class Runner:
             akey = ("call", key, call)
             if rec["status"] == "running" and rec.get("direct"):
                 if not C.alive(rec.get("pid"), rec.get("pid_start")):  # its process is gone
+                    _reap_native(self.store.runs_dir(project) / call)
                     _finish(rec, error=C.GONE)
             elif rec["status"] == "running":
                 self._poll(akey, rec)

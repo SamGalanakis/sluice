@@ -12,6 +12,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from .processes import record, scope_command
+
 SOCKET = "tmux.sock"
 SESSION = "main"
 TIMEOUT = 10.0  # seconds for one tmux command
@@ -60,10 +62,10 @@ class Tmux:
         """The command a person runs to watch or steer the live session."""
         return f"cd {shlex.quote(str(self.dir.resolve()))} && tmux -S {SOCKET} attach"
 
-    def run(self, *args, check=True, env=None):
+    def run(self, *args, check=True, env=None, timeout=TIMEOUT):
         env = {k: v for k, v in (env or os.environ).items() if k not in ("TMUX", "TMUX_PANE")}
         p = subprocess.run(["tmux", "-S", SOCKET, *args], cwd=self.dir, env=env, text=True,
-                           capture_output=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL,
                            check=False)
         if check and p.returncode != 0:
             raise RuntimeError(f"tmux {args[0]} failed: {p.stderr.strip()}")
@@ -73,17 +75,23 @@ class Tmux:
         """Start the server with one session running `argv` in `cwd` (exec'd directly, so the
         pane's pid is the engine's). The server takes `env` as its environment."""
         (self.dir / "tmux.conf").write_text(CONF)
+        cmd = ["tmux", "-f", "tmux.conf", "-S", SOCKET, "new-session", "-d", "-s", SESSION,
+               "-x", str(width), "-y", str(height), "-c", str(cwd), "--", *argv]
         p = subprocess.run(
-            ["tmux", "-f", "tmux.conf", "-S", SOCKET, "new-session", "-d", "-s", SESSION,
-             "-x", str(width), "-y", str(height), "-c", str(cwd), "--", *argv],
+            scope_command(cmd),
             cwd=self.dir, env={k: v for k, v in env.items() if k not in ("TMUX", "TMUX_PANE")},
             text=True, capture_output=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL,
             check=False)
         if p.returncode != 0:
             raise RuntimeError(f"tmux could not start the session: {p.stderr.strip()}")
+        server = self.info("#{pid}")
+        if server and server.isdigit():
+            record(self.dir, "tmux_server", int(server))
+        record(self.dir, "engine", self.pane_pid())
 
-    def info(self, fmt):
-        p = self.run("display-message", "-p", "-t", SESSION, fmt, check=False)
+    def info(self, fmt, timeout=TIMEOUT):
+        p = self.run("display-message", "-p", "-t", SESSION, fmt,
+                     check=False, timeout=timeout)
         return p.stdout.strip() if p.returncode == 0 else None
 
     def pane_pid(self):
@@ -125,17 +133,20 @@ class Tmux:
         finally:
             f.unlink(missing_ok=True)
 
-    def kill(self, grace=2.0):
+    def kill(self, grace=0.5):
         """End the server and every process under it: the engine and whatever it started
         (background shells included). SIGTERM first, SIGKILL after `grace` seconds."""
-        v = self.info("#{pid}")
+        try:
+            v = self.info("#{pid}", timeout=0.5)
+        except (subprocess.SubprocessError, OSError):
+            v = None
         server = int(v) if v and v.isdigit() else None
         pids = descendants(server) if server else []
         for pid in pids:
             with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGTERM)
         with contextlib.suppress(subprocess.SubprocessError, OSError):
-            self.run("kill-server", check=False)
+            self.run("kill-server", check=False, timeout=0.5)
         everyone = pids + ([server] if server else [])
         deadline = time.monotonic() + grace
         while time.monotonic() < deadline and any(_alive(p) for p in everyone):
