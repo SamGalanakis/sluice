@@ -839,6 +839,27 @@ def lanes(board: Board) -> tuple[list[dict[int, list[str]]], dict[str, int]]:
     return out, depth
 
 
+def _boxes(board: Board, groups: list[dict[int, list[str]]]) -> list[list[int]]:
+    """The lanes (indexes into `groups`) of each independent piece of work: lanes joined by
+    any edge (only an `after` can join two lanes) share a box. Boxes and their lanes keep the
+    plan's order."""
+    lane = {sid: i for i, rows in enumerate(groups) for r in rows.values() for sid in r}
+    parent = list(range(len(groups)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a, b, _ in edges(board):
+        parent[root(lane[a])] = root(lane[b])
+    boxes: dict[int, list[int]] = {}
+    for i in range(len(groups)):
+        boxes.setdefault(root(i), []).append(i)
+    return list(boxes.values())
+
+
 def _by_neighbours(row: list[str], near: dict[str, list[str]], pos: dict[str, float]) -> None:
     """Sort a row by the mean place (0-1 across their row) of each step's neighbours in its
     lane (`pos` holds the lane's steps), then record the new places."""
@@ -901,7 +922,8 @@ def _waits_text(waits: list[tuple[str, str]]) -> str:
     return "waits on " + ", ".join(f"{d} ({WORDS.get(m, m)})" for d, m in waits)
 
 
-def _card(store: Store, board: Board, b: Block, live: bool) -> str:
+def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = False,
+          order: int | None = None, lane_top: bool = False) -> str:
     """A step on the board: a compact bubble with its status glyph, its id and, small, how long
     it ran (and `done of total` for a scattered step). Everything else is one click away in the
     drawer; the doc and what it says now (progress, error, what it waits on) are its tooltip.
@@ -917,7 +939,9 @@ def _card(store: Store, board: Board, b: Block, live: bool) -> str:
     tip = " — ".join(t for t in (" ".join(b.doc.split()), now) if t)
     title = f' title="{e(tip)}"' if tip else ""
     nxt = " is-next" if is_next(board, b) else ""
-    attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}{nxt}" '
+    attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}{nxt}'
+             f'{" lane-start" if lane_start else ""}{" lane-top" if lane_top else ""}"'
+             f'{"" if order is None else f' style="--o:{order}"'} '
              f'id="n-{e(b.sid)}" data-node="s:{e(b.sid)}"{href}{title}')
     small = []
     if "total" in b.entry:
@@ -935,23 +959,36 @@ LEGEND_AFTER = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20"
 
 
 def board_html(store: Store, board: Board, live: bool = True) -> str:
-    """The plan as a board (the `graph` part): each independent piece of work (a lane) its own
-    box when there are several, side by side and wrapping, each a column of rows by
-    dependency depth from its own first step. The server lays the cards out (the order reads
-    without JavaScript); the <sluice-board> component (static/sluice.js) draws the edges
-    between them from its `edges` attribute, around the cards they would cross."""
+    """The plan as a board (the `graph` part): each independent piece of work (the steps any
+    edge joins, handoff or `after`) its own box when there are several, the boxes wrapping.
+    A box is rows by dependency depth from its first step; in a row, its cards stand grouped
+    by lane (the steps joined by handoffs), lane by lane, and a row too wide wraps within
+    itself. The server lays the cards out (the order reads without JavaScript); the
+    <sluice-board> component (static/sluice.js) draws the edges between them from its `edges`
+    attribute, around the cards they would cross."""
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
     groups, _ = lanes(board)
+    boxes = _boxes(board, groups)
     html = []
-    for rows in groups:
-        top = min(rows)  # each lane starts at its own first step
-        html.append(f'<li class="lane" style="--rows:{max(rows) - top + 1}"><ol class="rows">'
-                    + "".join(
-            f'<li class="row" style="--r:{d - top + 1}">'
-            f'{"".join(_card(store, board, board.blocks[sid], live) for sid in rows[d])}</li>'
-            for d in sorted(rows)) + "</ol></li>")
+    for box in boxes:
+        depths_in = sorted({d for i in box for d in groups[i]})
+        top = depths_in[0]
+        rows = []
+        for d in depths_in:
+            cards = []
+            for n, i in enumerate(box):
+                for k, sid in enumerate(groups[i].get(d, [])):
+                    # the first card of the next lane in this row marks where it begins; on a
+                    # phone the box stacks its lanes one after another (`--o`: lane, then depth)
+                    cards.append(_card(store, board, board.blocks[sid], live,
+                                       lane_start=k == 0 and bool(cards),
+                                       order=n * 1000 + d - top if len(box) > 1 else None,
+                                       lane_top=n > 0 and k == 0 and d == min(groups[i])))
+            rows.append(f'<li class="row" style="--r:{d - top + 1}">{"".join(cards)}</li>')
+        html.append(f'<li class="box"><ol class="rows" style="--rows:{depths_in[-1] - top + 1}">'
+                    f'{"".join(rows)}</ol></li>')
     es = edges(board)
     data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in es], ensure_ascii=False)
     legend = ""
@@ -962,7 +999,7 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
     return (f'<sluice-board class="board" role="region" aria-label="Plan" edges="{e(data)}" '
             f'data-preserve-attr="data-rocket-host"><div class="plane">'
             f'<svg class="edges" aria-hidden="true" data-ignore-morph></svg>'
-            f'<ol class="lanes{" boxed" if len(groups) > 1 else ""}">{"".join(html)}</ol>'
+            f'<ol class="boxes{" boxed" if len(boxes) > 1 else ""}">{"".join(html)}</ol>'
             f"</div>{legend}</sluice-board>")
 
 

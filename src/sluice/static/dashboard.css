@@ -228,19 +228,18 @@ sluice-board, sluice-thread { display: block; }
 sluice-drawer { display: contents; }
 .board { position: relative; padding: 8px 0 12px; --node-h: 36px; --row-gap: 40px; }
 .plane { position: relative; }
-.lanes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap;
-         justify-content: center; align-items: flex-start; gap: var(--row-gap) 36px; }
-/* several independent pieces of work: each its own quiet box (a region, not a card: the
-   bubbles carry the borders), laid out from its own first step */
-.lanes.boxed { gap: 14px; }
-.lanes.boxed > .lane { flex: 1 1 auto; max-width: 100%; box-sizing: border-box; padding: 16px 18px;
-                       border-radius: var(--radius); background: var(--muted); }
-.lane { min-width: 0; }
-.lane > .rows { list-style: none; margin: 0; padding: 0; display: grid; row-gap: var(--row-gap);
+/* the independent pieces of work (steps joined by any edge), each its own quiet box when
+   there are several (a region, not a card: the bubbles carry the borders); its lanes inside */
+.boxes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 14px;
+         justify-content: center; align-items: flex-start; }
+.box { flex: 1 1 auto; min-width: 0; max-width: 100%; box-sizing: border-box; }
+.boxes.boxed > .box { padding: 16px 18px; border-radius: var(--radius); background: var(--muted); }
+.box > .rows { list-style: none; margin: 0; padding: 0; display: grid; row-gap: var(--row-gap);
                 grid-template-columns: minmax(0, 1fr);  /* a long id ellipsizes, not overflows */
                 grid-template-rows: repeat(var(--rows), minmax(var(--node-h), auto)); }
 .row { grid-row: var(--r); min-width: 0; display: flex; flex-wrap: wrap; justify-content: center;
        align-items: flex-start; gap: 12px 14px; }
+.row .lane-start { margin-left: 22px; }  /* the next lane's cards begin */
 .legend { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
           gap: 4px 8px; margin-top: 20px; font-size: 12.5px; line-height: 16px;
           color: var(--muted-foreground); }
@@ -556,9 +555,15 @@ main > .phead + * { margin-top: 0; }
                   clip-path: inset(50%); white-space: nowrap; }
   #nav-inbox .badge { margin-left: 2px; }
   .board { --row-gap: 28px; }
-  .lanes { column-gap: 18px; }
-  .lanes.boxed { gap: 10px; }
-  .lanes.boxed > .lane { padding: 12px; }
+  /* a box of several lanes stacks them, lane by lane (`--o`: lane, then depth), so each reads
+     straight down; a lane after the first starts a little apart */
+  .box > .rows { display: flex; flex-direction: column; align-items: center; }
+  .box > .rows > .row { display: contents; }
+  .box > .rows .node { order: var(--o, 0); margin: 0 0 var(--row-gap); }
+  .box > .rows .node.lane-top { margin-top: 14px; }
+  .row .lane-start { margin-left: 0; }
+  .boxes { gap: 10px; }
+  .boxes.boxed > .box { padding: 12px; }
   .row { gap: 8px 10px; }
   .legend { justify-content: flex-start; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }

@@ -124,24 +124,23 @@ function drawEdges(host, data) {
   const plane = $(".plane", host), svg = $("svg.edges", host);
   if (!plane || !svg) return;
   const box = plane.getBoundingClientRect();
-  const boxed = $(".lanes", plane)?.classList.contains("boxed");
-  const lanes = $$(".lane", plane), rect = new Map();
+  const boxed = $(".boxes", plane)?.classList.contains("boxed");
+  const boxes = $$(".box", plane), rect = new Map();
   for (const n of $$(".node[data-node]", plane)) {
     const r = n.getBoundingClientRect();
     rect.set(n.dataset.node, { left: r.left - box.left, right: r.right - box.left,
                                top: r.top - box.top, bottom: r.bottom - box.top,
-                               width: r.width, lane: lanes.indexOf(n.closest(".lane")) });
+                               width: r.width, box: boxes.indexOf(n.closest(".box")) });
   }
-  // An edge inside a box threads that box's rows (each box has its own) and stays in it; an
-  // edge between boxes threads the rows of the whole board, so it passes no card.
+  // An edge threads the rows of its box (every edge is inside one) and stays in it.
   const rowsOf = new Map();
-  const route = (a, b) => {
-    const la = rect.get(a).lane, lb = rect.get(b).lane, key = la === lb ? `${la}` : "x";
+  const route = (a) => {
+    const key = rect.get(a).box;
     if (!rowsOf.has(key)) {
-      const rows = bands([...rect.values()].filter((r) => key === "x" || r.lane === la));
+      const rows = bands([...rect.values()].filter((r) => r.box === key));
       let lo = -CLEAR * 2, hi = box.width + CLEAR * 2;
-      if (boxed && la === lb && lanes[la]) {
-        const l = lanes[la].getBoundingClientRect();
+      if (boxed && boxes[key]) {
+        const l = boxes[key].getBoundingClientRect();
         lo = l.left - box.left + SIDE;
         hi = l.right - box.left - SIDE;
       }
@@ -168,35 +167,11 @@ function drawEdges(host, data) {
   const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
   const f = (n) => n.toFixed(1);
   for (const [a, b, label] of ends) {
-    const ra = rect.get(a), rb = rect.get(b);
-    if (ra.lane !== rb.lane && rb.top < ra.bottom + CLEAR) {
-      // between boxes on one line (each starts at its own first step): side to side, into
-      // the card's facing edge, rather than up into its top
-      const dir = rb.left >= ra.right ? 1 : rb.right <= ra.left ? -1 : cx(b) >= cx(a) ? 1 : -1;
-      const x1 = dir > 0 ? ra.right : ra.left, y1 = (ra.top + ra.bottom) / 2;
-      const tip = dir > 0 ? rb.left - 1 : rb.right + 1, y2 = (rb.top + rb.bottom) / 2;
-      const x2 = tip - dir * HEAD_H, dx = Math.max(Math.abs(x2 - x1) / 2, 12) * dir;
-      const attrs = { "data-from": a, "data-to": b,
-                      d: `M${f(x1)} ${f(y1)}C${f(x1 + dx)} ${f(y1)} ${f(x2 - dx)} ${f(y2)} `
-                         + `${f(x2)} ${f(y2)}` };
-      if (label === "after") attrs.class = "order";
-      wires.append(svgEl("path", attrs));
-      wires.append(svgEl("path", { "data-from": a, "data-to": b, class: "head",
-                                   d: `M${f(x2)} ${f(y2 - HEAD_W)}L${f(tip)} ${f(y2)}`
-                                      + `L${f(x2)} ${f(y2 + HEAD_W)}z` }));
-      for (const end of ["from", "to"]) {
-        const text = svgEl("text", { "data-from": a, "data-to": b, "data-end": end,
-                                     x: f((x1 + x2) / 2), y: f((y1 + y2) / 2 - 4) });
-        text.textContent = label;
-        names.append(text);
-      }
-      continue;
-    }
     const x1 = outX.get(a).get(b), y1 = rect.get(a).bottom;
     const x2 = inX.get(b).get(a), tip = rect.get(b).top - 1;
     const y2 = tip - HEAD_H;  // the line ends straight down, into the head's base
     const pts = [[x1, y1]];
-    const { rows, lo, hi, key } = route(a, b);
+    const { rows, lo, hi, key } = route(a);
     rows.forEach((row, i) => {
       if (row.top <= y1 + 1 || row.bottom >= tip - 1) return;  // only the rows in between
       const t = ((row.top + row.bottom) / 2 - y1) / (tip - y1);
