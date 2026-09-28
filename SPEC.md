@@ -653,12 +653,19 @@ raw HTML escaped, unsafe link schemes refused).
   progress (the tail of the current run's stderr, while
   running); its outputs (while running, what the agent has submitted so far), its prompt (the binding
   named `prompt`, `spec`, `task`, `instructions` or `brief`) and its other inputs (the run's
-  own `input.json`, else what the binding resolves to now), each value under its name with
-  its doc and, for an input, where it comes from as a small link (`← step/output`, or
-  `← input name`; nothing for a value set in the plan). Types show on demand: in the name's
-  title always, beside every name with the one Types switch (remembered per browser). Text that
-  reads as markdown is rendered, other multi-line text and structures read as code, an inbox
-  answer as what was chosen; a long value folds to its first lines ("Show all"). Then the
+  own `input.json`, else what the binding resolves to now), as a list of fields (a `<dl>`):
+  each name in a narrow column, its value beside it with its doc and, for an input, where it
+  comes from as a small chip linking to the step (`step/output`, or `plan input name`;
+  nothing for a value set in the plan; for the prompt, in its section's head). A value reads
+  by its kind: short text as text, a number as a number, a boolean as a small `true`/`false`
+  pill, null as "none", a short list of scalars as a comma list, an inbox answer as what was
+  chosen, and an identifier (one token with a slash, colon or `@`, or letters and digits: a
+  path, URL, sha, session or ticket) in the data face, giving way in the middle when it does
+  not fit, whole in its title, with a copy button (with script; it selects the text where the
+  clipboard is not allowed). Long or multi-line text and long structures take the full width
+  below their name (markdown rendered, other multi-line text and structures as code) and fold
+  past a few lines ("Show all"). Types show on demand: in the name's title always, after every
+  name with the one Types switch (the "Show value types" setting). Then the
   stderr of a finished run ("Log output", folded past six lines) and, when it ran more than
   once, its attempts from the log, oldest first so the current one closes the list: each its
   outcome (glyph and word), when it started (from the run id's stamp when the log no longer

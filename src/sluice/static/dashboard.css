@@ -609,7 +609,7 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .d-meta { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
 .d-meta code { font-size: 12.5px; border: 0; background: none; padding: 0; color: var(--foreground); }
 .d-sec { margin-top: 26px; }
-.d-sec-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+.d-sec-h { display: flex; align-items: baseline; gap: 12px;
            margin-bottom: 10px; }
 .d-sec-h .label { margin: 0; }
 .d-sec .meta { margin-bottom: 4px; }
@@ -622,26 +622,100 @@ dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
 .dep { white-space: nowrap; }
 .dep .g { vertical-align: -3px; margin: 0 4px 0 0; }
-/* named values: name (type on demand), where it comes from, its doc, its value */
-.fields { display: grid; gap: 14px; }
-.f { min-width: 0; }
-.f-k { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
-.f-name { font-weight: 600; font-size: 14px; }
-.f-type { display: none; font: 12px var(--font-mono); color: var(--muted-foreground); }
-.show-types .f-type { display: inline; }
-.f-from { font-size: 12.5px; color: var(--muted-foreground); }
-.f-from a { color: inherit; }
-.f-doc { font-size: 13px; line-height: 18px; color: var(--muted-foreground); margin-top: 1px; }
-.f-v { margin-top: 4px; min-width: 0; overflow-wrap: anywhere; }
+/* named values, a field list: each name in a narrow muted column (one line, ellipsized, its
+   type after it with Types on), its value beside it, so a short value is one row; a long one
+   takes the full width below its name, where it comes from and its doc beside the name. The
+   name column is as wide as the longest name, up to its cap (subgrid keeps the rows aligned). */
+.fields { display: grid; margin: 0; column-gap: 16px;
+          grid-template-columns: fit-content(min(34%, 11rem)) minmax(0, 1fr); }
+.show-types .fields { grid-template-columns: fit-content(min(44%, 16rem)) minmax(0, 1fr); }
+.f { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: baseline;
+     padding: 7px 0; border-top: 1px solid var(--border); min-width: 0; }
+.f:first-child { border-top: 0; padding-top: 2px; }
+.f-k { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; min-width: 0;
+       overflow: hidden;
+       font: 500 13px/20px var(--font-sans); color: var(--muted-foreground);
+       white-space: nowrap; }
+.f-name, .f-type { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.f-type { display: none;
+          text-overflow: ellipsis; font: 400 12px/20px var(--font-mono);
+          color: color-mix(in srgb, var(--muted-foreground) 80%, transparent); }
+.show-types .f-type { display: block; }
+.f-v { margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline;
+       gap: 2px 10px; font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+.f-v > .v { min-width: 0; max-width: 100%; }
+/* an id and its source share the row, both giving way (the id more slowly) before either
+   wraps; each stops at its own width */
+.f-v > .v.id { flex: 2 1 0; min-width: min(14ch, 100%); max-width: max-content; }
+.f-doc { flex-basis: 100%; font-size: 13px; line-height: 18px; color: var(--muted-foreground);
+         max-width: 72ch; }
+/* a long value: the name's row holds where it comes from and its doc, the value spans below */
+.f.wide { grid-template-rows: auto auto; }
+.f.wide > .f-k { grid-area: 1 / 1; position: relative; z-index: 1; }
+.f.wide > .f-v { grid-area: 1 / 1 / 3 / -1; display: grid; grid-template-columns: subgrid;
+                 grid-template-rows: subgrid; }
+.f.wide .f-about { grid-area: 1 / 2; display: flex; flex-wrap: wrap; align-items: baseline;
+                   gap: 2px 10px; min-width: 0; }
+.f.wide .f-v > :last-child { grid-area: 2 / 1 / 3 / -1; margin-top: 6px; min-width: 0; }
 .f-v .v.prose p, .f-v .v.md > :last-child { margin: 0; }
 .f-v .v.code pre, .f-v .clip.code pre { font-size: 12.5px; line-height: 19px; padding: 10px 12px;
                                         background: var(--muted); border: 1px solid var(--border);
                                         border-radius: var(--radius-md); white-space: pre-wrap; }
-.f-v .v.md, .f-v .clip.md { max-width: 72ch; }
-.types-toggle { font-size: 12px; padding: 1px 9px; border-radius: 999px;
-                color: var(--muted-foreground); }
-.types-toggle[aria-pressed="true"] { color: var(--foreground); background: var(--secondary);
-                                     border-color: var(--border-strong); }
+.f-v .v.md, .f-v .clip.md, .f-v .v.prose, .f-v .clip.prose { max-width: 72ch; }
+.f-v .v.md > * { margin-top: 0; }
+/* values by kind */
+.v.num { font-variant-numeric: tabular-nums; }
+.v.quiet { color: var(--muted-foreground); }
+code.v.json { font-size: 12.5px; }
+.v.pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px;
+          border: 1px solid var(--border-strong); border-radius: 999px;
+          font: 500 12px/16px var(--font-sans); color: var(--foreground); }
+.v.pill-false { color: var(--muted-foreground); border-color: var(--border); }
+ul.v.list { display: inline; margin: 0; padding: 0; list-style: none; }
+ul.v.list > li { display: inline; }
+ul.v.list > li:not(:last-child)::after { content: ", "; color: var(--muted-foreground); }
+/* an identifier: the data face, giving way in the middle (the tail stays), a copy button */
+.v.id { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.mid { display: inline-flex; min-width: 0; max-width: 100%; white-space: nowrap; }
+.mid > .h { flex: 0 1 auto; min-width: 1ch; overflow: hidden; text-overflow: ellipsis; }
+.mid > .t { flex: none; }
+.v.id > code.mid { padding: 0; border: 0; background: none; font-size: 12.5px; line-height: 20px;
+                   color: var(--foreground); }
+button.copy { position: relative; display: none; place-items: center; flex: none; width: 24px;
+              height: 24px; margin: -2px 0; padding: 0; border: 0; background: none;
+              border-radius: var(--radius-sm); color: var(--muted-foreground); cursor: pointer; }
+@media (scripting: enabled) { button.copy { display: inline-grid; } }
+button.copy:hover { color: var(--foreground); background: var(--muted); }
+button.copy .i-done, button.copy.done .i-copy { display: none; }
+button.copy.done .i-done { display: block; color: var(--status-success); }
+/* where a value comes from: a small quiet chip on the name's row, linking to the step */
+.f-from { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
+.f-v > .f-from { flex: 1 1 0; min-width: min(12ch, 100%); max-width: max-content;
+                  margin-left: auto; }
+.src { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%;
+       height: 22px; padding: 0 7px 0 5px; border-radius: var(--radius-sm);
+       background: var(--muted); color: var(--muted-foreground); text-decoration: none;
+       font: 400 12px/16px var(--font-mono); }
+.src > svg { flex: none; }
+a.src:hover { color: var(--foreground); background: var(--secondary); }
+.d-sec-h .f-from { align-self: center; }
+/* the Types switch: a small quiet switch at the end of the first values section's head */
+.types-toggle { margin-left: auto; align-self: center; display: inline-flex; align-items: center;
+                gap: 7px; height: 24px; padding: 0 2px 0 6px; border: 0; background: none;
+                border-radius: var(--radius-sm); font: 500 13px/18px var(--font-sans);
+                color: var(--muted-foreground); cursor: pointer; }
+.types-toggle:hover { background: none; color: var(--foreground); }
+.types-toggle .sw { position: relative; width: 24px; height: 14px; border-radius: 999px;
+                    background: var(--secondary); box-shadow: inset 0 0 0 1px var(--border-strong);
+                    transition: background 150ms; }
+.types-toggle .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 8px;
+                           height: 8px; border-radius: 50%; background: var(--muted-foreground);
+                           transition: transform 150ms; }
+.types-toggle[aria-pressed="true"] { color: var(--foreground); }
+.types-toggle[aria-pressed="true"] .sw { background: var(--accent); box-shadow: none; }
+.types-toggle[aria-pressed="true"] .sw::after { transform: translateX(10px);
+                                                background: var(--primary-foreground); }
+@media (scripting: none) { .types-toggle { display: none; } }
 /* attempts, oldest first: number and outcome glyph in a column, a hairline rail joining the
    glyphs, the current attempt (last) on the secondary fill (as the current filter is); a
    failure's headline in ink, all of it under "Show error" */
@@ -949,10 +1023,11 @@ main > .phead + * { margin-top: 0; }
   .drawer dl.facts dt { line-height: 44px; }  /* level with the first line of links */
   .drawer .d-sec details:not(.fold) > summary { padding-block: 12px; }
   .drawer .d-sec details:not(.fold)[open] > summary { margin-bottom: 0; }
-  /* the Types pill keeps its size; a clear border makes its target 44px tall */
-  .types-toggle { border: 12px solid transparent; border-width: 12px 0;
-                  background-clip: padding-box; box-shadow: inset 0 0 0 1px var(--input);
-                  margin: -12px 0; }
+  /* the Types switch and a copy button keep their size; their targets are 44px */
+  .types-toggle { position: relative; }
+  .types-toggle::after, button.copy::after { content: ""; position: absolute; inset: -10px; }
+  /* a source chip goes under a short value */
+  .f-v > .f-from { margin-left: 0; flex-basis: 100%; }
   dl.kv { grid-template-columns: 1fr; gap: 2px; }
   dl.kv dd { margin-bottom: 10px; }
   .fn .ports { grid-template-columns: 1fr; gap: 6px; }

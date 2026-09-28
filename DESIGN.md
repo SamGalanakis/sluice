@@ -364,7 +364,7 @@ index's list, threads, inbox items, prompts; 10px (`--radius-md`) for
 controls, the switcher and its menu, and code blocks; 5px (`--radius-sm`) for inline code,
 badges, menu items, the segmented filter's current item, the focus ring and the nav's current
 bar. A pill (999px) is deliberate, and only for the step bubbles, the progress bar, the inbox
-badge, the Types switch and the "n new" pill: a bubble is a token of work, not a panel. Plan input and output nodes are dashed, since they are ends, not work.
+badge, the Types switch's track, a boolean value and the "n new" pill: a bubble is a token of work, not a panel. Plan input and output nodes are dashed, since they are ends, not work.
 
 ## Components
 
@@ -484,11 +484,25 @@ its number and outcome glyph in a column joined by a strong-hairline rail, the o
 600 and in meta "started 1h ago · took 54m" (the current run: its live time alone, "42m so
 far"), a failure's headline in ink at 500 with all of it
 under a "Show error" disclosure; the current attempt, last, on the secondary fill with its word
-in Archivo). A value is a field:
-its name in 600, a small `← source` link, its doc in meta, the value under it. Types are
-noise until asked for: in the name's title, and beside every name with the one Types switch
-(on the first section of values), which is the settings' "Show value types": either turns it
-for every page. Long values fold under a fade.
+in Archivo). Outputs and Inputs are field lists (a `<dl>`), one row per value between
+hairlines: the name in a narrow column of 13px meta in muted ink (as wide as the longest
+name, up to a third of the drawer; one line, ellipsized, whole in its title), the value
+beside it at 14px, so five short values take five short rows. A value reads by its kind:
+text as text, numbers tabular, a boolean a small pill (`true` in ink on a strong hairline,
+`false` muted), null a muted "none", a short list commas; an identifier (a path, URL, sha,
+session, ticket) in the data face at 12.5px, giving way in the middle so its end stays (a
+path's last segment), with a quiet copy button (drawn, 24px; shown only with script, and
+without it the text is there to select; a green tick once copied). Where a value comes from
+is a small quiet chip at the row's end (the quiet fill, muted mono 12px, a drawn arrow,
+linking to the step; under the value on a phone), for the prompt in its section's head; the
+value gives way before its chip does, and both before either wraps. The doc is meta under
+the value. A long value (multi-line text, markdown, JSON, prose past a line) takes the full
+width below its name, its chip and doc on the name's row, and folds under a fade past six
+lines. Types are noise until asked for: in the name's title, and after every name in muted
+mono (wrapping under a long one) with the one Types switch, a small quiet switch (13px
+"Types" and a 24 by 14px track, the accent's fill when on) at the end of the first values
+section's head, which is the settings' "Show value types": either turns it for every page.
+Its focus is the one ring.
 
 ### Log
 A table of seq, time, kind (12px data) and a one-line summary in plain words (a run the
@@ -501,7 +515,7 @@ At phone width every control is at least 44px tall: Pause and Archive, the nav's
 the log's filter labels and pager links, the inbox's status filter, a folded box's line,
 the settings cog and its menu's rows, and in the drawer the steps its facts link to, its
 thread link and "Show n lines";
-the Types pill keeps its size with a clear border that makes its target 44px.
+the Types switch and a value's copy button keep their size on a 44px target.
 
 ## Do's and Don'ts
 

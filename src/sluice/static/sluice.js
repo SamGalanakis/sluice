@@ -606,6 +606,30 @@ new MutationObserver(() => {
   }
 }).observe(document.body, { childList: true, subtree: true });
 
+// ---- copying an id, path or session: its button (shown with script) copies the whole value;
+// where the clipboard is not allowed (not a secure context) it selects it instead ------------
+
+document.addEventListener("click", async (evt) => {
+  const btn = evt.target.closest?.("button.copy");
+  const mid = btn?.parentElement.querySelector(".mid");
+  if (!mid) return;
+  try {
+    await navigator.clipboard.writeText(mid.textContent);
+  } catch {
+    getSelection().selectAllChildren(mid);
+    return;
+  }
+  const label = btn.getAttribute("aria-label");
+  btn.classList.add("done");
+  btn.setAttribute("aria-label", "Copied");
+  const say = $("#announce");
+  if (say) say.textContent = "Copied";
+  setTimeout(() => {
+    btn.classList.remove("done");
+    btn.setAttribute("aria-label", label);
+  }, 1500);
+});
+
 // ---- the tab title: how many steps failed, then how many runs went quiet, first -----------
 // (`data-title-failed`, and `data-title-quiet`: when each running step last wrote)
 

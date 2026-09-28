@@ -1904,54 +1904,133 @@ def _fold(inner: str, cls: str) -> str:
             f"{inner}</summary></details>")
 
 
-def field_value(value: Any) -> str:
-    """A value in the step's detail: text as prose (markdown rendered), multi-line plain text
-    and structures as code, an inbox answer as what was chosen; long ones fold."""
+SHORT_TEXT = 80  # text up to this long, on one line, sits beside its name
+# a single token that names something (a path, a URL, a sha, a session, a ticket): shown in the
+# data face, middle-ellipsized when it does not fit, with a copy button
+ID_LIKE = re.compile(r"^(?=.*[/\\:@]|.*[A-Za-z].*\d|.*\d.*[A-Za-z])[\w.~/\\:@+#%=?&-]{1,300}$")
+COPY_ICON = ('<svg class="i-copy" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+             '<rect x="5.5" y="5.5" width="8" height="8" rx="1.8" fill="none" '
+             'stroke="currentColor" stroke-width="1.5"/><path d="M10.5 3.2A1.8 1.8 0 0 0 8.8 2H4'
+             'A2 2 0 0 0 2 4v4.8a1.8 1.8 0 0 0 1.2 1.7" fill="none" stroke="currentColor" '
+             'stroke-width="1.5" stroke-linecap="round"/></svg>'
+             '<svg class="i-done" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
+             '<path d="M3.5 8.4l3 3 6-6.6" fill="none" stroke="currentColor" stroke-width="1.6" '
+             'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+FROM_ICON = ('<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path '
+             'd="M10 6H2.5M5.5 3 2.5 6l3 3" fill="none" stroke="currentColor" stroke-width="1.4" '
+             'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+
+
+def _mid(text: str) -> str:
+    """Text that gives way in the middle when it does not fit: a head that ellipsizes and a tail
+    that stays (a path's last segment, else the last characters); the two read as the whole."""
+    if len(text) <= 16:
+        return f'<span class="t">{e(text)}</span>'
+    seg = text.rstrip("/").rpartition("/")
+    tail = "/" + seg[2] if seg[1] and 3 <= len(seg[2]) <= 32 else text[-10:]
+    cut = len(text) - len(tail) if text.endswith(tail) else len(text) - 10
+    return f'<span class="h">{e(text[:cut])}</span><span class="t">{e(text[cut:])}</span>'
+
+
+def _ident(text: str, name: str) -> str:
+    """An identifier in the data face, middle-ellipsized (whole in its title, selectable), and
+    a copy button (shown with script; without it the text is there to select)."""
+    return (f'<span class="v id"><code class="mid" title="{e(text)}">{_mid(text)}</code>'
+            f'<button type="button" class="copy" aria-label="Copy {e(name)}" '
+            f'title="Copy">{COPY_ICON}</button></span>')
+
+
+def _scalar(value: Any) -> str:
+    """A scalar as it reads in a list: text as is, numbers as numbers, booleans as words."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def field_value(value: Any, name: str = "") -> tuple[str, bool]:
+    """A value in the step's detail, by kind, and whether it takes the full width below its
+    name. Short text, numbers (tabular), booleans (a small pill), none, a short list (commas)
+    and an inbox answer sit beside the name; an identifier (path, URL, sha, session) is in the
+    data face, middle-ellipsized with a copy button. Long or multi-line text (markdown
+    rendered), long lists and structures go full width, and past a few lines they fold."""
     if (chosen := answer_text(value)) is not None:
-        return f'<span class="v">{e(chosen)}</span>'
+        return f'<span class="v">{e(chosen)}</span>', False
+    if value is None:
+        return '<span class="v quiet">none</span>', False
+    if isinstance(value, bool):
+        word = "true" if value else "false"
+        return f'<span class="v pill pill-{word}">{word}</span>', False
+    if isinstance(value, int | float):
+        return f'<span class="v num">{e(_scalar(value))}</span>', False
     if isinstance(value, str):
-        if MARKDOWN_HINT.search(value):
+        if not value.strip():
+            return '<span class="v quiet">empty</span>', False
+        one_line = "\n" not in value
+        if one_line and ID_LIKE.match(value):
+            return _ident(value, name), False
+        md = bool(MARKDOWN_HINT.search(value))
+        if one_line and len(value) <= SHORT_TEXT:
+            return ((f'<div class="v md">{markdown(value)}</div>', False) if md else
+                    (f'<span class="v">{e(value)}</span>', False))
+        if md:
             body, cls, lines = markdown(value), "md", value.count("\n") + len(value) // 90
-        elif "\n" in value:
+        elif not one_line:
             body, cls, lines = f"<pre>{e(value)}</pre>", "code", value.count("\n") + 1
         else:
             body, cls, lines = f"<p>{e(value)}</p>", "prose", len(value) // 90
         inner = f'<div class="clip {cls}">{body}</div>'
-        return _fold(inner, cls) if lines > FOLD_LINES else f'<div class="v {cls}">{body}</div>'
-    if isinstance(value, float):
-        return f'<code class="v">{e(f"{value:.6g}")}</code>'
-    if value is None:
-        return '<span class="quiet">none</span>'
+        return (_fold(inner, cls) if lines > FOLD_LINES else
+                f'<div class="v {cls}">{body}</div>'), True
+    if value == [] or value == {}:
+        return '<span class="v quiet">empty</span>', False
     text = json.dumps(value, ensure_ascii=False)
-    if len(text) <= 80:
-        return f'<code class="v">{e(text)}</code>'
+    if isinstance(value, list) and len(text) <= 120 and all(
+            isinstance(x, str | int | float | bool) and "\n" not in str(x) for x in value):
+        items = "".join(f"<li>{e(_scalar(x))}</li>" for x in value)
+        return f'<ul class="v list">{items}</ul>', False
+    if len(text) <= SHORT_TEXT:
+        return f'<code class="v json">{e(text)}</code>', False
     pretty = _json(value)
     inner = f'<div class="clip code"><pre>{pretty}</pre></div>'
-    return _fold(inner, "code") if pretty.count("\n") > FOLD_LINES else \
-        f'<div class="v code"><pre>{pretty}</pre></div>'
+    return (_fold(inner, "code") if pretty.count("\n") > FOLD_LINES else
+            f'<div class="v code"><pre>{pretty}</pre></div>'), True
 
 
 def _from(project: str, block: Block, name: str, live: bool) -> str:
-    """Where a binding comes from, as a small link (nothing for a value set in the plan)."""
+    """Where a binding comes from, each source a small quiet chip (a step's output links to
+    its step); nothing for a value set in the plan."""
     out = []
     for r in block.refs(name):
-        if r.step:
-            ref = e(str(r))
-            out.append(f'<a href="{e(step_href(project, r.step))}" data-step="{e(r.step)}">'
-                       f"{ref}</a>" if live else ref)
+        what = f"from {'' if r.step else 'plan input '}"
+        chip = f'{FROM_ICON}<span class="vh">{what}</span><span class="mid">{_mid(str(r))}</span>'
+        if r.step and live:
+            out.append(f'<a class="src" href="{e(step_href(project, r.step))}" '
+                       f'data-step="{e(r.step)}" title="{e(what + str(r))}">{chip}</a>')
         else:
-            out.append(f"input {e(str(r))}")
-    return f'<span class="f-from">← {", ".join(out)}</span>' if out else ""
+            out.append(f'<span class="src" title="{e(what + str(r))}">{chip}</span>')
+    return f'<span class="f-from">{"".join(out)}</span>' if out else ""
 
 
-def _field(name: str, value: str, type_: str = "", doc: str = "", source: str = "") -> str:
-    """One named value: its name (its type shown with Types on, and in the name's title), where
-    it comes from, its doc and its value."""
-    t = f' title="{e(type_)}"' if type_ else ""
+def _field(name: str, value: tuple[str, bool], type_: str = "", doc: str = "",
+           source: str = "") -> str:
+    """One named value, a row of the field list: its name (one line; its type after it with
+    Types on, and both in its title), then its value beside it with where it comes from and its
+    doc; a long value takes the full width below its name, the source and doc beside the name."""
+    shown, wide = value
+    tip = f"{name}: {type_}" if type_ else name
     ty = f'<span class="f-type">{e(type_)}</span>' if type_ else ""
     about = f'<p class="f-doc">{e(doc)}</p>' if doc else ""
-    return (f'<div class="f"><div class="f-k"><span class="f-name"{t}>{e(name)}</span>{ty}'
-            f"{source}</div>{about}<div class=\"f-v\">{value}</div></div>")
+    key = f'<dt class="f-k" title="{e(tip)}"><span class="f-name">{e(name)}</span>{ty}</dt>'
+    if wide:
+        aside = f'<div class="f-about">{source}{about}</div>' if source or about else ""
+        return f'<div class="f wide">{key}<dd class="f-v">{aside}{shown}</dd></div>'
+    return f'<div class="f">{key}<dd class="f-v">{shown}{source}{about}</dd></div>'
+
+
+def _fields(fields: list[str]) -> str:
+    return f'<dl class="fields">{"".join(fields)}</dl>'
 
 
 def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable[str]], str],
@@ -2062,7 +2141,8 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     # one Types switch, on the first section of values
     pressed = "true" if VIEWER.get().types else "false"
     types = [(f'<button type="button" class="types-toggle" aria-pressed="{pressed}" '
-              'title="Show the types of the values">Types</button>')]
+              'title="Show the types of the values">Types<span class="sw" aria-hidden="true">'
+              "</span></button>")]
 
     def section(title: str, body: str, extra: str = "") -> None:
         sections.append(f'<section class="d-sec"><div class="d-sec-h">{_label(title)}{extra}'
@@ -2101,12 +2181,12 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         if isinstance(got, dict):
             outs, title, declared = got, "Outputs so far", own
     if outs is not None:
-        fields = [_field(n, field_value(outs[n]) if n in outs else
-                         '<span class="quiet">none</span>', declared.get(n, ""),
+        fields = [_field(n, field_value(outs[n], n) if n in outs else
+                         ('<span class="v quiet">none</span>', False), declared.get(n, ""),
                          b.output_docs.get(n, ""))
                   for n in dict.fromkeys([*declared, *outs]) if n not in RUN_FACTS]
         if fields:
-            section(title, f'<div class="fields">{"".join(fields)}</div>', types_switch())
+            section(title, _fields(fields), types_switch())
     elif own:
         names = ", ".join(e(n) for n in own)
         section("Outputs", f'<p class="quiet">None yet: {names}.</p>')
@@ -2139,16 +2219,17 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
                 if ok and text.count("\n") + len(text) // 90 > FOLD_LINES else
                 f'<div class="prompt">{e(text)}</div>' if ok else
                 '<p class="quiet">No value yet.</p>')
-        section(prompt.capitalize(), _from(project, b, prompt, live) + body)
+        section(prompt.capitalize(), body, _from(project, b, prompt, live))
     fields = []
     for n in b.bindings:
         if n == prompt:
             continue
         ok, v = resolved(n)
-        fields.append(_field(n, field_value(v) if ok else '<span class="quiet">no value yet</span>',
+        fields.append(_field(n, field_value(v, n) if ok else
+                             ('<span class="v quiet">no value yet</span>', False),
                              b.fn_inputs.get(n, ""), source=_from(project, b, n, live)))
     if fields:
-        section("Inputs", f'<div class="fields">{"".join(fields)}</div>', types_switch())
+        section("Inputs", _fields(fields), types_switch())
     if tail and b.status != "running":
         lines = tail.splitlines()
         body = f'<pre class="tail">{e(tail)}</pre>'

@@ -337,17 +337,25 @@ def test_a_steps_detail(store):
     assert '<p class="d-meta meta"><code title="function">test.open</code> · $0.12</p>' in head
     sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
     assert sections == ["Outputs", "Prompt", "Inputs", "Log output", "Attempts"]
-    # a named value: its name (type on demand, and in the name's title), its doc, its value
-    assert ('<span class="f-name" title="string">answer</span><span class="f-type">string'
-            '</span></div><p class="f-doc">What it found</p><div class="f-v"><div class="v '
-            'prose"><p>&lt;i&gt;42&lt;/i&gt;</p></div></div>') in html
-    assert '<button type="button" class="types-toggle" aria-pressed="false"' in html
+    # a named value is a row of a field list: its name (its type after it on demand, both in
+    # its title), then its value beside it and its doc
+    assert '<dl class="fields"><div class="f">' in html
+    assert ('<div class="f"><dt class="f-k" title="answer: string"><span class="f-name">answer'
+            '</span><span class="f-type">string</span></dt><dd class="f-v"><span class="v">'
+            '&lt;i&gt;42&lt;/i&gt;</span><p class="f-doc">What it found</p></dd></div>') in html
+    assert ('<button type="button" class="types-toggle" aria-pressed="false" '
+            'title="Show the types of the values">Types<span class="sw" aria-hidden="true">'
+            '</span></button>') in html
     assert "0.123457" not in html  # cost is a fact of the run, in the header, not an output
     assert '<div class="prompt">Do &lt;b&gt;it&lt;/b&gt;\nthen stop</div>' in html
-    # an input says where it comes from, as a link; a value set in the plan says nothing
-    assert ('<span class="f-name" title="int">made</span><span class="f-type">int</span>'
-            '<span class="f-from">← <a href="/projects/v/steps/make" data-step="make">'
-            'make/sum</a></span></div><div class="f-v"><code class="v">2</code></div>') in html
+    # an input says where it comes from, a chip linking to the step; a value set in the plan
+    # says nothing
+    assert ('<dt class="f-k" title="made: int"><span class="f-name">made</span><span '
+            'class="f-type">int</span></dt><dd class="f-v"><span class="v num">2</span>'
+            '<span class="f-from"><a class="src" href="/projects/v/steps/make" '
+            f'data-step="make" title="from make/sum">{views.FROM_ICON}<span class="vh">from '
+            '</span><span class="mid"><span class="t">make/sum</span></span></a></span></dd>'
+            ) in html
     assert "set in the plan" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html and "<script>" not in html
     # its conversation is on the Threads tab: the head links to it; the step has finished, so
@@ -359,6 +367,83 @@ def test_a_steps_detail(store):
     assert runs.index("Failed") < runs.index("Succeeded")  # oldest first, the current last
     assert "exit code 2" in runs
     assert "<i>" not in html and "<b>it" not in html
+
+
+def fields_of(html_):
+    """Each field's row: name -> (its row's html, whether its value takes the full width)."""
+    return {m[2]: (m[0], m[1] == " wide") for m in re.finditer(
+        r'<div class="f( wide)?"><dt class="f-k" title="[^"]*"><span class="f-name">([^<]+)'
+        r'</span>.*?</dd></div>', html_, re.DOTALL)}
+
+
+def test_values_read_by_kind_in_a_compact_field_list(store):
+    path = "/workspace/kiln/lash/forks/fork-for-queued-runs-removal"
+    create(store, "v", {
+        "fork": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "agent": {"run": "test.open", "in": {
+            "spec": src("fork/sum"), "cwd": src("fork/sum"), "lands": d(True),
+            "dry": d(False), "engine": d("opus"), "ticket": d("FIG-3945"), "n": d(3),
+            "gone": d(None), "tags": d(["a", "b<c>"]), "note": d("line one\nline two"),
+            "blob": d({"k": list(range(40))})}}})
+    run = store.runs_dir("v") / "r1"
+    run.mkdir(parents=True)
+    (run / "input.json").write_text(json.dumps({"cwd": path, "spec": "Do it"}))
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "fork": {"status": "succeeded", "outputs": {"sum": 2}},
+            "agent": {"status": "succeeded", "run_ids": ["r1"]}}})
+    html = views.step_detail(store, "v", "agent")
+    f = fields_of(html)
+    # a boolean is a small pill, not a raw true
+    assert '<dd class="f-v"><span class="v pill pill-true">true</span></dd>' in f["lands"][0]
+    assert '<span class="v pill pill-false">false</span>' in f["dry"][0]
+    # a plain word is text; a number is a number; null is a quiet none; a short list, commas
+    assert '<dd class="f-v"><span class="v">opus</span></dd>' in f["engine"][0]
+    assert '<span class="v num">3</span>' in f["n"][0]
+    assert '<span class="v quiet">none</span>' in f["gone"][0]
+    assert '<ul class="v list"><li>a</li><li>b&lt;c&gt;</li></ul>' in f["tags"][0]
+    # an identifier (a ticket, a path) is in the data face, whole in its title, giving way in
+    # the middle (its last segment stays), with a copy button named for the field
+    assert ('<span class="v id"><code class="mid" title="FIG-3945"><span class="t">FIG-3945'
+            '</span></code><button type="button" class="copy" aria-label="Copy ticket" '
+            'title="Copy">') in f["ticket"][0]
+    assert (f'<code class="mid" title="{path}"><span class="h">/workspace/kiln/lash/forks'
+            '</span><span class="t">/fork-for-queued-runs-removal</span></code>') in f["cwd"][0]
+    # where it comes from: a quiet chip on the name's row, after the value, linking the step
+    assert re.search(r'</button></span><span class="f-from"><a class="src" '
+                     r'href="/projects/v/steps/fork" data-step="fork" title="from fork/sum">',
+                     f["cwd"][0])
+    # all of these are one row beside their names; multi-line text and a long structure take
+    # the full width below theirs
+    assert not any(f[n][1] for n in ("lands", "dry", "engine", "n", "gone", "tags", "ticket",
+                                     "cwd"))
+    assert f["note"][1] and '<div class="v code"><pre>line one\nline two</pre></div>' \
+        in f["note"][0]
+    assert f["blob"][1] and '<details class="fold code"' in f["blob"][0]
+    # the prompt's source is a chip in its section's head, not a line over the prompt
+    spec = html[html.index('<h3 class="label">Spec</h3>'):]
+    assert spec.startswith('<h3 class="label">Spec</h3><span class="f-from"><a class="src" ')
+    assert "</div><div class=\"prompt\">Do it</div>" in spec
+    # the type follows the name, and the name's title holds both
+    assert ('<dt class="f-k" title="lands: Any"><span class="f-name">lands</span>'
+            '<span class="f-type">Any</span></dt>') in f["lands"][0]
+
+
+def test_a_long_value_takes_the_full_width_below_its_name(store):
+    long = "A finding that runs on. " * 12
+    create(store, "v", {"agent": {"run": "test.open", "in": {},
+                                  "outputs": {"findings": {"type": "string",
+                                                           "doc": "What it found"}}}})
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {"agent": {
+            "status": "succeeded", "outputs": {"findings": long, "ok": True}}}})
+    html = views.step_detail(store, "v", "agent")
+    f = fields_of(html)
+    row, wide = f["findings"]
+    # its doc sits on the name's row, the value spans below
+    assert wide and ('<dd class="f-v"><div class="f-about"><p class="f-doc">What it found</p>'
+                     '</div><div class="v prose"><p>A finding') in row
+    assert not f["ok"][1]
 
 
 def test_attempts_read_oldest_first_each_with_its_start_and_its_whole_error(store):
