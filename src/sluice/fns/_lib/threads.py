@@ -1,7 +1,7 @@
 """Threads (SPEC §10), shared by the thread.* fns: messages are `message` records in the
 project's log (`{"seq", "at", "kind": "message", "thread", "from", "to"?, "body",
-"needs_reply", "data"?}`), so
-a thread is the log filtered by kind and thread name. Standard library only.
+"needs_reply", "data"?}`), so a thread is the log filtered by kind and thread name. Standard
+library only.
 """
 
 from __future__ import annotations
@@ -12,23 +12,24 @@ import time
 from pathlib import Path
 from typing import Any
 
+from sluice import db
 from sluice import log as L
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
-def project_log() -> tuple[Path, Path]:
-    """(the project's dir, SLUICE_HOME) from the environment the runner sets."""
+def project_log() -> tuple[Path, str]:
+    """(SLUICE_HOME, the project) from the environment the runner sets."""
     home = Path(os.environ.get("SLUICE_HOME") or Path.home() / ".sluice")
     project = os.environ.get("SLUICE_PROJECT", "")
     if not project:
         raise RuntimeError("threads live in a project's log, but SLUICE_PROJECT is empty: "
                            "call thread fns with a project (fn_call(..., project=...)) or as "
                            "steps of a project's plan")
-    d = home / "projects" / project
-    if not (d / "project.json").is_file():
-        raise RuntimeError(f"no project {project!r} in {home}")
-    return d, home
+    with db.read(home) as conn:
+        if db.one(conn, "SELECT 1 FROM projects WHERE name = ?", (project,)) is None:
+            raise RuntimeError(f"no project {project!r} in {home}")
+    return home, project
 
 
 def check_thread(name: Any) -> str:
@@ -42,7 +43,7 @@ def post(thread: str, body: str, sender: str, to: str | None = None,
     """Append one message; returns its seq (distinct and increasing across processes).
     `needs_reply` false marks a note (a heads-up, a decision already made) rather than a
     question; the record always says which."""
-    d, home = project_log()
+    home, project = project_log()
     rec: dict[str, Any] = {"kind": "message", "thread": check_thread(thread), "from": sender}
     if to is not None:
         rec["to"] = to
@@ -50,7 +51,8 @@ def post(thread: str, body: str, sender: str, to: str | None = None,
     rec["needs_reply"] = needs_reply is not False
     if data is not None:
         rec["data"] = data
-    return L.append_locked(d, [rec], L.cap_of(home))[0]
+    with db.write(home) as conn:
+        return L.append(conn, project, [rec], L.cap_of(home))[0]
 
 
 def addressed(rec: dict[str, Any], to: str | None) -> bool:
@@ -64,7 +66,7 @@ def wait(thread: str, since_seq: int | None = None, to: str | None = None,
     there is at least one or `timeout` seconds pass: {messages, last_seq}. With wake
     "questions", notes (needs_reply false) do not end the wait; they come back with the next
     question, or at the timeout."""
-    d, _ = project_log()
+    home, project = project_log()
     check_thread(thread)
     if wake not in L.WAKES:
         raise ValueError(f"wake: expected one of {', '.join(L.WAKES)}, got {wake!r}")
@@ -72,7 +74,7 @@ def wait(thread: str, since_seq: int | None = None, to: str | None = None,
     deadline = time.monotonic() + max(0.0, timeout)
     found: list[dict[str, Any]] = []
     while True:
-        res = L.wait(d, seq, ["message"], [thread], wake,
+        res = L.wait(home, project, seq, ["message"], [thread], wake,
                      deadline - time.monotonic(), interval)
         found += [m for m in res["records"] + res["held"] if addressed(m, to)]
         seq = res["last_seq"]

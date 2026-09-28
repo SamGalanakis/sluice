@@ -149,7 +149,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
             name: lowercase letters, digits, - and _ (starting with a letter or digit).
             description: what the project is for; put any context an orchestrator needs here.
             icon: the project's icon: an absolute path to an image file (SVG, PNG, WebP, JPEG
-                or GIF, at most 256 KB, copied into the project as icon.<ext>), or a short
+                or GIF, at most 256 KB, copied into the project's row), or a short
                 text icon (an emoji; at most 16 characters).
         """
         return store.create_project(name, description, AUTHOR, icon=icon)
@@ -460,7 +460,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
         """
         return store.submit(project, step, outputs, run)
 
-    def _log_args(project: str | None, kinds: list[str] | None, limit: int | None) -> Any:
+    def _log_args(project: str | None, kinds: list[str] | None, limit: int | None) -> None:
         if project is not None:
             store.project(project)
         errs = L.check_kinds(kinds)
@@ -468,13 +468,13 @@ def build_server(store: Store, stop: threading.Event | None = None,
             raise BadRequest("; ".join(errs))
         if limit is not None and limit < 1:
             raise BadRequest("limit: expected a positive int")
-        return store.log_dir(project)
 
     @tool
     def log_read(project: str | None = None, since_seq: int | None = None,
                  kinds: list[str] | None = None, threads: list[str] | None = None,
                  limit: int = 200) -> Any:
-        """Read the log: {records, last_seq}. Records are {seq, at, kind, ...} oldest first;
+        """Read the log: {records, last_seq}. Records are {seq, at, kind, ...} oldest first
+        (seqs increase across the whole home, so one log's have gaps);
         kinds: plan.edit, plan.input, step.output, step.retry, step.status, step.submit,
         step.cancel, call, message, inbox.post, inbox.answer, inbox.close, run.adopt,
         run.orphan.
@@ -487,8 +487,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
             threads: only messages on these threads (and, without kinds, only messages).
             limit: at most this many records (default 200).
         """
-        d = _log_args(project, kinds, limit)
-        return L.read(d, since_seq, kinds, threads, limit)
+        _log_args(project, kinds, limit)
+        return L.read(store.home, project, since_seq, kinds, threads, limit)
 
     @tool
     async def log_wait(since_seq: int, project: str | None = None,
@@ -510,17 +510,17 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 false) does not end the wait; it comes back with the next record that does,
                 or once `timeout` passes.
         """
-        d = _log_args(project, kinds, limit)
+        await anyio.to_thread.run_sync(_log_args, project, kinds, limit)
         res = await anyio.to_thread.run_sync(
-            functools.partial(L.wait, d, since_seq, kinds, threads, wake,
+            functools.partial(L.wait, store.home, project, since_seq, kinds, threads, wake,
                               min(max(0, timeout), WAIT_CAP), 0.25, limit))
         return {"records": res["records"] + res["held"], "last_seq": res["last_seq"]}
 
     @tool
     def verify(project: str | None = None) -> Any:
-        """Check functions (fn.json shape and types, name collisions), project.json, .env
-        files, the plan and state.json. Returns {ok, problems: [{where, message}]}; changes
-        nothing.
+        """Check functions (fn.json shape and types, name collisions), .env files, each
+        project's plan and its state. Returns {ok, problems: [{where, message}], warnings?}
+        (warnings: directories under projects/ of no project); changes nothing.
 
         Args:
             project: check this project (and the built-in and global functions it sees);

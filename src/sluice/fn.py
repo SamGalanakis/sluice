@@ -292,7 +292,7 @@ def _step_thread(ctx: Context, listen: bool | None) -> str:
     if listen is False:
         return ""
     thread = "step-" + re.sub(r"[^a-z0-9_-]", "-", ctx.step.lower())
-    since = last_seq(ctx.home / "projects" / ctx.project)
+    since = last_seq(ctx.home, ctx.project)
     read = (f'{{"project": "{ctx.project}", "threads": ["{thread}"], '
             f'"since_seq": {since}}}')
     post = (f'{{"name": "thread.post", "project": "{ctx.project}", "direct": true, '

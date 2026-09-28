@@ -7,7 +7,7 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
    the `attach:` line, wait for the engine's input, deliver the task (a one-line pointer to
    `<run_dir>/task.md` unless it is one short line: see `hand_over`);
 2. poll the adapter's state. When a turn has ended and the session is idle:
-   - every required declared output is in `<run_dir>/submitted.json` → done;
+   - every required declared output is submitted (the run's submission, step_submit) → done;
    - the session waits on its own background work (a background shell, a pending wakeup) →
      keep waiting, no nudge;
    - the step declares no required outputs → done after `settle` seconds of idle;
@@ -25,14 +25,17 @@ import json
 import os
 import re
 import signal
+import sqlite3
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sluice import db
 from sluice import log as L
 from sluice import types as T
+from sluice.errors import SluiceError
 from sluice.fn import Transient
 
 from .paste import NotDelivered, tail
@@ -178,12 +181,17 @@ def required_outputs(ctx):
     return names
 
 
-def submitted(run_dir):
-    try:
-        got = json.loads((Path(run_dir) / "submitted.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+def submitted():
+    """What the run's agent has submitted so far (step_submit): its submission in the home's
+    database, found from the environment the runner sets ({} outside a project's step)."""
+    home, project = os.environ.get("SLUICE_HOME"), os.environ.get("SLUICE_PROJECT")
+    run = os.environ.get("SLUICE_RUN_ID")
+    if not (home and project and run):
         return {}
-    return got if isinstance(got, dict) else {}
+    try:
+        return db.submission(home, project, run) or {}
+    except (OSError, sqlite3.Error, SluiceError):
+        return {}
 
 
 def hand_over(text, path, pointer, **fmt):
@@ -226,16 +234,16 @@ class ThreadFeed:
     step itself and addressed to it or to nobody, after the log's end at construction."""
 
     def __init__(self, ctx):
-        self.dir = Path(ctx.home) / "projects" / ctx.project
+        self.home, self.project = Path(ctx.home), ctx.project
         self.thread = thread_name(ctx.step)
         self.me = ctx.step
-        self.since = L.last_seq(self.dir)
+        self.since = L.last_seq(self.home, self.project)
         self.pending = []
 
     def poll(self):
         try:
-            got = L.read(self.dir, self.since, threads=[self.thread])
-        except OSError:
+            got = L.read(self.home, self.project, self.since, threads=[self.thread])
+        except (OSError, sqlite3.Error, SluiceError):
             return []
         self.since = got["last_seq"]
         self.pending += [rec for rec in got["records"] if rec.get("from") != self.me
@@ -263,6 +271,7 @@ class _Run:
     feed: object
     limits: Limits
     log: object
+    sent: object  # () -> what the agent has submitted so far
     record: dict = field(default_factory=dict)
     pending_text: str = ""
     await_base: int = 0
@@ -334,7 +343,7 @@ class _Run:
                 self.log(line)
             self.note_session()
             now = time.monotonic()
-            complete = self.required and all(n in submitted(self.run_dir) for n in self.required)
+            complete = self.required and all(n in self.sent() for n in self.required)
             if complete and snap.state == "idle" and snap.turns > base:
                 return
             if snap.error and snap.turns > base and self.transient(snap.error):
@@ -382,7 +391,7 @@ class _Run:
                 idle_since = None
                 time.sleep(lim.poll)
                 continue
-            missing = [n for n in self.required if n not in submitted(self.run_dir)]
+            missing = [n for n in self.required if n not in self.sent()]
             if self.required and not missing:
                 return
             if snap.waiting:
@@ -429,11 +438,12 @@ def _log(line):
 
 
 def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=None,
-              limits=None, attempt=1, log=_log):
+              limits=None, attempt=1, log=_log, sent=None):
     """Run `task` in a live session of the adapter's engine until the step is done. Returns
     {"final", "session", "cost_usd"}. `session` resumes that session (refused when it was
     started in another directory); on a retry (`attempt` > 1) a session an earlier attempt of
-    this run started is resumed and told to continue."""
+    this run started is resumed and told to continue. `sent()` says what the agent has
+    submitted so far (default: `submitted`, the run's submission)."""
     limits = limits or Limits.from_env()
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -452,6 +462,7 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
                              "cannot resume a session from another directory; run the "
                              "step in the session's own directory")
     run = _Run(adapter, Tmux(run_dir), run_dir, list(required), feed, limits, log,
+               sent or submitted,
                {"engine": adapter.name, "cwd": cwd, "resumed": session or None})
     _write_json(rec_path, run.record)
     if message is task:

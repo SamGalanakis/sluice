@@ -12,6 +12,7 @@ import sys
 import threading
 from typing import Any
 
+from . import db
 from .errors import BadRequest, SluiceError
 from .runner import Runner
 from .store import DEFAULT_CONFIG, Store, default_home
@@ -145,7 +146,7 @@ def cmd_watch(a: argparse.Namespace, store: Store) -> int:
         raise BadRequest("; ".join(errs))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     with contextlib.suppress(KeyboardInterrupt, BrokenPipeError):
-        follow(store.log_dir(a.project), sys.stdout, kinds, threads, a.since_seq, wake=a.wake)
+        follow(store.home, a.project, sys.stdout, kinds, threads, a.since_seq, wake=a.wake)
     return 0
 
 
@@ -176,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("watch", help="print new log records as JSON lines, until killed",
                        description="Follow a project's log (or, without -p, the home log) and "
                        "print each new matching record as one JSON line. Never exits; reads "
-                       "files only, so it needs no runner.")
+                       "the home's database only, so it needs no runner.")
     s.add_argument("-p", "--project")
     s.add_argument("--kinds", help="comma-separated kinds, e.g. step.status,message")
     s.add_argument("--threads", help="comma-separated thread names (messages on these only)")
@@ -192,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ensure_home(quiet=a.cmd in ("tool", "watch"))  # their output stays pure JSON
         store = Store()
+        db.connect(store.home)  # refuses a home from before the SQLite store, up front
         return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool,
                 "watch": cmd_watch}[a.cmd](a, store)
     except SluiceError as e:

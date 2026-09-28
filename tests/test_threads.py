@@ -45,7 +45,7 @@ def test_posts_append_messages_in_seq_order(store):
               data={"why": "ops"}, **{"from": "lead"})
     s3 = post(store, "p", thread="other", body="unrelated", **{"from": "x"})
     assert s1 < s2 < s3
-    msgs = L.read(store.project_dir("p"), threads=["questions"])["records"]
+    msgs = L.read(store.home, "p", threads=["questions"])["records"]
     assert [(m["seq"], m["from"], m["body"]) for m in msgs] == [
         (s1, "worker", "which db?"), (s2, "lead", "postgres")]
     assert msgs[0]["kind"] == "message" and "to" not in msgs[0] and "data" not in msgs[0]
@@ -57,7 +57,7 @@ def test_a_post_says_whether_it_needs_a_reply(store):
     post(store, "p", thread="step-a", body="which db?", to="orchestrator", **{"from": "a"})
     post(store, "p", thread="step-a", body="moving the helpers", to="orchestrator",
          needs_reply=False, **{"from": "a"})
-    msgs = L.read(store.project_dir("p"), threads=["step-a"])["records"]
+    msgs = L.read(store.home, "p", threads=["step-a"])["records"]
     assert [m["needs_reply"] for m in msgs] == [True, False]  # a watcher can wake on questions
 
 
@@ -75,9 +75,9 @@ def test_concurrent_posters_in_processes_get_unique_seqs(store):
         mine = [int(x) for x in out.split()]
         assert mine == sorted(mine) and len(mine) == 10
         seqs += mine
-    assert sorted(seqs) == list(range(2, 62))  # seq 1 is the project's creation
-    msgs = L.read(store.project_dir("p"), threads=["t"])["records"]
-    assert [m["seq"] for m in msgs] == list(range(2, 62))
+    assert len(set(seqs)) == 60 and min(seqs) > L.read(store.home, "p")["records"][0]["seq"]
+    msgs = L.read(store.home, "p", threads=["t"])["records"]
+    assert [m["seq"] for m in msgs] == sorted(seqs)
 
 
 def test_wait_filters_by_recipient(store):
@@ -88,7 +88,7 @@ def test_wait_filters_by_recipient(store):
     code, out, err = run_fn(store, "thread.wait", {"thread": "t", "to": "alice", "timeout": 5})
     assert code == 0, err
     assert [m["body"] for m in out["messages"]] == ["for all", "for alice"]
-    assert out["last_seq"] == L.last_seq(store.project_dir("p"))  # the call records count too
+    assert out["last_seq"] == L.last_seq(store.home, "p")  # the call records count too
     code, out, _ = run_fn(store, "thread.wait", {"thread": "t", "since_seq": second})
     assert [m["body"] for m in out["messages"]] == ["for alice"]
 
@@ -135,7 +135,7 @@ def test_wait_times_out_empty(store):
     t0 = time.monotonic()
     code, out, err = run_fn(store, "thread.wait", {"thread": "t", "timeout": 1})
     assert code == 0, err
-    assert out == {"messages": [], "last_seq": 1}
+    assert out == {"messages": [], "last_seq": L.last_seq(store.home, "p")}
     assert time.monotonic() - t0 >= 1
 
 

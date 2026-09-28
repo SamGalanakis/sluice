@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pytest
 
 from sluice import cli
+from sluice import log as L
 from sluice.store import Store
 from tests.conftest import (
     SPAWN_STEPS,
@@ -91,6 +92,7 @@ def test_verify_exits_non_zero_on_problems(sluice):
     write_config(sluice.home)
     assert json_out(sluice.tool("project_create", name="p")) == {"name": "p"}
     assert json_out(sluice.tool("verify")) == {"ok": True, "problems": []}
+    (sluice.home / "projects" / "p").mkdir(parents=True, exist_ok=True)
     (sluice.home / "projects" / "p" / ".env").write_text("oops\n")
     p = sluice.tool("verify", project="p", check=False)
     assert p.returncode == 1 and json_out(p)["problems"] == [
@@ -196,16 +198,14 @@ def test_sighup_leaves_a_default_loops_runs_for_the_next_loop_to_adopt(home):
 
     def adopted():  # the next loop's run.adopt record in the project log
         deadline = time.time() + 30
-        log = home / "projects" / "p" / "log.jsonl"
         while time.time() < deadline:
-            if log.exists() and '"run.adopt"' in log.read_text():
+            if L.read(home, "p", kinds=["run.adopt"])["records"]:
                 return
             time.sleep(0.1)
         raise AssertionError("the run was never adopted")
 
     def step_status():
-        return json.loads((home / "projects" / "p" / "state.json").read_text()
-                          )["steps"]["w"]["status"]
+        return store.read_state("p")["steps"]["w"]["status"]
 
     loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)

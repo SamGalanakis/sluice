@@ -429,13 +429,14 @@ def test_the_task_is_handed_over_as_a_file(call_fn, tmp_path):
 
 def test_a_thread_message_reaches_the_live_session(call_fn, tmp_path):
     env, rec = make_claude(tmp_path, [{"reply": "working", "busy_s": 2.0}, {"reply": "noted"}])
-    project = tmp_path / "sluice-home" / "projects" / "test-project"
-    project.mkdir(parents=True)
+    store = Store(tmp_path / "sluice-home")
+    posted = []
 
     def post(stderr):
-        if "task delivered" in stderr and not (project / "log.jsonl").exists():
-            L.append(project, [{"kind": "message", "thread": "step-test-step",
-                                "from": "orchestrator", "body": "please also do X"}])
+        if "task delivered" in stderr and not posted:
+            posted.extend(store.append("test-project", {
+                "kind": "message", "thread": "step-test-step", "from": "orchestrator",
+                "body": "please also do X"}))
 
     code, _out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
                               env=env, watch=post)
@@ -785,9 +786,9 @@ def test_claude_live_thread_message_reaches_the_session(tmp_path):
             break
         runs = list(store.runs_dir("p").glob("*/stderr.log"))
         if not posted and runs and "task delivered" in runs[0].read_text():
-            L.append_locked(store.log_dir("p"), [{
+            store.append("p", {
                 "kind": "message", "thread": "step-ask", "from": "orchestrator", "to": "ask",
-                "body": "The word is: heron"}])
+                "body": "The word is: heron"})
             posted = True
         time.sleep(0.5)
     err = (store.runs_dir("p") / e["run_ids"][-1] / "stderr.log").read_text()
@@ -1076,7 +1077,7 @@ def test_an_agent_that_submits_hands_its_outputs_downstream(tmp_path):
     prompt = json.loads((store.runs_dir("p") / run_b / "input.json").read_text())
     assert prompt["word"] == "blue" and prompt["session"] == session
     assert st["b"]["outputs"]["session"] == session
-    subs = L.read(store.log_dir("p"), kinds=["step.submit"])["records"]
+    subs = L.read(store.home, "p", kinds=["step.submit"])["records"]
     assert [(r["step"], r["outputs"]) for r in subs] == [("a", {"word": "blue"}),
                                                          ("b", {"echo": "blue"})]
 

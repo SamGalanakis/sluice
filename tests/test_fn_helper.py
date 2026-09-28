@@ -157,3 +157,23 @@ def test_with_step_notes(tmp_path):
     quiet = Context(project="", step="", run_id="", run_dir=tmp_path, home=tmp_path,
                     fn_dir=tmp_path)
     assert with_step_notes("do it", {"n": 3}, quiet, None) == "do it"
+
+
+def test_the_step_note_starts_its_reader_at_the_projects_last_seq(tmp_path):
+    """The cursor in the step-thread note is the project's log's end in the database, not
+    another project's, so the agent reads only what comes after it started."""
+    from sluice import log as L
+    from sluice.fn import Context, with_step_notes
+    from sluice.store import Store
+    store = Store(tmp_path / "home")
+    store.create_project("p")
+    store.create_project("q")
+    store.append("p", {"kind": "message", "thread": "step-a", "from": "o", "body": "old"})
+    store.append("q", {"kind": "message", "thread": "t", "from": "o", "body": "later"})
+    ctx = Context(project="p", step="a", run_id="r1", run_dir=tmp_path, home=store.home,
+                  fn_dir=tmp_path)
+    since = L.last_seq(store.home, "p")
+    assert since < L.last_seq(store.home, "q")
+    assert f'"since_seq": {since}}}' in with_step_notes("do it", {}, ctx, None)
+    assert not list(store.home.rglob("*.json*")) or \
+        {f.name for f in store.home.rglob("*.json*")} == {"config.json"}

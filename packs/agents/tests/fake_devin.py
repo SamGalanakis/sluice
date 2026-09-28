@@ -14,6 +14,17 @@ from fake_composer import RULE, Composer, Raw, draw
 CFG = json.loads(Path(os.environ["FAKE_DEVIN"]).read_text())
 
 
+
+def submit(outputs):
+    """What step_submit stores for the run: its submission, which the supervisor reads."""
+    from sluice import db
+
+    with db.write(os.environ["SLUICE_HOME"]) as conn:
+        conn.execute("INSERT OR REPLACE INTO submissions (project, run, step, outputs, at) "
+                     "VALUES (?, ?, ?, ?, 'now')",
+                     (os.environ["SLUICE_PROJECT"], os.environ["SLUICE_RUN_ID"],
+                      os.environ["SLUICE_STEP"], json.dumps(outputs)))
+
 def arg(argv, name):
     return argv[argv.index(name) + 1] if name in argv else None
 
@@ -58,8 +69,7 @@ def main():
                 if turn.get("busy_s"):
                     time.sleep(turn["busy_s"])
                 if "submit" in turn:
-                    Path(os.environ["SLUICE_RUN_DIR"]).joinpath("submitted.json").write_text(
-                        json.dumps(turn["submit"]))
+                    submit(turn["submit"])
                 if "submit_cli" in turn:
                     cmd = re.search(r"sluice tool step_submit '(.*?)'`",
                                     task_text(message)).group(1)

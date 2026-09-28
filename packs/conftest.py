@@ -28,6 +28,7 @@ def pytest_configure(config):
 def call_fn(tmp_path):
     run_dirs = []
     store = Store(tmp_path / "sluice-home")
+    store.create_project("test-project")  # what its step's messages and submission belong to
 
     def _call(fn_dir, inp, env=None, path=None, watch=None):
         """Run the fn; returns (exit code, parsed stdout or None, stderr). With `watch`, the

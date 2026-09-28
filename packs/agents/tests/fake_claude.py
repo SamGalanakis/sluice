@@ -10,7 +10,7 @@ hooks of the `--settings` file (each run with its JSON payload on stdin), the st
 message it receives), `trust` (show the workspace-trust dialog first), `cost`, `exit_at_start`
 (print `stderr` and exit with that code), and `turns`, played one per message (or background
 notification). A turn may hold: `busy_s`, `tool` ({name, input}), `tool_error`, `run` (a shell
-command in cwd), `submit` (outputs written to the run's submitted.json), `submit_cli` (a value
+command in cwd), `submit` (outputs stored as the run's submission, as step_submit does), `submit_cli` (a value
 put in every placeholder of the task's step_submit command, run through the sluice CLI),
 `reply`, `error` (the turn ends with StopFailure), `exit` (print `stderr`, exit with that code),
 `background_s` (a background shell for that long, then a task notification), `wakeup_s` (a
@@ -33,6 +33,17 @@ CFG = json.loads(Path(os.environ["FAKE_CLAUDE"]).read_text())
 CURSOR = Path(os.environ["FAKE_CLAUDE"] + ".cursor")  # turns played, across processes
 CONFIG = Path(os.environ["CLAUDE_CONFIG_DIR"])
 
+
+
+def submit(outputs):
+    """What step_submit stores for the run: its submission, which the supervisor reads."""
+    from sluice import db
+
+    with db.write(os.environ["SLUICE_HOME"]) as conn:
+        conn.execute("INSERT OR REPLACE INTO submissions (project, run, step, outputs, at) "
+                     "VALUES (?, ?, ?, ?, 'now')",
+                     (os.environ["SLUICE_PROJECT"], os.environ["SLUICE_RUN_ID"],
+                      os.environ["SLUICE_STEP"], json.dumps(outputs)))
 
 def arg(argv, name):
     return argv[argv.index(name) + 1] if name in argv else None
@@ -121,8 +132,7 @@ class Fake:
             subprocess.run(turn["run"], shell=True, cwd=self.cwd, check=False,
                            capture_output=True)
         if "submit" in turn:
-            run_dir = Path(os.environ["SLUICE_RUN_DIR"])
-            (run_dir / "submitted.json").write_text(json.dumps(turn["submit"]))
+            submit(turn["submit"])
         if "submit_cli" in turn:
             self.submit_cli(turn["submit_cli"])
         if turn.get("background_s"):
