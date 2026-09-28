@@ -43,12 +43,15 @@ runner.json                 the runner's heartbeat {pid, started, beat}, refresh
                             a second; stale means the runner is down
 .env                        global secrets (KEY=value lines)
 fns/                        global user functions
+recipes/<name>.json         global recipes (§5)
 runs/<call_id>/             input.json, output.json, stderr.log, shim.json, child.json,
                             shim.lock and exit.json of the calls without a project (§4)
 trash/                      a deleted project's directory on its way out (<name>-<token>)
 projects/<name>/            made when something needs it (runs/, fns/); may be prepared with
                             fns/ and .env before the project is created
   fns/                      project-local functions
+  recipes/<name>.json       project recipes (§5): a project sees the global ones and its own,
+                            and its own wins on a name clash
   .env                      project secrets (override global ones)
   runs/<run_id>/            input.json, output.json, stderr.log for one fn execution (a step run,
                             or a call: then run_id is the call id); shim.json, child.json,
@@ -228,7 +231,7 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   hold it (§6); `"after": ["<step>", ...]` to wait for steps it reads nothing from (an
   ordering edge: it is ready only once they have succeeded or been skipped, it is never stale
   because of them, and it counts for cycles); `"tags": ["<tag>", ...]` (tags match the id
-  pattern) to select steps by; and `"when": "<ref>"` to run it only if that value is true.
+  pattern, optionally after one `<prefix>:`, as in `unit:lane-1`) to select steps by; and `"when": "<ref>"` to run it only if that value is true.
 - **Conditions.** `when` names a step output or plan input of type `boolean` (or `boolean?`;
   `Any` is checked when it runs), read like an input: the step waits for it. Once it is known,
   `true` lets the step run; `false` or null makes it `skipped` (state `skipped: "<ref> is
@@ -281,6 +284,46 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   fails the step with `declared outputs not submitted: <names> (the agent must call
   step_submit ...)`. An unsubmitted optional one is null.
 - A step is **ready** when every plan input and step it reads has a value / has `succeeded`.
+
+**Recipes.** A step shape used again and again (a lane: a worktree, an agent working in it,
+the worktree removed) is a recipe: `recipes/<name>.json` in `SLUICE_HOME` or in the project's
+directory (§2; the project's wins on a name clash), shaped `{"name", "doc"?, "params"?: {<name>:
+<type or {"type", "doc"}>}, "steps": {<step id>: <step>}}` with `name` the file's name. Params
+are typed like plan inputs (§3); `unit` (a string matching the id pattern) is always a param,
+implicit. Substitution is deliberately tiny: in every step id and every string anywhere in the
+steps (object keys too), `{param}` is replaced by the param's value (a non-string as its JSON);
+a string that is exactly `{param}` becomes the value itself, so a non-string param keeps its type
+(an optional param left out is null). `{{` and `}}` are literal braces. An unknown `{x}` or a
+lone brace is an error naming where it is. Nothing else: no loops and no conditionals (`when`
+and `scatter` already exist in steps). `unit_add(project, recipe, params, start?)` checks the
+params against their types (every required one, no others), expands the recipe, tags every new
+step `unit:<unit>` before its own tags, refuses ids the plan already has, and adds the steps in
+one edit at the current rev (no rev argument: it is an add, like `step_add`); unless `start`,
+they come in paused. `recipe_list(project)` lists the recipes the project sees; a broken recipe
+file (bad JSON or shape, a name that is not the file's, a bad param type, an unknown `{x}`) is
+listed with its `error` and never stops the others. For example, `recipes/lane.json`:
+
+```json
+{"name": "lane",
+ "doc": "One unit of work: a worktree, an agent working in it on a spec read from a file, then the worktree removed",
+ "params": {"repo": "string", "base": "string", "spec": {"type": "string", "doc": "Absolute path of the spec file"},
+            "engine": {"type": "enum", "symbols": ["devin", "codex", "claude"]}},
+ "steps": {
+   "{unit}-fork": {"run": "git.worktree", "doc": "Cut a worktree for {unit}",
+                   "in": {"repo": {"default": "{repo}"}, "base": {"default": "{base}"},
+                          "branch": {"default": "work/{unit}"}}},
+   "{unit}-work": {"run": "agent.run", "doc": "Do {unit} in its worktree",
+                   "in": {"engine": {"default": "{engine}"}, "cwd": {"source": "{unit}-fork/path"},
+                          "spec": {"file": "{spec}"}},
+                   "outputs": {"landed": {"type": "boolean", "doc": "Whether the change landed"}}},
+   "{unit}-cleanup": {"run": "git.worktree_rm", "doc": "Remove {unit}'s worktree",
+                      "in": {"repo": {"default": "{repo}"}, "path": {"source": "{unit}-fork/path"}},
+                      "after": ["{unit}-work"]}}}
+```
+
+`unit_add("p", "lane", {"unit": "fix-login", "repo": "/src/app", "base": "origin/main", "spec":
+"/specs/fix-login.md", "engine": "devin"})` adds `fix-login-fork`, `fix-login-work` and
+`fix-login-cleanup`, tagged `unit:fix-login` and paused.
 
 **Validation** (every edit must pass; all errors returned with paths): ids valid; docs are
 strings and an input's object form has a `type`; every `run`
@@ -937,6 +980,8 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
 | `step_add` | `project, step, spec, reason?, start? = false` | `{rev}`: `plan_patch` adding one step at the current rev |
+| `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
+| `unit_add` | `project, recipe, params, start? = false, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>`, added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param or expansion problem, `bad_request` names the ids the plan already has |
 | `step_update` | `project, step, changes, reason?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
 | `step_remove` | `project, steps?, tags?, reason?` | `{rev, steps}`: removes the selected steps in one edit; refused while one runs or something left reads it |
 | `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |

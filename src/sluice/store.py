@@ -27,6 +27,7 @@ from . import db
 from . import inbox as I
 from . import log as L
 from . import plan as P
+from . import recipe as RC
 from . import registry as R
 from . import state as S
 from . import types as T
@@ -678,6 +679,52 @@ class Store:
         self.project(project)
         recs = L.read(self.home, project, kinds=L.HISTORY_KINDS, history=True)["records"]
         return [e for e in recs if since_rev is None or e["rev"] > since_rev]
+
+    # ---- recipes (SPEC §5) ----
+
+    def _recipes(self, project: str) -> dict[str, RC.Recipe]:
+        """The recipes a project sees: SLUICE_HOME/recipes/, then its own recipes/ (its own
+        win on a name clash)."""
+        self.project(project)
+        return RC.scan([("global", self.home / "recipes"),
+                        ("project", self.project_dir(project) / "recipes")])
+
+    def recipes(self, project: str) -> list[dict[str, Any]]:
+        """recipe_list: each recipe the project sees, by name: {name, doc, params, scope}, or
+        {name, scope, error} for a broken one."""
+        return [r.summary() for _, r in sorted(self._recipes(project).items())]
+
+    def unit_add(self, project: str, recipe: Any, params: Any, start: bool = False,
+                 author: str = "", reason: str = "") -> dict[str, Any]:
+        """Expand a recipe with `params` (`unit` among them) and add its steps in one edit at
+        the current rev, each tagged `unit:<unit>` before its own tags; unless `start`, they
+        come in paused. Refuses ids the plan already has. Returns {rev, steps}."""
+        if not isinstance(recipe, str):
+            raise BadRequest("recipe: expected a recipe's name")
+        found = self._recipes(project).get(recipe)
+        if found is None:
+            raise NotFound(f"project {project} sees no recipe {recipe!r} (recipe_list lists "
+                           "them)")
+        steps, errs = RC.expand(found, params)
+        errs += [f"steps.{sid}: ids match {P.ID_RE.pattern}" for sid in steps
+                 if not P.ID_RE.match(sid)]
+        if errs:
+            raise InvalidPlan(errs, f"recipe {recipe} does not expand with these params")
+        unit = params[RC.UNIT]
+        for step in steps.values():
+            if isinstance(step, dict) and isinstance(step.get("tags", []), list):
+                step["tags"] = list(dict.fromkeys([f"unit:{unit}", *step.get("tags", [])]))
+        with self.tx():
+            cur = self.get(project)
+            taken = [sid for sid in steps if sid in cur["steps"]]
+            if taken:
+                raise BadRequest(f"steps {', '.join(taken)} already exist in the plan of "
+                                 f"project {project}")
+            rev = self.patch(project, cur["rev"],
+                             [{"op": "add", "path": f"/steps/{sid}", "value": step}
+                              for sid, step in steps.items()],
+                             author, reason or f"add unit {unit} (recipe {recipe})", start)
+        return {"rev": rev, "steps": list(steps)}
 
     # ---- state ----
 

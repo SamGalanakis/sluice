@@ -91,6 +91,39 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   an earlier step's `session` output to continue that same agent (or `fn_call` it with the
   session to follow up by hand).
 
+## Recipes: the same unit again and again
+When every unit of work has the same shape (a worktree, an agent working in it, the worktree
+removed), write it once as a recipe and add each unit with one call. A recipe is a file
+`recipes/<name>.json` under `SLUICE_HOME` (every project sees it) or under the project's
+directory `projects/<p>/recipes/` (the project's wins on a name clash):
+
+```json
+{"name": "lane",
+ "doc": "One unit of work: a worktree, an agent working in it on a spec read from a file, then the worktree removed",
+ "params": {"repo": "string", "base": "string", "spec": "string",
+            "engine": {"type": "enum", "symbols": ["devin", "codex", "claude"]}},
+ "steps": {
+   "{unit}-fork": {"run": "git.worktree", "in": {"repo": {"default": "{repo}"},
+                   "base": {"default": "{base}"}, "branch": {"default": "work/{unit}"}}},
+   "{unit}-work": {"run": "agent.run", "in": {"engine": {"default": "{engine}"},
+                   "cwd": {"source": "{unit}-fork/path"}, "spec": {"file": "{spec}"}},
+                   "outputs": {"landed": "boolean"}},
+   "{unit}-cleanup": {"run": "git.worktree_rm", "after": ["{unit}-work"],
+                      "in": {"repo": {"default": "{repo}"}, "path": {"source": "{unit}-fork/path"}}}}}
+```
+
+- `recipe_list(project)` lists the recipes the project sees with their params; a broken file
+  is listed with its `error`.
+- `unit_add(project, "lane", {"unit": "fix-login", "repo": "/src/app", "base": "origin/main",
+  "spec": "/specs/fix-login.md", "engine": "devin"})` adds `fix-login-fork`, `fix-login-work`
+  and `fix-login-cleanup` in one edit at the current rev (no rev to fetch), each tagged
+  `unit:fix-login`, paused unless `start=true`. It returns `{rev, steps}` and refuses an id the
+  plan already has.
+- Substitution is tiny on purpose: `{param}` in step ids and in every string is replaced by the
+  param's value; a string that is exactly `{param}` becomes the value with its type. `{{` and
+  `}}` are literal braces; an unknown `{x}` is an error. `unit` (a valid step id) is always a
+  param. There are no loops or conditionals: use `when` and `scatter` in the steps.
+
 ## Shapes
 - **Chain:** B reads A's output.
 - **Fan-out:** several steps read the same output.

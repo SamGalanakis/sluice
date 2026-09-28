@@ -15,6 +15,8 @@ from .registry import Fn, Registry
 from .util import canonical
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# a tag: an id, or one `<prefix>:` and an id (`unit:lane-1`, what unit_add tags a unit with)
+TAG_RE = re.compile(r"^([a-z0-9][a-z0-9_-]*:)?[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
 STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "when"}
@@ -300,9 +302,9 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
             errs.append(f"{p}.after: expected an array of step ids")
             after = []
         tags = raw.get("tags", [])
-        if not (isinstance(tags, list) and all(isinstance(t, str) and ID_RE.match(t)
+        if not (isinstance(tags, list) and all(isinstance(t, str) and TAG_RE.match(t)
                                                for t in tags)):
-            errs.append(f"{p}.tags: expected an array of tags matching {ID_RE.pattern}")
+            errs.append(f"{p}.tags: expected an array of tags matching {TAG_RE.pattern}")
             tags = []
         when = None
         if "when" in raw:

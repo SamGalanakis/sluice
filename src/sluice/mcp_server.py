@@ -307,6 +307,38 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return {"rev": store.add_step(project, step, spec, AUTHOR, reason, start)}
 
     @tool
+    def recipe_list(project: str) -> Any:
+        """List the recipes a project sees: [{name, doc, params, scope}] by name (scope global:
+        SLUICE_HOME/recipes/, or project: the project's own recipes/, which wins on a name
+        clash); a broken recipe file is listed as {name, scope, error}. params maps each param
+        to its type, `unit` (always there) included. Read docs("plans") on recipes.
+
+        Args:
+            project: the project.
+        """
+        return store.recipes(project)
+
+    @tool
+    def unit_add(project: str, recipe: str, params: dict[str, Any], start: bool = False,
+                 author: str = AUTHOR, reason: str = "") -> Any:
+        """Add one unit of work from a recipe: its steps with `{param}` filled in, each tagged
+        `unit:<unit>`, in one plan edit at the current rev. They come in paused unless start
+        is true. Refused (`bad_request`) when an id it would add is already in the plan;
+        `invalid` lists every param or expansion problem. Returns {rev, steps}.
+
+        Args:
+            project: the project.
+            recipe: the recipe's name (recipe_list).
+            params: {unit: "<name of the unit, a valid step id>", <param>: value, ...}, each
+                checked against the recipe's param types.
+            start: let the new steps start as soon as they are ready.
+            author: who is editing (default "mcp").
+            reason: why, recorded in the plan's history (default "add unit <unit> (recipe
+                <recipe>)").
+        """
+        return store.unit_add(project, recipe, params, start, author, reason)
+
+    @tool
     def step_update(project: str, step: str, changes: dict[str, Any], reason: str = "") -> Any:
         """Change fields of one step: each key of `changes` replaces that field (`in` is
         replaced whole), null removes it. A running step only takes `paused`. Returns {rev}.
