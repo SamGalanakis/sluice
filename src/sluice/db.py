@@ -1,5 +1,6 @@
 """The database (SPEC §2): a home's projects, plans, plan edits, state, calls, submissions,
-inbox and log in one SQLite file, SLUICE_HOME/sluice.db. Standard library only: fn processes
+inbox, log and the outcomes of steps removed from plans in one SQLite file,
+SLUICE_HOME/sluice.db. Standard library only: fn processes
 import it.
 
 Connections open lazily, one per (home, thread, process); a connection cached before a fork is
@@ -24,12 +25,13 @@ from typing import Any
 from .errors import SluiceError
 
 FILE = "sluice.db"
-VERSION = 1
+VERSION = 2
 TIMEOUT = 5.0  # seconds a write waits for the lock before Busy
 CACHED = 8  # connections kept per thread (one per home)
 MIN_SQLITE = (3, 37)  # STRICT tables
 CALL_STATUSES = ("pending", "running", "succeeded", "failed")
 INBOX_STATUSES = ("open", "answered", "closed")
+OUTCOME_STATUSES = ("succeeded", "failed", "skipped", "stale")  # what a removed step keeps
 LIFTED = ("step", "call", "thread", "run")  # record fields also kept as columns, for filters
 
 TABLES = f"""
@@ -130,6 +132,30 @@ CREATE INDEX calls_status ON calls (project, status);
 CREATE INDEX inbox_status ON inbox (project, status);
 """
 
+# the outcome of each finished step a plan edit removed (SPEC §6): kept, never trimmed. IF NOT
+# EXISTS: a file may have the table already at version 1 (put back there by hand)
+OUTCOMES = f"""
+CREATE TABLE IF NOT EXISTS outcomes (
+  project TEXT NOT NULL REFERENCES projects ON DELETE CASCADE,
+  step TEXT NOT NULL,
+  rev INTEGER NOT NULL,
+  unit TEXT,
+  fn TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ({", ".join(f"'{s}'" for s in OUTCOME_STATUSES)})),
+  outputs TEXT,
+  error TEXT,
+  started TEXT,
+  finished TEXT,
+  run_ids TEXT,
+  manual INTEGER NOT NULL DEFAULT 0 CHECK (manual IN (0, 1)),
+  removed TEXT NOT NULL,
+  author TEXT,
+  reason TEXT,
+  PRIMARY KEY (project, step, rev)
+) STRICT;
+CREATE INDEX IF NOT EXISTS outcomes_unit ON outcomes (project, unit);
+"""
+
 VIEWS = """
 CREATE VIEW steps AS
 SELECT p.project, s.key AS step, s.value ->> '$.run' AS fn,
@@ -181,7 +207,9 @@ def _triggers() -> str:
     return "\n".join(out) + "\n"
 
 
-SCHEMA = TABLES + VIEWS + _triggers()
+SCHEMA = TABLES + OUTCOMES + VIEWS + _triggers()
+# version -> the script that takes a database of that version to the next
+MIGRATIONS = {1: OUTCOMES}
 
 
 class Busy(SluiceError):
@@ -250,21 +278,26 @@ def _version(conn: sqlite3.Connection) -> int:
 
 
 def _bootstrap(conn: sqlite3.Connection, path: Path) -> None:
-    """A new file gets the whole schema and its version in one transaction (the version is
-    checked again under the lock, so two first opens race safely); an unknown version is
-    refused, and a current one needs nothing."""
+    """A new file gets the whole schema and its version, an older one its MIGRATIONS in turn,
+    each in one transaction (the version is checked again under the lock, so two first opens
+    race safely); an unknown version is refused, and a current one needs nothing."""
     version = _version(conn)
     if version == VERSION:
         return
-    if version == 0:
-        _wal(conn)
+    if version == 0 or version in MIGRATIONS:
+        if version == 0:
+            _wal(conn)
         _begin(conn)
         try:
-            version = _version(conn)
+            version = was = _version(conn)
             if version == 0:
                 conn.executescript(SCHEMA)
-                conn.execute(f"PRAGMA user_version = {VERSION}")
                 version = VERSION
+            while version in MIGRATIONS:
+                conn.executescript(MIGRATIONS[version])
+                version += 1
+            if version != was:
+                conn.execute(f"PRAGMA user_version = {version}")
             conn.execute("COMMIT")
         except BaseException:
             _rollback(conn)

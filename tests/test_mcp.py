@@ -174,7 +174,7 @@ async def test_step_tools_edit_one_step_at_the_current_rev(store):
         err = await fail(c, "step_remove", project="p", steps="a")  # b still reads it
         assert err["error"] == "invalid"
         assert await ok(c, "step_remove", project="p", steps=["b", "a"]) == {
-            "rev": 6, "steps": ["a", "b"]}  # one edit, in plan order
+            "rev": 6, "steps": ["a", "b"], "outcomes": 0}  # one edit, in plan order
         assert (await ok(c, "plan_get", project="p"))["plan"]["steps"] == {}
         history = await ok(c, "plan_history", project="p")
         assert history[-1]["reason"] == "remove a, b"

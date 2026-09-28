@@ -172,7 +172,7 @@ def test_concurrent_first_opens_create_the_schema_once(tmp_path):
         p.stdin.write("x")
         p.stdin.flush()
     outs = [p.communicate(timeout=60) for p in procs]
-    assert [o.strip() for o, _ in outs] == ["1"] * 6, outs
+    assert [o.strip() for o, _ in outs] == [str(db.VERSION)] * 6, outs
     assert peek(home, "SELECT count(*) FROM sqlite_master WHERE name = 'records'") == [(1,)]
     assert peek(home, "PRAGMA journal_mode") == [("wal",)]
 

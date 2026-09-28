@@ -252,7 +252,12 @@ you ask for, done or not. The dashboard folds a done unit's box instead.
 
 `plan_prune(project, older_than_hours=0)` removes every done unit whose last step finished at
 least that long ago, in one edit: nothing else reads from them, and `plan_history` keeps the
-removed steps. A unit a plan output reads stays. It returns `{rev, units, steps}`.
+removed steps. A unit a plan output reads stays. It returns `{rev, units, steps, outcomes}`.
+
+Removing a step that finished (by `plan_prune`, `step_remove` or any `plan_patch`) keeps what it
+ended with in the `outcomes` table: its status, typed outputs, error, times, run ids, unit (its
+`unit:` tag, else its unit's first step) and who removed it. Nothing trims it; read it with
+`query`, e.g. `SELECT step, status, outputs FROM outcomes WHERE project = 'p' AND unit = 'x'`.
 
 ## Validation errors
 Every edit is checked: functions exist (as the project sees them), required inputs are bound,

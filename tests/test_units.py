@@ -101,16 +101,17 @@ def test_plan_prune_removes_done_units_past_the_age_in_one_edit(tidy):
     rev = tidy.get("p")["rev"]
     out = tidy.prune("p", older_than_hours=3.5, author="orch", reason="tidy")
     # a/b finished last 3 h ago: too recent; alone is read by a plan output: kept
-    assert out == {"rev": rev + 1, "units": 1, "steps": ["gate", "guarded"]}
+    assert out == {"rev": rev + 1, "units": 1, "steps": ["gate", "guarded"], "outcomes": 2}
     edit = [h for h in tidy.history("p") if h["kind"] == "plan.edit"][-1]
     assert (edit["rev"], edit["author"], edit["reason"]) == (rev + 1, "orch", "tidy")
     assert edit["ops"] == [{"op": "remove", "path": "/steps/gate"},
                            {"op": "remove", "path": "/steps/guarded"}]
     out = tidy.prune("p", author="orch")
-    assert out == {"rev": rev + 2, "units": 2, "steps": ["a", "b", "n1"]}
+    assert out == {"rev": rev + 2, "units": 2, "steps": ["a", "b", "n1"], "outcomes": 3}
     assert tidy.history("p")[-1]["reason"] == "prune 2 done units"
     assert list(tidy.get("p")["steps"]) == ["first", "second", "alone", "n2"]
-    assert tidy.prune("p") == {"rev": rev + 2, "units": 0, "steps": []}  # no edit
+    assert tidy.prune("p") == {"rev": rev + 2, "units": 0, "steps": [],
+                              "outcomes": 0}  # no edit
     assert tidy.get("p")["rev"] == rev + 2
     for bad in (-1, True, "3"):
         with pytest.raises(BadRequest):

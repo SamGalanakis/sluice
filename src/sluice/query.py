@@ -154,7 +154,7 @@ def _alias(item: str) -> str:
 def objects() -> list[tuple[str, str, list[str]]]:
     """(kind, name, columns) of every CREATE TABLE and CREATE VIEW in db.SCHEMA."""
     out = []
-    for m in re.finditer(r"CREATE (TABLE|VIEW) (\w+)", db.SCHEMA):
+    for m in re.finditer(r"CREATE (TABLE|VIEW) (?:IF NOT EXISTS )?(\w+)", db.SCHEMA):
         kind, name = m.group(1).lower(), m.group(2)
         rest = db.SCHEMA[m.end():]
         if kind == "table":

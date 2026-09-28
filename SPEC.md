@@ -37,7 +37,8 @@ change.
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                              "log_max": 10000}
 sluice.db                   the home's database (SQLite, WAL): every project, plan, edit, state,
-                            call, submission, inbox item and log record (below)
+                            call, submission, inbox item, log record and the outcome of every
+                            finished step removed from a plan (below)
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 runner.json                 the runner's heartbeat {pid, started, beat}, refreshed about once
                             a second; stale means the runner is down
@@ -66,7 +67,8 @@ triggers, rolled back with them — plus `changed`, the time of its last state w
 (the project's plan document and its `rev`, the one authoritative rev); `plan_edits` (every
 edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; never trimmed);
 `states` (the project's state document, §6); `calls` (§8 `fn_call`); `submissions` (§5);
-`inbox` (§8a); `records` (the log, §6b); and `deletions` (a deleted project whose directory is
+`inbox` (§8a); `records` (the log, §6b); `outcomes` (what each finished step a plan edit
+removed ended with, §6; never trimmed); and `deletions` (a deleted project whose directory is
 not gone yet: name, token, time). Deleting a project deletes all of its rows and adds its
 `deletions` row in one transaction; once that commits (the outermost transaction, when it is
 nested in another), its `projects/<name>/` moves to `trash/<name>-<token>` (in a write
@@ -79,8 +81,11 @@ sets a plan input both of those and the item; a submission its row and its recor
 state change the state and its `step.status` records; a call's status change its row and its
 record. A write that cannot get the database within 5 s fails with `busy` ("the store is busy,
 try again"), having written nothing. Reads that must agree (a status, a log page and its
-cursor) come from one snapshot. `user_version` is the schema's version; a database of another
-version is refused, and so is a home from before this database — one with a `log.jsonl` or a
+cursor) come from one snapshot. `user_version` is the schema's version, now 2. A new file gets
+the whole schema at 2; a version-1 file (before `outcomes`) is upgraded in place on first open,
+in one `BEGIN IMMEDIATE` transaction that checks the version again under the lock and creates
+the table and its index (`IF NOT EXISTS`: a file may have them already) before setting 2; a
+database of any other version is refused, and so is a home from before this database — one with a `log.jsonl` or a
 `projects/<name>/project.json` and no `sluice.db` — which is never read or treated as empty: it
 must be imported into a new home first. The database also defines views for agents'
 queries: `steps` (one row per plan step with its state, absent meaning `pending`), `messages`,
@@ -316,7 +321,7 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   work. No edge joins two units. A unit is **done** when every step in it succeeded (set by
   hand too) or was skipped, with at least one success. `status` and `plan_view` leave the done
   units out by default (§8), the dashboard groups its board's boxes by unit and folds a done
-  one, and `plan_prune` removes them.
+  one, and `plan_prune` removes them (their outcomes stay, §6).
 
 **Recipes.** A step shape used again and again (a lane: a worktree, an agent working in it,
 the worktree removed) is a recipe: `recipes/<name>.json` in `SLUICE_HOME` or in the project's
@@ -374,7 +379,9 @@ without `rev`. A stale `rev` fails with `conflict` (and the current rev). A vali
 `rev`, replaces the plan, and appends a `plan.edit` record `{"rev", "author", "reason",
 "ops"}` to the project's log, also kept (with the record's seq) in the edit history,
 `plan_edits` (creation is rev 1, one `add` of the whole plan). Removing or changing a running
-step is refused.
+step is refused. An edit that removes steps (`plan_patch`, `step_remove`, `plan_prune`: any
+edit whose plan no longer has them) keeps the outcome of each one that finished in `outcomes`
+(§6), in its own transaction.
 
 ## 6. Runner and state
 
@@ -390,6 +397,18 @@ run <i>: <err>; ...` for several (each `<err>` cut to one line of at most 200 ch
 and keeps `run_ids` (index-aligned: `run_ids[i]` is item i's run) plus `results` — a list
 holding each item's outputs where it succeeded and null where it failed — so a retry can
 re-run only what failed.
+
+**Outcomes.** A step's entry leaves the state once the step leaves the plan (the runner drops
+it at its next tick), and its run dirs go once nothing refers to them (§6b). So the plan edit
+that removes a step whose status is `succeeded`, `failed`, `skipped` or `stale` writes, in the
+same transaction, one `outcomes` row: `project, step, rev` (the rev that edit made; the key),
+`unit`, `fn` (its `run`), `status`, `outputs` (JSON), `error` (a failure's error, or why it was
+skipped), `started`, `finished`, `run_ids` (JSON), `manual` (0 or 1), `removed` (when), and the
+edit's `author` and `reason`. `unit` is the name in the step's `unit:<name>` tag when it has
+one, else the first step of its unit (§5 `plan.units`) in the plan before the edit when that
+unit has more than one step, else null. A step still pending (it never ran) leaves no row, and
+a running one cannot be removed. The rows are never trimmed; deleting the project deletes
+them. Read them with `query` (§8).
 
 **Staleness.** A result is only valid for the inputs it was computed from. When a step starts
 (and so when it succeeds) or is set by hand, its state records `inputs_hash`: a hash of the
@@ -1018,7 +1037,8 @@ so one huge scalar can run past it, bounded by the value limit). It returns {col
 truncated}: at most `limit` rows (an int in 1–1000, default 200), fetched as `limit + 1` so a
 full page is marked `truncated`, and stopping early once the rows' JSON passes ~1 MB. A BLOB
 cell is refused with the hint to select `hex(col)` or `length(col)`; `params` binds `?`
-placeholders. The `steps`, `messages`, `step_changes`, `edits` and `log` views (§2) join the
+placeholders. The `outcomes` table (§6) holds what finished steps removed from plans ended
+with. The `steps`, `messages`, `step_changes`, `edits` and `log` views (§2) join the
 raw tables into readable shapes, and the tool's description names every table and view with
 its columns.
 
@@ -1033,7 +1053,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `projects_list` | – | `[{name, description, rev, counts, archived, paused, icon?}]`; `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
 | `project_create` | `name, description?, icon?` | `{name}` (with an empty plan); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
 | `project_update` | `name, description?, archived?, paused?, icon?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
-| `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls and submissions in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name can be created once the old directory is gone, and starts clean |
+| `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls, submissions and outcomes in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name can be created once the old directory is gone, and starts clean |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
@@ -1045,7 +1065,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
 | `unit_add` | `project, recipe, params, start? = false, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>`, added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param or expansion problem, `bad_request` names the ids the plan already has |
 | `step_update` | `project, step, changes, reason?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
-| `step_remove` | `project, steps?, tags?, reason?` | `{rev, steps}`: removes the selected steps in one edit; refused while one runs or something left reads it |
+| `step_remove` | `project, steps?, tags?, reason?` | `{rev, steps, outcomes}`: removes the selected steps in one edit; refused while one runs or something left reads it; `outcomes` is how many of them finished and kept their outcome (§6) |
 | `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
 | `step_cancel` | `project, steps?, tags?, reason?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); a selected pending `core.external` step fails so at once (§6); refused, changing nothing, unless every one is running or a pending `core.external` step |
 | `plan_history` | `project, since_rev?` | every edit (`plan.edit` records from `plan_edits`, back to rev 1) and the `plan.input`, `step.output` and `step.retry` records still in the log, in seq order, each with its `seq` (with `rev` > `since_rev`) |
@@ -1063,7 +1083,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
-| `plan_prune` | `project, older_than_hours? = 0, author?, reason?` | `{rev, units, steps}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago, in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed. A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
+| `plan_prune` | `project, older_than_hours? = 0, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago, in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
 | `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |

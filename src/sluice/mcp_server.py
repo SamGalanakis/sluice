@@ -359,7 +359,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
                     tags: list[str] | str | None = None, reason: str = "") -> Any:
         """Remove steps from a plan in one edit, selected by ids and/or tags. Refused
         (`invalid`) while a step left or a plan output still reads one, or while one runs.
-        Returns {rev, steps}.
+        Each one that finished keeps its outcome (the `outcomes` table, see query). Returns
+        {rev, steps, outcomes}: outcomes is how many were kept.
 
         Args:
             project: the project.
@@ -693,8 +694,10 @@ def build_server(store: Store, stop: threading.Event | None = None,
                    reason: str = "") -> Any:
         """Remove every step of every done unit (an independent piece of work whose every
         step succeeded or was skipped) whose last step finished at least older_than_hours
-        ago, in one edit; plan_history keeps them. A unit a plan output reads stays. Returns
-        {rev, units, steps}: how many units and which step ids went (no edit when none).
+        ago, in one edit; plan_history keeps them, and each step's outcome stays in the
+        `outcomes` table (see query). A unit a plan output reads stays. Returns {rev, units,
+        steps, outcomes}: how many units, which step ids went and how many outcomes were kept
+        (no edit when none).
 
         Args:
             project: the project.

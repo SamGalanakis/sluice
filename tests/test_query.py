@@ -129,7 +129,7 @@ async def test_the_tool_and_its_docstring(store):
     assert not r.is_error
     assert json.loads(r.content[0].text) == {
         "columns": ["step", "status"], "rows": [["a", "pending"]], "truncated": False}
-    for name in re.findall(r"CREATE (?:TABLE|VIEW) (\w+)", db.SCHEMA):
+    for name in re.findall(r"CREATE (?:TABLE|VIEW) (?:IF NOT EXISTS )?(\w+)", db.SCHEMA):
         assert name in tools["query"]
 
 

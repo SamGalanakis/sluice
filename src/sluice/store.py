@@ -504,7 +504,8 @@ class Store:
               start: bool = True) -> int:
         """Apply an RFC 6902 patch at `rev`. Unless `start`, a step it adds comes in paused
         (unless the step itself says `paused`); that pause is one more op in the history.
-        Raises Conflict, InvalidPlan or NotFound."""
+        Every finished step it removes keeps its outcome (`outcomes`). Raises Conflict,
+        InvalidPlan or NotFound."""
         with self.tx() as conn:
             cur = self.get(project)
             if rev != cur["rev"]:
@@ -521,7 +522,8 @@ class Store:
                     new = apply_ops(new, held)
             errs, _ = P.validate(new, reg)
             new_steps = new.get("steps") if isinstance(new.get("steps"), dict) else {}
-            for sid, e in self.read_state(project)["steps"].items():
+            state = self.read_state(project)
+            for sid, e in state["steps"].items():
                 if e["status"] != "running":
                     continue
                 if sid not in new_steps:
@@ -530,11 +532,51 @@ class Store:
                     errs.append(f"steps.{sid}: cannot change a running step (only pause it)")
             if errs:
                 raise InvalidPlan(errs)
+            gone = [sid for sid in old["steps"] if sid not in new_steps]
+            if gone:
+                self._keep_outcomes(conn, project, rev + 1, cur, gone, state, author, reason)
             conn.execute("UPDATE plans SET rev = ?, doc = ? WHERE project = ?",
                          (rev + 1, _dumps(new), project))
             self._log(conn, project, rev + 1, author, reason, ops)
             self.notify()
         return rev + 1
+
+    def _keep_outcomes(self, conn: Connection, project: str, rev: int, cur: dict[str, Any],
+                       gone: list[str], state: dict[str, Any], author: str,
+                       reason: str) -> None:
+        """One `outcomes` row per removed step that finished (succeeded, failed, skipped or
+        stale; a pending one never ran), in the edit's transaction. Its unit: its `unit:`
+        tag, else the first step of its component in the plan before the edit when that has
+        more than one step."""
+        done = [sid for sid in gone
+                if S.entry_of(state, sid)["status"] in db.OUTCOME_STATUSES]
+        if not done:
+            return
+        try:
+            comps = P.units(self.plan(project)[1])
+        except InvalidPlan:  # the plan before the edit no longer validates: tags only
+            comps = []
+        first = {sid: c[0] for c in comps if len(c) > 1 for sid in c}
+        at = now_iso()
+        for sid in done:
+            step, e = cur["steps"][sid], state["steps"][sid]
+            tags = step.get("tags") if isinstance(step.get("tags"), list) else []
+            unit = next((t[5:] for t in tags if isinstance(t, str) and t.startswith("unit:")),
+                        first.get(sid))
+            conn.execute(
+                "INSERT INTO outcomes (project, step, rev, unit, fn, status, outputs, error, "
+                "started, finished, run_ids, manual, removed, author, reason) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (project, sid, rev, unit, str(step.get("run", "")), e["status"],
+                 _dumps(e["outputs"]) if e.get("outputs") is not None else None,
+                 e.get("error") or e.get("skipped"), e.get("started"), e.get("finished"),
+                 _dumps(e["run_ids"]) if e.get("run_ids") is not None else None,
+                 int(bool(e.get("manual"))), at, author, reason))
+
+    def _kept(self, conn: Connection, project: str, rev: int) -> int:
+        """How many outcomes the edit to `rev` kept."""
+        return db.one(conn, "SELECT count(*) FROM outcomes WHERE project = ? AND rev = ?",
+                      (project, rev))[0]
 
     # ---- one step of the plan: plan_patch for a single step, at the current rev ----
 
@@ -571,14 +613,16 @@ class Store:
 
     def remove_steps(self, project: str, steps: Any = None, tags: Any = None,
                      author: str = "", reason: str = "") -> dict[str, Any]:
-        """Remove the selected steps in one edit. Returns {rev, steps}."""
-        with self.tx():
+        """Remove the selected steps in one edit. Returns {rev, steps, outcomes}: how many
+        finished steps kept their outcome."""
+        with self.tx() as conn:
             chosen = self.select_steps(project, steps, tags)
             cur = self.get(project)
             rev = self.patch(project, cur["rev"],
                              [{"op": "remove", "path": f"/steps/{sid}"} for sid in chosen],
                              author, reason or f"remove {', '.join(chosen)}")
-        return {"rev": rev, "steps": chosen}
+            kept = self._kept(conn, project, rev)
+        return {"rev": rev, "steps": chosen, "outcomes": kept}
 
     def select_steps(self, project: str, steps: Any = None, tags: Any = None,
                      subtree: bool = False) -> list[str]:
@@ -615,13 +659,14 @@ class Store:
               reason: str = "") -> dict[str, Any]:
         """plan_prune: remove every step of every done unit whose last step finished at least
         `older_than_hours` ago, in one edit (the history keeps them). A unit a plan output
-        reads stays (removing it would break the plan). Returns {rev, units, steps}: the
-        number of units and the ids removed; no edit when there is nothing to remove."""
+        reads stays (removing it would break the plan). Returns {rev, units, steps, outcomes}:
+        the number of units, the ids removed and how many outcomes they kept; no edit when
+        there is nothing to remove."""
         if isinstance(older_than_hours, bool) or not isinstance(older_than_hours, int | float) \
                 or older_than_hours < 0:
             raise BadRequest("older_than_hours: expected a number of hours, 0 or more")
         cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(hours=older_than_hours)
-        with self.tx():
+        with self.tx() as conn:
             doc, plan = self.plan(project)
             state = self.read_state(project)
             kept = {r.step for r in plan.outputs.values() if r.step}
@@ -633,12 +678,13 @@ class Store:
                     gone.append(unit)
             ids = [sid for unit in gone for sid in unit]
             if not ids:
-                return {"rev": doc["rev"], "units": 0, "steps": []}
+                return {"rev": doc["rev"], "units": 0, "steps": [], "outcomes": 0}
             n = len(gone)
             rev = self.patch(project, doc["rev"],
                              [{"op": "remove", "path": f"/steps/{sid}"} for sid in ids], author,
                              reason or f"prune {n} done unit{'s' if n != 1 else ''}")
-        return {"rev": rev, "units": n, "steps": ids}
+            outcomes = self._kept(conn, project, rev)
+        return {"rev": rev, "units": n, "steps": ids, "outcomes": outcomes}
 
     def pause_steps(self, project: str, steps: Any = None, tags: Any = None,
                     subtree: bool = False, paused: bool = True, author: str = "",
