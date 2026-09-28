@@ -189,7 +189,8 @@ purpose: the brand lives in the mark, the nav's band and stripes, the heavy titl
 colour and the corners, never in decoration over the work. The plan is the
 page: a left-to-right board of the blocks of work, each card saying one thing per slot. Ids,
 fn names, bindings and run history live in the step drawer, never on the board. Nothing is
-repeated: plan inputs and outputs are board nodes, not tables; history is the log filtered.
+repeated: plan inputs and outputs are board nodes, not tables; history is the log filtered
+(to the history kinds, every edit back to rev 1 with the manual values the log still has).
 
 ## Colors
 

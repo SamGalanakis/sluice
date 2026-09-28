@@ -36,7 +36,8 @@ progress line and its typed outputs, with the one human decision point (the Inbo
 ## Operating Context
 
 - `sluice serve` serves the dashboard and MCP on localhost; `sluice loop` may run the runner apart.
-- State lives in files under SLUICE_HOME (plan.json, state.json, log.jsonl, inbox.json, runs/).
+- State lives in one SQLite database per SLUICE_HOME (`sluice.db`: projects, plans, state, calls,
+  inbox, log); each run's own files stay under `runs/`.
 - Agents post to per-step threads (`step-<id>`) and to `orchestrator`; the orchestrator agent
   and Sam answer.
 - Plans are light: a handful to a few dozen blocks.

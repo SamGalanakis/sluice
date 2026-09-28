@@ -20,7 +20,7 @@ change.
   its inputs comes from a plan input, other steps' outputs, or a literal. Edited only through
   typed edits, every edit logged.
 - **Log:** each project has one append-only log of what happened (edits, manual values, step
-  status changes, calls, thread messages). It is history; `plan.json` and `state.json` are the
+  status changes, calls, thread messages). It is history; the plan and the state are the
   current truth.
 - **Runner:** starts a step once everything it reads is available, records its outputs or its
   failure. A failed step shows up in `status`; an orchestrator decides what next. Runs survive
@@ -36,42 +36,56 @@ change.
 ```
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                              "log_max": 10000}
+sluice.db                   the home's database (SQLite, WAL): every project, plan, edit, state,
+                            call, submission, inbox item and log record (below)
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 runner.json                 the runner's heartbeat {pid, started, beat}, refreshed about once
                             a second; stale means the runner is down
 .env                        global secrets (KEY=value lines)
 fns/                        global user functions
-log.jsonl                   the home log: fn_call runs without a project (§6b)
 runs/<call_id>/             input.json, output.json, stderr.log, shim.json, child.json,
-                            shim.lock and exit.json of those calls (§4)
-.lock                       flock target for appends to the home log
-projects/<name>/
-  project.json              {"name", "description", "archived"?, "paused"?, "icon"?}
-  icon.<ext>                the project's image icon (svg, png, webp, jpg or gif), at most one
-  plan.json                 the project's plan (current truth)
-  state.json                runner-owned: plan input values, step status and outputs (current truth)
-  log.jsonl                 the project's log (§6b): edits, manual values, step status changes,
-                            calls, thread messages, inbox changes
-  inbox.json                {"items": [...]}: the project's inbox items (§8a), current truth
+                            shim.lock and exit.json of the calls without a project (§4)
+trash/                      a deleted project's directory on its way out
+projects/<name>/            made when something needs it (runs/, fns/); may be prepared with
+                            fns/ and .env before the project is created
   fns/                      project-local functions
   .env                      project secrets (override global ones)
   runs/<run_id>/            input.json, output.json, stderr.log for one fn execution (a step run,
-                            or a call: then run_id is the call id); submitted.json, what its
-                            agent submitted (§5); shim.json, child.json, shim.lock and
-                            exit.json, the supervising shim's identity, the fn child's pid +
-                            start time, liveness lock and exit record (§4)
-  .lock                     flock target for read-modify-write in this project and log appends
+                            or a call: then run_id is the call id); shim.json, child.json,
+                            shim.lock and exit.json, the supervising shim's identity, the fn
+                            child's pid + start time, liveness lock and exit record (§4)
 ```
 
-A project's optional **icon** is either an image — an `icon.<ext>` file (SVG, PNG, WebP, JPEG
-or GIF, at most 256 KB) written by `project_create`/`project_update`'s `icon` argument, which
-sniffs the type from the file's content — or a short text icon (at most 16 characters, no
-control characters, typically one emoji) kept as `project.json`'s `"icon"`. A project has at
-most one of the two: setting one clears the other; `icon: ""` removes it. A value that looks
-like a path (starts with `/` or `~`) but is not a readable image file is an error, never a
-text icon. `projects_list` reports it as `{"kind": "image", "type": <content type>}` or
-`{"kind": "text", "text": ...}`, absent when none; the dashboard shows it by the project's
-name and serves an image icon at `/projects/<name>/icon` (§8).
+**The database** (`src/sluice/db.py`, standard library only; SQLite 3.37 or later, on a local
+filesystem) holds, in STRICT tables: `projects` (name, description, `archived`, `paused`, the
+icon, `created`, and `ver`, a counter every change to the project's rows moves — kept by
+triggers, rolled back with them — plus `changed`, the time of its last state write); `plans`
+(the project's plan document and its `rev`, the one authoritative rev); `plan_edits` (every
+edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; never trimmed);
+`states` (the project's state document, §6); `calls` (§8 `fn_call`); `submissions` (§5);
+`inbox` (§8a); and `records` (the log, §6b). Deleting a project deletes all of its rows. Every
+logical change is one write transaction (`BEGIN IMMEDIATE`): a plan edit writes the plan, its
+`plan_edits` row and its record; a manual value the state and its record; an inbox answer that
+sets a plan input both of those and the item; a submission its row and its record; a runner
+state change the state and its `step.status` records; a call's status change its row and its
+record. A write that cannot get the database within 5 s fails with `busy` ("the store is busy,
+try again"), having written nothing. Reads that must agree (a status, a log page and its
+cursor) come from one snapshot. `user_version` is the schema's version; a database of another
+version is refused, and so is a home from before this database — one with a `log.jsonl` or a
+`projects/<name>/project.json` and no `sluice.db` — which is never read or treated as empty: it
+must be imported into a new home first. The database also defines views for agents'
+queries: `steps` (one row per plan step with its state, absent meaning `pending`), `messages`,
+`step_changes`, `edits` and `log` (each record as `log_read` returns it).
+
+A project's optional **icon** is either an image (SVG, PNG, WebP, JPEG or GIF, at most 256 KB)
+read by `project_create`/`project_update`'s `icon` argument from a file, its type sniffed from
+the content, and kept in the project's row with its sha256 — or a short text icon (at most 16
+characters, no control characters, typically one emoji). A project has at most one of the two:
+setting one clears the other; `icon: ""` removes it. A value that looks like a path (starts
+with `/` or `~`) but is not a readable image file is an error, never a text icon.
+`projects_list` reports it as `{"kind": "image", "type": <content type>}` or `{"kind": "text",
+"text": ...}`, absent when none; the dashboard shows it by the project's name and serves an
+image icon at `/projects/<name>/icon` (§8).
 
 **Function scopes:** built-in (shipped in the package, `src/sluice/fns/`), global
 (`SLUICE_HOME/fns/` and every dir in `config.fn_dirs`), and project (`projects/<name>/fns/`). A
@@ -93,7 +107,8 @@ validation like any unknown function. Reads (`status`, `plan_get`, `plan_history
 `fn_list`, `verify`) always work. Functions are rescanned when a `fn.json` or `main.py` changes,
 so a fix (or `fn_save`) needs no restart.
 
-Writes are atomic (`<file>.tmp` then `os.replace`); read-modify-write holds `fcntl.flock`.
+Files outside the database (`config.json`, `runner.json`, a fn's files, a run's files) are
+written atomically (`<file>.tmp` then `os.replace`).
 
 ## 3. Types
 
@@ -248,8 +263,8 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   run?)`: checked against the declared outputs (every required one, types fitting, no others;
   `invalid` lists every mismatch with its path), refused unless the step is `running`; `run`
   (a run id) is needed only when the step has several runs (scatter). Accepted outputs are
-  written to the run dir's `submitted.json` (a resubmit replaces it) and logged
-  (`step.submit`). When the fn exits 0, the runner merges them into the step's outputs (the
+  kept as the run's submission (a resubmit replaces it), in the same transaction as their
+  `step.submit` record. When the fn exits 0, the runner merges them into the step's outputs (the
   fn's returned values win on a name they share); a required declared output never submitted
   fails the step with `declared outputs not submitted: <names> (the agent must call
   step_submit ...)`. An unsubmitted optional one is null.
@@ -268,13 +283,14 @@ the scatter input, each item must fit the fn's input type); defaults and plan in
 
 **Edits.** `patch(rev, ops, reason, author)`: `ops` is RFC 6902 JSON Patch against the plan
 without `rev`. A stale `rev` fails with `conflict` (and the current rev). A valid edit bumps
-`rev`, rewrites `plan.json`, and appends a `plan.edit` record `{"rev", "author", "reason",
-"ops"}` to the project's log (creation is rev 1, one `add` of the whole plan). Removing or
-changing a running step is refused.
+`rev`, replaces the plan, and appends a `plan.edit` record `{"rev", "author", "reason",
+"ops"}` to the project's log, also kept (with the record's seq) in the edit history,
+`plan_edits` (creation is rev 1, one `add` of the whole plan). Removing or changing a running
+step is refused.
 
 ## 6. Runner and state
 
-`state.json`:
+A project's state (its `states` row):
 `{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
 "outputs", "error", "manual", "inputs_hash", "skipped", "results", "kept"}}}` with status `pending`, `running`,
 `succeeded`, `failed`, `stale`, `skipped` (`skipped` holds why). A
@@ -314,17 +330,36 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    rules out, and put back to `pending` a skipped step whose reason no longer holds), then
    start every ready `pending` step (what it reads is there, what it runs `after` has
    succeeded or been skipped) that is not paused (a step's `paused`, or its project's
-   `paused` in `project.json`: it stays `pending`, whatever it would read held, until
+   `paused`: it stays `pending`, whatever it would read held, until
    unpaused; pausing never stops a running step). Built-in fns run inline;
    staleness is re-checked after each round of inline results, so nothing starts from a result
    that no longer holds.
-4. If anything changed, write `state.json`, then append a `step.status` record per step whose
-   status changed in this pass (§6b).
-5. Calls: follow the log's `call` records; start `pending` calls and log each status change (§6b). `call_status` reads a call's latest record.
+4. If anything changed, write the state and a `step.status` record per step whose status
+   changed in this pass (§6b), together.
+5. Calls: start the `pending` calls and collect the `running` ones (the `calls` rows), each
+   status change written to the call's row with its `call` record (§6b).
 
-On startup — once, under `runner.lock`, before the first tick — the runner adopts what a
-previous one left. For every step entry still `running` and every `running` non-direct call it
-looks at each run dir (a step's `run_ids`; a call's is `runs/<call>`): `exit.json` → the run
+Processes are never started, stopped or waited on inside a write transaction: a tick (1) reads
+what finished (`exit.json`, `output.json`, stderr, the run's submission) outside any
+transaction; (2) in one short write transaction per project applies it, drops what left the
+plan, settles steps, runs built-ins inline and **reserves** each ready step's launch — `running`
+with fresh run ids in `run_ids` (a kept scattered item keeping its own) and its `step.status`
+records, committed before any of its processes exists; (3) outside the transaction stops the
+steps `step_cancel` flagged (the flag stays until the stop is done) and, for each reserved
+run, makes its dir and starts its shim (a step cancelled since its reservation starts
+nothing); (4) records in a second short transaction what (3) did: a cancelled step fails
+`cancelled[: <reason>]`, and a start that raised fails its step — or, scattered, just that
+item — with `could not start the fn: <error>`. A call is reserved the same way (its row
+`running`, committed) before its process starts. A `busy` database skips that project until
+the next tick; nothing that has started a process is ever retried.
+
+On startup — under `runner.lock`, as its first tick reaches each project — the runner adopts
+what a previous one left. For every step entry still `running` and every `running` non-direct call it
+looks at each run dir (a step's `run_ids`; a call's is `runs/<call>`): no dir at all → the run
+was reserved but never started (its dir is made before its process) and fails `not started
+(the runner stopped before it started the run)` — the step, or just that item of a scattered
+one (a retry then re-runs it alone); it is never started automatically, so no agent runs
+twice; `exit.json` → the run
 is finished from it (its `code`, then §6 step 2 decides outputs or error); a held `shim.lock`
 → the run lives on and is watched; an entry `running` with no `run_ids` at all, or a run dir
 without `shim.json` (both from before this contract) → the step fails `runner restarted`; a
@@ -343,10 +378,17 @@ started — and a running entry no Active could be built for is still killed by 
 shim pids. The runner kills a native session's recorded tmux server and engine process trees
 when it stops, adopts or finishes the run, checking each pid's `/proc` start time before
 signalling it. Each adopted run appends `run.adopt` `{step or call, run, outcome}`
-(`watching`/`finished`/`unknown`/`restarted`), and a run dir whose shim lives — or whose
-recorded fn child lives on past it — but which no running step or call references (the old
-runner died between spawning it and recording it) is killed and logged `run.orphan` `{run}`
-— only when something was actually signalled. A `direct` call (§8 `fn_call`) is
+(`watching`/`finished`/`unknown`/`restarted`/`not started`), and a run dir whose shim lives —
+or whose recorded fn child lives on past it — but which no running step or call references is
+killed and logged `run.orphan` `{run}` — only when something was actually signalled.
+
+**Run-dir GC.** At startup and about once a minute the runner removes every run dir nothing
+references and nothing runs in: a dir stays while a retained record names it (its `run` or
+`call`, or a `step.status` record's `run_ids`), a state entry lists it (`run_ids` or
+`kept.run_ids`), a `calls` row or a submission is its, its `shim.lock` is held or a recorded
+fn child still lives. Each log's dirs are listed before its references are read; since a run
+is referenced before its dir exists, a listed dir nothing references never gains a reference
+again. The pass also finishes the removal of deleted projects' directories (`trash/`). A `direct` call (§8 `fn_call`) is
 run by the process that made it, never by the runner; if that process dies before logging the
 end, the runner logs the call `failed` with `error: "the process running this direct call is
 gone"` — the pid is checked with its recorded start time, so a reused pid does not pass for it.
@@ -387,31 +429,37 @@ record):
 
 `verify(project?)` checks everything and returns every problem it finds, each with a location
 and a message; it changes nothing. `where` is a file path (relative to `SLUICE_HOME` when inside
-it, e.g. `projects/p/fns/x.y/fn.json`), followed by `#<path in the document>` for JSON
-(`projects/p/plan.json#steps.a.run`, `projects/p/state.json#inputs.n`) or `:<line>` for `.env`
-files. Without a project it checks the built-in and global scopes and every directory under
-`projects/`; with one, the built-in and global scopes and that project. It covers:
+it, e.g. `projects/p/fns/x.y/fn.json`, followed by `#<path in the document>` for JSON or
+`:<line>` for `.env` files), or a project's plan or state with the path in it
+(`project p: plan#steps.a.run`, `project p: state#inputs.n`). Without a project it checks the
+built-in and global scopes and every project; with one, the built-in and global scopes and
+that project. It covers:
 - every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, boolean `open` and,
   for an open fn, `submits`; nothing else), the name
   matching its directory, every type parsing, `main.py` present for non-built-ins;
 - name collisions across scopes (see §2);
-- `project.json` shape (`name` equal to its directory, optional strings `description` and
-  `icon`, optional booleans `archived` and `paused`), `.env`
-  files parsing as `KEY=value` lines (blank lines, `#` comments and `export ` allowed);
-- the plan: full validation (§5) against the project's functions;
-- `state.json` agreeing with the plan (no state for unknown steps or undeclared plan inputs,
+- `.env` files parsing as `KEY=value` lines (blank lines, `#` comments and `export `
+  allowed);
+- the plan: full validation (§5) against the project's functions (a plan can stop validating
+  when a function it uses changes);
+- the state agreeing with the plan (no state for unknown steps or undeclared plan inputs,
   valid statuses, outputs of succeeded steps passing their output types, plan input values
   passing their types).
 
-`{"ok": bool, "problems": [{"where", "message"}]}`. CLI `sluice tool verify '{"project": "P"}'`
-prints them and exits non-zero when there are any.
+The database's own constraints (§2) keep the shapes of its rows. Without a project, a directory
+under `projects/` that is no project's is a warning, not a problem (left over, or prepared with
+`fns/` and `.env` before its project is created).
+
+`{"ok": bool, "problems": [{"where", "message"}], "warnings"?: [{"where", "message"}]}`. CLI
+`sluice tool verify '{"project": "P"}'` prints them and exits non-zero when there are problems.
 
 ## 6b. The log
 
-Each project has one append-only `log.jsonl`, and `SLUICE_HOME/log.jsonl` holds the calls made
-without a project. Every record is `{"seq", "at", "kind", ...}`; `seq` counts up from 1 per log.
-Appends hold the directory's `.lock` flock, so writers in any process (the store, the runner, a
-fn process posting to a thread) get distinct, increasing seqs; the file is in seq order. Kinds:
+Each project has one append-only log, and the home has one more for the calls made without a
+project: the database's `records` (§2). Every record is `{"seq", "at", "kind", ...}`. `seq` is
+the home's: it increases across every log and a committed one is never reused, so a log's seqs
+increase but have gaps (another log's records). Writers in any process (the store, the
+runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 
 | kind | fields | written by |
 |---|---|---|
@@ -427,18 +475,22 @@ fn process posting to a thread) get distinct, increasing seqs; the file is in se
 | `inbox.post` | `item, title, from?, input?` | `inbox_post`, `inbox.ask` (§8a) |
 | `inbox.answer` | `item, answer, by` | `inbox_answer` and the dashboard's answer route |
 | `inbox.close` | `item, reason?, by` | `inbox_close` |
-| `run.adopt` | `step or call, run, outcome` | the runner, once per leftover run at startup: what its dir showed (`watching`, `finished`, `unknown`, `restarted`, §6) |
+| `run.adopt` | `step or call, run, outcome` | the runner, once per leftover run: what its dir showed (`watching`, `finished`, `unknown`, `restarted`, `not started`, §6) |
 | `run.orphan` | `run` | a live run nothing referenced, killed at startup (§6) |
 
-The log is history, not the source of truth, so it is capped at `config.log_max` records
-(default 10000): when an append takes it past the cap, the oldest records are dropped under the
-lock, down to 90% of the cap (so a full log is not rewritten on every append), together with the
-run dirs that only dropped records referred to (a `call` record refers to `runs/<call>`, a
-`step.status` record to its `run_ids`; dirs `state.json` still lists are kept). The latest record
-of a call that is still pending or running is never dropped. `plan_history` therefore reaches
-back only as far as the log does.
+The log is history, not the source of truth, so each log is capped at `config.log_max`
+records (default 10000, counted per log): when an append takes one past the cap, its oldest
+records are dropped in the same transaction, down to 90% of the cap (so a full log is not
+trimmed on every append), together with its finished calls and the submissions that no
+remaining record or state entry refers to any more. A pending or running call is never
+dropped: its row, not its records, is its truth. The trim removes rows only; the runner's GC
+(§6) removes the run dirs nothing references. The plan's edits are kept whole in `plan_edits`,
+so `plan_history` reaches back to rev 1 (to the earliest rev a home imported from older
+storage had); its manual values (`plan.input`, `step.output`, `step.retry`) as far as the log
+does.
 
-Readers take no lock: a line not yet complete is left out until it is. `log_read` and `log_wait`
+`last_seq` is a log's high-water mark (its greatest seq, from the same snapshot as the records),
+never moved back past a `since_seq` given. `log_read` and `log_wait`
 (§8), `thread.wait` and `sluice watch` share one filter: `kinds` (exact kinds, or a group name,
 `step`, `plan`, `inbox` or `run`, for every kind under it) and `threads` (messages only on these threads; given
 without `kinds`, only messages at all).
@@ -480,16 +532,18 @@ stripped out), so a tool the fn starts runs the host's `python3`, not the fn's i
 
 `sluice serve` runs the runner and an MCP server (official `mcp` SDK, streamable HTTP) at
 `http://<host>:<port>/mcp` in one process. With `--no-runner` it serves only, and a separate
-`sluice loop` runs the steps: the two share nothing but the files (the runner polls about once
-a second), so the server can restart without ending running steps. Stopping the runner leaves
+`sluice loop` runs the steps: the two share nothing but the home (the database and the run
+dirs; the runner polls about once a second), so the server can restart without ending running
+steps. Stopping the runner leaves
 its runs going — a later runner adopts them (§6) — unless it was started with `--kill-runs`.
 A `--host` that is not loopback warns loudly on stderr: the tools (fn_save, fn_call — running
 code) are served without authentication to anyone who can reach the port. Errors are tool
 errors whose message is JSON
-`{"error": "not_found"|"conflict"|"invalid"|"bad_request", "message", ...}` (`conflict` carries
-`current_rev` for a plan edit, or `status` for an inbox item that is no longer open; `invalid`
-carries `errors`). `rev` is optional on the convenience tools (they apply
-to the current revision under the lock) and required on `plan_patch`.
+`{"error": "not_found"|"conflict"|"invalid"|"bad_request"|"busy", "message", ...}` (`conflict`
+carries `current_rev` for a plan edit, or `status` for an inbox item that is no longer open;
+`invalid` carries `errors`; `busy`: the database stayed locked past its timeout and nothing was
+written, try again). `rev` is optional on the convenience tools (they apply to the current
+revision in the same transaction) and required on `plan_patch`.
 
 **Docs for agents.** The server sets MCP `instructions` from `src/sluice/docs/instructions.md`
 (short: what sluice is, the workflow, where to read more). A `docs(topic?)` tool returns the index
@@ -576,8 +630,9 @@ raw HTML escaped, unsafe link schemes refused).
   last seen …"); no heartbeat file says nothing (a runner from before it writes none). The
   streams carry the liveness, not the beat.
 - `GET /projects/<name>`: under the nav naming the project (its sections: Plan, Threads,
-  History, the log filtered to the history kinds, Log, and Functions, the functions as the
-  project sees them), first whether the work moves: a progress bar by status and one line
+  History — the log page filtered to the history kinds, which reads the plan's whole edit
+  history, every edit back to rev 1, with the manual values the log still has, in seq order —
+  Log, and Functions, the functions as the project sees them), first whether the work moves: a progress bar by status and one line
   (succeeded of total, skipped, running, stale, failed, blocked, paused, total `cost_usd`, last
   activity; the failed, blocked and paused left to the stuck line when it leads the page; the
   bar's label counts them all) with the Pause
@@ -673,12 +728,14 @@ raw HTML escaped, unsafe link schemes refused).
   long text folds to its first lines, markdown rendered) and the plan's inputs (name, value,
   doc).
 - `GET /projects/<name>/icon`: the project's image icon (§2), served with its content type,
-  `X-Content-Type-Options: nosniff`, stat-based cache validators (ETag, Last-Modified) and,
+  `X-Content-Type-Options: nosniff`, its sha256 as the `ETag` (a matching `If-None-Match`
+  gets 304) and,
   for SVG, `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline';
   img-src data:` so a script inside it cannot run even opened directly; 404 when the project
   has no image icon. Wherever a project's name shows — its index row, the switcher's button
-  and menu entries, its page head — an image icon is an `<img>` of this URL (a `?v=` of the
-  file's mtime busts a stale cache) and a text icon is escaped text in the same box. The
+  and menu entries, its page head — an image icon is an `<img>` of this URL (its sha256 as
+  `?v=`: a new image busts a stale cache, an unchanged one stays cached whatever else changes)
+  and a text icon is escaped text in the same box. The
   page's favicon stays sluice's mark.
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
   read like a run history: its id with its state as badges beside it (the status glyph and
@@ -737,11 +794,15 @@ and log pages then open one Datastar SSE stream each (`GET /stream`, `/projects/
 `/projects/<name>/log/stream`, `/log/stream`), and a step's detail one of its own
 (`/projects/<name>/steps/<id>/stream`, under the `sver` signal; the drawer ends the previous
 one when it shows another step). The index and project pages carry a `ver` signal, a hash of
-the stats (mtime, size) of the files they read (`project.json`, `plan.json`, `state.json`,
-`log.jsonl`, `inbox.json`) and, on the project page, of the `stderr.log` of every running
-step's runs, so a progress line moves while an agent works; a step's version adds the step and
-the stderr of its runs. The server polls those stats about once a second off the event loop
-(never blocking the runner or the MCP tools); when they change it re-renders the page's parts
+what they show, read from the database in one snapshot: the index (and the inbox page) the
+runner's liveness and every project's name and change counter (`projects.ver`, §2) — plus, on
+the index, the stats (mtime, size) of the `stderr.log` of every running step's runs; a project
+page the runner's liveness, its own counter, the number of open inbox items (the nav's badge)
+and its running steps' `stderr.log` stats, so a progress line moves while an agent works; a
+step's version adds the step and the stderr of its runs; a log page's, its log's last seq and
+size. The server polls those versions about once a second off the event loop, each poll a
+short read that holds nothing between polls (never blocking the runner or the MCP tools); when
+they change it re-renders the page's parts
 (each an element with an id: the project page's summary, graph, result and nav badge; the
 Threads tab's threads and nav badge) and sends
 a `datastar-patch-elements` event for each part that differs, then the new version. An idle
@@ -832,12 +893,12 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `projects_list` | – | `[{name, description, rev, counts, archived, paused, icon?}]`; `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
 | `project_create` | `name, description?, icon?` | `{name}` (with an empty plan) |
 | `project_update` | `name, description?, archived?, paused?, icon?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
-| `project_delete` | `name` | `{deleted}`: removes the project's directory (plan, state, log, inbox, runs); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running |
+| `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls and submissions in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name starts clean |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
-| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed) |
-| `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's latest record |
+| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed) |
+| `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's row (a finished call's row goes with its last record, §6b) |
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
 | `step_add` | `project, step, spec, reason?, start? = false` | `{rev}`: `plan_patch` adding one step at the current rev |
@@ -845,15 +906,15 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `step_remove` | `project, steps?, tags?, reason?` | `{rev, steps}`: removes the selected steps in one edit; refused while one runs or something left reads it |
 | `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
 | `step_cancel` | `project, steps?, tags?, reason?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); refused unless every one is running |
-| `plan_history` | `project, since_rev?` | the `plan.edit`, `plan.input`, `step.output` and `step.retry` records still in the log (with `rev` > `since_rev`) |
+| `plan_history` | `project, since_rev?` | every edit (`plan.edit` records from `plan_edits`, back to rev 1) and the `plan.input`, `step.output` and `step.retry` records still in the log, in seq order, each with its `seq` (with `rev` > `since_rev`) |
 | `plan_set_input` | `project, name, value, reason?` | `{ok}` |
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
 | `step_set_output` | `project, step, outputs, reason?, force?` | `{ok}` (§6: refused while what it reads is not ready, unless `force`) |
 | `step_retry` | `project, steps?, tags?, reason?` | `{steps}` (each failed, stale or manual); a failed scattered step re-runs only its failed items when its inputs are unchanged (§6) |
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
-| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
-| `verify` | `project?` | `{ok, problems: [{where, message}]}` (§6a) |
+| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
+| `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
 | `status` | `project, steps?, tags?, brief? = false` | only the steps selected by id and/or tag when given; with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
@@ -863,14 +924,15 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 
 ## 8a. The inbox
 
-Each project has an inbox, `inbox.json`: `{"items": [...]}` in posting order, written atomically
-under the project's flock (like `state.json`), and not trimmed with the log. An item is `{id,
+Each project has an inbox: its `inbox` rows (§2) in posting order, not trimmed with the log.
+An item is `{id,
 title, body?, ui?, input?, from?, status, created, answer?, answered?, closed?, reason?}`: `id`
 is `i<n>` (one more than the highest in the project), `body` markdown, `ui` an OpenUI Lang
 program, `input` a plan input, `from` who asked (a step id, an agent), `status` `open`,
 `answered` or `closed`, the times ISO UTC. Only an open item changes, once: answering or closing
 anything else is refused (`conflict` with its `status`), which is what makes a stale button or a
-second answer harmless. Every change appends one log record (§6b), so `log_wait(project,
+second answer harmless. Every change appends one log record (§6b) in the same transaction as
+the item's change (an answer that sets a plan input, that input's too), so `log_wait(project,
 since_seq, kinds=["inbox"])` and `sluice watch --kinds inbox` wake whoever waits on it.
 
 An **answer** is `{action: string, params?: object, values?: object, text?: string}` (nothing
@@ -973,15 +1035,15 @@ log's. Agents post through `fn_call`. Direct callers can read with `log_read`/`l
 (`threads: [name]`); the agent functions above deliver addressed messages into their live
 sessions. Plans use thread functions as ordinary steps.
 - `thread.post`: inputs `{thread: string, body: string, from: string, to: string?, data: Any?}`,
-  outputs `{seq: int}`. Appends under the project's flock, so concurrent posters get distinct,
-  increasing seqs.
+  outputs `{seq: int}`. Appends in its own write transaction, so concurrent posters get
+  distinct, increasing seqs.
 - `thread.wait`: inputs `{thread: string, since_seq: int?, to: string?, timeout: int?,
   wake: string?}`, outputs `{messages: Any[], last_seq: int}`: the messages after `since_seq`
-  (default 0: all) and, with `to`, only those addressed to it or to nobody; blocks (polling the
+  (default 0: all) and, with `to`, only those addressed to it or to nobody; blocks (reading the
   log every 0.5 s) until there is at least one or `timeout` s (default 300) pass, then
   `messages` is empty. With `wake: "questions"` a note (`needs_reply` false) does not end the
   wait: it comes back with the next question, or at the timeout. `last_seq` is the log's last
-  seq, to pass back as `since_seq`.
+  seq (§6b: seqs are the home's, so a log's have gaps), to pass back as `since_seq`.
 
 **`inline.bash`** and **`inline.python`**: code given as a string, for a check or a small
 transform no fn exists for. Both are open (§5): each extra input the step binds is visible to the
@@ -998,7 +1060,7 @@ variable; `value` is what it assigns to `out`, declared outputs come from `out` 
 
 **`inbox.ask`**: inputs `{title: string, body: string?, ui: string?}`, outputs `{answer: {action:
 string, params: Any?, values: Any?, text: string?}}`. It posts an item to the project's inbox
-(§8a) with `from` = the step (`call <run_id>` for a call) and polls `inbox.json` every 0.5 s
+(§8a) with `from` = the step (`call <run_id>` for a call) and reads the item every 0.5 s
 until the item is answered (the answer is the output) or closed (the step fails with `inbox item
 <id> was closed without an answer: <reason>`). It waits as long as it takes. If this step
 already has an open item with the same title, body and ui (a run killed by a runner restart,
@@ -1011,7 +1073,7 @@ harnesses with monitors (e.g. Claude Code's Monitor tool) the shell form is `slu
 without `-p`) with the same filter as `log_read`, from the end of the log (or after `--since-seq`),
 printing each matching record as one JSON line (flushed) as it is appended, and never exits
 (`--wake questions` holds notes and prints them with the next record that is not one). It
-reads the file only; it needs no runner or server.
+reads the home's database only; it needs no runner or server.
 
 ## 11. Conventions
 
