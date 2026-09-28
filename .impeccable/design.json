@@ -1,39 +1,54 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-26T22:21:17Z",
+  "generatedAt": "2026-09-28T16:00:00Z",
   "title": "Design System: sluice dashboard",
   "extensions": {
     "colorMeta": {
-      "primary": {
+      "accent": {
         "role": "primary",
-        "displayName": "Primary green",
-        "canonical": "oklch(0.48 0.12 158)"
+        "displayName": "The logo's blue",
+        "canonical": "oklch(0.617 0.2 257)",
+        "purpose": "The one accent: focus, selection, link underlines; and running."
       },
       "canvas": {
         "role": "neutral",
-        "displayName": "Canvas",
-        "canonical": "oklch(0.975 0.008 190)"
+        "displayName": "Cream canvas",
+        "canonical": "oklch(0.98 0.017 88)"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Navy ink",
+        "canonical": "oklch(0.308 0.112 262)"
       },
       "status-attention": {
         "role": "status",
-        "displayName": "Attention amber"
+        "displayName": "Harvest gold (stale, awaiting reply, quiet)"
+      },
+      "status-paused": {
+        "role": "status",
+        "displayName": "Plum (paused)"
       },
       "badge": {
         "role": "status",
-        "displayName": "The one red (open-inbox count)"
+        "displayName": "The one coral (open-inbox count)",
+        "canonical": "oklch(0.69 0.2 30)"
       }
     },
     "typographyMeta": {
       "meta": {
         "displayName": "Meta",
         "purpose": "What a run says about itself: times, costs, counts, labels."
+      },
+      "display": {
+        "displayName": "Display (Archivo)",
+        "purpose": "The wordmark, titles, section heads, step ids: heavy, a touch wide, 1970s American."
       }
     },
     "shadows": [
       {
         "name": "lift",
-        "value": "0 1px 2px oklch(0.23 0.018 220 / 6%), 0 12px 32px oklch(0.23 0.018 220 / 12%)",
-        "purpose": "The step drawer only."
+        "value": "0 1px 2px oklch(0.308 0.112 262 / 8%), 0 14px 36px oklch(0.308 0.112 262 / 14%)",
+        "purpose": "What floats over the page: the modal drawer, the switcher's menu, the skip link."
       }
     ],
     "motion": [
@@ -66,7 +81,7 @@
       "kind": "card",
       "refersTo": "card",
       "description": "One step on the board.",
-      "html": "<a class=\"ds-card\"><span class=\"ds-hd\"><span class=\"ds-g\"></span><span>Lane B: the UI on top of the interface</span></span><span class=\"ds-ln\">Canvas UI with preview and overlays</span><span class=\"ds-meta\"><span>claude \u00b7 sonnet \u00b7 $0.60</span><span>3m 26s</span></span></a>",
+      "html": "<a class=\"ds-card\"><span class=\"ds-hd\"><span class=\"ds-g\"></span><span>Lane B: the UI on top of the interface</span></span><span class=\"ds-ln\">Canvas UI with preview and overlays</span><span class=\"ds-meta\"><span>claude · sonnet · $0.60</span><span>3m 26s</span></span></a>",
       "css": ".ds-card{display:flex;flex-direction:column;gap:3px;width:248px;height:112px;padding:10px 12px;background:#fff;border:1px solid rgba(20,20,40,.1);border-radius:.625rem;font:14px/20px Inter,system-ui,sans-serif;color:#1d2a30;text-decoration:none}.ds-hd{display:flex;gap:8px;font-weight:500}.ds-g{width:14px;height:14px;border-radius:50%;background:#2b9a55;margin-top:3px;flex:none}.ds-ln{padding-left:22px;font-size:12.5px;color:#5c7176;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-meta{margin-top:auto;padding-left:22px;display:flex;justify-content:space-between;font-size:11px;color:#5c7176}"
     },
     {
@@ -88,12 +103,12 @@
   ],
   "narrative": {
     "northStar": "The plan is the page",
-    "overview": "A calm, server-drawn board of the blocks of work for one person supervising many agents; kin to hirsel. Ids and plumbing live in the step drawer.",
+    "overview": "A calm, server-drawn board of the blocks of work for one person supervising many agents, in the logo's world: navy ink on cream (cream on deep navy), the logo's blue for running and the one accent, coral only for the inbox count. Ids and plumbing live in the step drawer.",
     "keyCharacteristics": [
       "One thing per slot",
       "Needs you first",
       "Shape carries status",
-      "One red"
+      "One coral"
     ],
     "rules": [
       {

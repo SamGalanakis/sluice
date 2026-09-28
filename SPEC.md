@@ -495,7 +495,8 @@ archived ones last), then that scope's sections (a project's Plan · Log · Hist
 or Projects · Log · Functions), the current one marked (`aria-current` and a bar, not colour
 alone; a step's page is inside Plan), and Inbox at the right, every value HTML-escaped (plans, logs, run output and inbox items are
 untrusted). The Inbox link carries the count of open items across all projects as the
-dashboard's one red badge (none when nothing waits); nothing else is red. A step's status is a
+dashboard's one coral badge (none when nothing waits); coral, the logo's, is spent on nothing
+else, and a failure is never coral or red. A step's status is a
 drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
 hand, circular arrow stale, cross failed, ring with two bars paused, dashed ring with a slash
 skipped) with its word for assistive technology, never colour
@@ -503,19 +504,22 @@ alone. Every script the dashboard runs is served by sluice from `static/`: its o
 vendored copies (the version in each name) of Datastar v1.0.4 (`datastar-rocket-1.0.4.js`)
 and, on inbox pages, `@openuidev/lang-core@0.3.0` (jsDelivr's ESM build, with its imports of
 `zod@4.6.5` and `ci-info@4.4.0` rewritten to the vendored files next to it), so no third-party
-script runs with the dashboard's origin, which can reach `/mcp`. The one external asset is the
-Inter font's stylesheet from cdn.jsdelivr.net (`@fontsource-variable/inter@5.3.0`; the system
-sans without it). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
+script runs with the dashboard's origin, which can reach `/mcp`. The only external assets are
+two font stylesheets from cdn.jsdelivr.net (`@fontsource-variable/archivo@5.3.0/wdth.css` for
+display, `@fontsource-variable/public-sans@5.3.0` for text; the system sans without them). The
+nav's brand is the owner's mark (`static/logo.svg`) beside the wordmark "sluice" as live text,
+one link to the index; every page links the same mark as its icon (`static/favicon.svg`). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
 raw HTML escaped, unsafe link schemes refused).
 - Mermaid (`flowchart LR`, `plan_view`'s text format for agents; the dashboard does not use it):
   plan inputs as rounded nodes, steps as boxes labelled
   `id / fn / status` (a scattered step shows `done/total`; a step's doc, one line of at most 60
   characters, below it), plan outputs as rounded nodes, an edge
   per source ref labelled with the output name, one colour class per status (pending grey,
-  running blue, succeeded green, failed red, stale amber, manual outlined; a stale manual step
+  running blue, succeeded green, failed navy ink with a heavy border, stale gold, manual
+  outlined; a stale manual step
   shows as stale).
 - **What waits on a person is the inbox alone** (§8a): its open items, counted by the nav's
-  red badge. The orchestrator posts there whatever it needs from a person. Failed steps,
+  coral badge. The orchestrator posts there whatever it needs from a person. Failed steps,
   missing inputs and messages between agents are the orchestrator's: they show on the board,
   in the summary line and on the Threads tab, never as a call to the person.
 - `GET /projects/<name>/threads` (**Threads**, a tab of the project): every conversation of
@@ -526,7 +530,7 @@ raw HTML escaped, unsafe link schemes refused).
   open question on). A step's messages sit on the left, everyone else's indented. A message that
   asks for a reply (`needs_reply`, true unless the sender marked a note) from someone other
   than a step of the plan, with no later message from that addressee on the thread, is marked
-  "Awaiting reply" (amber, not red) and keeps its thread open, but on a step's thread only while
+  "Awaiting reply" (gold, not coral) and keeps its thread open, but on a step's thread only while
   that step is in the plan and has not succeeded, failed or been skipped (then nobody waits on
   the answer); a note is marked "note". A thread whose step has left the plan shows its id and
   "no longer in the plan". The
@@ -709,7 +713,8 @@ Streams end when the server shuts down; the client reconnects with backoff.
   its name with a Resume switch next to Archive. An `after` edge is drawn dashed; the drawer
   lists a step's After and Tags.
 - `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
-  `GET /static/sluice.js`: the dashboard's script and components.
+  `GET /static/sluice.js`: the dashboard's script and components; `GET /static/logo.svg`,
+  `GET /static/favicon.svg`: the mark (`image/svg+xml`).
 
 `plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML
 document from the same renderer: the summary and the board (cards without links), then every

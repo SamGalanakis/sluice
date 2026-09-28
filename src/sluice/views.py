@@ -2,7 +2,7 @@
 
 - `mermaid(plan, state)`: the plan as a Mermaid flowchart (plan_view's text format, for agents).
 - `index`: every project as one row. What waits on a person is the inbox alone (its count is
-  the nav's red badge); nothing else asks for them.
+  the nav's coral badge); nothing else asks for them.
 - `project_page`: the project's description, then its plan as a board of cards laid out by
   dependency depth (plan inputs left, plan outputs right, edges as inline SVG), drawn entirely
   on the server; a card opens the step's detail (`step_detail`): a drawer on the live page, a
@@ -42,17 +42,21 @@ from .plan import Plan, Ref, Source, Step, source_value, value_of
 from .store import Store
 from .util import read_json, tail_text
 
-CLASSES = {"pending": "fill:#f1f1f1,stroke:#999,color:#333",
-           "running": "fill:#dbeafe,stroke:#2563eb,color:#1e3a8a",
-           "succeeded": "fill:#dcfce7,stroke:#16a34a,color:#14532d",
-           "failed": "fill:#fee2e2,stroke:#dc2626,color:#7f1d1d",
-           "stale": "fill:#fef3c7,stroke:#d97706,color:#78350f",
-           "skipped": "fill:#fff,stroke:#999,color:#777,stroke-dasharray:3 3",
-           "manual": "fill:#fff,stroke:#16a34a,stroke-width:3px,stroke-dasharray:6 3"}
+# the dashboard's palette (static/dashboard.css, light), one class per status; failed is ink
+# with a heavy border, never coral (coral is the inbox badge's alone)
+CLASSES = {"pending": "fill:#f5eede,stroke:#788190,color:#46587a",
+           "running": "fill:#e1ebf8,stroke:#1f81fa,color:#0d2b67",
+           "succeeded": "fill:#e3eedb,stroke:#11813c,color:#0d2b67",
+           "failed": "fill:#fdf8ec,stroke:#0d2b67,stroke-width:3px,color:#0d2b67",
+           "stale": "fill:#f6ebcf,stroke:#916100,color:#0d2b67",
+           "skipped": "fill:#fdf8ec,stroke:#788190,color:#46587a,stroke-dasharray:3 3",
+           "manual": "fill:#fdf8ec,stroke:#11813c,stroke-width:3px,stroke-dasharray:6 3"}
 # Datastar with Rocket (web components), served from static/ like every script the dashboard
 # runs; static/sluice.js imports the same module
 DATASTAR_JS = "/static/datastar-rocket-1.0.4.js"
-FONT_CSS = "https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.3.0/index.css"
+# Archivo (weight and width axes) for display, Public Sans for text; the system sans without them
+FONT_CSS = ("https://cdn.jsdelivr.net/npm/@fontsource-variable/archivo@5.3.0/wdth.css",
+            "https://cdn.jsdelivr.net/npm/@fontsource-variable/public-sans@5.3.0/index.css")
 # Keep the stream open across server restarts and network blips (Datastar backs off to 30 s).
 # Reconnect for good, and within 3 s once the server is back (Datastar backs off to 30 s).
 STREAM_OPTIONS = "{retry: 'always', retryMaxCount: 1000000, retryMaxWait: 3000}"
@@ -278,20 +282,16 @@ TRAY = ('<svg class="tray" viewBox="0 0 20 20" width="20" height="20" aria-hidde
 
 
 def nav_inbox(count: int | None, current: bool = False) -> str:
-    """The nav's Inbox link: its count of open items is the dashboard's one red badge."""
+    """The nav's Inbox link: its count of open items is the dashboard's one coral badge."""
     badge = f' <span class="badge" title="open items">{count}</span>' if count else ""
     cur = ' aria-current="page"' if current else ""
     return f'<a id="nav-inbox" href="/inbox"{cur}>{TRAY}<span class="t">Inbox</span>{badge}</a>'
 
 
 NAV = (("/log", "Log"), ("/fns", "Functions"))  # with no project chosen; "/" is the switcher's
-# The wordmark's mark: a gate across a channel, in ink.
-BRAND_MARK = ('<svg class="mark" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">'
-              '<rect width="20" height="20" rx="5" fill="currentColor"/>'
-              '<path d="M4 13.5c2-1.6 4-1.6 6 0s4 1.6 6 0" fill="none" stroke="var(--card)" '
-              'stroke-width="1.6" stroke-linecap="round"/>'
-              '<path d="M7 4.5v5.5M13 4.5v5.5M7 7h6" fill="none" stroke="var(--card)" '
-              'stroke-width="1.6" stroke-linecap="round"/></svg>')
+# The brand: the owner's mark (static/logo.svg) and the wordmark as live text beside it.
+BRAND_MARK = ('<img class="mark" src="/static/logo.svg" width="27" height="26" alt="">'
+              '<span class="wordmark" aria-hidden="true">sluice</span>')
 CHEVRON = ('<svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
            '<path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" '
            'stroke-linecap="round" stroke-linejoin="round"/></svg>')
@@ -355,7 +355,7 @@ def top_nav(store: Store | None, project: str | None, tab: str | None, here: str
             inbox: int | None, sub: bool = False) -> str:
     """The one nav: the mark, the project switcher, the sections of the chosen project (Plan,
     Threads, Log, History, Functions) or of all of them (Log, Functions; the switcher's "All
-    projects" is the index), and the Inbox with the one red badge."""
+    projects" is the index), and the Inbox with the one coral badge."""
     if project is not None:
         p = quote(project)
         hrefs = {"plan": (f"/projects/{p}", "Plan"),
@@ -401,7 +401,9 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
     return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{e(title)} · sluice</title>"
-            f'<link rel="stylesheet" href="{FONT_CSS}"><style>{CSS}</style>{head}</head>\n'
+            f'<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
+            + "".join(f'<link rel="stylesheet" href="{u}">' for u in FONT_CSS)
+            + f"<style>{CSS}</style>{head}</head>\n"
             f"<body{body_attrs}>{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"
             "</body></html>\n")
 

@@ -59,7 +59,7 @@ def test_inbox_pages_and_the_badge(store, port):
     for path in ("/", "/projects/p", "/fns", "/log", "/projects/p/log", "/inbox"):
         code, page = get(port, path)
         assert code == 200 and badge(page) == 2, path
-    assert page.count('class="badge"') == 1  # the one red badge
+    assert page.count('class="badge"') == 1  # the one coral badge
     code, page = get(port, "/inbox")
     assert "First?" in page and "Second?" in page and '<script type="module" ' \
         'src="/static/inbox.js">' in page and "@get('/inbox/stream'" in page
@@ -87,7 +87,9 @@ def test_everything_from_an_item_is_escaped(store, port):
                          f"\n\n[link](javascript:alert(3))", ui=f'root = Text("{x}")',
                          sender=x)["id"]
     page = get(port, "/inbox")[1]
-    assert "<script>alert" not in page and "<img" not in page
+    # the one image on the page is the nav's own mark
+    assert "<script>alert" not in page and re.findall(r"<img [^>]*", page) == [
+        '<img class="mark" src="/static/logo.svg" width="27" height="26" alt=""']
     assert "title &lt;script&gt;alert(1)&lt;/script&gt;" in page
     assert "<p>body &lt;script&gt;alert(1)&lt;/script&gt;</p>" in page
     assert 'href="javascript' not in page

@@ -44,6 +44,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 # names; lang-core's imports rewritten to these files), so no third-party script runs here
 STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json",
                 "sluice.js": "text/javascript", "nav.js": "text/javascript",
+                "logo.svg": "image/svg+xml", "favicon.svg": "image/svg+xml",
                 **dict.fromkeys(["datastar-rocket-1.0.4.js", "lang-core-0.3.0.js",
                                  "zod-4.6.5-v4.js", "zod-4.6.5-v4-core.js", "ci-info-4.4.0.js"],
                                 "text/javascript")}

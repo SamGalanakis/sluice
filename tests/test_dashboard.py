@@ -84,6 +84,26 @@ def fresh_beat():
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# ---- the brand: the owner's mark and the favicon ---------------------------------------------
+
+
+def test_the_logo_and_the_favicon_are_served_as_svg_and_every_page_links_the_favicon(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    for name in ("logo.svg", "favicon.svg"):
+        r = urllib.request.urlopen(f"http://127.0.0.1:{port}/static/{name}", timeout=10)
+        assert r.status == 200 and r.headers["content-type"].startswith("image/svg+xml"), name
+        assert r.read().decode().startswith("<svg"), name
+    icon = '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
+    for path in ("/", "/projects/p", "/projects/p/threads", "/projects/p/log", "/log", "/fns",
+                 "/inbox", "/projects/p/inbox", "/projects/p/steps/a"):
+        code, page = get(port, path)
+        assert code == 200 and icon in page, path
+    # the nav's brand is the mark with the wordmark beside it, one link named for assistive tech
+    page = get(port, "/")[1]
+    assert re.search(r'<a class="brand" href="/" aria-label="sluice: all projects">'
+                     r'<img class="mark" src="/static/logo.svg"[^>]* alt="">', page)
+
+
 # ---- the Host allowlist (the loopback trust boundary) --------------------------------------
 
 

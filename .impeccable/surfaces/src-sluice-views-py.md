@@ -19,10 +19,7 @@ THESIS: The plan is the page: a quiet left-to-right board of the blocks of work,
 per slot (outcome glyph, what it does, what it said last, how long). It refuses the node-editor look
 (ports and ids everywhere) and the CI table of every job.
 
-OWN-WORLD: Kin to hirsel: slate neutrals with a teal cast, near-white canvas / charcoal field, white
-cards one step above the canvas, 10% ink hairlines, 0.625rem radii, Inter over system sans, one type
-ramp with an 11px meta step (tabular, muted, sentence case, never uppercase). Status ramp: active blue
-(running), success green, attention amber (stale, needs you), idle grey; red only for the open-inbox count.
+OWN-WORLD: The logo's world (redesign of 2026-09-28, brief-pinned by the owner, no roll): 1970s American supergraphics. Navy ink on a cream canvas, cream on deep navy in the dark; the logo's blue as the one accent and the colour of running; coral only in the logo and the inbox count. Archivo, heavy and a touch wide, for the wordmark, titles and step ids; Public Sans for text; flat fields, hairlines, the mark's rounded corners (14/10/5px). Status ramp: blue running, kelly green succeeded, harvest gold attention, plum paused, grey-navy idle, ink failed.
 
 STORY: Sam reads "Needs you" first (answer, input, failed, message), sees the board move, opens a block
 to read its prompt, its live progress and what it produced, and leaves.

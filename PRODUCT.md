@@ -45,7 +45,7 @@ progress line and its typed outputs, with the one human decision point (the Inbo
 
 - Read-only except answering inbox items (the one write, shared with the MCP tool).
 - Server-rendered HTML; every page works without JavaScript; Datastar SSE streams patch only the
-  parts that changed. Every script is served by sluice itself (vendored); only the font comes
+  parts that changed. Every script is served by sluice itself (vendored); only the fonts come
   from cdn.jsdelivr.net.
 - Every value is untrusted and HTML-escaped.
 - Statuses: pending, running, succeeded, failed, stale; a succeeded step may be manual (value set
@@ -56,7 +56,10 @@ progress line and its typed outputs, with the one human decision point (the Inbo
 
 ## Brand Commitments
 
-- The dashboard's one red badge: only the count of open inbox items is red.
+- The logo (the owner's SVG) is the brand: its navy, cream and blue are the dashboard's
+  palette, the blue its one accent and the colour of running.
+- The dashboard's one coral badge: coral appears only in the logo and the count of open inbox
+  items. A failure is never coral.
 - Plain, factual copy in sluice's own terms; no AI mention in teammate-visible text.
 
 ## Evidence on Hand
@@ -67,10 +70,10 @@ progress line and its typed outputs, with the one human decision point (the Inbo
 
 ## Product Principles
 
-1. One place asks the person: the inbox, with the one red badge. Nothing else calls for them.
+1. One place asks the person: the inbox, with the one coral badge. Nothing else calls for them.
 2. The plan is the page: show the graph of work, not a table about it.
 3. Every block explains itself: prompt in, progress now, typed outputs out.
-4. Calm when healthy: colour marks state, never decoration; red is reserved.
+4. Calm when healthy: colour marks state, never decoration; coral is reserved.
 5. Works as plain HTML first; live updates are an enhancement.
 
 ## Accessibility & Inclusion
