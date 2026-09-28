@@ -12,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from sluice import util
+from sluice import util, views
 from tests.conftest import create, d, message
 
 
@@ -178,10 +178,11 @@ def test_the_settings_cog_and_its_menu_are_on_every_page(store, port):
         assert '<form class="prefs" method="post" action="/settings" aria-label="Settings">' \
             in menu
         assert f'<input type="hidden" name="next" value="{html.escape(path)}">' in menu
-        # the theme is a radio group, none picked (the page follows the OS); value types off
-        assert '<fieldset class="theme"><legend>Theme</legend>' in menu
-        assert re.findall(r'<input type="radio" name="theme" value="(\w+)"( checked)?>', menu) \
-            == [("light", ""), ("dark", "")]
+        # the theme is a radio group of every preset, none picked (the page follows the OS);
+        # value types a checkbox, off
+        assert '<fieldset class="themes"><legend>Theme</legend>' in menu
+        assert re.findall(r'<input type="radio" name="theme" value="([\w-]+)"( checked)?>',
+                          menu) == [(t, "") for t in views.THEMES]
         assert ('<input type="hidden" name="types" value="0"><label class="check">'
                 '<input type="checkbox" name="types" value="1">Show value types</label>') in menu
         assert '<button type="submit" class="save">Save</button>' in menu
@@ -249,6 +250,71 @@ def test_a_page_renders_the_settings_its_cookies_name(store, port):
     assert '<html lang="en">' in page
     assert 'name="theme" value="light" checked' not in page
     assert 'name="theme" value="dark" checked' not in page
+
+
+def test_the_theme_picker_lists_every_preset_with_its_swatch(store, port):
+    create(store, "p", {})
+    _, page = get(port, "/projects/p")
+    menu = re.search(r'<fieldset class="themes">.*?</fieldset>', page)[0]
+    rows = re.findall(r'<label><input type="radio" name="theme" value="([\w-]+)"(?: checked)?>'
+                      r'(<span class="swatch.*?</span>)<span>([^<]+)</span><svg class="tick"',
+                      menu)
+    assert [(t, name) for t, _, name in rows] == list(views.THEMES.items())
+    for theme, swatch, _ in rows:
+        # drawn in the theme's own tokens: its canvas, ink, accent and badge
+        assert swatch == (f'<span class="swatch" data-theme="{theme}" aria-hidden="true">'
+                          'Aa<i class="sw-accent"></i><i class="sw-badge"></i></span>'), theme
+
+
+def test_every_theme_round_trips_through_the_route_to_the_page(store, port):
+    create(store, "p", {})
+    for theme in views.THEMES:
+        code, headers, _ = send(port, "POST", "/settings", {"theme": theme, "next": "/"})
+        assert code == 303, theme
+        cookie = cookies(headers)["sluice_theme"]
+        value = cookie.split(";", 1)[0].split("=", 1)[1]
+        assert value == theme
+        _, _, page = send(port, "GET", "/projects/p",
+                          headers={"Cookie": f"sluice_theme={value}"})
+        assert f'<html lang="en" data-theme="{theme}">' in page, theme
+        assert f'<input type="radio" name="theme" value="{theme}" checked>' in page, theme
+    # an id it does not know ("system" is not a theme) is refused by the route and ignored in
+    # a cookie: nothing picked, the page follows the OS and no preset is marked
+    for junk in ("sepia", "system", "Canyon", "night_sky"):
+        code, headers, _ = send(port, "POST", "/settings", {"theme": junk, "next": "/"})
+        assert code == 400 and not cookies(headers), junk
+        _, _, page = send(port, "GET", "/projects/p",
+                          headers={"Cookie": f"sluice_theme={junk}"})
+        assert '<html lang="en">' in page, junk
+        assert not re.search(r'name="theme" value="[\w-]+" checked', page), junk
+
+
+def _theme_tokens() -> dict[str, dict[str, str]]:
+    """Each theme's declarations in dashboard.css, by the ids its rules' selectors name (a rule
+    may name several); the unpicked fallback (`:root:not([data-theme])`) under "default"."""
+    css = re.sub(r"/\*.*?\*/", "", views.CSS, flags=re.DOTALL)
+    themes: dict[str, dict[str, str]] = {}
+    for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        names = re.findall(r'\[data-theme="([\w-]+)"\]', selector)
+        if ":root:not([data-theme])" in selector:
+            names.append("default")
+        decls = dict(re.findall(r"(--[\w-]+|color-scheme)\s*:\s*([^;]+);", body))
+        for name in names:
+            themes.setdefault(name, {}).update(decls)
+    return themes
+
+
+def test_every_theme_defines_every_colour_token(store):
+    themes = _theme_tokens()
+    default = themes.pop("default")
+    colours = {k for k in default if k.startswith("--")}
+    assert {"--background", "--foreground", "--accent", "--badge", "--lift"} <= colours
+    # the CSS has a block for every preset (Sluice Light and Sluice Dark share the fallback's
+    # selector), and no other
+    assert set(themes) == set(views.THEMES)
+    for theme, decls in themes.items():
+        assert colours <= set(decls), (theme, colours - set(decls))
+        assert decls["color-scheme"] in ("light", "dark"), theme
 
 
 # ---- pages ------------------------------------------------------------------------------

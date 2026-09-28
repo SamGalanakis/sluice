@@ -1,8 +1,10 @@
 // The nav's two menus, the project switcher and the settings cog, are <details>: they open and
 // work without this. This closes them on a click elsewhere or Escape, as a menu does, and makes
-// a setting apply at once, without the menu's Save: the theme (`data-theme` on <html>, none for
-// System) and value types (`show-types`, which the Types switch in a step's drawer also turns),
-// each kept by posting it to /settings, which sets the cookie every page is rendered from.
+// a setting apply at once, without the menu's Save: the theme (its id as `data-theme` on
+// <html>; until one is picked the attribute is absent, the page follows the OS and the menu
+// marks the matching preset) and value types (`show-types`, which the Types switch in a
+// step's drawer also turns), each kept by posting it to /settings, which sets the cookie
+// every page is rendered from.
 
 const root = document.documentElement;
 const menus = () => document.querySelectorAll("nav.top details[open]");

@@ -498,9 +498,9 @@ archiving a project, and pausing or resuming a project or a step. On a loopback 
 route refuses (403, plain text) a request whose `Host` does not name this machine
 (`127.0.0.1`, `localhost`, `[::1]`); a deliberate non-loopback bind lifts that, and the
 write routes still refuse a foreign `Origin` (DNS rebinding satisfies `Origin == Host`).
-Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
-`prefers-color-scheme` unless the settings menu chose one, usable at phone width, keyboard
-reachable), every page on one centred
+Server-rendered HTML with inline CSS (`static/dashboard.css`; Sluice Light and Sluice Dark
+via `prefers-color-scheme` unless the settings menu chose a theme, usable at phone width,
+keyboard reachable), every page on one centred
 column that the top nav's content shares, one nav and no second row: a project switcher whose
 button is the chosen project's name ("All projects" when none; its menu lists the projects, the
 archived ones last), each name led by the project's icon when it has one (§2), then that scope's
@@ -743,17 +743,21 @@ Streams end when the server shuts down; the client reconnects with backoff.
   lists a step's After and Tags.
 - **Settings**: the nav's cog (named "Settings", on every page and at every width) opens a
   menu (a `<details>`; a click elsewhere or Escape closes it) holding a form: the theme, a
-  radio group of Light and Dark (until one is picked, the page follows the OS's
-  `prefers-color-scheme` and the menu marks that one; once picked it stays), and "Show value
-  types" (the drawer's Types switch, as a setting), with a Save button that only a page
-  without JavaScript shows. The choices live in the browser's cookies, `sluice_theme`
-  (`light` or `dark`; none until one is picked) and `sluice_types` (`1`), which every route reads
+  radio group (legend "Theme") of every preset in `views.THEMES`, each row its swatch (the
+  theme's canvas with "Aa" in its ink and a dot of its accent and of its badge) and its name,
+  the chosen one ticked: Sluice Light (`light`), Sluice Dark (`dark`), Canyon (`canyon`),
+  Ranger (`ranger`), Diner (`diner`), Night Sky (`night-sky`) and Wood Panel (`wood-panel`)
+  (until one is picked, the page follows the OS's `prefers-color-scheme` between the two
+  sluice presets and the menu marks that one; once picked it stays); then
+  "Show value types" (the drawer's Types switch, as a setting), with a Save button that only
+  a page without JavaScript shows. The choices live in the browser's cookies, `sluice_theme`
+  (a preset's id; none until one is picked) and `sluice_types` (`1`), which every route reads
   (anything else in them is ignored): a page renders the theme on `<html>` as `data-theme`
   and value types as its `show-types` class, so it never shows the wrong theme first. With
   JavaScript (`static/nav.js`) a choice applies at once and is posted to the route in the
   background; the Types switch posts the same way. Cookies are per host, not port, so
   dashboards on other ports of this machine share them.
-- `POST /settings`: a form `theme` (`light` or `dark`) and `types` (`0` or `1`; of
+- `POST /settings`: a form `theme` (a preset's id) and `types` (`0` or `1`; of
   several, the last: the menu sends a hidden `0` before its checkbox) each set their cookie
   (`Path=/`, `SameSite=Lax`, `HttpOnly`, `Max-Age` 400 days) or clear it (`0`) when
   present; anything else is 400 and changes nothing. It then redirects (303) to `next` under

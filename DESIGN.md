@@ -178,11 +178,12 @@ repeated: plan inputs and outputs are board nodes, not tables; history is the lo
 ## Colors
 
 Tokens in `src/sluice/static/dashboard.css` are the only source of colour (the Mermaid
-classes in `views.py` repeat the light set as hex for agents); `:root` holds each as
-`light-dark(light, dark)`, so the theme is `color-scheme` alone: `light dark` (the OS's, by
-`prefers-color-scheme`) unless the settings menu chose one, which the server renders on
-`<html>` as `data-theme="light"` or `"dark"` (`:root[data-theme=…]` then fixes
-`color-scheme`), so a page never flashes the wrong theme. The logo's colours are the source of
+classes in `views.py` repeat the Sluice Light set as hex for agents). What follows is the
+house pair, Sluice Light and Sluice Dark; the other presets are under Themes, below. The
+pair's block holds each token as `light-dark(light, dark)`, so an unpicked page is
+`color-scheme` alone: `light dark` (the OS's, by `prefers-color-scheme`) when `<html>` has no
+`data-theme`, and `data-theme="light"` or `"dark"` fixes it. The logo's colours are the source
+of
 truth: coral `#ff5c49`→`#ff6551`, blue `#258aff`→`#1878f5`, navy `#0b285f`→`#102e70`; the
 flat tokens take the midpoints. Light: cream canvas `#fdf8ec`, navy ink `#0d2b67`. Dark: deep
 navy canvas `#071431`, cream ink `#f6f0e0`. Two colours are mixed in sRGB, never oklch: in
@@ -225,7 +226,48 @@ only by shape, and of coral always.
 **The One Coral Rule.** Coral (`badge`, the logo's `#ff604d`) is the open-inbox count in the nav
 and nothing else, besides the logo itself; its number is deep navy (`badge-ink`, 6.0:1). A
 failed step reads through its cross glyph, full-ink border and bold error line, not coral and
-not red.
+not red. In another theme `badge` is that theme's one alert hue (a poppy, fire-danger orange,
+the booths' cherry), under the same rule.
+
+### Themes
+The settings menu offers seven presets; until one is picked the page follows the OS between
+the house pair (their shared block is also the fallback, `:root:not([data-theme])`). Each
+preset is a full set of
+the colour tokens under `[data-theme="<id>"]` in `dashboard.css`, with its `color-scheme`:
+`background`, `foreground`, `card`, `secondary`, `muted`, `muted-foreground`, `accent`,
+`accent-ink`, `primary`, `primary-foreground`, `border`, `border-strong`, `input`, `edge`,
+`edge-head`, `status-idle`, `status-success`, `status-attention`, `status-paused`, `badge`,
+`badge-ink`, `lift` and `scrim`. `ring` and `status-active` are the accent in every theme, set
+once on `:root`. The selectors are bare attributes, not `:root`'s, so a swatch that carries a
+theme's `data-theme` draws itself in that theme's tokens.
+
+| Theme (id) | Scheme | The idea | Canvas · ink · accent · badge |
+|---|---|---|---|
+| Sluice Light (`light`) | light | the logo: navy on cream | cream · navy · the logo's blue · coral |
+| Sluice Dark (`dark`) | dark | the logo at night: cream on deep navy | deep navy · cream · the logo's blue · coral |
+| Canyon (`canyon`) | light | desert sandstone, a cliff's shadow, turquoise water | sandstone `oklch(0.945 0.028 62)` · canyon brown `oklch(0.3 0.07 40)` · turquoise `oklch(0.56 0.1 205)` · poppy `oklch(0.63 0.2 28)` |
+| Ranger (`ranger`) | light | a park service's parchment, pine and lake, ochre signs | parchment `oklch(0.955 0.03 95)` · pine `oklch(0.3 0.07 158)` · lake blue `oklch(0.55 0.12 240)` · fire-danger orange `oklch(0.66 0.18 45)` |
+| Diner (`diner`) | light | mint walls, chrome, charcoal lettering, a jukebox | mint `oklch(0.955 0.028 175)` · charcoal `oklch(0.27 0.025 230)` · jukebox blue `oklch(0.56 0.15 255)` · cherry `oklch(0.56 0.2 22)` |
+| Night Sky (`night-sky`) | dark | a desert night: indigo, starlight, moonlit cyan | indigo `oklch(0.2 0.06 285)` · starlight `oklch(0.945 0.02 90)` · cyan `oklch(0.78 0.11 210)` · sunset coral `oklch(0.72 0.17 35)` |
+| Wood Panel (`wood-panel`) | dark | a 1970s den: walnut, harvest gold, avocado, the TV's glow | walnut `oklch(0.22 0.03 55)` · cream `oklch(0.935 0.03 85)` · TV blue `oklch(0.74 0.1 225)` · burnt orange `oklch(0.7 0.17 45)` |
+
+Every preset keeps these, measured when it is added:
+- **One alert colour**: `badge` is used by the inbox count alone (and the swatch's dot).
+- **Distinct states**: running (the accent), succeeded, stale and quiet (the attention gold),
+  paused, pending, failed (ink) and the badge are apart from each other (the closest pair at
+  least 0.11 in OKLab), and the glyphs still carry every state.
+- **Contrast**: text (`foreground`, `muted-foreground`, `accent-ink`, `status-attention`, a
+  far-off pending id at 72% ink) at least 4.5:1 on the canvas, the card and the box fill;
+  `primary-foreground` on `primary` and `badge-ink` on `badge` at least 4.5:1; the status
+  glyphs, the ring and the edges' arrowheads at least 3:1 on all three.
+- **The mark** keeps its own colours in every theme: it is an `<img>`, never recoloured.
+- **The pair's structure**: canvas under everything, cards one step off it, the box fill between,
+  the secondary fill for hover and the current choice, hairlines as ink at 11-12% and 24-26%.
+
+**Adding a theme**: a line `"<id>": "<Name>"` in `THEMES` in `views.py` (its place there is its
+place in the menu), and a block `[data-theme="<id>"] { color-scheme: light|dark; … }` in
+`dashboard.css` that sets every token above. The route, the picker and its swatch read the
+list; a test fails if a block is missing a token or a theme has no block. Then measure it.
 
 **The Shape Carries It Rule.** Every status has its own drawn glyph (dashed ring, spinning
 ring, check, ring and dot, circular arrow, cross, ring with two bars for paused, dashed ring
@@ -380,11 +422,13 @@ phone), its segments 2px apart: green, blue, gold, ink, then the track.
   36px fill the sections' hover (the secondary fill while open), its edge on the column's;
   named "Settings". A `<details>` like the switcher (`nav.js` closes it on a click elsewhere
   or Escape, focus back on the cog) whose card, 256px, hangs under it flush with the column's
-  right edge, with the lift: "Theme" (a label in meta) over a two-part segmented radio
-  group, Light · Dark (until one is picked the page follows the OS, and the menu marks that
-  one), the choice in the secondary fill with a strong hairline as
-  the inbox's filter; a hairline; then "Show value types", a checkbox (the Types switch's
-  setting). It is a form posting to `/settings`: without script a Save button sends it and
+  right edge, with the lift: "Theme" (a label in meta) over a radio list of the themes, each
+  a 36px row of its swatch (a 50 by 26px chip of its canvas with "Aa" in its ink, 13px Archivo
+  800, and a 7px dot of its accent and of its badge, drawn by its own tokens) and its name,
+  the choice in the secondary fill with a strong hairline as the inbox's filter and a tick at
+  the row's end (until one is picked the page follows the OS, and the menu marks the preset
+  the OS chose); a hairline; then "Show value
+  types", a checkbox (the Types switch's setting). It is a form posting to `/settings`: without script a Save button sends it and
   the page comes back in the chosen theme; with script a choice applies at once and Save is
   hidden. Its rows are 44px on a phone.
 - **Sections** follow the switcher: in a project, Plan, Threads, Log, History, Functions; with

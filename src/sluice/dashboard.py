@@ -54,8 +54,8 @@ AUTHOR = "dashboard"
 HTTP_STATUS = {"not_found": 404, "conflict": 409}
 # the Host names this machine answers to on a loopback socket (the SDK's list for /mcp)
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
-# the settings menu's cookies: the theme ("light" or "dark"; none follows the OS) and "1" to
-# show value types; kept for 400 days, a browser's longest
+# the settings menu's cookies: the theme (an id of views.THEMES; none until one is picked,
+# when the OS's shows) and "1" to show value types; kept for 400 days, a browser's longest
 THEME_COOKIE, TYPES_COOKIE = "sluice_theme", "sluice_types"
 COOKIE_AGE = 400 * 24 * 3600
 
@@ -86,7 +86,7 @@ def _viewer(request: Request) -> views.Viewer:
     address."""
     theme = request.cookies.get(THEME_COOKIE)
     query = request.url.query
-    return views.Viewer(theme=theme if theme in ("light", "dark") else None,
+    return views.Viewer(theme=theme if theme in views.THEMES else None,
                         types=request.cookies.get(TYPES_COOKIE) == "1",
                         path=request.url.path + (f"?{query}" if query else ""))
 
@@ -468,7 +468,7 @@ class Dashboard:
         return FileResponse(f, media_type=ICON_TYPES[f.suffix[1:]], headers=headers)
 
     async def settings(self, request: Request) -> Response:
-        """The settings menu's form: `theme` (light or dark) and `types` ("0" or "1";
+        """The settings menu's form: `theme` (an id of `views.THEMES`) and `types` ("0" or "1";
         the last one given wins, so an unticked box after its hidden "0" says off) each set or
         clear their cookie when present. Back (303) to `next` when it is a local path, else to
         the index; with no `next` (the menu's script), 204. Refused from another site's

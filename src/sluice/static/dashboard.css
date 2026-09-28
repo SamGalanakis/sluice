@@ -1,7 +1,8 @@
 /* sluice dashboard: inlined into every page by views.py. The world is the logo's: navy ink on
    a cream canvas (cream on deep navy in the dark), the logo's blue as the one accent (links,
    focus, selection) and the colour of running, a named status ramp beside it. Coral is spent
-   once: the open-inbox badge. */
+   once: the open-inbox badge. The colours are a theme's: the settings menu picks one of the
+   presets below (views.THEMES lists them), which the server renders on <html> as data-theme. */
 :root {
   --radius: 14px;     /* regions: boxes, lists, items; the mark's own corner at a smaller scale */
   --radius-md: 10px;  /* controls and code */
@@ -9,7 +10,26 @@
   --font-display: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Public Sans Variable", "Public Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, monospace;
-  /* each colour is light-dark(light, dark): the theme is `color-scheme`, below */
+  /* in every theme the accent is the focus ring and the colour of running */
+  --ring: var(--accent);
+  --status-active: var(--accent);
+  --column: 960px;  /* the one reading column every page and the nav sit on */
+  --gutter: 24px;   /* the least space beside it */
+  --nav-pad: 10px;
+  --plane-pad: 12px;
+  --drawer-w: min(680px, 45vw);  /* the step drawer beside the page, from 1200px */
+  --drawer-gap: 40px;            /* between the board and the drawer beside it */
+}
+
+/* ---- themes: each a full set of colour tokens under its id, and its color-scheme. The
+   selectors are bare attributes, not :root's, so a swatch in the settings menu that carries a
+   theme's data-theme draws itself in that theme's colours. ------------------------------- */
+
+/* Sluice Light and Sluice Dark, the pair an unpicked page follows the OS between: each colour
+   is light-dark(light, dark), so the pair is color-scheme alone (the OS's, by
+   prefers-color-scheme) */
+:root:not([data-theme]), [data-theme="light"], [data-theme="dark"] {
+  color-scheme: light dark;
   --background: light-dark(oklch(0.98 0.017 88),      /* cream, #fdf8ec */
                            oklch(0.2 0.06 263));      /* deep navy */
   --foreground: light-dark(oklch(0.308 0.112 262),    /* the logo's navy, #0d2b67 */
@@ -28,10 +48,8 @@
   --border: light-dark(oklch(0.308 0.112 262 / 11%), oklch(0.955 0.022 88 / 11%));
   --border-strong: light-dark(oklch(0.308 0.112 262 / 24%), oklch(0.955 0.022 88 / 24%));
   --input: light-dark(oklch(0.308 0.112 262 / 22%), oklch(0.955 0.022 88 / 20%));
-  --ring: var(--accent);
   --edge: light-dark(oklch(0.46 0.06 262 / 45%), oklch(0.8 0.035 88 / 42%));
   --edge-head: light-dark(oklch(0.46 0.06 262 / 72%), oklch(0.8 0.035 88 / 70%));
-  --status-active: var(--accent);
   --status-idle: light-dark(oklch(0.6 0.025 262), oklch(0.66 0.03 262));
   --status-success: light-dark(oklch(0.53 0.14 150), oklch(0.76 0.16 150));
   --status-attention: light-dark(oklch(0.53 0.12 78), oklch(0.83 0.14 85));
@@ -43,18 +61,154 @@
           0 1px 2px light-dark(oklch(0.308 0.112 262 / 8%), transparent),
           0 14px 36px light-dark(oklch(0.308 0.112 262 / 14%), oklch(0.1 0.04 263 / 55%));
   --scrim: light-dark(oklch(0.2 0.06 262 / 45%), oklch(0.1 0.04 263 / 60%));
-  --column: 960px;  /* the one reading column every page and the nav sit on */
-  --gutter: 24px;   /* the least space beside it */
-  --nav-pad: 10px;
-  --plane-pad: 12px;
-  --drawer-w: min(680px, 45vw);  /* the step drawer beside the page, from 1200px */
-  --drawer-gap: 40px;            /* between the board and the drawer beside it */
-  /* the theme: the OS's (System), or the one chosen in the settings menu, which the server
-     renders on <html> as data-theme */
-  color-scheme: light dark;
 }
-:root[data-theme="light"] { color-scheme: light; }
-:root[data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+[data-theme="dark"] { color-scheme: dark; }
+
+/* Canyon: desert sandstone, the shadow brown of a cliff, turquoise water, a poppy for the
+   badge */
+[data-theme="canyon"] {
+  color-scheme: light;
+  --background: oklch(0.945 0.028 62);
+  --foreground: oklch(0.3 0.07 40);
+  --card: oklch(0.985 0.011 70);
+  --secondary: oklch(0.885 0.042 55);
+  --muted: oklch(0.915 0.036 58);
+  --muted-foreground: oklch(0.46 0.06 42);
+  --accent: oklch(0.56 0.1 205);
+  --accent-ink: oklch(0.47 0.09 208);
+  --primary: oklch(0.5 0.095 208);
+  --primary-foreground: oklch(0.985 0.011 70);
+  --border: oklch(0.3 0.07 40 / 12%);
+  --border-strong: oklch(0.3 0.07 40 / 26%);
+  --input: oklch(0.3 0.07 40 / 24%);
+  --edge: oklch(0.46 0.06 42 / 45%);
+  --edge-head: oklch(0.46 0.06 42 / 72%);
+  --status-idle: oklch(0.58 0.015 20);
+  --status-success: oklch(0.52 0.13 140);
+  --status-attention: oklch(0.5 0.105 78);
+  --status-paused: oklch(0.48 0.13 330);
+  --badge: oklch(0.63 0.2 28);
+  --badge-ink: oklch(0.2 0.05 38);
+  --lift: 0 1px 2px oklch(0.3 0.07 40 / 8%), 0 14px 36px oklch(0.3 0.07 40 / 15%);
+  --scrim: oklch(0.22 0.05 40 / 45%);
+}
+
+/* Ranger: a park service's parchment, pine green, lake blue, the ochre of its signs, the
+   fire-danger orange for the badge */
+[data-theme="ranger"] {
+  color-scheme: light;
+  --background: oklch(0.955 0.03 95);
+  --foreground: oklch(0.3 0.07 158);
+  --card: oklch(0.99 0.012 95);
+  --secondary: oklch(0.895 0.04 100);
+  --muted: oklch(0.925 0.036 96);
+  --muted-foreground: oklch(0.46 0.045 150);
+  --accent: oklch(0.55 0.12 240);
+  --accent-ink: oklch(0.47 0.11 245);
+  --primary: oklch(0.48 0.11 245);
+  --primary-foreground: oklch(0.99 0.012 95);
+  --border: oklch(0.3 0.07 158 / 12%);
+  --border-strong: oklch(0.3 0.07 158 / 26%);
+  --input: oklch(0.3 0.07 158 / 24%);
+  --edge: oklch(0.46 0.045 150 / 45%);
+  --edge-head: oklch(0.46 0.045 150 / 72%);
+  --status-idle: oklch(0.58 0.025 140);
+  --status-success: oklch(0.52 0.14 138);
+  --status-attention: oklch(0.5 0.105 72);
+  --status-paused: oklch(0.48 0.12 330);
+  --badge: oklch(0.66 0.18 45);
+  --badge-ink: oklch(0.22 0.04 160);
+  --lift: 0 1px 2px oklch(0.3 0.07 158 / 8%), 0 14px 36px oklch(0.3 0.07 158 / 15%);
+  --scrim: oklch(0.2 0.04 160 / 45%);
+}
+
+/* Diner: mint walls, chrome, charcoal lettering, a jukebox blue, the booths' cherry for the
+   badge */
+[data-theme="diner"] {
+  color-scheme: light;
+  --background: oklch(0.955 0.028 175);
+  --foreground: oklch(0.27 0.025 230);
+  --card: oklch(0.992 0.006 180);
+  --secondary: oklch(0.895 0.038 178);
+  --muted: oklch(0.925 0.033 176);
+  --muted-foreground: oklch(0.45 0.03 220);
+  --accent: oklch(0.56 0.15 255);
+  --accent-ink: oklch(0.48 0.15 258);
+  --primary: oklch(0.49 0.15 258);
+  --primary-foreground: oklch(0.992 0.006 180);
+  --border: oklch(0.27 0.025 230 / 12%);
+  --border-strong: oklch(0.27 0.025 230 / 26%);
+  --input: oklch(0.27 0.025 230 / 24%);
+  --edge: oklch(0.45 0.03 220 / 45%);
+  --edge-head: oklch(0.45 0.03 220 / 72%);
+  --status-idle: oklch(0.59 0.02 220);
+  --status-success: oklch(0.52 0.13 150);
+  --status-attention: oklch(0.505 0.11 78);
+  --status-paused: oklch(0.5 0.13 330);
+  --badge: oklch(0.56 0.2 22);
+  --badge-ink: oklch(0.99 0.006 180);
+  --lift: 0 1px 2px oklch(0.27 0.025 230 / 8%), 0 14px 36px oklch(0.27 0.025 230 / 15%);
+  --scrim: oklch(0.2 0.02 230 / 45%);
+}
+
+/* Night Sky: a desert night's indigo, starlight, a moonlit cyan, a sunset coral for the
+   badge */
+[data-theme="night-sky"] {
+  color-scheme: dark;
+  --background: oklch(0.2 0.06 285);
+  --foreground: oklch(0.945 0.02 90);
+  --card: oklch(0.245 0.07 285);
+  --secondary: oklch(0.3 0.075 285);
+  --muted: oklch(0.225 0.065 285);
+  --muted-foreground: oklch(0.79 0.04 280);
+  --accent: oklch(0.78 0.11 210);
+  --accent-ink: oklch(0.84 0.09 210);
+  --primary: oklch(0.78 0.11 210);
+  --primary-foreground: oklch(0.2 0.06 285);
+  --border: oklch(0.945 0.02 90 / 11%);
+  --border-strong: oklch(0.945 0.02 90 / 24%);
+  --input: oklch(0.945 0.02 90 / 20%);
+  --edge: oklch(0.79 0.04 280 / 42%);
+  --edge-head: oklch(0.79 0.04 280 / 70%);
+  --status-idle: oklch(0.66 0.035 280);
+  --status-success: oklch(0.78 0.15 150);
+  --status-attention: oklch(0.84 0.14 88);
+  --status-paused: oklch(0.76 0.12 330);
+  --badge: oklch(0.72 0.17 35);
+  --badge-ink: oklch(0.2 0.06 285);
+  --lift: inset 1px 0 0 oklch(1 0 0 / 6%), 0 14px 36px oklch(0.1 0.04 285 / 55%);
+  --scrim: oklch(0.1 0.04 285 / 60%);
+}
+
+/* Wood Panel: a 1970s den, walnut panelling, harvest gold, avocado, the television's blue
+   glow, burnt orange for the badge */
+[data-theme="wood-panel"] {
+  color-scheme: dark;
+  --background: oklch(0.22 0.03 55);
+  --foreground: oklch(0.935 0.03 85);
+  --card: oklch(0.265 0.035 55);
+  --secondary: oklch(0.315 0.04 55);
+  --muted: oklch(0.24 0.032 55);
+  --muted-foreground: oklch(0.79 0.04 75);
+  --accent: oklch(0.74 0.1 225);
+  --accent-ink: oklch(0.82 0.08 225);
+  --primary: oklch(0.74 0.1 225);
+  --primary-foreground: oklch(0.22 0.03 55);
+  --border: oklch(0.935 0.03 85 / 11%);
+  --border-strong: oklch(0.935 0.03 85 / 24%);
+  --input: oklch(0.935 0.03 85 / 20%);
+  --edge: oklch(0.79 0.04 75 / 42%);
+  --edge-head: oklch(0.79 0.04 75 / 70%);
+  --status-idle: oklch(0.65 0.03 60);
+  --status-success: oklch(0.74 0.15 135);
+  --status-attention: oklch(0.83 0.14 85);
+  --status-paused: oklch(0.76 0.1 340);
+  --badge: oklch(0.7 0.17 45);
+  --badge-ink: oklch(0.22 0.03 55);
+  --lift: inset 1px 0 0 oklch(1 0 0 / 6%), 0 14px 36px oklch(0.12 0.02 55 / 55%);
+  --scrim: oklch(0.1 0.02 55 / 60%);
+}
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -192,22 +346,36 @@ details.settings[open] > summary::before { background: var(--secondary); }
 details.settings > summary:focus-visible { outline-offset: -4px; border-radius: var(--radius-md); }
 details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px; z-index: 30;
   width: 256px; max-width: calc(100vw - 2 * var(--gutter)); padding: 12px 14px 14px;
+  max-height: calc(100dvh - 64px); overflow-y: auto;
   border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card);
   box-shadow: var(--lift); font: 15px/22px var(--font-sans); }
 .prefs fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .prefs legend { padding: 0; margin-bottom: 6px; font: 500 13px/18px var(--font-sans);
                 color: var(--muted-foreground); }
-/* the theme: a segmented radio group, the current choice as the inbox's filter marks it */
-.prefs .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px;
-              border: 1px solid var(--border); border-radius: var(--radius-md); }
-.prefs .seg label { position: relative; display: grid; place-items: center; height: 32px;
-  border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; font-weight: 500;
-  color: var(--muted-foreground); }
-.prefs .seg label:hover { color: var(--foreground); background: var(--muted); }
-.prefs .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
-.prefs .seg label:has(:checked) { color: var(--foreground); background: var(--secondary);
-                                  box-shadow: 0 0 0 1px var(--border-strong); }
-.prefs .seg label:has(:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; }
+/* the themes: a radio list, each row its swatch and name, the chosen one on the secondary
+   fill with a tick (the inbox filter's mark); the radio itself is the row, unseen */
+.prefs .themes { display: grid; gap: 2px; }
+.prefs .themes label { position: relative; display: flex; align-items: center; gap: 10px;
+  min-height: 36px; padding: 0 8px 0 5px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 14px; font-weight: 500; color: var(--muted-foreground); }
+.prefs .themes label:hover { color: var(--foreground); background: var(--muted); }
+.prefs .themes input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.prefs .themes label:has(:checked) { color: var(--foreground); background: var(--secondary);
+                                     box-shadow: inset 0 0 0 1px var(--border-strong); }
+.prefs .themes label:has(:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; }
+.prefs .themes .tick { margin-left: auto; flex: none; visibility: hidden; }
+.prefs .themes label:has(:checked) .tick { visibility: visible; }
+/* a theme's swatch: its canvas, "Aa" in its ink, a dot of its accent and of its badge, all in
+   its own tokens (the chip carries its data-theme) */
+.swatch { display: inline-flex; align-items: center; gap: 4px; flex: none; width: 50px;
+  height: 26px; padding: 0 7px; border-radius: var(--radius-sm); overflow: hidden;
+  background: var(--background); color: var(--foreground);
+  outline: 1px solid var(--border-strong); outline-offset: -1px;
+  font: 800 13px/1 var(--font-display); font-stretch: 105%; letter-spacing: -0.01em; }
+.swatch i { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+.swatch .sw-accent { margin-left: auto; background: var(--accent); }
+.swatch .sw-badge { background: var(--badge); }
+
 .prefs label.check { display: flex; align-items: center; gap: 10px; min-height: 36px;
   margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); cursor: pointer; }
 .prefs label.check input { width: 16px; height: 16px; margin: 0; flex: none; }
@@ -736,7 +904,7 @@ main > .phead + * { margin-top: 0; }
   #nav-inbox .t { position: absolute; width: 1px; height: 1px; overflow: hidden;
                   clip-path: inset(50%); white-space: nowrap; }
   #nav-inbox .badge { margin-left: 2px; }
-  .prefs .seg label, .prefs label.check { min-height: 44px; }
+  .prefs .themes label, .prefs label.check { min-height: 44px; }
   /* no edges on a phone: a lane reads straight down, its cards close together */
   .board { --row-gap: 10px; }
   .board svg.edges, .board .legend { display: none; }

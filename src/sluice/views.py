@@ -79,14 +79,26 @@ e = html.escape
 # CommonMark plus tables; raw HTML is escaped as text and unsafe link schemes are refused.
 MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
 INBOX_FILTERS = ("open", "answered", "closed", "all")
-THEMES = ("light", "dark")  # the settings menu's choices; until one is picked, the OS's
+# The settings menu's themes, id to name, in the menu's order. Each id's colours are in
+# static/dashboard.css under [data-theme="<id>"] (its swatch draws itself from them); until
+# one is picked the page follows the OS between Sluice Light and Sluice Dark. A theme is
+# added with a line here and a block there.
+THEMES = {
+    "light": "Sluice Light",
+    "dark": "Sluice Dark",
+    "canyon": "Canyon",
+    "ranger": "Ranger",
+    "diner": "Diner",
+    "night-sky": "Night Sky",
+    "wood-panel": "Wood Panel",
+}
 
 
 @dataclasses.dataclass(frozen=True)
 class Viewer:
     """What a page knows of the browser it renders for: the theme chosen in the settings menu
-    ("light" or "dark"; None follows the OS), whether value types show, and the address of
-    the page (where the menu's form goes back to)."""
+    (an id of `THEMES`; None until one is picked, when the OS's shows), whether value types
+    show, and the address of the page (where the menu's form goes back to)."""
     theme: str | None = None
     types: bool = False
     path: str = "/"
@@ -404,23 +416,38 @@ COG = ('<svg class="cog" viewBox="0 0 24 24" width="20" height="20" aria-hidden=
        'fill="none" stroke="currentColor" stroke-width="1.8"/></svg>')
 
 
+TICK = ('<svg class="tick" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">'
+        '<path d="M3.5 8.5 6.5 11.5 12.5 4.5" fill="none" stroke="currentColor" '
+        'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>')
+
+
+def theme_swatch(theme: str) -> str:
+    """A theme's swatch in the settings menu: a chip of its canvas with "Aa" in its ink and a
+    dot each of its accent and its badge, drawn by the theme's own tokens (the chip carries
+    its data-theme)."""
+    return (f'<span class="swatch" data-theme="{e(theme)}" aria-hidden="true">Aa'
+            f'<i class="sw-accent"></i><i class="sw-badge"></i></span>')
+
+
 def settings_menu() -> str:
-    """The nav's settings, the cog at its right end: the theme (the OS's until one is picked) and
-    whether value types show. A <details> holding a form that posts to /settings and comes
-    back here, so it works without JavaScript; with it (static/nav.js), a choice applies at
-    once and the Save button stays hidden."""
+    """The nav's settings, the cog at its right end: the theme (one of `THEMES`, each a radio
+    with its swatch; the OS's until one is picked) and whether value types show. A <details>
+    holding a form that posts to /settings and comes back here, so it works without
+    JavaScript; with it (static/nav.js), a choice applies at once and the Save button stays
+    hidden."""
     viewer = VIEWER.get()
     chosen = viewer.theme  # None: nothing picked yet, the page follows the OS
     themes = "".join(
         f'<label><input type="radio" name="theme" value="{t}"'
-        f'{" checked" if t == chosen else ""}><span>{t.capitalize()}</span></label>'
-        for t in THEMES)
+        f'{" checked" if t == chosen else ""}>{theme_swatch(t)}<span>{e(name)}</span>'
+        f'{TICK}</label>'
+        for t, name in THEMES.items())
     types = " checked" if viewer.types else ""
     return (f'<details class="settings"><summary aria-label="Settings" title="Settings">'
             f'{COG}</summary><div class="menu">'
             f'<form class="prefs" method="post" action="/settings" aria-label="Settings">'
             f'<input type="hidden" name="next" value="{e(viewer.path)}">'
-            f'<fieldset class="theme"><legend>Theme</legend><div class="seg">{themes}</div>'
+            f'<fieldset class="themes"><legend>Theme</legend>{themes}'
             f'</fieldset><input type="hidden" name="types" value="0">'
             f'<label class="check"><input type="checkbox" name="types" value="1"{types}>'
             f'Show value types</label><button type="submit" class="save">Save</button>'
@@ -465,8 +492,8 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
     components). `skip` is a (target id, text) link past the nav, the first thing a keyboard
     reaches; `tail` goes after `main` (the step drawer, which must stay reachable when the
     page is inert behind it). `<html>` carries the viewer's settings (`VIEWER`): the chosen
-    theme as `data-theme` (none for System) and `show-types`, so the page never flashes the
-    wrong theme."""
+    theme as `data-theme` (none until one is picked, when the OS's shows) and `show-types`,
+    so the page never flashes the wrong theme."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
     scripts = "".join(f'<script type="module" src="{e(s)}"></script>'
                       for s in (script, "/static/sluice.js" if board else "",
