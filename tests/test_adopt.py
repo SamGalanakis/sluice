@@ -332,6 +332,34 @@ def test_adoption_persists_done_for_a_scatter(store, kills):
     assert settle(r2, store, "p")["w"]["status"] == "succeeded"
 
 
+def test_a_retried_scatter_is_adopted_with_its_kept_items(store, kills):
+    create(store, "p", {"g": {"run": "test.gate", "scatter": "tag",
+                              "in": {"tag": d(["a", "b", "c"])}}})
+    r1, t1 = serve(store)
+    e = wait_step(store, "p", "g")
+    run_dirs = [store.runs_dir("p") / rid for rid in e["run_ids"]]
+    (run_dirs[1] / "fail").write_text("")
+    for rd in run_dirs:
+        (rd / "go").write_text("")
+    e = settle(r1, store, "p")["g"]
+    assert e["status"] == "failed" and e["results"][1] is None
+    store.retry("p", "g", author="test", reason="again")
+    e = wait_step(store, "p", "g")  # item 1 alone re-runs; it waits on its `go`
+    assert e["run_ids"][1] != run_dirs[1].name
+    kills.append(wait_shim(store.runs_dir("p") / e["run_ids"][1]))
+    stop(r1, t1)  # the runner dies mid-retry, leaving item 1's run alive
+
+    r2 = Runner(store)
+    r2.tick()
+    e = store.read_state("p")["steps"]["g"]
+    assert (e["status"], e["done"]) == ("running", 2)
+    recs = run_records(store, "p")
+    assert [r["outcome"] for r in recs] == ["finished", "watching", "finished"]
+    (store.runs_dir("p") / e["run_ids"][1] / "go").write_text("")
+    e = settle(r2, store, "p")["g"]
+    assert e["status"] == "succeeded" and e["outputs"] == {"tag": ["a", "b", "c"]}
+
+
 def test_the_running_record_lands_with_the_state_write(store, kills):
     create(store, "p", {"w": {"run": "test.wait", "in": {}}})
     seen = []

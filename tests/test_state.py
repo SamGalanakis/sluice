@@ -19,6 +19,12 @@ def test_pending():
     assert S.pending() is not S.pending()  # a fresh dict each call
 
 
+def test_pending_kept():
+    kept = {"inputs_hash": "h" * 32, "run_ids": ["r0", "r1"],
+            "results": [{"x": 1}, None]}
+    assert S.pending_kept(kept) == {"status": "pending", "kept": kept}
+
+
 def test_running():
     e = S.running("h" * 32)
     assert e["status"] == "running" and e["run_ids"] == [] and e["inputs_hash"] == "h" * 32

@@ -24,6 +24,12 @@ def pending() -> dict[str, Any]:
     return {"status": "pending"}
 
 
+def pending_kept(kept: dict[str, Any]) -> dict[str, Any]:
+    """A retried scattered step, pending again: `kept` ({inputs_hash, run_ids, results}
+    of the failed run) lets the runner re-use the items that already succeeded."""
+    return {"status": "pending", "kept": kept}
+
+
 def running(inputs_hash: str) -> dict[str, Any]:
     """The entry a step starts with (its `run_ids` fill in as the runs start)."""
     return {"status": "running", "started": now_iso(), "run_ids": [],

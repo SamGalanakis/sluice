@@ -157,8 +157,8 @@ by output name to stdout (logs go to stderr) and exits 0. Any other exit code, o
 fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
 (`run(main, retries=N)`, §7). Each run is its own session, led by the shim: signals sent to the
 group reach the fn (the shim ignores SIGINT, SIGTERM and SIGHUP itself and still records how the
-fn went). When the runner stops a run (a cancelled step, a removed step, a failed sibling
-scatter run, or shutdown with `--kill-runs`) it sends the whole process group SIGTERM, then
+fn went). When the runner stops a run (a cancelled step, a removed step, a scattered run whose
+supervisor died leaving a live fn behind, or shutdown with `--kill-runs`) it sends the whole process group SIGTERM, then
 SIGKILL to whatever is left after 5 s, so nothing started under `uv run` outlives it (SIGTERM
 first lets an agent CLI stop tool processes it started in sessions of their own). `sluice
 serve` and `sluice loop` exit 0 on SIGINT, SIGTERM and SIGHUP (a closed terminal or `tmux
@@ -221,7 +221,8 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
 - **Scatter** (dynamic fan-out): `"scatter": "<input name>"`. That input must receive an array
   whose items fit the fn's input type; the step runs once per item (the other inputs are the same
   for every run) and each of its outputs becomes an array, in item order. The step succeeds when
-  every run succeeds and fails if any fails.
+  every run succeeds and fails if any fails; a failed scattered step re-runs only its failed
+  items when retried with unchanged inputs (§6).
 - **Plan outputs** name the plan's results: `{"source": "<ref>"}`. `fn_call` and `status`
   report them.
 - **Typed agent blocks.** A step whose fn is open (§4) may bind **extra inputs** in `in`
@@ -262,10 +263,16 @@ changing a running step is refused.
 
 `state.json`:
 `{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
-"outputs", "error", "manual", "inputs_hash", "skipped"}}}` with status `pending`, `running`,
+"outputs", "error", "manual", "inputs_hash", "skipped", "results", "kept"}}}` with status `pending`, `running`,
 `succeeded`, `failed`, `stale`, `skipped` (`skipped` holds why). A
-scattered step also records `done` and `total` runs. There is no limit on how many run at
-once: every ready step starts, and a scattered step starts all its runs; a scattered step whose runs fail stops its other runs and fails with `run <i>: ...`.
+scattered step also records `done` (the runs that have ended) and `total` runs. There is no limit on how many run at
+once: every ready step starts, and a scattered step starts all its runs; a scattered run that
+fails does not stop the others — the step ends once every run has ended: `succeeded` if all
+did, else `failed` with `run <i>: <err>` for one failed run, `<n> of <total> runs failed:
+run <i>: <err>; ...` for several (each `<err>` cut to one line of at most 200 characters),
+and keeps `run_ids` (index-aligned: `run_ids[i]` is item i's run) plus `results` — a list
+holding each item's outputs where it succeeded and null where it failed — so a retry can
+re-run only what failed.
 
 **Staleness.** A result is only valid for the inputs it was computed from. When a step starts
 (and so when it succeeds) or is set by hand, its state records `inputs_hash`: a hash of the
@@ -288,7 +295,8 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
 2. Finished runs — `exit.json` written (§4): code 0 with valid outputs → `succeeded` with
    `outputs` (for a step that declares outputs, merged with what its agent submitted, §5);
    otherwise `failed` with `error` (exit code, type errors or declared outputs not submitted,
-   plus the stderr tail). A scattered step collects its runs as they finish.
+   plus the stderr tail). A scattered step collects its runs as they finish; a run's failure
+   is its item's and does not stop the others (above).
 3. Mark stale steps (above), settle `when` (§5: skip what its condition or a skipped input
    rules out, and put back to `pending` a skipped step whose reason no longer holds), then
    start every ready `pending` step (what it reads is there, what it runs `after` has
@@ -309,7 +317,10 @@ is finished from it (its `code`, then §6 step 2 decides outputs or error); a he
 without `shim.json` (both from before this contract) → the step fails `runner restarted`; a
 free lock with no `exit.json` → `run outcome unknown (its supervisor died)` — never an
 invented exit code — and a `child.json` that still names a live fn process then has its
-process group killed, so a retry never runs two agents. A run a `--kill-runs` shutdown
+process group killed, so a retry never runs two agents. For a scattered step a finished-but-failed
+or unknown run is that item's failure: adoption rebuilds the same per-item picture (finished
+items keep their results, live ones are watched) and the step still ends once every run has
+ended. A run a `--kill-runs` shutdown
 stopped is adopted the same way: usually `finished` off the `exit.json` its shim still
 wrote (`exit code -15`), `unknown` when the shim went down with it — never `runner
 restarted`. Adoption kills use the recorded shim pid only while its lock is held and it
@@ -341,7 +352,11 @@ record):
   `stale` once those values are all there). It is never run afterwards unless retried. Record
   `step.output` `{step, outputs, force?}`.
 - `step_retry(steps?, tags?)`: sets the selected steps, each `failed`, `stale` or manual, back to
-  `pending` (refused, changing nothing, unless every one is). Their succeeded dependents turn
+  `pending` (refused, changing nothing, unless every one is). A failed scattered step with
+  `results` goes back keeping `{inputs_hash, run_ids, results}` under `kept`: when it starts,
+  an unchanged inputs hash and one kept result per item mean the runs that already succeeded
+  are not re-run (their kept run ids stand in `run_ids`); a different hash or count drops
+  `kept` and runs every item as usual. Their succeeded dependents turn
   `stale` when they produce a different result. Record `step.retry` `{step}` per step.
 - Setting a step's input by hand is an edit: `step_set_input(step, input, value)` patches its
   binding to `{"default": value}`.
@@ -680,7 +695,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `plan_set_input` | `project, name, value, reason?` | `{ok}` |
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
 | `step_set_output` | `project, step, outputs, reason?, force?` | `{ok}` (§6: refused while what it reads is not ready, unless `force`) |
-| `step_retry` | `project, steps?, tags?, reason?` | `{steps}` (each failed, stale or manual) |
+| `step_retry` | `project, steps?, tags?, reason?` | `{steps}` (each failed, stale or manual); a failed scattered step re-runs only its failed items when its inputs are unchanged (§6) |
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the file, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |

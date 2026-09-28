@@ -632,9 +632,11 @@ class Store:
     def retry(self, project: str, steps: Any = None, tags: Any = None, author: str = "",
               reason: str = "") -> list[str]:
         """step_retry: the selected steps, each failed, stale or manually set, go back to
-        pending (refused, changing nothing, unless every one of them is)."""
+        pending (refused, changing nothing, unless every one of them is). A failed
+        scattered step keeps its finished items under `kept` so the retry re-runs only
+        what failed (SPEC §6)."""
         with self.lock(project):
-            doc, _ = self._plan_for_write(project)
+            doc, plan = self._plan_for_write(project)
             chosen = self.select_steps(project, steps, tags)
             state = self.read_state(project)
             was = {s: S.entry_of(state, s) for s in chosen}
@@ -644,7 +646,13 @@ class Store:
                 raise BadRequest(f"{'; '.join(bad)}; only a failed, stale or manually set step "
                                  "can be retried")
             for sid in chosen:
-                state["steps"][sid] = S.pending()
+                e = was[sid]
+                if e["status"] == "failed" and plan.steps[sid].scatter \
+                        and isinstance(e.get("results"), list):
+                    kept = {k: e.get(k) for k in ("inputs_hash", "run_ids", "results")}
+                    state["steps"][sid] = S.pending_kept(kept)
+                else:
+                    state["steps"][sid] = S.pending()
             self.write_state(project, state)
             for sid, e in was.items():
                 self._log(project, doc["rev"], author, reason, kind="step.retry", step=sid)

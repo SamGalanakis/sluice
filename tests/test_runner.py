@@ -7,7 +7,7 @@ import pytest
 
 from sluice import log as L
 from sluice.errors import InvalidPlan
-from sluice.runner import Runner
+from sluice.runner import Runner, lock_held
 from tests.conftest import add, create, d, settle, src, statuses, window
 
 
@@ -92,8 +92,49 @@ def test_a_failing_scatter_run_fails_the_step(store, runner):
     create(store, "p", {"b": {"run": "test.boom", "scatter": "ok",
                               "in": {"ok": d([True, False, True])}}})
     steps = settle(runner, store, "p")
-    assert steps["b"]["status"] == "failed"
-    assert steps["b"]["error"].startswith("run 1: exit code 1")
+    e = steps["b"]
+    assert e["status"] == "failed" and e["error"] == "run 1: exit code 1"
+    # every run ended; the failed entry keeps what the good items produced
+    assert (e["done"], e["total"]) == (3, 3) and len(e["run_ids"]) == 3
+    assert e["outputs"] is None
+    assert e["results"] == [{"done": True}, None, {"done": True}]
+
+
+def test_a_failed_scatter_item_does_not_stop_its_siblings(store, runner):
+    create(store, "p", {"g": {"run": "test.gate", "scatter": "tag",
+                              "in": {"tag": d(["a", "b", "c"])}}})
+    settle(runner, store, "p",
+           until=lambda s: s["g"]["status"] == "running" and len(s["g"]["run_ids"]) == 3)
+    run_dirs = [store.runs_dir("p") / rid
+                for rid in store.read_state("p")["steps"]["g"]["run_ids"]]
+    (run_dirs[1] / "fail").write_text("")
+    (run_dirs[1] / "go").write_text("")  # item 1 fails while items 0 and 2 still wait
+    e = settle(runner, store, "p", until=lambda s: s["g"].get("done") == 1)["g"]
+    assert e["status"] == "running"  # the step waits for every run to end
+    assert lock_held(run_dirs[0] / "shim.lock") and lock_held(run_dirs[2] / "shim.lock")
+    for d_ in (run_dirs[0], run_dirs[2]):
+        (d_ / "go").write_text("")
+    e = settle(runner, store, "p")["g"]
+    assert e["status"] == "failed" and e["error"] == "run 1: exit code 1"
+    assert e["done"] == 3
+    assert e["results"] == [{"tag": "a"}, None, {"tag": "c"}]
+
+
+def test_two_failed_scatter_items_name_every_run_in_index_order(store, runner):
+    create(store, "p", {"g": {"run": "test.gate", "scatter": "tag",
+                              "in": {"tag": d(["a", "b", "c"])}}})
+    settle(runner, store, "p",
+           until=lambda s: s["g"]["status"] == "running" and len(s["g"]["run_ids"]) == 3)
+    run_dirs = [store.runs_dir("p") / rid
+                for rid in store.read_state("p")["steps"]["g"]["run_ids"]]
+    for i in (0, 2):
+        (run_dirs[i] / "fail").write_text("")
+    for d_ in run_dirs:
+        (d_ / "go").write_text("")
+    e = settle(runner, store, "p")["g"]
+    assert e["status"] == "failed"
+    assert e["error"] == "2 of 3 runs failed: run 0: exit code 1; run 2: exit code 1"
+    assert e["results"] == [None, {"tag": "b"}, None]
 
 
 def test_a_spawn_error_fails_the_step_and_kills_the_runs_that_started(store, runner,
@@ -145,10 +186,78 @@ def test_retry_after_a_failure(store, runner, home):
     create(store, "p", {"boom": {"run": "test.boom", "in": {}},
                         "after": {"run": "core.echo", "in": {"value": src("boom/done")}}})
     settle(runner, store, "p", until=lambda s: s["boom"]["status"] == "failed")
+    # a non-scattered step keeps nothing: no results, and the retry is a plain pending
+    assert "results" not in store.read_state("p")["steps"]["boom"]
     (home / "boom-ok").write_text("")
     store.retry("p", "boom", author="test", reason="fixed")
+    assert store.read_state("p")["steps"]["boom"] == {"status": "pending"}
     steps = settle(runner, store, "p")
     assert steps["boom"]["status"] == "succeeded" and steps["after"]["outputs"] == {"value": True}
+
+
+def test_a_retried_scatter_reruns_only_the_failed_items(store, runner):
+    create(store, "p", {"g": {"run": "test.gate", "scatter": "tag",
+                              "in": {"tag": d(["a", "b", "c"])}}})
+    settle(runner, store, "p",
+           until=lambda s: s["g"]["status"] == "running" and len(s["g"]["run_ids"]) == 3)
+    run_dirs = [store.runs_dir("p") / rid
+                for rid in store.read_state("p")["steps"]["g"]["run_ids"]]
+    (run_dirs[1] / "fail").write_text("")
+    for d_ in run_dirs:
+        (d_ / "go").write_text("")
+    e = settle(runner, store, "p")["g"]
+    assert e["status"] == "failed"
+    old_ids = e["run_ids"]
+    store.retry("p", "g", author="test", reason="again")
+    e = store.read_state("p")["steps"]["g"]
+    assert e["status"] == "pending"
+    assert e["kept"]["run_ids"] == old_ids
+    assert e["kept"]["results"] == [{"tag": "a"}, None, {"tag": "c"}]
+    e = settle(runner, store, "p",
+               until=lambda s: s["g"]["status"] == "running"
+               and len(s["g"]["run_ids"]) == 3)["g"]
+    assert "kept" not in e  # dropped once the step starts
+    assert (e["run_ids"][0], e["run_ids"][2]) == (old_ids[0], old_ids[2])
+    assert e["run_ids"][1] != old_ids[1]  # only the failed item got a new run
+    assert len(list(store.runs_dir("p").iterdir())) == 4
+    (store.runs_dir("p") / e["run_ids"][1] / "go").write_text("")
+    e = settle(runner, store, "p")["g"]
+    assert e["status"] == "succeeded" and e["outputs"] == {"tag": ["a", "b", "c"]}
+
+
+def test_a_retried_scatter_with_changed_inputs_reruns_every_item(store, runner):
+    create(store, "p", {"b": {"run": "test.boom", "scatter": "ok",
+                              "in": {"ok": src("oks")}}}, inputs={"oks": "boolean[]"})
+    store.set_input("p", "oks", [True, False, True], "test", "go")
+    steps = settle(runner, store, "p")
+    assert steps["b"]["status"] == "failed"
+    old_ids = steps["b"]["run_ids"]
+    store.retry("p", "b", author="test")
+    assert store.read_state("p")["steps"]["b"]["kept"]["run_ids"] == old_ids
+    store.set_input("p", "oks", [True, True, True], "test", "all fine now")
+    steps = settle(runner, store, "p")
+    e = steps["b"]
+    # the inputs changed, so nothing kept was valid: all three ran again
+    assert e["status"] == "succeeded" and e["outputs"] == {"done": [True, True, True]}
+    assert len(e["run_ids"]) == 3 and not set(e["run_ids"]) & set(old_ids)
+
+
+def test_a_retried_stale_scatter_step_is_unchanged(store, runner):
+    create(store, "p", {"w": {"run": "test.window", "scatter": "tag",
+                              "in": {"seconds": d(0), "tag": src("tags")}}},
+           inputs={"tags": "string[]"})
+    store.set_input("p", "tags", ["a", "b"], "test", "go")
+    settle(runner, store, "p")
+    old_ids = store.read_state("p")["steps"]["w"]["run_ids"]
+    store.set_input("p", "tags", ["x", "y"], "test", "changed")
+    runner.tick()
+    assert statuses(store, "p")["w"] == "stale"
+    store.retry("p", "w", author="test")
+    # stale, not failed: nothing is kept and the retry is a plain pending entry
+    assert store.read_state("p")["steps"]["w"] == {"status": "pending"}
+    e = settle(runner, store, "p")["w"]
+    assert e["status"] == "succeeded" and e["outputs"]["tag"] == ["x", "y"]
+    assert not set(e["run_ids"]) & set(old_ids)
 
 
 def test_plan_inputs_and_manual_outputs_unblock_steps(store, runner):

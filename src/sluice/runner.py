@@ -360,13 +360,15 @@ def run_call_direct(store: Store, call: str, project: str | None) -> dict[str, A
 @dataclass
 class Run:
     """One fn execution: its input; its run dir, its shim's pid and (when this runner started
-    it) its Popen once spawned; its outputs once collected (None until then)."""
+    it) its Popen once spawned; its outputs once collected (None until then), or its error
+    once it failed (a scattered step's failed item does not stop the others)."""
 
     inp: dict[str, Any]
     run_dir: Path | None = None
     proc: subprocess.Popen | None = None
     pid: int | None = None  # the shim's pid — the run's process group id
     result: dict[str, Any] | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -568,15 +570,20 @@ class Runner:
             if outcome == "finished":
                 run.result, err = read_run(a.fn, d, code, a.declared)
                 if err:
-                    a.fatal = a.fatal or (f"run {i}: {err}" if a.scatter else err)
+                    if a.scatter:  # the item's failure; the other runs still stand
+                        run.result, run.error = None, err
+                    elif a.fatal is None:
+                        a.fatal = err
             elif outcome == "watching":
                 run.pid = _shim_pid(d)
+            elif outcome == "unknown" and a.scatter:
+                run.error = UNKNOWN
+                kill(run)  # a fn child that outlived the shim still dies (SPEC §6)
             elif a.fatal is None:
-                a.fatal = (f"run {i}: {UNKNOWN}" if a.scatter else UNKNOWN) \
-                    if outcome == "unknown" else RESTARTED
+                a.fatal = UNKNOWN if outcome == "unknown" else RESTARTED
             a.runs.append(run)
         if a.scatter:
-            e["done"] = sum(r.result is not None for r in a.runs)
+            e["done"] = sum(_ended(r) for r in a.runs)
         self.active[key] = a
         if records:
             self.store.append(project, *records)
@@ -778,7 +785,9 @@ class Runner:
         """Start a ready step's runs; returns the canonical the caller diffs, advanced when
         the spawn persist happens here."""
         inp = resolved_inputs(step, plan, state)
-        e = state["steps"][step.id] = S.running(inputs_hash(inp))
+        h = inputs_hash(inp)
+        kept = state["steps"][step.id].get("kept")  # a retried scatter's finished items
+        e = state["steps"][step.id] = S.running(h)
         runs = [inp]
         if step.scatter:
             items = inp[step.scatter]
@@ -795,20 +804,32 @@ class Runner:
         a = Active(step.fn, project, step.id, [Run(run) for run in runs],
                    scatter=bool(step.scatter), declared=step.declared,
                    ports=step.ports() if step.fn.open else None)
+        # `kept` that still fits (same inputs, one run id and result per item) stands:
+        # those items are not re-run; anything else re-runs every item as usual
+        kept_runs = _kept(kept, h, len(runs)) if step.scatter else {}
+        for i, (_, result) in kept_runs.items():
+            a.runs[i].result = result
         if step.scatter:
-            e.update(done=0, total=len(runs))
+            e.update(done=len(kept_runs), total=len(runs))
         if step.fn.native:
             for run in a.runs:
+                if run.result is not None:
+                    continue
                 run.result, err = run_native(step.fn, run.inp)
                 if err:
-                    _finish(e, error=err)
-                    return before
+                    run.result = None
+                    if not a.scatter:
+                        _finish(e, error=err)
+                        return before
+                    run.error = err
             if step.scatter:
-                e["done"] = len(a.runs)
+                e["done"] = sum(_ended(run) for run in a.runs)
         else:
             try:
                 for i in range(len(a.runs)):
-                    e["run_ids"].append(self._spawn_run(a, i))
+                    # run_ids stays index-aligned: a kept item keeps its old run id
+                    e["run_ids"].append(kept_runs[i][0] if i in kept_runs
+                                        else self._spawn_run(a, i))
             except Exception as ex:  # noqa: BLE001 - a failed start fails the step
                 a.kill()
                 _finish(e, error=f"could not start the fn: {ex}")
@@ -819,6 +840,9 @@ class Runner:
             before = self._persist(project, state, was, before)
         if all(run.result is not None for run in a.runs):
             _finish(e, outputs=a.outputs())
+            return before
+        if a.scatter and all(_ended(run) for run in a.runs):
+            _finish_scatter(a, e)
             return before
         self.active[("step", project, step.id)] = a
         return before
@@ -848,28 +872,75 @@ class Runner:
             a.kill()
             del self.active[key]
             return _finish(e, error=a.fatal)
-        for i, run in enumerate(a.runs):
-            if run.result is not None:
+        for run in a.runs:
+            if _ended(run):
                 continue
             code = _run_code(run)
             if code is None:
                 continue
             if isinstance(code, str):  # UNKNOWN: the shim died without writing exit.json
-                a.kill()
-                del self.active[key]
-                return _finish(e, error=f"run {i}: {code}" if a.scatter else code)
+                if not a.scatter:
+                    a.kill()
+                    del self.active[key]
+                    return _finish(e, error=code)
+                run.error = code
+                kill(run)  # a fn child that outlived the shim still dies (SPEC §6)
+                continue
             outputs, err = read_run(a.fn, run.run_dir, code, a.declared)
             if err:
-                a.kill()
-                del self.active[key]
-                return _finish(e, error=f"run {i}: {err}" if a.scatter else err)
+                if not a.scatter:
+                    a.kill()
+                    del self.active[key]
+                    return _finish(e, error=err)
+                run.error = err  # a scattered item's failure does not stop the others
+                continue
             run.result = outputs
-            if a.scatter:
-                e["done"] = sum(r.result is not None for r in a.runs)
+        if a.scatter:
+            e["done"] = sum(_ended(run) for run in a.runs)
         if all(run.result is not None for run in a.runs):
             del self.active[key]
             _finish(e, outputs=a.outputs())
+        elif a.scatter and all(_ended(run) for run in a.runs):
+            del self.active[key]
+            _finish_scatter(a, e)
 
 
 def _finish(e: dict[str, Any], outputs: Any = None, error: str | None = None) -> None:
     e.update(S.failed(error) if error else S.succeeded(outputs))
+
+
+def _ended(run: Run) -> bool:
+    """Whether the run has ended: its outputs collected, or its failure recorded."""
+    return run.result is not None or run.error is not None
+
+
+def _scatter_error(runs: list[Run]) -> str:
+    """The error a scattered step fails with once every run has ended: `run <i>: <err>`
+    for one failed run, `<n> of <N> runs failed: ...` for several, in index order; each
+    <err> is cut to one line of at most 200 characters."""
+    bad = [(i, r.error.split("\n", 1)[0][:200])
+           for i, r in enumerate(runs) if r.error is not None]
+    if len(bad) == 1:
+        return f"run {bad[0][0]}: {bad[0][1]}"
+    return f"{len(bad)} of {len(runs)} runs failed: " + \
+        "; ".join(f"run {i}: {err}" for i, err in bad)
+
+
+def _finish_scatter(a: Active, e: dict[str, Any]) -> None:
+    """Fail a scattered step whose every run has ended: the entry keeps `run_ids` and
+    gains `results` — each item's outputs, null where it failed — for a retry to keep."""
+    e["results"] = [run.result for run in a.runs]
+    _finish(e, error=_scatter_error(a.runs))
+
+
+def _kept(kept: Any, h: str, n: int) -> dict[int, tuple[str, dict[str, Any]]]:
+    """The items a retried scattered step does not re-run — index -> (old run id, its
+    outputs) — when the pending entry's `kept` still fits: the inputs hash as before and
+    there is one run id and one result per item."""
+    if not (isinstance(kept, dict) and kept.get("inputs_hash") == h
+            and isinstance(kept.get("run_ids"), list) and len(kept["run_ids"]) == n
+            and isinstance(kept.get("results"), list) and len(kept["results"]) == n):
+        return {}
+    return {i: (rid, res) for i, (rid, res)
+            in enumerate(zip(kept["run_ids"], kept["results"], strict=True))
+            if res is not None and isinstance(rid, str) and L.RUN_ID_RE.match(rid)}

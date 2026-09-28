@@ -121,6 +121,24 @@ def test_the_cap_keeps_run_dirs_that_state_still_uses(tmp_path):
     assert store.history("p") == []  # history only goes back as far as the log
 
 
+def test_the_cap_keeps_the_run_dirs_a_retried_scatter_keeps(tmp_path):
+    home = tmp_path / "home"
+    write_config(home, log_max=6)
+    store = Store(home)
+    from sluice.runner import Runner
+
+    runner = Runner(store)
+    create(store, "p", {"a": add(d(1), d(1))})
+    settle(runner, store, "p")
+    state = store.read_state("p")
+    [run_id] = state["steps"]["a"]["run_ids"]
+    state["steps"]["a"] = {"status": "pending", "kept": {"run_ids": [run_id]}}
+    store.write_state("p", state)
+    for i in range(12):
+        store.append("p", {"kind": "message", "thread": "t", "from": "x", "body": str(i)})
+    assert (store.runs_dir("p") / run_id).is_dir()  # the pending retry still needs it
+
+
 def test_log_read_and_log_wait_tools(live):
     live.create_project("p")
 

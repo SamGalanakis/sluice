@@ -355,6 +355,7 @@ def trim(directory: Path, cap: int) -> None:
 def _state_run_ids(directory: Path) -> set[str]:
     try:
         state = json.loads((directory / "state.json").read_text(encoding="utf-8"))
-        return {r for e in state["steps"].values() for r in e.get("run_ids") or []}
+        return {r for e in state["steps"].values()
+                for r in [*(e.get("run_ids") or []), *((e.get("kept") or {}).get("run_ids") or [])]}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return set()
