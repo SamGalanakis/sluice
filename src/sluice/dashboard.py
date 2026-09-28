@@ -1,9 +1,10 @@
 """The dashboard's HTTP routes (SPEC §8 Views): pages, and one Datastar SSE stream per page.
 
 A page renders completely on first load (usable without JavaScript) and carries the version of
-what it shows (`ver`, from the stats of the files it reads, including the stderr.log of every
-running step's current run, so a progress line moves while an agent works). Its stream polls
-those stats every `interval` seconds off the event loop; when they change it re-renders the
+what it shows (`ver`, from the projects' change counters in the database — `projects.ver`,
+which every write to a project's rows moves — and the stats of the stderr.log of every running
+step's current run, so a progress line moves while an agent works). Its stream polls that
+version every `interval` seconds off the event loop; when they change it re-renders the
 page's parts and sends a `datastar-patch-elements` event for each part that differs from what
 the client has, then the new `ver` (so a reconnecting client resumes from there). An idle page
 gets nothing. A step's detail (the project page's drawer, or its own page) streams the same way
@@ -18,6 +19,7 @@ cookies (theme, value types), which every page reads to render them.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import ipaddress
 import threading
@@ -33,14 +35,12 @@ from datastar_py.starlette import DatastarResponse, read_signals
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from . import db, views
 from . import inbox as I
 from . import log as L
-from . import views
 from .errors import BadRequest, NotFound, SluiceError
-from .store import ICON_TYPES, Store
-from .util import read_json
+from .store import Store
 
-PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE, I.FILE)
 STATIC = Path(__file__).resolve().parent / "static"
 # the dashboard's own scripts, then the vendored ones (from jsDelivr, the versions in their
 # names; lang-core's imports rewritten to these files), so no third-party script runs here
@@ -51,7 +51,7 @@ STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json"
                                  "zod-4.6.5-v4.js", "zod-4.6.5-v4-core.js", "ci-info-4.4.0.js"],
                                 "text/javascript")}
 AUTHOR = "dashboard"
-HTTP_STATUS = {"not_found": 404, "conflict": 409}
+HTTP_STATUS = {"not_found": 404, "conflict": 409, "busy": 503}
 # the Host names this machine answers to on a loopback socket (the SDK's list for /mcp)
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 # the settings menu's cookies: the theme (an id of views.THEMES; none until one is picked,
@@ -129,43 +129,44 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(repr(value).encode()).hexdigest()[:16]
 
 
+# every running step's run ids, by project (the stderr.log a page's version stats)
+RUNNING = ("SELECT s.project, j.value FROM states s, json_each(s.doc, '$.steps') e, "
+           "json_each(e.value, '$.run_ids') j WHERE e.value ->> '$.status' = 'running'")
+
+
+def _running_stderr(store: Store, rows: list[Any]) -> list[tuple[int, int] | None]:
+    """The stats of the stderr.log of each (project, run id) row."""
+    return [_stat(store.runs_dir(p) / r / "stderr.log") for p, r in rows
+            if isinstance(r, str) and L.RUN_ID_RE.match(r)]
+
+
 def index_ver(store: Store) -> str:
-    """The version of the index and inbox pages: the runner's liveness and the stats of
-    every project's files."""
-    return _digest([views.runner_state(store.home)]
-                   + [(n, [_stat(store.project_dir(n) / f) for f in PROJECT_FILES])
-                      for n in store.project_names()])
+    """The version of the index and inbox pages: the runner's liveness and every project's
+    name and change counter."""
+    with store.rx() as conn:
+        vers = [tuple(r) for r in db.all_rows(conn, "SELECT name, ver FROM projects "
+                                                    "ORDER BY name")]
+    return _digest([views.runner_state(store.home), vers])
 
 
 def home_ver(store: Store) -> str:
     """The version of the index: `index_ver` and the running steps' stderr, so a row's
     `quiet 40m` goes when its run writes again."""
-    return _digest([index_ver(store), [[_stat(p) for p in _running_stderr(store, n)]
-                                       for n in store.project_names()]])
-
-
-def _running_stderr(store: Store, project: str) -> list[Path]:
-    """The stderr.log of every running step's runs (cheap: state.json is small)."""
-    try:
-        steps = read_json(store.project_dir(project) / "state.json").get("steps") or {}
-    except (OSError, ValueError, AttributeError):
-        return []
-    out = []
-    for e in steps.values():
-        if isinstance(e, dict) and e.get("status") == "running":
-            out += [store.runs_dir(project) / r / "stderr.log" for r in e.get("run_ids") or []
-                    if isinstance(r, str) and L.RUN_ID_RE.match(r)]
-    return out
+    with store.rx() as conn:
+        runs = db.all_rows(conn, RUNNING + " ORDER BY s.project")
+    return _digest([index_ver(store), _running_stderr(store, runs)])
 
 
 def project_ver(store: Store, project: str) -> str:
-    """The version of what the project page shows: the stats of the files it reads, of every
-    inbox (for the nav's badge) and of the running steps' stderr (their progress lines)."""
-    d = store.project_dir(project)
-    inboxes = [_stat(store.project_dir(n) / I.FILE) for n in store.project_names()]
-    return _digest([views.runner_state(store.home),
-                    [_stat(d / f) for f in PROJECT_FILES], inboxes,
-                    [_stat(p) for p in _running_stderr(store, project)]])
+    """The version of what the project page shows: the project's change counter, the open
+    inbox items of every project (the nav's badge) and the running steps' stderr (their
+    progress lines)."""
+    with store.rx() as conn:
+        row = db.one(conn, "SELECT ver FROM projects WHERE name = ?", (project,))
+        badge = I.open_count(conn)
+        runs = db.all_rows(conn, RUNNING + " AND s.project = ?", (project,))
+    return _digest([views.runner_state(store.home), row and row[0], badge,
+                    _running_stderr(store, runs)])
 
 
 def step_ver(store: Store, project: str, sid: str) -> str:
@@ -176,7 +177,11 @@ def step_ver(store: Store, project: str, sid: str) -> str:
 
 
 def log_ver(store: Store, project: str | None) -> str:
-    return _digest(_stat(store.log_dir(project) / L.FILE))
+    """The version of a log page: its log's last seq and its size (a trim changes that)."""
+    with store.rx() as conn:
+        row = db.one(conn, "SELECT max(seq), count(*) FROM records WHERE project IS ?",
+                     (project,))
+    return _digest(tuple(row))
 
 
 def _patch(html: str) -> str:
@@ -251,12 +256,13 @@ class Dashboard:
             while await self._tick():
                 pass
             return
-        d, stamp = self.store.log_dir(project), None
+        stamp, history = None, q.history(project)
         while True:
             new_stamp = await run(log_ver, self.store, project)
             if new_stamp != stamp:
                 stamp = new_stamp
-                res = await run(L.read, d, seen, q.kinds, q.threads)
+                res = await run(functools.partial(L.read, self.store.home, project, seen,
+                                                  q.kinds, q.threads, history=history))
                 recs = [r for r in res["records"] if views.log_shown(r, q)]
                 if recs:
                     rows = views.log_rows(reversed(recs))
@@ -468,21 +474,24 @@ class Dashboard:
             f"/projects/{views.quote(name)}#step:{views.quote(sid)}")
 
     async def icon(self, request: Request) -> Response:
-        """The project's image icon: its content type, nosniff and the stat-based validators
-        FileResponse sets (etag, last-modified); for SVG a CSP keeps any script inside from
-        running even when the URL is opened directly. 404 when it has no image icon."""
+        """The project's image icon: its content type, nosniff and its sha256 as the ETag (a
+        matching If-None-Match gets 304); for SVG a CSP keeps any script inside from running
+        even when the URL is opened directly. 404 when it has no image icon."""
         try:
-            f = await anyio.to_thread.run_sync(self.store.icon_file,
-                                               request.path_params["name"])
+            got = await anyio.to_thread.run_sync(self.store.icon_image,
+                                                 request.path_params["name"])
         except SluiceError as err:
             return Response(err.message, status_code=404)
-        if f is None:
+        if got is None:
             return Response("not found", status_code=404)
-        headers = {"X-Content-Type-Options": "nosniff"}
-        if f.suffix == ".svg":
+        kind, data, digest = got
+        headers = {"X-Content-Type-Options": "nosniff", "ETag": f'"{digest}"'}
+        if kind == "image/svg+xml":
             headers["Content-Security-Policy"] = \
                 "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
-        return FileResponse(f, media_type=ICON_TYPES[f.suffix[1:]], headers=headers)
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
+        return Response(data, media_type=kind, headers=headers)
 
     async def settings(self, request: Request) -> Response:
         """The settings menu's form: `theme` (an id of `views.THEMES`) and `types` ("0" or "1";

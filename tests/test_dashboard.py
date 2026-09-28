@@ -424,7 +424,7 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
     assert stream(port, "/projects/p/stream", {"ver": ver}, seconds=1.0) == []  # idle
 
     def fail():
-        with store.lock("p"):
+        with store.tx():
             store.write_state("p", {"inputs": {}, "steps": {
                 "a": {"status": "failed", "error": "<script>alert(1)</script>"}}})
 
@@ -529,7 +529,7 @@ def test_a_running_steps_stderr_moves_its_progress_line(store, port):
     run.mkdir(parents=True)
     log = run / "stderr.log"
     log.write_text("first\n")
-    with store.lock("p"):
+    with store.tx():
         store.write_state("p", {"inputs": {}, "steps": {"a": {
             "status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"}}})
     ver = signals_of(get(port, "/projects/p")[1])["ver"]

@@ -1,6 +1,8 @@
-"""Project icons (SPEC §2, §8): image files sniffed into icon.<ext>, text icons in
-project.json, the /icon route, and the icon by a project's name on the dashboard."""
+"""Project icons (SPEC §2, §8): image files sniffed and kept in the project's row with their
+sha256, text icons beside them, the /icon route, and the icon by a project's name on the
+dashboard."""
 
+import hashlib
 import re
 import urllib.error
 import urllib.request
@@ -22,8 +24,10 @@ def write(tmp_path, name, data):
     return str(p)
 
 
-def icon_files(d):
-    return sorted(f.name for f in d.iterdir() if f.name.startswith("icon."))
+def icon_row(store, name="p"):
+    with store.rx() as conn:
+        return tuple(conn.execute("SELECT icon_text, icon_type, icon, icon_hash FROM projects "
+                                  "WHERE name = ?", (name,)).fetchone())
 
 
 def get(port, path, host=None):
@@ -39,27 +43,25 @@ def get(port, path, host=None):
 def test_an_image_icon_is_copied_in_and_replaced(store, tmp_path):
     svg, png = write(tmp_path, "a.svg", SVG), write(tmp_path, "a.png", PNG)
     store.create_project("p", "d", icon=svg)
-    d = store.project_dir("p")
-    assert (d / "icon.svg").read_bytes() == SVG and icon_files(d) == ["icon.svg"]
+    assert icon_row(store) == (None, "image/svg+xml", SVG, hashlib.sha256(SVG).hexdigest())
+    assert store.icon_image("p") == ("image/svg+xml", SVG, hashlib.sha256(SVG).hexdigest())
     assert store.icon("p") == {"kind": "image", "type": "image/svg+xml"}
     assert store.projects()[0]["icon"] == {"kind": "image", "type": "image/svg+xml"}
-    store.update_project("p", icon=png)  # a new one replaces the old, whatever its extension
-    assert (d / "icon.png").read_bytes() == PNG and icon_files(d) == ["icon.png"]
+    store.update_project("p", icon=png)  # a new one replaces the old, whatever its type
+    assert icon_row(store) == (None, "image/png", PNG, hashlib.sha256(PNG).hexdigest())
     assert store.icon("p") == {"kind": "image", "type": "image/png"}
-    store.update_project("p", icon=svg)  # replacing a PNG with an SVG leaves one file
-    assert icon_files(d) == ["icon.svg"]
+    assert not store.project_dir("p").exists()  # nothing on disk
 
 
 def test_a_text_icon_lives_in_project_json_and_clears_the_image(store, tmp_path):
     store.create_project("p", "d", icon=write(tmp_path, "a.png", PNG))
     store.update_project("p", icon=" 🌊 ")  # stripped
-    d = store.project_dir("p")
-    assert icon_files(d) == [] and store.project("p")["icon"] == "🌊"
-    assert store.icon("p") == {"kind": "text", "text": "🌊"}
+    assert icon_row(store) == ("🌊", None, None, None) and store.project("p")["icon"] == "🌊"
+    assert store.icon("p") == {"kind": "text", "text": "🌊"} and store.icon_image("p") is None
     store.update_project("p", icon=write(tmp_path, "a.svg", SVG))  # an image clears the text
-    assert "icon" not in store.project("p") and icon_files(d) == ["icon.svg"]
+    assert "icon" not in store.project("p") and icon_row(store)[:2] == (None, "image/svg+xml")
     store.update_project("p", icon="")  # the empty string removes any icon
-    assert "icon" not in store.project("p") and icon_files(d) == []
+    assert "icon" not in store.project("p") and icon_row(store) == (None, None, None, None)
     assert store.icon("p") is None and "icon" not in store.projects()[0]
     store.update_project("p", description="kept")  # no icon argument leaves it alone
     store.update_project("p", icon="🔧")
@@ -83,7 +85,7 @@ def test_bad_icons_are_refused(store, tmp_path):
         store.update_project("p", icon="a\nb")
     with pytest.raises(BadRequest, match="expected a string"):
         store.update_project("p", icon=3)
-    assert store.icon("p") is None and icon_files(store.project_dir("p")) == []
+    assert store.icon("p") is None and icon_row(store) == (None, None, None, None)
 
 
 def test_the_icon_route_serves_the_image_or_404s(store, port, tmp_path):
@@ -97,9 +99,16 @@ def test_the_icon_route_serves_the_image_or_404s(store, port, tmp_path):
     assert code == 200 and body == SVG
     assert headers["content-type"].startswith("image/svg+xml")
     assert headers["x-content-type-options"] == "nosniff"
-    assert headers.get("etag") or headers.get("last-modified")
+    assert headers["etag"] == f'"{hashlib.sha256(SVG).hexdigest()}"'
     assert headers["content-security-policy"] == \
         "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/projects/p/icon",
+                                 headers={"If-None-Match": headers["etag"]})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        raise AssertionError("expected 304")
+    except urllib.error.HTTPError as e:  # urllib raises for a 304
+        assert e.code == 304 and not e.read()
     assert get(port, "/projects/p/icon", host="evil.example:7420")[0] == 403
     store.update_project("p", icon=write(tmp_path, "a.png", PNG))
     code, headers, body = get(port, "/projects/p/icon")
@@ -118,8 +127,11 @@ def test_the_dashboard_shows_the_icon_by_the_projects_name(store, tmp_path):
     assert '<span class="picon" aria-hidden="true">a&lt;b</span>' in page
     assert '<span class="picon" aria-hidden="true">a<b</span>' not in page
     img = f'<img class="picon" src="/projects/q/icon?v=' \
-          f'{store.icon_file("q").stat().st_mtime_ns}" alt="" width="20" height="20">'
+          f'{hashlib.sha256(SVG).hexdigest()}" alt="" width="20" height="20">'
     assert img in page
+    store.update_project("q", description="other")  # the icon's URL is its content's
+    store.append("q", {"kind": "message", "thread": "t", "from": "x", "body": "hi"})
+    assert img in views.index(store)
     board = views.project_page(store, "q", ver="x")
     assert '<link rel="icon" href="/static/favicon.svg"' in board  # the favicon stays sluice's
     assert '<link rel="icon" href="/projects/' not in board

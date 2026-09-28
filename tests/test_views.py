@@ -21,7 +21,7 @@ def test_mermaid_shows_inputs_steps_outputs_edges_and_status_classes(store):
                  "in": {"seconds": d(0), "tag": {"source": ["a/sum"]}}},
         "gate": {"run": "core.collect", "in": {"items": {"source": ["b/sum", "each/end"]}}},
     }, inputs={"n": "int"}, outputs={"all": {"source": "gate/items"}})
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {"n": 1}, "steps": {
             "a": {"status": "succeeded", "outputs": {"sum": 2}},
             "b": {"status": "succeeded", "outputs": {"sum": 4}, "manual": True},
@@ -92,7 +92,7 @@ def board_project(store):
     run.mkdir(parents=True)
     (run / "input.json").write_text('{"seconds": 0, "tag": 2}')
     (run / "stderr.log").write_text("starting\nhalfway there\n\n")
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {"n": 1}, "steps": {
             "a": {"status": "succeeded", "outputs": {"sum": 2}, "started": "2026-01-01T10:00:00Z",
                   "finished": "2026-01-01T10:12:04Z"},
@@ -236,7 +236,7 @@ def test_a_pending_step_says_what_it_waits_on_and_the_next_ones_stand_out(store)
     create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                         "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
                         "c": {"run": "test.add", "in": {"a": src("b/sum"), "b": d(1)}}})
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "a": {"status": "running", "started": "2026-01-01T10:00:00Z"}}})
     page = views.project_page(store, "v", ver="x")
@@ -304,7 +304,7 @@ def test_a_steps_detail(store):
     run.mkdir(parents=True)
     (run / "input.json").write_text('{"prompt": "Do <b>it</b>\\nthen stop", "made": 2}')
     (run / "stderr.log").write_text("step one\n<script>alert(1)</script>\n")
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {"n": 1}, "steps": {
             "make": {"status": "succeeded", "outputs": {"sum": 2}},
             "agent": {"status": "succeeded", "run_ids": ["r1"],
@@ -389,7 +389,7 @@ def test_values_read_by_kind_in_a_compact_field_list(store):
     run = store.runs_dir("v") / "r1"
     run.mkdir(parents=True)
     (run / "input.json").write_text(json.dumps({"cwd": path, "spec": "Do it"}))
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "fork": {"status": "succeeded", "outputs": {"sum": 2}},
             "agent": {"status": "succeeded", "run_ids": ["r1"]}}})
@@ -435,7 +435,7 @@ def test_a_long_value_takes_the_full_width_below_its_name(store):
     create(store, "v", {"agent": {"run": "test.open", "in": {},
                                   "outputs": {"findings": {"type": "string",
                                                            "doc": "What it found"}}}})
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {"agent": {
             "status": "succeeded", "outputs": {"findings": long, "ok": True}}}})
     html = views.step_detail(store, "v", "agent")
@@ -451,7 +451,7 @@ def test_attempts_read_oldest_first_each_with_its_start_and_its_whole_error(stor
     create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
     trace = ("exit code 1\nTraceback (most recent call last):\n  File \"x.py\", line 3\n"
              "ValueError: " + "the fork at /tmp/forks/a is gone " * 6 + "<end>")
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {"a": {
             "status": "running", "run_ids": ["20260101T100500-a-0-cafe"],
             "started": "2026-01-01T10:05:00Z"}}})
@@ -507,10 +507,11 @@ def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
     run = store.runs_dir("v") / "r1"
     run.mkdir(parents=True)
     (run / "stderr.log").write_text("thinking\n")
-    (run / "submitted.json").write_text('{"answer": "so far"}')
-    with store.lock("v"):
+    with store.tx() as conn:
         store.write_state("v", {"inputs": {}, "steps": {"agent": {
             "status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"}}})
+        conn.execute("INSERT INTO submissions (project, run, step, outputs, at) VALUES "
+                     """('v', 'r1', 'agent', '{"answer": "so far"}', 'now')""")
     html = views.step_detail(store, "v", "agent")
     progress = html[html.index('Progress</h3>'):html.index("</section>")]
     assert '<pre class="tail">thinking</pre>' in progress
@@ -519,7 +520,8 @@ def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
                                                                      html.index("so far"))]
     assert ">answer</span>" in outputs and "so far" in outputs
     assert ">ports</span>" not in outputs and ">results</span>" not in outputs  # the fn's own
-    (run / "submitted.json").unlink()
+    with store.tx() as conn:
+        conn.execute("DELETE FROM submissions")
     html = views.step_detail(store, "v", "agent")
     assert "None yet: answer." in html and "ports" not in html
 
@@ -559,7 +561,7 @@ def test_a_running_step_gone_quiet_wears_a_quiet_badge_and_nothing_more(store):
     live.mkdir()
     (live / "stderr.log").write_text("working\n")
     _ago(done / "stderr.log", 60)
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "a": {"status": "running", "run_ids": ["r1"],
                   "started": "2026-01-01T10:00:00Z"},
@@ -600,7 +602,7 @@ def test_a_running_step_gone_quiet_wears_a_quiet_badge_and_nothing_more(store):
     _ago(live / "stderr.log", 20)
     assert quiet_badge(card(views.project_page(store, "v", ver="x"), "each")) == "quiet 20m"
     # a step that is not running has no badge at all
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {"a": {"status": "succeeded",
                                                                "run_ids": ["r1"]}}})
     assert quiet_badge(card(views.project_page(store, "v", ver="x"), "a")) is None
@@ -615,7 +617,7 @@ def test_the_drawer_puts_the_status_and_the_duration_by_the_title(store):
     run.mkdir(parents=True)
     (run / "stderr.log").write_text("working\n")
     started = (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=74)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "a": {"status": "running", "run_ids": ["r1"], "started": started},
             "c": {"status": "failed", "error": "boom", "started": "2026-01-01T10:00:00Z",
@@ -655,7 +657,7 @@ def test_the_index_and_the_tab_title_say_a_run_went_quiet(store):
     for r in ("r1", "r2"):
         (store.runs_dir("v") / r).mkdir(parents=True)
         (store.runs_dir("v") / r / "stderr.log").write_text("working\n")
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "a": {"status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"},
             "b": {"status": "running", "run_ids": ["r2"], "started": "2026-01-01T10:00:00Z"},
@@ -698,7 +700,7 @@ def test_the_log_hides_thread_post_calls_behind_their_message(store):
     assert "c1 thread.post" in calls and "running" in calls and "succeeded" in calls
     assert "the question" not in calls
     # the filter stays a view concern: log_read lists everything
-    fns = [r.get("fn") for r in L.read(store.log_dir("v"), kinds=["call"])["records"]]
+    fns = [r.get("fn") for r in L.read(store.home, "v", kinds=["call"])["records"]]
     assert fns.count("thread.post") == 3
 
 
@@ -806,7 +808,7 @@ def test_the_project_index(store):
                         "b": {"run": "test.boom", "in": {}},
                         "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
     store.create_project("w", "second")
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "a": {"status": "running", "started": "2026-01-01T10:00:00Z"},
             "b": {"status": "failed"}, "c": {"status": "succeeded"}}})
@@ -879,7 +881,7 @@ def test_values_are_escaped(store):
     run = store.runs_dir("v") / "r1"
     run.mkdir(parents=True)
     (run / "stderr.log").write_text("<script>progress</script>\n")
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "a": {"status": "succeeded", "outputs": {"value": "<script>alert(2)</script>"}},
             "p": {"status": "running", "run_ids": ["r1"]}}})
@@ -958,7 +960,7 @@ def stuck_project(store, running=False):
         "notes": {"run": "test.add", "in": {"a": src("lint/sum"), "b": d(1)}, "paused": True},
         "later": {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "paused": "not yet"},
         "go": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "lint": {"status": "failed", "error": "exit code 1\nTraceback (most recent call last):"
                      "\n  File x\nValueError: 3 lint errors\n\n"},
@@ -1051,7 +1053,7 @@ def test_a_failure_headline_is_in_sluices_words(store, monkeypatch):
     assert h("KeyboardInterrupt") == "KeyboardInterrupt"
     # the card's tooltip and the drawer say it; the drawer keeps the error as raised under it
     create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {"a": {
             "status": "failed", "error": "RuntimeError: /home/sam/w exited 143"}}})
     said = "~/w exited 143 (terminated: SIGTERM)"
@@ -1063,7 +1065,7 @@ def test_a_failure_headline_is_in_sluices_words(store, monkeypatch):
 
 def test_pause_shows_only_where_it_acts(store):
     stuck_project(store, running=True)
-    with store.lock("v"):
+    with store.tx():
         state = store.read_state("v")
         state["steps"].update(ship={"status": "stale"}, fix={"status": "skipped",
                                                               "skipped": "no"})
@@ -1114,7 +1116,7 @@ def test_a_finished_box_folds_to_one_line(store):
         "b2": {"run": "test.add", "in": {"a": src("b1/sum"), "b": d(1)}},
         "c1": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
     ok = {"status": "succeeded", "outputs": {"sum": 2}}
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "a1": ok, "a2": ok, "a3": {"status": "skipped", "skipped": "no"},
             "b1": ok, "b2": {"status": "running"}, "c1": ok}})
@@ -1135,7 +1137,7 @@ def test_a_finished_box_folds_to_one_line(store):
     # a plan of one piece of work never folds
     create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                         "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
-    with store.lock("w"):
+    with store.tx():
         store.write_state("w", {"inputs": {}, "steps": {"a": ok, "b": ok}})
     assert '<details class="fold-box"' not in views.project_page(store, "w", ver="x")
 

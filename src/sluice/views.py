@@ -35,6 +35,7 @@ from urllib.parse import parse_qs, quote, urlencode
 
 from markdown_it import MarkdownIt
 
+from . import db
 from . import log as L
 from . import state as S
 from . import types as T
@@ -337,14 +338,14 @@ PROJECT_TABS = ("plan", "threads", "log", "history", "fns")  # a project's secti
 
 def project_icon(store: Store, name: str, icon: dict[str, Any] | None = None) -> str:
     """The project's icon before its name (index row, switcher, page head): an image as an
-    <img> (the file's mtime in `?v=` busts a stale cache), or the text icon in an aria-hidden
-    span in the same 20px box; "" when the project has none."""
+    <img> (its content hash in `?v=`: a changed image busts a stale cache, an unchanged one
+    stays cached), or the text icon in an aria-hidden span in the same 20px box; "" when the
+    project has none."""
     icon = store.icon(name) if icon is None else icon
     if not icon:
         return ""
     if icon["kind"] == "image":
-        f = store.icon_file(name)
-        v = f.stat().st_mtime_ns if f is not None else 0
+        v = store.icon_hash(name) or ""
         return (f'<img class="picon" src="/projects/{e(quote(name))}/icon?v={v}" '
                 'alt="" width="20" height="20">')
     return f'<span class="picon" aria-hidden="true">{e(icon["text"])}</span>'
@@ -535,7 +536,7 @@ def _label(text: str) -> str:
 @dataclasses.dataclass
 class Block:
     """One step as the dashboard shows it: the plan's parsed Step (plan.py reads its
-    bindings, `when`, pause and tags) plus its state.json entry."""
+    bindings, `when`, pause and tags) plus its state entry."""
 
     step: Step
     entry: dict[str, Any]
@@ -720,9 +721,10 @@ class Board:
 
 
 def load_board(store: Store, project: str) -> Board:
-    info = store.project(project)
-    doc, plan = store.plan(project)
-    state = store.read_state(project)
+    with store.rx():  # one snapshot of the project, its plan and its state
+        info = store.project(project)
+        doc, plan = store.plan(project)
+        state = store.read_state(project)
     blocks = {}
     for sid, step in plan.steps.items():
         declared = step.declared
@@ -1012,7 +1014,7 @@ def thread_html(board: Board, thread: str, ms: list[dict[str, Any]], waiting: se
 def threads_panel(store: Store, board: Board, live: bool = True) -> str:
     """Every conversation of the project (the `threads` part of the Threads tab), the latest
     first."""
-    msgs = L.read(store.log_dir(board.project), kinds=["message"])["records"]
+    msgs = L.read(store.home, board.project, kinds=["message"])["records"]
     if not msgs:
         return ('<p class="empty">No messages yet. Agents running as steps post to their '
                 "thread (<code>step-&lt;id&gt;</code>) and the orchestrator answers there.</p>")
@@ -1792,15 +1794,12 @@ def runner_note(store: Store) -> str:
 
 
 def last_change(store: Store, project: str) -> str:
-    """The later of the last log record and the last state.json write."""
-    times = []
-    last = L.last_record(store.log_dir(project))
-    if last:
-        times.append(last["at"])
-    state = store.project_dir(project) / "state.json"
-    if state.exists():
-        t = dt.datetime.fromtimestamp(state.stat().st_mtime, dt.UTC)
-        times.append(t.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    """The later of the project's last log record and its last state write."""
+    with store.rx() as conn:
+        last = db.one(conn, "SELECT at FROM records WHERE project = ? ORDER BY seq DESC "
+                            "LIMIT 1", (project,))
+        changed = db.one(conn, "SELECT changed FROM projects WHERE name = ?", (project,))
+    times = [t for t in (last and last[0], changed and changed[0]) if t]
     return max(times) if times else ""
 
 
@@ -1823,7 +1822,7 @@ def _bar(counts: Mapping[str, int], total: int,
 def _project_row(store: Store, name: str, since: list[str] | None = None) -> str:
     """One project on the index (with `since`, it adds when each running step last wrote)."""
     info = store.project(name)
-    icon = project_icon(store, name, store.icon(name, info))
+    icon = project_icon(store, name)
     href = f"/projects/{quote(name)}"
     about = f'<p class="about">{e(first_paragraph(info["description"]))}</p>' \
         if info.get("description") else ""
@@ -2384,7 +2383,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
 
     head = _detail_head(store, board, b, steps, live) + _relations(board, b, steps)
     thread = f"step-{sid}"  # its conversation with the orchestrator, on the Threads tab
-    recs = L.read(store.log_dir(project), threads=[thread],
+    recs = L.read(store.home, project, threads=[thread],
                   kinds=["step.status", "step.output", "run.adopt", "message"])["records"]
     msgs = [r for r in recs if r.get("kind") == "message"]
     talk = ""
@@ -2436,12 +2435,9 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     title = "Outputs"
     own = {n: t for n, t in declared.items() if n in b.submitted}
     if outs is None and b.status == "running" and b.run_ids:
-        d = _run_dir(store, project, b.run_ids[-1])
-        try:  # what the agent has submitted so far (step_submit), before the fn exits
-            got = read_json(d / "submitted.json") if d else None
-        except (OSError, ValueError):
-            got = None
-        if isinstance(got, dict):
+        # what the agent has submitted so far (step_submit), before the fn exits
+        got = store.submission(project, b.run_ids[-1])
+        if got is not None:
             outs, title, declared = got, "Outputs so far", own
     if outs is not None:
         fields = [_field(n, field_value(outs[n], n) if n in outs else
@@ -2575,6 +2571,12 @@ class LogQuery:
     def newest(self) -> bool:
         return self.before is None and self.after is None
 
+    def history(self, project: str | None) -> bool:
+        """Whether this is a project's History tab: its plan's whole edit history (every edit,
+        and the manual values the log still has), not the capped log."""
+        return project is not None and bool(self.kinds) \
+            and set(self.kinds) == set(L.HISTORY_KINDS) and not self.threads
+
     def query(self, **change: Any) -> str:
         """The canonical query string, with `change`d fields."""
         q = dataclasses.replace(self, **change)
@@ -2596,7 +2598,8 @@ def _st(status: Any) -> str:
 ADOPTED = {"watching": "kept through a runner restart",
            "finished": "had finished; its result was collected",
            "unknown": "had stopped without saying how it ended",
-           "restarted": "was lost in the restart"}
+           "restarted": "was lost in the restart",
+           "not started": "was never started (the runner stopped first)"}
 
 
 def log_summary(rec: dict[str, Any]) -> str:
@@ -2693,7 +2696,8 @@ def log_base(project: str | None) -> str:
 def log_view(store: Store, project: str | None, q: LogQuery) -> tuple[str, int]:
     """The `log-view` part: one page of records (newest first) and the pager; with the log's
     last seq when it was read."""
-    res = L.page(store.log_dir(project), q.kinds, q.threads, q.before, q.after, PAGE_SIZE)
+    res = L.page(store.home, project, q.kinds, q.threads, q.before, q.after, PAGE_SIZE,
+                 history=q.history(project))
     recs = [r for r in res["records"] if log_shown(r, q)]
     base = log_base(project)
 
@@ -2756,7 +2760,7 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
         title = '<h1 class="vh">Log</h1><p class="meta">Calls made without a project.</p>'
         name = "Log"
     else:
-        history = bool(q.kinds) and set(q.kinds) == set(L.HISTORY_KINDS) and not q.threads
+        history = q.history(project)
         tab = "history" if history else "log"
         title = project_head(store, project, tab)
         name = f'{"History" if history else "Log"} · {project}'  # as the Threads tab's
