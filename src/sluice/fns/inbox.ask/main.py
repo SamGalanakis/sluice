@@ -6,7 +6,7 @@
 
 import time
 
-from sluice import inbox
+from sluice import db, inbox
 from sluice import log as L
 from sluice.fn import run
 from sluice.fns._lib.threads import project_log
@@ -14,16 +14,17 @@ from sluice.fns._lib.threads import project_log
 
 def ask(ctx, title, body=None, ui=None, interval=0.5):
     """Post (or, after a runner restart, find again) this step's open item and poll it."""
-    d, home = project_log()
+    home, project = project_log()
     sender = ctx.step or f"call {ctx.run_id}"
     fields = {"title": title, "body": body, "ui": ui, "sender": sender}
-    with L.flock(d / L.LOCK):
-        same = [i for i in inbox.items(d) if i["status"] == "open" and i.get("from") == sender
+    with db.write(home) as conn:
+        same = [i for i in inbox.items(conn, project, "open") if i.get("from") == sender
                 and (i["title"], i.get("body"), i.get("ui")) == (title, body, ui)]
-        item = same[-1] if same else inbox.post(d, L.cap_of(home), **fields)
+        item = same[-1] if same else inbox.post(conn, project, L.cap_of(home), **fields)
     ctx.log(f"waiting for an answer to inbox item {item['id']}")
     while True:
-        item = inbox.find(d, item["id"])
+        with db.read(home) as conn:
+            item = inbox.find(conn, project, item["id"])
         if item["status"] == "answered":
             return {"answer": item["answer"]}
         if item["status"] == "closed":

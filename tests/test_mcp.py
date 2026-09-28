@@ -95,10 +95,10 @@ async def test_project_delete_needs_archiving_and_removes_everything(store):
         err = await fail(c, "project_delete", name="p")
         assert err["error"] == "bad_request" and "archive" in err["message"]
         await ok(c, "project_update", name="p", archived=True)
-        with store.lock("p"):
+        with store.tx():
             store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "running"}}})
         assert "running steps: a" in (await fail(c, "project_delete", name="p"))["message"]
-        with store.lock("p"):
+        with store.tx():
             store.write_state("p", {"inputs": {}, "steps": {}})
         assert await ok(c, "project_delete", name="p") == {"deleted": "p"}
         assert not store.project_dir("p").exists()
@@ -119,15 +119,15 @@ async def test_project_delete_refuses_live_calls(store):
         err = await fail(c, "project_delete", name="p")
         assert err["error"] == "bad_request" and queued in err["message"]
         assert direct not in err["message"]  # direct calls don't block
-        store.append("p", {"kind": "call", "call": queued, "fn": "test.add",
-                           "status": "succeeded", "outputs": {"sum": 7}})
+        calls.record(store, "p", {**calls.latest(store, queued, "p"), "status": "succeeded",
+                                  "outputs": {"sum": 7}})
         assert await ok(c, "project_delete", name="p") == {"deleted": "p"}
 
 
 async def test_waits_are_capped_at_3600(store, monkeypatch):
     """log_wait's timeout and fn_call's wait hold a call open an hour at most."""
     timeouts = []
-    monkeypatch.setattr(L, "wait", lambda *a: timeouts.append(a[5]) or
+    monkeypatch.setattr(L, "wait", lambda *a: timeouts.append(a[6]) or
                         {"records": [], "held": [], "last_seq": 0})
     now = [0.0]
     real_sleep = anyio.sleep
@@ -310,6 +310,7 @@ async def test_verify_tool(store):
     store.create_project("p")
     async with Client(build_server(store)) as c:
         assert await ok(c, "verify") == {"ok": True, "problems": []}
+        store.project_dir("p").mkdir(parents=True, exist_ok=True)  # made lazily
         (store.project_dir("p") / ".env").write_text("nope\n")
         assert await ok(c, "verify", project="p") == {
             "ok": False, "problems": [{"where": "projects/p/.env:1",

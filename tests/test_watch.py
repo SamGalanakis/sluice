@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 
+from sluice import log as L
 from sluice.watch import follow
 from tests.conftest import add, create, d, message, settle
 
@@ -25,12 +26,12 @@ def test_follow_prints_matching_records_from_now_or_since_a_seq(store):
                          {"kind": "step.status", "step": "s", "from": None, "to": "pending"})
         return i is None
 
-    follow(store.project_dir("p"), out, kinds=["message"], threads=["q"], interval=0, stop=stop)
+    follow(store.home, "p", out, kinds=["message"], threads=["q"], interval=0, stop=stop)
     assert [json.loads(x)["body"] for x in out.getvalue().splitlines()] == ["after"]
 
     out = io.StringIO()
     rounds = iter(range(1))
-    follow(store.project_dir("p"), out, threads=["q"], since_seq=0, interval=0,
+    follow(store.home, "p", out, threads=["q"], since_seq=0, interval=0,
            stop=lambda: next(rounds, None) is None)
     assert [json.loads(x)["body"] for x in out.getvalue().splitlines()] == ["before", "after"]
 
@@ -50,8 +51,8 @@ def test_follow_holds_notes_until_a_question_when_waking_on_questions(store):
             store.append("p", {**message("q", "which db?"), "needs_reply": True})
         return i is None
 
-    follow(store.project_dir("p"), out, threads=["q"], since_seq=1, interval=0, stop=stop,
-           wake="questions")
+    follow(store.home, "p", out, threads=["q"], since_seq=L.last_seq(store.home, "p"),
+           interval=0, stop=stop, wake="questions")
     assert seen[:3] == [0, 0, 0]
     assert [json.loads(x)["body"] for x in out.getvalue().splitlines()] == ["fyi", "which db?"]
 

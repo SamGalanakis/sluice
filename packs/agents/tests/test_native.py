@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from sluice import log as L
 from sluice.fn import Transient
+from sluice.store import Store
 
 AGENTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENTS))
@@ -178,6 +178,7 @@ class Model(Adapter):
         self.resumed = None
         self.cwd_of = {}
         self.exited = False
+        self.outputs = {}  # what it has submitted (the run's submission)
 
     def prepare(self, run_dir, cwd, session):
         self.run_dir, self.resumed = Path(run_dir), session
@@ -197,7 +198,7 @@ class Model(Adapter):
         self.on_turn(self, self.turns, text)
 
     def submit(self, **outputs):
-        (self.run_dir / "submitted.json").write_text(json.dumps(outputs))
+        self.outputs = outputs
 
     def poll(self, tmux):
         state = self.state or ("idle" if self.turns else "starting")
@@ -228,6 +229,7 @@ def run(model, tmp_path, required=("word",), **kw):
     cwd.mkdir(exist_ok=True)
     lines = []
     out = supervise(model, "the task", cwd, tmp_path / "run", required=list(required),
+                    sent=lambda: model.outputs,
                     limits=kw.pop("limits", FAST), log=lines.append, **kw)
     return out, lines
 
@@ -430,7 +432,7 @@ def test_a_long_or_multiline_task_is_handed_over_as_a_file(tmp_path, task):
     cwd = tmp_path / "work"
     cwd.mkdir()
     supervise(model, task, cwd, tmp_path / "run", required=["word"], limits=FAST,
-              log=lambda line: None)
+              log=lambda line: None, sent=lambda: model.outputs)
     task_md = (tmp_path / "run" / "task.md").resolve()
     assert model.sent == [POINTER.format(path=task_md)] and task_md.read_text() == task
 
@@ -486,11 +488,11 @@ def test_thread_delivery_rpc_error_is_requeued(tmp_path):
 
 
 def test_the_thread_feed_reads_messages_for_the_step(tmp_path):
-    project = tmp_path / "projects" / "p"
-    project.mkdir(parents=True)
-    L.append(project, [{"kind": "message", "thread": "step-build", "from": "o", "body": "old"}])
+    store = Store(tmp_path)
+    store.create_project("p")
+    store.append("p", {"kind": "message", "thread": "step-build", "from": "o", "body": "old"})
     feed = ThreadFeed(SimpleNamespace(home=tmp_path, project="p", step="build"))
-    L.append(project, [
+    store.append("p", *[
         {"kind": "message", "thread": "step-build", "from": "o", "to": "build", "body": "a"},
         {"kind": "message", "thread": "step-build", "from": "build", "body": "mine"},
         {"kind": "message", "thread": "step-build", "from": "o", "to": "other", "body": "b"},
