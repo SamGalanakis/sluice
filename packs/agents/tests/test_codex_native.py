@@ -134,6 +134,34 @@ def test_resume_waits_for_the_new_threads_rollout_to_be_written():
     assert codex.resuming and codex.busy
 
 
+def test_a_turn_counts_as_started_once_from_its_reply_or_its_notification():
+    codex = Codex()
+    codex.thread, codex.resuming = "thread-1", True
+    codex.rpc = FakeRpc()
+
+    class Pane:
+        def dead(self):
+            return None
+
+    class Server:
+        def poll(self):
+            return None
+
+    codex.server = Server()
+    codex.deliver(None, "task")  # turn/started was sent before anyone subscribed
+    assert codex.starts == 1
+    codex.rpc.events = [{"method": "turn/started", "params": {
+        "threadId": "thread-1", "turn": {"id": "turn-1"}}}]
+    codex.poll(Pane())
+    assert codex.starts == 1
+    codex.deliver(None, "steer")  # the running turn takes it
+    assert codex.starts == 2
+    codex.rpc.events = [{"method": "turn/started", "params": {
+        "threadId": "thread-1", "turn": {"id": "turn-2"}}}]
+    codex.poll(Pane())
+    assert codex.starts == 3
+
+
 def test_codex_home_and_engine_environment(tmp_path, monkeypatch):
     import _agents.native.codex as mod
 

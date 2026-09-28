@@ -196,6 +196,7 @@ class Codex(Adapter):
         self.thread = self.turn = self.message = self.error = ""
         self.turns = self.version = 0
         self.starts = 0
+        self.started = set()  # turn ids already counted in `starts`
         self.lines = []
         self.server = self.rpc = self.log_file = None
         self.app_pid = None
@@ -362,6 +363,7 @@ class Codex(Adapter):
                 if self.busy:
                     raise
             else:
+                self.starts += 1  # the running turn took the message
                 self.version += 1
                 return
         if not self.busy:
@@ -370,6 +372,7 @@ class Codex(Adapter):
                                                       "model": self.model,
                                                       "effort": self.effort})
             self.turn = result["turn"]["id"]
+            self._count_start(self.turn)  # its turn/started comes before the resume subscribes
             self.busy = True
             if not self.resuming:
                 deadline = time.monotonic() + 10
@@ -389,6 +392,13 @@ class Codex(Adapter):
                                        "turn/start")
         self.version += 1
 
+    def _count_start(self, turn):
+        """Count a turn as started once, whether turn/start's reply or its turn/started
+        notification shows it first."""
+        if turn not in self.started:
+            self.started.add(turn)
+            self.starts += 1
+
     def poll(self, tmux):
         try:
             events = self.rpc.drain()
@@ -403,9 +413,9 @@ class Codex(Adapter):
             if params.get("threadId") not in (None, self.thread):
                 continue
             if method == "turn/started":
-                self.starts += 1
                 self.busy = True
                 self.turn = (params.get("turn") or {}).get("id", self.turn)
+                self._count_start(self.turn)
             elif method in ("turn/completed", "turn/failed"):
                 turn = params.get("turn") or {}
                 if turn.get("id") not in (None, self.turn):
