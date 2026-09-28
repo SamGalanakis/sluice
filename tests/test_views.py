@@ -1326,8 +1326,9 @@ def test_the_board_view_reads_and_writes_its_query():
 def unreachable_project(store):
     """Five pieces of work. `f` failed: `f1` and `f2` wait behind it, and `fp`, paused, waits
     behind `f1` with `fp1` after it. `p` is paused (in the plan) with `p1`, stale, reading
-    it. `w` reads the plan input `n`, which has no value, and `w1` runs after it. `s` was
-    skipped. `ok` succeeded and `r` reads it, ready to run."""
+    it. `w` reads the plan input `n`, which has no value, and `w1` runs after it. `st` is
+    stale (it waits for a retry) with `st1` reading it. `s` was skipped. `ok` succeeded and
+    `r` reads it, ready to run."""
     one = {"run": "test.add", "in": {"a": d(1), "b": d(1)}}
 
     def reads(sid):
@@ -1339,11 +1340,13 @@ def unreachable_project(store):
         "p": {**one, "paused": "not yet"}, "p1": reads("p"),
         "w": {"run": "test.add", "in": {"a": src("n"), "b": d(1)}},
         "w1": {**one, "after": ["w"]},
+        "st": one, "st1": reads("st"),
         "s": one, "ok": one, "r": reads("ok")}, inputs={"n": "int"})
     with store.lock("v"):
         store.write_state("v", {"inputs": {}, "steps": {
             "f": {"status": "failed", "error": "boom"},
             "p1": {"status": "stale", "outputs": {"sum": 1}},
+            "st": {"status": "stale", "outputs": {"sum": 2}},
             "s": {"status": "skipped", "skipped": "go is false"},
             "ok": {"status": "succeeded", "outputs": {"sum": 2}}}})
 
@@ -1354,11 +1357,12 @@ def test_a_step_cant_run_behind_a_failure_a_pause_or_a_missing_input(store):
     hidden = board.unreachable
     # each cause holds up what is behind it, transitively through handoffs and `after`; a
     # stale step counts as not run; every skipped step is in
-    assert hidden == {"f1", "f2", "fp", "fp1", "p1", "w1", "s"}
+    assert hidden == {"f1", "f2", "fp", "fp1", "p1", "w1", "st1", "s"}
     # the frontier stays: what a person acts on (the failed, the paused, the step waiting on
-    # an input), and what can run (ready or done)
-    assert {"f", "p", "w", "ok", "r"}.isdisjoint(hidden)
-    assert [sid for sid in board.blocks if board.halts(sid)] == ["f", "fp", "p", "w"]
+    # an input, the stale one waiting for a retry), and what can run (ready or done)
+    assert {"f", "p", "w", "st", "ok", "r"}.isdisjoint(hidden)
+    assert [sid for sid in board.blocks if board.halts(sid)] == ["f", "fp", "p", "p1", "w",
+                                                                  "st"]
     # a paused step behind a failure is not the frontier: the failure comes first
     assert "fp" in hidden
     # closed downstream: no step left on the board waits on a hidden one
@@ -1391,16 +1395,16 @@ def test_the_board_hides_the_steps_that_cant_run_and_says_so(store):
         return set(cards), note and html.unescape(re.sub(r"<[^>]+>", "", note[1])), html_
 
     cards, note, page = show()
-    assert cards == {"f", "p", "w", "ok", "r"}
-    assert note == "7 steps that can't run hidden · show"
+    assert cards == {"f", "p", "w", "st", "ok", "r"}
+    assert note == "8 steps that can't run hidden · show"
     assert '<a href="/projects/v?steps=all">show</a>' in page
     # a box left with no step goes, like a filtered one (its step is counted above)
-    assert box_ids(page) == ["f", "w", "p", "ok"] and 'id="box-s"' not in page
+    assert box_ids(page) == ["f", "w", "p", "st", "ok"] and 'id="box-s"' not in page
     # nothing dangles: every edge joins two cards on the board
     assert set(board_edges(page)) == {("s:ok", "s:r")}
     # the frontier says what waits behind it, quietly in its small line
     assert "+4 behind" in card(page, "f") and "+1 behind" in card(page, "p")
-    assert "+1 behind" in card(page, "w")
+    assert "+1 behind" in card(page, "w") and "+1 behind" in card(page, "st")
     assert "behind" not in card(page, "ok") and "behind" not in card(page, "r")
     # the control: which steps show, after which boxes and before the order
     tools = page[page.index('<form class="board-tools"'):page.index("</form>")]
@@ -1417,7 +1421,7 @@ def test_the_board_hides_the_steps_that_cant_run_and_says_so(store):
     assert ("s:f", "s:f1") in board_edges(page) and box_ids(page)[-1] == "s"
     # with a box filter too, one line says both, its link showing everything
     cards, note, page = show(show="active")
-    assert note == "1 done box and 6 steps that can't run hidden · show"
+    assert note == "1 done box and 7 steps that can't run hidden · show"
     assert '<a href="/projects/v?steps=all">show</a>' in page
     cards, note, page = show(show="active", order="plan")
     assert '<a href="/projects/v?order=plan&amp;steps=all">show</a>' in page

@@ -691,11 +691,12 @@ class Board:
 
     def halts(self, sid: str) -> bool:
         """Whether a person must act on this step itself before the steps behind it can run:
-        it failed, or it has not run and is paused (in the plan; a project's pause does not
-        count) or pending on a plan input with no value."""
+        it failed, it is stale (the runner re-runs a stale step only on step_retry), or it is
+        pending and paused (in the plan; a project's pause does not count) or waiting on a
+        plan input with no value."""
         b = self.blocks[sid]
-        return b.status == "failed" or b.status in ("pending", "stale") and (
-            b.paused or b.status == "pending" and bool(_missing_inputs(self, b)))
+        return b.status in ("failed", "stale") or b.status == "pending" and (
+            b.paused or bool(_missing_inputs(self, b)))
 
     @functools.cached_property
     def unreachable(self) -> frozenset[str]:

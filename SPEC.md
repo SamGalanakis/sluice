@@ -611,9 +611,10 @@ raw HTML escaped, unsafe link schemes refused).
   is hidden by default (`?steps=all` shows every step; a segmented Runnable · All steps,
   shown when some step can't run): every skipped step (it never runs), and each step that has
   not run (pending or stale) with a step upstream of it, through handoffs and `after`, that
-  failed, that has not run and is paused (in the plan; a project's pause does not count), that
-  is pending on a plan input with no value, or that can't run itself. The failed, paused or
-  waiting step is where a person acts, so it stays unless something above it holds it too;
+  failed, that is stale (the runner re-runs a stale step only on `step_retry`), that is
+  pending and paused (in the plan; a project's pause does not count), that is pending on a
+  plan input with no value, or that can't run itself. The failed, stale, paused or waiting
+  step is where a person acts, so it stays unless something above it holds it too;
   and a step behind one that can't run can't run, so no step left waits on a hidden one. The
   boxes stay the plan's pieces of work, their cards laid out again without the hidden ones
   (rows, lanes, wrapping) and their edges dropped; a box left with none goes; a finished box's

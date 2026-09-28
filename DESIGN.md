@@ -357,8 +357,8 @@ per tab, a reload). No edge crosses between boxes, so a folded one hides only it
 With several boxes a toolbar (below) orders them live first by default (what needs
 attention, then what runs, what is ready, what is held, what is done; the plan's order within
 each) or in the plan's order, and filters them; the cards inside a box keep the plan's
-layout. By default the board leaves out the steps that can't run (behind a failure, a paused
-step or a plan input with no value, and every skipped step): the step a person acts on stays,
+layout. By default the board leaves out the steps that can't run (behind a failure, a stale
+step, a paused step or a plan input with no value, and every skipped step): the step a person acts on stays,
 with "+12 behind" in its small muted line, and the box lays out again without the rest, so a
 long chain waiting on one failure reads as that failure. The head of a
 project page says first whether the work moves (progress bar, counts, Pause and Archive), then
