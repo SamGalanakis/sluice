@@ -1056,7 +1056,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
-| `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false` | `{records: [it], notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped; an open-fn or unit-completing success; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record). `notes` are the notes held since the last wake — read them before the record. `last_seq` is past everything read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout returns `records` empty and `timed_out` true (`timeout` capped at 3600) |
+| `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs}]}`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all. `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
 | `drain` | `projects?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in `drain.json` so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
 | `release` | – | unpauses exactly the projects `drain.json` lists and deletes it; `{released}`. Projects paused otherwise stay paused |
 | `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` |
@@ -1121,7 +1121,8 @@ sluice tool <name> '<json args>'      call that tool in-process and print its re
 sluice watch [-p P] [--kinds k1,k2] [--threads a,b] [--since-seq N]
                                       print new log records as JSON lines (§10)
 sluice next [-p P …] [--since-seq N | --cursor FILE] [--me NAME] [--timeout S]
-            [--all] [--json]    print the next record an orchestrator acts on, then exit
+            [--settle S] [--settle-max S] [--all] [--json]
+                                      print the next records an orchestrator acts on, exit
 sluice drain [-p P …] [--no-wait] [--release]
                                       pause projects for maintenance and wait out their
                                       running work; --release unpauses what it paused
@@ -1131,21 +1132,58 @@ sluice query [SQL [PARAM …]] [--limit N] [--table [--width N]]
 ```
 
 `sluice next` blocks until the projects' logs (the given ones, or every project not archived)
-hold a record an orchestrator acts on, prints it as one compact line and exits: `STEP fix-x
-running -> failed: <last line of the error>`, `MSG step-fix-x fix-x -> orchestrator: <body>`,
-`NOTE …` for a held note, `INBOX post i3 <title>`, `UNIT done: <first> … <last> (n steps)`
-for a success that settled its unit, then `seq <N>` on the last line. **Wakes** on a
-`step.status` to `failed`, `stale` or `skipped`; a `step.status` to `succeeded` when the fn
-is open or the step completes its unit (every step joined to it by handoffs or `after`
-succeeded or was skipped); a `message` needing a reply, not from `--me` (default
-`orchestrator`), addressed to `--me` or to nobody; an `inbox.post` or `inbox.answer`; with
-`--all`, every record. Notes (`needs_reply: false`) not from `--me` are held and printed
-just before the waking record, like `sluice watch --wake questions`. Without `--since-seq`
-or `--cursor` it starts from now; `--cursor FILE` reads the start seq from it (missing:
-from now) and writes back the seq of the last record consumed — read, waking or not — so a
-relaunch never misses or repeats one. `--timeout S` exits 0 printing `timeout seq <N>`
-(and writes the cursor); `--json` prints the records as JSON lines and a final
-`{"seq": N, "timed_out": …}`. Exit 0 on a wake or a timeout.
+hold a record an orchestrator acts on, collects what follows within a settle window, prints
+each record compactly and exits. Every record is judged **as of its own seq**, so reading a
+stretch of the log late gives the same wakes as reading it live. A step's status at seq S is
+the `to` of its last `step.status` record up to S; with none up to S, the `from` of its first
+one after S (null: pending); with no `step.status` record at all, its status now. The plan's
+shape (steps, edges, pauses, fns) is the current plan's.
+
+A step's **unit** is the steps sharing its `unit:<name>` tag (a recipe unit, §5, named
+`<name>`); a step without one belongs to its `plan.units` component when that has more than one
+step (named by its first step); otherwise it is standalone. A unit is **settled** when none of
+its steps is running or pending and startable: each is succeeded, skipped, failed or stale, or
+pending and **held** — paused, its project paused, a `core.external` step, reading a plan input
+with no value, or waiting (through reads or `after`) on a step that is failed, stale or itself
+held (a step outside the unit counts by the same rule). **Wakes:**
+
+- a `step.status` to `failed`, `stale` or `skipped`, inside a unit too; a `message` needing a
+  reply, not from `--me` (default `orchestrator`), addressed to `--me` or to nobody; an
+  `inbox.post` or `inbox.answer`;
+- a unit **once, when it settles**: the `step.status` record (any `to`) of one of its steps at
+  which it is settled while it was not at its previous `step.status` record. A step inside a
+  unit never wakes on its own success. When that record is itself a failure (or stale or
+  skipped) it wakes once, with the unit attached; a retry that runs and settles again is a new
+  settling and wakes again;
+- a standalone step's success when its fn is open;
+- with `--all`, every record.
+
+Notes (`needs_reply: false`) not from `--me` are held and printed first, like `sluice watch
+--wake questions`. A record that settles its unit carries `unit: {name, settled: true, steps:
+[{id, status, held?, outputs}]}` (steps in plan order, status as of the record, `held: true`
+on a held pending step, `outputs` the non-null outputs now of a step succeeded as of the
+record, else `{}`). Each record prints as one block: `STEP fix-x running -> failed: <last line
+of the error>`, `MSG step-fix-x fix-x -> orchestrator: <body>`, `NOTE …` for a held note,
+`INBOX post i3 <title>`; a unit settled by a success as
+
+```
+UNIT fig-3984 settled: fork succeeded · work succeeded · close succeeded · rm succeeded
+  work.landed: true
+  work.summary: <whitespace collapsed, cut to 600 characters and "…">
+```
+
+(step names without the `<unit>-` prefix; one line per output: strings as they are, anything
+else as compact JSON, cut to 600); a unit settled by a failure as its `STEP` line, then `  unit
+fig-3984: fork succeeded · work failed · close pending (held) · rm pending (held)` and the
+outputs. The last line is `seq <N>`. After the first waking record it keeps reading until
+`--settle S` seconds (default 20) pass with no new waking record, or `--settle-max S` (default
+120) after the first; `--settle 0` returns at the first waking record. Without `--since-seq` or
+`--cursor` it starts from now; `--cursor FILE` reads the start seq from it (missing: from now)
+and writes back, once and atomically, the seq of the last record consumed — read, waking or not
+— so a relaunch never misses or repeats one. `--timeout S` bounds the wait for the first waking
+record, then exits 0 printing `timeout seq <N>` (and writes the cursor); `--json` prints the
+records as JSON lines, `unit` included with its outputs whole, and a final `{"seq": N,
+"timed_out": …}`. Exit 0 on a wake or a timeout.
 
 `sluice drain` pauses the given projects (default: every project not archived) that are not
 already paused, records which ones in `SLUICE_HOME/drain.json` (`{"paused": […], "at": …}`,
@@ -1274,7 +1312,7 @@ printing each matching record as one JSON line (flushed) as it is appended, and 
 (`--wake questions` holds notes and prints them with the next record that is not one). It
 reads the home's database only; it needs no runner or server. When the next thing to act on
 is what an orchestrator wants — not a stream — `next` (the tool) and `sluice next` (§9) wait
-for exactly one waking record; a worker agent asks where its own step stands with
+for the waking records (a unit once, when it settles) and return them in one batch; a worker agent asks where its own step stands with
 `step_context` or `sluice me` inside the step (§9).
 
 ## 11. Conventions

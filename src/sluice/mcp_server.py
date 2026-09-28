@@ -556,24 +556,34 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     async def next(projects: list[str] | str, since_seq: int, me: str = "orchestrator",
-                   timeout: float = 300, all: bool = False) -> Any:
-        """Wait until the next record an orchestrator should act on across the projects,
-        then return {records: [it], notes, last_seq, timed_out}: a step that failed, went
-        stale or was skipped; a step that succeeded and opens work for you (its fn is open,
-        or its success settled its unit — every step connected to it by handoffs or `after`
-        succeeded or was skipped); a message needing a reply, not from you, addressed to
-        `me` or to nobody; an inbox post or answer. `notes` are the notes (messages with
-        needs_reply false) held since the last wake — read them before the record. Pass
-        `last_seq` back as `since_seq` to continue; nothing is missed or repeated. The
-        command-line form is `sluice next`.
+                   timeout: float = 300, all: bool = False, settle: float = 20,
+                   settle_max: float = 120) -> Any:
+        """Wait for the records an orchestrator should act on across the projects, then
+        return {records, notes, last_seq, timed_out}. Wakes at once on a step that failed,
+        went stale or was skipped (inside a unit too); a message needing a reply, not from
+        you, addressed to `me` or to nobody; an inbox post or answer. A unit (the steps
+        tagged `unit:<name>`, else steps joined by handoffs or `after`) wakes once, when it
+        settles — none of its steps running or pending and startable — never on its steps'
+        own successes; its record carries `unit: {name, settled, steps: [{id, status,
+        held?, outputs}]}` with the succeeded steps' outputs, on the failure itself when a
+        failure settled it. A standalone step wakes on a success when its fn is open. After
+        the first waking record it keeps collecting until `settle` seconds pass with no new
+        one, or `settle_max` seconds after the first. `notes` are the notes (messages with
+        needs_reply false) held on the way — read them before the records. Pass `last_seq`
+        back as `since_seq` to continue; nothing is missed or repeated. The command-line
+        form is `sluice next`.
 
         Args:
             projects: the projects to watch (one or several).
             since_seq: records after this seq (the last_seq you last got).
             me: your name; your own messages never wake it (default "orchestrator").
-            timeout: seconds to wait at most (default 300; capped at 3600); on a timeout
-                records is empty and timed_out is true.
+            timeout: seconds to wait at most for the first waking record (default 300;
+                capped at 3600); on a timeout records is empty and timed_out is true.
             all: every record wakes it (default false).
+            settle: seconds with no new waking record that end the batch (default 20; 0
+                returns at the first).
+            settle_max: seconds after the first waking record that end the batch at the
+                latest (default 120; capped at 3600).
         """
         names = [projects] if isinstance(projects, str) else list(projects)
         if not names:
@@ -582,7 +592,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
             store.project(p)
         return await anyio.to_thread.run_sync(functools.partial(
             watch_mod.next_up, store, names, since_seq, me,
-            min(max(0, timeout), WAIT_CAP), all))
+            min(max(0, timeout), WAIT_CAP), all, settle=max(0, settle),
+            settle_max=min(max(0, settle_max), WAIT_CAP)))
 
     @tool
     def drain(projects: list[str] | str | None = None) -> Any:

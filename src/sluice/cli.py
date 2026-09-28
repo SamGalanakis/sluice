@@ -157,7 +157,8 @@ def cmd_watch(a: argparse.Namespace, store: Store) -> int:
 
 
 def cmd_next(a: argparse.Namespace, store: Store) -> int:
-    """Print the next record an orchestrator acts on once one arrives, then exit."""
+    """Print the next records an orchestrator acts on once they arrive and settle, then
+    exit."""
     from .watch import line, next_up
 
     if a.project:
@@ -175,7 +176,8 @@ def cmd_next(a: argparse.Namespace, store: Store) -> int:
             raise BadRequest(f"cursor file {a.cursor} is not a seq") from None
     else:
         since = a.since_seq
-    res = next_up(store, projects, since, me=a.me, timeout=a.timeout, every=a.all)
+    res = next_up(store, projects, since, me=a.me, timeout=a.timeout, every=a.all,
+                  settle=a.settle, settle_max=a.settle_max)
     if a.cursor is not None:
         atomic_write_text(Path(a.cursor), f"{res['last_seq']}\n")
     shown = [*res["notes"], *res["records"]]
@@ -315,12 +317,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--wake", choices=("any", "questions"), default="any",
                    help="questions: hold notes (needs_reply false) and print them with the "
                    "next record that is not one")
-    s = sub.add_parser("next", help="print the next record an orchestrator acts on, exit",
-                       description="Block until a record one of the projects' logs should "
-                       "wake an orchestrator for (a failed/stale/skipped step, an "
-                       "open-fn or unit-completing success, a question for you, an inbox "
-                       "post or answer), print it compactly and exit. Held notes print "
-                       "just before it; the last line is `seq <N>` to pass to --since-seq.")
+    s = sub.add_parser("next", help="print the next records an orchestrator acts on, exit",
+                       description="Block until the projects' logs hold a record that should "
+                       "wake an orchestrator (a failed/stale/skipped step, a unit that "
+                       "settled, a standalone open-fn success, a question for you, an inbox "
+                       "post or answer), collect what follows within the settle window, "
+                       "print each compactly and exit. Held notes print first; the last "
+                       "line is `seq <N>` to pass to --since-seq.")
     s.add_argument("-p", "--project", action="append",
                    help="a project to watch (repeatable; default: every project not "
                    "archived)")
@@ -334,8 +337,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="your name: your own messages never wake it, questions wake only "
                    "when addressed to this or to nobody (default: orchestrator)")
     s.add_argument("--timeout", type=float, default=None, metavar="S",
-                   help="wait at most S seconds, then exit 0 printing `timeout seq <N>` "
-                   "(default: wait forever)")
+                   help="wait at most S seconds for the first waking record, then exit 0 "
+                   "printing `timeout seq <N>` (default: wait forever)")
+    s.add_argument("--settle", type=float, default=20, metavar="S",
+                   help="after a waking record, keep collecting until S seconds pass with "
+                   "no new one (default 20; 0: return at the first)")
+    s.add_argument("--settle-max", type=float, default=120, metavar="S",
+                   help="return at most S seconds after the first waking record "
+                   "(default 120)")
     s.add_argument("--all", action="store_true", help="every record wakes it")
     s.add_argument("--json", action="store_true",
                    help="print each record as one JSON line, then {\"seq\": N, ...}")

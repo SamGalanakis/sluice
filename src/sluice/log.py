@@ -142,6 +142,14 @@ def read(home: Path, project: str | None, since_seq: int | None = None,
         return {"records": found, "last_seq": max(since_seq, _high(conn, project, src))}
 
 
+def statuses(home: Path, project: str, steps: Iterable[str]) -> list[dict[str, Any]]:
+    """The `step.status` records of these steps, oldest first, in one read."""
+    steps = list(steps)
+    with db.read(home) as conn:
+        return _rows(conn, "records", project, "kind = 'step.status' AND step IN ("
+                     + ", ".join("?" * len(steps)) + ")", steps, "ORDER BY seq")
+
+
 def page(home: Path, project: str | None, kinds: Iterable[str] | None = None,
          threads: Iterable[str] | None = None, before: int | None = None,
          after: int | None = None, size: int = 50, history: bool = False) -> dict[str, Any]:

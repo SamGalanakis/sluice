@@ -1,22 +1,27 @@
-"""`sluice next` and the `next` tool: block until the next record an orchestrator acts on,
-print it, exit (SPEC §8, §9). Each test drives a real `sluice next` process against a real
-home; waits are bounded by the command's own --timeout."""
+"""`sluice next` and the `next` tool: block until the records an orchestrator acts on, print
+them, exit (SPEC §8, §9). Tests drive a real `sluice next` process (or next_up itself, when a
+writer must run alongside) against a real home; waits are bounded by --timeout."""
 
 import json
 import os
 import subprocess
 import sys
+import threading
+import time
 
 from mcp import Client
 
 from sluice import log as L
 from sluice.mcp_server import build_server
+from sluice.watch import next_up
 from tests.conftest import add, create, d, src
 
 
 def next_run(home, *args, timeout=30):
-    """`sluice next <args>` as its own process; returns its stdout."""
-    p = subprocess.run([sys.executable, "-m", "sluice.cli", "next", *args],
+    """`sluice next <args>` as its own process; returns its stdout. Without a --settle in
+    `args` it passes --settle 0 (return at the first waking record)."""
+    settle = () if "--settle" in args else ("--settle", "0")
+    p = subprocess.run([sys.executable, "-m", "sluice.cli", "next", *args, *settle],
                        env={**os.environ, "SLUICE_HOME": str(home)},
                        capture_output=True, text=True, timeout=timeout, check=False)
     assert p.returncode == 0, p.stderr
@@ -69,25 +74,6 @@ def test_an_open_fns_success_wakes(store):
                      "t", "t")
     lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
     assert lines[0] == "STEP o pending -> succeeded" and lines[-1].startswith("seq ")
-
-
-def test_a_success_completing_its_unit_wakes_with_it(store):
-    create(store, "p", {"a": add(d(1), d(2)),
-                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
-    since = L.last_seq(store.home, "p")
-    store.set_output("p", "a", {"sum": 3}, "t", "t")
-    store.set_output("p", "b", {"sum": 4}, "t", "t")
-    lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
-    assert lines[0] == "UNIT done: a … b (2 steps)"
-
-
-def test_a_mid_unit_success_does_not_wake(store):
-    create(store, "p", {"a": add(d(1), d(2)),
-                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
-    since = L.last_seq(store.home, "p")
-    store.set_output("p", "a", {"sum": 3}, "t", "t")  # b still pending: the unit is open
-    out = next_run(store.home, "-p", "p", "--since-seq", str(since), "--timeout", "1")
-    assert out.splitlines()[-1].startswith("timeout seq ") and "STEP" not in out
 
 
 def test_a_question_from_someone_else_wakes_own_messages_do_not(store):
@@ -181,12 +167,257 @@ async def test_the_mcp_tools_shape(store):
     msg(store, "p", "ping", to=None)
     async with Client(build_server(store)) as c:
         r = await c.call_tool("next", {"projects": ["p"], "since_seq": since,
-                                       "timeout": 5})
+                                       "timeout": 5, "settle": 0})
         assert not r.is_error
         res = json.loads(r.content[0].text)
         assert sorted(res) == ["last_seq", "notes", "records", "timed_out"]
         assert res["timed_out"] is False and res["records"][0]["body"] == "ping"
         r = await c.call_tool("next", {"projects": ["p"], "since_seq": res["last_seq"],
-                                       "timeout": 1})
+                                       "timeout": 1, "settle": 0})
         res = json.loads(r.content[0].text)
         assert res["timed_out"] is True and res["records"] == []
+
+
+# ---- units: one wake when a unit settles --------------------------------------------------
+
+WORK_OUT = {"ports": {}, "extra": {}, "results": [], "landed": True, "summary": "all done"}
+
+
+def lane(unit="u", close_paused=False):
+    """A recipe-shaped unit, tagged unit:<unit>: fork -> work (an open fn) -> close -> rm."""
+    tags = [f"unit:{unit}"]
+    close = {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "after": [f"{unit}-work"],
+             "tags": tags}
+    return {f"{unit}-fork": add(d(1), d(2), tags=tags),
+            f"{unit}-work": {"run": "test.open", "in": {"n": src(f"{unit}-fork/sum")},
+                             "outputs": {"landed": "boolean", "summary": "string"},
+                             "tags": tags},
+            f"{unit}-close": {**close, "paused": True} if close_paused else close,
+            f"{unit}-rm": add(d(0), d(0), after=[f"{unit}-close"], tags=tags)}
+
+
+def run_step(store, project, sid, outputs, gap=0.0):
+    """The step goes pending -> running (a record, like the runner's), then succeeds with
+    `outputs` (step_set_output: its state and the record to succeeded); returns that seq."""
+    status_rec(store, project, sid, "running", frm=None)
+    time.sleep(gap)
+    store.set_output(project, sid, outputs, "t", "t")
+    return L.last_seq(store.home, project)
+
+
+def land(store, project, unit="u", gap=0.0, summary="all done"):
+    """Run the lane to success; returns the rm step's success seq."""
+    run_step(store, project, f"{unit}-fork", {"sum": 3}, gap)
+    run_step(store, project, f"{unit}-work", {**WORK_OUT, "summary": summary}, gap)
+    run_step(store, project, f"{unit}-close", {"sum": 2}, gap)
+    return run_step(store, project, f"{unit}-rm", {"sum": 0}, gap)
+
+
+def in_thread(fn, *args, **kw):
+    """Start fn(*args, **kw) in a thread; returns a join() that gives its result."""
+    out = {}
+    t = threading.Thread(target=lambda: out.setdefault("r", fn(*args, **kw)))
+    t.start()
+
+    def join():
+        t.join(30)
+        return out["r"]
+    return join
+
+
+def test_a_landed_lane_wakes_once_read_live_or_late(store):
+    create(store, "p", lane())
+    since = L.last_seq(store.home, "p")
+    # the waiter is already polling while the records arrive
+    join = in_thread(next_up, store, ["p"], since, timeout=10, settle=1)
+    time.sleep(0.3)
+    rm = land(store, "p", gap=0.3)
+    live = join()
+    assert [r["seq"] for r in live["records"]] == [rm] and live["last_seq"] == rm
+    unit = live["records"][0]["unit"]
+    assert unit["name"] == "u" and unit["settled"] is True
+    assert [(s["id"], s["status"]) for s in unit["steps"]] == [
+        ("u-fork", "succeeded"), ("u-work", "succeeded"), ("u-close", "succeeded"),
+        ("u-rm", "succeeded")]
+    assert unit["steps"][1]["outputs"] == WORK_OUT
+    # read late: every record is already there, each judged as of its own seq
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since), "--settle",
+                     "0.3").splitlines()
+    assert lines == [
+        "UNIT u settled: fork succeeded · work succeeded · close succeeded · rm succeeded",
+        "  fork.sum: 3", "  work.ports: {}", "  work.extra: {}", "  work.results: []",
+        "  work.landed: true", "  work.summary: all done", "  close.sum: 2", "  rm.sum: 0",
+        f"seq {rm}"]
+
+
+def test_an_open_step_inside_a_unit_does_not_wake_on_success(store):
+    create(store, "p", lane())
+    since = L.last_seq(store.home, "p")
+    run_step(store, "p", "u-fork", {"sum": 3})
+    run_step(store, "p", "u-work", WORK_OUT)  # close is next: the unit is still going
+    out = next_run(store.home, "-p", "p", "--since-seq", str(since), "--timeout", "1")
+    assert out.splitlines() == [f"timeout seq {L.last_seq(store.home, 'p')}"]
+
+
+def test_a_failed_work_step_wakes_once_with_its_held_unit(store):
+    create(store, "p", lane())
+    since = L.last_seq(store.home, "p")
+    run_step(store, "p", "u-fork", {"sum": 3})
+    status_rec(store, "p", "u-work", "running", frm=None)
+    seq = status_rec(store, "p", "u-work", "failed", error="trace\nno tests pass")
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    assert lines == ["STEP u-work running -> failed: no tests pass",
+                     ("  unit u: fork succeeded · work failed · close pending (held) · "
+                      "rm pending (held)"),
+                     "  fork.sum: 3", f"seq {seq}"]
+    recs = [json.loads(x) for x in next_run(store.home, "-p", "p", "--since-seq", str(since),
+                                            "--json", "--settle", "0.3").splitlines()]
+    assert [r["seq"] for r in recs[:-1]] == [seq]
+    assert recs[0]["unit"]["steps"][2] == {"id": "u-close", "status": "pending",
+                                           "held": True, "outputs": {}}
+    out = next_run(store.home, "-p", "p", "--since-seq", str(seq), "--timeout", "1")
+    assert out.splitlines() == [f"timeout seq {seq}"]
+
+
+def test_a_paused_step_after_work_settles_the_unit_at_works_success(store):
+    create(store, "p", lane(close_paused=True))
+    since = L.last_seq(store.home, "p")
+    run_step(store, "p", "u-fork", {"sum": 3})
+    seq = run_step(store, "p", "u-work", WORK_OUT)
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since), "--settle",
+                     "0.3").splitlines()
+    assert lines[0] == ("UNIT u settled: fork succeeded · work succeeded · "
+                        "close pending (held) · rm pending (held)")
+    assert "  work.landed: true" in lines and lines[-1] == f"seq {seq}"
+    out = next_run(store.home, "-p", "p", "--since-seq", str(seq), "--timeout", "1")
+    assert out.splitlines() == [f"timeout seq {seq}"]
+
+
+def test_a_retried_unit_that_settles_again_wakes_again(store):
+    create(store, "p", lane())
+    run_step(store, "p", "u-fork", {"sum": 3})
+    status_rec(store, "p", "u-work", "running", frm=None)
+    first = status_rec(store, "p", "u-work", "failed", error="boom")
+    status_rec(store, "p", "u-work", "pending", frm="failed")  # retried
+    run_step(store, "p", "u-work", WORK_OUT)
+    run_step(store, "p", "u-close", {"sum": 2})
+    rm = run_step(store, "p", "u-rm", {"sum": 0})
+    res = next_up(store, ["p"], first - 1, settle=0.3, timeout=5)
+    assert [r["seq"] for r in res["records"]] == [first, rm]
+    assert all(r["unit"]["name"] == "u" for r in res["records"])
+
+
+def test_two_units_settling_within_the_window_arrive_together(store):
+    create(store, "p", {**lane("a"), **lane("b")})
+    since = L.last_seq(store.home, "p")
+    join = in_thread(next_up, store, ["p"], since, timeout=10, settle=1)
+    a = land(store, "p", "a")
+    time.sleep(0.2)
+    b = land(store, "p", "b")
+    res = join()
+    assert [r["seq"] for r in res["records"]] == [a, b] and res["last_seq"] == b
+    assert [r["unit"]["name"] for r in res["records"]] == ["a", "b"]
+
+
+def test_settle_max_cuts_a_stream_of_wakes_off_and_the_next_call_continues(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    since = L.last_seq(store.home, "p")
+    stop, seqs = threading.Event(), []
+
+    def write():
+        while not stop.is_set():
+            seqs.append(status_rec(store, "p", "x", "failed", error="again"))
+            stop.wait(0.1)
+    writer = threading.Thread(target=write)
+    writer.start()
+    try:
+        t0 = time.monotonic()
+        one = next_up(store, ["p"], since, timeout=10, settle=1, settle_max=0.8)
+        took = time.monotonic() - t0
+    finally:
+        stop.set()
+        writer.join(10)
+    assert one["records"] and took < 2.5
+    two = next_up(store, ["p"], one["last_seq"], timeout=5, settle=0.3)
+    assert [r["seq"] for r in one["records"] + two["records"]] == seqs  # each once, in order
+
+
+def test_settle_zero_returns_at_the_first_and_a_window_takes_the_rest(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    since = L.last_seq(store.home, "p")
+    s1 = status_rec(store, "p", "x", "failed", error="one")
+    s2 = status_rec(store, "p", "x", "failed", error="two")
+    assert next_run(store.home, "-p", "p", "--since-seq", str(since), "--settle",
+                    "0").splitlines() == ["STEP x running -> failed: one", f"seq {s1}"]
+    assert next_run(store.home, "-p", "p", "--since-seq", str(since), "--settle",
+                    "0.3").splitlines() == ["STEP x running -> failed: one",
+                                            "STEP x running -> failed: two", f"seq {s2}"]
+
+
+def test_the_cursor_moves_once_per_batch_without_misses_or_repeats(store, tmp_path):
+    create(store, "p", {"x": add(d(1), d(2))})
+    cursor = tmp_path / "next.seq"
+    cursor.write_text(f"{L.last_seq(store.home, 'p')}\n")
+    s1 = status_rec(store, "p", "x", "failed", error="one")
+    s2 = status_rec(store, "p", "x", "failed", error="two")
+    tail = msg(store, "p", "trailing", needs_reply=False)
+    out = next_run(store.home, "-p", "p", "--cursor", str(cursor), "--settle", "0.3")
+    assert out.splitlines() == ["NOTE t worker -> orchestrator: trailing",
+                                "STEP x running -> failed: one",
+                                "STEP x running -> failed: two", f"seq {tail}"]
+    assert int(cursor.read_text()) == tail
+    s3 = status_rec(store, "p", "x", "failed", error="three")
+    out = next_run(store.home, "-p", "p", "--cursor", str(cursor), "--settle", "0.3")
+    assert out.splitlines() == ["STEP x running -> failed: three", f"seq {s3}"]
+    assert int(cursor.read_text()) == s3 and s1 < s2 < tail < s3
+
+
+def test_json_keeps_outputs_whole_and_text_cuts_them_at_600(store):
+    create(store, "p", lane())
+    since = L.last_seq(store.home, "p")
+    long = "word " * 300
+    land(store, "p", summary=long)
+    text = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    cut = next(x for x in text if x.startswith("  work.summary: "))
+    assert cut == "  work.summary: " + ("word " * 120)[:600] + "…"
+    recs = [json.loads(x) for x in next_run(store.home, "-p", "p", "--since-seq", str(since),
+                                            "--json").splitlines()]
+    assert recs[0]["unit"]["steps"][1]["outputs"]["summary"] == long
+    assert recs[-1] == {"seq": recs[0]["seq"], "timed_out": False}
+
+
+def test_an_untagged_component_is_a_unit_named_by_its_first_step(store):
+    create(store, "p", {"a": add(d(1), d(2)),
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
+    since = L.last_seq(store.home, "p")
+    store.set_output("p", "a", {"sum": 3}, "t", "t")  # b still pending: the unit is going
+    out = next_run(store.home, "-p", "p", "--since-seq", str(since), "--timeout", "1")
+    assert out.splitlines()[-1].startswith("timeout seq ")
+    store.set_output("p", "b", {"sum": 4}, "t", "t")
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    assert lines[:3] == ["UNIT a settled: a succeeded · b succeeded", "  a.sum: 3",
+                         "  b.sum: 4"]
+
+
+def test_all_wakes_on_every_record(store):
+    create(store, "p", lane())
+    since = L.last_seq(store.home, "p")
+    seq = status_rec(store, "p", "u-fork", "running", frm=None)
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since), "--all").splitlines()
+    assert lines == ["STEP u-fork pending -> running", f"seq {seq}"]
+
+
+async def test_the_mcp_tool_returns_a_batch(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    since = L.last_seq(store.home, "p")
+    status_rec(store, "p", "x", "failed", error="one")
+    msg(store, "p", "fyi", needs_reply=False)
+    status_rec(store, "p", "x", "failed", error="two")
+    async with Client(build_server(store)) as c:
+        r = await c.call_tool("next", {"projects": "p", "since_seq": since, "timeout": 5,
+                                       "settle": 0.3})
+        res = json.loads(r.content[0].text)
+        assert sorted(res) == ["last_seq", "notes", "records", "timed_out"]
+        assert [x["error"] for x in res["records"]] == ["one", "two"]
+        assert [x["body"] for x in res["notes"]] == ["fyi"]
+        assert res["last_seq"] == res["records"][-1]["seq"]

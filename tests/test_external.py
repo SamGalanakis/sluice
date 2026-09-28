@@ -142,15 +142,16 @@ def test_cancel_fails_a_pending_external_step_and_still_refuses_other_pending_on
 
 # ---- sluice next -------------------------------------------------------------------------
 
-def test_setting_its_outputs_wakes_the_orchestrator(store):
-    create(store, "p", {"x": external({"n": "int"}),
+def test_setting_its_outputs_wakes_the_orchestrator_when_it_stands_alone(store):
+    create(store, "p", {"x": external({"n": "int"}), "z": external({"n": "int"}),
                         "y": {"run": "test.add", "in": {"a": src("x/n"), "b": d(1)}}})
     since = L.last_seq(store.home, "p")
-    store.set_output("p", "x", {"n": 1}, "t", "t")
+    store.set_output("p", "x", {"n": 1}, "t", "t")  # y is next: its unit is still going
+    store.set_output("p", "z", {"n": 2}, "t", "t")
     recs = [{**r, "project": "p"} for r in L.read(store.home, "p", since)["records"]]
     done = [r for r in recs if r["kind"] == "step.status"]
-    assert [watch._classify(store, r, "orchestrator") for r in done] == ["wake"]
-    assert "unit" not in done[0]  # it wakes as open work done, not as a finished unit
+    assert [watch._classify(store, r, "orchestrator", {}) for r in done] == ["skip", "wake"]
+    assert "unit" not in done[1]  # it wakes as open work done, not as a settled unit
 
 
 # ---- the board ---------------------------------------------------------------------------
