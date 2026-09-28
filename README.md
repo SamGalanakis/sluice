@@ -6,3 +6,5 @@ outputs. A runner starts each step once what it reads is ready, records what it 
 marks results stale when their inputs change, and keeps runs alive across its own restarts. A
 local dashboard shows the plan as a live board, with an inbox for the decisions that need a
 person.
+
+> Unchecked slop: use at your own risk.
