@@ -893,15 +893,16 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   its type and doc, and the exact `sluice tool step_submit` command) and the step-thread note.
   Each takes `session?` and returns `session` (empty when none was recorded): binding a
   later step's `session` to an earlier step's `session` output continues that agent.
-  Claude always runs Opus, in a live interactive session supervised by
-  `packs/agents/_agents/native/`: a private tmux server per run (`attach:` in the step's
-  stderr), the task handed over as `<run_dir>/task.md`, and the step done when a turn ends
-  with every required declared output submitted, not at the model's end of turn. A turn that
-  ends without them is nudged, then fails the step; a session waiting on its own background
-  work (a background shell, a pending wakeup) is left to wait; thread messages for the step
-  are typed into the session (its step-thread note says so instead of asking it to poll);
-  `session` resumes only from the directory the session started in; a cancel ends the tmux
-  server and everything under it (`packs/README.md`, "Live sessions"). Codex (`agent.codex`, or
+  All five agent fns use `packs/agents/_agents/native/` to supervise a live session on the
+  owner's engine login. Each run has a private tmux server (`attach:` in the step's stderr).
+  Long tasks go through `<run_dir>/task.md`. A step with required declared outputs completes
+  after the engine submits all of them; an idle turn with missing outputs gets a bounded
+  series of nudges, then a clear failure. Claude's background shell and scheduled-wakeup
+  signals keep its session waiting. Messages addressed to the step arrive in the live session
+  without polling. A `session` resumes only in its original directory. Cancel ends the tmux
+  server and its process tree (`packs/README.md`, "Agent functions and live sessions").
+  Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.
+  Codex (`agent.codex`, or
   `agent.run` with engine `codex`) uses the same supervisor with `codex app-server` JSON-RPC
   and a TUI attached to it in tmux. It takes `model` `sol` (the default) or `astra` and
   `effort` (`minimal` to `max`), whose default is `high`. Its final message and turn state come
@@ -926,8 +927,9 @@ so a copy anywhere works (see `packs/README.md`).
 filtered to `message` records with that `thread` name (the project comes from `SLUICE_PROJECT`;
 without one they fail with a clear error; thread names use the id pattern). A message is
 `{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "data"?}`; its `seq` is the
-log's. Agents post through `fn_call` (any harness) and read with `log_read`/`log_wait`
-(`threads: [name]`); plans use them as ordinary steps.
+log's. Agents post through `fn_call`. Direct callers can read with `log_read`/`log_wait`
+(`threads: [name]`); the agent functions above deliver addressed messages into their live
+sessions. Plans use thread functions as ordinary steps.
 - `thread.post`: inputs `{thread: string, body: string, from: string, to: string?, data: Any?}`,
   outputs `{seq: int}`. Appends under the project's flock, so concurrent posters get distinct,
   increasing seqs.

@@ -1,7 +1,8 @@
 sluice agents pack
 
 Parts of _agents/native/ are adapted from Omnigent (https://github.com/omnigent-ai/omnigent),
-licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0):
+licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0).
+The license text is in LICENSE-APACHE in this pack. The adapted sections are:
 
 - _agents/native/paste.py: the message delivery into a TUI composer through tmux
   (omnigent/harnesses/claude_native/bridge.py: inject_user_message, _paste_and_submit,

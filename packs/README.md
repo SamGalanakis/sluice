@@ -11,7 +11,7 @@ home or project actually needs.
 
 Each `fn.json` is the reference for that function's typed inputs and outputs.
 
-## Agent blocks and sessions
+## Agent functions and live sessions
 
 The agent functions (`agent.claude`, `agent.codex`, `agent.devin`, `agent.run`,
 `agent.review`) are **open**: a plan step running one may bind extra inputs and declare
@@ -22,8 +22,8 @@ to submit them) and the step-thread note (`listen: false` drops only the note). 
 if the agent finishes without submitting a required output.
 
 Claude always runs Opus. Codex takes `model` `sol` (default) or `astra`, and `effort`
-(`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high`. Long,
-grinding work goes to Devin, not to a bigger codex effort.
+(`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high`.
+Projects choose which engine runs each kind of work.
 
 Every agent function takes `session?: string` and returns `session: string` (the engine's
 session or thread id; empty when there is none).
@@ -33,8 +33,6 @@ A follow-up to a particular agent is another step with `session` bound to the ea
 The agents pack is a starting point: which engine runs which kind of work is up to each
 project. To route, copy (or wrap) `agent.run` into the project's own `fns/` under a name of
 its own and pick the engines there.
-
-## Live sessions
 
 Claude, Codex and Devin run as real interactive sessions on your own logins through `_agents/native/`.
 `agent.claude`, `agent.review`, and `agent.run` with engine `claude` use the Claude adapter.
@@ -60,6 +58,7 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   minutes busy with no transcript growth. `SLUICE_AGENT_SETTLE_S` (10) seconds of idle before
   a nudge. `SLUICE_AGENT_GRACE_MIN` (10) minutes of idle before the first nudge, for an engine
   with no waiting signal (Codex and Devin have none; Claude has one).
+  `SLUICE_AGENT_POLL_S` (0.5) sets the state-check interval.
 - `session` resumes the session, and only from the directory it was started in; another cwd
   fails the step before anything starts. Codex keeps its private `CODEX_HOME` per thread and
   a registry at `<SLUICE_HOME>/codex-native-sessions/`. A rate limit or

@@ -1,6 +1,6 @@
 {
   "name": "agent.codex",
-  "doc": "Run a Codex session on a spec text in a working directory. Models: sol (default) and astra; effort defaults to high.",
+  "doc": "Run a supervised interactive Codex session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. Models: sol (default) and astra; effort defaults to high.",
   "open": true,
   "inputs": {
     "cwd": "string",

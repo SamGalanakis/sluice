@@ -1,6 +1,6 @@
 {
   "name": "agent.review",
-  "doc": "Review the diff of a branch against the project standards and fix issues by committing.",
+  "doc": "Review and fix a branch diff against project standards in a supervised interactive Claude session. Pass session to resume in the same directory.",
   "open": true,
   "inputs": {
     "cwd": "string",
