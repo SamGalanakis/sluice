@@ -480,7 +480,7 @@ def test_the_steps_that_cant_run_round_trip_through_the_page_and_its_stream(stor
     create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}},
                         "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(2)}},
                         "c": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
-    with store.lock("p"):
+    with store.tx():
         store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "failed",
                                                               "error": "boom"}}})
     # by default the board hides b, which can't run behind a's failure

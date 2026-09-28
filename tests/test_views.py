@@ -1344,7 +1344,7 @@ def unreachable_project(store):
         "w1": {**one, "after": ["w"]},
         "st": one, "st1": reads("st"),
         "s": one, "ok": one, "r": reads("ok")}, inputs={"n": "int"})
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "f": {"status": "failed", "error": "boom"},
             "p1": {"status": "stale", "outputs": {"sum": 1}},
@@ -1381,7 +1381,7 @@ def test_a_step_cant_run_behind_a_failure_a_pause_or_a_missing_input(store):
     create(store, "lone", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                            "b": {"run": "test.add", "in": {"a": src("n"), "b": d(1)}}},
            inputs={"n": "int"})
-    with store.lock("lone"):
+    with store.tx():
         store.write_state("lone", {"inputs": {}, "steps": {"a": {"status": "failed"}}})
     assert views.load_board(store, "lone").unreachable == frozenset()
 
@@ -1435,7 +1435,7 @@ def test_a_board_of_one_box_offers_only_the_steps_filter(store):
     create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                         "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
                         "c": {"run": "test.add", "in": {"a": src("b/sum"), "b": d(1)}}})
-    with store.lock("w"):
+    with store.tx():
         store.write_state("w", {"inputs": {}, "steps": {"a": {"status": "failed",
                                                               "error": "boom"}}})
     page = views.project_page(store, "w", ver="x", view=views.BoardView(show="done"))
@@ -1448,7 +1448,7 @@ def test_a_board_of_one_box_offers_only_the_steps_filter(store):
     assert "blocking 2 steps" in page and 'aria-label="1 failed, 2 blocked"' in page
     # a board where every step is hidden says so
     create(store, "x", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
-    with store.lock("x"):
+    with store.tx():
         store.write_state("x", {"inputs": {}, "steps": {"a": {"status": "skipped",
                                                               "skipped": "no"}}})
     assert '<p class="empty">No step can run.</p>' in views.project_page(store, "x", ver="x")
