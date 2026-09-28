@@ -4,6 +4,7 @@ cards and its layout, a step's detail, the "Needs you" lines, the index, and esc
 import datetime as dt
 import html
 import json
+import os
 import re
 
 from sluice import log as L
@@ -333,7 +334,10 @@ def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
         store.write_state("v", {"inputs": {}, "steps": {"agent": {
             "status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"}}})
     html = views.step_detail(store, "v", "agent")
-    assert '<h3 class="label">Progress</h3></div><pre class="tail">thinking</pre>' in html
+    progress = html[html.index('Progress</h3>'):html.index("</section>")]
+    assert '<pre class="tail">thinking</pre>' in progress
+    assert 'data-quiet-line' in progress and ' hidden>' in progress \
+        and "Quiet for" not in progress  # still writing: the quiet line stays hidden
     outputs = html[html.index("Outputs submitted so far"):html.index("</section>",
                                                                      html.index("so far"))]
     assert ">answer</span>" in outputs and "so far" in outputs
@@ -341,6 +345,98 @@ def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):
     (run / "submitted.json").unlink()
     html = views.step_detail(store, "v", "agent")
     assert "None yet. It hands on: answer." in html and "ports" not in html
+
+
+def _ago(path, minutes):
+    old = (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=minutes)).timestamp()
+    os.utime(path, (old, old))
+
+
+def test_a_running_step_gone_quiet_says_so_on_its_card_and_in_its_drawer(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "each": {"run": "test.window", "scatter": "tag",
+                                 "in": {"seconds": d(0), "tag": src(["a/sum"])}}})
+    run = store.runs_dir("v") / "r1"
+    run.mkdir(parents=True)
+    (run / "stderr.log").write_text("halfway there\n")
+    done = store.runs_dir("v") / "r2"  # a scattered step's finished run does not count
+    done.mkdir()
+    (done / "stderr.log").write_text("finished\n")
+    (done / "exit.json").write_text('{"code": 0}')
+    live = store.runs_dir("v") / "r3"
+    live.mkdir()
+    (live / "stderr.log").write_text("working\n")
+    _ago(done / "stderr.log", 60)
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a": {"status": "running", "run_ids": ["r1"],
+                  "started": "2026-01-01T10:00:00Z"},
+            "each": {"status": "running", "run_ids": ["r2", "r3"], "done": 1, "total": 2,
+                     "started": "2026-01-01T10:00:00Z"}}})
+    # still writing: no quiet mark on the card, none in the drawer
+    page = views.project_page(store, "v", ver="x")
+    assert "quiet 5m" not in card(page, "a") and "Quiet for" not in card(page, "a")
+    assert 'title="halfway there"' in card(page, "a")
+    assert "Quiet for" not in views.step_detail(store, "v", "a")
+    # its stderr quiet 20 minutes: the card says so small, the tooltip and drawer say so
+    _ago(run / "stderr.log", 20)
+    page = views.project_page(store, "v", ver="x")
+    a = card(page, "a")
+    assert ' · quiet 20m' in a and 'class="quiet" data-quiet=' in a
+    assert 'title="Quiet for 20m. Last output: halfway there"' in a
+    detail = views.step_detail(store, "v", "a")
+    assert "Quiet for 20m." in detail and "Last output: halfway there" in detail
+    _ago(run / "stderr.log", 65)
+    assert "quiet 1h 5m" in card(views.project_page(store, "v", ver="x"), "a")
+    # no stderr.log: the run dir's own mtime is the sign of life
+    (run / "stderr.log").unlink()
+    _ago(run, 20)
+    assert "quiet 20m" in card(views.project_page(store, "v", ver="x"), "a")
+    detail = views.step_detail(store, "v", "a")
+    assert "Quiet for 20m." in detail and "No output yet." in detail
+    # a scattered step with one live run writing is not quiet, however old its finished runs
+    each = card(views.project_page(store, "v", ver="x"), "each")
+    assert "Quiet for" not in each and "quiet 60m" not in each
+    _ago(live / "stderr.log", 20)
+    assert "quiet 20m" in card(views.project_page(store, "v", ver="x"), "each")
+
+
+def test_the_log_hides_thread_post_calls_behind_their_message(store):
+    create(store, "v", {})
+    store.append("v",
+                 {"kind": "call", "call": "c1", "fn": "thread.post", "status": "running",
+                  "direct": True},
+                 {"kind": "message", "thread": "step-a", "from": "a", "body": "the question"},
+                 {"kind": "call", "call": "c1", "fn": "thread.post", "status": "succeeded"},
+                 {"kind": "call", "call": "c2", "fn": "thread.post", "status": "failed",
+                  "error": "nope"},
+                 {"kind": "call", "call": "c3", "fn": "test.add", "status": "succeeded"})
+    page = views.log_view(store, "v", views.LogQuery())[0]
+    assert "the question" in page
+    assert "c1 thread.post" not in page  # both of its call rows hide behind the message
+    assert "c2 thread.post" in page  # a failed thread.post call still shows
+    assert "c3 test.add" in page
+    calls = views.log_view(store, "v", views.LogQuery.parse({"kind": ["call"]}))[0]
+    assert "c1 thread.post" in calls and "running" in calls and "succeeded" in calls
+    assert "the question" not in calls
+    # the filter stays a view concern: log_read lists everything
+    fns = [r.get("fn") for r in L.read(store.log_dir("v"), kinds=["call"])["records"]]
+    assert fns.count("thread.post") == 3
+
+
+def test_the_kind_filter_renders_one_line_per_group_in_kind_options_order(store):
+    create(store, "v", {})
+    page = views.log_page(store, "v", views.LogQuery.parse({"kind": ["step"]}))
+    values = re.findall(r'name="kind" value="([^"]+)"', page)
+    assert values == list(views.KIND_OPTIONS)  # every kind once, in the signal's order
+    lines = re.findall(r'<span class="kline">(.*?)</span>', page)
+    step = next(l for l in lines if 'value="step"' in l)
+    assert step.startswith('<label class="kg"><input type="checkbox" name="kind" '
+                           'value="step" data-bind:kinds checked> step</label>')
+    for short in ("output", "retry", "status", "submit"):
+        assert f"> {short}</label>" in step
+    rest = next(l for l in lines if 'value="call"' in l)
+    assert 'value="message"' in rest and 'kg' not in rest
 
 
 # ---- what needs a person ------------------------------------------------------------------

@@ -558,7 +558,10 @@ raw HTML escaped, unsafe link schemes refused).
   edges seldom cross. Each step is a compact bubble: its status glyph, its id and, small, how
   long it ran (live while running) and `done/total` for a scattered step; its tooltip is its
   doc and what it says now (a running step's last non-empty stderr line, a failed step's
-  error, what a pending step waits on, "its inputs changed" when stale). A pending step whose
+  error, what a pending step waits on, "its inputs changed" when stale). A running step that
+  has written nothing for 15 minutes (the newest stderr.log mtime of its runs that have not
+  finished, else their run dirs') is quiet: its card adds `· quiet 42m` and the line reads
+  `Quiet for 42m. Last output: …`. A pending step whose
   unfinished upstream steps are all running is next in line and reads at full strength;
   pending steps further off are faint. Everything else is one click away in the step's detail.
   Built-ins that run inline (`core.*`) are dashed bubbles. The server lays out the board, so
@@ -595,7 +598,9 @@ raw HTML escaped, unsafe link schemes refused).
   shareable: `kind` (repeated or comma-separated; exact kinds or the `step`/`plan` groups) and
   `thread` (comma-separated), the §6b filter `log_read` uses. A row shows seq, time, kind and a
   one-line summary (`s2 succeeded → stale`, `rev 7 by orch: reason (2 ops)`, `questions from
-  e2e: body…`, `<call> <fn> <status>`, `logic submitted interface, branch`) and expands to the full record as JSON. Unknown kinds or a
+  e2e: body…`, `<call> <fn> <status>`, `logic submitted interface, branch`) and expands to the full record as JSON. A
+  `thread.post` call's `call` records are hidden unless the filter selects `call` (a failed
+  one still shows); the tools list everything. Unknown kinds or a
   bad seq are a 400 page.
 - `GET /fns?project=<name>` (project optional): every function that context sees, grouped by
   scope, with doc and typed inputs and outputs (`string[]`, `enum(a|b)`, `{field: type}`,

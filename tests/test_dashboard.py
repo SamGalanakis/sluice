@@ -351,6 +351,21 @@ def test_the_log_stream_prepends_new_matching_records_on_the_newest_page(store, 
     assert patches(events) == [] and events[-1]["data"] == ['signals {"seen":4}']
 
 
+def test_the_log_stream_hides_thread_post_calls_too(store, port):
+    store.create_project("p")
+    sig = signals_of(get(port, "/projects/p/log")[1])
+
+    def post():
+        store.append("p", {"kind": "call", "call": "c1", "fn": "thread.post",
+                           "status": "running", "direct": True},
+                     message("q", "hello"),
+                     {"kind": "call", "call": "c1", "fn": "thread.post",
+                      "status": "succeeded"})
+
+    [rows_patch] = patches(stream(port, "/projects/p/log/stream", sig, action=later(post)))
+    assert "q from t: hello" in rows_patch and "thread.post" not in rows_patch
+
+
 def test_the_log_stream_sends_the_table_when_the_filter_changes(store, port):
     store.create_project("p")
     store.append("p", message("q", "hello"), message("r", "other"))

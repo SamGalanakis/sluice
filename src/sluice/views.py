@@ -64,6 +64,7 @@ HISTORY_QUERY = urlencode([("kind", k) for k in L.HISTORY_KINDS])
 PROMPT_INPUTS = ("prompt", "spec", "task", "instructions", "brief")  # an agent block's prompt
 TEXT_OUTPUTS = ("result", "summary", "text", "message", "answer")  # what a card shows first
 TAIL = 6000  # characters of a run's stderr in the step detail
+QUIET = 15 * 60  # seconds without a write before a running step has gone quiet
 
 STATIC = Path(__file__).resolve().parent / "static"
 CSS = (STATIC / "dashboard.css").read_text(encoding="utf-8")
@@ -579,6 +580,35 @@ def progress_line(store: Store, project: str, block: Block) -> str:
     return ""
 
 
+def _activity(store: Store, project: str, block: Block) -> tuple[str, float] | None:
+    """(iso, seconds since) a running step's last sign of life: the newest mtime of the
+    stderr.log (the run dir's own when there is none) of each run that has not finished (no
+    exit.json). None for a step that is not running or has no live run."""
+    if block.status != "running":
+        return None
+    times = []
+    for r in block.run_ids:
+        d = _run_dir(store, project, r)
+        if d is None or (d / "exit.json").exists():
+            continue
+        try:
+            times.append((d / "stderr.log").stat().st_mtime)
+        except OSError:
+            try:
+                times.append(d.stat().st_mtime)
+            except OSError:
+                pass
+    if not times:
+        return None
+    act = dt.datetime.fromtimestamp(max(times), dt.UTC)
+    return act.strftime("%Y-%m-%dT%H:%M:%SZ"), (_now() - act).total_seconds()
+
+
+def quiet_text(age: float, line: str) -> str:
+    """A quiet running step's "what it says now" line: `Quiet for 42m. Last output: …`."""
+    return f"Quiet for {dur(age)}. " + (f"Last output: {line}" if line else "No output yet.")
+
+
 def _short(value: Any, width: int = 120) -> str:
     """A value in one line: text as it is, anything else as compact JSON."""
     if isinstance(value, str):
@@ -615,7 +645,11 @@ def block_line(store: Store, board: Board, block: Block) -> tuple[str, str]:
     what it produced when done, why it waits when a plan input holds it up."""
     status = block.status
     if status == "running":
-        return "progress", progress_line(store, board.project, block)
+        line = progress_line(store, board.project, block)
+        act = _activity(store, board.project, block)
+        if act is not None and act[1] >= QUIET:
+            return "progress", quiet_text(act[1], line)
+        return "progress", line
     if status == "failed":
         return "error", _line(block.entry.get("error") or "failed", 200)
     if status == "stale":
@@ -948,7 +982,12 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
         small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
     if _elapsed(b):
         small.append(_elapsed(b))
-    tail = f'<span class="dur">{" · ".join(small)}</span>' if small else ""
+    inner = " · ".join(small)
+    if (act := _activity(store, board.project, b)) is not None:
+        # the ticker (static/sluice.js) keeps `quiet 42m` current from data-quiet
+        text = f"{' · ' if small else ''}quiet {dur(act[1])}" if act[1] >= QUIET else ""
+        inner += f'<span class="quiet" data-quiet="{e(act[0])}">{e(text)}</span>'
+    tail = f'<span class="dur">{inner}</span>' if inner else ""
     return f'<{tag} {attrs}>{glyph(b.mark)}<span class="sid">{e(b.sid)}</span>{tail}</{tag}>'
 
 
@@ -1496,8 +1535,19 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     which = f" (run {len(b.run_ids)} of {int(b.entry['total'])})" \
         if "total" in b.entry and len(b.run_ids) > 1 else ""
     if b.status == "running":
-        section("Progress" + which, f'<pre class="tail">{e(tail)}</pre>' if tail else
-                '<p class="quiet">Nothing written yet.</p>')
+        line, quiet = "", False
+        if (act := _activity(store, project, b)) is not None:
+            quiet = act[1] >= QUIET
+            last = progress_line(store, project, b)
+            # the ticker (static/sluice.js) fills the line in and unhides it when the run
+            # crosses QUIET without another write
+            line = (f'<p class="attn" data-quiet-line="{e(act[0])}"'
+                    f'{"" if quiet else " hidden"}><span class="q">'
+                    f'{e(f"Quiet for {dur(act[1])}.") if quiet else ""}</span> '
+                    f'{e("Last output: " + last if last else "No output yet.")}</p>')
+        line += (f'<pre class="tail">{e(tail)}</pre>' if tail else
+                 "" if quiet else '<p class="quiet">Nothing written yet.</p>')
+        section("Progress" + which, line)
     # outputs: what it produced (its declared ones first); session and cost are run facts
     outs: dict[str, Any] | None = outs_all if isinstance(b.entry.get("outputs"), dict) else None
     declared = b.outputs
@@ -1718,6 +1768,14 @@ def log_row(rec: dict[str, Any]) -> str:
             f"<pre>{_json(rec)}</pre></details></td></tr>")
 
 
+def log_shown(rec: dict[str, Any], q: LogQuery) -> bool:
+    """Whether the Log viewer lists a record: a `thread.post` call's `call` rows are noise
+    beside its `message` row, so they hide unless the kinds filter names `call` — a failed
+    one always shows. Only the viewer does this; the tools list everything."""
+    return not (rec.get("kind") == "call" and rec.get("fn") == "thread.post"
+                and rec.get("status") != "failed" and "call" not in q.kinds)
+
+
 def log_rows(records: Iterable[dict[str, Any]]) -> str:
     return "".join(map(log_row, records))
 
@@ -1740,7 +1798,8 @@ def log_view(store: Store, project: str | None, q: LogQuery) -> tuple[str, int]:
     """The `log-view` part: one page of records (newest first) and the pager; with the log's
     last seq when it was read."""
     res = L.page(store.log_dir(project), q.kinds, q.threads, q.before, q.after, PAGE_SIZE)
-    recs, base = res["records"], log_base(project)
+    recs = [r for r in res["records"] if log_shown(r, q)]
+    base = log_base(project)
 
     def link(text: str, **change: Any) -> str:
         qs = q.query(**change)
@@ -1768,9 +1827,24 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
     view, last = log_view(store, project, q)
     base = log_base(project)
     apply = f"$before = 0; $after = 0; @get('{base}/stream', {STREAM_OPTIONS})"
-    boxes = "".join(
-        f'<label><input type="checkbox" name="kind" value="{k}" data-bind:kinds'
-        f'{" checked" if k in q.kinds else ""}> {k}</label>' for k in KIND_OPTIONS)
+
+    def box(k: str, text: str, cls: str = "") -> str:
+        c = f' class="{cls}"' if cls else ""
+        return (f'<label{c}><input type="checkbox" name="kind" value="{k}" data-bind:kinds'
+                f'{" checked" if k in q.kinds else ""}> {e(text)}</label>')
+
+    # one line per group — its checkbox then its kinds by their short names — and one for
+    # the ungrouped kinds; the order is still KIND_OPTIONS, so data-bind:kinds lines up
+    # with the `kinds` signal
+    lines: list[tuple[str, list[str]]] = []
+    for k in KIND_OPTIONS:
+        g = k if k in L.GROUPS else (k.split(".", 1)[0] if k.split(".", 1)[0] in L.GROUPS
+                                     else "")
+        text = k[len(g) + 1:] if g and k != g else k
+        if not lines or lines[-1][0] != g:
+            lines.append((g, []))
+        lines[-1][1].append(box(k, text, "kg" if k == g else ""))
+    boxes = "".join(f'<span class="kline">{"".join(bs)}</span>' for _, bs in lines)
     form = (f'<form class="filters" method="get" action="{e(base)}" '
             f'data-on:input__debounce.300ms="{e(apply)}" data-on:submit="{e(apply)}">'
             f"<fieldset><legend>Kinds</legend>{boxes}</fieldset>"

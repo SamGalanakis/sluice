@@ -10,8 +10,9 @@
 //   its newest line in view unless the reader scrolled up.
 // - <sluice-thread project thread last>: counts the messages this browser has not seen on a
 //   thread, marks them when it is opened, and opens the thread the address names.
-// On every page: relative times (`data-ago`) and running times (`data-since`) stay current,
-// and the Types switch shows the types of values.
+// On every page: relative times (`data-ago`), running times (`data-since`) and a running
+// step's quiet mark (`data-quiet`, `data-quiet-line`) stay current, and the Types switch
+// shows the types of values.
 
 import { rocket } from
   "/static/datastar-rocket-1.0.4.js";
@@ -38,6 +39,8 @@ function ago(seconds) {
   return "just now";
 }
 
+const QUIET = 15 * 60;  // seconds without a write before a running step has gone quiet
+
 function tick() {
   const now = Date.now();
   for (const t of $$("time[data-since]")) {
@@ -45,6 +48,15 @@ function tick() {
   }
   for (const t of $$("time[data-ago]")) {
     t.textContent = ago((now - Date.parse(t.getAttribute("datetime"))) / 1000);
+  }
+  for (const t of $$("[data-quiet]")) {
+    const age = (now - Date.parse(t.dataset.quiet)) / 1000;
+    t.textContent = age >= QUIET ? `${t.previousSibling ? " · " : ""}quiet ${dur(age)}` : "";
+  }
+  for (const p of $$("[data-quiet-line]")) {
+    const age = (now - Date.parse(p.dataset.quietLine)) / 1000;
+    p.hidden = age < QUIET;
+    $(".q", p).textContent = age >= QUIET ? `Quiet for ${dur(age)}.` : "";
   }
 }
 setInterval(tick, 5000);

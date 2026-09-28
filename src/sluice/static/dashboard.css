@@ -269,6 +269,7 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .sid { font-weight: 550; font-size: 14.5px; line-height: 20px; min-width: 0; overflow: hidden;
        text-overflow: ellipsis; white-space: nowrap; }
 .node .dur { font-size: 12px; line-height: 16px; }
+.node .dur .quiet { color: var(--status-attention); }  /* a wedged run, in the attention voice */
 .is-pending .sid, .is-skipped .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
 .node.is-pending { border-color: transparent;
                    background: color-mix(in oklch, var(--card) 55%, transparent); }
@@ -458,6 +459,8 @@ form.filters fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wr
 form.filters legend { float: left; margin-right: 8px; font-size: 11px; font-weight: 500;
                       color: var(--muted-foreground); }
 form.filters label { white-space: nowrap; }
+form.filters .kline { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+form.filters .kg { font-weight: 600; }
 input, button, select, textarea { font: inherit; color: inherit; }
 input:not([type=checkbox]):not([type=radio]), select, textarea {
   background: var(--card); border: 1px solid var(--input); border-radius: 8px; padding: 5px 8px; }

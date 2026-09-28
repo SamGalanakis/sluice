@@ -216,8 +216,9 @@ class Dashboard:
             if new_stamp != stamp:
                 stamp = new_stamp
                 res = await run(L.read, d, seen, q.kinds, q.threads)
-                if res["records"]:
-                    rows = views.log_rows(reversed(res["records"]))
+                recs = [r for r in res["records"] if views.log_shown(r, q)]
+                if recs:
+                    rows = views.log_rows(reversed(recs))
                     yield SSE.patch_elements(rows, selector="#log-rows",
                                              mode=ElementPatchMode.PREPEND)
                 if res["last_seq"] != seen:
