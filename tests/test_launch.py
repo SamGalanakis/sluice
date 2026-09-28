@@ -14,6 +14,7 @@ import pytest
 from sluice import calls, db
 from sluice import log as L
 from sluice import runner as R
+from sluice.errors import BadRequest
 from sluice.runner import NOT_STARTED, Runner
 from sluice.store import Store
 from tests.conftest import create, d, settle, write_config
@@ -165,6 +166,52 @@ def test_a_cancel_during_a_reserved_launch_starts_nothing(store, monkeypatch):
     assert not (store.runs_dir("p") / rid).exists() and not runner.active
 
 
+def cancel_during_first_spawn(store, monkeypatch, step, kills):  # noqa: F811
+    """Spawn for real, but commit `step_cancel` of `step` (from another Store) while the
+    tick's first spawn is under way; returns the steps' env names of what was spawned."""
+    real, spawned = R.spawn, []
+
+    def spawn(fn, inp, run_dir, env):
+        if not spawned:
+            Store(store.home).cancel_steps("p", step, author="me", reason="stop")
+        proc = real(fn, inp, run_dir, env)
+        kills.append(proc.pid)
+        spawned.append((env["SLUICE_STEP"], run_dir.name))
+        return proc
+
+    monkeypatch.setattr(R, "spawn", spawn)
+    return spawned
+
+
+def test_cancel_second_reserved_step_during_first_spawn(store, kills, monkeypatch):  # noqa: F811
+    create(store, "p", {"a": {"run": "test.wait", "in": {"value": d("a")}},
+                        "b": {"run": "test.wait", "in": {"value": d("b")}}})
+    spawned = cancel_during_first_spawn(store, monkeypatch, "b", kills)
+    runner = Runner(store)
+    runner.tick()
+    [rid] = entry(store, "b")["run_ids"]
+    assert [s for s, _ in spawned] == ["a"] and not (store.runs_dir("p") / rid).exists()
+    e = settle(runner, store, "p", until=lambda s: s["b"]["status"] == "failed")["b"]
+    assert e["error"] == "cancelled: stop" and not (store.runs_dir("p") / rid).exists()
+    assert entry(store, "a")["status"] == "running" and len(spawned) == 1
+
+
+def test_cancel_scatter_during_partial_launch(store, kills, monkeypatch):  # noqa: F811
+    create(store, "p", {"g": {"run": "test.gate", "scatter": "tag",
+                              "in": {"tag": d(["a", "b", "c"])}}})
+    spawned = cancel_during_first_spawn(store, monkeypatch, "g", kills)
+    runner = Runner(store)
+    runner.tick()
+    run_ids = entry(store, "g")["run_ids"]
+    assert [r for _, r in spawned] == run_ids[:1]  # item 0 started; 1 and 2 never do
+    first = store.runs_dir("p") / run_ids[0]
+    wait_shim(first)
+    e = settle(runner, store, "p")["g"]
+    assert (e["status"], e["error"]) == ("failed", "cancelled: stop") and not runner.active
+    assert not R.lock_held(first / "shim.lock")  # the started item was stopped
+    assert [p.name for p in store.runs_dir("p").iterdir()] == run_ids[:1] and len(spawned) == 1
+
+
 def test_other_projects_write_while_a_cancelled_step_is_stopped(store, kills,  # noqa: F811
                                                                 monkeypatch):
     """Stopping a run (SIGTERM, a grace, SIGKILL) happens outside any write transaction."""
@@ -232,6 +279,35 @@ def test_a_call_reserved_but_never_started_fails_on_adoption(store, monkeypatch)
     assert adopted(store, None) == [(call, "not started")]
 
 
+def test_call_spawn_error_survives_busy_result_write(store, monkeypatch):
+    call = calls.create(store, "test.wait", {"value": 1}, None)
+    spawned, busy = [], [True]
+
+    def no_spawn(*a):
+        spawned.append(a)
+        raise OSError("no such shim")
+
+    real = calls.record
+
+    def record(store_, project, rec, was=calls.LIVE):
+        if busy and rec["status"] == "failed":
+            busy.clear()
+            raise db.Busy()
+        return real(store_, project, rec, was)
+
+    monkeypatch.setattr(R, "spawn", no_spawn)
+    monkeypatch.setattr(calls, "record", record)
+    runner = Runner(store)
+    runner.tick()  # reserved, the spawn fails, recording that is Busy: retried next tick
+    assert not busy and calls.latest(store, call, None)["status"] == "running"
+    runner.tick()
+    res = calls.status(store, call, None)
+    assert (res["status"], res["error"]) == ("failed", "could not start the fn: no such shim")
+    ends = [r for r in L.read(store.home, None, kinds=["call"])["records"]
+            if r["status"] == "failed"]
+    assert len(ends) == 1 and len(spawned) == 1 and not runner.active
+
+
 # ---- the run-dir GC ------------------------------------------------------------------------
 
 
@@ -285,6 +361,85 @@ def test_gc_keeps_every_referenced_run_dir_and_removes_the_rest(tmp_path, monkey
         os.close(lock)
 
 
+@pytest.mark.parametrize("when", ["before", "after"])
+def test_run_gc_and_orphan_sweep_race_reference_then_directory(store, kills,  # noqa: F811
+                                                               monkeypatch, when):
+    """Direct calls launched (reference committed, then dir made, then process) while the GC
+    and the orphan sweep have listed the run dirs, `when` their references are read: a pass
+    either never lists the dir or finds it referenced. The GC's run is held with its dir made
+    and no process yet (no shim lock to protect it); the sweep's run lives. Neither is removed
+    nor killed."""
+    stale = store.runs_dir(None) / "stale"
+    stale.mkdir(parents=True)  # nothing refers to it: the GC's pass does remove it
+    gates = {k: (threading.Event(), threading.Event()) for k in ("gc", "sweep", "dir")}
+
+    def pause(gate):
+        reached, go = gates[gate]
+        reached.set()
+        assert go.wait(20)
+
+    def between(real, gate):  # the pass has listed the dirs
+        def f(*a):
+            if a[-1] is None and when == "before":
+                pause(gate)
+            refs = real(*a)
+            if a[-1] is None and when == "after":
+                pause(gate)
+            return refs
+        return f
+
+    real_spawn = R.spawn
+
+    def spawn(fn, inp, run_dir, env):  # the first launch: its dir, then (later) its process
+        if not gates["dir"][0].is_set():
+            run_dir.mkdir(parents=True)
+            pause("dir")
+        proc = real_spawn(fn, inp, run_dir, env)
+        kills.append(proc.pid)  # stopped however the test goes
+        return proc
+
+    runner = Runner(store)
+    monkeypatch.setattr(L, "refs", between(L.refs, "gc"))
+    monkeypatch.setattr(runner, "_referenced_runs", between(runner._referenced_runs, "sweep"))
+    monkeypatch.setattr(R, "spawn", spawn)
+
+    def reserve():
+        return calls.create(store, "test.wait", {"value": 1}, None, direct=True)
+
+    def launch(call):
+        launches.append(threading.Thread(target=lambda: results.append(
+            R.run_call_direct(Store(store.home), call, None)), daemon=True))
+        launches[-1].start()
+        runs.append(store.runs_dir(None) / call)
+
+    runs, launches, results = [], [], []
+    passes = threading.Thread(target=lambda: (runner._gc(), runner._orphans()))
+    passes.start()
+    try:
+        assert gates["gc"][0].wait(20)
+        launch(reserve())
+        assert gates["dir"][0].wait(20)  # its dir exists; no process yet
+        gates["gc"][1].set()
+        assert gates["sweep"][0].wait(20)  # the GC's pass is over
+        assert runs[0].is_dir() and not stale.exists()
+        gates["dir"][1].set()
+        wait_shim(runs[0])
+        launch(reserve())
+        wait_shim(runs[1])
+        gates["sweep"][1].set()
+        passes.join(20)
+    finally:
+        for _, go in gates.values():
+            go.set()
+    assert not passes.is_alive()
+    for run in runs:  # neither removed nor killed
+        assert run.is_dir() and R.lock_held(run / "shim.lock")
+        (run / "go").write_text("")
+    for t in launches:
+        t.join(20)
+    assert [r["status"] for r in results] == ["succeeded", "succeeded"]
+
+
 def test_a_finished_run_dir_goes_once_nothing_retained_refers_to_it(tmp_path):
     home = tmp_path / "home"
     write_config(home, log_max=5)
@@ -317,6 +472,119 @@ def test_deleting_a_project_removes_its_files_and_nothing_brings_them_back(store
     store.create_project("p")  # a new project of the name starts clean
     assert L.read(store.home, "p")["records"][0]["kind"] == "plan.edit"
     assert len(L.read(store.home, "p")["records"]) == 1 and store.read_state("p")["steps"] == {}
+
+
+def deleted_with_a_run(store):
+    """Project p archived with one finished run; returns the run's dir."""
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    [rid] = settle(Runner(store), store, "p")["a"]["run_ids"]
+    store.update_project("p", archived=True)
+    return store.runs_dir("p") / rid
+
+
+def pending_deletions(store):
+    with store.rx() as conn:
+        return [tuple(r) for r in db.all_rows(conn, "SELECT name, token FROM deletions")]
+
+
+def test_delete_recreate_before_cleanup_preserves_replacement_files(store, monkeypatch):
+    """From the deletion's commit until its directory is gone the name is fenced: a new
+    project of the name is refused meanwhile, and the cleanup (or a GC pass that read the
+    deletion before it finished) never touches the replacement's files."""
+    run = deleted_with_a_run(store)
+    gates = {k: (threading.Event(), threading.Event()) for k in ("committed", "renamed")}
+
+    def pause(k):
+        reached, go = gates[k]
+        reached.set()
+        assert go.wait(10)
+
+    real_remove, real_rmtree = store._remove_dir, shutil.rmtree
+
+    def remove_dir(name, token):  # after the commit, before any file is touched
+        pause("committed")
+        return real_remove(name, token)
+
+    def rmtree(path, *a, **kw):  # moved to trash, not yet removed
+        if threading.current_thread() is deleter:
+            pause("renamed")
+        return real_rmtree(path, *a, **kw)
+
+    monkeypatch.setattr(store, "_remove_dir", remove_dir)
+    monkeypatch.setattr(shutil, "rmtree", rmtree)
+    other = Store(store.home)
+    deleter = threading.Thread(target=store.delete_project, args=("p",))
+    deleter.start()
+    try:
+        assert gates["committed"][0].wait(10)
+        [(_, token)] = pending_deletions(other)
+        assert other.project_names() == [] and run.is_dir()
+        with pytest.raises(BadRequest, match="'p' is still being removed; try again shortly"):
+            other.create_project("p")
+        gates["committed"][1].set()
+        assert gates["renamed"][0].wait(10)
+        assert not store.project_dir("p").exists()
+        with pytest.raises(BadRequest, match="still being removed"):
+            other.create_project("p")
+    finally:
+        for _, go in gates.values():
+            go.set()
+        deleter.join(10)
+    monkeypatch.undo()
+    assert pending_deletions(other) == [] and not list((store.home / "trash").iterdir())
+    other.create_project("p")
+    mine = store.project_dir("p") / "fns" / "mine.txt"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("the replacement's")
+    assert other._remove_dir("p", token) is True  # a stale GC pass: the row is gone
+    Runner(other)._gc()
+    assert mine.read_text() == "the replacement's" and other.project_names() == ["p"]
+
+
+def test_delete_inside_rolled_back_outer_write_preserves_artifacts(store):
+    run = deleted_with_a_run(store)
+    with pytest.raises(ValueError), store.tx():
+        store.delete_project("p")
+        assert run.is_dir()  # nothing is removed before the outermost commit
+        raise ValueError("the outer change fails")
+    assert store.project_names() == ["p"] and (run / "output.json").is_file()
+    assert pending_deletions(store) == [] and store.read_state("p")["steps"]["a"]
+    with store.tx():
+        store.delete_project("p")
+        assert run.is_dir() and pending_deletions(store) != []
+    assert store.project_names() == [] and not store.project_dir("p").exists()
+    assert pending_deletions(store) == []
+
+
+@pytest.mark.parametrize("fails", ["rename", "rmtree", "crash"])
+def test_delete_cleanup_recovers_before_trash_rename(store, monkeypatch, fails):
+    """A deletion whose directory removal failed (the move to trash, the removal) or never
+    ran (the process died after the commit) is finished by the runner's GC — only that
+    one: a directory prepared for a project not created yet stays."""
+    run = deleted_with_a_run(store)
+    prepared = store.project_dir("q") / "fns"
+    prepared.mkdir(parents=True)
+
+    def fail(*a, **kw):
+        raise OSError(f"{fails} is unavailable")
+
+    if fails == "crash":
+        monkeypatch.setattr(store, "_remove_dir", lambda name, token: None)
+    else:
+        monkeypatch.setattr({"rename": os, "rmtree": shutil}[fails],
+                            {"rename": "replace", "rmtree": "rmtree"}[fails], fail)
+    assert store.delete_project("p") == {"deleted": "p"}
+    monkeypatch.undo()
+    assert store.project_names() == [] and [n for n, _ in pending_deletions(store)] == ["p"]
+    assert run.is_dir() or (store.home / "trash").is_dir()
+    with pytest.raises(BadRequest, match="still being removed"):
+        store.create_project("p")
+    Runner(store)._gc()
+    assert pending_deletions(store) == [] and not store.project_dir("p").exists()
+    assert not (store.home / "trash").exists() or not list((store.home / "trash").iterdir())
+    assert prepared.is_dir()
+    store.create_project("p")  # clean
+    assert not store.project_dir("p").exists() and store.read_state("p")["steps"] == {}
 
 
 def test_a_leftover_project_dir_refuses_the_name_unless_it_only_holds_prepared_files(store):

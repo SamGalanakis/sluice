@@ -276,6 +276,8 @@ class Store:
         with self.tx() as conn:
             if db.one(conn, "SELECT 1 FROM projects WHERE name = ?", (name,)) is not None:
                 raise BadRequest(f"project {name!r} already exists")
+            if db.one(conn, "SELECT 1 FROM deletions WHERE name = ?", (name,)) is not None:
+                raise BadRequest(f"project {name!r} is still being removed; try again shortly")
             left = sorted(p.name for p in d.iterdir() if p.name not in PREPARED) \
                 if d.is_dir() else []
             if left:
@@ -378,9 +380,11 @@ class Store:
         """Delete a project and everything it holds (plan, state, log, inbox, calls, runs).
         Refused unless it is archived first, none of its steps is running and no non-direct
         call on it is pending or running (a direct call runs in the caller's own process; it
-        can record nothing once the project is gone). The rows go in one transaction; then its
-        directory moves to SLUICE_HOME/trash/ and is removed (the runner's GC finishes a
-        removal that failed)."""
+        can record nothing once the project is gone). One transaction deletes the rows and
+        records the deletion (`deletions`), which keeps the name from being created again
+        until its directory is gone; once the outermost transaction commits, the directory
+        moves to SLUICE_HOME/trash/ and is removed (finish_deletions)."""
+        token = secrets.token_hex(4)
         with self.tx() as conn:
             if not self._row(conn, name)["archived"]:
                 raise BadRequest(f"archive project {name!r} before deleting it")
@@ -395,18 +399,49 @@ class Store:
                 raise BadRequest(
                     f"project {name!r} has pending or running calls: {', '.join(live)}")
             conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+            conn.execute("INSERT INTO deletions (name, token, at) VALUES (?, ?, ?)",
+                         (name, token, now_iso()))
             self.notify()
+            db.after_commit(self.home, lambda: self._remove_dir(name, token))
         self._parsed.pop(name, None)
-        d = self.project_dir(name)
-        if d.exists():
-            trash = self.home / "trash" / f"{name}-{secrets.token_hex(4)}"
-            try:
-                trash.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(d, trash)
-            except OSError:
-                return {"deleted": name}  # left in place: a new project of the name refuses it
-            shutil.rmtree(trash, ignore_errors=True)
         return {"deleted": name}
+
+    def _remove_dir(self, name: str, token: str) -> bool:
+        """Remove a deleted project's directory — moved to trash/<name>-<token>, then removed
+        — and then its `deletions` row. Idempotent; a step that fails leaves the row for the
+        runner's GC to finish. Returns whether it is done. The move happens in a write
+        transaction that still finds the row, and the row stops a project of the name from
+        being created, so nothing here can touch a project created after the deletion (not
+        even from a GC pass that read the row before another process finished it)."""
+        d, trash = self.project_dir(name), self.home / "trash" / f"{name}-{token}"
+        try:
+            if trash.exists():  # an earlier attempt's leftover: os.replace needs room
+                shutil.rmtree(trash)
+            with self.tx() as conn:
+                if db.one(conn, "SELECT 1 FROM deletions WHERE name = ? AND token = ?",
+                          (name, token)) is None:
+                    return True  # finished already
+                if d.exists():
+                    trash.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(d, trash)
+            if trash.exists():
+                shutil.rmtree(trash)
+            with self.tx() as conn:
+                if d.exists():  # something wrote there again: moved on the next pass
+                    return False
+                conn.execute("DELETE FROM deletions WHERE name = ? AND token = ?",
+                             (name, token))
+        except (OSError, db.Busy):
+            return False
+        return True
+
+    def finish_deletions(self) -> list[str]:
+        """Finish every deletion whose directory removal failed or was cut short (a failed
+        move or removal, a process that died after the commit); returns the names still
+        pending."""
+        with self.rx() as conn:
+            rows = db.all_rows(conn, "SELECT name, token FROM deletions ORDER BY name")
+        return [r["name"] for r in rows if not self._remove_dir(r["name"], r["token"])]
 
     def archived(self, name: str) -> bool:
         try:

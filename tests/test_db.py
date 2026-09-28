@@ -217,22 +217,60 @@ def test_busy_is_a_defined_error_with_nothing_written(tmp_path, monkeypatch):
     finally:
         holder.execute("ROLLBACK")
     assert "message" not in records(store.home)
-    # a lock released while the writer waits: the write goes through
+    holder.close()
+
+
+def test_busy_writer_actually_waits_before_release(tmp_path):
+    """A write that finds the lock held waits for it (up to TIMEOUT) and then goes through:
+    the lock is released only once the write's BEGIN IMMEDIATE is running against it."""
+    store = Store(tmp_path / "h")
+    store.create_project("p")
+    holder = sqlite3.connect(store.home / db.FILE, isolation_level=None)
     holder.execute("BEGIN IMMEDIATE")
-    waiting = threading.Event()
-    done = []
+    begun, done = threading.Event(), []
 
     def write():
-        waiting.set()
+        db.connect(store.home).set_trace_callback(
+            lambda sql: sql == "BEGIN IMMEDIATE" and begun.set())
         done.append(store.append("p", msg()))
 
     t = threading.Thread(target=write)
     t.start()
-    waiting.wait()
-    holder.execute("ROLLBACK")
-    t.join()
-    holder.close()
+    try:
+        assert begun.wait(10)  # the writer is inside BEGIN IMMEDIATE, the lock still held
+        assert not done
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    t.join(10)
     assert done and records(store.home)[-1] == "message"
+
+
+def test_bootstrap_wal_timeout_is_busy(tmp_path, monkeypatch):
+    """A first open that cannot switch the new file to WAL within TIMEOUT (another opener
+    holds it) is `busy`, like any write; once the lock is gone the home opens. Errors that are
+    not contention stay what they are."""
+    monkeypatch.setattr(db, "TIMEOUT", 0.05)
+    home = tmp_path / "h"
+    home.mkdir()
+    holder = sqlite3.connect(home / db.FILE, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(db.Busy) as err:
+            db.connect(home)
+        assert err.value.payload() == {"error": "busy",
+                                       "message": "the store is busy, try again"}
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert peek(home, "PRAGMA user_version") == [(0,)]
+    assert db.connect(home).execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / db.FILE).write_bytes(b"not a database, just some bytes" * 64)
+    with pytest.raises(sqlite3.DatabaseError) as err:
+        db.connect(bad)
+    assert not isinstance(err.value, db.Busy)
 
 
 def test_readers_release_the_wal(tmp_path):

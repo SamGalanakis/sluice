@@ -105,6 +105,11 @@ CREATE TABLE inbox (
   reason TEXT,
   PRIMARY KEY (project, n)
 ) STRICT;
+CREATE TABLE deletions (
+  name TEXT PRIMARY KEY NOT NULL,
+  token TEXT NOT NULL,
+  at TEXT NOT NULL
+) STRICT;
 CREATE TABLE records (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   project TEXT REFERENCES projects ON DELETE CASCADE,
@@ -229,6 +234,11 @@ def _open(home: Path) -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA synchronous = FULL")
         _bootstrap(conn, path)
+    except sqlite3.OperationalError as e:
+        conn.close()
+        if _locked(e):  # another opener held the file past TIMEOUT (_wal, or a lock wait)
+            raise Busy() from None
+        raise
     except BaseException:
         conn.close()
         raise
@@ -270,7 +280,7 @@ def _locked(e: sqlite3.OperationalError) -> bool:
 
 def _wal(conn: sqlite3.Connection) -> None:
     """Switch a new file to WAL. The switch does not wait on the busy handler, so while
-    another first open holds the file it is retried until TIMEOUT."""
+    another first open holds the file it is retried until TIMEOUT (then _open says Busy)."""
     deadline = time.monotonic() + TIMEOUT
     while True:
         try:

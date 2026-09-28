@@ -719,6 +719,77 @@ def test_a_closed_stream_holds_no_reader(store, port):
     assert busy == 0 and frames == done
 
 
+def test_wait_and_sse_release_snapshot_between_polls(store, port, monkeypatch):
+    """While a wait (log_wait, thread.wait) or a page's stream is paused between two polls,
+    still waiting or connected, it holds no snapshot: a checkpoint copies every frame back."""
+    import sqlite3
+    import types
+
+    import anyio
+
+    from sluice import db
+    from sluice import log as L
+    from sluice.dashboard import Dashboard
+
+    store.create_project("p")
+    store.append("p", message("t", "first"))
+
+    def checkpoint():
+        writer = sqlite3.connect(store.home / db.FILE, isolation_level=None)
+        try:
+            for _ in range(20):
+                writer.execute("INSERT INTO records (at, kind, data) "
+                               "VALUES ('x', 'note', '{}')")
+            return writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        finally:
+            writer.close()
+
+    polling, go = threading.Event(), threading.Event()
+
+    def sleep(seconds):  # the wait, between two polls
+        polling.set()
+        assert go.wait(10)
+
+    monkeypatch.setattr(L, "time", types.SimpleNamespace(monotonic=time.monotonic, sleep=sleep))
+    got = []
+    t = threading.Thread(target=lambda: got.append(
+        L.wait(store.home, "p", L.read(store.home, "p")["last_seq"], timeout=30)))
+    t.start()
+    try:
+        assert polling.wait(10)
+        busy, frames, done = checkpoint()
+        store.append("p", message("t", "wake"))
+    finally:
+        go.set()
+        t.join(10)
+    assert busy == 0 and frames == done
+    assert [r["body"] for r in got[0]["records"]] == ["wake"]
+    monkeypatch.undo()
+
+    polling, go = threading.Event(), threading.Event()
+    real_tick = Dashboard._tick
+
+    async def tick(self):  # the stream, between two polls
+        polling.set()
+        await anyio.to_thread.run_sync(go.wait, 10)
+        return await real_tick(self)
+
+    monkeypatch.setattr(Dashboard, "_tick", tick)
+    result = []
+
+    def paused():
+        try:
+            assert polling.wait(10)
+            result.append(checkpoint())
+        finally:
+            go.set()
+
+    sig = signals_of(get(port, "/projects/p/log")[1])
+    stream(port, "/projects/p/log/stream", sig, seconds=0.3, action=paused)
+    [(busy, frames, done)] = result
+    assert busy == 0 and frames == done
+
+
 def test_the_history_tab_shows_every_edit_past_the_log_cap(tmp_path):
     from tests.conftest import write_config
 

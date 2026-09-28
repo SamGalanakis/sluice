@@ -687,11 +687,18 @@ class Runner:
         return refs
 
     def _gc(self) -> None:
-        """At startup and about once a minute: remove every run dir nothing references (a
-        retained record, a state entry, a call, a submission: log.refs) whose shim and fn are
-        gone, and whatever SLUICE_HOME/trash still holds. Each log's dirs are listed before its
-        references are read: a run's reference is committed before its dir is made, so a
+        """At startup and about once a minute: finish the deleted projects' directory removals
+        still pending (store.finish_deletions), remove whatever SLUICE_HOME/trash still holds,
+        and remove every run dir nothing references (a retained record, a state entry, a call,
+        a submission: log.refs) whose shim and fn are gone. Each log's dirs are listed before
+        its references are read: a run's reference is committed before its dir is made, so a
         listed dir nothing references can never gain a reference again."""
+        try:
+            for name in self.store.finish_deletions():
+                self._report(name, "deleted, but its directory could not be removed yet "
+                                   "(retried)")
+        except Exception as ex:  # noqa: BLE001 - retried on the next pass
+            self._report("home", f"deleted projects' cleanup failed: {ex}")
         trash = self.store.home / "trash"
         for d in sorted(trash.iterdir()) if trash.is_dir() else []:
             shutil.rmtree(d, ignore_errors=True)
@@ -885,15 +892,17 @@ class Runner:
 
     def _launch(self, project: str, launch: dict[str, Active]) -> None:
         """Start the reserved runs, outside any transaction: make each run's dir and spawn its
-        shim. A start that raises is that run's failure. A step cancelled since its
-        reservation starts nothing."""
-        steps = self.store.read_state(project)["steps"]
+        shim. A start that raises is that run's failure. Each run's entry is read again just
+        before its spawn: a run whose step was cancelled since, or that its entry no longer
+        lists, is not started. A cancel committed between that read and the spawn is not
+        seen here; the next tick stops that run (the flag stays until the stop is done)."""
         for sid, a in launch.items():
-            if "cancel" in steps.get(sid, {}):
-                continue
             for run in a.runs:
                 if run.result is not None:
                     continue  # a kept item of a retried scatter
+                e = self.store.read_state(project)["steps"].get(sid) or {}
+                if "cancel" in e or run.rid not in (e.get("run_ids") or []):
+                    break
                 try:
                     env = fn_env(self.store, project, a.fn, sid, run.rid, run.run_dir, a.ports)
                     run.proc = spawn(a.fn, run.inp, run.run_dir, env)
@@ -1036,7 +1045,9 @@ class Runner:
             a.runs[0].proc = spawn(fn, inp, d, fn_env(self.store, project, fn, "", call, d))
             a.runs[0].pid = a.runs[0].proc.pid
         except Exception as ex:  # noqa: BLE001 - a failed start fails the call
-            _finish(rec, error=f"could not start the fn: {ex}")
+            # kept on the run too: a Busy result write is retried from it on the next tick
+            a.runs[0].error = f"could not start the fn: {ex}"
+            _finish(rec, error=a.runs[0].error)
             if C.record(self.store, project, rec, ("running",)):
                 self.active.pop(key, None)
 

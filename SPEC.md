@@ -45,7 +45,7 @@ runner.json                 the runner's heartbeat {pid, started, beat}, refresh
 fns/                        global user functions
 runs/<call_id>/             input.json, output.json, stderr.log, shim.json, child.json,
                             shim.lock and exit.json of the calls without a project (§4)
-trash/                      a deleted project's directory on its way out
+trash/                      a deleted project's directory on its way out (<name>-<token>)
 projects/<name>/            made when something needs it (runs/, fns/); may be prepared with
                             fns/ and .env before the project is created
   fns/                      project-local functions
@@ -63,7 +63,13 @@ triggers, rolled back with them — plus `changed`, the time of its last state w
 (the project's plan document and its `rev`, the one authoritative rev); `plan_edits` (every
 edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; never trimmed);
 `states` (the project's state document, §6); `calls` (§8 `fn_call`); `submissions` (§5);
-`inbox` (§8a); and `records` (the log, §6b). Deleting a project deletes all of its rows. Every
+`inbox` (§8a); `records` (the log, §6b); and `deletions` (a deleted project whose directory is
+not gone yet: name, token, time). Deleting a project deletes all of its rows and adds its
+`deletions` row in one transaction; once that commits (the outermost transaction, when it is
+nested in another), its `projects/<name>/` moves to `trash/<name>-<token>` (in a write
+transaction that still finds the row) and is removed, and then the row goes. Until then a
+project of that name cannot be created, so the removal never touches a replacement; a removal
+that failed or was cut short (a crash after the commit) is finished by the runner's GC. Every
 logical change is one write transaction (`BEGIN IMMEDIATE`): a plan edit writes the plan, its
 `plan_edits` row and its record; a manual value the state and its record; an inbox answer that
 sets a plan input both of those and the item; a submission its row and its record; a runner
@@ -346,8 +352,11 @@ plan, settles steps, runs built-ins inline and **reserves** each ready step's la
 with fresh run ids in `run_ids` (a kept scattered item keeping its own) and its `step.status`
 records, committed before any of its processes exists; (3) outside the transaction stops the
 steps `step_cancel` flagged (the flag stays until the stop is done) and, for each reserved
-run, makes its dir and starts its shim (a step cancelled since its reservation starts
-nothing); (4) records in a second short transaction what (3) did: a cancelled step fails
+run, makes its dir and starts its shim. Just before each run's start (each step, each
+scattered item) its entry is read again: a step cancelled since its reservation — or a run
+its entry no longer lists — starts nothing more. A cancel committed between that read and the
+start is not seen by it: the run starts, and the next tick stops it, as the flag stays until
+the stop is done; (4) records in a second short transaction what (3) did: a cancelled step fails
 `cancelled[: <reason>]`, and a start that raised fails its step — or, scattered, just that
 item — with `could not start the fn: <error>`. A call is reserved the same way (its row
 `running`, committed) before its process starts. A `busy` database skips that project until
@@ -388,7 +397,9 @@ references and nothing runs in: a dir stays while a retained record names it (it
 `kept.run_ids`), a `calls` row or a submission is its, its `shim.lock` is held or a recorded
 fn child still lives. Each log's dirs are listed before its references are read; since a run
 is referenced before its dir exists, a listed dir nothing references never gains a reference
-again. The pass also finishes the removal of deleted projects' directories (`trash/`). A `direct` call (§8 `fn_call`) is
+again. The pass also finishes every deleted project's directory removal still pending (each
+`deletions` row: its directory moved to `trash/`, removed, then the row deleted; idempotent)
+and removes whatever else `trash/` holds. A `direct` call (§8 `fn_call`) is
 run by the process that made it, never by the runner; if that process dies before logging the
 end, the runner logs the call `failed` with `error: "the process running this direct call is
 gone"` — the pid is checked with its recorded start time, so a reused pid does not pass for it.
@@ -891,9 +902,9 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
 | `projects_list` | – | `[{name, description, rev, counts, archived, paused, icon?}]`; `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
-| `project_create` | `name, description?, icon?` | `{name}` (with an empty plan) |
+| `project_create` | `name, description?, icon?` | `{name}` (with an empty plan); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
 | `project_update` | `name, description?, archived?, paused?, icon?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
-| `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls and submissions in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name starts clean |
+| `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls and submissions in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name can be created once the old directory is gone, and starts clean |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |

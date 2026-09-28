@@ -177,7 +177,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
     def project_delete(name: str) -> Any:
         """Delete a project and everything it holds: plan, state, log, inbox and runs. Cannot
         be undone. Refused unless it is archived first, none of its steps is running and no
-        non-direct call on it is pending or running. Returns {deleted}.
+        non-direct call on it is pending or running. Returns {deleted}. The name can be used
+        for a new project once the old files are gone (project_create says when it is not yet).
 
         Args:
             name: the project.
