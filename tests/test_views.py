@@ -1200,7 +1200,7 @@ def ranked_project(store):
         (run / "stderr.log").write_text("working\n")
     _ago(store.runs_dir("v") / "r-still" / "stderr.log", 60)
     ok = {"status": "succeeded", "outputs": {"sum": 2}}
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {
             "done1": ok, "done2": ok, "d3a": ok, "d3b": ok, "run1": {"status": "running"},
             "run2": {"status": "running"}, "fail1": {"status": "failed", "error": "boom"},
@@ -1278,7 +1278,7 @@ def test_filtering_drops_the_edges_of_hidden_boxes(store):
                         "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                         "e": {"run": "test.add", "in": {"a": src("c/sum"), "b": d(1)}}})
     ok = {"status": "succeeded", "outputs": {"sum": 2}}
-    with store.lock("v"):
+    with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {"a": ok, "b": ok}})
     board = views.load_board(store, "v")
     assert set(board_edges(views.board_html(store, board))) == {("s:a", "s:b"), ("s:c", "s:e")}

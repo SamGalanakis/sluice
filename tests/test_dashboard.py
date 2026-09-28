@@ -443,7 +443,7 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
 def test_the_boards_order_and_filters_round_trip_through_the_page_and_its_stream(store, port):
     one = {"run": "test.add", "in": {"a": d(1), "b": d(2)}}
     create(store, "p", {"a": one, "b": one, "c": one})
-    with store.lock("p"):
+    with store.tx():
         store.write_state("p", {"inputs": {}, "steps": {
             "a": {"status": "succeeded", "outputs": {"sum": 3}}, "b": {"status": "running"}}})
 
@@ -465,7 +465,7 @@ def test_the_boards_order_and_filters_round_trip_through_the_page_and_its_stream
     ver = signals_of(page)["ver"]
 
     def finish():
-        with store.lock("p"):
+        with store.tx():
             store.write_state("p", {"inputs": {}, "steps": {
                 "a": {"status": "succeeded", "outputs": {"sum": 3}},
                 "b": {"status": "succeeded", "outputs": {"sum": 3}}}})
