@@ -19,6 +19,7 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import Field, ValidationError
 
 from . import calls, runner, views
+from . import drain as drain_mod
 from . import log as L
 from . import query as query_mod
 from . import verify as verify_mod
@@ -580,6 +581,27 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return await anyio.to_thread.run_sync(functools.partial(
             watch_mod.next_up, store, names, since_seq, me,
             min(max(0, timeout), WAIT_CAP), all))
+
+    @tool
+    def drain(projects: list[str] | str | None = None) -> Any:
+        """Pause the projects (default: every project not archived) that are not already
+        paused, recording which ones in drain.json so `release` lets exactly those go
+        again. Returns {paused, pending}: `pending` is the running steps and live
+        non-direct calls still to finish — the CLI's `sluice drain` waits for them.
+
+        Args:
+            projects: the projects to drain; leave out for every project not archived.
+        """
+        names = drain_mod.targets(store, [projects] if isinstance(projects, str)
+                                     else projects)
+        return {"paused": drain_mod.pause(store, names),
+                "pending": drain_mod.pending(store, names)}
+
+    @tool
+    def release() -> Any:
+        """Unpause exactly the projects drain.json lists — what `sluice drain --release`
+        does — and delete it. Projects paused otherwise stay paused. Returns {released}."""
+        return {"released": drain_mod.release(store)}
 
     def query(sql: str, params: list | None = None, limit: int = 200) -> Any:
         return query_mod.run(store.home, sql, params, limit)

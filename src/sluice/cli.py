@@ -1,6 +1,7 @@
 """The `sluice` command line (SPEC §9): `serve`, `loop`, `tool` to call any MCP tool
-in-process through the same server object `serve` exposes, `watch` to follow a log and
-`next` for the one record an orchestrator acts on."""
+in-process through the same server object `serve` exposes, `watch` to follow a log,
+`next` for the one record an orchestrator acts on and `drain` to pause projects for
+maintenance."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import json
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -187,6 +189,36 @@ def cmd_next(a: argparse.Namespace, store: Store) -> int:
     return 0
 
 
+def cmd_drain(a: argparse.Namespace, store: Store) -> int:
+    """Pause the projects for maintenance and wait for their running work to finish, or
+    (--release) unpause exactly the projects drain.json lists."""
+    from . import drain as D
+
+    if a.release:
+        names = D.release(store)
+        print(f"released {', '.join(names)}" if names else "released nothing "
+              "(no drain.json)")
+        return 0
+    projects = D.targets(store, a.project)
+    paused = D.pause(store, projects)
+    print(f"paused {', '.join(paused)}" if paused else "nothing to pause "
+          "(all already paused)")
+    if a.no_wait:
+        return 0
+    last = ""
+    while True:
+        left = D.pending(store, projects)
+        if not left["calls"] and not any(left["running"].values()):
+            break
+        text = D.line(left)
+        if text != last:
+            print(text, flush=True)
+            last = text
+        time.sleep(0.5)
+    print("drained")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
@@ -246,6 +278,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--all", action="store_true", help="every record wakes it")
     s.add_argument("--json", action="store_true",
                    help="print each record as one JSON line, then {\"seq\": N, ...}")
+    s = sub.add_parser("drain",
+                       help="pause projects for maintenance; wait for running work",
+                       description="Pause the given projects (default: every project not "
+                       "archived) that are not already paused — drain.json records which "
+                       "ones — then wait until no step of theirs runs and no non-direct "
+                       "call is live, printing `drained`. --release unpauses exactly what "
+                       "drain.json lists and removes it.")
+    s.add_argument("-p", "--project", action="append",
+                   help="a project to drain (repeatable; default: every project not "
+                   "archived)")
+    s.add_argument("--no-wait", action="store_true",
+                   help="pause and exit without waiting")
+    s.add_argument("--release", action="store_true",
+                   help="unpause the projects drain.json lists, delete it")
     return p
 
 
@@ -256,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         store = Store()
         db.connect(store.home)  # refuses a home from before the SQLite store, up front
         return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool,
-                "watch": cmd_watch, "next": cmd_next}[a.cmd](a, store)
+                "watch": cmd_watch, "next": cmd_next, "drain": cmd_drain}[a.cmd](a, store)
     except SluiceError as e:
         print(json.dumps(e.payload(), indent=2), file=sys.stderr)
         return 1

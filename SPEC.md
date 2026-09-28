@@ -1006,6 +1006,8 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
 | `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false` | `{records: [it], notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped; an open-fn or unit-completing success; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record). `notes` are the notes held since the last wake — read them before the record. `last_seq` is past everything read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout returns `records` empty and `timed_out` true (`timeout` capped at 3600) |
+| `drain` | `projects?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in `drain.json` so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
+| `release` | – | unpauses exactly the projects `drain.json` lists and deletes it; `{released}`. Projects paused otherwise stay paused |
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
@@ -1068,6 +1070,9 @@ sluice watch [-p P] [--kinds k1,k2] [--threads a,b] [--since-seq N]
                                       print new log records as JSON lines (§10)
 sluice next [-p P …] [--since-seq N | --cursor FILE] [--me NAME] [--timeout S]
             [--all] [--json]    print the next record an orchestrator acts on, then exit
+sluice drain [-p P …] [--no-wait] [--release]
+                                      pause projects for maintenance and wait out their
+                                      running work; --release unpauses what it paused
 ```
 
 `sluice next` blocks until the projects' logs (the given ones, or every project not archived)
@@ -1086,6 +1091,14 @@ from now) and writes back the seq of the last record consumed — read, waking o
 relaunch never misses or repeats one. `--timeout S` exits 0 printing `timeout seq <N>`
 (and writes the cursor); `--json` prints the records as JSON lines and a final
 `{"seq": N, "timed_out": …}`. Exit 0 on a wake or a timeout.
+
+`sluice drain` pauses the given projects (default: every project not archived) that are not
+already paused, records which ones in `SLUICE_HOME/drain.json` (`{"paused": […], "at": …}`,
+written atomically, merged with an existing file), then waits — one line whenever the count
+changes (`running: lash 1 (fix-x), sluice 0; calls 0`) — until none of them has a running
+step or a pending or running non-direct call, and exits 0 printing `drained`. `--no-wait`
+pauses and exits. `--release` unpauses exactly the projects `drain.json` lists — not ones
+paused otherwise — deletes the file and prints what it released.
 
 Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
 builds the same MCP server object `serve` exposes and calls its tool (same argument validation,
