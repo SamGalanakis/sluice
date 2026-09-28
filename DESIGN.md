@@ -354,7 +354,10 @@ one 44px line: the success glyph, its first step's id, then in meta "… its las
 (the glyph says they succeeded; "3 succeeded, 1 skipped" only when some were skipped; on a
 phone the first id in full, wrapping, and "n steps" under it; the last id gives way); a native `<details>` that opens to its cards (open through live updates and,
 per tab, a reload). No edge crosses between boxes, so a folded one hides only its own edges.
-The plan's order stays; nothing is sorted by attention. The head of a
+With several boxes a toolbar (below) orders them live first by default (what needs
+attention, then what runs, what is ready, what is held, what is done; the plan's order within
+each) or in the plan's order, and filters them; the cards inside a box keep the plan's
+layout. The head of a
 project page says first whether the work moves (progress bar, counts, Pause and Archive), then
 what the project is (its description, folded to its opening); what the plan took and produced
 follows the board. When the runner is down (its heartbeat stale), the index and that
@@ -480,6 +483,15 @@ phone), its segments 2px apart: green, blue, gold, ink, then the track.
   project's last one or two, at 390px).
 - **Status filter** (inbox): a small segmented control, the current status in the secondary
   fill with a strong hairline; a filter, so it does not look like the sections.
+- **Board toolbar** (a project page with several boxes, 12px above the board): one line of
+  small quiet controls in 13px, what shows first: a segmented control of All · Active ·
+  Attention · Done, each but All with its box count in 12px muted numerals; "Tag" in muted
+  500 before a select (only when the plan tags steps; "any" by default); a segmented control
+  of Live first · Plan order. Segments as the status filter's (radios, the current one in
+  the secondary fill with a strong hairline, the one ring around a focused segment), 30px
+  tall. When a filter hides boxes, "9 done boxes hidden · show" in muted meta ends the line,
+  its link back to all. A GET form: its Apply button is in a `<noscript>`. On a phone, two
+  lines: the show control across the width, then the tag and the order, every target 44px.
 
 ### Threads
 The Threads tab, one bordered card per thread, the latest first: the step's glyph, id and
@@ -550,7 +562,8 @@ repeat the thread). On a phone the kind filter folds behind a 44px "Filter: all 
 "Filter: 3 kinds" summary, so the records start near the top; its labels are 44px tall.
 
 ### Touch
-At phone width every control is at least 44px tall: Pause and Archive, the nav's sections,
+At phone width every control is at least 44px tall: Pause and Archive, the board toolbar's
+segments, select and hidden line's link, the nav's sections,
 the log's filter labels and pager links, the inbox's status filter, a folded box's line,
 the settings cog and its menu's rows, and in the drawer the steps its facts link to, its
 thread link and "Show n lines";

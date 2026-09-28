@@ -13,6 +13,7 @@
 //   reader scrolled up.
 // - <sluice-thread project thread last>: counts the messages this browser has not seen on a
 //   thread, marks them when it is opened, and opens the thread the address names.
+// The board's toolbar applies a choice of order or filter at once.
 // On every page: relative times (`data-ago`), running times (`data-since`) and a running
 // step's quiet badge (`data-quiet`) stay current, and the Types switch shows the types of
 // values (the settings' "Show value types", static/nav.js); the tab title leads with how many
@@ -648,6 +649,17 @@ function retitle() {
 new MutationObserver(retitle).observe(document.body, {
   childList: true, subtree: true, attributes: true,
   attributeFilter: ["data-title-failed", "data-title-quiet"] });
+
+// ---- the board's order and filters: a GET form (its Apply button is for a page without
+// script); here a choice applies at once, and the step open in the drawer stays open (the
+// server takes the address to the clean query, keeping the `#step:` part) ------------------
+
+document.addEventListener("change", (evt) => {
+  const form = evt.target.closest?.("form.board-tools");
+  if (!form) return;
+  const q = new URLSearchParams(new FormData(form)).toString();
+  location.assign(`${form.getAttribute("action")}?${q}${location.hash}`);
+});
 
 // ---- the log's kind filter: folded behind its summary on a phone, which counts the kinds ----
 

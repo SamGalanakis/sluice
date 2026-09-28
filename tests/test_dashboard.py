@@ -440,6 +440,42 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
     assert len(patches(stale)) == 4  # summary, graph, result and the nav badge
 
 
+def test_the_boards_order_and_filters_round_trip_through_the_page_and_its_stream(store, port):
+    one = {"run": "test.add", "in": {"a": d(1), "b": d(2)}}
+    create(store, "p", {"a": one, "b": one, "c": one})
+    with store.lock("p"):
+        store.write_state("p", {"inputs": {}, "steps": {
+            "a": {"status": "succeeded", "outputs": {"sum": 3}}, "b": {"status": "running"}}})
+
+    def boxes(page):
+        return re.findall(r'<li class="box(?: done)?" id="box-(\w+)">', page)
+
+    page = get(port, "/projects/p")[1]
+    assert boxes(page) == ["b", "c", "a"] and signals_of(page)["board"] == ""
+    page = get(port, "/projects/p?order=plan&show=active")[1]
+    assert boxes(page) == ["b", "c"] and signals_of(page)["board"] == "order=plan&show=active"
+    assert 'name="show" value="active" checked' in page and "1 done box hidden" in page
+    # the form sends every field, defaults too: the address becomes the clean query
+    code, headers, _ = send(port, "GET", "/projects/p?order=live&show=active&tag=")
+    assert code == 303 and headers["location"] == "/projects/p?show=active"
+    code, headers, _ = send(port, "GET", "/projects/p?order=live&show=all&tag=")
+    assert code == 303 and headers["location"] == "/projects/p"
+    assert get(port, "/projects/p?show=bogus")[0] == 400
+    # the stream renders the board in the order and filters of the page's `board` signal
+    ver = signals_of(page)["ver"]
+
+    def finish():
+        with store.lock("p"):
+            store.write_state("p", {"inputs": {}, "steps": {
+                "a": {"status": "succeeded", "outputs": {"sum": 3}},
+                "b": {"status": "succeeded", "outputs": {"sum": 3}}}})
+
+    sent = patches(stream(port, "/projects/p/stream", {"ver": ver, "board": "show=active"},
+                          action=later(finish)))
+    graph = next(p for p in sent if p.startswith('elements <div id="graph"'))
+    assert boxes(graph) == ["c"] and "2 done boxes hidden" in graph
+
+
 def test_the_threads_tab_streams_its_conversations(store, port):
     create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
     status, page = get(port, "/projects/p/threads")

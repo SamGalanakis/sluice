@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode
 
 from markdown_it import MarkdownIt
 
@@ -1293,7 +1293,137 @@ LEGEND_AFTER = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20"
                 'stroke="var(--edge-head)" stroke-width="1.5" stroke-dasharray="4 4"/></svg>')
 
 
-def board_html(store: Store, board: Board, live: bool = True) -> str:
+ORDERS = {"live": "Live first", "plan": "Plan order"}  # the first is the default
+SHOWS = {"all": "All", "active": "Active", "attention": "Attention", "done": "Done"}
+RANKS = ("attention", "running", "ready", "held", "done")  # most urgent first
+
+
+@dataclasses.dataclass(frozen=True)
+class BoardView:
+    """How the board orders and filters its boxes, from the page's query (`?order=plan`,
+    `?show=active|attention|done`, `?tag=<tag>`; the defaults, live first, all and any tag,
+    leave it clean) and, on its stream, the `board` signal holding that query."""
+
+    order: str = "live"
+    show: str = "all"
+    tag: str = ""
+
+    @classmethod
+    def parse(cls, params: Mapping[str, list[Any]]) -> BoardView:
+        """From query parameters (the last of each counts; empty is the default); raises
+        BadRequest for an order or show it does not know."""
+        def last(name: str, default: str) -> str:
+            values = params.get(name) or []
+            return str(values[-1]).strip() if values and str(values[-1]).strip() else default
+        order, show = last("order", "live"), last("show", "all")
+        if order not in ORDERS:
+            raise BadRequest(f"order: expected one of {', '.join(ORDERS)}, got {order!r}")
+        if show not in SHOWS:
+            raise BadRequest(f"show: expected one of {', '.join(SHOWS)}, got {show!r}")
+        return cls(order, show, last("tag", ""))
+
+    @classmethod
+    def from_signals(cls, signals: Mapping[str, Any]) -> BoardView:
+        """From the project page's `board` signal (its query string); the default when it is
+        missing or bad."""
+        query = signals.get("board")
+        try:
+            return cls.parse(parse_qs(query)) if isinstance(query, str) else cls()
+        except BadRequest:
+            return cls()
+
+    def query(self, **change: Any) -> str:
+        """The canonical query string (defaults left out), with `change`d fields."""
+        v = dataclasses.replace(self, **change)
+        return urlencode([(k, x) for k, x, default in (("order", v.order, "live"),
+                                                       ("show", v.show, "all"),
+                                                       ("tag", v.tag, "")) if x != default])
+
+
+DEFAULT_VIEW = BoardView()
+
+
+def rank(board: Board, ids: Iterable[str], quiet: frozenset[str],
+         asking: frozenset[str]) -> int:
+    """What a box of work needs from a person, as an index into RANKS (0 most urgent): the
+    rank of its most urgent step. A step ranks
+    0 `attention`: it failed; or it is running but has gone quiet (`quiet`); or it asks
+      something in an open inbox item (`asking`, the items' `from`); or it is pending on a
+      plan input that has no value;
+    1 `running`: it is running;
+    2 `ready`: it is pending, next in line or further off, or paused;
+    3 `held`: a failure upstream blocks it, or it is stale;
+    4 `done`: it succeeded (by hand too) or was skipped.
+    The live-first order sorts boxes by this, the plan's order within a rank, so a box moves
+    only when its rank changes."""
+    def step(sid: str) -> int:
+        b = board.blocks[sid]
+        if b.status == "failed" or sid in quiet or sid in asking \
+                or (b.status == "pending" and _missing_inputs(board, b)):
+            return 0
+        if b.status == "running":
+            return 1
+        if board.blocked(sid) or b.status == "stale":
+            return 3
+        return 4 if b.status in ("succeeded", "skipped") else 2
+    return min(map(step, ids), default=4)
+
+
+def _shows(show: str, r: int) -> bool:
+    return show == "all" or (show == "active" and r < 4) or \
+        (show == "attention" and r == 0) or (show == "done" and r == 4)
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 'es' if word.endswith('x') else 's'}"
+
+
+def board_tools(board: Board, view: BoardView, ranks: list[int], tagged: list[bool],
+                hidden: int) -> str:
+    """The board's toolbar: which boxes show (all, active, attention, done, each with how
+    many of the boxes the tag lets through), a tag when the plan tags steps, and the order
+    (live first, the plan's). A GET form to the page: without JavaScript its Apply button
+    sends it (the server takes the address back to the clean query); with it, a choice
+    applies at once (static/sluice.js). Then, when a filter hides boxes, one quiet line
+    saying how many, with a link that shows them."""
+    base = f"/projects/{quote(board.project)}"
+
+    def seg(name: str, options: dict[str, str], chosen: str, counts: dict[str, int]) -> str:
+        opts = "".join(
+            f'<label><input type="radio" name="{name}" value="{k}"'
+            f'{" checked" if k == chosen else ""}>{text}'
+            + (f'<span class="n">{counts[k]}</span>' if k in counts else "") + "</label>"
+            for k, text in options.items())
+        return f'<fieldset class="seg"><legend class="vh">{name.capitalize()}</legend>{opts}</fieldset>'
+
+    let = [r for r, t in zip(ranks, tagged, strict=True) if t]
+    counts = {k: sum(_shows(k, r) for r in let) for k in SHOWS if k != "all"}
+    tags = list(dict.fromkeys(t for b in board.blocks.values() for t in b.tags))
+    if view.tag and view.tag not in tags:
+        tags.append(view.tag)  # a tag the plan no longer uses still reads as chosen
+    select = ""
+    if tags:
+        options = "".join(f'<option value="{e(t)}"{" selected" if t == view.tag else ""}>'
+                          f"{e(t)}</option>" for t in tags)
+        select = (f'<label class="tag-pick">Tag <select name="tag">'
+                  f'<option value="">any</option>{options}</select></label>')
+    note = ""
+    if hidden:
+        what = {"active": "done ", "done": "unfinished ", "attention": "other "}
+        text = (_plural(hidden, what[view.show] + "box") if not view.tag
+                else f"{_plural(hidden, 'box')} not tagged {e(view.tag)}"
+                if view.show == "all" else _plural(hidden, "box"))
+        href = base + (f"?{q}" if (q := view.query(show="all", tag="")) else "")
+        note = (f'<p class="hidden-note">{text} hidden · '
+                f'<a href="{e(href)}">show</a></p>')
+    return (f'<form class="board-tools" method="get" action="{e(base)}" '
+            f'aria-label="Order and filter the plan">'
+            f'{seg("show", SHOWS, view.show, counts)}{select}{seg("order", ORDERS, view.order, {})}'
+            f'<noscript><button type="submit">Apply</button></noscript>{note}</form>')
+
+
+def board_html(store: Store, board: Board, live: bool = True,
+               view: BoardView = DEFAULT_VIEW) -> str:
     """The plan as a board (the `graph` part): each independent piece of work (the steps any
     edge joins, handoff or `after`) its own box when there are several, the boxes wrapping.
     A box is rows by dependency depth from its first step; in a row, its cards stand grouped
@@ -1301,7 +1431,11 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
     itself. A box of several steps that have all succeeded (or were skipped) is folded to one
     line, a <details> that opens to its cards. The server lays the cards out (the order reads
     without JavaScript); the <sluice-board> component (static/sluice.js) draws the edges
-    between them from its `edges` attribute, around the cards they would cross."""
+    between them from its `edges` attribute, around the cards they would cross.
+    With several boxes, `view` orders them (live first: by `rank`, the plan's order within
+    one; or the plan's order) and filters them (by rank and by tag), and the live page leads
+    with the toolbar that chooses it (`board_tools`). Each box's id is its first step's, so a
+    live update that moves a box moves it whole, open or not."""
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
@@ -1309,13 +1443,23 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
     boxes = _boxes(board, groups)
     quiet = frozenset(sid for sid, b in board.blocks.items()
                       if _is_quiet(store, board.project, b))
-    html = []
-    for box in boxes:
+    asking = frozenset(str(i.get("from")) for i in store.inbox(board.project))
+    order = {sid: n for n, sid in enumerate(board.blocks)}
+    shown: list[tuple[int, int, str, list[str]]] = []  # (rank, plan place, html, ids)
+    ranks, tagged = [], []
+    for place, box in enumerate(boxes):
         shift = _shifts(board, groups, box, depth, ROOM if len(boxes) > 1 else ROOM + 36,
                         quiet)
         at = sorted({d + shift[i] for i in box for d in groups[i]})  # the box's rows
         seats = _seats(board, groups, box, shift, at)
         top = at[0]
+        ids = [sid for v in at for i in seats[v] for sid in groups[i][v - shift[i]]]
+        r = rank(board, ids, quiet, asking)
+        tag = not view.tag or any(view.tag in board.blocks[sid].tags for sid in ids)
+        ranks.append(r)
+        tagged.append(tag)
+        if len(boxes) > 1 and not (tag and _shows(view.show, r)):
+            continue
         rows = []
         for v in at:
             cards = []
@@ -1331,22 +1475,35 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
             rows.append(f'<li class="row" style="--r:{v - top + 1}">{"".join(cards)}</li>')
         inner = (f'<ol class="rows" style="--rows:{at[-1] - top + 1}">'
                  f'{"".join(rows)}</ol>')
-        ids = [sid for v in at for i in seats[v] for sid in groups[i][v - shift[i]]]
+        bid = f' id="box-{e(min(ids, key=order.__getitem__))}"'
         if len(boxes) > 1 and len(ids) > 1 and _done(board, ids):
-            html.append(f'<li class="box done">{_folded(board, ids, inner)}</li>')
+            item = f'<li class="box done"{bid}>{_folded(board, ids, inner)}</li>'
         else:
-            html.append(f'<li class="box">{inner}</li>')
-    es = edges(board)
+            item = f'<li class="box"{bid}>{inner}</li>'
+        shown.append((r, place, item, ids))
+    tools = empty = ""
+    if len(boxes) > 1:
+        if view.order == "live":
+            shown.sort(key=lambda x: x[:2])
+        tools = board_tools(board, view, ranks, tagged, len(boxes) - len(shown)) if live \
+            else ""
+        if not shown:
+            empty = {"attention": "Nothing needs attention.", "active": "Every box has finished.",
+                     "done": "No box has finished yet."}.get(view.show, "")
+            empty = f'<p class="empty">{empty or "No box matches."}</p>'
+    visible = {sid for x in shown for sid in x[3]}
+    es = [(a, b, label) for a, b, label in edges(board) if a in visible and b in visible]
     data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in es], ensure_ascii=False)
     legend = ""
     if es:
         after = any("after" in label.split(", ") for _, _, label in es)
         legend = (f'<p class="legend">{LEGEND_DATA}hands on a value'
                   + (f"{LEGEND_AFTER}runs after" if after else "") + "</p>")
-    return (f'<sluice-board class="board" role="region" aria-label="Plan" edges="{e(data)}" '
-            f'data-preserve-attr="data-rocket-host"><div class="plane">'
+    return (f'{tools}<sluice-board class="board" role="region" aria-label="Plan" '
+            f'edges="{e(data)}" data-preserve-attr="data-rocket-host"><div class="plane">'
             f'<svg class="edges" aria-hidden="true" data-ignore-morph></svg>'
-            f'<ol class="boxes{" boxed" if len(boxes) > 1 else ""}">{"".join(html)}</ol>'
+            f'<ol class="boxes{" boxed" if len(boxes) > 1 else ""}">'
+            f'{"".join(x[2] for x in shown)}</ol>{empty}'
             f"</div>{legend}</sluice-board>")
 
 
@@ -1648,9 +1805,11 @@ def index(store: Store, ver: str | None = None) -> str:
 # ---- the project page -------------------------------------------------------------------
 
 
-def project_parts(store: Store, project: str) -> dict[str, str]:
-    """The live project page's parts by element id: what its stream patches."""
-    return _project(store, project, True)
+def project_parts(store: Store, project: str,
+                  view: BoardView = DEFAULT_VIEW) -> dict[str, str]:
+    """The live project page's parts by element id: what its stream patches, the board in
+    the page's order and filters (`view`)."""
+    return _project(store, project, True, view)
 
 
 def _switch(action: str, field: str, on: bool, labels: tuple[str, str]) -> str:
@@ -1673,7 +1832,8 @@ def _pause_form(project: str, paused: bool, sid: str | None = None) -> str:
     return _switch(f"{base}/pause", "paused", paused, ("Pause", "Resume"))
 
 
-def _project(store: Store, project: str, live: bool) -> dict[str, str]:
+def _project(store: Store, project: str, live: bool,
+             view: BoardView = DEFAULT_VIEW) -> dict[str, str]:
     board = load_board(store, project)
     about = board.info.get("description") or ""
     archived = board.info.get("archived") is True
@@ -1697,7 +1857,7 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     parts = {"summary": _part("summary", line + note + _about(about)
                               + _title_mark(len(board.failed), quiet_since(store, board))),
              # the skip link's target: focusable, so a keyboard lands on the plan
-             "graph": f'<div id="graph" tabindex="-1">{board_html(store, board, live)}</div>',
+             "graph": f'<div id="graph" tabindex="-1">{board_html(store, board, live, view)}</div>',
              "result": _part("result", result_panel(board) + inputs_strip(board), "section",
                              "plan-facts")}
     if live:
@@ -1730,12 +1890,14 @@ def _drawer(project: str) -> str:
             f'<div id="announce" class="vh" role="status" aria-live="polite"></div>')
 
 
-def project_page(store: Store, project: str, ver: str | None = None) -> str:
+def project_page(store: Store, project: str, ver: str | None = None,
+                 view: BoardView = DEFAULT_VIEW) -> str:
     """The project page: live (nav, links, the step drawer, streaming its changes) when given
     the project's version `ver`, else the standalone page plan_view returns (the board, then
-    every step's detail in a disclosure)."""
+    every step's detail in a disclosure). `view` orders and filters the board's boxes; the
+    page's `board` signal carries it to the stream, so live updates keep it."""
     live = ver is not None
-    p = _project(store, project, live)
+    p = _project(store, project, live, view)
     body = (f'{project_head(store, project, "plan" if live else None)}{p["summary"]}'
             f'{p["graph"]}{p["result"]}')
     board = load_board(store, project)
@@ -1747,7 +1909,8 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     lead = title_lead(len(board.failed), quiet_since(store, board))
     return layout(f"{lead}{project}", body, nav=live,
                   stream=f"/projects/{project}/stream" if live else None,
-                  signals={"ver": ver, "step": "", "sver": ""} if live else None,
+                  signals={"ver": ver, "step": "", "sver": "", "board": view.query()}
+                  if live else None,
                   inbox=open_count(store) if live else None, here="/", board=live,
                   store=store, project=project, tab="plan",
                   skip=("graph", "Skip to plan") if live else None,

@@ -301,9 +301,9 @@ class Dashboard:
     def _index(self) -> str:
         return views.index(self.store, home_ver(self.store))
 
-    def _project(self, name: str) -> str:
+    def _project(self, name: str, view: views.BoardView) -> str:
         self.store.project(name)
-        return views.project_page(self.store, name, project_ver(self.store, name))
+        return views.project_page(self.store, name, project_ver(self.store, name), view)
 
     async def index(self, request: Request) -> Response:
         return await self._page(self._index)
@@ -313,12 +313,29 @@ class Dashboard:
                                   lambda: views.index_parts(self.store))
 
     async def project(self, request: Request) -> Response:
-        return await self._page(self._project, request.path_params["name"])
+        """The project page, its board ordered and filtered by the query (`order`, `show`,
+        `tag`); a query that is not the view's canonical one (the toolbar's form sends the
+        defaults too) goes to the canonical address, so the defaults leave it clean."""
+        params: dict[str, list[str]] = {}
+        for k, v in request.query_params.multi_items():
+            params.setdefault(k, []).append(v)
+        try:
+            view = views.BoardView.parse(params)
+        except BadRequest as err:
+            return HTMLResponse(views.layout("bad request", f"<p>{views.e(err.message)}</p>"),
+                                status_code=400)
+        if request.url.query != view.query():
+            q = view.query()
+            return RedirectResponse(request.url.path + (f"?{q}" if q else ""), status_code=303)
+        return await self._page(self._project, request.path_params["name"], view)
 
     async def project_stream(self, request: Request) -> Response:
+        """The project page's stream: its parts in the order and filters of the page's
+        `board` signal."""
         name = request.path_params["name"]
+        view = views.BoardView.from_signals(await _signals(request))
         return await self._stream(request, lambda: project_ver(self.store, name),
-                                  lambda: views.project_parts(self.store, name),
+                                  lambda: views.project_parts(self.store, name, view),
                                   exists=lambda: self.store.project(name))
 
     def _threads(self, name: str) -> str:

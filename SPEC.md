@@ -596,7 +596,25 @@ raw HTML escaped, unsafe link schemes refused).
   · n steps", with "n succeeded, m skipped" when some were skipped; on a phone the first id in full and the count under it,
   without the last id), which opens to its cards; open, it stays open through live
   updates and, per browser tab, a reload. No edge joins two boxes, so a folded box hides only
-  its own edges. The plan's order is kept. Inside a lane, each row is sorted by where its
+  its own edges. With several boxes, a toolbar above the board orders and filters them, a
+  plain GET form whose choices live in the query, so a reload, Back and a shared link keep
+  them (the defaults leave the address clean; any other spelling of a choice is sent on, 303,
+  to its clean query; an unknown `order` or `show` is a 400). The order (`order`) is live
+  first by default: each box ranks by its most urgent step, 1 attention (failed; running but
+  quiet; asking in an open inbox item, whose `from` is the step; pending on a plan input
+  with no value), 2 running, 3 ready (pending or paused), 4 held (blocked by a failure, or
+  stale), 5 done (succeeded or skipped), the plan's order within a rank, so a box moves only
+  when its rank changes; `?order=plan` is the plan's order. `?show=` filters by rank:
+  `active` (not done), `attention` or `done` (default all); `?tag=<tag>` (a select, shown
+  when the plan tags steps) keeps the boxes with any step so tagged. Each choice of what
+  shows counts the boxes it would show within the tag. Boxes a filter hides are said in one
+  quiet line at the toolbar's end ("9 done boxes hidden · show", its link back to all), and
+  their edges go with them; with none left, the board says so. Without JavaScript the form
+  has an Apply button; with it a choice applies at once, keeping the open step's `#step:`.
+  The page's `board` signal holds the query, so its stream renders the board the same way;
+  each box's id is its first step's (`box-<id>`), so a live update moves a box whole (open,
+  folded, with the drawer's ring). A board of one box has no toolbar and ignores the query.
+  Inside a lane, each row is sorted by where its
   neighbours sit, a few sweeps down and up, so
   edges seldom cross. Each step is a compact bubble: its status glyph, its id and, small, how
   long it ran (live while running) and `done/total` for a scattered step; its tooltip is its

@@ -64,8 +64,8 @@ def card(page, sid):
 def lanes(page):
     """The step ids on the board, box by box, each {row: ids}."""
     out = []
-    for box in re.findall(r'<li class="box"><ol class="rows"[^>]*>(.*?)</ol></li>', page,
-                          re.DOTALL):
+    for box in re.findall(r'<li class="box"(?: id="[^"]*")?><ol class="rows"[^>]*>(.*?)</ol>'
+                          r'</li>', page, re.DOTALL):
         out.append({int(r): re.findall(r'id="n-([^"]+)"', cards) for r, cards in
                     re.findall(r'<li class="row" style="--r:(\d+)">(.*?)</li>', box,
                                re.DOTALL)})
@@ -195,8 +195,9 @@ def test_a_lane_that_would_crowd_a_row_starts_below_instead(store):
 def test_the_board_lays_steps_out_in_lanes_of_rows_by_dependency_depth(store):
     board_project(store)
     page = views.project_page(store, "v", ver="abc")
-    # the steps joined by handoffs make one lane; c hands nothing on, so it stands apart
-    assert lanes(page) == [{1: ["a"], 2: ["fmt", "b", "each"], 3: ["late"]}, {1: ["c"]}]
+    # the steps joined by handoffs make one lane; c hands nothing on, so it stands apart (and,
+    # failed, its box leads: live first)
+    assert lanes(page) == [{1: ["c"]}, {1: ["a"], 2: ["fmt", "b", "each"], 3: ["late"]}]
     assert '<ol class="rows" style="--rows:3">' in page  # a box has the rows it uses
     # a and c are joined by nothing: each is its own box
     assert '<ol class="boxes boxed">' in page
@@ -1116,9 +1117,10 @@ def test_a_finished_box_folds_to_one_line(store):
             "a1": ok, "a2": ok, "a3": {"status": "skipped", "skipped": "no"},
             "b1": ok, "b2": {"status": "running"}, "c1": ok}})
     page = views.project_page(store, "v", ver="x")
-    boxes = re.findall(r'<li class="box( done)?">', page)
-    assert boxes == [" done", "", ""]  # a's box folds; b's is still running; c is one step
-    start = page.index('<li class="box done">')
+    boxes = re.findall(r'<li class="box( done)?" id="box-(\w+)">', page)
+    # a's box folds; b's is still running, so it leads; c is one step
+    assert boxes == [("", "b1"), (" done", "a1"), ("", "c1")]
+    start = page.index('<li class="box done"')
     folded = page[start:page.index("</details>", start)]
     assert '<details class="fold-box" data-preserve-attr="open" data-box="a1">' in folded
     assert '<span class="sid">a1</span>' in folded
@@ -1166,3 +1168,146 @@ def test_the_log_filter_folds_behind_a_summary_that_counts_kinds(store):
     page = views.log_page(store, "v", views.LogQuery(kinds=("run", "message")))
     assert '<details class="kinds" open><summary><span>Filter: 2 kinds</span>' in page
     assert "<span>Filter: all kinds</span>" in views.log_page(store, "v", views.LogQuery())
+
+
+# ---- the board's order and filters ----------------------------------------------------------
+
+
+def box_ids(page):
+    """The boxes on the board, in order, by their first step."""
+    return re.findall(r'<li class="box(?: done)?" id="box-([^"]+)">', page)
+
+
+def ranked_project(store):
+    """Seven independent pieces of work, one of each state, in a plan order that is none of
+    their ranks'. `wait` reads the plan input `n`, which has no value; `ask` runs and has an
+    open inbox item; `still` runs and has gone quiet; `old` is stale."""
+    one = {"run": "test.add", "in": {"a": d(1), "b": d(1)}}
+    create(store, "v", {
+        "done1": one, "pend1": one, "run1": one, "fail1": one, "pend2": one, "run2": one,
+        "old": one, "done2": {**one, "tags": ["ui"]},
+        "d3a": one, "d3b": {"run": "test.add", "in": {"a": src("d3a/sum"), "b": d(1)}},
+        "wait": {"run": "test.add", "in": {"a": src("n"), "b": d(1)}},
+        "ask": one, "still": {**one, "tags": ["ui"]},
+    }, inputs={"n": "int"})
+    for r in ("r-ask", "r-still"):
+        run = store.runs_dir("v") / r
+        run.mkdir(parents=True)
+        (run / "stderr.log").write_text("working\n")
+    _ago(store.runs_dir("v") / "r-still" / "stderr.log", 60)
+    ok = {"status": "succeeded", "outputs": {"sum": 2}}
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "done1": ok, "done2": ok, "d3a": ok, "d3b": ok, "run1": {"status": "running"},
+            "run2": {"status": "running"}, "fail1": {"status": "failed", "error": "boom"},
+            "old": {"status": "stale", "outputs": {"sum": 1}},
+            "ask": {"status": "running", "run_ids": ["r-ask"]},
+            "still": {"status": "running", "run_ids": ["r-still"]}}})
+    store.inbox_post("v", "Which one?", sender="ask")
+
+
+def test_live_first_orders_boxes_by_what_they_need_stably_within_a_rank(store):
+    ranked_project(store)
+    page = views.project_page(store, "v", ver="x")
+    # attention (failed, waiting on a plan input, asking in the inbox, gone quiet), running,
+    # pending, stale, done: each rank in the plan's order
+    assert box_ids(page) == ["fail1", "wait", "ask", "still", "run1", "run2", "pend1", "pend2",
+                             "old", "done1", "done2", "d3a"]
+    assert views.RANKS[views.rank(views.load_board(store, "v"), ["d3a", "run1"], frozenset(),
+                                  frozenset())] == "running"  # a box takes its most urgent
+    # the plan's order, as written
+    plan = views.project_page(store, "v", ver="x", view=views.BoardView(order="plan"))
+    assert box_ids(plan) == ["done1", "pend1", "run1", "fail1", "pend2", "run2", "old", "done2",
+                             "d3a", "wait", "ask", "still"]
+    assert 'class="hidden-note"' not in page and 'class="hidden-note"' not in plan
+
+
+def test_the_toolbar_filters_boxes_and_says_what_it_hides(store):
+    ranked_project(store)
+    board = views.load_board(store, "v")
+
+    def show(**kw):
+        html_ = views.board_html(store, board, True, views.BoardView(**kw))
+        note = re.search(r'<p class="hidden-note">(.*?)</p>', html_)
+        return box_ids(html_), note and html.unescape(re.sub(r"<[^>]+>", "", note[1])), html_
+
+    ids, note, page = show(show="active")
+    assert ids == ["fail1", "wait", "ask", "still", "run1", "run2", "pend1", "pend2", "old"]
+    assert note == "3 done boxes hidden · show"
+    assert '<a href="/projects/v">show</a>' in page  # back to the clean address
+    ids, note, _ = show(show="attention", order="plan")
+    assert ids == ["fail1", "wait", "ask", "still"] and note == "8 other boxes hidden · show"
+    ids, note, page = show(show="done", order="plan")
+    assert ids == ["done1", "done2", "d3a"] and note == "9 unfinished boxes hidden · show"
+    assert '<a href="/projects/v?order=plan">show</a>' in page  # the order stays
+    # a tag shows the boxes with any step tagged so
+    ids, note, _ = show(tag="ui")
+    assert ids == ["still", "done2"] and note == "10 boxes not tagged ui hidden · show"
+    ids, note, _ = show(tag="ui", show="done")
+    assert ids == ["done2"] and note == "11 boxes hidden · show"
+    ids, note, page = show(tag="nope")
+    assert ids == [] and '<p class="empty">No box matches.</p>' in page
+    assert '<option value="nope" selected>nope</option>' in page  # still reads as chosen
+    ids, note, page = show(show="attention", tag="ui")
+    assert ids == ["still"]
+    # the controls: a GET form to the page, each choice with how many boxes it shows (within
+    # the tag), the tags the plan uses, and Apply for a page without script
+    _, _, page = show(show="active")
+    tools = page[page.index('<form class="board-tools"'):page.index("</form>")]
+    assert '<form class="board-tools" method="get" action="/projects/v"' in tools
+    assert '<input type="radio" name="order" value="live" checked>Live first' in tools
+    assert '<input type="radio" name="show" value="active" checked>Active<span class="n">9' \
+        in tools
+    assert 'value="attention">Attention<span class="n">4</span>' in tools
+    assert 'value="done">Done<span class="n">3</span>' in tools
+    assert re.search(r'<label class="tag-pick">Tag <select name="tag"><option value="">any'
+                     r'</option><option value="ui">ui</option></select></label>', tools)
+    # what shows, then the order
+    assert tools.index('name="show"') < tools.index('name="tag"') < tools.index('name="order"')
+    assert "<noscript><button type=\"submit\">Apply</button></noscript>" in tools
+    assert page.index('<form class="board-tools"') < page.index("<sluice-board")
+
+
+def test_filtering_drops_the_edges_of_hidden_boxes(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
+                        "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "e": {"run": "test.add", "in": {"a": src("c/sum"), "b": d(1)}}})
+    ok = {"status": "succeeded", "outputs": {"sum": 2}}
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {"a": ok, "b": ok}})
+    board = views.load_board(store, "v")
+    assert set(board_edges(views.board_html(store, board))) == {("s:a", "s:b"), ("s:c", "s:e")}
+    active = views.board_html(store, board, True, views.BoardView(show="active"))
+    assert box_ids(active) == ["c"] and set(board_edges(active)) == {("s:c", "s:e")}
+    none = views.board_html(store, board, True, views.BoardView(show="attention"))
+    assert board_edges(none) == {} and 'class="legend"' not in none
+    assert '<p class="empty">Nothing needs attention.</p>' in none
+
+
+def test_a_board_of_one_box_has_no_toolbar_and_ignores_filters(store):
+    create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
+    page = views.project_page(store, "w", ver="x", view=views.BoardView(show="done"))
+    assert '<form class="board-tools"' not in page
+    assert 'id="n-a"' in page and 'id="n-b"' in page
+    # nor does the standalone page (no server to send the form to)
+    ranked_project(store)
+    assert '<form class="board-tools"' not in views.render(store, "v", "html")
+
+
+def test_the_board_view_reads_and_writes_its_query():
+    v = views.BoardView.parse({"order": ["plan"], "show": ["active"], "tag": ["ui"]})
+    assert v == views.BoardView("plan", "active", "ui")
+    assert v.query() == "order=plan&show=active&tag=ui"
+    assert views.BoardView.parse({"order": ["live"], "show": ["all"], "tag": [""]}).query() == ""
+    assert views.BoardView.from_signals({"board": "show=done&tag=x"}) == \
+        views.BoardView(show="done", tag="x")
+    assert views.BoardView.from_signals({"board": "show=bogus"}) == views.BoardView()
+    assert views.BoardView.from_signals({}) == views.BoardView()
+    for bad in ({"order": ["sideways"]}, {"show": ["some"]}):
+        try:
+            views.BoardView.parse(bad)
+        except views.BadRequest:
+            continue
+        raise AssertionError(bad)
