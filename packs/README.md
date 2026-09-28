@@ -25,8 +25,8 @@ Claude always runs Opus. Codex takes `model` `sol` (default) or `astra`, and `ef
 (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high`. Long,
 grinding work goes to Devin, not to a bigger codex effort.
 
-Every agent function takes `session?: string` and returns `session: string` (the Claude or
-Codex thread id, or the id the Devin harness writes to `<log>.session`; empty when there is none).
+Every agent function takes `session?: string` and returns `session: string` (the engine's
+session or thread id; empty when there is none).
 A follow-up to a particular agent is another step with `session` bound to the earlier step's
 `session` output, or a `fn_call` with that session.
 
@@ -36,16 +36,16 @@ its own and pick the engines there.
 
 ## Live sessions
 
-Claude and Codex run as real interactive sessions on your own logins through `_agents/native/`.
+Claude, Codex and Devin run as real interactive sessions on your own logins through `_agents/native/`.
 `agent.claude`, `agent.review`, and `agent.run` with engine `claude` use the Claude adapter.
-`agent.codex` and `agent.run` with engine `codex` use the Codex adapter. Devin still uses its
-harness script. Per run:
+`agent.codex` and `agent.run` with engine `codex` use the Codex adapter.
+`agent.devin` and `agent.run` with engine `devin` use the Devin adapter. Per run:
 
 - A private tmux server on `<run_dir>/tmux.sock` runs the session. The step's stderr starts
   with an `attach:` line (`cd <run_dir> && tmux -S tmux.sock attach`): run it to watch or
   steer the worker live.
 - A long task goes to `<run_dir>/task.md` and the session gets one line pointing at it. Claude
-  receives that line in its composer; Codex receives it through app-server JSON-RPC.
+  and Devin receive that line in their composers; Codex receives it through app-server JSON-RPC.
 - The wrapper, not the model's end of turn, decides when the step is done. When a turn ends:
   every required declared output submitted → done; the session still waits on its own
   background work (below) → it keeps waiting; otherwise it is nudged ("Your turn ended but
@@ -59,7 +59,7 @@ harness script. Per run:
 - Caps: `SLUICE_AGENT_MAX_MIN` (600) minutes of wall clock; `SLUICE_AGENT_STALL_MIN` (30)
   minutes busy with no transcript growth. `SLUICE_AGENT_SETTLE_S` (10) seconds of idle before
   a nudge. `SLUICE_AGENT_GRACE_MIN` (10) minutes of idle before the first nudge, for an engine
-  with no waiting signal (Codex has none; Claude has one).
+  with no waiting signal (Codex and Devin have none; Claude has one).
 - `session` resumes the session, and only from the directory it was started in; another cwd
   fails the step before anything starts. Codex keeps its private `CODEX_HOME` per thread and
   a registry at `<SLUICE_HOME>/codex-native-sessions/`. A rate limit or
@@ -123,6 +123,26 @@ therefore has no reliable pending-work signal or autonomous wakeup for this case
 supervisor waits `SLUICE_AGENT_GRACE_MIN` (10 minutes by default) before its first nudge; the
 worker should wait for background work within its turn when it needs the result. Subsequent
 nudges use `SLUICE_AGENT_SETTLE_S`.
+
+### Devin: idle is not done
+
+The Devin adapter runs `devin` in the private tmux server with `--model swe-2-high`,
+`--permission-mode dangerous`, `--respect-workspace-trust false`, `--export` and a per-run
+`--config`. That config retains the owner's settings and hooks, then adds lifecycle hooks
+which append to `<run_dir>/hooks.jsonl`. `SessionStart` supplies the session id;
+`UserPromptSubmit` marks a busy turn; `PreToolUse` and `PostToolUse` supply progress;
+`Stop` supplies its final message and turn end. The export is saved as `<log>.json`, with
+`<log>.final` and `<log>.session` beside it. The pack does not write Devin config into the
+repository. `--resume` continues a session in its original cwd.
+
+Observed on Devin CLI 3000.11.3: a turn started `sleep 25 && echo finished >
+idle-marker.txt` as a background shell and replied `LAUNCHED`. `Stop` arrived at 11.3 s,
+and the session stayed idle. The file appeared at 30.7 s. Through 65 s there was no new
+hook event or autonomous turn. The `Stop` payload had no pending-work field. Devin therefore
+has no reliable waiting signal for this case. The supervisor waits
+`SLUICE_AGENT_GRACE_MIN` (10 minutes by default) after the first idle before its first
+nudge or completion when no required output is due. Workers should wait within their turn
+when they need a background result. Later nudges use `SLUICE_AGENT_SETTLE_S`.
 
 ## Installing
 

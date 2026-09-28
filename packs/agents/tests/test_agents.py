@@ -64,151 +64,81 @@ def init_repo(path):
     return SimpleNamespace(path=path, git=g)
 
 
-def _progress_then_wait(wait_for, name):
-    """Fake-harness lines: one on stdout, one appended to its log, then wait (up to 10 s,
-    else exit 3) for `wait_for` to exist."""
-    return (f"echo '{name}-harness: starting'\n"
-            f"echo '{name}: step one' >> \"$log\"\n"
-            f"i=0; while [ ! -e '{wait_for}' ]; do i=$((i+1)); "
-            "[ $i -gt 200 ] && exit 3; sleep 0.05; done\n")
+FAKE_DEVIN = Path(__file__).with_name("fake_devin.py")
 
 
-def make_devin(tmp_path, fake_bin, *, code=0, log_body="devin log output\n",
-               final_body="devin finished\n", with_session=True, wait_for=None):
-    argv_file = tmp_path / "devin.argv"
-    spec_copy = tmp_path / "devin.spec.copy"
-    script = (
-        "#!/bin/sh\n"
-        f"printf '%s\\0' \"$@\" > \"{argv_file}\"\n"
-        'spec=""; log=""\n'
-        "while [ $# -gt 0 ]; do\n"
-        '  case "$1" in\n'
-        '    --spec) spec="$2"; shift 2 ;;\n'
-        '    --log) log="$2"; shift 2 ;;\n'
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-        f'cp "$spec" "{spec_copy}"\n'
-    )
-    if wait_for:
-        script += _progress_then_wait(wait_for, "devin")
-    script += f"printf '{log_body}' >> \"$log\"\n"
-    if with_session:
-        script += 'echo "sess-abc" > "$log.session"\n'
-    if final_body is not None:
-        script += f"printf '{final_body}' > \"$log.final\"\n"
-    script += f"exit {code}\n"
-    bin_dir = fake_bin("devin-harness-run", script)
-    return bin_dir, argv_file, spec_copy
+def make_devin(tmp_path, turns=()):
+    d = tmp_path / "fake-devin"
+    d.mkdir(exist_ok=True)
+    wrapper = d / "devin"
+    wrapper.write_text(f'#!/bin/sh\nexec {sys.executable} {FAKE_DEVIN} "$@"\n')
+    wrapper.chmod(0o755)
+    for f in ("argv.json", "prompts.jsonl", "cursor"):
+        (d / f).unlink(missing_ok=True)
+    cfg = d / "config.json"
+    cfg.write_text(json.dumps({"argv": str(d / "argv.json"),
+                               "prompts": str(d / "prompts.jsonl"),
+                               "cursor": str(d / "cursor"), "turns": list(turns)}))
+    env = {"SLUICE_DEVIN_BIN": str(wrapper), "FAKE_DEVIN": str(cfg),
+           "SLUICE_AGENT_GRACE_MIN": "0.005", "SLUICE_AGENT_SETTLE_S": "0.3",
+           "SLUICE_AGENT_POLL_S": "0.05", "SLUICE_AGENT_NUDGES": "2"}
+
+    def prompts():
+        got = [json.loads(line).rstrip("\n") for line in (d / "prompts.jsonl").read_text().splitlines()]
+        return [Path(m.group(1)).read_text() if
+                (m := re.search(r"Your task is in (\S+); read it", text)) else text
+                for text in got]
+
+    return env, SimpleNamespace(argv=lambda: json.loads((d / "argv.json").read_text()),
+                                prompts=prompts)
 
 
-def test_devin_success(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file, spec_copy = make_devin(tmp_path, fake_bin)
-    cwd = tmp_path / "work"
-    cwd.mkdir()
-    code, out, err = call_fn(
-        AGENTS / "agent.devin",
-        {"cwd": str(cwd), "spec": "do the thing"},
-        path=bin_dir,
-    )
-    run_dir = call_fn.run_dirs[-1]
+def test_devin_success(call_fn, tmp_path):
+    env, rec = make_devin(tmp_path, [{"reply": "devin finished", "tool": "exec"}])
+    code, out, err = call_fn(AGENTS / "agent.devin",
+                             {"cwd": str(tmp_path), "spec": "do the thing"}, env=env)
     assert code == 0, err
-    assert out == {
-        "log": str(run_dir / "devin.log"),
-        "final": "devin finished\n",
-        "report": None,
-        "session": "sess-abc",
-    }
-    assert read_argv(argv_file) == [
-        "--cd", str(cwd),
-        "--spec", str(run_dir / "spec.md"),
-        "--log", str(run_dir / "devin.log"),
-    ]
-    assert spec_copy.read_text().startswith("do the thing")
+    run_dir = call_fn.run_dirs[-1]
+    assert out == {"log": str(run_dir / "devin.log"), "final": "devin finished",
+                   "report": None, "session": session_of(call_fn)}
+    assert "do the thing" in rec.prompts()[0]
+    assert "Messages for you on sluice thread" in rec.prompts()[0]
+    argv = rec.argv()
+    assert argv[argv.index("--model") + 1] == "swe-2-high"
+    assert argv[argv.index("--permission-mode") + 1] == "dangerous"
+    assert argv[argv.index("--respect-workspace-trust") + 1] == "false"
+    assert (run_dir / "hooks.jsonl").exists()
+    assert (run_dir / "devin.log.final").read_text() == "devin finished"
+    assert (run_dir / "devin.log.session").read_text().strip() == out["session"]
+    assert (run_dir / "devin.log.json").exists()
 
 
-def test_devin_log_and_report_path(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file, _ = make_devin(tmp_path, fake_bin)
+def test_devin_log_and_report_path(call_fn, tmp_path):
+    env, _ = make_devin(tmp_path, [{"reply": "done"}])
     log = tmp_path / "custom.log"
     report = tmp_path / "report.md"
     report.write_text("REPORT BODY")
-    code, out, err = call_fn(
-        AGENTS / "agent.devin",
-        {"cwd": str(tmp_path), "spec": "s", "log": str(log),
-         "report_path": str(report)},
-        path=bin_dir,
-    )
+    code, out, err = call_fn(AGENTS / "agent.devin",
+                             {"cwd": str(tmp_path), "spec": "s", "log": str(log),
+                              "report_path": str(report)}, env=env)
     assert code == 0, err
-    assert out == {"log": str(log), "final": "devin finished\n",
-                   "report": "REPORT BODY", "session": "sess-abc"}
-    argv = read_argv(argv_file)
-    assert "--log" in argv
-    assert argv[argv.index("--log") + 1] == str(log)
+    assert out["log"] == str(log) and out["report"] == "REPORT BODY"
+    assert (tmp_path / "custom.log.final").read_text() == "done"
 
 
-def test_devin_session(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file, _ = make_devin(tmp_path, fake_bin)
-    code, _out, err = call_fn(
-        AGENTS / "agent.devin",
-        {"cwd": str(tmp_path), "spec": "s", "session": "sess-9"},
-        path=bin_dir,
-    )
-    assert code == 0, err
-    argv = read_argv(argv_file)
-    assert argv[-2:] == ["--resume", "sess-9"]
+def test_devin_transient(call_fn, tmp_path):
+    env, _ = make_devin(tmp_path, [{"reply": "capacity issues"}] * 4)
+    code, out, err = call_fn(AGENTS / "agent.devin",
+                             {"cwd": str(tmp_path), "spec": "s"}, env=env)
+    assert code == 1 and out is None
+    assert "transient (attempt 1)" in err
 
 
-def test_devin_transient(call_fn, fake_bin, tmp_path):
-    bin_dir, _, _ = make_devin(
-        tmp_path, fake_bin, code=1, log_body="failed: capacity issues\n")
-    code, out, err = call_fn(
-        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"}, path=bin_dir)
-    assert code == 1, err
-    assert "transient (attempt 1)" in err  # the helper retried before giving up
-    assert out is None
-
-
-def test_devin_hard_failure(call_fn, fake_bin, tmp_path):
-    bin_dir, _, _ = make_devin(
-        tmp_path, fake_bin, code=2, log_body="a real bug happened\n")
-    code, out, _err = call_fn(
-        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"}, path=bin_dir)
-    assert code == 1
-    assert out is None
-
-
-def test_devin_streams_the_harness_and_its_log_while_it_runs(call_fn, fake_bin, tmp_path):
-    marker = tmp_path / "seen"
-    bin_dir, _, _ = make_devin(tmp_path, fake_bin, wait_for=marker)
-    code, out, err = call_fn(
-        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
-        path=bin_dir, watch=seen_then_touch(marker, "devin: step one"))
-    assert code == 0, err
-    assert out["final"] == "devin finished\n"
-    assert out["log"] == str(call_fn.run_dirs[-1] / "devin.log")
-    lines = err.splitlines()
-    assert "devin-harness: starting" in lines
-    assert lines.index("devin: step one") < lines.index("devin log output")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def test_devin_hard_failure(call_fn, tmp_path):
+    env, _ = make_devin(tmp_path, [{"exit": 2, "stderr": "a real bug happened"}])
+    code, out, err = call_fn(AGENTS / "agent.devin",
+                             {"cwd": str(tmp_path), "spec": "s"}, env=env)
+    assert code == 1 and out is None and "a real bug happened" in err
 
 
 FAKE_CLAUDE = Path(__file__).with_name("fake_claude.py")
@@ -836,39 +766,18 @@ def test_claude_live_thread_message_reaches_the_session(tmp_path):
     assert "thread message from orchestrator typed into the session" in err
 
 
-def test_run_devin(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file, _ = make_devin(tmp_path, fake_bin)
+def test_run_devin(call_fn, tmp_path):
+    env, rec = make_devin(tmp_path, [{"reply": "devin finished"}])
     cwd = tmp_path / "work"
     cwd.mkdir()
     code, out, err = call_fn(
         AGENTS / "agent.run",
-        {"engine": "devin", "cwd": str(cwd), "spec": "do it"},
-        path=bin_dir,
-    )
-    run_dir = call_fn.run_dirs[-1]
+        {"engine": "devin", "cwd": str(cwd), "spec": "do it"}, env=env)
     assert code == 0, err
-    assert out == {"final": "devin finished\n", "report": None,
-                   "session": "sess-abc"}
-    assert read_argv(argv_file) == [
-        "--cd", str(cwd),
-        "--spec", str(run_dir / "spec.md"),
-        "--log", str(run_dir / "devin.log"),
-    ]
-
-
-def test_run_devin_no_session(call_fn, fake_bin, tmp_path):
-    bin_dir, _, _ = make_devin(tmp_path, fake_bin, with_session=False)
-    code, out, err = call_fn(
-        AGENTS / "agent.run",
-        {"engine": "devin", "cwd": str(tmp_path), "spec": "s"},
-        path=bin_dir,
-    )
-    assert code == 0, err
-    assert out["session"] == ""
-
-
-
-
+    assert out == {"final": "devin finished", "report": None,
+                   "session": session_of(call_fn)}
+    assert "do it" in rec.prompts()[0]
+    assert rec.argv()[rec.argv().index("--model") + 1] == "swe-2-high"
 
 
 def test_run_claude(call_fn, tmp_path):
@@ -889,16 +798,20 @@ def test_run_claude(call_fn, tmp_path):
     assert rec.argv()[:3] == ["--model", "opus", "--dangerously-skip-permissions"]
 
 
-def test_run_session(call_fn, fake_bin, tmp_path):
-    bin_dir, devin_argv, _ = make_devin(tmp_path, fake_bin)
-    code, _out, err = call_fn(
-        AGENTS / "agent.run",
-        {"engine": "devin", "cwd": str(tmp_path), "spec": "s",
-         "session": "sess-9"},
-        path=bin_dir,
-    )
+def test_run_session(call_fn, tmp_path):
+    env, _ = make_devin(tmp_path)
+    code, out, err = call_fn(
+        AGENTS / "agent.run", {"engine": "devin", "cwd": str(tmp_path), "spec": "s"},
+        env=env)
     assert code == 0, err
-    assert read_argv(devin_argv)[-2:] == ["--resume", "sess-9"]
+    sid = out["session"]
+    env, rec = make_devin(tmp_path)
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "devin", "cwd": str(tmp_path), "spec": "s", "session": sid}, env=env)
+    assert code == 0, err
+    assert rec.argv()[-2:] == ["--resume", sid]
+    assert out["session"] == sid
 
     env, _ = make_claude(tmp_path)
     code, out, err = call_fn(
@@ -908,88 +821,47 @@ def test_run_session(call_fn, fake_bin, tmp_path):
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "s",
-         "session": out["session"]},
-        env=env,
-    )
+         "session": out["session"]}, env=env)
     assert code == 0, err
     assert rec.argv()[-2:] == ["--resume", out["session"]]
 
 
-def test_run_transient_per_engine(call_fn, fake_bin, tmp_path):
-    bin_dir, _, _ = make_devin(
-        tmp_path, fake_bin, code=1, log_body="capacity issues\n")
+def test_run_transient_per_engine(call_fn, tmp_path):
+    env, _ = make_devin(tmp_path, [{"reply": "capacity issues"}] * 5)
     code, out, err = call_fn(
         AGENTS / "agent.run",
-        {"engine": "devin", "cwd": str(tmp_path), "spec": "s"},
-        path=bin_dir,
-    )
+        {"engine": "devin", "cwd": str(tmp_path), "spec": "s"}, env=env)
     assert code == 1, err
-    assert "transient (attempt 1)" in err  # the helper retried before giving up
+    assert "transient (attempt 1)" in err
     assert out is None
 
     env, _ = make_claude(tmp_path, [{"error": "529 overloaded"}] * 5)
     code, out, err = call_fn(
         AGENTS / "agent.run",
-        {"engine": "claude", "cwd": str(tmp_path), "spec": "s"},
-        env=env,
-    )
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "s"}, env=env)
     assert code == 1, err
-    assert "transient (attempt 1)" in err  # the helper retried before giving up
+    assert "transient (attempt 1)" in err
     assert out is None
 
 
-def spec_of(call_fn):
-    """The spec.md the last fn call wrote into its run dir."""
-    return (call_fn.run_dirs[-1] / "spec.md").read_text()
-
-
-def test_step_thread_devin(call_fn, fake_bin, tmp_path):
-    """Running as a plan step, the spec gains the step-thread section, reading from the
-    project log's last seq when the fn started."""
-    project = tmp_path / "sluice-home" / "projects" / "test-project"
-    project.mkdir(parents=True)
-    (project / "log.jsonl").write_text("".join(
-        json.dumps({"seq": n, "at": "t", "kind": "step.status"}) + "\n" for n in range(1, 43)))
-    bin_dir, _, spec_copy = make_devin(tmp_path, fake_bin)
+def test_step_thread_devin(call_fn, tmp_path):
+    env, rec = make_devin(tmp_path)
     code, _out, err = call_fn(
-        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "do it"},
-        path=bin_dir)
+        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "do it"}, env=env)
     assert code == 0, err
-    spec = spec_copy.read_text()
-    assert spec.startswith("do it")
+    spec = rec.prompts()[0]
     assert "sluice thread `step-test-step` of project `test-project`" in spec
-    assert '"threads": ["step-test-step"], "since_seq": 42}' in spec
-    assert "<last>" not in spec
-    assert '"project": "test-project"' in spec
+    assert "log_read" not in spec
     assert '"name": "thread.post"' in spec
-    assert '"from": "test-step"' in spec
-    assert '"to": "orchestrator"' in spec
-    assert "sluice tool log_read" in spec
-    assert "sluice tool fn_call" in spec
 
 
-def test_step_thread_off(call_fn, fake_bin, tmp_path):
-    """listen: false, and running outside a plan step, leave the spec alone."""
-    bin_dir, _, spec_copy = make_devin(tmp_path, fake_bin)
+def test_step_thread_off(call_fn, tmp_path):
+    env, rec = make_devin(tmp_path)
     code, _out, err = call_fn(
-        AGENTS / "agent.devin",
-        {"cwd": str(tmp_path), "spec": "s", "listen": False}, path=bin_dir)
+        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s", "listen": False},
+        env=env)
     assert code == 0, err
-    assert spec_copy.read_text() == "s"
-
-    code, _out, err = call_fn(
-        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_STEP": ""}, path=bin_dir)
-    assert code == 0, err
-    assert spec_copy.read_text() == "s"
-
-    code, _out, err = call_fn(
-        AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_PROJECT": ""}, path=bin_dir)
-    assert code == 0, err
-    assert spec_copy.read_text() == "s"
-
-
+    assert "sluice thread" not in rec.prompts()[0]
 
 
 def test_step_thread_claude(call_fn, tmp_path):
@@ -1014,7 +886,7 @@ def test_step_thread_claude(call_fn, tmp_path):
     assert rec.raw_prompts()[0] == "p"  # one short line: typed as it is
 
 
-def test_step_thread_run(call_fn, fake_bin, tmp_path):
+def test_step_thread_run(call_fn, tmp_path):
     """agent.run appends the section once, whatever the engine."""
     env, rec = make_claude(tmp_path)
     code, _out, err = call_fn(
@@ -1023,22 +895,22 @@ def test_step_thread_run(call_fn, fake_bin, tmp_path):
     assert code == 0, err
     assert rec.prompts()[0].count("sluice thread `step-test-step`") == 1
 
-    bin_dir, _, _ = make_devin(tmp_path, fake_bin)
+    env, rec = make_devin(tmp_path)
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "devin", "cwd": str(tmp_path), "spec": "s", "listen": False},
-        path=bin_dir)
+        env=env)
     assert code == 0, err
-    assert spec_of(call_fn) == "s"
+    assert "sluice thread" not in rec.prompts()[0]
 
 
-def test_step_thread_sanitizes_step(call_fn, fake_bin, tmp_path):
-    bin_dir, _, spec_copy = make_devin(tmp_path, fake_bin)
+def test_step_thread_sanitizes_step(call_fn, tmp_path):
+    env, rec = make_devin(tmp_path)
     code, _out, err = call_fn(
         AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_STEP": "Build.Mac OS"}, path=bin_dir)
+        env={**env, "SLUICE_STEP": "Build.Mac OS"})
     assert code == 0, err
-    assert "`step-build-mac-os`" in spec_copy.read_text()
+    assert "`step-build-mac-os`" in rec.prompts()[0]
 
 
 # ---- typed agent blocks: extra inputs, declared outputs, step_submit ----------------------
@@ -1051,17 +923,8 @@ BLOCK_ENV = {"SLUICE_STEP_INPUTS": json.dumps(STEP_INPUTS),
 BLOCK_INPUTS = {"interface": "docs/api.md\nsecond line", "branches": ["a", "b"]}
 
 
-def prompt_of(name, call_fn, rec):
-    """The task text an agent fn handed its CLI: spec.md for the harnesses, else the first
-    message pasted into the claude session."""
-    if name in ("agent.claude", "agent.review", "agent.run"):
-        return rec.prompts()[0]
-    return spec_of(call_fn)
-
-
 def block_call(name, call_fn, fake_bin, tmp_path, inputs, env):
-    """Run agent fn `name` against its fake with these extra inputs and env; return the text
-    it handed its CLI."""
+    """Run an agent fn with extra inputs and read the task it received."""
     base = {"agent.claude": {"prompt": "the task"}, "agent.codex": {"spec": "the task"},
             "agent.devin": {"spec": "the task"},
             "agent.run": {"engine": "claude", "spec": "the task"},
@@ -1075,17 +938,16 @@ def block_call(name, call_fn, fake_bin, tmp_path, inputs, env):
             extra_inputs=json.loads(env.get("SLUICE_STEP_INPUTS", "{}")),
             outputs=json.loads(env.get("SLUICE_STEP_OUTPUTS", "{}")))
         return task_text("the task", inputs, ctx, inputs.get("listen"))
-    bin_dir = None
     if name == "agent.devin":
-        bin_dir, rec, _ = make_devin(tmp_path, fake_bin)
-    else:  # its session must submit the declared outputs to finish
-        claude_env, rec = make_claude(tmp_path, [{"submit": {"branch": "b",
+        native_env, rec = make_devin(tmp_path, [{"submit": {"branch": "b",
                                                              "report": {"ok": True}}}])
-        env = {**env, **claude_env}
-    code, _out, err = call_fn(AGENTS / name, {"cwd": str(cwd), **base, **inputs}, env=env,
-                              path=bin_dir)
+    else:
+        native_env, rec = make_claude(tmp_path, [{"submit": {"branch": "b",
+                                                             "report": {"ok": True}}}])
+    code, _out, err = call_fn(AGENTS / name, {"cwd": str(cwd), **base, **inputs},
+                              env={**env, **native_env})
     assert code == 0, err
-    return prompt_of(name, call_fn, rec)
+    return rec.prompts()[0]
 
 
 AGENT_FNS = ["agent.claude", "agent.codex", "agent.devin", "agent.run", "agent.review"]
@@ -1120,12 +982,12 @@ def test_sections_apply_one_at_a_time_and_listen_false_drops_only_the_note(
         call_fn, fake_bin, tmp_path):
     only_out = {"SLUICE_STEP_OUTPUTS": BLOCK_ENV["SLUICE_STEP_OUTPUTS"]}
     text = block_call("agent.devin", call_fn, fake_bin, tmp_path, {"listen": False}, only_out)
-    assert text.startswith("the task\n\n## Outputs you must submit\n")
+    assert "the task\n\n## Outputs you must submit\n" in text
     assert "## Inputs" not in text and "sluice thread" not in text
     only_in = {"SLUICE_STEP_INPUTS": json.dumps({"n": {"type": "Any"}})}
     text = block_call("agent.devin", call_fn, fake_bin, tmp_path, {"n": {"k": 1}}, only_in)
-    assert text.startswith('the task\n\n## Inputs\n\n`n` (Any):\n{\n  "k": 1\n}\n\n'
-                           "Messages for you")
+    assert ('the task\n\n## Inputs\n\n`n` (Any):\n{\n  "k": 1\n}\n\n'
+            "Messages for you") in text
 
 
 # ---- the same, end to end under the runner -----------------------------------------------

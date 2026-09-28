@@ -5,6 +5,7 @@ from sluice.fn import with_step_notes
 
 from .claude import Claude
 from .codex import Codex
+from .devin import GUARDRAIL, Devin
 from .supervisor import ThreadFeed, required_outputs, supervise, thread_note
 
 
@@ -33,5 +34,15 @@ def run_codex(text, inp, ctx, cwd):
     feed = ThreadFeed(ctx) if ctx.project and ctx.step and listen is not False else None
     return supervise(Codex(inp.get("model") or "sol", inp.get("effort")),
                      task_text(text, inp, ctx, listen, "delivered"), cwd, ctx.run_dir,
+                     required=required_outputs(ctx), session=inp.get("session"), feed=feed,
+                     attempt=ctx.attempt)
+
+
+def run_devin(text, inp, ctx, cwd):
+    """Run one supervised Devin TUI session and return its final message and id."""
+    listen = inp.get("listen")
+    feed = ThreadFeed(ctx) if ctx.project and ctx.step and listen is not False else None
+    task = GUARDRAIL + "\n\n" + task_text(text, inp, ctx, listen)
+    return supervise(Devin(inp.get("model"), inp.get("log")), task, cwd, ctx.run_dir,
                      required=required_outputs(ctx), session=inp.get("session"), feed=feed,
                      attempt=ctx.attempt)

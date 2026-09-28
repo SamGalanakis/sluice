@@ -1,6 +1,6 @@
 {
   "name": "agent.run",
-  "doc": "Run a spec on the agent engine named in the input. For codex, model is sol (default) or astra and effort defaults to high; claude always runs Opus.",
+  "doc": "Run a spec in a supervised interactive session on the named engine. Codex model is sol (default) or astra and effort defaults to high; Claude always runs Opus; Devin defaults to swe-2-high.",
   "open": true,
   "inputs": {
     "engine": {

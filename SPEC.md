@@ -906,8 +906,12 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   and a TUI attached to it in tmux. It takes `model` `sol` (the default) or `astra` and
   `effort` (`minimal` to `max`), whose default is `high`. Its final message and turn state come
   from app-server notifications; it waits a configurable grace period before the first nudge
-  because Codex reports no reliable pending background-work state. The fns share engine code through
-  `packs/agents/_agents/`.
+  because Codex reports no reliable pending background-work state. Devin (`agent.devin`, or
+  `agent.run` with engine `devin`) runs its TUI in the private tmux server with a per-run
+  config that adds lifecycle hooks and an exported transcript. It defaults to `swe-2-high`,
+  retains the owner's Devin config, resumes by session id in the same cwd, and uses the same
+  grace period because its `Stop` hook does not report pending background shell work. The fns
+  share engine code through `packs/agents/_agents/`.
 - `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
   `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)
 - `packs/jev/`: `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` (Jev, TypeSafe's System One

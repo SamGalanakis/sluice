@@ -1,6 +1,6 @@
 {
   "name": "agent.devin",
-  "doc": "Run a Devin session on a spec text in a working directory.",
+  "doc": "Run a supervised interactive Devin session on a spec text in a working directory.",
   "open": true,
   "inputs": {
     "cwd": "string",

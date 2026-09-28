@@ -9,9 +9,14 @@ licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/L
 - _agents/native/claude.py, the composer section: reading Claude Code's input box off the pane
   (bridge.py: _is_box_rule, _composer_row, _occupying_surface, _claude_prompt_rendered,
   _history_search_footer_shown, _draft_in_input_box).
+- _agents/native/devin.py: parsing comments in the owner's Devin JSONC config
+  (omnigent/harnesses/devin_native/bridge.py: _strip_jsonc_comments).
 
 The Codex adapter's app-server and remote TUI arrangement follows Omnigent's
 omnigent/harnesses/codex_native design. Its WebSocket and JSON-RPC code is specific to sluice.
+The Devin adapter's TUI, per-run config and lifecycle-hook arrangement follows Omnigent's
+omnigent/harnesses/devin_native design. Its hook recording and turn state code is specific to
+sluice.
 
 Each adapted section carries a header naming its source and what was changed.
 
