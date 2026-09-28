@@ -409,7 +409,7 @@ def test_archiving_a_project_lists_it_apart(store, port):
     create(store, "old", {"a": {"run": "test.add", "in": {"a": {"default": 1},
                                                            "b": {"default": 2}}}})
     create(store, "new", {})
-    with store.lock("old"):
+    with store.tx():
         store.write_state("old", {"inputs": {}, "steps": {"a": {"status": "failed",
                                                                 "error": "boom"}}})
     assert "Archived (" not in get(port, "/")[1]
