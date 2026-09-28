@@ -7,11 +7,11 @@
 import sys
 from pathlib import Path
 
-from sluice.fn import run, sh, with_step_notes
+from sluice.fn import run, sh
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _agents.engines import claude
+from _agents.native import run_claude
 
 PROMPT = """\
 You are reviewing a branch in the git repository at your working directory.
@@ -36,13 +36,12 @@ def main(inp, ctx):
     if inp.get("notes"):
         notes = "\n\nAdditional notes from the caller:\n" + inp["notes"]
     prompt = PROMPT.format(base=inp["base"], standards=inp["standards"], notes=notes)
-    data = claude(with_step_notes(prompt, inp, ctx, inp.get("listen")), "opus", cwd,
-                  inp.get("session"))
+    out = run_claude(prompt, inp, ctx, cwd)
     sha = sh(["git", "rev-parse", "HEAD"], cwd=cwd).stdout.strip()
     commits = int(
         sh(["git", "rev-list", "--count", f"{before}..{sha}"], cwd=cwd).stdout.strip())
-    return {"summary": data["result"], "sha": sha, "commits": commits,
-            "session": data["session_id"]}
+    return {"summary": out["final"], "sha": sha, "commits": commits,
+            "session": out["session"]}
 
 
 if __name__ == "__main__":

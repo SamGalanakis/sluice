@@ -20,8 +20,8 @@ from _agents.engines import (
     DiffFold,
     _codex_final,
     _session,
-    claude,
 )
+from _agents.native import run_claude
 
 
 def _devin(inp, ctx):
@@ -79,24 +79,25 @@ def _codex(inp, ctx):
     return {"final": _codex_final(log, since), "session": _session(log)}
 
 
-def _claude(inp):
+def _claude(inp, ctx):
     if inp.get("model"):
         raise ValueError("the claude engine always runs Opus; model is for codex and devin")
-    data = claude(inp["spec"], "opus", inp["cwd"], inp.get("session"))
-    return {"final": data["result"], "session": data["session_id"]}
+    out = run_claude(inp["spec"], inp, ctx, inp["cwd"])
+    return {"final": out["final"], "session": out["session"]}
 
 
 def main(inp, ctx):
     ctx.run_dir.mkdir(parents=True, exist_ok=True)
-    inp = {**inp, "spec": with_step_notes(inp["spec"], inp, ctx, inp.get("listen"))}
     engine = inp["engine"]
     if inp.get("effort") and engine != "codex":
         raise ValueError("effort is for the codex engine")
-    if engine == "claude":
-        out = _claude(inp)
+    if engine == "claude":  # its session builds the task itself
+        out = _claude(inp, ctx)
     elif engine == "codex":
+        inp = {**inp, "spec": with_step_notes(inp["spec"], inp, ctx, inp.get("listen"))}
         out = _codex(inp, ctx)
     elif engine == "devin":
+        inp = {**inp, "spec": with_step_notes(inp["spec"], inp, ctx, inp.get("listen"))}
         out = _devin(inp, ctx)
     else:
         raise ValueError(f"unknown engine {engine!r}")

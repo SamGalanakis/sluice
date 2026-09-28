@@ -8,6 +8,8 @@ HTTP server on 127.0.0.1 since its only seam is SLUICE_JEV_URL.
 
 import json
 import os
+import re
+import signal
 import subprocess
 import sys
 import time
@@ -17,10 +19,15 @@ from types import SimpleNamespace
 import pytest
 
 from sluice import log as L
+from sluice import runner
+from sluice.registry import parse_fn
 from sluice.runner import Runner
 from sluice.store import Store
 
 AGENTS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(AGENTS))
+
+from _agents.native.tmux import descendants
 
 requires_live = pytest.mark.skipif(
     os.environ.get("SLUICE_LIVE") != "1", reason="set SLUICE_LIVE=1 to run live tests")
@@ -346,100 +353,82 @@ def test_codex_streams_its_log_while_it_runs(call_fn, fake_bin, tmp_path):
     assert "codex-harness: starting" in lines and "codex log output" in lines
 
 
-def result_event(result="did it", session="s-1", cost=0.02, **extra):
-    return {"type": "result", "subtype": "success", "is_error": False, "num_turns": 2,
-            "result": result, "session_id": session, "total_cost_usd": cost, **extra}
+FAKE_CLAUDE = Path(__file__).with_name("fake_claude.py")
 
 
-def claude_stream(result_ev=None):
-    """stream-json events of a short session: text, three tool calls (one fails), the end."""
-    def assistant(*content):
-        return {"type": "assistant", "parent_tool_use_id": None,
-                "message": {"role": "assistant", "content": list(content)}}
+def make_claude(tmp_path, turns=(), **cfg):
+    """A fake interactive claude (fake_claude.py) that plays `turns`. Returns the env a call
+    needs and a recorder: `argv()` (its last argv) and `prompts()` (every message it got, the
+    final /exit left out)."""
+    d = tmp_path / "fake-claude"
+    d.mkdir(exist_ok=True)
+    wrapper = d / "claude"
+    wrapper.write_text(f'#!/bin/sh\nexec {sys.executable} {FAKE_CLAUDE} "$@"\n')
+    wrapper.chmod(0o755)
+    for f in ("argv.json", "prompts.jsonl", "config.json.cursor"):
+        (d / f).unlink(missing_ok=True)
+    (d / "config.json").write_text(json.dumps({
+        "argv": str(d / "argv.json"), "prompts": str(d / "prompts.jsonl"),
+        "turns": list(turns), **cfg}))
+    env = {"SLUICE_CLAUDE_BIN": str(wrapper), "FAKE_CLAUDE": str(d / "config.json"),
+           "CLAUDE_CONFIG_DIR": str(tmp_path / "claude-config"), "SLUICE_AGENT_SETTLE_S": "0.3",
+           "SLUICE_AGENT_POLL_S": "0.05", "SLUICE_AGENT_NUDGES": "2"}
 
-    return [
-        {"type": "system", "subtype": "init", "session_id": "s-1", "model": "fake-model"},
-        {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning"}},
-        assistant({"type": "thinking", "thinking": ""},
-                  {"type": "text", "text": "Looking at\nthe repo first."}),
-        assistant({"type": "tool_use", "name": "Bash",
-                   "input": {"command": "git status " + "x" * 200, "description": "d"}}),
-        {"type": "user", "message": {"role": "user", "content": [
-            {"type": "tool_result", "content": "clean", "is_error": False}]}},
-        assistant({"type": "tool_use", "name": "Read", "input": {"file_path": "/w/a.py"}}),
-        {"type": "user", "message": {"role": "user", "content": [
-            {"type": "tool_result", "content": [{"type": "text", "text": "no such file"}],
-             "is_error": True}]}},
-        result_ev or result_event(),
-    ]
+    def raw_prompts():
+        f = d / "prompts.jsonl"
+        got = [json.loads(ln).rstrip("\n") for ln in f.read_text().splitlines()] \
+            if f.exists() else []
+        return [p for p in got if p != "/exit"]
 
+    def prompts():  # a pointer to a file stands for the file's text
+        return [Path(m.group(1)).read_text()
+                if (m := re.fullmatch(r"(?:Your task|A message .*?) is in (\S+?);.*", p))
+                else p for p in raw_prompts()]
 
-def make_claude(tmp_path, fake_bin, *, code=0, stdout_obj=None, events=None,
-                stderr_text="", wait_for=None):
-    """A fake claude: reads its prompt on stdin into claude.stdin, prints `stdout_obj` as one
-    JSON object (--output-format json), or `events` one per line (stream-json). With
-    `wait_for`, it stops after the fourth event until that file exists (exit 3 after 10 s)."""
-    argv_file = tmp_path / "claude.argv"
-    stdin_file = tmp_path / "claude.stdin"
-    script = (
-        "#!/bin/sh\n"
-        f"printf '%s\\0' \"$@\" > \"{argv_file}\"\n"
-        f"cat > \"{stdin_file}\"\n"
-    )
-    if stderr_text:
-        script += f"printf '{stderr_text}' >&2\n"
-    if stdout_obj is not None:
-        script += f"printf '%s' '{json.dumps(stdout_obj)}'\n"
-    for i, ev in enumerate(events or []):
-        script += f"printf '%s\\n' '{json.dumps(ev)}'\nsleep 0.02\n"
-        if wait_for and i == 3:
-            script += (f"i=0; while [ ! -e '{wait_for}' ]; do i=$((i+1)); "
-                       "[ $i -gt 200 ] && exit 3; sleep 0.05; done\n")
-    script += f"exit {code}\n"
-    bin_dir = fake_bin("claude", script)
-    return bin_dir, argv_file
+    return env, SimpleNamespace(argv=lambda: json.loads((d / "argv.json").read_text()),
+                                argv_file=d / "argv.json", prompts=prompts,
+                                raw_prompts=raw_prompts)
 
 
-def claude_stdin(tmp_path):
-    """The prompt the fake claude got on stdin (kept off argv so stderr.log and ps stay
-    free of it)."""
-    return (tmp_path / "claude.stdin").read_text()
+def session_of(call_fn):
+    """The session the last call's run recorded."""
+    return json.loads((call_fn.run_dirs[-1] / "native.json").read_text())["session"]
 
 
-def test_claude_success(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=claude_stream())
-    code, out, err = call_fn(
-        AGENTS / "agent.claude",
-        {"cwd": str(tmp_path), "prompt": "do the thing"},
-        path=bin_dir,
-    )
+OUT_ENV = {"SLUICE_STEP_OUTPUTS": json.dumps({"word": {"type": "string"}})}
+
+
+def test_claude_success(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"reply": "did it"}])
+    code, out, err = call_fn(AGENTS / "agent.claude",
+                             {"cwd": str(tmp_path), "prompt": "do the thing"}, env=env)
     assert code == 0, err
-    assert out == {"result": "did it", "session": "s-1", "cost_usd": 0.02}
-    assert read_argv(argv_file) == [
-        "-p",
-        "--model", "opus",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-    ]
-    assert claude_stdin(tmp_path).startswith("do the thing")
+    run_dir = call_fn.run_dirs[-1]
+    assert out == {"result": "did it", "session": session_of(call_fn), "cost_usd": 0.02}
+    assert out["session"]
+    assert rec.argv() == ["--model", "opus", "--dangerously-skip-permissions",
+                          "--settings", str(run_dir / "claude-settings.json")]
+    settings = json.loads((run_dir / "claude-settings.json").read_text())
+    assert sorted(settings) == ["hooks"]
+    assert sorted(settings["hooks"]) == ["SessionStart", "Stop", "StopFailure",
+                                         "UserPromptSubmit"]
+    assert rec.prompts()[0].startswith("do the thing")
+    assert f"attach: cd {run_dir} && tmux -S tmux.sock attach" in err
+    assert not (run_dir / "tmux.sock").exists()
 
 
-def test_the_prompt_goes_on_stdin_never_on_argv(call_fn, fake_bin, tmp_path):
-    """The echoed `$ ...` line in stderr.log and `ps` carry no prompt."""
-    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event()])
+def test_the_prompt_goes_into_the_session_never_on_argv(call_fn, fake_bin, tmp_path):
+    """stderr.log and `ps` carry no prompt: it is pasted into the session."""
+    env, rec = make_claude(tmp_path)
     code, _out, err = call_fn(
         AGENTS / "agent.claude",
-        {"cwd": str(tmp_path), "prompt": "the-secret-prompt"},
-        path=bin_dir,
-    )
+        {"cwd": str(tmp_path), "prompt": "the-secret-prompt"}, env=env)
     assert code == 0, err
-    assert "the-secret-prompt" not in read_argv(argv_file)
-    echoed = next(l for l in err.splitlines() if l.startswith("$ "))
-    assert "the-secret-prompt" not in echoed
-    assert claude_stdin(tmp_path).startswith("the-secret-prompt")
+    assert "the-secret-prompt" not in rec.argv() and "the-secret-prompt" not in err
+    assert rec.prompts()[0].startswith("the-secret-prompt")
 
-    make_claude(tmp_path, fake_bin, stdout_obj=claude_decide("a", 0.9))
+    bin_dir, argv_file = make_claude_print(tmp_path, fake_bin,
+                                           stdout_obj=claude_decide("a", 0.9))
     code, _out, err = call_fn(
         AGENTS / "decide.llm",
         {"question": "the-secret-prompt", "options": ["a", "b"]},
@@ -452,99 +441,261 @@ def test_the_prompt_goes_on_stdin_never_on_argv(call_fn, fake_bin, tmp_path):
     assert "the-secret-prompt" in claude_stdin(tmp_path)
 
 
-def test_claude_streams_progress_while_it_runs(call_fn, fake_bin, tmp_path):
-    """Each event becomes a short stderr line as it arrives: the fake stops mid-session until
-    the test has seen the tool call line in the fn's stderr."""
-    marker = tmp_path / "seen"
-    bin_dir, _ = make_claude(tmp_path, fake_bin, events=claude_stream(), wait_for=marker)
-    code, out, err = call_fn(
-        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
-        path=bin_dir, watch=seen_then_touch(marker, "tool Bash git status"))
+def test_claude_streams_progress(call_fn, tmp_path):
+    env, _ = make_claude(tmp_path, [{
+        "tool": {"name": "Bash", "input": {"command": "git status " + "x" * 200,
+                                           "description": "d"}},
+        "tool_error": [{"type": "text", "text": "no such file"}],
+        "reply": "Looking at\nthe repo first."}])
+    code, _out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                              env=env)
     assert code == 0, err
-    assert out == {"result": "did it", "session": "s-1", "cost_usd": 0.02}
     lines = err.splitlines()
-    assert "session s-1 model fake-model" in lines
-    assert "Looking at the repo first." in lines
     assert "tool Bash git status " + "x" * 89 in lines  # the command, cut to 100 chars
-    assert "tool Read /w/a.py" in lines
     assert "tool error no such file" in lines
-    assert "done: 2 turns, $0.0200" in lines
-    assert "rate limit" not in err and "clean" not in lines
+    assert "Looking at the repo first." in lines
 
 
-def test_claude_always_runs_opus_and_resumes_a_session(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(
-        tmp_path, fake_bin, events=[result_event("r", "s-9", None)])
-    code, out, err = call_fn(
-        AGENTS / "agent.claude",
-        {"cwd": str(tmp_path), "prompt": "p", "session": "s-9"},
-        path=bin_dir,
-    )
+def test_claude_always_runs_opus_and_resumes_a_session(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"reply": "r"}])
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env=env)
     assert code == 0, err
-    argv = read_argv(argv_file)
+    first = out["session"]
+    env, rec = make_claude(tmp_path, [{"reply": "again"}])
+    code, out, err = call_fn(
+        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p2", "session": first},
+        env=env)
+    assert code == 0, err
+    argv = rec.argv()
     assert argv[argv.index("--model") + 1] == "opus"
-    assert argv[-2:] == ["--resume", "s-9"]
-    assert out["cost_usd"] is None
+    assert argv[-2:] == ["--resume", first]
+    assert out["session"] == first and out["result"] == "again"
 
 
-def test_claude_refuses_a_model_input(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s", None)])
+def test_resume_from_another_directory_is_refused(call_fn, tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    env, rec = make_claude(tmp_path)
+    code, out, err = call_fn(AGENTS / "agent.claude",
+                             {"cwd": str(tmp_path / "a"), "prompt": "p"}, env=env)
+    assert code == 0, err
+    env, rec = make_claude(tmp_path)
+    code, _out, err = call_fn(
+        AGENTS / "agent.claude",
+        {"cwd": str(tmp_path / "b"), "prompt": "p", "session": out["session"]}, env=env)
+    assert code == 1
+    assert f"was started in {tmp_path / 'a'}, not {tmp_path / 'b'}" in err
+    assert "cannot resume a session from another directory" in err
+    assert not rec.argv_file.exists()
+
+
+def test_claude_refuses_a_model_input(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path)
     code, out, err = call_fn(
         AGENTS / "agent.claude",
-        {"cwd": str(tmp_path), "prompt": "p", "model": "sonnet"}, path=bin_dir)
+        {"cwd": str(tmp_path), "prompt": "p", "model": "sonnet"}, env=env)
     assert code == 1 and out is None
-    assert "always runs Opus" in err and not argv_file.exists()
+    assert "always runs Opus" in err and not rec.argv_file.exists()
 
 
-def test_run_claude_engine_refuses_a_model(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event("r", "s", None)])
+def test_run_claude_engine_refuses_a_model(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path)
     code, out, err = call_fn(
         AGENTS / "agent.run",
-        {"engine": "claude", "cwd": str(tmp_path), "spec": "s", "model": "sonnet"},
-        path=bin_dir)
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "s", "model": "sonnet"}, env=env)
     assert code == 1 and out is None
-    assert "always runs Opus" in err and not argv_file.exists()
+    assert "always runs Opus" in err and not rec.argv_file.exists()
 
 
-def test_claude_transient(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_claude(
-        tmp_path, fake_bin, code=1, stderr_text="Error: API overloaded\\n")
-    code, out, err = call_fn(
-        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
-        path=bin_dir)
-    assert code == 1, err
-    assert "transient (attempt 1)" in err  # the helper retried before giving up
-    assert out is None
-
-
-def test_claude_transient_from_the_stream(call_fn, fake_bin, tmp_path):
-    """An API error reported only in the result event is recognised too."""
-    failed = result_event("API Error: 529 overloaded", subtype="error_during_execution",
-                          is_error=True, api_error_status=529)
-    bin_dir, _ = make_claude(tmp_path, fake_bin, code=1, events=[failed])
-    code, out, err = call_fn(
-        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"}, path=bin_dir)
-    assert code == 1, err
+def test_a_transient_error_is_retried_in_the_same_session(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"error": "API Error: 529 overloaded"},
+                                      {"reply": "recovered"}])
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env=env)
+    assert code == 0, err
     assert "transient (attempt 1)" in err
-    assert "error error_during_execution: API Error: 529 overloaded" in err
-    assert out is None
+    assert out["result"] == "recovered"
+    assert rec.argv()[-2:] == ["--resume", out["session"]]
+    assert rec.prompts()[-1].startswith("Your session was interrupted by a rate limit")
 
 
-def test_claude_hard_failure(call_fn, fake_bin, tmp_path):
-    """A rate-limit warning that still allowed the request does not make a failure
-    transient."""
-    bin_dir, _ = make_claude(
-        tmp_path, fake_bin, code=1, stderr_text="Error: auth failed\\n",
-        events=claude_stream()[:2])
-    code, out, err = call_fn(
-        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
-        path=bin_dir)
-    assert code == 1
-    assert out is None
+def test_claude_transient_until_the_retries_run_out(call_fn, tmp_path):
+    env, _ = make_claude(tmp_path, [{"error": "rate_limit: usage limit reached"}] * 5)
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env=env)
+    assert code == 1 and out is None
+    assert "transient (attempt 3)" in err
+    assert "error rate_limit: usage limit reached" in err  # the progress line
+
+
+def test_claude_hard_failure(call_fn, tmp_path):
+    env, _ = make_claude(tmp_path, exit_at_start=1, stderr="Error: auth failed")
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env=env)
+    assert code == 1 and out is None
     assert "transient" not in err and "Error: auth failed" in err
 
 
-def test_review(call_fn, fake_bin, tmp_path):
+def test_the_workspace_trust_dialog_is_answered(call_fn, tmp_path):
+    env, _ = make_claude(tmp_path, [{"reply": "trusted"}], trust=True)
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env=env)
+    assert code == 0, err
+    assert out["result"] == "trusted"
+
+
+def test_a_turn_without_the_declared_outputs_is_nudged_then_fails(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"reply": "done, I think"}] * 3)
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env={**env, **OUT_ENV})
+    assert code == 1 and out is None
+    assert "without submitting word (nudged 2 times)" in err
+    assert "Its last message: done, I think" in err
+    prompts = rec.prompts()
+    assert len(prompts) == 3
+    assert prompts[1].startswith("Your turn ended but these outputs are not submitted: word.")
+
+
+def test_a_nudged_agent_that_submits_succeeds(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"reply": "done"}, {"submit": {"word": "w"}}])
+    code, _out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env={**env, **OUT_ENV})
+    assert code == 0, err
+    assert "nudge 1/2: not submitted: word" in err and len(rec.prompts()) == 2
+
+
+def test_claude_waits_for_its_background_shell_without_nudging(call_fn, tmp_path):
+    """The incident: the model starts a background build and ends its turn; the session waits
+    for the task notification, whose turn submits."""
+    env, rec = make_claude(tmp_path, [{"reply": "building", "background_s": 1.5},
+                                      {"submit": {"word": "built"}, "reply": "built"}])
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env={**env, **OUT_ENV})
+    assert code == 0, err
+    assert "waiting: a background shell is running" in err
+    assert "task notification: sleep finished" in err
+    assert len(rec.prompts()) == 1 and out["result"] == "built"
+
+
+def test_claude_waits_for_its_wakeup_without_nudging(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"reply": "scheduled", "wakeup_s": 1.5},
+                                      {"submit": {"word": "awake"}, "reply": "awake"}])
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env={**env, **OUT_ENV})
+    assert code == 0, err
+    assert "waiting: a wakeup at " in err and "wakeup: Claude resuming /loop wakeup" in err
+    assert len(rec.prompts()) == 1 and out["result"] == "awake"
+
+
+def test_without_declared_outputs_background_work_is_waited_for(call_fn, tmp_path):
+    env, _ = make_claude(tmp_path, [{"reply": "started", "background_s": 1.0},
+                                      {"reply": "finished"}])
+    code, out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                             env=env)
+    assert code == 0, err
+    assert out["result"] == "finished"
+
+
+def test_the_task_is_handed_over_as_a_file(call_fn, tmp_path):
+    """With the step's notes it is many lines, which the TUI would collapse into a paste the
+    model does not take as a request: one typed line points at task.md instead."""
+    env, rec = make_claude(tmp_path)
+    code, _out, err = call_fn(AGENTS / "agent.claude",
+                              {"cwd": str(tmp_path), "prompt": "the task"}, env=env)
+    assert code == 0, err
+    task_md = call_fn.run_dirs[-1] / "task.md"
+    assert rec.raw_prompts() == [f"Your task is in {task_md}; read it fully, then do it."]
+    assert task_md.read_text().startswith("the task\n\nMessages for you")
+
+
+def test_a_thread_message_reaches_the_live_session(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"reply": "working", "busy_s": 2.0}, {"reply": "noted"}])
+    project = tmp_path / "sluice-home" / "projects" / "test-project"
+    project.mkdir(parents=True)
+
+    def post(stderr):
+        if "task delivered" in stderr and not (project / "log.jsonl").exists():
+            L.append(project, [{"kind": "message", "thread": "step-test-step",
+                                "from": "orchestrator", "body": "please also do X"}])
+
+    code, _out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                              env=env, watch=post)
+    assert code == 0, err
+    assert rec.raw_prompts()[1] == ("Message from orchestrator on your sluice thread "
+                                    "`step-test-step`: please also do X")
+    assert "thread message from orchestrator typed into the session" in err
+
+
+def test_cancel_leaves_no_session_behind(tmp_path):
+    """SIGTERM to the fn's process group (step_cancel) ends the tmux server, claude and the
+    background shell claude started."""
+    env, _ = make_claude(tmp_path, [{"reply": "building", "background_s": 60}])
+    fn, _errs = parse_fn(json.loads((AGENTS / "agent.claude" / "fn.json").read_text()),
+                         AGENTS / "agent.claude")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    e = runner.fn_env(Store(tmp_path / "home"), "p", fn, "s", "r", run_dir)
+    e.update(env)
+    err = run_dir / "stderr.log"
+    with open(err, "w") as f:
+        p = subprocess.Popen(["uv", "run", "--quiet", "--script",
+                              str(AGENTS / "agent.claude" / "main.py")],
+                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=f,
+                             env=e, cwd=run_dir, text=True, start_new_session=True)
+        p.stdin.write(json.dumps({"cwd": str(tmp_path), "prompt": "p"}))
+        p.stdin.close()
+        deadline = time.time() + 30
+        while time.time() < deadline and "waiting:" not in err.read_text():
+            time.sleep(0.05)
+        assert "waiting: a background shell is running" in err.read_text()
+        pids = descendants(_server_pid(run_dir))
+        assert len(pids) >= 2  # claude and its sleep
+        os.killpg(p.pid, signal.SIGTERM)
+        assert p.wait(timeout=10) != 0
+    assert not any(Path(f"/proc/{pid}").exists() and _running(pid) for pid in pids)
+    assert not (run_dir / "tmux.sock").exists()
+
+
+def _server_pid(run_dir):
+    return int(subprocess.run(["tmux", "-S", "tmux.sock", "display-message", "-p", "#{pid}"],
+                              cwd=run_dir, capture_output=True, text=True,
+                              check=True).stdout)
+
+
+def _running(pid):
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(") ")[1][0] != "Z"
+    except OSError:
+        return False
+
+
+def make_claude_print(tmp_path, fake_bin, *, code=0, stdout_obj=None, stderr_text=""):
+    """A fake `claude -p` for decide.llm: reads its prompt on stdin into claude.stdin, prints
+    `stdout_obj` as one JSON object (--output-format json)."""
+    argv_file = tmp_path / "claude.argv"
+    stdin_file = tmp_path / "claude.stdin"
+    script = (
+        "#!/bin/sh\n"
+        f"printf '%s\\0' \"$@\" > \"{argv_file}\"\n"
+        f"cat > \"{stdin_file}\"\n"
+    )
+    if stderr_text:
+        script += f"printf '{stderr_text}' >&2\n"
+    if stdout_obj is not None:
+        script += f"printf '%s' '{json.dumps(stdout_obj)}'\n"
+    script += f"exit {code}\n"
+    bin_dir = fake_bin("claude", script)
+    return bin_dir, argv_file
+
+
+def claude_stdin(tmp_path):
+    """The prompt the fake `claude -p` got on stdin (kept off argv so stderr.log and ps stay
+    free of it)."""
+    return (tmp_path / "claude.stdin").read_text()
+
+
+def test_review(call_fn, tmp_path):
     repo = init_repo(tmp_path / "repo")
     (repo.path / "STANDARDS.md").write_text("be good\n")
     repo.git("add", ".")
@@ -555,45 +706,36 @@ def test_review(call_fn, fake_bin, tmp_path):
     repo.git("commit", "-m", "the work")
     before = repo.git("rev-parse", "HEAD")
 
-    argv_file = tmp_path / "claude.argv"
-    stdin_file = tmp_path / "claude.stdin"
-    script = (
-        "#!/bin/sh\n"
-        f"printf '%s\\0' \"$@\" > \"{argv_file}\"\n"
-        f"cat > \"{stdin_file}\"\n"
-        'echo "z" >> f.txt\n'
-        "git add f.txt\n"
-        'git -c user.email=r@e -c user.name=R commit -q -m "Fix f.txt"\n'
-        f"printf '%s\\n' '{json.dumps(result_event('fixed it', 'rs', 0.01))}'\n"
-    )
-    bin_dir = fake_bin("claude", script)
+    fix = ('echo z >> f.txt && git add f.txt && '
+           'git -c user.email=r@e -c user.name=R commit -q -m "Fix f.txt"')
+    env, rec = make_claude(tmp_path, [{"run": fix, "reply": "fixed it"}])
     code, out, err = call_fn(
         AGENTS / "agent.review",
         {"cwd": str(repo.path), "base": "base",
          "standards": str(repo.path / "STANDARDS.md"), "notes": "be strict"},
-        path=bin_dir,
+        env=env,
     )
     assert code == 0, err
     assert out["commits"] == 1
     assert out["sha"] == repo.git("rev-parse", "HEAD") != before
     assert out["summary"] == "fixed it"
-    argv = read_argv(argv_file)
-    assert argv[0] == "-p"
-    prompt = stdin_file.read_text()
+    prompt = rec.prompts()[0]
     assert "git diff base...HEAD" in prompt
     assert str(repo.path / "STANDARDS.md") in prompt
     assert "be strict" in prompt
     assert "step-test-step" in prompt
-    assert out["session"] == "rs" and "--resume" not in argv
+    assert out["session"] and "--resume" not in rec.argv()
 
+    first = out["session"]
+    env, rec = make_claude(tmp_path)
     code, out, err = call_fn(
         AGENTS / "agent.review",
         {"cwd": str(repo.path), "base": "base",
-         "standards": str(repo.path / "STANDARDS.md"), "session": "rs-0"},
-        path=bin_dir,
+         "standards": str(repo.path / "STANDARDS.md"), "session": first},
+        env=env,
     )
     assert code == 0, err
-    assert read_argv(argv_file)[-2:] == ["--resume", "rs-0"]
+    assert rec.argv()[-2:] == ["--resume", first]
 
 
 def claude_decide(choice, p, structured=False):
@@ -605,7 +747,7 @@ def claude_decide(choice, p, structured=False):
 
 
 def test_decide_llm_confident(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(
+    bin_dir, argv_file = make_claude_print(
         tmp_path, fake_bin, stdout_obj=claude_decide("b", 0.9))
     code, out, err = call_fn(
         AGENTS / "decide.llm",
@@ -621,7 +763,7 @@ def test_decide_llm_confident(call_fn, fake_bin, tmp_path):
 
 
 def test_decide_llm_not_confident_and_threshold(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_claude(
+    bin_dir, _ = make_claude_print(
         tmp_path, fake_bin, stdout_obj=claude_decide("a", 0.5))
     code, out, err = call_fn(
         AGENTS / "decide.llm",
@@ -648,7 +790,7 @@ def test_decide_llm_not_confident_and_threshold(call_fn, fake_bin, tmp_path):
 
 
 def test_decide_llm_prefers_structured_output(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_claude(
+    bin_dir, _ = make_claude_print(
         tmp_path, fake_bin, stdout_obj=claude_decide("b", 0.95, structured=True))
     code, out, err = call_fn(
         AGENTS / "decide.llm",
@@ -660,7 +802,7 @@ def test_decide_llm_prefers_structured_output(call_fn, fake_bin, tmp_path):
 
 
 def test_decide_llm_choice_not_in_options(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_claude(
+    bin_dir, _ = make_claude_print(
         tmp_path, fake_bin, stdout_obj=claude_decide("zzz", 0.9))
     code, out, err = call_fn(
         AGENTS / "decide.llm",
@@ -673,7 +815,7 @@ def test_decide_llm_choice_not_in_options(call_fn, fake_bin, tmp_path):
 
 
 def test_decide_llm_model_override(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(
+    bin_dir, argv_file = make_claude_print(
         tmp_path, fake_bin, stdout_obj=claude_decide("a", 0.9))
     code, _out, err = call_fn(
         AGENTS / "decide.llm",
@@ -687,7 +829,7 @@ def test_decide_llm_model_override(call_fn, fake_bin, tmp_path):
 
 
 def test_decide_llm_transient(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_claude(
+    bin_dir, _ = make_claude_print(
         tmp_path, fake_bin, code=1, stderr_text="Error 529: overloaded\\n")
     code, _out, err = call_fn(
         AGENTS / "decide.llm", {"question": "q", "options": ["a"]}, path=bin_dir)
@@ -697,7 +839,7 @@ def test_decide_llm_transient(call_fn, fake_bin, tmp_path):
 
 def test_decide_llm_transient_rate_limit(call_fn, fake_bin, tmp_path):
     """claude's own rate_limit error string retries too."""
-    bin_dir, _ = make_claude(
+    bin_dir, _ = make_claude_print(
         tmp_path, fake_bin, code=1, stderr_text="API Error: rate_limit\\n")
     code, _out, err = call_fn(
         AGENTS / "decide.llm", {"question": "q", "options": ["a"]}, path=bin_dir)
@@ -734,6 +876,106 @@ def test_agent_claude_live(call_fn, tmp_path):
     assert (repo.path / "hello.txt").exists()
     assert int(repo.git("rev-list", "--count", "HEAD")) >= 2
     assert out["session"]
+
+
+INCIDENT = (
+    "In your working directory, start the shell command `sleep 90 && echo built > out.txt` "
+    "as a background Bash task (run_in_background). Do not wait for it in the foreground: end "
+    "your turn and let its completion notification bring you back, or schedule a wakeup. Once "
+    "out.txt exists, submit its content (without the newline) as `word`.")
+
+
+@requires_live
+@pytest.mark.live
+def test_claude_live_declared_output_incident_and_resume(tmp_path):
+    """On the real claude, under a runner: a step that must submit an output; the incident
+    (a background build the model waits for across turns, then submits from); a second step
+    that resumes the incident step's session in the same directory."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"fn_dirs": [str(AGENTS)]}))
+    work = tmp_path / "work"
+    work.mkdir()
+    store = Store(home)
+    store.create_project("p", "", "t", "t")
+
+    def claude_step(prompt, outputs, **extra):
+        return {"run": "agent.claude", "outputs": outputs,
+                "in": {"cwd": {"default": str(work)}, "prompt": {"default": prompt}, **extra}}
+
+    steps = {
+        "pick": claude_step("Submit the word blue as `word`. Nothing else to do.",
+                            {"word": "string"}),
+        "build": claude_step(INCIDENT, {"word": "string"}),
+        "again": claude_step("Submit, as `again`, the word you submitted in your previous "
+                             "turn. Nothing else to do.", {"again": "string"},
+                             session={"source": "build/session"}),
+    }
+    store.patch("p", 1, [{"op": "replace", "path": "/steps", "value": steps}], "t", "t")
+    runner = Runner(store)
+    deadline = time.time() + 1200
+    while time.time() < deadline:
+        runner.tick()
+        st = store.read_state("p")["steps"]
+        if len(st) == 3 and all(e["status"] in ("succeeded", "failed") for e in st.values()):
+            break
+        time.sleep(0.5)
+    st = store.read_state("p")["steps"]
+
+    def stderr(step):
+        return (store.runs_dir("p") / st[step]["run_ids"][-1] / "stderr.log").read_text()
+
+    for step in steps:
+        assert st[step]["status"] == "succeeded", (step, st[step].get("error"), stderr(step))
+    assert st["pick"]["outputs"]["word"] == "blue"
+    assert st["build"]["outputs"]["word"] == "built"
+    assert (work / "out.txt").read_text().strip() == "built"
+    assert "nudge" not in stderr("build") and "waiting: " in stderr("build")
+    assert st["again"]["outputs"]["session"] == st["build"]["outputs"]["session"]
+    assert st["again"]["outputs"]["again"] == "built"
+    for step in steps:
+        run_dir = store.runs_dir("p") / st[step]["run_ids"][-1]
+        assert not (run_dir / "tmux.sock").exists()
+
+
+@requires_live
+@pytest.mark.live
+def test_claude_live_thread_message_reaches_the_session(tmp_path):
+    """A message posted on the step's thread while it runs is typed into the live session;
+    the agent acts on it without polling."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"fn_dirs": [str(AGENTS)]}))
+    work = tmp_path / "work"
+    work.mkdir()
+    store = Store(home)
+    store.create_project("p", "", "t", "t")
+    prompt = ("The orchestrator will send you, as a message in this session, the word to "
+              "submit as `word`. Do not poll or check anything; wait for the message, then "
+              "submit the word it names.")
+    store.patch("p", 1, [{"op": "replace", "path": "/steps", "value": {"ask": {
+        "run": "agent.claude", "outputs": {"word": "string"},
+        "in": {"cwd": {"default": str(work)}, "prompt": {"default": prompt}}}}}], "t", "t")
+    runner = Runner(store)
+    posted = False
+    deadline = time.time() + 400
+    while time.time() < deadline:
+        runner.tick()
+        st = store.read_state("p")["steps"]
+        e = st.get("ask", {})
+        if e.get("status") in ("succeeded", "failed"):
+            break
+        runs = list(store.runs_dir("p").glob("*/stderr.log"))
+        if not posted and runs and "task delivered" in runs[0].read_text():
+            L.append_locked(store.log_dir("p"), [{
+                "kind": "message", "thread": "step-ask", "from": "orchestrator", "to": "ask",
+                "body": "The word is: heron"}])
+            posted = True
+        time.sleep(0.5)
+    err = (store.runs_dir("p") / e["run_ids"][-1] / "stderr.log").read_text()
+    assert e["status"] == "succeeded", (e.get("error"), err)
+    assert e["outputs"]["word"] == "heron"
+    assert "thread message from orchestrator typed into the session" in err
 
 
 def test_run_devin(call_fn, fake_bin, tmp_path):
@@ -797,28 +1039,22 @@ def test_run_codex_refuses_another_model_and_effort_elsewhere(call_fn, fake_bin,
     assert not argv_file.exists()
 
 
-def test_run_claude(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_claude(
-        tmp_path, fake_bin, events=claude_stream(result_event("done", "s-42", 0.01)))
+def test_run_claude(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"tool": {"name": "Read", "input": {"file_path": "/w/a.py"}},
+                                       "reply": "done"}])
     report = tmp_path / "rep.md"
     report.write_text("REP")
     code, out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "the prompt",
          "report_path": str(report)},
-        path=bin_dir,
+        env=env,
     )
     assert code == 0, err
-    assert out == {"final": "done", "report": "REP", "session": "s-42"}
+    assert out == {"final": "done", "report": "REP", "session": session_of(call_fn)}
     assert "tool Read /w/a.py" in err.splitlines()
-    assert read_argv(argv_file)[0] == "-p"
-    assert claude_stdin(tmp_path).startswith("the prompt")
-    assert read_argv(argv_file)[1:] == [
-        "--model", "opus",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-    ]
+    assert rec.prompts()[0].startswith("the prompt")
+    assert rec.argv()[:3] == ["--model", "opus", "--dangerously-skip-permissions"]
 
 
 def test_run_session(call_fn, fake_bin, tmp_path):
@@ -832,16 +1068,19 @@ def test_run_session(call_fn, fake_bin, tmp_path):
     assert code == 0, err
     assert read_argv(devin_argv)[-2:] == ["--resume", "sess-9"]
 
-    _, claude_argv = make_claude(
-        tmp_path, fake_bin, events=[result_event("x", "sess-7")])
+    env, _ = make_claude(tmp_path)
+    code, out, err = call_fn(
+        AGENTS / "agent.run", {"engine": "claude", "cwd": str(tmp_path), "spec": "s"}, env=env)
+    assert code == 0, err
+    env, rec = make_claude(tmp_path)
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "s",
-         "session": "sess-7"},
-        path=bin_dir,
+         "session": out["session"]},
+        env=env,
     )
     assert code == 0, err
-    assert read_argv(claude_argv)[-2:] == ["--resume", "sess-7"]
+    assert rec.argv()[-2:] == ["--resume", out["session"]]
 
 
 def test_run_transient_per_engine(call_fn, fake_bin, tmp_path):
@@ -867,11 +1106,11 @@ def test_run_transient_per_engine(call_fn, fake_bin, tmp_path):
     assert "transient (attempt 1)" in err  # the helper retried before giving up
     assert out is None
 
-    make_claude(tmp_path, fake_bin, code=1, stderr_text="529 overloaded\\n")
+    env, _ = make_claude(tmp_path, [{"error": "529 overloaded"}] * 5)
     code, out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "claude", "cwd": str(tmp_path), "spec": "s"},
-        path=bin_dir,
+        env=env,
     )
     assert code == 1, err
     assert "transient (attempt 1)" in err  # the helper retried before giving up
@@ -939,28 +1178,38 @@ def test_step_thread_codex(call_fn, fake_bin, tmp_path):
     assert "sluice thread `step-test-step`" in spec_of(call_fn)
 
 
-def test_step_thread_claude(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
+def test_step_thread_claude(call_fn, tmp_path):
+    """A live session's thread messages are pasted in, so its note says so instead of asking
+    the agent to poll log_read; asking back works as before."""
+    env, rec = make_claude(tmp_path)
     code, _out, err = call_fn(
-        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
-        path=bin_dir)
+        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"}, env=env)
     assert code == 0, err
-    prompt = claude_stdin(tmp_path)
-    assert "sluice thread `step-test-step`" in prompt
-    assert '"since_seq": 0}' in prompt  # no log yet
+    prompt = rec.prompts()[0]
+    assert ("Messages for you on sluice thread `step-test-step` of project `test-project` "
+            "are pasted into this session as they arrive; you need not poll") in prompt
+    assert "log_read" not in prompt
+    assert '"name": "thread.post"' in prompt and '"from": "test-step"' in prompt
+    assert '"to": "orchestrator"' in prompt and "sluice tool fn_call" in prompt
+
+    env, rec = make_claude(tmp_path)
+    code, _out, err = call_fn(
+        AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p", "listen": False},
+        env=env)
+    assert code == 0, err
+    assert rec.raw_prompts()[0] == "p"  # one short line: typed as it is
 
 
 def test_step_thread_run(call_fn, fake_bin, tmp_path):
     """agent.run appends the section once, whatever the engine."""
-    bin_dir, _ = make_claude(tmp_path, fake_bin, events=[result_event("r", "s")])
+    env, rec = make_claude(tmp_path)
     code, _out, err = call_fn(
         AGENTS / "agent.run",
-        {"engine": "claude", "cwd": str(tmp_path), "spec": "s"},
-        path=bin_dir)
+        {"engine": "claude", "cwd": str(tmp_path), "spec": "s"}, env=env)
     assert code == 0, err
-    assert "sluice thread `step-test-step`" in claude_stdin(tmp_path)
+    assert rec.prompts()[0].count("sluice thread `step-test-step`") == 1
 
-    make_devin(tmp_path, fake_bin)
+    bin_dir, _, _ = make_devin(tmp_path, fake_bin)
     code, _out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "devin", "cwd": str(tmp_path), "spec": "s", "listen": False},
@@ -988,11 +1237,11 @@ BLOCK_ENV = {"SLUICE_STEP_INPUTS": json.dumps(STEP_INPUTS),
 BLOCK_INPUTS = {"interface": "docs/api.md\nsecond line", "branches": ["a", "b"]}
 
 
-def prompt_of(name, call_fn, argv_file):
-    """The task text an agent fn handed its CLI: spec.md for the harnesses, else claude's
-    prompt on stdin."""
+def prompt_of(name, call_fn, rec):
+    """The task text an agent fn handed its CLI: spec.md for the harnesses, else the first
+    message pasted into the claude session."""
     if name in ("agent.claude", "agent.review", "agent.run"):
-        return argv_file.with_name("claude.stdin").read_text()
+        return rec.prompts()[0]
     return spec_of(call_fn)
 
 
@@ -1006,17 +1255,20 @@ def block_call(name, call_fn, fake_bin, tmp_path, inputs, env):
     cwd = tmp_path / "repo"
     if not cwd.exists():
         init_repo(cwd)
+    bin_dir = None
     if name == "agent.codex":
-        bin_dir, argv_file = make_codex(tmp_path, fake_bin)
+        bin_dir, rec = make_codex(tmp_path, fake_bin)
         env = {**env, "SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
     elif name == "agent.devin":
-        bin_dir, argv_file, _ = make_devin(tmp_path, fake_bin)
-    else:
-        bin_dir, argv_file = make_claude(tmp_path, fake_bin, events=[result_event()])
+        bin_dir, rec, _ = make_devin(tmp_path, fake_bin)
+    else:  # its session must submit the declared outputs to finish
+        claude_env, rec = make_claude(tmp_path, [{"submit": {"branch": "b",
+                                                             "report": {"ok": True}}}])
+        env = {**env, **claude_env}
     code, _out, err = call_fn(AGENTS / name, {"cwd": str(cwd), **base, **inputs}, env=env,
                               path=bin_dir)
     assert code == 0, err
-    return prompt_of(name, call_fn, argv_file)
+    return prompt_of(name, call_fn, rec)
 
 
 AGENT_FNS = ["agent.claude", "agent.codex", "agent.devin", "agent.run", "agent.review"]
@@ -1028,7 +1280,7 @@ def test_a_block_is_told_its_inputs_and_the_outputs_to_submit(name, call_fn, fak
     text = block_call(name, call_fn, fake_bin, tmp_path, BLOCK_INPUTS, BLOCK_ENV)
     inputs = text.index("## Inputs")
     outputs = text.index("## Outputs you must submit")
-    thread = text.index("Messages for you arrive on sluice thread")
+    thread = text.index("Messages for you")
     assert inputs < outputs < thread
     assert ("`interface` (string):\ndocs/api.md\nsecond line\n\n"
             "`branches` (string[]):\n[\n  \"a\",\n  \"b\"\n]") in text
@@ -1044,7 +1296,7 @@ def test_a_block_is_told_its_inputs_and_the_outputs_to_submit(name, call_fn, fak
 def test_a_block_without_ports_gets_only_the_thread_note(name, call_fn, fake_bin, tmp_path):
     text = block_call(name, call_fn, fake_bin, tmp_path, {}, {})
     assert "## Inputs" not in text and "## Outputs" not in text and "step_submit" not in text
-    assert "Messages for you arrive on sluice thread" in text
+    assert "Messages for you" in text
 
 
 def test_sections_apply_one_at_a_time_and_listen_false_drops_only_the_note(
@@ -1061,34 +1313,16 @@ def test_sections_apply_one_at_a_time_and_listen_false_drops_only_the_note(
 
 # ---- the same, end to end under the runner -----------------------------------------------
 
-SUBMITTING_CLAUDE = '''#!{python}
-"""A fake claude that does what the prompt says: fills the step_submit command's
-placeholders and runs it through the sluice CLI, then reports a result."""
-import json, re, sys
-from sluice.cli import main
-
-prompt = sys.stdin.read()
-submit = {submit!r}
-if submit:
-    cmd = re.search(r"sluice tool step_submit '(.*?)'`", prompt).group(1)
-    args = json.loads(re.sub(r"<[^>]+>", json.dumps(submit), cmd))
-    code = main(["tool", "step_submit", json.dumps(args)])
-    print(f"step_submit exited {{code}}", file=sys.stderr)
-print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "num_turns": 1,
-                  "result": "done", "session_id": "s-run", "total_cost_usd": 0.0}}))
-'''
-
-
 def run_plan(tmp_path, steps, submit):
     """Run `steps` (a plan using the agents pack) under a runner on a scratch home whose
-    claude is the fake above; returns (store, state steps)."""
+    claude is the interactive fake, submitting `submit` for every declared output through the
+    step_submit command in its task (nothing when None); returns (store, state steps)."""
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.json").write_text(json.dumps({"fn_dirs": [str(AGENTS)]}))
-    fake = tmp_path / "claude-fake"
-    fake.write_text(SUBMITTING_CLAUDE.format(python=sys.executable, submit=submit))
-    fake.chmod(0o755)
-    (home / ".env").write_text(f"SLUICE_CLAUDE_BIN={fake}\n")
+    turn = {"reply": "done"} | ({"submit_cli": submit} if submit is not None else {})
+    env, _ = make_claude(tmp_path, [turn] * len(steps), cost=0.0)
+    (home / ".env").write_text("".join(f"{k}={v}\n" for k, v in env.items()))
     store = Store(home)
     store.create_project("p", "", "t", "t")
     store.patch("p", 1, [{"op": "replace", "path": "/steps", "value": steps}], "t", "t")
@@ -1115,13 +1349,15 @@ def test_an_agent_that_submits_hands_its_outputs_downstream(tmp_path):
               "outputs": {"echo": "string"}},
     }, submit="blue")
     assert st["a"]["status"] == "succeeded", st["a"].get("error")
-    assert st["a"]["outputs"] == {"result": "done", "session": "s-run", "cost_usd": 0.0,
+    session = st["a"]["outputs"]["session"]
+    assert st["a"]["outputs"] == {"result": "done", "session": session, "cost_usd": 0.0,
                                   "word": "blue"}
     assert st["b"]["status"] == "succeeded", st["b"].get("error")
     assert st["b"]["outputs"]["echo"] == "blue"
     [run_b] = st["b"]["run_ids"]
     prompt = json.loads((store.runs_dir("p") / run_b / "input.json").read_text())
-    assert prompt["word"] == "blue" and prompt["session"] == "s-run"
+    assert prompt["word"] == "blue" and prompt["session"] == session
+    assert st["b"]["outputs"]["session"] == session
     subs = L.read(store.log_dir("p"), kinds=["step.submit"])["records"]
     assert [(r["step"], r["outputs"]) for r in subs] == [("a", {"word": "blue"}),
                                                          ("b", {"echo": "blue"})]
@@ -1131,5 +1367,5 @@ def test_an_agent_that_does_not_submit_fails_its_step(tmp_path):
     _, st = run_plan(tmp_path, {"a": {**claude_block(), "outputs": {"word": "string"}}},
                      submit=None)
     assert st["a"]["status"] == "failed"
-    assert "declared outputs not submitted: word" in st["a"]["error"]
-    assert "step_submit" in st["a"]["error"]
+    assert "the agent ended its turn without submitting word (nudged 2 times)" \
+        in st["a"]["error"]

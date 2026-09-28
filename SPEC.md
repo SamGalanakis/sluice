@@ -893,7 +893,15 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   its type and doc, and the exact `sluice tool step_submit` command) and the step-thread note.
   Each takes `session?` and returns `session` (empty when the harness wrote none): binding a
   later step's `session` to an earlier step's `session` output continues that agent.
-  Claude always runs Opus. Codex (`agent.codex`, or `agent.run` with engine `codex`) takes
+  Claude always runs Opus, in a live interactive session supervised by
+  `packs/agents/_agents/native/`: a private tmux server per run (`attach:` in the step's
+  stderr), the task handed over as `<run_dir>/task.md`, and the step done when a turn ends
+  with every required declared output submitted, not at the model's end of turn. A turn that
+  ends without them is nudged, then fails the step; a session waiting on its own background
+  work (a background shell, a pending wakeup) is left to wait; thread messages for the step
+  are typed into the session (its step-thread note says so instead of asking it to poll);
+  `session` resumes only from the directory the session started in; a cancel ends the tmux
+  server and everything under it (`packs/README.md`, "Live sessions"). Codex (`agent.codex`, or `agent.run` with engine `codex`) takes
   `model` `sol` (the default) or `astra` and `effort` (`minimal` to `max`), whose default is
   `high`; both always reach the harness. A codex run's echo folds the diff codex prints after
   every patch into one line (the harness log keeps it), and its `final` is the agent's last

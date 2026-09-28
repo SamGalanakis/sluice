@@ -1,0 +1,20 @@
+sluice agents pack
+
+Parts of _agents/native/ are adapted from Omnigent (https://github.com/omnigent-ai/omnigent),
+licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0):
+
+- _agents/native/paste.py: the message delivery into a TUI composer through tmux
+  (omnigent/harnesses/claude_native/bridge.py: inject_user_message, _paste_and_submit,
+  _verify_submit_accepted, _restore_occupied_input, _submit_needle, _paste_payload_bytes);
+- _agents/native/claude.py, the composer section: reading Claude Code's input box off the pane
+  (bridge.py: _is_box_rule, _composer_row, _occupying_surface, _claude_prompt_rendered,
+  _history_search_footer_shown, _draft_in_input_box).
+
+Each adapted section carries a header naming its source and what was changed.
+
+Omnigent's NOTICE reads:
+
+  Copyright (2026) Databricks, Inc.
+
+  This Software includes software developed at Databricks (https://www.databricks.com/) and
+  its use is subject to the included LICENSE file.
