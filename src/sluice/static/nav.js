@@ -38,11 +38,16 @@ export function setTypes(on) {
 const prefs = document.querySelector("form.prefs");
 if (prefs) {
   prefs.querySelector(".save").hidden = true;
+  // nothing picked yet: the page follows the OS, so the menu shows that theme as chosen
+  if (!root.dataset.theme) {
+    const os = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    const radio = prefs.querySelector(`input[name=theme][value=${os}]`);
+    if (radio) radio.checked = true;
+  }
   prefs.addEventListener("change", (ev) => {
     const input = ev.target;
     if (input.name === "theme") {
-      if (input.value === "system") delete root.dataset.theme;
-      else root.dataset.theme = input.value;
+      root.dataset.theme = input.value;
       keep("theme", input.value);
     } else if (input.name === "types") {
       setTypes(input.checked);

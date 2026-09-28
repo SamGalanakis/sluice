@@ -79,7 +79,7 @@ e = html.escape
 # CommonMark plus tables; raw HTML is escaped as text and unsafe link schemes are refused.
 MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
 INBOX_FILTERS = ("open", "answered", "closed", "all")
-THEMES = ("system", "light", "dark")  # the settings menu's choices; system follows the OS
+THEMES = ("light", "dark")  # the settings menu's choices; until one is picked, the OS's
 
 
 @dataclasses.dataclass(frozen=True)
@@ -405,12 +405,12 @@ COG = ('<svg class="cog" viewBox="0 0 24 24" width="20" height="20" aria-hidden=
 
 
 def settings_menu() -> str:
-    """The nav's settings, the cog at its right end: the theme (System follows the OS) and
+    """The nav's settings, the cog at its right end: the theme (the OS's until one is picked) and
     whether value types show. A <details> holding a form that posts to /settings and comes
     back here, so it works without JavaScript; with it (static/nav.js), a choice applies at
     once and the Save button stays hidden."""
     viewer = VIEWER.get()
-    chosen = viewer.theme or "system"
+    chosen = viewer.theme  # None: nothing picked yet, the page follows the OS
     themes = "".join(
         f'<label><input type="radio" name="theme" value="{t}"'
         f'{" checked" if t == chosen else ""}><span>{t.capitalize()}</span></label>'
@@ -1226,7 +1226,8 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
     """A step on the board: a compact bubble with its status glyph, its id and, small, how long
     it ran (and `done of total` for a scattered step), then a `quiet 42m` badge once a running
     step has gone quiet. Everything else is one click away in the
-    drawer; the doc and what it says now (progress, error, what it waits on) are its tooltip.
+    drawer; the doc and what it says now (progress, error, what it waits on) are its accessible
+    description (no hover tooltip).
     A pending step next in line (`is-next`) reads at full strength; one a failed step holds up
     (`is-blocked`) says "blocked". Its accessible name reads "failed, a, 1h 14m"."""
     tag = "a" if live else "div"
@@ -1238,7 +1239,7 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
     elif waits_on(board, b) and not now:
         now = _waits_text(waits_on(board, b))
     tip = " — ".join(t for t in (" ".join(b.doc.split()), now) if t)
-    title = f' title="{e(tip)}"' if tip else ""
+    title = f' aria-description="{e(tip)}"' if tip else ""
     nxt = " is-next" if is_next(board, b) else ""
     nxt += " is-blocked" if board.blocked(b.sid) else ""
     attrs = (f'class="node {"chip" if b.glue else "card"} is-{e(b.mark)}{nxt}'

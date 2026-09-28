@@ -109,19 +109,19 @@ def test_the_board_shows_each_step_as_a_bubble(store):
     page = views.project_page(store, "v", ver="abc")
     a = card(page, "a")
     assert a.startswith('<a class="node card is-succeeded" id="n-a" data-node="s:a" '
-                        'href="/projects/v/steps/a" data-step="a" title="Add one to n">')
+                        'href="/projects/v/steps/a" data-step="a" aria-description="Add one to n">')
     # the glyph's word, for assistive tech, then the id and its time: "succeeded, a, 12m 4s"
     assert '<span class="vh">succeeded, </span>' in a
     assert ('<span class="sid">a<span class="sep">,</span></span><span class="dur">12m 4s'
             '</span>') in a
     # just the name and, small, its time: outputs, engine and cost are in the drawer
     assert "sum" not in a and "test.add" not in a and "$" not in a
-    assert "title=" not in card(page, "b").split(">", 1)[0]  # no doc, nothing to say
+    assert "aria-description=" not in card(page, "b").split(">", 1)[0]  # no doc, nothing to say
     assert "is-manual" in card(page, "b")
     c = card(page, "c")  # failed: its error's last line (the exception) is the tooltip
-    assert "is-failed" in c and 'title="traceback &lt;here&gt;"' in c
+    assert "is-failed" in c and 'aria-description="traceback &lt;here&gt;"' in c
     each = card(page, "each")  # running: its progress is the tooltip, done/total beside it
-    assert "is-running" in each and 'title="halfway there"' in each and "1/3" in each
+    assert "is-running" in each and 'aria-description="halfway there"' in each and "1/3" in each
     assert 'data-since="2026-01-01T10:12:05Z"' in each  # its running time stays current
     assert "is-stale" in card(page, "late") and "Its inputs changed" in card(page, "late")
     assert card(page, "fmt").startswith('<a class="node chip is-succeeded"')  # glue: dashed
@@ -241,7 +241,7 @@ def test_a_pending_step_says_what_it_waits_on_and_the_next_ones_stand_out(store)
     page = views.project_page(store, "v", ver="x")
     assert 'class="node card is-pending is-next" id="n-b"' in page  # starts once a finishes
     assert 'class="node card is-pending" id="n-c"' in page  # further off
-    assert 'title="waits on b (pending)"' in card(page, "c")
+    assert 'aria-description="waits on b (pending)"' in card(page, "c")
     head = views.step_detail(store, "v", "b").split("</header>")[0]
     # a row of its own, each step led by its status glyph
     assert re.search(r'<div><dt>Waits on</dt><dd><span class="dep"><span class="g '
@@ -483,7 +483,7 @@ def test_a_running_step_gone_quiet_wears_a_quiet_badge_and_nothing_more(store):
     # it once the run goes quiet), and nothing says quiet
     page = views.project_page(store, "v", ver="x")
     assert quiet_badge(card(page, "a")) == ""
-    assert 'title="halfway there"' in card(page, "a")
+    assert 'aria-description="halfway there"' in card(page, "a")
     detail = views.step_detail(store, "v", "a")
     assert quiet_badge(detail) == "" and "quiet" not in re.sub(QUIET_BADGE, "", detail).lower()
     # its stderr quiet 20 minutes: a gold badge "quiet 20m" after the card's time, and the
@@ -493,7 +493,7 @@ def test_a_running_step_gone_quiet_wears_a_quiet_badge_and_nothing_more(store):
     a = card(page, "a")
     assert quiet_badge(a) == "quiet 20m" and "·" not in a
     assert a.index('class="dur"') < a.index('class="tag attn"')
-    assert 'title="halfway there"' in a and "Quiet for" not in page
+    assert 'aria-description="halfway there"' in a and "Quiet for" not in page
     detail = views.step_detail(store, "v", "a")
     head = detail[:detail.index("</header>")]
     assert quiet_badge(re.search(r'<p class="d-badges">(.*?)</p>', head)[1]) == "quiet 20m"
@@ -808,7 +808,7 @@ def test_values_are_escaped(store):
         assert "<script>progress" not in page and "<i>me" not in page
     assert "&lt;script&gt;progress&lt;/script&gt;" in pages[0]
     assert '<details class="about"' not in pages[0]  # a short description is not folded
-    assert 'title="&lt;script&gt;doc&lt;/script&gt;"' in pages[0]  # a's chip
+    assert 'aria-description="&lt;script&gt;doc&lt;/script&gt;"' in pages[0]  # a's chip
     assert "&lt;script&gt;doc&lt;/script&gt;" in pages[4]  # its detail
     assert "&lt;script&gt;alert(3)&lt;/script&gt;" in pages[5]  # the message, on Threads
     assert "&lt;b&gt;bold&lt;/b&gt;" in pages[3]
@@ -900,7 +900,7 @@ def test_a_failure_blocks_the_steps_downstream_and_the_page_says_so(store):
     assert 'class="node card is-pending is-blocked"' in fix and ">blocked</span>" in fix
     assert "is-blocked" not in card(page, "notes") and "is-paused" in card(page, "notes")
     assert "is-blocked" not in card(page, "go")
-    assert 'title="waits on lint (failed)"' in fix
+    assert 'aria-description="waits on lint (failed)"' in fix
     # the tab title leads with it, and the page carries the count for the live title
     assert "<title>1 failed · v · sluice</title>" in page
     assert '<span hidden data-title-failed="1"></span>' in page
@@ -937,7 +937,7 @@ def test_a_failed_steps_drawer_leads_with_its_cause_and_what_it_blocks(store):
     assert "ValueError: 3 lint errors</pre>" in html_
     assert views.error_headline("one line") == "one line" and views.error_headline(None) == ""
     # the same line in the card's tooltip and in the log
-    assert 'title="3 lint errors"' in card(views.project_page(store, "v", "x"), "lint")
+    assert 'aria-description="3 lint errors"' in card(views.project_page(store, "v", "x"), "lint")
     rec = {"kind": "step.status", "step": "lint", "from": "running", "to": "failed",
            "error": "exit code 1\nValueError: 3 lint errors"}
     assert views.log_summary(rec).endswith(": 3 lint errors")
@@ -967,7 +967,7 @@ def test_a_failure_headline_is_in_sluices_words(store, monkeypatch):
         store.write_state("v", {"inputs": {}, "steps": {"a": {
             "status": "failed", "error": "RuntimeError: /home/sam/w exited 143"}}})
     said = "~/w exited 143 (terminated: SIGTERM)"
-    assert f'title="{said}"' in card(views.project_page(store, "v", ver="x"), "a")
+    assert f'aria-description="{said}"' in card(views.project_page(store, "v", ver="x"), "a")
     detail = views.step_detail(store, "v", "a")
     assert (f'<p class="err-line">{said}</p><div class="err-box"><pre class="err">'
             "RuntimeError: /home/sam/w exited 143</pre>") in detail

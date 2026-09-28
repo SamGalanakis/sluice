@@ -58,7 +58,7 @@ def test_the_project_page_shows_the_docs(store, port):
     # the input's doc in the plan inputs; the step's doc on its card (a glue chip carries it
     # as its title)
     assert '<p class="meta">Who &lt;b&gt;signs&lt;/b&gt; off</p></dd>' in page
-    assert 'title="Echo &lt;i&gt;it&lt;/i&gt; — Waits for who"' in page  # doc, then why it waits
+    assert 'aria-description="Echo &lt;i&gt;it&lt;/i&gt; — Waits for who"' in page  # doc, then why it waits
     assert "<i>it" not in page and "<b>signs" not in page
 
 

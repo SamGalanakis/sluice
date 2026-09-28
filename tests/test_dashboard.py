@@ -178,14 +178,14 @@ def test_the_settings_cog_and_its_menu_are_on_every_page(store, port):
         assert '<form class="prefs" method="post" action="/settings" aria-label="Settings">' \
             in menu
         assert f'<input type="hidden" name="next" value="{html.escape(path)}">' in menu
-        # the theme is a radio group, System by default; value types a checkbox, off
+        # the theme is a radio group, none picked (the page follows the OS); value types off
         assert '<fieldset class="theme"><legend>Theme</legend>' in menu
         assert re.findall(r'<input type="radio" name="theme" value="(\w+)"( checked)?>', menu) \
-            == [("system", " checked"), ("light", ""), ("dark", "")]
+            == [("light", ""), ("dark", "")]
         assert ('<input type="hidden" name="types" value="0"><label class="check">'
                 '<input type="checkbox" name="types" value="1">Show value types</label>') in menu
         assert '<button type="submit" class="save">Save</button>' in menu
-        assert '<html lang="en">' in page, path  # System: the OS's theme
+        assert '<html lang="en">' in page, path  # nothing picked: the OS's theme
 
 
 def test_the_settings_route_sets_and_clears_the_cookies_and_goes_back_safely(store, port):
@@ -197,12 +197,13 @@ def test_the_settings_route_sets_and_clears_the_cookies_and_goes_back_safely(sto
     assert set_theme["sluice_theme"].startswith("sluice_theme=dark;")
     for part in ("Max-Age=34560000", "Path=/", "SameSite=lax", "HttpOnly"):
         assert part in set_theme["sluice_theme"], part
-    # System clears it; the unticked box's hidden "0" clears value types, a tick sets them
-    code, headers, _ = send(port, "POST", "/settings",
-                            {"theme": "system", "types": "0", "next": "/"})
+    # the unticked box's hidden "0" clears value types, a tick sets them; there is no
+    # "system" theme: once picked, a theme stays until another is picked
+    assert send(port, "POST", "/settings", {"theme": "system", "next": "/"})[0] == 400
+    code, headers, _ = send(port, "POST", "/settings", {"types": "0", "next": "/"})
     assert code == 303
     cleared = cookies(headers)
-    assert set(cleared) == {"sluice_theme", "sluice_types"}
+    assert set(cleared) == {"sluice_types"}
     assert all('=""' in c and "Max-Age=0" in c for c in cleared.values())
     code, headers, _ = send(port, "POST", "/settings",
                             {"theme": "light", "types": ["0", "1"], "next": "/"})
@@ -243,10 +244,11 @@ def test_a_page_renders_the_settings_its_cookies_name(store, port):
     assert '<button type="button" class="types-toggle" aria-pressed="true"' in page
     _, _, page = send(port, "GET", "/", headers={"Cookie": "sluice_theme=light"})
     assert '<html lang="en" data-theme="light">' in page
-    # anything else in the cookies is ignored: System, types off
+    # anything else in the cookies is ignored: no theme picked (the OS's), types off
     _, _, page = send(port, "GET", "/", headers={"Cookie": 'sluice_theme="><x; sluice_types=2'})
     assert '<html lang="en">' in page
-    assert '<input type="radio" name="theme" value="system" checked>' in page
+    assert 'name="theme" value="light" checked' not in page
+    assert 'name="theme" value="dark" checked' not in page
 
 
 # ---- pages ------------------------------------------------------------------------------
@@ -404,7 +406,7 @@ def test_a_running_steps_stderr_moves_its_progress_line(store, port):
 
     sent = patches(stream(port, "/projects/p/stream", {"ver": ver}, action=later(write)))
     [graph] = [p for p in sent if p.startswith('elements <div id="graph" tabindex="-1">')]
-    assert 'title="second &lt;b&gt;line&lt;/b&gt;"' in graph  # the bubble's tooltip
+    assert 'aria-description="second &lt;b&gt;line&lt;/b&gt;"' in graph  # the bubble's tooltip
     # the step's own stream (the drawer, or its page) follows the same file
     sver = signals_of(get(port, "/projects/p/steps/a")[1])["sver"]
     assert stream(port, "/projects/p/steps/a/stream", {"sver": sver}, seconds=0.8) == []

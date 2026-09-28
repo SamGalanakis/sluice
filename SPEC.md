@@ -743,18 +743,19 @@ Streams end when the server shuts down; the client reconnects with backoff.
   lists a step's After and Tags.
 - **Settings**: the nav's cog (named "Settings", on every page and at every width) opens a
   menu (a `<details>`; a click elsewhere or Escape closes it) holding a form: the theme, a
-  radio group of System (the OS's `prefers-color-scheme`), Light and Dark, and "Show value
+  radio group of Light and Dark (until one is picked, the page follows the OS's
+  `prefers-color-scheme` and the menu marks that one; once picked it stays), and "Show value
   types" (the drawer's Types switch, as a setting), with a Save button that only a page
   without JavaScript shows. The choices live in the browser's cookies, `sluice_theme`
-  (`light` or `dark`; none for System) and `sluice_types` (`1`), which every route reads
+  (`light` or `dark`; none until one is picked) and `sluice_types` (`1`), which every route reads
   (anything else in them is ignored): a page renders the theme on `<html>` as `data-theme`
   and value types as its `show-types` class, so it never shows the wrong theme first. With
   JavaScript (`static/nav.js`) a choice applies at once and is posted to the route in the
   background; the Types switch posts the same way. Cookies are per host, not port, so
   dashboards on other ports of this machine share them.
-- `POST /settings`: a form `theme` (`system`, `light` or `dark`) and `types` (`0` or `1`; of
+- `POST /settings`: a form `theme` (`light` or `dark`) and `types` (`0` or `1`; of
   several, the last: the menu sends a hidden `0` before its checkbox) each set their cookie
-  (`Path=/`, `SameSite=Lax`, `HttpOnly`, `Max-Age` 400 days) or clear it (System, `0`) when
+  (`Path=/`, `SameSite=Lax`, `HttpOnly`, `Max-Age` 400 days) or clear it (`0`) when
   present; anything else is 400 and changes nothing. It then redirects (303) to `next` under
   the answer route's rule (a local path, else `/`), or answers 204 without one. It writes
   nothing on the server; like the writes it is refused under a foreign `Host` and from a

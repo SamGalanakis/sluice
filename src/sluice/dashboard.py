@@ -468,7 +468,7 @@ class Dashboard:
         return FileResponse(f, media_type=ICON_TYPES[f.suffix[1:]], headers=headers)
 
     async def settings(self, request: Request) -> Response:
-        """The settings menu's form: `theme` (system, light or dark) and `types` ("0" or "1";
+        """The settings menu's form: `theme` (light or dark) and `types` ("0" or "1";
         the last one given wins, so an unticked box after its hidden "0" says off) each set or
         clear their cookie when present. Back (303) to `next` when it is a local path, else to
         the index; with no `next` (the menu's script), 204. Refused from another site's
@@ -487,7 +487,7 @@ class Dashboard:
             if nxt is not None else Response(status_code=204)
         changes: dict[str, str] = {}
         if theme is not None:
-            changes[THEME_COOKIE] = "" if theme == "system" else str(theme)
+            changes[THEME_COOKIE] = str(theme)
         if types:
             changes[TYPES_COOKIE] = "1" if types[-1] == "1" else ""
         for name, value in changes.items():

@@ -392,16 +392,17 @@ def test_a_setting_applies_at_once_and_the_next_page_is_rendered_with_it(store, 
                        "document.querySelector('.types-toggle').getAttribute('aria-pressed')]") \
         == ["dark", True, "true"]
     assert chrome.eval(background) == dark
-    # System follows the OS again; the Types switch turns value types off in the menu too
-    chrome.eval("document.querySelector('input[name=theme][value=system]').click()")
-    assert chrome.eval("document.documentElement.dataset.theme") is None
+    # a picked theme stays whatever the OS says; Light picks light again at once
+    chrome.eval("document.querySelector('input[name=theme][value=light]').click()")
+    assert chrome.eval("document.documentElement.dataset.theme") == "light"
     assert chrome.eval(background) == light
+    chrome.send("Emulation.setEmulatedMedia",
+                {"features": [{"name": "prefers-color-scheme", "value": "dark"}]})
+    assert chrome.eval(background) == light
+    # the Types switch turns value types off in the menu too
     chrome.eval("document.querySelector('.types-toggle').click()")
     assert chrome.eval("document.querySelector('input[name=types][type=checkbox]').checked") \
         is False
-    chrome.send("Emulation.setEmulatedMedia",
-                {"features": [{"name": "prefers-color-scheme", "value": "dark"}]})
-    assert chrome.eval(background) == dark
 
 
 def test_archiving_a_project_lists_it_apart(store, port):

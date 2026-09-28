@@ -380,8 +380,9 @@ phone), its segments 2px apart: green, blue, gold, ink, then the track.
   36px fill the sections' hover (the secondary fill while open), its edge on the column's;
   named "Settings". A `<details>` like the switcher (`nav.js` closes it on a click elsewhere
   or Escape, focus back on the cog) whose card, 256px, hangs under it flush with the column's
-  right edge, with the lift: "Theme" (a label in meta) over a three-part segmented radio
-  group, System · Light · Dark, the choice in the secondary fill with a strong hairline as
+  right edge, with the lift: "Theme" (a label in meta) over a two-part segmented radio
+  group, Light · Dark (until one is picked the page follows the OS, and the menu marks that
+  one), the choice in the secondary fill with a strong hairline as
   the inbox's filter; a hairline; then "Show value types", a checkbox (the Types switch's
   setting). It is a form posting to `/settings`: without script a Save button sends it and
   the page comes back in the chosen theme; with script a choice applies at once and Save is

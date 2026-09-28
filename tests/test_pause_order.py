@@ -117,7 +117,7 @@ def test_the_board_draws_after_edges_and_the_drawer_shows_tags_and_reason(store)
     page = views.project_page(store, "p", ver="x")
     edges = json.loads(views.html.unescape(page.split(' edges="', 1)[1].split('"', 1)[0]))
     assert ["s:a", "s:b", "after"] in edges
-    assert 'title="paused: host busy"' in page and "is-paused" in page
+    assert 'aria-description="paused: host busy"' in page and "is-paused" in page
     detail = views.step_detail(store, "p", "b")
     assert "host busy" in detail and "<dt>After</dt>" in detail
     assert '<span class="tag">heavy</span>' in detail  # its tags, in the meta line
@@ -192,7 +192,7 @@ def test_the_board_shows_a_skipped_step_and_a_finished_plan(store, runner):
            and s["b"]["status"] == "succeeded")
     page = views.project_page(store, "p", ver="x")
     assert "is-skipped" in page and 'class="g g-skipped"' in page
-    assert 'title="Skipped: go is false"' in page
+    assert 'aria-description="Skipped: go is false"' in page
     assert "Finished." in views.index(store)
     assert "<dt>When</dt>" in views.step_detail(store, "p", "a")
 
