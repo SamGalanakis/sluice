@@ -499,13 +499,14 @@ route refuses (403, plain text) a request whose `Host` does not name this machin
 (`127.0.0.1`, `localhost`, `[::1]`); a deliberate non-loopback bind lifts that, and the
 write routes still refuse a foreign `Origin` (DNS rebinding satisfies `Origin == Host`).
 Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
-`prefers-color-scheme`, usable at phone width, keyboard reachable), every page on one centred
+`prefers-color-scheme` unless the settings menu chose one, usable at phone width, keyboard
+reachable), every page on one centred
 column that the top nav's content shares, one nav and no second row: a project switcher whose
 button is the chosen project's name ("All projects" when none; its menu lists the projects, the
 archived ones last), each name led by the project's icon when it has one (§2), then that scope's
 sections (a project's Plan · Log · History · Functions,
 or Projects · Log · Functions), the current one marked (`aria-current` and a bar, not colour
-alone; a step's page is inside Plan), and Inbox at the right, every value HTML-escaped (plans, logs, run output and inbox items are
+alone; a step's page is inside Plan), then Inbox and, at the right end, the settings cog, every value HTML-escaped (plans, logs, run output and inbox items are
 untrusted). The Inbox link carries the count of open items across all projects as the
 dashboard's one coral badge (none when nothing waits); coral, the logo's, is spent on nothing
 else, and a failure is never coral or red. A step's status is a
@@ -740,8 +741,27 @@ Streams end when the server shuts down; the client reconnects with backoff.
   glyph (its reason in its tooltip and the drawer's Status); a paused project says so under
   its name with a Resume switch next to Archive. An `after` edge is drawn dashed; the drawer
   lists a step's After and Tags.
+- **Settings**: the nav's cog (named "Settings", on every page and at every width) opens a
+  menu (a `<details>`; a click elsewhere or Escape closes it) holding a form: the theme, a
+  radio group of System (the OS's `prefers-color-scheme`), Light and Dark, and "Show value
+  types" (the drawer's Types switch, as a setting), with a Save button that only a page
+  without JavaScript shows. The choices live in the browser's cookies, `sluice_theme`
+  (`light` or `dark`; none for System) and `sluice_types` (`1`), which every route reads
+  (anything else in them is ignored): a page renders the theme on `<html>` as `data-theme`
+  and value types as its `show-types` class, so it never shows the wrong theme first. With
+  JavaScript (`static/nav.js`) a choice applies at once and is posted to the route in the
+  background; the Types switch posts the same way. Cookies are per host, not port, so
+  dashboards on other ports of this machine share them.
+- `POST /settings`: a form `theme` (`system`, `light` or `dark`) and `types` (`0` or `1`; of
+  several, the last: the menu sends a hidden `0` before its checkbox) each set their cookie
+  (`Path=/`, `SameSite=Lax`, `HttpOnly`, `Max-Age` 400 days) or clear it (System, `0`) when
+  present; anything else is 400 and changes nothing. It then redirects (303) to `next` under
+  the answer route's rule (a local path, else `/`), or answers 204 without one. It writes
+  nothing on the server; like the writes it is refused under a foreign `Host` and from a
+  foreign `Origin` (403).
 - `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
-  `GET /static/sluice.js`: the dashboard's script and components; `GET /static/logo.svg`,
+  `GET /static/sluice.js`: the dashboard's script and components; `GET /static/nav.js`: the
+nav's menus and settings; `GET /static/logo.svg`,
   `GET /static/favicon.svg`: the mark (`image/svg+xml`).
 
 `plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML

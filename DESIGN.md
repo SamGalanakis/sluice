@@ -178,8 +178,11 @@ repeated: plan inputs and outputs are board nodes, not tables; history is the lo
 ## Colors
 
 Tokens in `src/sluice/static/dashboard.css` are the only source of colour (the Mermaid
-classes in `views.py` repeat the light set as hex for agents); `:root` holds the light values
-and `@media (prefers-color-scheme: dark)` the dark ones. The logo's colours are the source of
+classes in `views.py` repeat the light set as hex for agents); `:root` holds each as
+`light-dark(light, dark)`, so the theme is `color-scheme` alone: `light dark` (the OS's, by
+`prefers-color-scheme`) unless the settings menu chose one, which the server renders on
+`<html>` as `data-theme="light"` or `"dark"` (`:root[data-theme=…]` then fixes
+`color-scheme`), so a page never flashes the wrong theme. The logo's colours are the source of
 truth: coral `#ff5c49`→`#ff6551`, blue `#258aff`→`#1878f5`, navy `#0b285f`→`#102e70`; the
 flat tokens take the midpoints. Light: cream canvas `#fdf8ec`, navy ink `#0d2b67`. Dark: deep
 navy canvas `#071431`, cream ink `#f6f0e0`. Two colours are mixed in sRGB, never oklch: in
@@ -292,7 +295,7 @@ quiet count grows as the page ages). Text blocks hold a 68-75ch measure.
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
 least a 24px gutter, 16px below 720px): `main` is a three-track grid (gutter, column, gutter)
 and everything goes in the middle track, the board included. The top nav's content aligns to
-the same edges (the mark on the left edge, Inbox ending on the right), so nav, title,
+the same edges (the mark on the left edge, the settings cog ending on the right), so nav, title,
 lists, tables and cards share one left edge at every width. Nothing makes the page scroll
 sideways. While the step drawer is open from 1200px, the page makes room for it: nav and
 `main` take its width as right padding and the column keeps to the drawer's side (40px from
@@ -310,7 +313,7 @@ the step drawer becomes a full-screen sheet over the scrim.
 
 Flat by default, as supergraphics are: fields of flat colour, cards separated by hairline, not
 shadow. One lift (`--lift`, a navy-tinted shadow), on what floats over the page: the step drawer below 1200px (beside the page from there, it has only its
-hairline), the project switcher's menu and the focused skip link.
+hairline), the project switcher's and the settings' menus and the focused skip link.
 
 ## Shapes
 
@@ -367,19 +370,30 @@ phone), its segments 2px apart: green, blue, gold, ink, then the track.
 - **One bar** (52px, card fill, on the column), the only navigation: the brand (the owner's
   mark, `static/logo.svg` at 27 by 26px, and the wordmark "sluice" beside it as live text;
   one link to All projects, named "sluice: all projects"), the **project switcher**, then the
-  sections; Inbox, with the one coral badge, sits at the right edge. Every page links
+  sections; Inbox, with the one coral badge, then the settings cog at the right edge. Every page links
   `static/favicon.svg`, the same mark (legible at 16px as it stands). There is no second row: a page does not repeat the project's name or its sections.
 - **Project switcher**: a bordered button whose label is the chosen project's name (or "All
   projects") and a chevron; it opens a menu of All projects, then every project with its status
   glyph, the archived ones last under a label. A `<details>`, so it works without script;
   `nav.js` closes it on a click elsewhere or Escape.
+- **Settings**: a drawn cog (20px, the tray's stroke) in muted ink on a 44px target, its
+  36px fill the sections' hover (the secondary fill while open), its edge on the column's;
+  named "Settings". A `<details>` like the switcher (`nav.js` closes it on a click elsewhere
+  or Escape, focus back on the cog) whose card, 256px, hangs under it flush with the column's
+  right edge, with the lift: "Theme" (a label in meta) over a three-part segmented radio
+  group, System · Light · Dark, the choice in the secondary fill with a strong hairline as
+  the inbox's filter; a hairline; then "Show value types", a checkbox (the Types switch's
+  setting). It is a form posting to `/settings`: without script a Save button sends it and
+  the page comes back in the chosen theme; with script a choice applies at once and Save is
+  hidden. Its rows are 44px on a phone.
 - **Sections** follow the switcher: in a project, Plan, Threads, Log, History, Functions; with
   none chosen, Log, Functions (the switcher's "All projects" is the index). The current one is ink with a 2px ink bar on the bar's
   bottom hairline and `aria-current` (`page`, or `true` on a page inside it: a step is inside
   Plan); the rest are muted ink, with a quiet fill on hover.
 - **Phone** (below 720px): the brand gives way to the switcher (whose menu leads to All
-  projects), the switcher's label clips at 120px, and Inbox is a tray icon with its badge; the
-  sections scroll sideways inside themselves if they ever do not fit.
+  projects), the switcher's label clips at 120px, and Inbox is a tray icon with its badge, the
+  cog beside it; the sections scroll sideways inside themselves when they do not fit (a
+  project's last one or two, at 390px).
 - **Status filter** (inbox): a small segmented control, the current status in the secondary
   fill with a strong hairline; a filter, so it does not look like the sections.
 
@@ -428,7 +442,8 @@ under a "Show error" disclosure; the current attempt, last, on the secondary fil
 in Archivo). A value is a field:
 its name in 600, a small `← source` link, its doc in meta, the value under it. Types are
 noise until asked for: in the name's title, and beside every name with the one Types switch
-(on the first section of values). Long values fold under a fade.
+(on the first section of values), which is the settings' "Show value types": either turns it
+for every page. Long values fold under a fade.
 
 ### Log
 A table of seq, time, kind (12px data) and a one-line summary in plain words (a run the
@@ -439,7 +454,8 @@ repeat the thread). On a phone the kind filter folds behind a 44px "Filter: all 
 ### Touch
 At phone width every control is at least 44px tall: Pause and Archive, the nav's sections,
 the log's filter labels and pager links, the inbox's status filter, a folded box's line,
-and in the drawer the steps its facts link to, its thread link and "Show n lines";
+the settings cog and its menu's rows, and in the drawer the steps its facts link to, its
+thread link and "Show n lines";
 the Types pill keeps its size with a clear border that makes its target 44px.
 
 ## Do's and Don'ts

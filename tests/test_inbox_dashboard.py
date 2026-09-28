@@ -358,6 +358,52 @@ def test_a_card_opens_the_step_drawer_and_escape_closes_it(store, port, chrome):
         == ["true", True]
 
 
+def test_a_setting_applies_at_once_and_the_next_page_is_rendered_with_it(store, port, chrome):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": {"default": 1},
+                                                         "b": {"default": 2}}}})
+    chrome.open(f"http://127.0.0.1:{port}/projects/p")
+    chrome.send("Emulation.setEmulatedMedia",
+                {"features": [{"name": "prefers-color-scheme", "value": "light"}]})
+    chrome.wait("!!window.sluiceStream && document.querySelector('form.prefs .save').hidden")
+    background = "getComputedStyle(document.body).backgroundColor"
+    light = chrome.eval(background)
+    # the cog opens the menu; Dark applies at once, over the OS's light
+    chrome.eval("document.querySelector('details.settings > summary').click()")
+    assert chrome.eval("document.querySelector('details.settings').open")
+    chrome.eval("document.querySelector('input[name=theme][value=dark]').click()")
+    assert chrome.eval("document.documentElement.dataset.theme") == "dark"
+    dark = chrome.eval(background)
+    assert dark != light
+    # value types, and the Types switch says so
+    chrome.eval("document.querySelector('input[name=types][type=checkbox]').click()")
+    assert chrome.eval("document.documentElement.classList.contains('show-types')")
+    # Escape closes the menu and gives the cog its focus back
+    chrome.eval("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))")
+    assert chrome.eval("[document.querySelector('details.settings').open, "
+                       "document.activeElement.matches('details.settings > summary')]") \
+        == [False, True]
+    # both were kept: the next page comes from the server with them
+    chrome.wait("document.cookie === '' && performance.getEntriesByType('resource')"
+                ".filter(r => r.name.endsWith('/settings')).length === 2")
+    chrome.send("Page.navigate", {"url": f"http://127.0.0.1:{port}/projects/p/steps/a"})
+    chrome.wait("location.pathname.endsWith('/steps/a') && document.readyState === 'complete'")
+    assert chrome.eval("[document.documentElement.dataset.theme, "
+                       "document.documentElement.classList.contains('show-types'), "
+                       "document.querySelector('.types-toggle').getAttribute('aria-pressed')]") \
+        == ["dark", True, "true"]
+    assert chrome.eval(background) == dark
+    # System follows the OS again; the Types switch turns value types off in the menu too
+    chrome.eval("document.querySelector('input[name=theme][value=system]').click()")
+    assert chrome.eval("document.documentElement.dataset.theme") is None
+    assert chrome.eval(background) == light
+    chrome.eval("document.querySelector('.types-toggle').click()")
+    assert chrome.eval("document.querySelector('input[name=types][type=checkbox]').checked") \
+        is False
+    chrome.send("Emulation.setEmulatedMedia",
+                {"features": [{"name": "prefers-color-scheme", "value": "dark"}]})
+    assert chrome.eval(background) == dark
+
+
 def test_archiving_a_project_lists_it_apart(store, port):
     create(store, "old", {"a": {"run": "test.add", "in": {"a": {"default": 1},
                                                            "b": {"default": 2}}}})

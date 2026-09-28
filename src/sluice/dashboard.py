@@ -10,8 +10,10 @@ gets nothing. A step's detail (the project page's drawer, or its own page) strea
 under the `sver` signal, versioned by the project and that step's runs.
 The log page's stream sends the table when the filter signals changed, and on the newest page
 prepends new matching records. The inbox page streams its items the same way, and its answer
-route is one of the dashboard's two writes: it calls the same Store.inbox_answer as the MCP
-tool. The other is archiving a project (Store.update_project, like project_update).
+route is one of the dashboard's writes: it calls the same Store.inbox_answer as the MCP
+tool. The others archive or pause a project (Store.update_project, like project_update) or
+pause a step. The settings menu's route writes nothing on the server: it sets the browser's
+cookies (theme, value types), which every page reads to render them.
 """
 
 from __future__ import annotations
@@ -52,6 +54,10 @@ AUTHOR = "dashboard"
 HTTP_STATUS = {"not_found": 404, "conflict": 409}
 # the Host names this machine answers to on a loopback socket (the SDK's list for /mcp)
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+# the settings menu's cookies: the theme ("light" or "dark"; none follows the OS) and "1" to
+# show value types; kept for 400 days, a browser's longest
+THEME_COOKIE, TYPES_COOKIE = "sluice_theme", "sluice_types"
+COOKIE_AGE = 400 * 24 * 3600
 
 
 def _local_host(request: Request) -> bool:
@@ -75,13 +81,40 @@ def _local_host(request: Request) -> bool:
     return host in LOCAL_HOSTS
 
 
+def _viewer(request: Request) -> views.Viewer:
+    """The browser's settings, from its cookies (anything else is ignored), and the page's
+    address."""
+    theme = request.cookies.get(THEME_COOKIE)
+    query = request.url.query
+    return views.Viewer(theme=theme if theme in ("light", "dark") else None,
+                        types=request.cookies.get(TYPES_COOKIE) == "1",
+                        path=request.url.path + (f"?{query}" if query else ""))
+
+
 def _local(handler: Callable) -> Callable:
-    """403 a request that reached a loopback socket under a foreign Host."""
+    """403 a request that reached a loopback socket under a foreign Host; otherwise note the
+    viewer's settings for the pages it renders."""
     async def route(request: Request) -> Response:
         if not _local_host(request):
             return Response("requests under a foreign Host are refused", status_code=403)
+        views.VIEWER.set(_viewer(request))
         return await handler(request)
     return route
+
+
+def _next(nxt: str, fallback: str) -> str:
+    """A form's `next`, used only when it is a local path: no scheme, no netloc, no
+    backslash; otherwise `fallback`."""
+    where = urlsplit(nxt)
+    return nxt if nxt and not where.scheme and not where.netloc and "\\" not in nxt \
+        else fallback
+
+
+def _foreign(request: Request) -> bool:
+    """A write sent from another site's page (DNS rebinding satisfies Origin == Host, which the
+    Host check covers)."""
+    origin = request.headers.get("origin")
+    return bool(origin) and urlsplit(origin).netloc != request.headers.get("host")
 
 
 def _stat(path: Path) -> tuple[int, int] | None:
@@ -353,8 +386,7 @@ class Dashboard:
         """Answer an inbox item: a JSON answer {action, params?, values?, text?} (from
         inbox.js), or the no-JS text box's form (its text, then a redirect back). Both go
         through Store.inbox_answer, like the inbox_answer tool."""
-        origin = request.headers.get("origin")
-        if origin and urlsplit(origin).netloc != request.headers.get("host"):
+        if _foreign(request):
             return Response("answers from other sites are refused", status_code=403)
         name, item_id = request.path_params["name"], request.path_params["id"]
         is_json = request.headers.get("content-type", "").startswith("application/json")
@@ -368,10 +400,7 @@ class Dashboard:
             else:
                 form = await request.form()
                 answer = {"action": "answer", "text": str(form.get("text") or "")}
-                nxt = str(form.get("next") or "")
-                where = urlsplit(nxt)
-                back = nxt if nxt and not where.scheme and not where.netloc \
-                    and "\\" not in nxt else back
+                back = _next(str(form.get("next") or ""), back)
             item = await anyio.to_thread.run_sync(self.store.inbox_answer, name, item_id,
                                                   answer, AUTHOR)
         except SluiceError as err:
@@ -390,8 +419,7 @@ class Dashboard:
                       back: str) -> Response:
         """A switch form: `field` "1" or "0" calls `change(on)` (the tool's own code path),
         then back (303). Refused from another site's page."""
-        origin = request.headers.get("origin")
-        if origin and urlsplit(origin).netloc != request.headers.get("host"):
+        if _foreign(request):
             return Response("changes from other sites are refused", status_code=403)
         on = str((await request.form()).get(field)) == "1"
         try:
@@ -439,6 +467,37 @@ class Dashboard:
                 "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
         return FileResponse(f, media_type=ICON_TYPES[f.suffix[1:]], headers=headers)
 
+    async def settings(self, request: Request) -> Response:
+        """The settings menu's form: `theme` (system, light or dark) and `types` ("0" or "1";
+        the last one given wins, so an unticked box after its hidden "0" says off) each set or
+        clear their cookie when present. Back (303) to `next` when it is a local path, else to
+        the index; with no `next` (the menu's script), 204. Refused from another site's
+        page."""
+        if _foreign(request):
+            return Response("changes from other sites are refused", status_code=403)
+        form = await request.form()
+        theme = form.get("theme")
+        types = [str(t) for t in form.getlist("types")]
+        if theme is not None and theme not in views.THEMES:
+            return Response(f"theme must be one of {', '.join(views.THEMES)}", status_code=400)
+        if types and types[-1] not in ("0", "1"):
+            return Response('types must be "0" or "1"', status_code=400)
+        nxt = form.get("next")
+        response = RedirectResponse(_next(str(nxt), "/"), status_code=303) \
+            if nxt is not None else Response(status_code=204)
+        changes: dict[str, str] = {}
+        if theme is not None:
+            changes[THEME_COOKIE] = "" if theme == "system" else str(theme)
+        if types:
+            changes[TYPES_COOKIE] = "1" if types[-1] == "1" else ""
+        for name, value in changes.items():
+            if value:
+                response.set_cookie(name, value, max_age=COOKIE_AGE, path="/",
+                                    httponly=True, samesite="lax")
+            else:
+                response.delete_cookie(name, path="/", httponly=True, samesite="lax")
+        return response
+
     async def static(self, request: Request) -> Response:
         name = request.path_params["file"]
         if name not in STATIC_TYPES:
@@ -478,4 +537,5 @@ class Dashboard:
                             methods=["POST"])(_local(self.pause))
         server.custom_route("/projects/{name}/steps/{sid}/pause",
                             methods=["POST"])(_local(self.pause_step))
+        server.custom_route("/settings", methods=["POST"])(_local(self.settings))
 

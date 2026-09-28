@@ -136,6 +136,119 @@ def test_a_request_on_a_loopback_socket_must_be_addressed_to_this_machine(store,
     assert not store.paused("p")
 
 
+# ---- the settings menu: the theme and value types, kept in cookies ---------------------------
+
+
+def send(port, method, path, form=None, headers=None):
+    """A request that does not follow redirects: (status, headers, body)."""
+    body = urllib.parse.urlencode(form, doseq=True).encode() if form is not None else None
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=body, method=method,
+        headers={**({"content-type": "application/x-www-form-urlencoded"} if body else {}),
+                 **(headers or {})})
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    try:
+        r = urllib.request.build_opener(NoRedirect).open(req, timeout=10)
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read().decode()
+    return r.status, r.headers, r.read().decode()
+
+
+def cookies(headers):
+    """The Set-Cookie headers of a response, by name."""
+    return {c.split("=", 1)[0]: c for c in headers.get_all("set-cookie") or []}
+
+
+def test_the_settings_cog_and_its_menu_are_on_every_page(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    for path in ("/", "/projects/p", "/projects/p/threads", "/projects/p/log", "/log", "/fns",
+                 "/inbox", "/projects/p/inbox", "/projects/p/steps/a", "/inbox?status=all"):
+        code, page = get(port, path)
+        assert code == 200, path
+        # the cog ends the nav, after the Inbox: an icon button with a name
+        assert re.search(r'Inbox</span>(?: <span class="badge"[^>]*>\d+</span>)?</a>'
+                         r'<details class="settings"><summary aria-label="Settings" '
+                         r'title="Settings"><svg class="cog"[^>]*aria-hidden="true">', page), path
+        menu = re.search(r'<details class="settings">.*?</details></nav>', page)[0]
+        # a form that works without JavaScript and comes back to this page
+        assert '<form class="prefs" method="post" action="/settings" aria-label="Settings">' \
+            in menu
+        assert f'<input type="hidden" name="next" value="{html.escape(path)}">' in menu
+        # the theme is a radio group, System by default; value types a checkbox, off
+        assert '<fieldset class="theme"><legend>Theme</legend>' in menu
+        assert re.findall(r'<input type="radio" name="theme" value="(\w+)"( checked)?>', menu) \
+            == [("system", " checked"), ("light", ""), ("dark", "")]
+        assert ('<input type="hidden" name="types" value="0"><label class="check">'
+                '<input type="checkbox" name="types" value="1">Show value types</label>') in menu
+        assert '<button type="submit" class="save">Save</button>' in menu
+        assert '<html lang="en">' in page, path  # System: the OS's theme
+
+
+def test_the_settings_route_sets_and_clears_the_cookies_and_goes_back_safely(store, port):
+    create(store, "p", {})
+    code, headers, _ = send(port, "POST", "/settings", {"theme": "dark", "next": "/projects/p"})
+    assert code == 303 and headers["location"] == "/projects/p"
+    set_theme = cookies(headers)
+    assert list(set_theme) == ["sluice_theme"]  # value types untouched
+    assert set_theme["sluice_theme"].startswith("sluice_theme=dark;")
+    for part in ("Max-Age=34560000", "Path=/", "SameSite=lax", "HttpOnly"):
+        assert part in set_theme["sluice_theme"], part
+    # System clears it; the unticked box's hidden "0" clears value types, a tick sets them
+    code, headers, _ = send(port, "POST", "/settings",
+                            {"theme": "system", "types": "0", "next": "/"})
+    assert code == 303
+    cleared = cookies(headers)
+    assert set(cleared) == {"sluice_theme", "sluice_types"}
+    assert all('=""' in c and "Max-Age=0" in c for c in cleared.values())
+    code, headers, _ = send(port, "POST", "/settings",
+                            {"theme": "light", "types": ["0", "1"], "next": "/"})
+    assert cookies(headers)["sluice_types"].startswith("sluice_types=1;")
+    assert cookies(headers)["sluice_theme"].startswith("sluice_theme=light;")
+    # the menu's script sends no `next`: nothing to go back to
+    code, headers, _ = send(port, "POST", "/settings", {"types": "1"})
+    assert code == 204 and list(cookies(headers)) == ["sluice_types"]
+    # a `next` that is not a local path goes to the index
+    for hostile in ("//evil.example", "https://evil.example/x", "/\\evil.example",
+                    "javascript:alert(1)", ""):
+        code, headers, _ = send(port, "POST", "/settings", {"theme": "dark", "next": hostile})
+        assert code == 303 and headers["location"] == "/", hostile
+    # a value it does not know sets nothing
+    for form in ({"theme": "blue", "next": "/"}, {"types": "yes", "next": "/"}):
+        code, headers, _ = send(port, "POST", "/settings", form)
+        assert code == 400 and not cookies(headers), form
+    # refused from another site's page, and under a foreign Host
+    code, headers, _ = send(port, "POST", "/settings", {"theme": "dark", "next": "/"},
+                            {"Origin": "http://evil.example"})
+    assert code == 403 and not cookies(headers)
+    code, headers, _ = send(port, "POST", "/settings", {"theme": "dark", "next": "/"},
+                            {"Host": "evil.example:7420"})
+    assert code == 403 and not cookies(headers)
+    assert send(port, "GET", "/settings")[0] == 405
+
+
+def test_a_page_renders_the_settings_its_cookies_name(store, port):
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    jar = {"Cookie": "sluice_theme=dark; sluice_types=1"}
+    for path in ("/", "/projects/p", "/projects/p/steps/a", "/inbox"):
+        _, _, page = send(port, "GET", path, headers=jar)
+        assert '<html lang="en" data-theme="dark" class="show-types">' in page, path
+        assert '<input type="radio" name="theme" value="dark" checked>' in page
+        assert '<input type="checkbox" name="types" value="1" checked>' in page
+    # the Types switch in a step's detail says it is on
+    _, _, page = send(port, "GET", "/projects/p/steps/a", headers=jar)
+    assert '<button type="button" class="types-toggle" aria-pressed="true"' in page
+    _, _, page = send(port, "GET", "/", headers={"Cookie": "sluice_theme=light"})
+    assert '<html lang="en" data-theme="light">' in page
+    # anything else in the cookies is ignored: System, types off
+    _, _, page = send(port, "GET", "/", headers={"Cookie": 'sluice_theme="><x; sluice_types=2'})
+    assert '<html lang="en">' in page
+    assert '<input type="radio" name="theme" value="system" checked>' in page
+
+
 # ---- pages ------------------------------------------------------------------------------
 
 

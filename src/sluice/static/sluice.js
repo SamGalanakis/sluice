@@ -14,12 +14,13 @@
 // - <sluice-thread project thread last>: counts the messages this browser has not seen on a
 //   thread, marks them when it is opened, and opens the thread the address names.
 // On every page: relative times (`data-ago`), running times (`data-since`) and a running
-// step's quiet badge (`data-quiet`) stay current, and the Types switch
-// shows the types of values; the tab title leads with how many steps failed; on a phone the
-// log's kind filter folds behind its summary.
+// step's quiet badge (`data-quiet`) stay current, and the Types switch shows the types of
+// values (the settings' "Show value types", static/nav.js); the tab title leads with how many
+// steps failed; on a phone the log's kind filter folds behind its summary.
 
 import { rocket } from
   "/static/datastar-rocket-1.0.4.js";
+import { setTypes, typesOn } from "/static/nav.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -592,25 +593,16 @@ rocket("sluice-thread", {
   },
 });
 
-// ---- the Types switch: a value's type shows on demand, remembered in this browser -----------
+// ---- the Types switch: a value's type shows on demand, a setting (static/nav.js) ------------
 
-function setTypes(on) {
-  document.documentElement.classList.toggle("show-types", on);
-  for (const b of $$(".types-toggle")) b.setAttribute("aria-pressed", String(on));
-}
-let typesOn = false;
-try { typesOn = localStorage.getItem("sluice.types") === "1"; } catch { /* no storage */ }
-setTypes(typesOn);
 document.addEventListener("click", (evt) => {
-  if (!evt.target.closest?.(".types-toggle")) return;
-  typesOn = !typesOn;
-  setTypes(typesOn);
-  try { localStorage.setItem("sluice.types", typesOn ? "1" : "0"); } catch { /* no storage */ }
+  if (evt.target.closest?.(".types-toggle")) setTypes(!typesOn());
 });
 // a patch brings new switches: keep them in step
 new MutationObserver(() => {
+  const on = String(typesOn());
   for (const b of $$(".types-toggle")) {
-    if (b.getAttribute("aria-pressed") !== String(typesOn)) b.setAttribute("aria-pressed", String(typesOn));
+    if (b.getAttribute("aria-pressed") !== on) b.setAttribute("aria-pressed", on);
   }
 }).observe(document.body, { childList: true, subtree: true });
 

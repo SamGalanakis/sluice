@@ -28,6 +28,7 @@ import json
 import re
 import signal
 from collections.abc import Callable, Iterable, Mapping
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -78,6 +79,22 @@ e = html.escape
 # CommonMark plus tables; raw HTML is escaped as text and unsafe link schemes are refused.
 MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
 INBOX_FILTERS = ("open", "answered", "closed", "all")
+THEMES = ("system", "light", "dark")  # the settings menu's choices; system follows the OS
+
+
+@dataclasses.dataclass(frozen=True)
+class Viewer:
+    """What a page knows of the browser it renders for: the theme chosen in the settings menu
+    ("light" or "dark"; None follows the OS), whether value types show, and the address of
+    the page (where the menu's form goes back to)."""
+    theme: str | None = None
+    types: bool = False
+    path: str = "/"
+
+
+# set per request by the dashboard's routes (from the settings cookies); the default for a page
+# rendered outside one (plan_view's standalone page)
+VIEWER: ContextVar[Viewer] = ContextVar("viewer", default=Viewer())  # noqa: B039 (frozen)
 
 
 def markdown(text: str) -> str:
@@ -376,11 +393,45 @@ def project_switcher(store: Store, project: str | None) -> str:
             f'<div class="menu">{menu}</div></details>')
 
 
+# the settings cog: eight teeth round a hole, drawn in the tray's stroke
+COG = ('<svg class="cog" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">'
+       '<path d="M18.81 9.66 21.45 10.33 21.45 13.67 18.81 14.34 18.47 15.16 19.86 17.51 '
+       '17.51 19.86 15.16 18.47 14.34 18.81 13.67 21.45 10.33 21.45 9.66 18.81 8.84 18.47 '
+       '6.49 19.86 4.14 17.51 5.53 15.16 5.19 14.34 2.55 13.67 2.55 10.33 5.19 9.66 5.53 8.84 '
+       '4.14 6.49 6.49 4.14 8.84 5.53 9.66 5.19 10.33 2.55 13.67 2.55 14.34 5.19 15.16 5.53 '
+       '17.51 4.14 19.86 6.49 18.47 8.84Z" fill="none" stroke="currentColor" '
+       'stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" '
+       'fill="none" stroke="currentColor" stroke-width="1.8"/></svg>')
+
+
+def settings_menu() -> str:
+    """The nav's settings, the cog at its right end: the theme (System follows the OS) and
+    whether value types show. A <details> holding a form that posts to /settings and comes
+    back here, so it works without JavaScript; with it (static/nav.js), a choice applies at
+    once and the Save button stays hidden."""
+    viewer = VIEWER.get()
+    chosen = viewer.theme or "system"
+    themes = "".join(
+        f'<label><input type="radio" name="theme" value="{t}"'
+        f'{" checked" if t == chosen else ""}><span>{t.capitalize()}</span></label>'
+        for t in THEMES)
+    types = " checked" if viewer.types else ""
+    return (f'<details class="settings"><summary aria-label="Settings" title="Settings">'
+            f'{COG}</summary><div class="menu">'
+            f'<form class="prefs" method="post" action="/settings" aria-label="Settings">'
+            f'<input type="hidden" name="next" value="{e(viewer.path)}">'
+            f'<fieldset class="theme"><legend>Theme</legend><div class="seg">{themes}</div>'
+            f'</fieldset><input type="hidden" name="types" value="0">'
+            f'<label class="check"><input type="checkbox" name="types" value="1"{types}>'
+            f'Show value types</label><button type="submit" class="save">Save</button>'
+            f'</form></div></details>')
+
+
 def top_nav(store: Store | None, project: str | None, tab: str | None, here: str,
             inbox: int | None, sub: bool = False) -> str:
     """The one nav: the mark, the project switcher, the sections of the chosen project (Plan,
     Threads, Log, History, Functions) or of all of them (Log, Functions; the switcher's "All
-    projects" is the index), and the Inbox with the one coral badge."""
+    projects" is the index), the Inbox with the one coral badge, and the settings cog."""
     if project is not None:
         p = quote(project)
         hrefs = {"plan": (f"/projects/{p}", "Plan"),
@@ -396,7 +447,8 @@ def top_nav(store: Store | None, project: str | None, tab: str | None, here: str
     switcher = project_switcher(store, project) if store is not None else ""
     return (f'<nav class="top" aria-label="Sections"><a class="brand" href="/" '
             f'aria-label="sluice: all projects">{BRAND_MARK}</a>{switcher}'
-            f'<span class="links">{links}</span>{nav_inbox(inbox, here == "/inbox")}</nav>')
+            f'<span class="links">{links}</span>{nav_inbox(inbox, here == "/inbox")}'
+            f"{settings_menu()}</nav>")
 
 
 def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
@@ -412,7 +464,9 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
     nav's switcher; `board` loads static/sluice.js (times, and the board, drawer and thread
     components). `skip` is a (target id, text) link past the nav, the first thing a keyboard
     reaches; `tail` goes after `main` (the step drawer, which must stay reachable when the
-    page is inert behind it)."""
+    page is inert behind it). `<html>` carries the viewer's settings (`VIEWER`): the chosen
+    theme as `data-theme` (none for System) and `show-types`, so the page never flashes the
+    wrong theme."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
     scripts = "".join(f'<script type="module" src="{e(s)}"></script>'
                       for s in (script, "/static/sluice.js" if board else "",
@@ -423,7 +477,10 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
         top = f'<a class="skip" href="#{e(skip[0])}">{e(skip[1])}</a>{top}'
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
-    return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+    viewer = VIEWER.get()
+    root = (f' data-theme="{e(viewer.theme)}"' if viewer.theme else "") + \
+        (' class="show-types"' if viewer.types else "")
+    return (f'<!doctype html>\n<html lang="en"{root}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{e(title)} · sluice</title>"
             + '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
@@ -1975,7 +2032,8 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     head = f'<header class="d-head">{head}{switch}</header>'
     sections = []
     # one Types switch, on the first section of values
-    types = [('<button type="button" class="types-toggle" aria-pressed="false" '
+    pressed = "true" if VIEWER.get().types else "false"
+    types = [(f'<button type="button" class="types-toggle" aria-pressed="{pressed}" '
               'title="Show the types of the values">Types</button>')]
 
     def section(title: str, body: str, extra: str = "") -> None:

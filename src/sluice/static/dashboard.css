@@ -9,66 +9,52 @@
   --font-display: "Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Public Sans Variable", "Public Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, monospace;
-  --background: oklch(0.98 0.017 88);          /* cream, #fdf8ec */
-  --foreground: oklch(0.308 0.112 262);        /* the logo's navy, #0d2b67 */
-  --card: oklch(0.995 0.007 88);
-  --secondary: oklch(0.925 0.028 88);
-  --muted: oklch(0.95 0.022 88);
-  --muted-foreground: oklch(0.46 0.06 262);
-  --accent: oklch(0.617 0.2 257);              /* the logo's blue, #1f81fa */
-  --accent-ink: oklch(0.52 0.19 257);          /* the blue as text on cream */
-  --primary: oklch(0.55 0.2 257);              /* the answer button: the blue, deep enough for cream */
-  --primary-foreground: oklch(0.995 0.007 88);
-  --border: oklch(0.308 0.112 262 / 11%);
-  --border-strong: oklch(0.308 0.112 262 / 24%);
-  --input: oklch(0.308 0.112 262 / 22%);
+  /* each colour is light-dark(light, dark): the theme is `color-scheme`, below */
+  --background: light-dark(oklch(0.98 0.017 88),      /* cream, #fdf8ec */
+                           oklch(0.2 0.06 263));      /* deep navy */
+  --foreground: light-dark(oklch(0.308 0.112 262),    /* the logo's navy, #0d2b67 */
+                           oklch(0.955 0.022 88));    /* cream */
+  --card: light-dark(oklch(0.995 0.007 88), oklch(0.245 0.07 263));
+  --secondary: light-dark(oklch(0.925 0.028 88), oklch(0.29 0.075 263));
+  --muted: light-dark(oklch(0.95 0.022 88), oklch(0.225 0.066 263));
+  --muted-foreground: light-dark(oklch(0.46 0.06 262), oklch(0.8 0.035 88));
+  --accent: light-dark(oklch(0.617 0.2 257),          /* the logo's blue, #1f81fa */
+                       oklch(0.64 0.195 256));        /* and #258aff */
+  --accent-ink: light-dark(oklch(0.52 0.19 257),      /* the blue as text */
+                           oklch(0.76 0.12 252));
+  /* the answer button: the blue deep enough for cream; in the dark the accent under navy */
+  --primary: light-dark(oklch(0.55 0.2 257), oklch(0.64 0.195 256));
+  --primary-foreground: light-dark(oklch(0.995 0.007 88), oklch(0.2 0.06 263));
+  --border: light-dark(oklch(0.308 0.112 262 / 11%), oklch(0.955 0.022 88 / 11%));
+  --border-strong: light-dark(oklch(0.308 0.112 262 / 24%), oklch(0.955 0.022 88 / 24%));
+  --input: light-dark(oklch(0.308 0.112 262 / 22%), oklch(0.955 0.022 88 / 20%));
   --ring: var(--accent);
-  --edge: oklch(0.46 0.06 262 / 45%);
-  --edge-head: oklch(0.46 0.06 262 / 72%);
+  --edge: light-dark(oklch(0.46 0.06 262 / 45%), oklch(0.8 0.035 88 / 42%));
+  --edge-head: light-dark(oklch(0.46 0.06 262 / 72%), oklch(0.8 0.035 88 / 70%));
   --status-active: var(--accent);
-  --status-idle: oklch(0.6 0.025 262);
-  --status-success: oklch(0.53 0.14 150);
-  --status-attention: oklch(0.53 0.12 78);
-  --status-paused: oklch(0.5 0.13 330);
+  --status-idle: light-dark(oklch(0.6 0.025 262), oklch(0.66 0.03 262));
+  --status-success: light-dark(oklch(0.53 0.14 150), oklch(0.76 0.16 150));
+  --status-attention: light-dark(oklch(0.53 0.12 78), oklch(0.83 0.14 85));
+  --status-paused: light-dark(oklch(0.5 0.13 330), oklch(0.76 0.11 330));
   --badge: oklch(0.69 0.2 30);                 /* the logo's coral, #ff604d */
-  --badge-ink: oklch(0.2 0.06 262);
-  --lift: 0 1px 2px oklch(0.308 0.112 262 / 8%), 0 14px 36px oklch(0.308 0.112 262 / 14%);
-  --scrim: oklch(0.2 0.06 262 / 45%);
+  --badge-ink: light-dark(oklch(0.2 0.06 262), oklch(0.2 0.06 263));
+  /* a navy-tinted lift; in the dark a deeper shadow and a faint light edge */
+  --lift: inset 1px 0 0 light-dark(transparent, oklch(1 0 0 / 6%)),
+          0 1px 2px light-dark(oklch(0.308 0.112 262 / 8%), transparent),
+          0 14px 36px light-dark(oklch(0.308 0.112 262 / 14%), oklch(0.1 0.04 263 / 55%));
+  --scrim: light-dark(oklch(0.2 0.06 262 / 45%), oklch(0.1 0.04 263 / 60%));
   --column: 960px;  /* the one reading column every page and the nav sit on */
   --gutter: 24px;   /* the least space beside it */
   --nav-pad: 10px;
   --plane-pad: 12px;
   --drawer-w: min(680px, 45vw);  /* the step drawer beside the page, from 1200px */
   --drawer-gap: 40px;            /* between the board and the drawer beside it */
-  color-scheme: light;
+  /* the theme: the OS's (System), or the one chosen in the settings menu, which the server
+     renders on <html> as data-theme */
+  color-scheme: light dark;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.2 0.06 263);         /* deep navy */
-    --foreground: oklch(0.955 0.022 88);       /* cream */
-    --card: oklch(0.245 0.07 263);
-    --secondary: oklch(0.29 0.075 263);
-    --muted: oklch(0.225 0.066 263);
-    --muted-foreground: oklch(0.8 0.035 88);
-    --accent: oklch(0.64 0.195 256);           /* the logo's blue, #258aff */
-    --accent-ink: oklch(0.76 0.12 252);
-    --primary: var(--accent);
-    --primary-foreground: oklch(0.2 0.06 263);
-    --border: oklch(0.955 0.022 88 / 11%);
-    --border-strong: oklch(0.955 0.022 88 / 24%);
-    --input: oklch(0.955 0.022 88 / 20%);
-    --edge: oklch(0.8 0.035 88 / 42%);
-    --edge-head: oklch(0.8 0.035 88 / 70%);
-    --status-idle: oklch(0.66 0.03 262);
-    --status-success: oklch(0.76 0.16 150);
-    --status-attention: oklch(0.83 0.14 85);
-    --status-paused: oklch(0.76 0.11 330);
-    --badge-ink: oklch(0.2 0.06 263);
-    --lift: inset 1px 0 0 oklch(1 0 0 / 6%), 0 14px 36px oklch(0.1 0.04 263 / 55%);
-    --scrim: oklch(0.1 0.04 263 / 60%);
-    color-scheme: dark;
-  }
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -152,7 +138,7 @@ nav.top a.brand { display: flex; align-items: center; gap: 8px; margin-right: 14
 nav.top .mark { display: block; flex: none; }
 .wordmark { font: 800 22px/1 var(--font-display); font-stretch: 112%; letter-spacing: -0.025em;
             padding-bottom: 3px; }  /* on the mark's optical centre, not its box's */
-#nav-inbox { margin-left: auto; margin-right: calc(-1 * var(--nav-pad)); }
+#nav-inbox { margin-left: auto; }
 #nav-inbox .tray { display: none; }
 .badge { display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px;
          border-radius: 999px; background: var(--badge); color: var(--badge-ink); font-size: 12px;
@@ -190,6 +176,42 @@ details.switcher .menu a.all { color: var(--muted-foreground); margin-bottom: 4p
 details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 .menu-label { margin: 8px 10px 4px; font-size: 12px; font-weight: 600;
               color: var(--muted-foreground); }
+
+/* ---- the settings cog, at the nav's right end: theme and value types ------------------ */
+details.settings { position: relative; display: flex; align-items: center; flex: none;
+                   margin-right: -12px; }  /* the cog's own edge on the column's */
+details.settings > summary { position: relative; isolation: isolate; display: grid;
+  place-items: center; width: 44px; height: 44px; list-style: none; cursor: pointer;
+  color: var(--muted-foreground); user-select: none; }
+details.settings > summary::-webkit-details-marker { display: none; }
+details.settings > summary::before { content: ""; position: absolute; inset: 4px; z-index: -1;
+                                     border-radius: var(--radius-md); }
+details.settings > summary:hover, details.settings[open] > summary { color: var(--foreground); }
+details.settings > summary:hover::before { background: var(--muted); }
+details.settings[open] > summary::before { background: var(--secondary); }
+details.settings > summary:focus-visible { outline-offset: -4px; border-radius: var(--radius-md); }
+details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px; z-index: 30;
+  width: 256px; max-width: calc(100vw - 2 * var(--gutter)); padding: 12px 14px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card);
+  box-shadow: var(--lift); font: 15px/22px var(--font-sans); }
+.prefs fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.prefs legend { padding: 0; margin-bottom: 6px; font: 500 13px/18px var(--font-sans);
+                color: var(--muted-foreground); }
+/* the theme: a segmented radio group, the current choice as the inbox's filter marks it */
+.prefs .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px;
+              border: 1px solid var(--border); border-radius: var(--radius-md); }
+.prefs .seg label { position: relative; display: grid; place-items: center; height: 32px;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; font-weight: 500;
+  color: var(--muted-foreground); }
+.prefs .seg label:hover { color: var(--foreground); background: var(--muted); }
+.prefs .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.prefs .seg label:has(:checked) { color: var(--foreground); background: var(--secondary);
+                                  box-shadow: 0 0 0 1px var(--border-strong); }
+.prefs .seg label:has(:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; }
+.prefs label.check { display: flex; align-items: center; gap: 10px; min-height: 36px;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); cursor: pointer; }
+.prefs label.check input { width: 16px; height: 16px; margin: 0; flex: none; }
+.prefs .save { margin-top: 10px; }
 
 /* the first stop for a keyboard: past the nav to the plan */
 .skip { position: absolute; left: var(--gutter); top: 8px; z-index: 40; padding: 8px 12px;
@@ -714,6 +736,7 @@ main > .phead + * { margin-top: 0; }
   #nav-inbox .t { position: absolute; width: 1px; height: 1px; overflow: hidden;
                   clip-path: inset(50%); white-space: nowrap; }
   #nav-inbox .badge { margin-left: 2px; }
+  .prefs .seg label, .prefs label.check { min-height: 44px; }
   /* no edges on a phone: a lane reads straight down, its cards close together */
   .board { --row-gap: 10px; }
   .board svg.edges, .board .legend { display: none; }
