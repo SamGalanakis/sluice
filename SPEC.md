@@ -1005,6 +1005,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
+| `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false` | `{records: [it], notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped; an open-fn or unit-completing success; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record). `notes` are the notes held since the last wake — read them before the record. `last_seq` is past everything read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout returns `records` empty and `timed_out` true (`timeout` capped at 3600) |
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
@@ -1065,7 +1066,26 @@ sluice tool                           list the MCP tools with one-line descripti
 sluice tool <name> '<json args>'      call that tool in-process and print its result
 sluice watch [-p P] [--kinds k1,k2] [--threads a,b] [--since-seq N]
                                       print new log records as JSON lines (§10)
+sluice next [-p P …] [--since-seq N | --cursor FILE] [--me NAME] [--timeout S]
+            [--all] [--json]    print the next record an orchestrator acts on, then exit
 ```
+
+`sluice next` blocks until the projects' logs (the given ones, or every project not archived)
+hold a record an orchestrator acts on, prints it as one compact line and exits: `STEP fix-x
+running -> failed: <last line of the error>`, `MSG step-fix-x fix-x -> orchestrator: <body>`,
+`NOTE …` for a held note, `INBOX post i3 <title>`, `UNIT done: <first> … <last> (n steps)`
+for a success that settled its unit, then `seq <N>` on the last line. **Wakes** on a
+`step.status` to `failed`, `stale` or `skipped`; a `step.status` to `succeeded` when the fn
+is open or the step completes its unit (every step joined to it by handoffs or `after`
+succeeded or was skipped); a `message` needing a reply, not from `--me` (default
+`orchestrator`), addressed to `--me` or to nobody; an `inbox.post` or `inbox.answer`; with
+`--all`, every record. Notes (`needs_reply: false`) not from `--me` are held and printed
+just before the waking record, like `sluice watch --wake questions`. Without `--since-seq`
+or `--cursor` it starts from now; `--cursor FILE` reads the start seq from it (missing:
+from now) and writes back the seq of the last record consumed — read, waking or not — so a
+relaunch never misses or repeats one. `--timeout S` exits 0 printing `timeout seq <N>`
+(and writes the cursor); `--json` prints the records as JSON lines and a final
+`{"seq": N, "timed_out": …}`. Exit 0 on a wake or a timeout.
 
 Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
 builds the same MCP server object `serve` exposes and calls its tool (same argument validation,
@@ -1166,7 +1186,9 @@ harnesses with monitors (e.g. Claude Code's Monitor tool) the shell form is `slu
 without `-p`) with the same filter as `log_read`, from the end of the log (or after `--since-seq`),
 printing each matching record as one JSON line (flushed) as it is appended, and never exits
 (`--wake questions` holds notes and prints them with the next record that is not one). It
-reads the home's database only; it needs no runner or server.
+reads the home's database only; it needs no runner or server. When the next thing to act on
+is what an orchestrator wants — not a stream — `next` (the tool) and `sluice next` (§9) wait
+for exactly one waking record.
 
 ## 11. Conventions
 

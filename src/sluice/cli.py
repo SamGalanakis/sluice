@@ -1,5 +1,6 @@
 """The `sluice` command line (SPEC §9): `serve`, `loop`, `tool` to call any MCP tool
-in-process through the same server object `serve` exposes, and `watch` to follow a log."""
+in-process through the same server object `serve` exposes, `watch` to follow a log and
+`next` for the one record an orchestrator acts on."""
 
 from __future__ import annotations
 
@@ -10,13 +11,14 @@ import json
 import signal
 import sys
 import threading
+from pathlib import Path
 from typing import Any
 
 from . import db
 from .errors import BadRequest, SluiceError
 from .runner import Runner
 from .store import DEFAULT_CONFIG, Store, default_home
-from .util import atomic_write_json
+from .util import atomic_write_json, atomic_write_text
 
 # `serve` and `loop` exit 0 on these; SIGHUP is what closing the terminal (or
 # `tmux kill-session`) sends. Their runs are left running (the next runner adopts them)
@@ -150,6 +152,41 @@ def cmd_watch(a: argparse.Namespace, store: Store) -> int:
     return 0
 
 
+def cmd_next(a: argparse.Namespace, store: Store) -> int:
+    """Print the next record an orchestrator acts on once one arrives, then exit."""
+    from .watch import line, next_up
+
+    if a.project:
+        projects = [store.project(p)["name"] for p in a.project]
+    else:
+        projects = [p["name"] for p in store.projects() if not p["archived"]]
+        if not projects:
+            raise BadRequest("no projects (none not archived); pass -p to name them")
+    if a.cursor is not None:
+        try:
+            since = int(Path(a.cursor).read_text().strip())
+        except FileNotFoundError:
+            since = None  # a missing cursor starts from now
+        except ValueError:
+            raise BadRequest(f"cursor file {a.cursor} is not a seq") from None
+    else:
+        since = a.since_seq
+    res = next_up(store, projects, since, me=a.me, timeout=a.timeout, every=a.all)
+    if a.cursor is not None:
+        atomic_write_text(Path(a.cursor), f"{res['last_seq']}\n")
+    shown = [*res["notes"], *res["records"]]
+    if a.json:
+        for r in shown:
+            print(json.dumps(r, ensure_ascii=False))
+        print(json.dumps({"seq": res["last_seq"], "timed_out": res["timed_out"]}))
+    else:
+        for r in shown:
+            print(line(r))
+        print(f"{'timeout ' if res['timed_out'] else ''}seq {res['last_seq']}")
+    sys.stdout.flush()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
@@ -185,17 +222,41 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--wake", choices=("any", "questions"), default="any",
                    help="questions: hold notes (needs_reply false) and print them with the "
                    "next record that is not one")
+    s = sub.add_parser("next", help="print the next record an orchestrator acts on, exit",
+                       description="Block until a record one of the projects' logs should "
+                       "wake an orchestrator for (a failed/stale/skipped step, an "
+                       "open-fn or unit-completing success, a question for you, an inbox "
+                       "post or answer), print it compactly and exit. Held notes print "
+                       "just before it; the last line is `seq <N>` to pass to --since-seq.")
+    s.add_argument("-p", "--project", action="append",
+                   help="a project to watch (repeatable; default: every project not "
+                   "archived)")
+    where = s.add_mutually_exclusive_group()
+    where.add_argument("--since-seq", type=int,
+                       help="start after this seq (default: from now)")
+    where.add_argument("--cursor", metavar="FILE",
+                       help="read the start seq from FILE (missing: from now) and write "
+                       "the last consumed seq back to it, atomically")
+    s.add_argument("--me", default="orchestrator",
+                   help="your name: your own messages never wake it, questions wake only "
+                   "when addressed to this or to nobody (default: orchestrator)")
+    s.add_argument("--timeout", type=float, default=None, metavar="S",
+                   help="wait at most S seconds, then exit 0 printing `timeout seq <N>` "
+                   "(default: wait forever)")
+    s.add_argument("--all", action="store_true", help="every record wakes it")
+    s.add_argument("--json", action="store_true",
+                   help="print each record as one JSON line, then {\"seq\": N, ...}")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     try:
-        ensure_home(quiet=a.cmd in ("tool", "watch"))  # their output stays pure JSON
+        ensure_home(quiet=a.cmd in ("tool", "watch", "next"))
         store = Store()
         db.connect(store.home)  # refuses a home from before the SQLite store, up front
         return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool,
-                "watch": cmd_watch}[a.cmd](a, store)
+                "watch": cmd_watch, "next": cmd_next}[a.cmd](a, store)
     except SluiceError as e:
         print(json.dumps(e.payload(), indent=2), file=sys.stderr)
         return 1

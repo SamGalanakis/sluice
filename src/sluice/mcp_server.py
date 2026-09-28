@@ -22,6 +22,7 @@ from . import calls, runner, views
 from . import log as L
 from . import query as query_mod
 from . import verify as verify_mod
+from . import watch as watch_mod
 from .dashboard import Dashboard
 from .errors import BadRequest, NotFound, SluiceError
 from .store import Store
@@ -549,6 +550,36 @@ def build_server(store: Store, stop: threading.Event | None = None,
             functools.partial(L.wait, store.home, project, since_seq, kinds, threads, wake,
                               min(max(0, timeout), WAIT_CAP), 0.25, limit))
         return {"records": res["records"] + res["held"], "last_seq": res["last_seq"]}
+
+    @tool
+    async def next(projects: list[str] | str, since_seq: int, me: str = "orchestrator",
+                   timeout: float = 300, all: bool = False) -> Any:
+        """Wait until the next record an orchestrator should act on across the projects,
+        then return {records: [it], notes, last_seq, timed_out}: a step that failed, went
+        stale or was skipped; a step that succeeded and opens work for you (its fn is open,
+        or its success settled its unit — every step connected to it by handoffs or `after`
+        succeeded or was skipped); a message needing a reply, not from you, addressed to
+        `me` or to nobody; an inbox post or answer. `notes` are the notes (messages with
+        needs_reply false) held since the last wake — read them before the record. Pass
+        `last_seq` back as `since_seq` to continue; nothing is missed or repeated. The
+        command-line form is `sluice next`.
+
+        Args:
+            projects: the projects to watch (one or several).
+            since_seq: records after this seq (the last_seq you last got).
+            me: your name; your own messages never wake it (default "orchestrator").
+            timeout: seconds to wait at most (default 300; capped at 3600); on a timeout
+                records is empty and timed_out is true.
+            all: every record wakes it (default false).
+        """
+        names = [projects] if isinstance(projects, str) else list(projects)
+        if not names:
+            raise BadRequest("projects: expected at least one project")
+        for p in names:
+            store.project(p)
+        return await anyio.to_thread.run_sync(functools.partial(
+            watch_mod.next_up, store, names, since_seq, me,
+            min(max(0, timeout), WAIT_CAP), all))
 
     def query(sql: str, params: list | None = None, limit: int = 200) -> Any:
         return query_mod.run(store.home, sql, params, limit)
