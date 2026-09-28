@@ -12,7 +12,7 @@ from tests.conftest import add, create, d, echo, settle, src, statuses, window
 
 
 def status_of(store, project):
-    return {s["id"]: s for s in store.status(project)["steps"]}
+    return {s["id"]: s for s in store.status(project, all=True)["steps"]}
 
 
 def test_steps_added_through_the_tools_come_in_paused_unless_started(store, runner):
@@ -218,7 +218,7 @@ def test_a_brief_status_cuts_long_strings(store):
                                "outputs": {"sum": 2, "final": long, "notes": ["short", long]}}
         store.write_state("p", state)
     cut = "x" * 200 + "… [250 more characters]"
-    brief = store.status("p", brief=True)
+    brief = store.status("p", brief=True, all=True)
     assert brief["inputs"]["spec"] == cut
     assert brief["steps"][0]["outputs"] == {"sum": 2, "final": cut, "notes": ["short", cut]}
-    assert store.status("p")["steps"][0]["outputs"]["final"] == long  # whole without brief
+    assert store.status("p", all=True)["steps"][0]["outputs"]["final"] == long  # whole without brief

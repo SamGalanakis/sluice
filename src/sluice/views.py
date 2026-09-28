@@ -40,7 +40,17 @@ from . import log as L
 from . import state as S
 from . import types as T
 from .errors import BadRequest, NotFound, SluiceError
-from .plan import Plan, Ref, Source, Step, source_value, value_of
+from .plan import (
+    Plan,
+    Ref,
+    Source,
+    Step,
+    done_units,
+    source_value,
+    unit_done,
+    units,
+    value_of,
+)
 from .store import Store
 from .util import read_json, tail_text
 
@@ -148,14 +158,25 @@ def _status(entry: dict[str, Any]) -> str:
     return status
 
 
-def mermaid(plan: Plan, state: dict[str, Any]) -> str:
+def done_note(done: list[list[str]]) -> str:
+    """The line saying which done units a view leaves out (empty when none)."""
+    n, m = len(done), sum(map(len, done))
+    return (f"{n} done unit{'s' if n != 1 else ''} ({m} step{'s' if m != 1 else ''}) left "
+            "out; plan_view with all: true shows them") if done else ""
+
+
+def mermaid(plan: Plan, state: dict[str, Any], done: list[list[str]] | None = None) -> str:
+    """The plan as a Mermaid flowchart; the steps of `done` (units) left out, said in a
+    comment line."""
+    hide = {sid for u in done or [] for sid in u}
     ids = {("in", n): f"in{i}" for i, n in enumerate(plan.inputs)}
     ids.update({("step", s): f"s{i}" for i, s in enumerate(plan.steps)})
     ids.update({("out", n): f"out{i}" for i, n in enumerate(plan.outputs)})
-    lines = ["flowchart LR"]
+    steps = {sid: step for sid, step in plan.steps.items() if sid not in hide}
+    lines = ["flowchart LR"] + ([f"  %% {done_note(done)}"] if hide else [])
     for n in plan.inputs:
         lines.append(f"  {ids['in', n]}([{_q(n)}])")
-    for sid, step in plan.steps.items():
+    for sid, step in steps.items():
         entry = S.entry_of(state, sid)
         label = step_label(sid, step.fn.name, entry, step.doc)
         lines.append(f"  {ids['step', sid]}[{_q(label)}]")
@@ -166,14 +187,15 @@ def mermaid(plan: Plan, state: dict[str, Any]) -> str:
         src = ids["step", ref.step] if ref.step else ids["in", ref.name]
         return f"  {src} -->|{_q(ref.name)}| {target}"
 
-    for sid, step in plan.steps.items():
+    for sid, step in steps.items():
         lines.extend(dict.fromkeys(edge(r, ids["step", sid]) for r in step.reads))
         lines.extend(f"  {ids['step', a]} -.->|after| {ids['step', sid]}" for a in step.after)
     for n, ref in plan.outputs.items():
-        lines.append(edge(ref, ids["out", n]))
+        if ref.step not in hide:
+            lines.append(edge(ref, ids["out", n]))
     for cls, style in CLASSES.items():
         lines.append(f"  classDef {cls} {style}")
-    for sid in plan.steps:
+    for sid in steps:
         entry = S.entry_of(state, sid)
         cls = "manual" if entry.get("manual") and entry["status"] == "succeeded" \
             else entry["status"]
@@ -1109,24 +1131,14 @@ def lanes(board: Board) -> tuple[list[dict[int, list[str]]], dict[str, int]]:
 
 
 def _boxes(board: Board, groups: list[dict[int, list[str]]]) -> list[list[int]]:
-    """The lanes (indexes into `groups`) of each independent piece of work: lanes joined by
-    any edge (only an `after` can join two lanes) share a box. Boxes and their lanes keep the
-    plan's order."""
-    lane = {sid: i for i, rows in enumerate(groups) for r in rows.values() for sid in r}
-    parent = list(range(len(groups)))
-
-    def root(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for a, b, _ in edges(board):
-        parent[root(lane[a])] = root(lane[b])
+    """The lanes (indexes into `groups`) of each independent piece of work: the plan's units
+    (`plan.units`, the steps any edge joins; only an `after` can join two lanes). Boxes and
+    their lanes keep the plan's order."""
+    unit = {sid: n for n, ids in enumerate(units(board.plan)) for sid in ids}
     boxes: dict[int, list[int]] = {}
-    for i in range(len(groups)):
-        boxes.setdefault(root(i), []).append(i)
-    return list(boxes.values())
+    for i, rows in enumerate(groups):
+        boxes.setdefault(unit[next(iter(rows.values()))[0]], []).append(i)
+    return [boxes[n] for n in sorted(boxes)]
 
 
 ROOM = 960 - 36  # px a row of a box has: the column, less the box's padding
@@ -1613,8 +1625,7 @@ def board_html(store: Store, board: Board, live: bool = True,
 def _done(board: Board, ids: list[str]) -> bool:
     """Whether a box's work is finished: every step succeeded (by hand too), or was skipped
     while the rest succeeded."""
-    marks = {board.blocks[sid].status for sid in ids}
-    return marks <= {"succeeded", "skipped"} and "succeeded" in marks
+    return unit_done(ids, board.state)
 
 
 def _folded(board: Board, ids: list[str], inner: str) -> str:
@@ -1933,8 +1944,14 @@ def _pause_form(project: str, paused: bool, sid: str | None = None) -> str:
 
 
 def _project(store: Store, project: str, live: bool,
-             view: BoardView = DEFAULT_VIEW) -> dict[str, str]:
+             view: BoardView = DEFAULT_VIEW,
+             done: list[list[str]] | None = None) -> dict[str, str]:
+    """The page's parts; the board without the steps of the `done` units (plan_view's
+    default), said in one line under the summary, which counts every step."""
     board = load_board(store, project)
+    hide = {sid for u in done or [] for sid in u}
+    shown = dataclasses.replace(board, blocks={sid: b for sid, b in board.blocks.items()
+                                               if sid not in hide}) if hide else board
     about = board.info.get("description") or ""
     archived = board.info.get("archived") is True
     paused = board.info.get("paused") is True
@@ -1952,12 +1969,14 @@ def _project(store: Store, project: str, live: bool,
         line += (f'<div class="switches">{_pause_form(project, paused)}'
                  f"{_archive_form(project, archived)}</div>")
     line += "</div>"
+    if hide:
+        line += f'<p class="meta">{e(done_note(done or []))}</p>'
     # first whether the work is moving (and the switches), then what the project is; what the
     # plan took and produced sits under the board
     parts = {"summary": _part("summary", line + note + _about(about)
                               + _title_mark(len(board.failed), quiet_since(store, board))),
              # the skip link's target: focusable, so a keyboard lands on the plan
-             "graph": f'<div id="graph" tabindex="-1">{board_html(store, board, live, view)}</div>',
+             "graph": f'<div id="graph" tabindex="-1">{board_html(store, shown, live, view)}</div>',
              "result": _part("result", result_panel(board) + inputs_strip(board), "section",
                              "plan-facts")}
     if live:
@@ -1991,13 +2010,15 @@ def _drawer(project: str) -> str:
 
 
 def project_page(store: Store, project: str, ver: str | None = None,
-                 view: BoardView = DEFAULT_VIEW) -> str:
+                 view: BoardView = DEFAULT_VIEW, done: list[list[str]] | None = None) -> str:
     """The project page: live (nav, links, the step drawer, streaming its changes) when given
     the project's version `ver`, else the standalone page plan_view returns (the board, then
-    every step's detail in a disclosure). `view` orders and filters the board's boxes; the
-    page's `board` signal carries it to the stream, so live updates keep it."""
+    every step's detail in a disclosure; without the steps of the `done` units). `view`
+    orders and filters the board's boxes; the page's `board` signal carries it to the
+    stream, so live updates keep it."""
     live = ver is not None
-    p = _project(store, project, live, view)
+    p = _project(store, project, live, view, done)
+    hide = {sid for u in done or [] for sid in u}
     body = (f'{project_head(store, project, "plan" if live else None)}{p["summary"]}'
             f'{p["graph"]}{p["result"]}')
     board = load_board(store, project)
@@ -2005,7 +2026,7 @@ def project_page(store: Store, project: str, ver: str | None = None,
         body += "".join(
             f'<details class="std" id="step-{e(sid)}"><summary>{glyph(b.mark)}'
             f"<span>{e(b.title)}</span></summary>{step_detail(store, project, sid, False)}"
-            f"</details>" for sid, b in board.blocks.items())
+            f"</details>" for sid, b in board.blocks.items() if sid not in hide)
     lead = title_lead(len(board.failed), quiet_since(store, board))
     return layout(f"{lead}{project}", body, nav=live,
                   stream=f"/projects/{project}/stream" if live else None,
@@ -2017,14 +2038,17 @@ def project_page(store: Store, project: str, ver: str | None = None,
                   tail=_drawer(project) if live else "")
 
 
-def render(store: Store, project: str, fmt: str) -> str:
-    """plan_view: the Mermaid text or the standalone HTML page."""
+def render(store: Store, project: str, fmt: str, all: bool = False) -> str:
+    """plan_view: the Mermaid text or the standalone HTML page, without the done units
+    unless `all` (a line says how many it left out)."""
+    if fmt not in ("mermaid", "html"):
+        raise BadRequest(f'format must be "mermaid" or "html", got {fmt!r}')
+    with store.rx():
+        plan, state = store.plan(project)[1], store.read_state(project)
+    done = [] if all else done_units(plan, state)
     if fmt == "mermaid":
-        plan = store.plan(project)[1]
-        return mermaid(plan, store.read_state(project))
-    if fmt == "html":
-        return project_page(store, project)
-    raise BadRequest(f'format must be "mermaid" or "html", got {fmt!r}')
+        return mermaid(plan, state, done)
+    return project_page(store, project, done=done)
 
 
 # ---- a step's detail --------------------------------------------------------------------

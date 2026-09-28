@@ -14,13 +14,15 @@ Workflow:
 2. `fn_list(project)` to see the functions it can use (built-in, global, its own). Missing one?
    `fn_save(fn, main_py, project)` writes it (see `docs("fns")`).
 3. One-off work: `fn_call(name, inputs, project, wait)`. Multi-step work: `plan_get(project)`,
-   then `plan_patch(project, rev, ops, reason)` to add steps.
+   then `plan_patch(project, rev, ops, reason)` to add steps. Many units of one shape: write
+   a recipe once and add each unit with `unit_add(project, recipe, params)` (`docs("plans")`).
 4. Watch with `status(project)`, or wait for changes with `log_wait(project, since_seq)` (every
    step status change, call and message is a log record). A failed step stays failed until you
    act: fix the plan with `plan_patch` (needs the current `rev`), then `step_retry`; or record
    the result yourself with `step_set_output`. A `stale` step was computed from inputs that have
    changed since: `step_retry` it (or accept it with `step_set_output`). Provide values a plan
-   waits on with `plan_set_input`.
+   waits on with `plan_set_input`. `status` leaves out finished units (`all=true` shows them);
+   `plan_prune(project)` removes them from the plan.
 5. `verify(project)` lists every problem (bad fn.json, name collisions, plan, state) with where
    it is. A project with function problems refuses edits and runs until they are fixed.
 

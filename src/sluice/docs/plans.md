@@ -219,6 +219,18 @@ Every edit, manual value and step status change is a record in the project's log
 `plan_history(project)` shows every edit (back to rev 1) and the manual values the log still
 has, `log_read(project)` everything (`docs("threads")`).
 
+## Keeping the plan short
+A **unit** is an independent piece of work: the steps joined by any edge (a handoff, a `when`,
+an `after`). It is **done** once every step in it succeeded or was skipped (at least one
+succeeded). `status(project)` and `plan_view(project)` leave the done units out, saying how many
+(`done_units: {units, steps}` in `status`, one line in the view), so they show what is still
+going on; `all=true` shows everything, and `status(steps=[...])` or `tags=[...]` returns what
+you ask for, done or not. The dashboard folds a done unit's box instead.
+
+`plan_prune(project, older_than_hours=0)` removes every done unit whose last step finished at
+least that long ago, in one edit: nothing else reads from them, and `plan_history` keeps the
+removed steps. A unit a plan output reads stays. It returns `{rev, units, steps}`.
+
 ## Validation errors
 Every edit is checked: functions exist (as the project sees them), required inputs are bound,
 extra inputs and declared outputs only on an open function's step, refs point at real inputs

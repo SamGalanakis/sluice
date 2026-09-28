@@ -569,20 +569,28 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return verify_mod.verify(store, project)
 
     @tool
-    def plan_view(project: str, format: Literal["mermaid", "html"] = "mermaid") -> Any:
+    def plan_view(project: str, format: Literal["mermaid", "html"] = "mermaid",
+                  all: bool = False) -> Any:
         """Draw the plan with each step's status: a Mermaid flowchart or a standalone HTML page.
+        Done units (independent pieces of work whose every step succeeded or was skipped) are
+        left out, with one line saying how many, unless all is true.
 
         Args:
             project: the project.
             format: "mermaid" (default) or "html".
+            all: include the done units too.
         """
-        return views.render(store, project, format)
+        return views.render(store, project, format, all)
 
     @tool
     def status(project: str, steps: list[str] | str | None = None,
-               tags: list[str] | str | None = None, brief: bool = False) -> Any:
+               tags: list[str] | str | None = None, brief: bool = False,
+               all: bool = False) -> Any:
         """Return {rev, paused, inputs, outputs, steps: [{id, run, status, started, finished,
-        outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}.
+        outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}],
+        done_units?}. Without steps or tags, the done units (independent pieces of work,
+        steps joined by any edge, whose every step succeeded or was skipped) are left out and
+        counted in done_units {units, steps}, unless all is true.
         inputs and outputs map names to values (null if unset). A step's status is pending,
         running, succeeded, failed, stale (its result was computed from inputs that have
         changed since; it waits for step_retry or step_set_output, and so do the steps reading
@@ -596,8 +604,26 @@ def build_server(store: Store, stop: threading.Event | None = None,
             brief: cut every string value over 200 characters in inputs and outputs (an
                 agent's `final`, a report) to its start and how much more there is; step_get
                 or a status without brief has them whole.
+            all: include the done units too (steps or tags always return what they select).
         """
-        return store.status(project, steps, tags, brief)
+        return store.status(project, steps, tags, brief, all)
+
+    @tool
+    def plan_prune(project: str, older_than_hours: float = 0, author: str = AUTHOR,
+                   reason: str = "") -> Any:
+        """Remove every step of every done unit (an independent piece of work whose every
+        step succeeded or was skipped) whose last step finished at least older_than_hours
+        ago, in one edit; plan_history keeps them. A unit a plan output reads stays. Returns
+        {rev, units, steps}: how many units and which step ids went (no edit when none).
+
+        Args:
+            project: the project.
+            older_than_hours: only units finished at least this many hours ago (default 0:
+                every done unit).
+            author: who is editing (default "mcp").
+            reason: why, recorded in the plan's history (default "prune <n> done units").
+        """
+        return store.prune(project, older_than_hours, author, reason)
 
     @tool
     def inbox_post(project: str, title: str, body: str | None = None, ui: str | None = None,

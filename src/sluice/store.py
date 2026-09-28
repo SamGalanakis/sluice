@@ -5,6 +5,7 @@ made by hand (manual values). Each logical change is one write transaction."""
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import hashlib
 import json
 import os
@@ -608,6 +609,35 @@ class Store:
                         todo.append(d)
         return [sid for sid in plan.steps if sid in chosen]
 
+    def prune(self, project: str, older_than_hours: Any = 0, author: str = "",
+              reason: str = "") -> dict[str, Any]:
+        """plan_prune: remove every step of every done unit whose last step finished at least
+        `older_than_hours` ago, in one edit (the history keeps them). A unit a plan output
+        reads stays (removing it would break the plan). Returns {rev, units, steps}: the
+        number of units and the ids removed; no edit when there is nothing to remove."""
+        if isinstance(older_than_hours, bool) or not isinstance(older_than_hours, int | float) \
+                or older_than_hours < 0:
+            raise BadRequest("older_than_hours: expected a number of hours, 0 or more")
+        cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(hours=older_than_hours)
+        with self.tx():
+            doc, plan = self.plan(project)
+            state = self.read_state(project)
+            kept = {r.step for r in plan.outputs.values() if r.step}
+            gone: list[list[str]] = []
+            for unit in P.done_units(plan, state):
+                ends = [_parse_time(S.entry_of(state, sid).get("finished")) for sid in unit]
+                last = max((t for t in ends if t is not None), default=None)
+                if kept.isdisjoint(unit) and last is not None and last <= cutoff:
+                    gone.append(unit)
+            ids = [sid for unit in gone for sid in unit]
+            if not ids:
+                return {"rev": doc["rev"], "units": 0, "steps": []}
+            n = len(gone)
+            rev = self.patch(project, doc["rev"],
+                             [{"op": "remove", "path": f"/steps/{sid}"} for sid in ids], author,
+                             reason or f"prune {n} done unit{'s' if n != 1 else ''}")
+        return {"rev": rev, "units": n, "steps": ids}
+
     def pause_steps(self, project: str, steps: Any = None, tags: Any = None,
                     subtree: bool = False, paused: bool = True, author: str = "",
                     reason: str = "") -> dict[str, Any]:
@@ -745,14 +775,18 @@ class Store:
                 self._row(conn, project)
 
     def status(self, project: str, steps: Any = None, tags: Any = None,
-               brief: bool = False) -> dict[str, Any]:
-        """The plan's inputs, outputs and steps (with `steps` and/or `tags`, only those); with
-        `brief`, their long strings cut (`_brief`). One snapshot of plan, state and project."""
+               brief: bool = False, all: bool = False) -> dict[str, Any]:
+        """The plan's inputs, outputs and steps (with `steps` and/or `tags`, only those; else,
+        unless `all`, without the done units, counted in `done_units`); with `brief`, their
+        long strings cut (`_brief`). One snapshot of plan, state and project."""
         with self.rx():
             only = set(self.select_steps(project, steps, tags)) if steps or tags else None
             doc, plan = self.plan(project)
             state = self.read_state(project)
             project_paused = self.paused(project)
+        done = P.done_units(plan, state) if only is None and not all else []
+        if done:
+            only = set(plan.steps) - {sid for u in done for sid in u}
         outputs = {}
         for name, ref in plan.outputs.items():
             ok, v = P.value_of(ref, plan, state)
@@ -786,7 +820,10 @@ class Store:
             for row in rows:
                 if "outputs" in row:
                     row["outputs"] = _brief(row["outputs"])
-        return {**out, "outputs": outputs, "steps": rows}
+        out = {**out, "outputs": outputs, "steps": rows}
+        if done:
+            out["done_units"] = {"units": len(done), "steps": sum(map(len, done))}
+        return out
 
     # ---- manual values (SPEC §6) ----
 
@@ -1045,6 +1082,14 @@ def answer_value(answer: dict[str, Any]) -> Any:
         if "value" in where:
             return where["value"]
     return answer.get("text")
+
+
+def _parse_time(text: Any) -> dt.datetime | None:
+    """An ISO UTC time as the state writes it (2026-09-26T14:02:11Z); None when it is not."""
+    try:
+        return dt.datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.UTC)
+    except (TypeError, ValueError):
+        return None
 
 
 def _body(doc: dict[str, Any]) -> dict[str, Any]:

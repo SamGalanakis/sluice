@@ -18,7 +18,7 @@ TOOLS = {"docs", "projects_list", "project_create", "project_update", "fn_list",
          "plan_view", "status", "log_read", "log_wait", "inbox_post", "inbox_list",
          "inbox_answer", "inbox_close", "step_submit", "project_delete", "step_add",
          "step_update", "step_remove", "step_pause", "step_cancel", "query",
-         "recipe_list", "unit_add"}
+         "recipe_list", "unit_add", "plan_prune"}
 UPPER = """from sluice.fn import run
 
 run(lambda inp, ctx: {"text": inp["text"].upper()})
@@ -58,7 +58,7 @@ async def fail(c, tool, **args):
 async def until(c, project, pred, timeout=20.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        s = await ok(c, "status", project=project)
+        s = await ok(c, "status", project=project, all=True)
         if pred({x["id"]: x["status"] for x in s["steps"]}):
             return s
         await anyio.sleep(0.1)
@@ -295,7 +295,7 @@ async def test_status_manual_outputs_and_retry(live):
         assert running["error"] == "bad_request"
         assert await ok(c, "step_set_output", project="p", step="boom", outputs={"done": True},
                         reason="done by hand") == {"ok": True}
-        s = await ok(c, "status", project="p")
+        s = await ok(c, "status", project="p", all=True)
         boom = next(r for r in s["steps"] if r["id"] == "boom")
         assert (boom["status"], boom["manual"], boom["outputs"]) == ("succeeded", True,
                                                                      {"done": True})
@@ -355,7 +355,7 @@ async def test_every_tool_refuses_an_argument_it_does_not_take(store):
         err = await fail(c, "status", project="p", step="a")
         assert err["error"] == "bad_request"
         assert err["message"] == ("status takes no argument 'step'; its arguments are "
-                                  "project, steps, tags, brief")
+                                  "project, steps, tags, brief, all")
         err = await fail(c, "projects_list", verbose=True)
         assert "its arguments are none" in err["message"]
         assert [s["id"] for s in (await ok(c, "status", project="p", steps=["a"]))["steps"]] \

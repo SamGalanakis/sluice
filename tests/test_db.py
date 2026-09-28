@@ -367,7 +367,7 @@ def test_the_views_agree_with_status(tmp_path):
         "skip": {"status": "skipped", "skipped": "when is false"},
         "old": {"status": "stale", "outputs": {"value": 1}},
         "fan": {"status": "running", "run_ids": ["r0", "r1"], "done": 1, "total": 2}}})
-    status = {s["id"]: s for s in store.status("p")["steps"]}
+    status = {s["id"]: s for s in store.status("p", all=True)["steps"]}
     with store.rx() as conn:
         rows = {r["step"]: dict(r) for r in conn.execute(
             "SELECT * FROM steps WHERE project = 'p'")}

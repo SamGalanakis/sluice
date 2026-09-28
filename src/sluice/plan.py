@@ -563,3 +563,36 @@ def mark_stale(plan: Plan, state: dict[str, Any]) -> bool:
             e["status"] = "succeeded"
             changed = True
     return changed
+
+
+def units(plan: Plan) -> list[list[str]]:
+    """The plan's units: the connected components of its steps over every edge (handoffs,
+    `when`, `after`), in plan order (by their first step), each its step ids in plan order.
+    No edge joins two units."""
+    parent = {sid: sid for sid in plan.steps}
+
+    def root(sid: str) -> str:
+        while parent[sid] != sid:
+            parent[sid] = parent[parent[sid]]
+            sid = parent[sid]
+        return sid
+
+    for step in plan.steps.values():
+        for other in step.waits:
+            if other in parent:
+                parent[root(other)] = root(step.id)
+    out: dict[str, list[str]] = {}
+    for sid in plan.steps:
+        out.setdefault(root(sid), []).append(sid)
+    return list(out.values())
+
+
+def unit_done(ids: list[str], state: dict[str, Any]) -> bool:
+    """A unit is done when every step in it succeeded (by hand too) or was skipped, with at
+    least one success."""
+    marks = {S.entry_of(state, sid)["status"] for sid in ids}
+    return marks <= {"succeeded", "skipped"} and "succeeded" in marks
+
+
+def done_units(plan: Plan, state: dict[str, Any]) -> list[list[str]]:
+    return [u for u in units(plan) if unit_done(u, state)]

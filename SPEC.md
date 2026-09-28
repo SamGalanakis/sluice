@@ -284,6 +284,13 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   fails the step with `declared outputs not submitted: <names> (the agent must call
   step_submit ...)`. An unsubmitted optional one is null.
 - A step is **ready** when every plan input and step it reads has a value / has `succeeded`.
+- **Units.** The plan's units are the connected components of its steps over every edge
+  (handoffs, `when`, `after`; a plan input shared by two steps is no edge), in plan order (by
+  their first step), each its steps in plan order (`plan.units`): the independent pieces of
+  work. No edge joins two units. A unit is **done** when every step in it succeeded (set by
+  hand too) or was skipped, with at least one success. `status` and `plan_view` leave the done
+  units out by default (§8), the dashboard groups its board's boxes by unit and folds a done
+  one, and `plan_prune` removes them.
 
 **Recipes.** A step shape used again and again (a lane: a worktree, an agent working in it,
 the worktree removed) is a recipe: `recipes/<name>.json` in `SLUICE_HOME` or in the project's
@@ -703,8 +710,8 @@ raw HTML escaped, unsafe link schemes refused).
   and Archive switches; then the description (markdown, folded to its opening, then "Show
   more"; a paused or archived project says so), then the **board**. Its **lanes** are the
   steps joined by handoffs (an edge that carries a value; `after` only orders), so independent
-  pieces of work stay together. The steps any edge joins (a handoff or an `after`) are one
-  independent piece of work, its own quiet box when there are several; the boxes wrap, in
+  pieces of work stay together. The steps any edge joins (a handoff, a `when` or an `after`: a
+  unit, §5) are one independent piece of work, its own quiet box when there are several; the boxes wrap, in
   the plan's order, and no edge crosses between them. A box is rows by dependency depth
   (`after` counts) from its first step; in a row its cards stand lane by lane, and a row too
   wide wraps within itself. A lane's cards stay together: a lane that would crowd a row it
@@ -942,9 +949,13 @@ Streams end when the server shuts down; the client reconnects with backoff.
 nav's menus and settings; `GET /static/logo.svg`,
   `GET /static/favicon.svg`: the mark (`image/svg+xml`).
 
-`plan_view(project, format)` returns the Mermaid text, or the project page as a standalone HTML
-document from the same renderer: the summary and the board (cards without links), then every
-step's detail in a disclosure (no nav, no drawer, no stream, no script).
+`plan_view(project, format, all?)` returns the Mermaid text, or the project page as a standalone
+HTML document from the same renderer: the summary and the board (cards without links), then every
+step's detail in a disclosure (no nav, no drawer, no stream, no script). Unless `all`, both
+leave out the done units (§5) — their steps, and the edges to them and from them to the plan's
+outputs — and say so in one line (`3 done units (7 steps) left out; plan_view with all: true
+shows them`: a `%%` comment after `flowchart LR`, a line under the page's summary, whose bar and
+counts still cover every step).
 
 The `query` tool gives trusted agents one SELECT (or WITH) against the database itself — for
 questions the other tools do not answer: joins, aggregates, looking across projects. Each call
@@ -996,8 +1007,9 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
-| `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
-| `status` | `project, steps?, tags?, brief? = false` | only the steps selected by id and/or tag when given; with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
+| `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
+| `plan_prune` | `project, older_than_hours? = 0, author?, reason?` | `{rev, units, steps}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago, in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed. A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
+| `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
 | `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |

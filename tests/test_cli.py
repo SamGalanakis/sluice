@@ -129,7 +129,7 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
     try:
         deadline = time.time() + 30
         while time.time() < deadline:
-            s = json_out(sluice.tool("status", project="demo"))
+            s = json_out(sluice.tool("status", project="demo", all=True))
             if {x["id"]: x["status"] for x in s["steps"]} == {
                     "a": "succeeded", "b": "succeeded", "boom": "failed"}:
                 break
