@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -14,8 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from sluice import calls
+from sluice import calls, db
 from sluice import log as L
+from sluice import runner as R
 from sluice.runner import (
     RESTARTED,
     UNKNOWN,
@@ -81,7 +83,7 @@ def stop(r: Runner, t: threading.Thread) -> None:
 
 
 def run_records(store, project=None):
-    return L.read(store.log_dir(project), kinds=["run"])["records"]
+    return L.read(store.home, project, kinds=["run"])["records"]
 
 
 def wait_run(store, project, sid, kills):
@@ -424,21 +426,46 @@ def test_a_retried_scatter_is_adopted_with_its_kept_items(store, kills):
     assert e["status"] == "succeeded" and e["outputs"] == {"tag": ["a", "b", "c"]}
 
 
-def test_the_running_record_lands_with_the_state_write(store, kills):
+def outside(store, project, step):
+    """The step's entry and its step.status records as another connection sees them: only
+    what is committed."""
+    conn = sqlite3.connect(store.home / db.FILE)
+    try:
+        state = json.loads(conn.execute("SELECT doc FROM states WHERE project = ?",
+                                        (project,)).fetchone()[0])
+        tos = [r[0] for r in conn.execute(
+            "SELECT json_extract(data, '$.to') FROM records WHERE project = ? AND "
+            "kind = 'step.status' AND step = ? ORDER BY seq", (project, step))]
+    finally:
+        conn.close()
+    return state["steps"].get(step, {}), tos
+
+
+def test_a_run_is_committed_with_its_record_before_its_process_starts(store, kills,
+                                                                       monkeypatch):
+    """The reservation (running, the run id, the pending→running record) commits as one
+    transaction, before the run's dir or process exists; nothing of it shows before."""
     create(store, "p", {"w": {"run": "test.wait", "in": {}}})
-    seen = []
-    write_state = store.write_state
+    at_append, at_spawn = [], []
+    real_append, real_spawn = L.append, R.spawn
 
-    def spy(project, state):
-        seen.append([r["to"] for r in L.read(store.log_dir(project),
-                                            kinds=["step.status"])["records"]])
-        write_state(project, state)
+    def append(conn, project, records, cap=L.DEFAULT_MAX):
+        if any(r.get("to") == "running" for r in records):
+            at_append.append(outside(store, "p", "w"))
+        return real_append(conn, project, records, cap)
 
-    store.write_state = spy
+    def spawn(fn, inp, run_dir, env):
+        at_spawn.append((outside(store, "p", "w"), run_dir.exists()))
+        return real_spawn(fn, inp, run_dir, env)
+
+    monkeypatch.setattr(L, "append", append)
+    monkeypatch.setattr(R, "spawn", spawn)
     Runner(store).tick()
-    # the write that persists run_ids already carries the pending→running record
-    assert seen[0] == ["running"]
+    assert at_append == [({}, [])]  # inside the transaction: nothing visible yet
+    [((entry, tos), existed)] = at_spawn
     [run_id] = store.read_state("p")["steps"]["w"]["run_ids"]
+    assert entry["status"] == "running" and entry["run_ids"] == [run_id]
+    assert tos == ["running"] and not existed
     kills.append(wait_shim(store.runs_dir("p") / run_id))
 
 
@@ -477,10 +504,11 @@ def test_kill_runs_stops_runs_on_exit(store, kills):
     assert wait_gone(kills) == []  # --kill-runs: stopped, not left for adoption
 
 
-def test_a_corrupt_state_json_does_not_stop_other_projects(store, capsys):
+def test_a_broken_state_does_not_stop_other_projects(store, capsys):
     create(store, "a", {})
     create(store, "z", {"w": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
-    (store.project_dir("a") / "state.json").write_text("{not json")
+    with store.tx() as conn:
+        conn.execute("""UPDATE states SET doc = '{"inputs": {}}' WHERE project = 'a'""")
     steps = settle(Runner(store), store, "z")
     assert steps["w"]["status"] == "succeeded" and steps["w"]["outputs"] == {"sum": 3}
     assert "sluice runner: a:" in capsys.readouterr().err
@@ -501,8 +529,8 @@ def test_a_direct_call_record_with_a_wrong_start_time_is_gone(store, runner):
     rec = calls.latest(store, call, None)
     if rec.get("pid_start") is None:
         pytest.skip("no /proc")
-    store.append(None, {k: v for k, v in rec.items() if k not in ("seq", "at")}
-                 | {"pid_start": "1"})  # a reused pid: its start time is not the recorded one
+    with store.tx() as conn:  # a reused pid: its start time is not the recorded one
+        conn.execute("UPDATE calls SET pid_start = '1' WHERE call = ?", (call,))
     assert calls.status(store, call, None)["status"] == "failed"
     runner.tick()
     assert calls.status(store, call, None)["error"] == calls.GONE
@@ -519,8 +547,8 @@ def test_runner_reaps_native_session_of_a_gone_direct_call(store, runner):
     try:
         (run_dir / "native-processes.json").write_text(json.dumps({
             "app_server": {"pid": app.pid, "start_time": _proc_identity(app.pid)[0]}}))
-        store.append(None, {k: v for k, v in rec.items() if k not in ("seq", "at")}
-                     | {"pid_start": "1"})
+        with store.tx() as conn:
+            conn.execute("UPDATE calls SET pid_start = '1' WHERE call = ?", (call,))
         runner.tick()
         assert calls.status(store, call, None)["error"] == calls.GONE
         assert wait_gone([app.pid]) == []

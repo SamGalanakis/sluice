@@ -107,7 +107,7 @@ def test_cancel_stops_a_running_step(store, runner):
     steps = settle(runner, store, "p", timeout=10)
     assert (steps["w"]["status"], steps["w"]["error"]) == ("failed", "cancelled: too slow")
     assert not runner.active
-    [rec] = L.read(store.log_dir("p"), kinds=["step.cancel"])["records"]
+    [rec] = L.read(store.home, "p", kinds=["step.cancel"])["records"]
     assert (rec["step"], rec["reason"]) == ("w", "too slow")
 
 
@@ -157,7 +157,7 @@ def test_when_runs_or_skips_a_step_and_skipping_follows_data_not_order(store, ru
     assert steps["close"]["skipped"] == "step land was skipped"
     st = status_of(store, "p")
     assert (st["land"]["when"], st["land"]["skipped"]) == ("check/value", "check/value is false")
-    recs = [r for r in L.read(store.log_dir("p"), kinds=["step.status"])["records"]
+    recs = [r for r in L.read(store.home, "p", kinds=["step.status"])["records"]
             if r["to"] == "skipped"]
     assert {r["step"]: r["reason"] for r in recs}["land"] == "check/value is false"
     # the condition changes: skipped steps are decided afresh and run
@@ -212,7 +212,7 @@ def test_a_brief_status_cuts_long_strings(store):
            outputs={"total": {"source": "a/sum"}})
     long = "x" * 450
     store.set_input("p", "spec", long, "test", "")
-    with store.lock("p"):
+    with store.tx():
         state = store.read_state("p")
         state["steps"]["a"] = {"status": "succeeded",
                                "outputs": {"sum": 2, "final": long, "notes": ["short", long]}}

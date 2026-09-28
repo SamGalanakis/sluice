@@ -19,7 +19,7 @@ def until_status(**want):
 
 
 def transitions(store, project, step):
-    recs = L.read(store.project_dir(project), kinds=["step.status"])["records"]
+    recs = L.read(store.home, project, kinds=["step.status"])["records"]
     return [(r["from"], r["to"]) for r in recs if r["step"] == step]
 
 

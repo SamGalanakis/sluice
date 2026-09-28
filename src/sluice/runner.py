@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -20,9 +21,11 @@ from typing import Any
 import sluice
 
 from . import calls as C
+from . import db
 from . import log as L
 from . import state as S
 from . import types as T
+from .db import Busy
 from .errors import BadRequest, InvalidPlan, NotFound
 from .fn import HOST_VARS
 from .plan import (
@@ -37,12 +40,14 @@ from .plan import (
     topo_order,
 )
 from .registry import NATIVE, Fn
-from .store import SUBMITTED, Store
+from .store import Store
 from .util import atomic_write_json, canonical, now_iso, read_dotenv, tail_text
 
 SRC_DIR = str(Path(sluice.__file__).resolve().parent.parent)
 RESTARTED = "runner restarted"
 UNKNOWN = "run outcome unknown (its supervisor died)"
+NOT_STARTED = "not started (the runner stopped before it started the run)"
+GC_EVERY = 60.0  # seconds between the runner's passes removing unreferenced run dirs
 KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
 NATIVE_PROCESSES = "native-processes.json"
 
@@ -343,8 +348,12 @@ def _run_code(run: Run) -> int | str | None:
 
 def _probe(run_dir: Path) -> tuple[str, int | None]:
     """Classify a run dir a `running` entry references: finished / watching / unknown /
-    restarted — the last meaning a pre-shim run dir (SPEC §6). exit.json first and last; the
-    shim may still be starting, so a bare dir gets one recheck before `restarted`."""
+    restarted — the last meaning a pre-shim run dir (SPEC §6) — or `not started` when there
+    is no dir at all (its dir is made before its process is started, so it never was).
+    exit.json first and last; the shim may still be starting, so a bare dir gets one recheck
+    before `restarted`."""
+    if not run_dir.is_dir():
+        return "not started", None
     if (code := _read_exit(run_dir)) is not None:
         _reap_native(run_dir)
         return "finished", code
@@ -364,10 +373,11 @@ def _probe(run_dir: Path) -> tuple[str, int | None]:
     return "restarted", None
 
 
-def read_run(fn: Fn, run_dir: Path, code: int,
-             declared: dict[str, T.Type] | None = None) -> tuple[dict[str, Any], str]:
+def read_run(fn: Fn, run_dir: Path, code: int, declared: dict[str, T.Type] | None = None,
+             sent: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
     """A finished process's outputs, or the error: exit code or type errors plus stderr tail.
-    With `declared` (a step's own outputs), those come from what was submitted (SPEC §5)."""
+    With `declared` (a step's own outputs), those come from `sent`, what was submitted
+    (SPEC §5)."""
     tail = tail_text(run_dir / "stderr.log", 2000).strip()
     if code != 0:
         if (why := _exit_error(run_dir)) is not None:
@@ -380,21 +390,15 @@ def read_run(fn: Fn, run_dir: Path, code: int,
     errs = T.check_value(T.record_of(fn.outputs), out)
     if errs:
         return {}, "outputs do not match the fn: " + "; ".join(errs)
-    return with_submitted(out, declared, run_dir) if declared else (out, "")
+    return with_submitted(out, declared, sent or {}) if declared else (out, "")
 
 
 def with_submitted(out: dict[str, Any], declared: dict[str, T.Type],
-                   run_dir: Path) -> tuple[dict[str, Any], str]:
+                   sent: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """The step's outputs: the fn's own plus the declared ones, which the fn returns itself
-    (an inline fn) or its agent submitted with step_submit (the run dir's submitted.json; the
+    (an inline fn) or its agent submitted with step_submit (`sent`, the run's submission; the
     fn's own values win on a name they share). A required declared output given neither way
     fails the step."""
-    try:
-        sent = json.loads((run_dir / SUBMITTED).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        sent = {}
-    except (OSError, json.JSONDecodeError) as ex:
-        return {}, f"the submitted outputs are not readable: {ex}"
     merged = {k: sent.get(k) for k in declared} | out
     missing = [k for k, t in declared.items()
                if k not in sent and k not in out and not isinstance(t, T.Optional)]
@@ -427,7 +431,7 @@ def run_call_direct(store: Store, call: str, project: str | None) -> dict[str, A
         _reap_native(d)
         outputs, err = read_run(fn, d, code)
     _finish(rec, outputs=outputs, error=err or None)
-    C.record(store, project, rec)
+    C.record(store, project, rec, ("running",))
     return C.result(rec)
 
 
@@ -436,9 +440,9 @@ def run_call_direct(store: Store, call: str, project: str | None) -> dict[str, A
 
 @dataclass
 class Run:
-    """One fn execution: its input; its run dir, its shim's pid and (when this runner started
-    it) its Popen once spawned; its outputs once collected (None until then), or its error
-    once it failed (a scattered step's failed item does not stop the others)."""
+    """One fn execution: its input; its run id and dir, its shim's pid and (when this runner
+    started it) its Popen once spawned; its outputs once collected (None until then), or its
+    error once it failed (a scattered step's failed item does not stop the others)."""
 
     inp: dict[str, Any]
     run_dir: Path | None = None
@@ -446,6 +450,7 @@ class Run:
     pid: int | None = None  # the shim's pid — the run's process group id
     result: dict[str, Any] | None = None
     error: str | None = None
+    rid: Any = None  # its run id (as recorded: an adopted one may be malformed)
 
 
 @dataclass
@@ -468,6 +473,9 @@ class Active:
         return {o: [run.result.get(o) for run in self.runs]
                 for o in {**self.fn.outputs, **self.declared}}
 
+    def run_ids(self) -> list[Any]:
+        return [run.rid for run in self.runs]
+
     def kill(self) -> None:
         kill(*self.runs)
 
@@ -477,13 +485,13 @@ class Runner:
         self.store = store
         self.kill_runs = kill_runs
         self.active: dict[tuple[str, ...], Active] = {}
-        self._calls: dict[str, tuple[int, dict[str, dict[str, Any]]]] = {}  # log -> seq, live
         self._reported: dict[str, str] = {}
         self._wake = threading.Event()
         self._stop = threading.Event()
-        self._adopted = False  # startup adoption happens once (SPEC §6)
+        self._started_up = False  # the startup pass happens once (SPEC §6)
         self._started = ""  # runner.json: when this runner started beating
         self._beat_at = 0.0
+        self._gc_at: float | None = None
 
     def wake(self) -> None:
         self._wake.set()
@@ -537,80 +545,51 @@ class Runner:
         if self._reported.get(who) != message:
             self._reported[who] = message
             print(f"sluice runner: {who}: {message}", file=sys.stderr, flush=True)
-            if sys.exc_info()[0] is not None:
+            if sys.exc_info()[0] is not None and not isinstance(sys.exc_info()[1], Busy):
                 traceback.print_exc()
 
     def tick(self) -> bool:
         """One pass over every project and every call. Returns whether any state changed."""
-        self._adopt()
+        if not self._started_up:
+            self._started_up = True
+            self._orphans()
         changed = False
         for project in self.store.project_names():
             try:
                 changed |= self._tick_project(project)
+            except Busy as e:  # retried on the next tick
+                self._report(project, e.message)
             except (InvalidPlan, NotFound) as e:  # e.g. a fn dir went away; others still run
                 errs = getattr(e, "errors", None)
                 self._report(project, e.message + (f": {errs}" if errs else ""))
             except (OSError, ValueError, LookupError, TypeError, AttributeError) as e:
-                # corrupt project files must not stop the others
-                self._report(project, f"cannot read its files: {e}")
-            try:
-                self._tick_calls(project)
-            except (OSError, ValueError, LookupError, TypeError, AttributeError) as e:
-                self._report(project, f"cannot read its calls: {e}")
-        self._tick_calls(None)
+                # a broken project must not stop the others
+                self._report(project, f"cannot read it: {e}")
+            self._calls(project)
+        self._calls(None)
+        if self._gc_at is None or time.monotonic() - self._gc_at >= GC_EVERY:
+            self._gc_at = time.monotonic()
+            self._gc()
         return changed
+
+    def _calls(self, project: str | None) -> None:
+        try:
+            self._tick_calls(project)
+        except Busy as e:
+            self._report(project or "home", e.message)
+        except (NotFound, OSError, ValueError, LookupError, TypeError, AttributeError) as e:
+            self._report(project or "home", f"cannot read its calls: {e}")
 
     # ---- adoption (SPEC §6) ----
 
-    def _adopt(self) -> None:
-        """The startup pass, once: rebuild an Active for every entry the previous runner left
-        `running`, then kill runs nothing references. Also what makes a bare `tick()` see
-        leftovers — _poll re-does it lazily for anything missed."""
-        if self._adopted:
-            return
-        self._adopted = True
-        for project in self.store.project_names():
-            try:
-                with self.store.lock(project):
-                    state = self.store.read_state(project)
-                    dirty = False
-                    for sid, e in (state.get("steps") or {}).items():
-                        if isinstance(e, dict) and e.get("status") == "running":
-                            done = e.get("done")
-                            self._adopt_entry(("step", project, sid), e)
-                            dirty |= e.get("done") != done
-                    if dirty:
-                        self.store.write_state(project, state)
-            except Exception as ex:  # noqa: BLE001 - one bad project must not stop the rest
-                self._report(project, f"adoption failed: {ex}")
-        for phase in (self._adopt_calls, self._orphans):  # a failure must not skip a phase
-            try:
-                phase()
-            except Exception:  # noqa: BLE001 - the startup pass must finish
-                traceback.print_exc()
-
-    def _adopt_calls(self) -> None:
-        """Rebuild the Active of every non-direct call a previous runner left `running`
-        (a direct call's run belongs to its caller — it dies or finishes with it)."""
-        for project in (*self.store.project_names(), None):
-            try:
-                latest: dict[str, dict[str, Any]] = {}
-                for rec in L.read(self.store.log_dir(project), kinds=["call"])["records"]:
-                    latest[rec["call"]] = rec
-                for call, rec in latest.items():
-                    if rec.get("status") == "running" and not rec.get("direct"):
-                        self._adopt_entry(("call", project or "", call), rec)
-                        if rec.get("status") != "running":  # it was finished right there
-                            C.record(self.store, project, rec)
-            except Exception as ex:  # noqa: BLE001 - one log must not stop the others
-                self._report(project or "home", f"call adoption failed: {ex}")
-
-    def _adopt_entry(self, key: tuple[str, ...], e: dict[str, Any]) -> None:
-        """Rebuild an Active for a `running` entry: runs with an exit.json collect their
-        outputs, live shims get watched, and what neither shows decides the entry's `fatal`.
-        One `run.adopt` record per run."""
-        if key in self.active:
-            return
+    def _adopt_entry(self, key: tuple[str, ...], e: dict[str, Any],
+                     plan: Plan | None = None) -> Active | None:
+        """Rebuild an Active for a `running` step entry or call a previous runner left: runs
+        with an exit.json collect their outputs, live shims get watched, a run with no dir was
+        never started, and what none of these shows decides the entry's `fatal`. One
+        `run.adopt` record per run; the Active counts once they are committed. Outside any
+        transaction (it probes and kills). None when there is nothing to adopt with (the step
+        left the plan, the call's fn is gone)."""
         kind, pkey, name = key
         project = pkey or None
         if kind == "call":
@@ -619,13 +598,13 @@ class Runner:
                 if L.RUN_ID_RE.match(name):
                     d = self.store.runs_dir(project) / name
                     kill(Run({}, run_dir=d, pid=_shim_pid(d)))
-                return _finish(e, error=f"no fn {e.get('fn')!r}")
+                return None
             a = Active(fn, project, "", [])
             run_ids = [name]
         else:
-            step = self.store.plan(project)[1].steps.get(name)
+            step = plan.steps.get(name) if plan is not None else None
             if step is None:
-                return  # not in the plan any more: the tick drops it
+                return None  # not in the plan any more: the tick drops it
             a = Active(step.fn, project, name, [], scatter=bool(step.scatter),
                        declared=step.declared)
             raw = e.get("run_ids")
@@ -633,7 +612,7 @@ class Runner:
             if not run_ids:  # `running` with nothing recorded: pre-change state
                 a.fatal = RESTARTED
         records = []
-        for i, rid in enumerate(run_ids):
+        for rid in run_ids:
             if not isinstance(rid, str) or not L.RUN_ID_RE.match(rid):
                 # a malformed id: don't build a path from it
                 d, outcome, code = None, "unknown", None
@@ -643,9 +622,9 @@ class Runner:
             records.append({"kind": "run.adopt",
                             "step" if kind == "step" else "call": name,
                             "run": rid, "outcome": outcome})
-            run = Run({}, run_dir=d)
+            run = Run({}, run_dir=d, rid=rid)
             if outcome == "finished":
-                run.result, err = read_run(a.fn, d, code, a.declared)
+                run.result, err = read_run(a.fn, d, code, a.declared, self._sent(a, rid))
                 if err:
                     if a.scatter:  # the item's failure; the other runs still stand
                         run.result, run.error = None, err
@@ -653,24 +632,32 @@ class Runner:
                         a.fatal = err
             elif outcome == "watching":
                 run.pid = _shim_pid(d)
-            elif outcome == "unknown" and a.scatter:
-                run.error = UNKNOWN
-                kill(run)  # a fn child that outlived the shim still dies (SPEC §6)
+            elif outcome in ("unknown", "not started") and a.scatter:
+                run.error = UNKNOWN if outcome == "unknown" else NOT_STARTED
+                if outcome == "unknown":
+                    kill(run)  # a fn child that outlived the shim still dies (SPEC §6)
             elif a.fatal is None:
-                a.fatal = UNKNOWN if outcome == "unknown" else RESTARTED
+                a.fatal = {"unknown": UNKNOWN, "not started": NOT_STARTED}.get(outcome,
+                                                                              RESTARTED)
             a.runs.append(run)
-        if a.scatter:
-            e["done"] = sum(_ended(r) for r in a.runs)
-        self.active[key] = a
         if records:
             self.store.append(project, *records)
+        self.active[key] = a
+        return a
+
+    def _sent(self, a: Active, rid: Any) -> dict[str, Any] | None:
+        """What the agent of a step's run submitted, when the step declares outputs."""
+        if not a.declared or not isinstance(rid, str):
+            return None
+        return self.store.submission(a.project, rid)
 
     def _orphans(self) -> None:
         """Kill runs whose shim (or a recorded fn child that outlived it) lives but which no
-        `running` step entry or call references: the runner that spawned them died before
-        recording them (SPEC §6). Candidates are collected before the references are read —
-        a run's record always lands before its lock — so a run started while the sweep runs
-        is either referenced then, or left for the next runner, never killed live."""
+        `running` step entry or call references: the runner that spawned them died between
+        starting them and a reference to them (SPEC §6) — only possible for runs from before
+        reservations. Candidates are collected before the references are read — a run's
+        reference always lands before its dir — so a run started while the sweep runs is
+        either referenced then, or left for the next runner, never killed live."""
         for project in (*self.store.project_names(), None):
             try:
                 root = self.store.runs_dir(project)
@@ -685,38 +672,62 @@ class Runner:
                 self._report(project or "home", f"orphan sweep failed: {ex}")
 
     def _referenced_runs(self, project: str | None) -> set[str]:
-        """Run ids (dirs under runs/) that a `running` step entry or `running` call claims."""
+        """Run ids (dirs under runs/) that a `running` step entry or `running` call claims,
+        from one snapshot."""
         refs: set[str] = set()
-        if project is not None:
-            steps = self.store.read_state(project).get("steps") or {}
-            refs |= {r for e in steps.values()
-                     if isinstance(e, dict) and e.get("status") == "running"
-                     for r in e.get("run_ids") or [] if isinstance(r, str)}
-        latest: dict[str, dict[str, Any]] = {}
-        for rec in L.read(self.store.log_dir(project), kinds=["call"])["records"]:
-            latest[rec["call"]] = rec
-        refs |= {c for c, r in latest.items() if r.get("status") == "running"}
+        with self.store.rx() as conn:
+            if project is not None:
+                steps = self.store.read_state(project).get("steps") or {}
+                refs |= {r for e in steps.values()
+                         if isinstance(e, dict) and e.get("status") == "running"
+                         for r in e.get("run_ids") or [] if isinstance(r, str)}
+            refs |= {r[0] for r in db.all_rows(
+                conn, "SELECT call FROM calls WHERE project IS ? AND status = 'running'",
+                (project,))}
         return refs
 
-    def _kill_step_runs(self, project: str, e: dict[str, Any]) -> None:
-        """Kill the runs a `running` entry names when no Active tracks them — by the
+    def _gc(self) -> None:
+        """At startup and about once a minute: remove every run dir nothing references (a
+        retained record, a state entry, a call, a submission: log.refs) whose shim and fn are
+        gone, and whatever SLUICE_HOME/trash still holds. Each log's dirs are listed before its
+        references are read: a run's reference is committed before its dir is made, so a
+        listed dir nothing references can never gain a reference again."""
+        trash = self.store.home / "trash"
+        for d in sorted(trash.iterdir()) if trash.is_dir() else []:
+            shutil.rmtree(d, ignore_errors=True)
+        ours = {run.rid for a in self.active.values() for run in a.runs}
+        for project in (None, *self.store.project_names()):
+            try:
+                root = self.store.runs_dir(project)
+                dirs = sorted(d for d in root.iterdir() if d.is_dir()) if root.is_dir() else []
+                if not dirs:
+                    continue
+                with self.store.rx() as conn:
+                    refs = L.refs(conn, project)
+                for d in dirs:
+                    if d.name not in refs and d.name not in ours and not _run_alive(d):
+                        shutil.rmtree(d, ignore_errors=True)
+            except Exception as ex:  # noqa: BLE001 - a failed pass is retried later
+                self._report(project or "home", f"run dir cleanup failed: {ex}")
+
+    def _kill_step_runs(self, project: str, e: dict[str, Any]) -> list[Run]:
+        """The runs a `running` entry names, to kill when no Active tracks them — by the
         recorded shim pids while their locks are held, or by the recorded fn child when
         the shim is already dead."""
-        kill(*[Run({}, run_dir=self.store.runs_dir(project) / rid)
-               for rid in e.get("run_ids") or []
-               if isinstance(rid, str) and L.RUN_ID_RE.match(rid)])
+        return [Run({}, run_dir=self.store.runs_dir(project) / rid)
+                for rid in e.get("run_ids") or []
+                if isinstance(rid, str) and L.RUN_ID_RE.match(rid)]
+
+    # ---- one project's steps ----
 
     def _persist(self, project: str, state: dict[str, Any], was: dict[str, Any],
-                 before: str) -> str:
-        """Append a step.status record for every status that changed since the last write,
-        then write state.json — records first, so a crash between them leaves a record for
-        a state that did not land (which re-runs), never a state change with no record.
-        `was` advances past what was logged; returns the canonical the caller diffs."""
-        if (now := canonical(state)) == before:
-            return before
-        st = state["steps"]
+                 before: str) -> bool:
+        """Write the state and a step.status record for every status that changed since `was`,
+        in the caller's transaction. Returns whether anything changed."""
+        if canonical(state) == before:
+            return False
         records = []
-        for sid, e in st.items():
+        for sid, e in state["steps"].items():
             if e["status"] == was.get(sid):
                 continue
             rec = {"kind": "step.status", "step": sid, "from": was.get(sid),
@@ -728,15 +739,83 @@ class Runner:
             if e["status"] in ("succeeded", "failed") and e.get("run_ids"):
                 rec["run_ids"] = e["run_ids"]
             records.append(rec)
+        self.store.write_state(project, state)
         if records:
             self.store.append(project, *records)
-        self.store.write_state(project, state)
-        was.clear()
-        was.update({sid: e.get("status") for sid, e in st.items()})
-        return now
+        return True
 
     def _tick_project(self, project: str) -> bool:
-        with self.store.lock(project):
+        """(1) collect what finished, outside any transaction; (2) one write transaction:
+        apply it, settle, and reserve every ready step's launch (running, with its run ids);
+        (3) outside it, stop cancelled steps and start the reserved runs; (4) one short write
+        transaction records what (3) did. `active` changes only once the transaction that
+        justifies it has committed."""
+        self._collect(project)
+        stop, launch, changed = self._settle(project)
+        if not stop and not launch:
+            return changed
+        kill(*(run for runs in stop.values() for run in runs))
+        self._launch(project, launch)
+        return self._record(project, stop, launch) or changed
+
+    def _collect(self, project: str) -> None:
+        """Adopt the running entries no Active tracks, then read what finished into the
+        Actives' runs, killing what a failed run leaves behind."""
+        state = self.store.read_state(project)
+        plan = None
+        for sid, e in state["steps"].items():
+            key = ("step", project, sid)
+            if e.get("status") != "running" or "cancel" in e:
+                continue
+            if key not in self.active:
+                plan = plan or self.store.plan(project)[1]
+                self._adopt_entry(key, e, plan)
+            if (a := self.active.get(key)) is not None:
+                self._collect_runs(a)
+
+    def _collect_runs(self, a: Active) -> None:
+        for run in a.runs:
+            if _ended(run) or run.run_dir is None:
+                continue
+            code = _run_code(run)
+            if code is None:
+                continue
+            if isinstance(code, str):  # UNKNOWN: the shim died without writing exit.json
+                run.error = code
+                kill(run)  # a fn child that outlived the shim still dies (SPEC §6)
+                continue
+            outputs, err = read_run(a.fn, run.run_dir, code, a.declared, self._sent(a, run.rid))
+            if err:
+                run.error = err  # a scattered item's failure does not stop the others
+            else:
+                run.result = outputs
+        if a.fatal is not None or (not a.scatter and a.runs and a.runs[0].error is not None):
+            a.kill()
+
+    def _apply(self, a: Active, e: dict[str, Any]) -> bool:
+        """Carry the Active's collected runs into its state entry; returns whether the step
+        (or call) is done with."""
+        if a.fatal is not None:
+            _finish(e, error=a.fatal)
+            return True
+        if a.scatter:
+            e["done"] = sum(_ended(run) for run in a.runs)
+        if all(run.result is not None for run in a.runs):
+            _finish(e, outputs=a.outputs())
+        elif not a.scatter and a.runs[0].error is not None:
+            _finish(e, error=a.runs[0].error)
+        elif a.scatter and all(_ended(run) for run in a.runs):
+            _finish_scatter(a, e)
+        else:
+            return False
+        return True
+
+    def _settle(self, project: str) -> tuple[dict[str, list[Run]], dict[str, Active], bool]:
+        """The tick's write transaction: returns the cancelled steps to stop (their runs), the
+        reserved launches and whether the state changed."""
+        done, stop, launch = [], {}, {}
+        drop: list[Run] = []  # runs of steps that left the plan, killed after the commit
+        with self.store.tx():
             state = self.store.read_state(project)
             before = canonical(state)
             was = {sid: e.get("status") for sid, e in state["steps"].items()}
@@ -749,26 +828,31 @@ class Runner:
                 self._reported.pop(project, None)
             st = state["steps"]
             for sid in [s for s in st if s not in plan.steps]:  # removed from the plan
-                if (a := self.active.pop(("step", project, sid), None)) is not None:
-                    a.kill()
+                if (a := self.active.get(("step", project, sid))) is not None:
+                    drop += a.runs
+                    done.append(("step", project, sid))
                 elif st[sid].get("status") == "running":
                     # a leftover entry adoption could not take (no such step): kill its runs
-                    self._kill_step_runs(project, st[sid])
+                    drop += self._kill_step_runs(project, st[sid])
                 del st[sid]
             for name in [n for n in state["inputs"] if n not in plan.inputs]:
                 del state["inputs"][name]
             for sid in plan.steps:
                 st.setdefault(sid, S.pending())
             for sid, e in st.items():
-                if e["status"] == "running" and "cancel" in e:  # step_cancel asked to stop it
-                    if (a := self.active.pop(("step", project, sid), None)) is not None:
-                        a.kill()
-                    else:  # adoption never took it: kill what its run_ids name anyway
-                        self._kill_step_runs(project, e)
-                    why = e.pop("cancel")
-                    _finish(e, error="cancelled" + (f": {why}" if why != "cancelled" else ""))
-                elif e["status"] == "running":
-                    self._poll(("step", project, sid), e)
+                if e["status"] != "running":
+                    continue
+                key = ("step", project, sid)
+                a = self.active.get(key)
+                if "cancel" in e:  # step_cancel asked to stop it: the flag stays until it is
+                    stop[sid] = a.runs if a is not None else self._kill_step_runs(project, e)
+                elif a is None:  # adoption could not take it
+                    _finish(e, error=RESTARTED)
+                elif a.run_ids() != (e.get("run_ids") or []):  # not the runs we track
+                    drop += a.runs
+                    done.append(key)
+                elif self._apply(a, e):
+                    done.append(key)
             held = self.store.paused(project)  # a paused project starts nothing
             holding = set(plan.steps) if held else {s for s, x in plan.steps.items() if x.paused}
             order = topo_order(plan)
@@ -788,80 +872,67 @@ class Runner:
                     if settle_skip(step, plan, state):  # its `when` says no, or it reads a skip
                         progress = True
                         continue
-                    before = self._begin(project, step, plan, state, was, before)
+                    if (a := self._begin(project, step, plan, state)) is not None:
+                        launch[sid] = a
                     progress = True
-            return self._persist(project, state, was, before) != before
+            changed = self._persist(project, state, was, before)
+        for key in done:
+            self.active.pop(key, None)
+        for sid, a in launch.items():
+            self.active[("step", project, sid)] = a
+        kill(*drop)
+        return stop, launch, changed
 
-    def _tick_calls(self, project: str | None) -> None:
-        """Start pending calls and collect finished ones. Follows the log's `call` records from
-        the last seq seen, keeping the calls that are still pending or running."""
-        d = self.store.log_dir(project)
-        key = project or ""
-        seq, live = self._calls.get(key, (0, {}))
-        res = L.read(d, since_seq=seq, kinds=["call"])
-        if res["last_seq"] < seq:  # the log was reset: start over
-            seq, live = 0, {}
-            res = L.read(d, since_seq=0, kinds=["call"])
-        for rec in res["records"]:
-            if rec["status"] in C.DONE:
-                live.pop(rec["call"], None)
-            else:
-                live[rec["call"]] = rec
-        self._calls[key] = (res["last_seq"], live)
-        for call, rec in list(live.items()):
-            rec = dict(rec)
-            before = rec["status"]
-            akey = ("call", key, call)
-            if rec["status"] == "running" and rec.get("direct"):
-                if not C.alive(rec.get("pid"), rec.get("pid_start")):  # its process is gone
-                    _reap_native(self.store.runs_dir(project) / call)
-                    _finish(rec, error=C.GONE)
-            elif rec["status"] == "running":
-                self._poll(akey, rec)
-            elif rec["status"] == "pending":
-                logged = self._start_call(akey, rec, project)
-                before = logged or before  # what _start_call already logged, if anything
-            if rec["status"] != before:
-                C.record(self.store, project, rec)
-                live[call] = rec  # the record itself is picked up on the next pass
+    def _launch(self, project: str, launch: dict[str, Active]) -> None:
+        """Start the reserved runs, outside any transaction: make each run's dir and spawn its
+        shim. A start that raises is that run's failure. A step cancelled since its
+        reservation starts nothing."""
+        steps = self.store.read_state(project)["steps"]
+        for sid, a in launch.items():
+            if "cancel" in steps.get(sid, {}):
+                continue
+            for run in a.runs:
+                if run.result is not None:
+                    continue  # a kept item of a retried scatter
+                try:
+                    env = fn_env(self.store, project, a.fn, sid, run.rid, run.run_dir, a.ports)
+                    run.proc = spawn(a.fn, run.inp, run.run_dir, env)
+                    run.pid = run.proc.pid
+                except Exception as ex:  # noqa: BLE001 - a failed start fails the run
+                    run.error = f"could not start the fn: {ex}"
 
-    def _start_call(self, key: tuple[str, ...], rec: dict[str, Any],
-                    project: str | None) -> str | None:
-        """Start a pending call; returns the status it already logged itself, else None."""
-        reg = self.store.registry(project)
-        if reg.blocking:
-            return None  # stays pending until the functions are fixed
-        fn = reg.get(rec["fn"])
-        if fn is None:
-            _finish(rec, error=f"no fn {rec['fn']!r}")
-            return None
-        inp = rec.get("inputs") or {}
-        rec.update(status="running")
-        if fn.native:
-            outputs, err = run_native(fn, inp)
-            _finish(rec, outputs=outputs, error=err or None)
-            return None
-        d = self.store.runs_dir(project) / rec["call"]
-        a = Active(fn, project, "", [Run(inp, d)])
-        try:
-            a.runs[0].proc = spawn(fn, inp, d,
-                                   fn_env(self.store, project, fn, "", rec["call"], d))
-            a.runs[0].pid = a.runs[0].proc.pid
-        except Exception as ex:  # noqa: BLE001 - a failed start fails the call
-            _finish(rec, error=f"could not start the fn: {ex}")
-            return None
-        # the running record lands before the run is tracked: a crash here leaves the run
-        # referenced by the log (adoptable), not an orphan the next runner would kill
-        C.record(self.store, project, rec)
-        self.active[key] = a
-        return "running"
+    def _record(self, project: str, stop: dict[str, list[Run]],
+                launch: dict[str, Active]) -> bool:
+        """The tick's second write transaction: the stopped steps fail `cancelled`, and a
+        launch that could not start (all of it, or a scattered item) is recorded."""
+        done = []
+        with self.store.tx():
+            state = self.store.read_state(project)
+            before = canonical(state)
+            st = state["steps"]
+            was = {sid: e.get("status") for sid, e in st.items()}
+            for sid in stop:
+                e = st.get(sid)
+                if e is not None and e["status"] == "running" and "cancel" in e:
+                    why = e.pop("cancel")
+                    _finish(e, error="cancelled" + (f": {why}" if why != "cancelled" else ""))
+                    done.append(sid)
+            for sid, a in launch.items():
+                e = st.get(sid)
+                if e is not None and e["status"] == "running" and "cancel" not in e \
+                        and a.run_ids() == e.get("run_ids") and self._apply(a, e):
+                    done.append(sid)
+            changed = self._persist(project, state, was, before)
+        for sid in done:
+            self.active.pop(("step", project, sid), None)
+        return changed
 
-    # ---- one step ----
-
-    def _begin(self, project: str, step: Step, plan: Plan, state: dict[str, Any],
-               was: dict[str, Any], before: str) -> str:
-        """Start a ready step's runs; returns the canonical the caller diffs, advanced when
-        the spawn persist happens here."""
+    def _begin(self, project: str, step: Step, plan: Plan,
+               state: dict[str, Any]) -> Active | None:
+        """A ready step, inside the tick's transaction: a built-in runs inline and finishes;
+        anything else is reserved — running, with a fresh run id per run (index-aligned, a
+        kept item of a retried scatter keeping its own) — and returned, to be started once
+        the reservation is committed. Bad inputs fail it at once."""
         inp = resolved_inputs(step, plan, state)
         h = inputs_hash(inp)
         kept = state["steps"][step.id].get("kept")  # a retried scatter's finished items
@@ -871,22 +942,22 @@ class Runner:
             items = inp[step.scatter]
             if not isinstance(items, list):
                 _finish(e, error=f"scatter input {step.scatter} is not an array")
-                return before
+                return None
             runs = [{**inp, step.scatter: item} for item in items]
         for i, run in enumerate(runs):
             errs = T.check_value(T.record_of(step.inputs), run, "inputs")
             if errs:
                 where = f"run {i}: " if step.scatter else ""
                 _finish(e, error=f"{where}inputs do not match the fn: " + "; ".join(errs))
-                return before
+                return None
         a = Active(step.fn, project, step.id, [Run(run) for run in runs],
                    scatter=bool(step.scatter), declared=step.declared,
                    ports=step.ports() if step.fn.open else None)
         # `kept` that still fits (same inputs, one run id and result per item) stands:
         # those items are not re-run; anything else re-runs every item as usual
         kept_runs = _kept(kept, h, len(runs)) if step.scatter else {}
-        for i, (_, result) in kept_runs.items():
-            a.runs[i].result = result
+        for i, (rid, result) in kept_runs.items():
+            a.runs[i].rid, a.runs[i].result = rid, result
         if step.scatter:
             e.update(done=len(kept_runs), total=len(runs))
         if step.fn.native:
@@ -898,89 +969,76 @@ class Runner:
                     run.result = None
                     if not a.scatter:
                         _finish(e, error=err)
-                        return before
+                        return None
                     run.error = err
-            if step.scatter:
-                e["done"] = sum(_ended(run) for run in a.runs)
         else:
-            try:
-                for i in range(len(a.runs)):
-                    # run_ids stays index-aligned: a kept item keeps its old run id
-                    e["run_ids"].append(kept_runs[i][0] if i in kept_runs
-                                        else self._spawn_run(a, i))
-            except Exception as ex:  # noqa: BLE001 - a failed start fails the step
-                a.kill()
-                _finish(e, error=f"could not start the fn: {ex}")
-                return before
-            # the spawn→persist window stays live: a crash here must not leave runs the
-            # state doesn't know (the orphan sweep kills those), nor a state change
-            # without its step.status record (SPEC §6)
-            before = self._persist(project, state, was, before)
-        if all(run.result is not None for run in a.runs):
-            _finish(e, outputs=a.outputs())
-            return before
-        if a.scatter and all(_ended(run) for run in a.runs):
-            _finish_scatter(a, e)
-            return before
-        self.active[("step", project, step.id)] = a
-        return before
+            stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+            for i, run in enumerate(a.runs):
+                if i not in kept_runs:
+                    run.rid = f"{stamp}-{step.id}-{i}-{secrets.token_hex(2)}"
+                run.run_dir = self.store.runs_dir(project) / run.rid
+            e["run_ids"] = a.run_ids()
+        if not self._apply(a, e):
+            return a
+        return None
 
-    def _spawn_run(self, a: Active, i: int) -> str:
-        """Start run i of a scattered (or single-run) step; returns its run id."""
-        assert a.project is not None
-        stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-        run_id = f"{stamp}-{a.step}-{i}-{secrets.token_hex(2)}"
-        run = a.runs[i]
-        run.run_dir = run_dir = self.store.runs_dir(a.project) / run_id
-        env = fn_env(self.store, a.project, a.fn, a.step, run_id, run_dir, a.ports)
-        run.proc = spawn(a.fn, run.inp, run_dir, env)
-        run.pid = run.proc.pid
-        return run_id
+    # ---- calls ----
 
-    def _poll(self, key: tuple[str, ...], e: dict[str, Any]) -> None:
-        a = self.active.get(key)
-        if a is None:  # started by a runner that is gone: adopt it (SPEC §6)
-            self._adopt_entry(key, e)
-            a = self.active.get(key)
-            if a is None:
-                if e.get("status") == "running":
-                    _finish(e, error=RESTARTED)
-                return
-        if a.fatal is not None:
-            a.kill()
-            del self.active[key]
-            return _finish(e, error=a.fatal)
-        for run in a.runs:
-            if _ended(run):
-                continue
-            code = _run_code(run)
-            if code is None:
-                continue
-            if isinstance(code, str):  # UNKNOWN: the shim died without writing exit.json
-                if not a.scatter:
-                    a.kill()
-                    del self.active[key]
-                    return _finish(e, error=code)
-                run.error = code
-                kill(run)  # a fn child that outlived the shim still dies (SPEC §6)
-                continue
-            outputs, err = read_run(a.fn, run.run_dir, code, a.declared)
-            if err:
-                if not a.scatter:
-                    a.kill()
-                    del self.active[key]
-                    return _finish(e, error=err)
-                run.error = err  # a scattered item's failure does not stop the others
-                continue
-            run.result = outputs
-        if a.scatter:
-            e["done"] = sum(_ended(run) for run in a.runs)
-        if all(run.result is not None for run in a.runs):
-            del self.active[key]
-            _finish(e, outputs=a.outputs())
-        elif a.scatter and all(_ended(run) for run in a.runs):
-            del self.active[key]
-            _finish_scatter(a, e)
+    def _tick_calls(self, project: str | None) -> None:
+        """Start pending calls and collect finished ones, from the `calls` rows still pending
+        or running."""
+        for rec in C.live(self.store, project):
+            key = ("call", project or "", rec["call"])
+            if rec["status"] == "pending":
+                self._start_call(key, rec, project)
+            elif rec.get("direct"):
+                if not C.alive(rec.get("pid"), rec.get("pid_start")):  # its process is gone
+                    _reap_native(self.store.runs_dir(project) / rec["call"])
+                    _finish(rec, error=C.GONE)
+                    C.record(self.store, project, rec, ("running",))
+            else:
+                a = self.active.get(key) or self._adopt_entry(key, rec)
+                if a is None:  # its fn is gone
+                    _finish(rec, error=f"no fn {rec['fn']!r}")
+                else:
+                    self._collect_runs(a)
+                    if not self._apply(a, rec):
+                        continue
+                C.record(self.store, project, rec, ("running",))
+                self.active.pop(key, None)
+
+    def _start_call(self, key: tuple[str, ...], rec: dict[str, Any],
+                    project: str | None) -> None:
+        """Start a pending call: a built-in runs inline; anything else is reserved (its row
+        running, committed), then spawned, and a start that raises fails it."""
+        reg = self.store.registry(project)
+        if reg.blocking:
+            return  # stays pending until the functions are fixed
+        fn = reg.get(rec["fn"])
+        if fn is None:
+            _finish(rec, error=f"no fn {rec['fn']!r}")
+            C.record(self.store, project, rec, ("pending",))
+            return
+        inp = rec["inputs"]
+        if fn.native:
+            outputs, err = run_native(fn, inp)
+            _finish(rec, outputs=outputs, error=err or None)
+            C.record(self.store, project, rec, ("pending",))
+            return
+        call = rec["call"]
+        d = self.store.runs_dir(project) / call
+        a = Active(fn, project, "", [Run(inp, d, rid=call)])
+        rec["status"] = "running"
+        if not C.record(self.store, project, rec, ("pending",)):
+            return
+        self.active[key] = a
+        try:
+            a.runs[0].proc = spawn(fn, inp, d, fn_env(self.store, project, fn, "", call, d))
+            a.runs[0].pid = a.runs[0].proc.pid
+        except Exception as ex:  # noqa: BLE001 - a failed start fails the call
+            _finish(rec, error=f"could not start the fn: {ex}")
+            if C.record(self.store, project, rec, ("running",)):
+                self.active.pop(key, None)
 
 
 def _finish(e: dict[str, Any], outputs: Any = None, error: str | None = None) -> None:

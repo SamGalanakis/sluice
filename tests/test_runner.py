@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from sluice import log as L
+from sluice import runner as R
 from sluice.errors import InvalidPlan
 from sluice.runner import Runner, lock_held
 from tests.conftest import add, create, d, settle, src, statuses, window
@@ -137,31 +138,31 @@ def test_two_failed_scatter_items_name_every_run_in_index_order(store, runner):
     assert e["results"] == [None, {"tag": "b"}, None]
 
 
-def test_a_spawn_error_fails_the_step_and_kills_the_runs_that_started(store, runner,
-                                                                    monkeypatch):
+def test_a_spawn_error_fails_its_run_and_the_others_carry_on(store, runner, monkeypatch):
+    """Every run is reserved (running, its id recorded) before any process starts; a start
+    that raises fails that run: a single step, or just that item of a scattered one."""
     create(store, "p", {"w": {"run": "test.window", "scatter": "tag",
-                              "in": {"seconds": d(30), "tag": d(["a", "b", "c"])}}})
-    real = Runner._spawn_run
+                              "in": {"seconds": d(0), "tag": d(["a", "b", "c"])}},
+                        "one": {"run": "test.window", "in": {"seconds": d(0), "tag": d("b")}}})
+    real = R.spawn
 
-    def flaky(self, a, i):
-        if i == 1:
+    def flaky(fn, inp, run_dir, env):
+        if inp.get("tag") == "b":
             raise RuntimeError("spawn blew up")
-        return real(self, a, i)
+        return real(fn, inp, run_dir, env)
 
-    monkeypatch.setattr(Runner, "_spawn_run", flaky)
+    monkeypatch.setattr(R, "spawn", flaky)
     steps = settle(runner, store, "p")
+    assert steps["one"]["status"] == "failed"
+    assert steps["one"]["error"] == "could not start the fn: spawn blew up"
     e = steps["w"]
-    assert e["status"] == "failed" and e["error"] == "could not start the fn: spawn blew up"
+    assert e["status"] == "failed" and e["error"] == "run 1: could not start the fn: spawn blew up"
+    assert len(e["run_ids"]) == 3 and e["results"][0]["tag"] == "a" and e["results"][1] is None
     assert not runner.active
-    [run_id] = e["run_ids"]  # only the run that started is recorded
-    [rec] = [r for r in L.read(store.log_dir("p"), kinds=["step.status"])["records"]
-             if r["to"] == "failed"]
-    assert (rec["step"], rec["error"], rec["run_ids"]) == ("w", e["error"], [run_id])
-    run_dir = store.runs_dir("p") / run_id
-    deadline = time.time() + 10
-    while _procs_in(run_dir) and time.time() < deadline:
-        time.sleep(0.05)
-    assert _procs_in(run_dir) == []
+    assert not (store.runs_dir("p") / e["run_ids"][1]).exists()
+    [rec] = [r for r in L.read(store.home, "p", kinds=["step.status"])["records"]
+             if r["to"] == "failed" and r["step"] == "w"]
+    assert (rec["error"], rec["run_ids"]) == (e["error"], e["run_ids"])
 
 
 def test_a_failure_records_the_exit_code_and_stderr_and_blocks_dependents(store, runner):
@@ -330,7 +331,7 @@ def test_a_new_runner_adopts_leftover_running_steps(store, runner):
     steps = settle(fresh, store, "p")
     assert steps["w"]["outputs"] == {"value": "x"} and steps["after"]["outputs"] == \
         {"value": "x"}
-    [rec] = L.read(store.log_dir("p"), kinds=["run.adopt"])["records"]
+    [rec] = L.read(store.home, "p", kinds=["run.adopt"])["records"]
     assert (rec["step"], rec["run"], rec["outcome"]) == ("w", rid, "watching")
 
 
@@ -403,6 +404,7 @@ def test_fn_processes_get_the_home_then_the_project_dotenv(store, runner):
                                      "TEST_SHARED=home\n")
     create(store, "p", {"e": {"run": "test.env", "in": {}}})
     create(store, "q", {"e": {"run": "test.env", "in": {}}})
+    store.project_dir("p").mkdir(parents=True, exist_ok=True)  # made lazily
     (store.project_dir("p") / ".env").write_text("TEST_SHARED=project-p\nTEST_ONLY_P=1\n")
     settle(runner, store, "p")
     settle(runner, store, "q")
