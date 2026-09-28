@@ -85,7 +85,7 @@ def _check_project(store: Store, r: Report, name: str) -> None:
         return
     if not isinstance(info, dict):
         r.add(f"{show}/project.json",
-              "expected an object {name, description?, archived?, paused?}")
+              "expected an object {name, description?, archived?, paused?, icon?}")
     else:
         for k in info:
             if k not in PROJECT_KEYS:
@@ -93,8 +93,9 @@ def _check_project(store: Store, r: Report, name: str) -> None:
         if info.get("name") != name:
             r.add(f"{show}/project.json#name",
                   f"expected {name!r} (the directory name), got {info.get('name')!r}")
-        if not isinstance(info.get("description", ""), str):
-            r.add(f"{show}/project.json#description", "expected a string")
+        for k in ("description", "icon"):
+            if not isinstance(info.get(k, ""), str):
+                r.add(f"{show}/project.json#{k}", "expected a string")
     _check_env(store, r, d / ".env")
 
     reg = store.registry(name)

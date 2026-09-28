@@ -186,6 +186,11 @@ details.switcher .menu a.all[aria-current] { color: var(--foreground); }
 /* a project's title on its standalone page, which has no nav */
 .phead { margin: 8px 0 20px; }
 
+/* a project's icon, before its name (an image, or short text in the same 20px box) */
+img.picon, span.picon { width: 20px; height: 20px; flex: none; vertical-align: -0.15em; }
+img.picon { object-fit: contain; }
+span.picon { display: inline-flex; align-items: center; justify-content: center; }
+
 /* ---- the status glyph ---------------------------------------------------------------- */
 .g { display: inline-flex; flex: none; width: 16px; height: 16px; margin-top: 2px; }
 .g svg { display: block; }

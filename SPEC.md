@@ -13,9 +13,9 @@ change.
   named `outputs`, and a Python implementation (`main.py`, run with `uv`). An **open** fn (an
   agent) also takes whatever extra inputs a step binds and declares, per step, outputs that
   its agent submits (§5).
-- **Project:** a name and an optional description, nothing else (no code directory: put whatever
-  context matters in the description). Each project has exactly one plan, its own functions and
-  its own `.env`. Every call names the project it acts on.
+- **Project:** a name, an optional description and an optional icon (§2), nothing else (no
+  code directory: put whatever context matters in the description). Each project has exactly
+  one plan, its own functions and its own `.env`. Every call names the project it acts on.
 - **Plan:** typed plan `inputs`, named plan `outputs`, and `steps`. Each step runs one fn; each of
   its inputs comes from a plan input, other steps' outputs, or a literal. Edited only through
   typed edits, every edit logged.
@@ -46,7 +46,8 @@ runs/<call_id>/             input.json, output.json, stderr.log, shim.json, chil
                             shim.lock and exit.json of those calls (§4)
 .lock                       flock target for appends to the home log
 projects/<name>/
-  project.json              {"name", "description", "archived"?, "paused"?}
+  project.json              {"name", "description", "archived"?, "paused"?, "icon"?}
+  icon.<ext>                the project's image icon (svg, png, webp, jpg or gif), at most one
   plan.json                 the project's plan (current truth)
   state.json                runner-owned: plan input values, step status and outputs (current truth)
   log.jsonl                 the project's log (§6b): edits, manual values, step status changes,
@@ -61,6 +62,16 @@ projects/<name>/
                             start time, liveness lock and exit record (§4)
   .lock                     flock target for read-modify-write in this project and log appends
 ```
+
+A project's optional **icon** is either an image — an `icon.<ext>` file (SVG, PNG, WebP, JPEG
+or GIF, at most 256 KB) written by `project_create`/`project_update`'s `icon` argument, which
+sniffs the type from the file's content — or a short text icon (at most 16 characters, no
+control characters, typically one emoji) kept as `project.json`'s `"icon"`. A project has at
+most one of the two: setting one clears the other; `icon: ""` removes it. A value that looks
+like a path (starts with `/` or `~`) but is not a readable image file is an error, never a
+text icon. `projects_list` reports it as `{"kind": "image", "type": <content type>}` or
+`{"kind": "text", "text": ...}`, absent when none; the dashboard shows it by the project's
+name and serves an image icon at `/projects/<name>/icon` (§8).
 
 **Function scopes:** built-in (shipped in the package, `src/sluice/fns/`), global
 (`SLUICE_HOME/fns/` and every dir in `config.fn_dirs`), and project (`projects/<name>/fns/`). A
@@ -380,8 +391,8 @@ files. Without a project it checks the built-in and global scopes and every dire
   for an open fn, `submits`; nothing else), the name
   matching its directory, every type parsing, `main.py` present for non-built-ins;
 - name collisions across scopes (see §2);
-- `project.json` shape (`name` equal to its directory, optional string `description`,
-  optional booleans `archived` and `paused`), `.env`
+- `project.json` shape (`name` equal to its directory, optional strings `description` and
+  `icon`, optional booleans `archived` and `paused`), `.env`
   files parsing as `KEY=value` lines (blank lines, `#` comments and `export ` allowed);
 - the plan: full validation (§5) against the project's functions;
 - `state.json` agreeing with the plan (no state for unknown steps or undeclared plan inputs,
@@ -491,7 +502,8 @@ Server-rendered HTML with inline CSS (`static/dashboard.css`; light and dark via
 `prefers-color-scheme`, usable at phone width, keyboard reachable), every page on one centred
 column that the top nav's content shares, one nav and no second row: a project switcher whose
 button is the chosen project's name ("All projects" when none; its menu lists the projects, the
-archived ones last), then that scope's sections (a project's Plan · Log · History · Functions,
+archived ones last), each name led by the project's icon when it has one (§2), then that scope's
+sections (a project's Plan · Log · History · Functions,
 or Projects · Log · Functions), the current one marked (`aria-current` and a bar, not colour
 alone; a step's page is inside Plan), and Inbox at the right, every value HTML-escaped (plans, logs, run output and inbox items are
 untrusted). The Inbox link carries the count of open items across all projects as the
@@ -550,7 +562,7 @@ raw HTML escaped, unsafe link schemes refused).
   update and as runs age. A Log or History tab is titled `Log · <project>` or
   `History · <project>`.
 - `GET /`: one row per active project, and the archived ones folded under
-  "Archived (n)"; each row: the project's status glyph and name, the line above when steps
+  "Archived (n)"; each row: the project's status glyph, icon and name, the line above when steps
   failed, description (two lines), a progress bar by status with "n of m"
   succeeded, what is running now (each running step's title and running time, and
   `quiet 40m` as on its card) or why nothing is, and the last activity (the later of the last log record and the last state write).
@@ -617,6 +629,14 @@ raw HTML escaped, unsafe link schemes refused).
   (`a failed`). Under the board: the **Result** (the plan's outputs that have a value; a
   long text folds to its first lines, markdown rendered) and the plan's inputs (name, value,
   doc).
+- `GET /projects/<name>/icon`: the project's image icon (§2), served with its content type,
+  `X-Content-Type-Options: nosniff`, stat-based cache validators (ETag, Last-Modified) and,
+  for SVG, `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline';
+  img-src data:` so a script inside it cannot run even opened directly; 404 when the project
+  has no image icon. Wherever a project's name shows — its index row, the switcher's button
+  and menu entries, its page head — an image icon is an `<img>` of this URL (a `?v=` of the
+  file's mtime busts a stale cache), a text icon is escaped text in the same box, and an
+  image icon is also the page's favicon.
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
   read like a run history: its id and doc, then a grid of facts (status, `blocked` for a
   blocked step, fn, runs done of total for a scattered step, started, duration, cost as money,
@@ -731,9 +751,9 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | Tool | Args | Returns |
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
-| `projects_list` | – | `[{name, description, rev, counts, archived, paused}]` |
-| `project_create` | `name, description?` | `{name}` (with an empty plan) |
-| `project_update` | `name, description?, archived?, paused?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6) |
+| `projects_list` | – | `[{name, description, rev, counts, archived, paused, icon?}]`; `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
+| `project_create` | `name, description?, icon?` | `{name}` (with an empty plan) |
+| `project_update` | `name, description?, archived?, paused?, icon?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
 | `project_delete` | `name` | `{deleted}`: removes the project's directory (plan, state, log, inbox, runs); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |

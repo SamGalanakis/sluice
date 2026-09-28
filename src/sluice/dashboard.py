@@ -35,7 +35,7 @@ from . import inbox as I
 from . import log as L
 from . import views
 from .errors import BadRequest, NotFound, SluiceError
-from .store import Store
+from .store import ICON_TYPES, Store
 from .util import read_json
 
 PROJECT_FILES = ("project.json", "plan.json", "state.json", L.FILE, I.FILE)
@@ -422,6 +422,23 @@ class Dashboard:
             lambda on: self.store.pause_steps(name, [sid], paused=on, author=AUTHOR),
             f"/projects/{views.quote(name)}#step:{views.quote(sid)}")
 
+    async def icon(self, request: Request) -> Response:
+        """The project's image icon: its content type, nosniff and the stat-based validators
+        FileResponse sets (etag, last-modified); for SVG a CSP keeps any script inside from
+        running even when the URL is opened directly. 404 when it has no image icon."""
+        try:
+            f = await anyio.to_thread.run_sync(self.store.icon_file,
+                                               request.path_params["name"])
+        except SluiceError as err:
+            return Response(err.message, status_code=404)
+        if f is None:
+            return Response("not found", status_code=404)
+        headers = {"X-Content-Type-Options": "nosniff"}
+        if f.suffix == ".svg":
+            headers["Content-Security-Policy"] = \
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        return FileResponse(f, media_type=ICON_TYPES[f.suffix[1:]], headers=headers)
+
     async def static(self, request: Request) -> Response:
         name = request.path_params["file"]
         if name not in STATIC_TYPES:
@@ -438,6 +455,7 @@ class Dashboard:
         Host allowlist."""
         for path, handler in (("/", self.index), ("/stream", self.index_stream),
                               ("/projects/{name}", self.project),
+                              ("/projects/{name}/icon", self.icon),
                               ("/projects/{name}/stream", self.project_stream),
                               ("/projects/{name}/threads", self.threads),
                               ("/projects/{name}/threads/stream", self.threads_stream),

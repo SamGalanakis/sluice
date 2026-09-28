@@ -135,24 +135,31 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def projects_list() -> Any:
-        """List projects: [{name, description, rev, counts, archived, paused}]; counts maps step
-        status -> number of steps in the project's plan."""
+        """List projects: [{name, description, rev, counts, archived, paused, icon?}]; counts
+        maps step status -> number of steps in the project's plan; icon, when the project has
+        one, is {"kind": "image", "type": <content type>} or {"kind": "text", "text": <text>}.
+        """
         return store.projects()
 
     @tool
-    def project_create(name: str, description: str = "") -> Any:
+    def project_create(name: str, description: str = "", icon: str | None = None) -> Any:
         """Create a project with an empty plan (rev 1). Returns {name}.
 
         Args:
             name: lowercase letters, digits, - and _ (starting with a letter or digit).
             description: what the project is for; put any context an orchestrator needs here.
+            icon: the project's icon: an absolute path to an image file (SVG, PNG, WebP, JPEG
+                or GIF, at most 256 KB, copied into the project as icon.<ext>), or a short
+                text icon (an emoji; at most 16 characters).
         """
-        return store.create_project(name, description, AUTHOR)
+        return store.create_project(name, description, AUTHOR, icon=icon)
 
     @tool
     def project_update(name: str, description: str | None = None,
-                       archived: bool | None = None, paused: bool | None = None) -> Any:
-        """Replace a project's description, archive it and/or pause it. Returns {name}.
+                       archived: bool | None = None, paused: bool | None = None,
+                       icon: str | None = None) -> Any:
+        """Replace a project's description, archive it, pause it and/or set its icon. Returns
+        {name}.
 
         Args:
             name: the project.
@@ -161,8 +168,10 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 changes), false to bring it back.
             paused: true to pause the whole project: no step of it starts, however ready,
                 until false again; running steps finish.
+            icon: an image path or a short text icon, as in project_create; "" removes the
+                icon (leave out to keep it). A project has at most one of the two kinds.
         """
-        return store.update_project(name, description, archived, paused)
+        return store.update_project(name, description, archived, paused, icon=icon)
 
     @tool
     def project_delete(name: str) -> Any:

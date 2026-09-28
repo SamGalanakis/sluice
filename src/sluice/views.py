@@ -306,13 +306,29 @@ CHEVRON = ('<svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hi
 PROJECT_TABS = ("plan", "threads", "log", "history", "fns")  # a project's sections, in the nav
 
 
-def project_head(project: str, tab: str | None) -> str:
+def project_icon(store: Store, name: str, icon: dict[str, Any] | None = None) -> str:
+    """The project's icon before its name (index row, switcher, page head): an image as an
+    <img> (the file's mtime in `?v=` busts a stale cache), or the text icon in an aria-hidden
+    span in the same 20px box; "" when the project has none."""
+    icon = store.icon(name) if icon is None else icon
+    if not icon:
+        return ""
+    if icon["kind"] == "image":
+        f = store.icon_file(name)
+        v = f.stat().st_mtime_ns if f is not None else 0
+        return (f'<img class="picon" src="/projects/{e(quote(name))}/icon?v={v}" '
+                'alt="" width="20" height="20">')
+    return f'<span class="picon" aria-hidden="true">{e(icon["text"])}</span>'
+
+
+def project_head(store: Store, project: str, tab: str | None) -> str:
     """A project page's title: the nav already names the project (its switcher) and the
     section, so it is for assistive technology only; visible on the standalone page
     (`tab` None), which has no nav."""
+    icon = project_icon(store, project)
     if tab is None:
-        return f'<div class="phead"><h1>{e(project)}</h1></div>'
-    return f'<h1 class="vh">{e(project)}</h1>'
+        return f'<div class="phead"><h1>{icon}{e(project)}</h1></div>'
+    return f'<h1 class="vh">{icon}{e(project)}</h1>'
 
 
 def _project_status(counts: Mapping[str, int]) -> str:
@@ -347,15 +363,16 @@ def project_switcher(store: Store, project: str | None) -> str:
         name = info["name"]
         cur = ' aria-current="page"' if name == project else ""
         row = (f'<a href="/projects/{e(quote(name))}"{cur}>{_project_mark(info["counts"])}'
-               f"<span>{e(name)}</span></a>")
+               f'{project_icon(store, name, info.get("icon"))}<span>{e(name)}</span></a>')
         (old if info.get("archived") else items).append(row)
     cur = ' aria-current="page"' if project is None else ""
     menu = f'<a href="/" class="all"{cur}>All projects</a>' + "".join(items)
     if old:
         menu += f'<p class="menu-label">Archived</p>{"".join(old)}'
     label = e(project) if project else "All projects"
+    mark = project_icon(store, project) if project else ""
     return (f'<details class="switcher"><summary aria-label="Project: {label}">'
-            f'<span class="sw-name">{label}</span>{CHEVRON}</summary>'
+            f'{mark}<span class="sw-name">{label}</span>{CHEVRON}</summary>'
             f'<div class="menu">{menu}</div></details>')
 
 
@@ -406,10 +423,15 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
         top = f'<a class="skip" href="#{e(skip[0])}">{e(skip[1])}</a>{top}'
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
+    fav = ""  # a project's image icon is the favicon of its pages
+    if store is not None and project is not None \
+            and (f := store.icon_file(project)) is not None:
+        fav = (f'<link rel="icon" href="/projects/{e(quote(project))}/icon'
+               f'?v={f.stat().st_mtime_ns}">')
     return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{e(title)} · sluice</title>"
-            f'<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
+            + (fav or '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">')
             + "".join(f'<link rel="stylesheet" href="{u}">' for u in FONT_CSS)
             + f"<style>{CSS}</style>{head}</head>\n"
             f"<body{body_attrs}>{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"
@@ -1450,6 +1472,7 @@ def _bar(counts: Mapping[str, int], total: int,
 def _project_row(store: Store, name: str, since: list[str] | None = None) -> str:
     """One project on the index (with `since`, it adds when each running step last wrote)."""
     info = store.project(name)
+    icon = project_icon(store, name, store.icon(name, info))
     href = f"/projects/{quote(name)}"
     about = f'<p class="about">{e(first_paragraph(info["description"]))}</p>' \
         if info.get("description") else ""
@@ -1458,9 +1481,9 @@ def _project_row(store: Store, name: str, since: list[str] | None = None) -> str
         board = load_board(store, name)
     except SluiceError as err:  # a broken plan is shown, not raised
         msg = err.message
-        return (f'<li class="proj"><div class="p-head"><a href="{href}">{e(name)}</a></div>'
-                f'{about}<p class="now attn">The plan does not validate: {e(_line(msg, 120))}'
-                f"</p></li>")
+        return (f'<li class="proj"><div class="p-head"><a href="{href}">{icon}{e(name)}</a>'
+                f'</div>{about}<p class="now attn">The plan does not validate: '
+                f"{e(_line(msg, 120))}</p></li>")
     counts, total = board.counts, len(board.blocks)
     stuck = attention(board, lambda sid: f"{href}#step:{quote(sid)}", mark=False)
     running = [b for b in board.blocks.values() if b.status == "running"]
@@ -1488,8 +1511,8 @@ def _project_row(store: Store, name: str, since: list[str] | None = None) -> str
     done = f"{counts.get('succeeded', 0)} of {total}" if total else ""
     last = f'<span class="meta">{_when(when)}</span>' if when else ""
     return (f'<li class="proj"><div class="p-head"><a href="{href}">'
-            f'{glyph(_project_status(counts), ", ")}<span>{e(name)}</span></a>{last}</div>'
-            f'{stuck}{about}<div class="p-state">{_bar(counts, total, board.stuck)}'
+            f'{glyph(_project_status(counts), ", ")}{icon}<span>{e(name)}</span></a>{last}'
+            f'</div>{stuck}{about}<div class="p-state">{_bar(counts, total, board.stuck)}'
             f'<span class="meta">{done}</span></div>{now}</li>')
 
 
@@ -1620,7 +1643,7 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     every step's detail in a disclosure)."""
     live = ver is not None
     p = _project(store, project, live)
-    body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}'
+    body = (f'{project_head(store, project, "plan" if live else None)}{p["summary"]}'
             f'{p["graph"]}{p["result"]}')
     board = load_board(store, project)
     if not live:
@@ -2031,7 +2054,7 @@ def step_parts(store: Store, project: str, sid: str) -> dict[str, str]:
 def step_page(store: Store, project: str, sid: str, ver: str) -> str:
     """One step on a page of its own (what a card links to without JavaScript)."""
     parts = step_parts(store, project, sid)
-    return layout(f"{sid} · {project}", project_head(project, "plan") + parts["step-detail"],
+    return layout(f"{sid} · {project}", project_head(store, project, "plan") + parts["step-detail"],
                   stream=f"/projects/{project}/steps/{sid}/stream", signals={"sver": ver},
                   inbox=open_count(store), here="/", sub=True, board=True, store=store,
                   project=project, tab="plan")
@@ -2274,7 +2297,7 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
     else:
         history = bool(q.kinds) and set(q.kinds) == set(L.HISTORY_KINDS) and not q.threads
         tab = "history" if history else "log"
-        title = project_head(project, tab)
+        title = project_head(store, project, tab)
         name = f'{"History" if history else "Log"} · {project}'  # as the Threads tab's
     signals = {"kinds": [k if k in q.kinds else "" for k in KIND_OPTIONS],
                "thread": ",".join(q.threads), "before": q.before or 0, "after": q.after or 0,
@@ -2347,7 +2370,7 @@ def fns_page(store: Store, project: str | None = None) -> str:
         sections.append(f"<h2>{title}</h2>{index}{cards}")
     extra = "".join(f'<p class="fn problem err">{e(p["where"])}: {e(p["message"])}</p>'
                     for p in other)
-    title = '<h1 class="vh">Functions</h1>' if project is None else project_head(project, "fns")
+    title = '<h1 class="vh">Functions</h1>' if project is None else project_head(store, project, "fns")
     return layout("Functions", f"{title}{picker}{extra}{''.join(sections)}",
                   inbox=open_count(store), here="/fns" if project is None else "/",
                   store=store, project=project, tab="fns")
@@ -2420,7 +2443,7 @@ def inbox_page(store: Store, project: str | None, status: str, ver: str) -> str:
     filters = "".join(
         f'<a href="{e(base + ("" if s == "open" else "?status=" + s))}"'
         f'{_current(s, status)}>{s.capitalize()}</a>' for s in INBOX_FILTERS)
-    title = '<h1 class="vh">Inbox</h1>' if project is None else project_head(project, "inbox")
+    title = '<h1 class="vh">Inbox</h1>' if project is None else project_head(store, project, "inbox")
     return layout("Inbox", f'{title}<nav class="seg" aria-label="Status">{filters}</nav>'
                   f'{parts["inbox-items"]}', stream=f"{base}/stream",
                   signals={"ver": ver, "status": status}, inbox=open_count(store),

@@ -8,6 +8,8 @@ import copy
 import os
 import shutil
 import threading
+import unicodedata
+import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -23,11 +25,17 @@ from . import registry as R
 from . import state as S
 from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound, NotOpen
-from .util import atomic_write_json, atomic_write_text, now_iso, read_json
+from .util import atomic_write_bytes, atomic_write_json, atomic_write_text, now_iso, read_json
 
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                                   "log_max": L.DEFAULT_MAX}
-PROJECT_KEYS = {"name", "description", "archived", "paused"}
+PROJECT_KEYS = {"name", "description", "archived", "paused", "icon"}
+# the image types an icon may be, icon.<ext> -> its content type, sniffed from the file's
+# content (never its name): an SVG parses as XML with an <svg> root, the rest by magic bytes
+ICON_TYPES = {"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp",
+              "jpg": "image/jpeg", "gif": "image/gif"}
+ICON_MAX = 256 * 1024  # the largest image icon (bytes)
+ICON_TEXT_MAX = 16  # characters of a text icon, stripped
 SUBMITTED = "submitted.json"  # in a run dir: the outputs its agent submitted (step_submit)
 ANSWER_KEYS = {"action": str, "params": dict, "values": dict, "text": str}
 
@@ -50,6 +58,34 @@ def _brief(value: Any) -> Any:
     if isinstance(value, list):
         return [_brief(v) for v in value]
     return value
+
+
+def _sniff_icon(path: Path) -> tuple[str, bytes]:
+    """(extension, content) of the image at `path`: an SVG parses as XML with an <svg> root,
+    the others match magic bytes; BadRequest says what was wrong."""
+    try:
+        too_big = path.stat().st_size > ICON_MAX
+        data = b"" if too_big else path.read_bytes()
+    except OSError:
+        raise BadRequest(f"icon: no readable file at {path}") from None
+    if too_big:
+        raise BadRequest(f"icon: {path} is over {ICON_MAX // 1024} KB")
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png", data
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif", data
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg", data
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp", data
+    try:
+        root = ET.fromstring(data)
+        ok = root.tag.rpartition("}")[2] == "svg"
+    except ET.ParseError:
+        ok = False
+    if ok:
+        return "svg", data
+    raise BadRequest(f"icon: {path} is not an SVG, PNG, WebP, JPEG or GIF image")
 
 class Store:
     """All reads and writes of a SLUICE_HOME. Safe across threads and processes (flock)."""
@@ -214,12 +250,13 @@ class Store:
         return read_json(path)
 
     def create_project(self, name: str, description: str = "", author: str = "",
-                       reason: str = "") -> dict[str, str]:
-        """A project with the empty plan at rev 1 (SPEC §5)."""
+                       reason: str = "", icon: str | None = None) -> dict[str, str]:
+        """A project with the empty plan at rev 1 (SPEC §5); `icon` as in update_project."""
         if not isinstance(name, str) or not P.ID_RE.match(name):
             raise BadRequest(f"project names match {P.ID_RE.pattern}, got {name!r}")
         if not isinstance(description, str):
             raise BadRequest("description: expected a string")
+        resolved = self._read_icon(icon) if icon is not None else None
         d = self.project_dir(name)
         d.mkdir(parents=True, exist_ok=True)
         with self.lock(name):
@@ -228,23 +265,30 @@ class Store:
             doc = copy.deepcopy(P.EMPTY)
             (d / L.FILE).unlink(missing_ok=True)
             atomic_write_json(d / "plan.json", {**doc, "rev": 1})
-            atomic_write_json(d / "project.json", {"name": name, "description": description})
+            info: dict[str, Any] = {"name": name, "description": description}
+            if icon is not None:
+                self._apply_icon(d, info, resolved)
+            atomic_write_json(d / "project.json", info)
             self._log(name, 1, author, reason or "project created",
                       [{"op": "add", "path": "", "value": doc}])
         self.notify()
         return {"name": name}
 
     def update_project(self, name: str, description: str | None = None,
-                       archived: bool | None = None, paused: bool | None = None
-                       ) -> dict[str, str]:
+                       archived: bool | None = None, paused: bool | None = None,
+                       icon: str | None = None) -> dict[str, str]:
         """Replace the description and/or set `archived` (an archived project stays whole and
         keeps running; the dashboard lists it apart) and/or
-        `paused` (no step of it starts until unpaused; running ones finish)."""
+        `paused` (no step of it starts until unpaused; running ones finish) and/or the icon:
+        an absolute path to an image (SVG, PNG, WebP, JPEG or GIF, at most 256 KB, copied in
+        as icon.<ext>) or a short text icon (at most 16 characters, no control characters);
+        "" removes the icon. A project has at most one of the two."""
         if description is not None and not isinstance(description, str):
             raise BadRequest("description: expected a string")
         for key, value in (("archived", archived), ("paused", paused)):
             if value is not None and not isinstance(value, bool):
                 raise BadRequest(f"{key}: expected true or false")
+        resolved = self._read_icon(icon) if icon is not None else None
         with self.lock(name):
             new = dict(self.project(name))
             if description is not None:
@@ -253,9 +297,63 @@ class Store:
                 new["archived"] = archived
             if paused is not None:
                 new["paused"] = paused
+            if icon is not None:
+                self._apply_icon(self.project_dir(name), new, resolved)
             atomic_write_json(self.project_dir(name) / "project.json", new)
         self.notify()
         return {"name": name}
+
+    def _read_icon(self, icon: Any) -> tuple[str, Any] | None:
+        """Resolve an `icon` argument: ("image", (ext, content)) or ("text", text) to set,
+        None to clear. A string starting with / or ~ must be a readable image file; it is
+        never a text icon."""
+        if not isinstance(icon, str):
+            raise BadRequest("icon: expected a string")
+        icon = icon.strip()
+        if not icon:
+            return None
+        if icon.startswith(("/", "~")):
+            return "image", _sniff_icon(Path(icon).expanduser())
+        if len(icon) > ICON_TEXT_MAX:
+            raise BadRequest(f"icon: a text icon is at most {ICON_TEXT_MAX} characters")
+        if any(unicodedata.category(c) == "Cc" for c in icon):
+            raise BadRequest("icon: a text icon may not contain control characters")
+        return "text", icon
+
+    def _apply_icon(self, d: Path, doc: dict[str, Any],
+                    resolved: tuple[str, Any] | None) -> None:
+        """Store a resolved icon: its image as icon.<ext>, or its text in `doc` (the
+        project.json being written). Setting either clears the other."""
+        for ext in ICON_TYPES:
+            (d / f"icon.{ext}").unlink(missing_ok=True)
+        doc.pop("icon", None)
+        if resolved is None:
+            return
+        if resolved[0] == "image":
+            ext, data = resolved[1]
+            atomic_write_bytes(d / f"icon.{ext}", data)
+        else:
+            doc["icon"] = resolved[1]
+
+    def icon_file(self, name: str) -> Path | None:
+        """The project's image icon (icon.<ext>), or None."""
+        d = self.project_dir(name)
+        for ext in ICON_TYPES:
+            f = d / f"icon.{ext}"
+            if f.is_file():
+                return f
+        return None
+
+    def icon(self, name: str, info: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """The project's icon, as projects_list reports it: {"kind": "image", "type":
+        <content type>} for an icon.<ext> file, {"kind": "text", "text": <text>} for
+        project.json's "icon"; None when it has neither (an image file wins over a stray
+        text icon)."""
+        f = self.icon_file(name)
+        if f is not None:
+            return {"kind": "image", "type": ICON_TYPES[f.suffix[1:]]}
+        text = (self.project(name) if info is None else info).get("icon")
+        return {"kind": "text", "text": text} if isinstance(text, str) else None
 
     def delete_project(self, name: str) -> dict[str, Any]:
         """Delete a project and everything it holds (plan, state, log, inbox, runs). Refused
@@ -301,10 +399,13 @@ class Store:
             info, doc = self.project(name), self.get(name)
             state = self.read_state(name)
             counts = Counter(S.entry_of(state, s)["status"] for s in doc["steps"])
-            out.append({"name": name, "description": info.get("description", ""),
-                        "rev": doc["rev"], "counts": dict(counts),
-                        "archived": info.get("archived") is True,
-                        "paused": info.get("paused") is True})
+            entry = {"name": name, "description": info.get("description", ""),
+                     "rev": doc["rev"], "counts": dict(counts),
+                     "archived": info.get("archived") is True,
+                     "paused": info.get("paused") is True}
+            if (icon := self.icon(name, info)) is not None:
+                entry["icon"] = icon
+            out.append(entry)
         return out
 
     # ---- the plan ----
