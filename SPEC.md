@@ -1140,13 +1140,14 @@ one after S (null: pending); with no `step.status` record at all, its status now
 shape (steps, edges, pauses, fns) is the current plan's.
 
 A step's **unit** is the steps sharing its `unit:<name>` tag (a recipe unit, §5, named
-`<name>`); a step without one belongs to its component among the steps without one (`plan.units`
-over just those, so an untagged step after a recipe unit never joins it) when that has more
-than one step (named by its first step); otherwise it is standalone. A unit is **settled** when none of
-its steps is running or pending and startable: each is succeeded, skipped, failed or stale, or
-pending and **held** — paused, its project paused, a `core.external` step, reading a plan input
-with no value, or waiting (through reads or `after`) on a step that is failed, stale or itself
-held (a step outside the unit counts by the same rule). **Wakes:**
+`<name>`); a step without one belongs to its component among the steps without one
+(`plan.units` over just those, so an untagged step after a recipe unit never joins it) when
+that has more than one step (named by its first step); otherwise it is standalone. A unit is
+**settled** when at least one of its steps has finished and none of its steps is running or
+pending and startable: each is succeeded, skipped, failed or stale, or pending and **held** —
+paused, its project paused, a `core.external` step, reading a plan input with no value, or
+waiting (through reads or `after`) on a step that is failed, stale or itself held (a step
+outside the unit counts by the same rule). **Wakes:**
 
 - a `step.status` to `failed`, `stale` or `skipped`, inside a unit too; a `message` needing a
   reply, not from `--me` (default `orchestrator`), addressed to `--me` or to nobody; an

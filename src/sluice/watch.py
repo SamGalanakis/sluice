@@ -145,8 +145,10 @@ def _marks(view: View, ids: list[str], history: dict[str, list[dict[str, Any]]],
 
 
 def _settled(marks: dict[str, tuple[str, bool]], ids: list[str]) -> bool:
-    """None of the steps is running or pending and startable."""
-    return all(marks[s][0] in FINAL or marks[s][1] for s in ids)
+    """None of the steps is running or pending and startable, and at least one has finished
+    (a unit added paused, nothing run yet, has not settled)."""
+    return all(marks[s][0] in FINAL or marks[s][1] for s in ids) and \
+        any(marks[s][0] in FINAL for s in ids)
 
 
 def _settles(store: Store, view: View, rec: dict[str, Any],

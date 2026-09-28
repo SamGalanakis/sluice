@@ -419,6 +419,18 @@ def test_an_untagged_step_after_a_recipe_unit_does_not_join_it(store):
     assert not any(x.startswith("  work.ports") for x in lines)  # declared outputs only
 
 
+def test_a_unit_added_paused_does_not_settle_until_a_step_finishes(store):
+    create(store, "p", {sid: {**s, "paused": True} for sid, s in lane().items()})
+    since = L.last_seq(store.home, "p")
+    for sid in lane():  # the runner's record for each new step
+        status_rec(store, "p", sid, "pending", frm=None)
+    out = next_run(store.home, "-p", "p", "--since-seq", str(since), "--timeout", "1")
+    assert out.splitlines()[-1].startswith("timeout seq ")  # held from the start: no wake
+    store.set_output("p", "u-fork", {"sum": 3}, "t", "t")  # finished, the rest still paused
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    assert lines[0].startswith("UNIT u settled: fork succeeded · work pending (held)")
+
+
 def test_all_wakes_on_every_record(store):
     create(store, "p", lane())
     since = L.last_seq(store.home, "p")
