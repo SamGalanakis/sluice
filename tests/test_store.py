@@ -240,3 +240,48 @@ def test_set_output_and_retry(store):
     assert store.history("p")[-1]["kind"] == "step.retry"
     with pytest.raises(BadRequest, match="step a is pending"):
         store.retry("p", "a", author="me", reason="again")
+
+
+def test_a_submission_and_its_record_are_written_together(store, monkeypatch):
+    create(store, "p", {"a": {"run": "test.open", "in": {}, "outputs": {"word": "string"}}})
+    store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "running",
+                                                          "run_ids": ["r1"]}}})
+    real = L.append
+
+    def fail(conn, project, records, cap=L.DEFAULT_MAX):
+        if records[0]["kind"] == "step.submit":
+            raise OSError("disk full")
+        return real(conn, project, records, cap)
+
+    monkeypatch.setattr(L, "append", fail)
+    with pytest.raises(OSError):
+        store.submit("p", "a", {"word": "lost"})
+    assert store.submission("p", "r1") is None  # the runner cannot take what was not accepted
+    monkeypatch.undo()
+    assert store.submit("p", "a", {"word": "kept"}) == {"ok": True, "run": "r1"}
+    assert store.submission("p", "r1") == {"word": "kept"}
+    [rec] = L.read(store.home, "p", kinds=["step.submit"])["records"]
+    assert (rec["run"], rec["outputs"]) == ("r1", {"word": "kept"})
+
+
+def test_the_history_keeps_every_edit_in_seq_order_past_the_log_cap(tmp_path):
+    from tests.conftest import write_config
+
+    home = tmp_path / "home"
+    write_config(home, log_max=6)
+    store = Store(home)
+    create(store, "p", {"a": add(d(1), d(1))}, inputs={"n": "int"})
+    store.set_input("p", "n", 1, "me", "at rev 2")
+    store.patch("p", 2, [{"op": "add", "path": "/steps/b", "value": add(d(2), d(1))}], "me", "b")
+    store.set_input("p", "n", 2, "me", "at rev 3")
+    whole = store.history("p")
+    assert [(e["kind"], e["rev"]) for e in whole] == [
+        ("plan.edit", 1), ("plan.edit", 2), ("plan.input", 2), ("plan.edit", 3),
+        ("plan.input", 3)]
+    assert [e["seq"] for e in whole] == sorted(e["seq"] for e in whole)
+    for i in range(10):  # the log forgets all of them
+        store.append("p", {"kind": "message", "thread": "t", "from": "x", "body": str(i)})
+    kept = store.history("p")
+    assert kept == [e for e in whole if e["kind"] == "plan.edit"]  # same seqs, ops and times
+    assert replay(store, "p") == {k: v for k, v in store.get("p").items() if k != "rev"}
+    assert [e["rev"] for e in store.history("p", since_rev=2)] == [3]

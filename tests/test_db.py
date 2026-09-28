@@ -1,6 +1,7 @@
 """The database contract (db.py): transactions, nesting, connections per home, thread and
 process, bootstrap, Busy, and the schema's own checks."""
 
+import json
 import os
 import sqlite3
 import subprocess
@@ -304,3 +305,59 @@ def test_records_keep_explicit_nulls_and_lift_their_filter_fields(tmp_path):
     assert peek(home, "SELECT step, run FROM records") == [("a", None)]
     assert peek(home, "SELECT json_extract(record, '$.from') IS NULL, "
                       "json_type(record, '$.from') FROM log") == [(1, "null")]
+
+
+def test_the_views_agree_with_status(tmp_path):
+    """`steps` reads the plan and state as `status` does (absent means pending, a step's pause
+    and its project's apart, manual, skipped, stale, scatter progress, outputs with explicit
+    nulls); `messages`, `step_changes`, `edits` and `log` project the records."""
+    from tests.conftest import create, d, write_config
+
+    home = tmp_path / "h"
+    write_config(home)
+    store = Store(home)
+    create(store, "p", {
+        "new": {"run": "core.echo", "in": {"value": d(1)}, "paused": "wait for me"},
+        "held": {"run": "core.echo", "in": {"value": d(1)}, "paused": True},
+        "man": {"run": "core.echo", "in": {"value": d(1)}},
+        "skip": {"run": "core.echo", "in": {"value": d(1)}},
+        "old": {"run": "core.echo", "in": {"value": d(1)}},
+        "fan": {"run": "test.add", "scatter": "a", "in": {"a": d([1, 2]), "b": d(1)}}})
+    store.update_project("p", paused=True)
+    store.write_state("p", {"inputs": {}, "steps": {
+        "man": {"status": "succeeded", "outputs": {"value": None}, "manual": True},
+        "skip": {"status": "skipped", "skipped": "when is false"},
+        "old": {"status": "stale", "outputs": {"value": 1}},
+        "fan": {"status": "running", "run_ids": ["r0", "r1"], "done": 1, "total": 2}}})
+    status = {s["id"]: s for s in store.status("p")["steps"]}
+    with store.rx() as conn:
+        rows = {r["step"]: dict(r) for r in conn.execute(
+            "SELECT * FROM steps WHERE project = 'p'")}
+    assert set(rows) == set(status)
+    for sid, s in status.items():
+        r = rows[sid]
+        assert r["status"] == s["status"] and bool(r["manual"]) == s["manual"]
+        assert r["fn"] == s["run"] and r["project_paused"] == 1
+        assert (r["paused"] if r["paused"] != 1 else True) == s.get("paused")
+        assert r["skipped"] == s.get("skipped")
+    assert json.loads(rows["man"]["outputs"]) == {"value": None}  # an explicit null kept
+    assert rows["new"]["entry"] is None and rows["new"]["paused"] == "wait for me"
+    assert (rows["fan"]["done"], rows["fan"]["total"]) == (1, 2)
+    assert json.loads(rows["fan"]["run_ids"]) == ["r0", "r1"]
+
+    store.append("p", {"kind": "message", "thread": "t", "from": "a", "to": "b", "body": "hi",
+                       "needs_reply": False, "data": {"k": [1]}},
+                 {"kind": "step.status", "step": "man", "from": None, "to": "pending"})
+    with store.rx() as conn:
+        [m] = [dict(r) for r in conn.execute("SELECT * FROM messages")]
+        [c] = [dict(r) for r in conn.execute("SELECT * FROM step_changes")]
+        edits = [dict(r) for r in conn.execute("SELECT * FROM edits ORDER BY rev")]
+        log = {r["seq"]: json.loads(r["record"]) for r in conn.execute(
+            "SELECT seq, record FROM log WHERE project = 'p'")}
+    assert (m["thread"], m["from"], m["to"], m["body"], m["needs_reply"]) == (
+        "t", "a", "b", "hi", 0)
+    assert json.loads(m["data"]) == {"k": [1]}
+    assert (c["step"], c["from"], c["to"]) == ("man", None, "pending")
+    assert [e["rev"] for e in edits] == list(range(1, store.get("p")["rev"] + 1))
+    assert all(json.loads(e["ops"]) and e["author"] == "test" for e in edits)
+    assert {s: log[s] for s in log} == {r["seq"]: r for r in L.read(home, "p")["records"]}
