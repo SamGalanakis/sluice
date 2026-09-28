@@ -191,15 +191,15 @@ def thread_name(step):
     return "step-" + re.sub(r"[^a-z0-9_-]", "-", step.lower())
 
 
-def thread_note(ctx):
-    """The step-thread note for a session whose thread messages are pasted in."""
+def thread_note(ctx, delivery="pasted"):
+    """The step-thread note for a session whose thread messages arrive automatically."""
     thread = thread_name(ctx.step)
     post = (f'{{"name": "thread.post", "project": "{ctx.project}", "direct": true, '
             f'"inputs": {{"thread": "{thread}", "from": "{ctx.step}", '
             f'"to": "orchestrator", "body": "..."}}}}')
     return (
         f"Messages for you on sluice thread `{thread}` of project `{ctx.project}` are "
-        f"pasted into this session as they arrive; you need not poll for them. Follow "
+        f"{delivery} into this session as they arrive; you need not poll for them. Follow "
         f"instructions addressed to you. If you hit a question you cannot settle within your "
         f"task, post it with `sluice tool fn_call '{post}'` and continue with anything not "
         f"blocked by it. For a note that needs no answer (a decision you have already made, a "
@@ -280,7 +280,8 @@ class _Run:
                 self.log(f"thread message from {frm} not delivered yet: {e}")
                 self.feed.unread(rec)
                 break
-            self.log(f"thread message from {frm} typed into the session")
+            verb = "delivered to" if self.adapter.name == "codex" else "typed into"
+            self.log(f"thread message from {frm} {verb} the session")
             sent = True
         return sent
 
@@ -381,9 +382,9 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
     _write_json(rec_path, run.record)
     if message is task:
         message = hand_over(task, run_dir / "task.md", POINTER)
-    run.tmux.kill()  # a server an earlier attempt of this run left
     handlers = _exit_on_signals()
     try:
+        run.tmux.kill()  # a server an earlier attempt of this run left
         adapter.prepare(run_dir, cwd, session)
         run.tmux.start(adapter.argv(), cwd, adapter.env())
         log(f"attach: {run.tmux.attach}")

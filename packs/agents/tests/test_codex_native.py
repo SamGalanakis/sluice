@@ -1,0 +1,204 @@
+"""Codex app-server protocol and adapter state tests."""
+
+import base64
+import hashlib
+import json
+import os
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from sluice.runner import Runner
+from sluice.store import Store
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from _agents.native.codex import Codex, Rpc, _private_config
+from _agents.native.tmux import _alive, descendants
+
+
+def test_private_config_disables_every_mcp_and_pins_model():
+    source = ('model = "old"\n[mcp_servers.a]\ncommand = "a"\nenabled = true\n'
+              '[mcp_servers.a.env]\nTOKEN = "x"\n[mcp_servers.b]\ncommand = "b"\n'
+              '[profiles.work]\nmodel = "profile"\n')
+    got = tomllib.loads(_private_config(source, "gpt-6-astra", "max", True))
+    assert got["model"] == "gpt-6-astra" and got["model_reasoning_effort"] == "max"
+    assert got["web_search"] == "live"
+    assert got["mcp_servers"]["a"]["enabled"] is False
+    assert got["mcp_servers"]["b"]["enabled"] is False
+    assert got["mcp_servers"]["a"]["env"]["TOKEN"] == "x"
+    assert got["profiles"]["work"]["model"] == "profile"
+
+
+class FakeRpc:
+    def __init__(self):
+        self.calls = []
+        self.events = []
+
+    def request(self, method, params):
+        self.calls.append((method, params))
+        return {"turn": {"id": "turn-1"}} if method == "turn/start" else {}
+
+    def drain(self):
+        events, self.events = self.events, []
+        return events
+
+
+def test_turn_start_steer_and_completed_message(tmp_path):
+    codex = Codex()
+    codex.thread = "thread-1"
+    codex.resuming = True
+    codex.rpc = FakeRpc()
+    codex.progress_file = (tmp_path / "progress.log").open("w")
+    codex.deliver(None, "first")
+    codex.deliver(None, "steer")
+    assert [m for m, _ in codex.rpc.calls] == ["turn/start", "turn/steer"]
+    assert codex.rpc.calls[1][1]["expectedTurnId"] == "turn-1"
+    codex.rpc.events = [
+        {"method": "item/completed", "params": {"threadId": "thread-1",
+          "item": {"type": "commandExecution", "command": "pwd"}}},
+        {"method": "item/completed", "params": {"threadId": "thread-1",
+          "item": {"type": "agentMessage", "text": "Finished."}}},
+        {"method": "turn/completed", "params": {"threadId": "thread-1",
+          "turn": {"id": "turn-1", "status": "completed"}}},
+    ]
+    class Pane:
+        def dead(self):
+            return None
+    class Server:
+        def poll(self):
+            return None
+    codex.server = Server()
+    snap = codex.poll(Pane())
+    assert (snap.state, snap.turns, codex.final()) == ("idle", 1, "Finished.")
+    assert codex.progress() == ["tool commandExecution pwd", "codex: Finished."]
+    codex.progress_file.close()
+    assert "Finished." in (tmp_path / "progress.log").read_text()
+
+
+def test_rpc_handshake_request_and_notification(tmp_path):
+    path = tmp_path / "app.sock"
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(str(path))
+    listener.listen()
+    seen = []
+
+    def server():
+        conn, _ = listener.accept()
+        with conn:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += conn.recv(4096)
+            key = request.split(b"Sec-WebSocket-Key: ", 1)[1].split(b"\r\n", 1)[0]
+            accept = base64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-"
+                                                   b"C5AB0DC85B11").digest())
+            conn.sendall(b"HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: "
+                         + accept + b"\r\n\r\n")
+            header = conn.recv(2)
+            n = header[1] & 127
+            if n == 126:
+                n = struct.unpack("!H", conn.recv(2))[0]
+            mask = conn.recv(4)
+            payload = b""
+            while len(payload) < n:
+                payload += conn.recv(n - len(payload))
+            seen.append(json.loads(bytes(b ^ mask[i % 4] for i, b in enumerate(payload))))
+            def frame(obj):
+                data = json.dumps(obj).encode()
+                return b"\x81" + (bytes([len(data)]) if len(data) < 126
+                                   else b"\x7e" + struct.pack("!H", len(data))) + data
+            conn.sendall(frame({"method": "thread/started", "params": {"thread": {"id": "t"}}})
+                         + frame({"id": 1, "result": {"ok": True}}))
+            conn.recv(1)
+    worker = threading.Thread(target=server)
+    worker.start()
+    rpc = Rpc(path)
+    assert rpc.request("initialize", {"clientInfo": {"name": "test"}}) == {"ok": True}
+    assert rpc.drain()[0]["method"] == "thread/started"
+    rpc.close()
+    worker.join(timeout=2)
+    listener.close()
+    assert seen == [{"id": 1, "method": "initialize", "params":
+                     {"clientInfo": {"name": "test"}}}]
+
+
+def test_close_ends_the_app_server_process_tree(tmp_path):
+    codex = Codex()
+    codex.short_dir = tmp_path / "socket"
+    codex.short_dir.mkdir()
+    codex.server = subprocess.Popen(
+        [sys.executable, "-c", ("import subprocess,time; "
+                                "subprocess.Popen(['sleep','60']); time.sleep(60)")],
+        start_new_session=True)
+    try:
+        deadline = time.monotonic() + 3
+        while not descendants(codex.server.pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        children = descendants(codex.server.pid)
+        assert children
+        codex.close()
+        assert codex.server.poll() is not None
+        assert all(not _alive(pid) for pid in children)
+        assert not codex.short_dir.exists()
+    finally:
+        if codex.server.poll() is None:
+            codex.close()
+
+
+@pytest.mark.skipif(os.environ.get("SLUICE_LIVE") != "1", reason="set SLUICE_LIVE=1")
+@pytest.mark.live
+def test_codex_live_declared_output_and_resume():
+    scratch = Path("/workspace/tmp/claude-1000/-workspace-code-lash/"
+                   "8dfa931c-0520-4166-a225-16dc65dc37d8/scratchpad/native")
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="codex-live-", dir=scratch) as root:
+        root = Path(root)
+        home, work = root / "home", root / "work"
+        home.mkdir()
+        work.mkdir()
+        (home / "config.json").write_text(json.dumps({"fn_dirs": [str(Path(__file__).parents[1])]}))
+        (home / ".env").write_text("SLUICE_AGENT_GRACE_MIN=0.02\n"
+                                   "SLUICE_AGENT_SETTLE_S=0.5\n")
+        store = Store(home)
+        store.create_project("p", "", "t", "t")
+
+        def step(spec, output, *, engine="agent.codex", **extra):
+            inputs = {"cwd": {"default": str(work)}, "spec": {"default": spec}, **extra}
+            if engine == "agent.run":
+                inputs["engine"] = {"default": "codex"}
+            return {"run": engine, "outputs": {output: "string"}, "in": inputs}
+
+        steps = {
+            "pick": step("Submit the literal word blue as `word` using the command in your "
+                         "task. Then finish.", "word"),
+            "again": step("Submit the word you submitted in the preceding turn as `again`. "
+                          "Then finish.", "again", engine="agent.run",
+                          session={"source": "pick/session"}),
+        }
+        store.patch("p", 1, [{"op": "replace", "path": "/steps", "value": steps}], "t", "t")
+        runner = Runner(store)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            runner.tick()
+            state = store.read_state("p")["steps"]
+            if len(state) == 2 and all(e["status"] in ("succeeded", "failed")
+                                       for e in state.values()):
+                break
+            time.sleep(0.2)
+        state = store.read_state("p")["steps"]
+        for name in steps:
+            run_dir = store.runs_dir("p") / state[name]["run_ids"][-1]
+            assert state[name]["status"] == "succeeded", (name, state[name].get("error"),
+                                                              (run_dir / "stderr.log").read_text())
+            assert not (run_dir / "tmux.sock").exists()
+        assert state["pick"]["outputs"]["word"] == "blue"
+        assert state["again"]["outputs"]["again"] == "blue"
+        assert state["again"]["outputs"]["session"] == state["pick"]["outputs"]["session"]

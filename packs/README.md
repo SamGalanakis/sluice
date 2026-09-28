@@ -25,8 +25,8 @@ Claude always runs Opus. Codex takes `model` `sol` (default) or `astra`, and `ef
 (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high`. Long,
 grinding work goes to Devin, not to a bigger codex effort.
 
-Every agent function takes `session?: string` and returns `session: string` (Claude's session
-id, or the id the Devin or Codex harness writes to `<log>.session`; empty when there is none).
+Every agent function takes `session?: string` and returns `session: string` (the Claude or
+Codex thread id, or the id the Devin harness writes to `<log>.session`; empty when there is none).
 A follow-up to a particular agent is another step with `session` bound to the earlier step's
 `session` output, or a `fn_call` with that session.
 
@@ -36,31 +36,33 @@ its own and pick the engines there.
 
 ## Live sessions
 
-Claude runs as a real interactive session (`claude` in its TUI, on your own login), not a
-one-shot `claude -p`: `agent.claude`, `agent.review` and `agent.run` with engine `claude` go
-through `_agents/native/`. (Codex and Devin still run through their harness scripts.) Per run:
+Claude and Codex run as real interactive sessions on your own logins through `_agents/native/`.
+`agent.claude`, `agent.review`, and `agent.run` with engine `claude` use the Claude adapter.
+`agent.codex` and `agent.run` with engine `codex` use the Codex adapter. Devin still uses its
+harness script. Per run:
 
 - A private tmux server on `<run_dir>/tmux.sock` runs the session. The step's stderr starts
   with an `attach:` line (`cd <run_dir> && tmux -S tmux.sock attach`): run it to watch or
   steer the worker live.
-- The task goes to `<run_dir>/task.md` and the session gets one typed line pointing at it.
-  (A TUI collapses a long or multi-line paste into a placeholder the model reads as pasted
-  content rather than a request; only one line of at most 500 characters is typed as it is.)
+- A long task goes to `<run_dir>/task.md` and the session gets one line pointing at it. Claude
+  receives that line in its composer; Codex receives it through app-server JSON-RPC.
 - The wrapper, not the model's end of turn, decides when the step is done. When a turn ends:
   every required declared output submitted → done; the session still waits on its own
   background work (below) → it keeps waiting; otherwise it is nudged ("Your turn ended but
   these outputs are not submitted: …"), up to `SLUICE_AGENT_NUDGES` (3) times, then the step
   fails naming the missing outputs and the agent's last message. A step that declares no
-  required outputs is done once the session is idle with nothing pending.
+  required outputs is done once the session is idle with nothing pending, after the grace
+  period for an engine that cannot report pending work.
 - Messages addressed to the step on its thread (`thread.post` to `step-<id>`, to the step
-  or to nobody) are typed into the live session as they arrive, so the step-thread note no
+  or to nobody) are delivered to the live session as they arrive, so the step-thread note no
   longer asks the agent to poll `log_read`. `listen: false` turns this off.
 - Caps: `SLUICE_AGENT_MAX_MIN` (600) minutes of wall clock; `SLUICE_AGENT_STALL_MIN` (30)
   minutes busy with no transcript growth. `SLUICE_AGENT_SETTLE_S` (10) seconds of idle before
   a nudge. `SLUICE_AGENT_GRACE_MIN` (10) minutes of idle before the first nudge, for an engine
-  with no waiting signal (Claude has one).
-- `session` resumes the session, and only from the directory it was started in (Claude files
-  a session under its cwd); another cwd fails the step before anything starts. A rate limit or
+  with no waiting signal (Codex has none; Claude has one).
+- `session` resumes the session, and only from the directory it was started in; another cwd
+  fails the step before anything starts. Codex keeps its private `CODEX_HOME` per thread and
+  a registry at `<SLUICE_HOME>/codex-native-sessions/`. A rate limit or
   capacity error raises `Transient`; the retry resumes the session and tells it to continue.
 - `step_cancel` (SIGTERM) ends the tmux server, the engine and every process it started,
   background shells included.
@@ -101,6 +103,26 @@ A new directory's workspace-trust dialog is answered yes (its default is "No, ex
 session sets (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, …): inherited, they turn off the
 child's transcript and status file. `cost_usd` is the `lastCost` Claude Code records for the
 directory at exit (for a resumed session it includes the earlier turns).
+
+### Codex: idle is not done
+
+The Codex adapter starts `codex app-server` on a private Unix WebSocket, then attaches a Codex
+TUI in the run's tmux server with `--remote`. It sends the task, nudges and thread messages as
+JSON-RPC `turn/start` or `turn/steer` calls. The app-server's `item/completed` and
+`turn/completed` notifications supply progress, the final message and the turn boundary.
+Resume uses `thread/resume` and the same private thread home. The private config pins the
+selected model and effort, disables each configured MCP server, and retains the owner's login.
+`SLUICE_CODEX_SEARCH=1` enables live web search. A fork's `env.sh` supplies its Cargo target.
+
+Observed on Codex CLI 0.158.0: `exec_command` ran `sleep 20 && echo finished >
+background-3.txt` with a running session id; the model ended its turn at 7.7 s. The
+app-server reported `turn/completed` and stayed idle with no pending-work field. The file
+appeared at 25.2 s, but there was no new turn or notification by 42 s. A separate `nohup`
+background command also ended in idle and did not complete after its shell returned. Codex
+therefore has no reliable pending-work signal or autonomous wakeup for this case. The
+supervisor waits `SLUICE_AGENT_GRACE_MIN` (10 minutes by default) before its first nudge; the
+worker should wait for background work within its turn when it needs the result. Subsequent
+nudges use `SLUICE_AGENT_SETTLE_S`.
 
 ## Installing
 

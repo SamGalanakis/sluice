@@ -891,7 +891,7 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   (§5): as a plan step they add to their task text an `## Inputs` section (each extra input
   with its type and value), an `## Outputs you must submit` section (each declared output with
   its type and doc, and the exact `sluice tool step_submit` command) and the step-thread note.
-  Each takes `session?` and returns `session` (empty when the harness wrote none): binding a
+  Each takes `session?` and returns `session` (empty when none was recorded): binding a
   later step's `session` to an earlier step's `session` output continues that agent.
   Claude always runs Opus, in a live interactive session supervised by
   `packs/agents/_agents/native/`: a private tmux server per run (`attach:` in the step's
@@ -901,11 +901,12 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   work (a background shell, a pending wakeup) is left to wait; thread messages for the step
   are typed into the session (its step-thread note says so instead of asking it to poll);
   `session` resumes only from the directory the session started in; a cancel ends the tmux
-  server and everything under it (`packs/README.md`, "Live sessions"). Codex (`agent.codex`, or `agent.run` with engine `codex`) takes
-  `model` `sol` (the default) or `astra` and `effort` (`minimal` to `max`), whose default is
-  `high`; both always reach the harness. A codex run's echo folds the diff codex prints after
-  every patch into one line (the harness log keeps it), and its `final` is the agent's last
-  message from the session's rollout. The fns share their engine code through
+  server and everything under it (`packs/README.md`, "Live sessions"). Codex (`agent.codex`, or
+  `agent.run` with engine `codex`) uses the same supervisor with `codex app-server` JSON-RPC
+  and a TUI attached to it in tmux. It takes `model` `sol` (the default) or `astra` and
+  `effort` (`minimal` to `max`), whose default is `high`. Its final message and turn state come
+  from app-server notifications; it waits a configurable grace period before the first nudge
+  because Codex reports no reliable pending background-work state. The fns share engine code through
   `packs/agents/_agents/`.
 - `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
   `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)

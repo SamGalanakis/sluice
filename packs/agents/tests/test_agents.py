@@ -27,6 +27,7 @@ from sluice.store import Store
 AGENTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENTS))
 
+from _agents.native import task_text
 from _agents.native.tmux import descendants
 
 requires_live = pytest.mark.skipif(
@@ -190,167 +191,24 @@ def test_devin_streams_the_harness_and_its_log_while_it_runs(call_fn, fake_bin, 
     assert lines.index("devin: step one") < lines.index("devin log output")
 
 
-def make_codex(tmp_path, fake_bin, *, code=0, log_body="codex log output\n",
-               big_log=False, wait_for=None):
-    argv_file = tmp_path / "codex.argv"
-    script = (
-        "#!/bin/sh\n"
-        f"printf '%s\\0' \"$@\" > \"{argv_file}\"\n"
-        'log=""\n'
-        "while [ $# -gt 0 ]; do\n"
-        '  case "$1" in\n'
-        '    --log) log="$2"; shift 2 ;;\n'
-        '    --spec|--cd|--model|--effort|--resume) shift 2 ;;\n'
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-        'echo "sess-codex" > "$log.session"\n'
-    )
-    if wait_for:
-        script += _progress_then_wait(wait_for, "codex")
-    if big_log:
-        script += (
-            "head -c 4200 /dev/zero | tr '\\0' 'x' > \"$log\"\n"
-            "printf 'ENDTAIL\\n' >> \"$log\"\n"
-        )
-    else:
-        script += f"printf '{log_body}' >> \"$log\"\n"
-    script += f"exit {code}\n"
-    bin_dir = fake_bin("codex-harness-run", script)
-    return bin_dir, argv_file
 
 
-def test_codex_success(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_codex(tmp_path, fake_bin, big_log=True)
-    code, out, err = call_fn(
-        AGENTS / "agent.codex",
-        {"cwd": str(tmp_path), "spec": "the spec", "model": "astra"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
-    )
-    run_dir = call_fn.run_dirs[-1]
-    assert code == 0, err
-    # no .final file: final is the last 4000 chars of the log
-    assert out["log"] == str(run_dir / "codex.log")
-    assert len(out["final"]) == 4000
-    assert out["final"].endswith("ENDTAIL\n")
-    assert out["report"] is None
-    argv = read_argv(argv_file)
-    assert argv[:4] == [
-        "--cd", str(tmp_path), "--spec", str(run_dir / "spec.md")]
-    assert argv[argv.index("--model") + 1] == "astra"
-    assert argv[argv.index("--effort") + 1] == "high"
 
 
-def codex_rollout(tmp_path, *messages):
-    """A codex sessions dir holding the rollout of session sess-codex: (timestamp, text) of
-    each task_complete, among other records."""
-    d = tmp_path / "sessions" / "2026" / "09" / "27"
-    d.mkdir(parents=True)
-    recs = [{"timestamp": "2000-01-01T00:00:00Z", "type": "session_meta", "payload": {}}]
-    for at, text in messages:
-        recs.append({"timestamp": at, "type": "response_item",
-                     "payload": {"type": "message", "role": "assistant",
-                                 "content": [{"type": "output_text", "text": "diff hunks"}]}})
-        recs.append({"timestamp": at, "type": "event_msg",
-                     "payload": {"type": "task_complete", "last_agent_message": text}})
-    (d / "rollout-2026-09-27T10-00-00-sess-codex.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in recs) + "{not json\n")
-    return tmp_path / "sessions"
 
 
-@pytest.mark.parametrize("fn", ["agent.codex", "agent.run"])
-def test_codex_final_is_the_agents_last_message(call_fn, fake_bin, tmp_path, fn):
-    bin_dir, _ = make_codex(tmp_path, fake_bin, big_log=True)
-    sessions = codex_rollout(tmp_path, ("2000-01-01T00:00:01Z", "an earlier turn's answer"),
-                             ("2999-01-01T00:00:00Z", "Landed at abc123. All green."))
-    inp = {"cwd": str(tmp_path), "spec": "the spec"}
-    code, out, err = call_fn(AGENTS / fn, {**inp, "engine": "codex"} if fn == "agent.run"
-                             else inp,
-                             env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run"),
-                                  "SLUICE_CODEX_SESSIONS": str(sessions)})
-    assert code == 0, err
-    assert out["final"] == "Landed at abc123. All green."  # not the log's tail
 
 
-def test_codex_final_ignores_a_previous_turns_message(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_codex(tmp_path, fake_bin, big_log=True)
-    sessions = codex_rollout(tmp_path, ("2000-01-01T00:00:01Z", "an earlier turn's answer"))
-    code, out, err = call_fn(AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s"},
-                             env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run"),
-                                  "SLUICE_CODEX_SESSIONS": str(sessions)})
-    assert code == 0, err
-    assert out["final"].endswith("ENDTAIL\n") and len(out["final"]) == 4000  # the fallback
 
 
-@pytest.mark.parametrize("fn", ["agent.codex", "agent.run"])
-def test_codex_diffs_fold_to_one_line_in_the_echo(call_fn, fake_bin, tmp_path, fn):
-    body = ("exec\\nls\\napply patch\\ndiff --git a/x b/x\\nindex 1..2\\n--- a/x\\n+++ b/x\\n"
-            "@@ -1 +1 @@\\n-old\\n+new\\n\\ndiff --git a/y b/y\\n+more\\ncodex\\nDone.\\n")
-    bin_dir, _ = make_codex(tmp_path, fake_bin, log_body=body)
-    inp = {"cwd": str(tmp_path), "spec": "s"}
-    code, _out, err = call_fn(AGENTS / fn, {**inp, "engine": "codex"} if fn == "agent.run"
-                              else inp,
-                              env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")})
-    assert code == 0, err
-    lines = err.splitlines()
-    assert "(a diff of 2 files, 10 lines: in the log)" in lines
-    assert "+new" not in lines and "diff --git a/y b/y" not in lines
-    assert lines.index("apply patch") < lines.index("(a diff of 2 files, 10 lines: in the log)") \
-        < lines.index("Done.")
-    assert "+new" in (call_fn.run_dirs[-1] / "codex.log").read_text()  # the log keeps it
 
 
-def test_codex_model_and_effort_defaults(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_codex(tmp_path, fake_bin)
-    env = {"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
-    for extra, model, effort in (({}, "sol", "high"), ({"model": "astra"}, "astra", "high"),
-                                 ({"model": "astra", "effort": "max"}, "astra", "max")):
-        code, _out, err = call_fn(AGENTS / "agent.codex",
-                                  {"cwd": str(tmp_path), "spec": "s", **extra}, env=env)
-        assert code == 0, err
-        argv = read_argv(argv_file)
-        assert (argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]) == \
-            (model, effort)
-    code, _, err = call_fn(AGENTS / "agent.codex",  # luna is gone: long work goes to Devin
-                           {"cwd": str(tmp_path), "spec": "s", "model": "luna"}, env=env)
-    assert code == 1 and "codex models are sol, astra, got 'luna'" in err
 
 
-def test_codex_session(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_codex(tmp_path, fake_bin)
-    code, out, err = call_fn(
-        AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s", "session": "sess-1"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
-    )
-    assert code == 0, err
-    assert read_argv(argv_file)[-2:] == ["--resume", "sess-1"]
-    assert out["session"] == "sess-codex"
 
 
-def test_codex_transient(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_codex(
-        tmp_path, fake_bin, code=1, log_body="http 429: rate limit hit\n")
-    code, out, err = call_fn(
-        AGENTS / "agent.codex",
-        {"cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
-    )
-    assert code == 1, err
-    assert "transient (attempt 1)" in err  # the helper retried before giving up
-    assert out is None
 
 
-def test_codex_streams_its_log_while_it_runs(call_fn, fake_bin, tmp_path):
-    marker = tmp_path / "seen"
-    bin_dir, _ = make_codex(tmp_path, fake_bin, wait_for=marker)
-    code, out, err = call_fn(
-        AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
-        watch=seen_then_touch(marker, "codex: step one"))
-    assert code == 0, err
-    assert out["final"] == "codex: step one\ncodex log output\n"
-    lines = err.splitlines()
-    assert "codex-harness: starting" in lines and "codex log output" in lines
 
 
 FAKE_CLAUDE = Path(__file__).with_name("fake_claude.py")
@@ -1009,34 +867,8 @@ def test_run_devin_no_session(call_fn, fake_bin, tmp_path):
     assert out["session"] == ""
 
 
-def test_run_codex(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_codex(tmp_path, fake_bin)
-    code, out, err = call_fn(
-        AGENTS / "agent.run",
-        {"engine": "codex", "cwd": str(tmp_path), "spec": "s", "model": "astra"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
-    )
-    run_dir = call_fn.run_dirs[-1]
-    assert code == 0, err
-    assert out == {"final": "codex log output\n", "report": None,
-                   "session": "sess-codex"}
-    argv = read_argv(argv_file)
-    assert argv[:4] == [
-        "--cd", str(tmp_path), "--spec", str(run_dir / "spec.md")]
-    assert argv[argv.index("--model") + 1] == "astra"
-    assert argv[argv.index("--effort") + 1] == "high"
 
 
-def test_run_codex_refuses_another_model_and_effort_elsewhere(call_fn, fake_bin, tmp_path):
-    bin_dir, argv_file = make_codex(tmp_path, fake_bin)
-    env = {"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
-    code, _, err = call_fn(AGENTS / "agent.run", {"engine": "codex", "cwd": str(tmp_path),
-                                                  "spec": "s", "model": "gpt-4"}, env=env)
-    assert code == 1 and "codex models are sol, astra, got 'gpt-4'" in err
-    code, _, err = call_fn(AGENTS / "agent.run", {"engine": "devin", "cwd": str(tmp_path),
-                                                  "spec": "s", "effort": "max"}, env=env)
-    assert code == 1 and "effort is for the codex engine" in err
-    assert not argv_file.exists()
 
 
 def test_run_claude(call_fn, tmp_path):
@@ -1089,17 +921,6 @@ def test_run_transient_per_engine(call_fn, fake_bin, tmp_path):
     code, out, err = call_fn(
         AGENTS / "agent.run",
         {"engine": "devin", "cwd": str(tmp_path), "spec": "s"},
-        path=bin_dir,
-    )
-    assert code == 1, err
-    assert "transient (attempt 1)" in err  # the helper retried before giving up
-    assert out is None
-
-    make_codex(tmp_path, fake_bin, code=1, log_body="429 rate limit\n")
-    code, out, err = call_fn(
-        AGENTS / "agent.run",
-        {"engine": "codex", "cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")},
         path=bin_dir,
     )
     assert code == 1, err
@@ -1169,13 +990,6 @@ def test_step_thread_off(call_fn, fake_bin, tmp_path):
     assert spec_copy.read_text() == "s"
 
 
-def test_step_thread_codex(call_fn, fake_bin, tmp_path):
-    bin_dir, _ = make_codex(tmp_path, fake_bin)
-    code, _out, err = call_fn(
-        AGENTS / "agent.codex", {"cwd": str(tmp_path), "spec": "s"},
-        env={"SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")})
-    assert code == 0, err
-    assert "sluice thread `step-test-step`" in spec_of(call_fn)
 
 
 def test_step_thread_claude(call_fn, tmp_path):
@@ -1255,11 +1069,14 @@ def block_call(name, call_fn, fake_bin, tmp_path, inputs, env):
     cwd = tmp_path / "repo"
     if not cwd.exists():
         init_repo(cwd)
-    bin_dir = None
     if name == "agent.codex":
-        bin_dir, rec = make_codex(tmp_path, fake_bin)
-        env = {**env, "SLUICE_CODEX_BIN": str(bin_dir / "codex-harness-run")}
-    elif name == "agent.devin":
+        ctx = SimpleNamespace(
+            project="test-project", step="test-step", run_id="test-run",
+            extra_inputs=json.loads(env.get("SLUICE_STEP_INPUTS", "{}")),
+            outputs=json.loads(env.get("SLUICE_STEP_OUTPUTS", "{}")))
+        return task_text("the task", inputs, ctx, inputs.get("listen"))
+    bin_dir = None
+    if name == "agent.devin":
         bin_dir, rec, _ = make_devin(tmp_path, fake_bin)
     else:  # its session must submit the declared outputs to finish
         claude_env, rec = make_claude(tmp_path, [{"submit": {"branch": "b",
