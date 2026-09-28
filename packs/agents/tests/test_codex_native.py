@@ -359,8 +359,10 @@ def test_rpc_drain_buffers_a_slow_partial_frame_and_continuation(tmp_path, conti
     started = time.monotonic()
     assert rpc.drain() == []
     assert time.monotonic() - started < 0.15
-    time.sleep(0.4)
-    events = rpc.drain()
+    events, deadline = [], time.monotonic() + 5  # the rest arrives ~0.35 s later, or later
+    while not events and time.monotonic() < deadline:  # under load
+        time.sleep(0.05)
+        events = rpc.drain()
     assert len(events) == 1 and len(events[0]["params"]["text"]) == 300000
     rpc.close()
     worker.join(timeout=2)
