@@ -388,8 +388,8 @@ files. Without a project it checks the built-in and global scopes and every dire
   valid statuses, outputs of succeeded steps passing their output types, plan input values
   passing their types).
 
-`{"ok": bool, "problems": [{"where", "message"}]}`. CLI `sluice verify [-p P]` prints them and exits
-non-zero when there are any.
+`{"ok": bool, "problems": [{"where", "message"}]}`. CLI `sluice tool verify '{"project": "P"}'`
+prints them and exits non-zero when there are any.
 
 ## 6b. The log
 

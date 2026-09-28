@@ -136,7 +136,7 @@ def run(
     real_stdout.flush()
 
 
-HOST_VARS = ("PATH", "PYTHONPATH", "VIRTUAL_ENV")
+HOST_VARS = ("PATH", "PYTHONPATH", "VIRTUAL_ENV")  # what `uv run` and sluice change for a fn
 
 
 def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:

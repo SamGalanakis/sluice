@@ -79,6 +79,7 @@ def test_read_filters_by_kind_group_thread_since_and_limit(store):
     assert L.read(ld, since_seq=8) == {"records": [], "last_seq": 8}
     assert L.check_kinds(["step", "message", "nope"]) == [
         "unknown kind 'nope'; kinds: " + ", ".join((*L.KINDS, *L.GROUPS))]
+    assert L.check_kinds(["step.cancel"]) == []
 
 
 def test_a_half_written_last_line_is_not_read_yet(store):
@@ -88,6 +89,18 @@ def test_a_half_written_last_line_is_not_read_yet(store):
         f.write('{"seq": 2, "at": "x", "kind": "message", "thread": "t", "bo')
     assert [r["seq"] for r in L.read(store.project_dir("p"))["records"]] == [1]
     assert L.read(store.project_dir("p"), since_seq=0)["last_seq"] == 1
+    assert L.last_seq(store.project_dir("p")) == 1
+    assert L.last_record(store.project_dir("p"))["seq"] == 1
+
+
+def test_last_seq_and_last_record_on_an_empty_log(store, tmp_path):
+    missing = tmp_path / "no-such-dir"  # no log file at all
+    assert L.last_seq(missing) == 0 and L.last_record(missing) is None
+    (tmp_path / L.FILE).write_bytes(b"")  # a file with nothing in it
+    assert L.last_seq(tmp_path) == 0 and L.last_record(tmp_path) is None
+    store.create_project("p")
+    assert L.last_seq(store.project_dir("p")) == 1
+    assert L.last_record(store.project_dir("p"))["kind"] == "plan.edit"
 
 
 def test_reading_backwards_across_blocks(store, monkeypatch):

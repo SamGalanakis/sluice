@@ -1,8 +1,9 @@
 // The inbox's OpenUI renderer (SPEC §8). An open item's `ui` is an OpenUI Lang program: it is
-// parsed by @openuidev/lang-core (from the CDN, pinned) against the closed vocabulary in
-// openui.json and drawn here with plain DOM (text only, never HTML from the program). A line
-// the parser cannot use is dropped and counted in a visible note. A Button answers the item
-// with {action, params, values}, POSTed as JSON to the same route the no-JS text box posts to.
+// parsed by @openuidev/lang-core (vendored, pinned: /static/lang-core-0.3.0.js) against the
+// closed vocabulary in openui.json and drawn here with plain DOM (text only, never HTML from
+// the program). A line the parser cannot use is dropped and counted in a visible note. A
+// Button answers the item with {action, params, values}, POSTed as JSON to the same route
+// the no-JS text box posts to.
 import { createParser, parseRules, validate } from
   "/static/lang-core-0.3.0.js";
 

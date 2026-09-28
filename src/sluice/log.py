@@ -25,7 +25,7 @@ from typing import Any
 from .util import now_iso
 
 KINDS = ("plan.edit", "plan.input", "step.output", "step.retry", "step.status", "step.submit",
-         "call", "message", "inbox.post", "inbox.answer", "inbox.close",
+         "step.cancel", "call", "message", "inbox.post", "inbox.answer", "inbox.close",
          "run.adopt", "run.orphan")
 GROUPS = ("plan", "step", "inbox", "run")  # a group name matches every kind under it
 HISTORY_KINDS = ("plan.edit", "plan.input", "step.output", "step.retry")
@@ -147,12 +147,12 @@ def _after(path: Path, since_seq: int) -> tuple[list[dict[str, Any]], int]:
 
 
 def last_seq(directory: Path) -> int:
-    return _after(Path(directory) / FILE, 2 ** 62)[1]
+    rec = next(_backwards(Path(directory) / FILE), None)
+    return rec["seq"] if rec else 0
 
 
 def last_record(directory: Path) -> dict[str, Any] | None:
-    recs = _after(Path(directory) / FILE, last_seq(directory) - 1)[0]
-    return recs[-1] if recs else None
+    return next(_backwards(Path(directory) / FILE), None)
 
 
 def read(directory: Path, since_seq: int | None = None, kinds: Iterable[str] | None = None,
@@ -271,7 +271,8 @@ def append(directory: Path, records: list[dict[str, Any]], cap: int = DEFAULT_MA
     directory = Path(directory)
     path = directory / FILE
     directory.mkdir(parents=True, exist_ok=True)
-    _, last = _after(path, 2 ** 62)
+    rec = next(_backwards(path), None)
+    last = rec["seq"] if rec else 0
     first = _first_seq(path)
     at = now_iso()
     seqs, lines = [], []

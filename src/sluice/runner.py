@@ -24,6 +24,7 @@ from . import log as L
 from . import state as S
 from . import types as T
 from .errors import BadRequest, InvalidPlan, NotFound
+from .fn import HOST_VARS
 from .plan import (
     Plan,
     Step,
@@ -46,9 +47,6 @@ KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
 
 
 # ---- one fn execution (SPEC §4 process contract) ----------------------------------------
-
-
-HOST_VARS = ("PATH", "PYTHONPATH", "VIRTUAL_ENV")  # what `uv run` and sluice change for a fn
 
 
 def fn_env(store: Store, project: str | None, fn: Fn, step: str, run_id: str,
@@ -135,14 +133,20 @@ def _live_leader(pid: int) -> bool:
         return False
 
 
+def _run_json(run_dir: Path, name: str) -> dict | None:
+    """A run dir's JSON file as a dict; None when it is missing, unparsable or not one."""
+    try:
+        data = json.loads((run_dir / name).read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _child_pid(run_dir: Path) -> int | None:
     """The fn's pid from child.json — written by the shim right after Popen — verified
     against its recorded /proc start time so a reused pid cannot pass for it."""
-    try:
-        data = json.loads((run_dir / "child.json").read_text())
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
+    data = _run_json(run_dir, "child.json")
+    if data is None:
         return None
     pid, started = data.get("pid"), data.get("pid_start")
     if not isinstance(pid, int) or not isinstance(started, str) or pid <= 1:
@@ -218,11 +222,8 @@ def _read_exit(run_dir: Path) -> int | None:
     """A finished run's wait code from exit.json — its `code`, or `-signal` when it died by a
     signal (SPEC §4: exit.json is the only evidence a run is done). None while unfinished, or
     for a corrupt record."""
-    try:
-        data = json.loads((run_dir / "exit.json").read_text())
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
+    data = _run_json(run_dir, "exit.json")
+    if data is None:
         return None
     code, sig = data.get("code"), data.get("signal")
     return code if isinstance(code, int) else (-sig if isinstance(sig, int) else None)
@@ -230,21 +231,15 @@ def _read_exit(run_dir: Path) -> int | None:
 
 def _exit_error(run_dir: Path) -> str | None:
     """The start failure a shim recorded in exit.json (code 127: the fn never ran)."""
-    try:
-        data = json.loads((run_dir / "exit.json").read_text())
-    except (OSError, ValueError):
-        return None
-    err = data.get("error") if isinstance(data, dict) else None
+    data = _run_json(run_dir, "exit.json")
+    err = data.get("error") if data is not None else None
     return err if isinstance(err, str) else None
 
 
 def _shim_pid(run_dir: Path) -> int | None:
     """The supervising shim's pid — also the run's process-group id — from shim.json."""
-    try:
-        data = json.loads((run_dir / "shim.json").read_text())
-    except (OSError, ValueError):
-        return None
-    pid = data.get("pid") if isinstance(data, dict) else None
+    data = _run_json(run_dir, "shim.json")
+    pid = data.get("pid") if data is not None else None
     return pid if isinstance(pid, int) else None
 
 

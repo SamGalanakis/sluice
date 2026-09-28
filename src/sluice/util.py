@@ -43,15 +43,6 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def append_line(path: Path, obj: Any) -> None:
-    """Append one JSON line and fsync. Callers hold the project lock."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-
-
 def tail_text(path: Path, limit: int = 2000) -> str:
     """The last `limit` characters of a text file, or '' if it does not exist."""
     try:

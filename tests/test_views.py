@@ -823,8 +823,19 @@ def test_a_finished_box_folds_to_one_line(store):
     assert '<details class="fold-box"' not in views.project_page(store, "w", ver="x")
 
 
+def test_the_log_reads_a_step_cancel_as_a_sentence(store):
+    create(store, "v", {})
+    store.append("v", {"kind": "step.cancel", "step": "w", "author": "me",
+                       "reason": "too slow"})
+    page = views.log_view(store, "v", views.LogQuery())[0]
+    assert "w cancelled by me: too slow" in page
+
+
 def test_the_log_says_what_run_records_mean():
     s = views.log_summary
+    assert s({"kind": "step.cancel", "step": "w", "author": "me", "reason": "x"}) == \
+        "w cancelled by me: x"
+    assert s({"kind": "step.cancel", "step": "w"}) == "w cancelled"
     assert s({"kind": "run.adopt", "step": "a", "run": "r1", "outcome": "watching"}) == \
         "a: run r1 still running; the new runner watches it"
     assert s({"kind": "run.adopt", "call": "c1", "run": "c1", "outcome": "finished"}) == \

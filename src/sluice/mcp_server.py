@@ -466,8 +466,9 @@ def build_server(store: Store, stop: threading.Event | None = None,
                  kinds: list[str] | None = None, threads: list[str] | None = None,
                  limit: int = 200) -> Any:
         """Read the log: {records, last_seq}. Records are {seq, at, kind, ...} oldest first;
-        kinds: plan.edit, plan.input, step.output, step.retry, step.status, step.submit, call,
-        message, inbox.post, inbox.answer, inbox.close.
+        kinds: plan.edit, plan.input, step.output, step.retry, step.status, step.submit,
+        step.cancel, call, message, inbox.post, inbox.answer, inbox.close, run.adopt,
+        run.orphan.
 
         Args:
             project: the project's log; leave out for the home log (calls without a project).

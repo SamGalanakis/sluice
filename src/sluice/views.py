@@ -48,7 +48,6 @@ CLASSES = {"pending": "fill:#f1f1f1,stroke:#999,color:#333",
            "stale": "fill:#fef3c7,stroke:#d97706,color:#78350f",
            "skipped": "fill:#fff,stroke:#999,color:#777,stroke-dasharray:3 3",
            "manual": "fill:#fff,stroke:#16a34a,stroke-width:3px,stroke-dasharray:6 3"}
-STATUSES = S.STATUSES
 # Datastar with Rocket (web components), served from static/ like every script the dashboard
 # runs; static/sluice.js imports the same module
 DATASTAR_JS = "/static/datastar-rocket-1.0.4.js"
@@ -508,27 +507,6 @@ class Block:
         v = (self.entry.get("outputs") or {}).get("cost_usd") \
             if isinstance(self.entry.get("outputs"), dict) else None
         return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
-
-    @property
-    def agent(self) -> bool:
-        return self.fn.startswith("agent.") or any(n in self.bindings for n in PROMPT_INPUTS)
-
-    def default(self, name: str) -> Any:
-        src = self.step.sources.get(name)
-        return src.default if src is not None else None
-
-    @property
-    def engine(self) -> str:
-        """What runs it: `claude · sonnet` for an agent block (from the fn name and a bound
-        `engine`/`model`), else the fn's name."""
-        if not self.fn.startswith("agent."):
-            return self.fn
-        engine = self.default("engine")
-        parts = [engine if isinstance(engine, str) and engine else self.fn.split(".", 1)[1]]
-        model = self.default("model")
-        if isinstance(model, str) and model:
-            parts.append(model)
-        return " · ".join(parts)
 
     @property
     def run_ids(self) -> list[str]:
@@ -1922,6 +1900,10 @@ def log_summary(rec: dict[str, Any]) -> str:
         return e(f"{rec.get('step')} submitted {names}")
     if kind == "step.retry":
         return e(f"{rec.get('step')} retried · {by}")
+    if kind == "step.cancel":
+        who = f" by {rec['author']}" if rec.get("author") else ""
+        why = f": {_line(rec['reason'], 80)}" if rec.get("reason") else ""
+        return e(f"{rec.get('step')} cancelled{who}{why}")
     if kind == "call":
         text = e(f"{rec.get('call')} {rec.get('fn')} ") + _st(rec.get("status"))
         return text + (e(": " + _line(rec["error"])) if rec.get("error") else "")

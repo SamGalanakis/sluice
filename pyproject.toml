@@ -12,6 +12,10 @@ dependencies = [
     "uvicorn>=0.30",
     "datastar-py>=1.0.2",
     "markdown-it-py>=4,<5",
+    "anyio>=4",
+    "starlette>=1",
+    "pydantic>=2",
+    "jsonpointer>=3",
 ]
 
 [project.scripts]
