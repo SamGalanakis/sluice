@@ -347,9 +347,61 @@ def test_a_steps_detail(store):
             '</a>') in head
     assert "Which &lt;file&gt;?" not in html and "not here" not in html
     runs = html[html.index("Attempts</h3>"):]
-    assert runs.index("succeeded") < runs.index("failed")  # newest first
+    assert runs.index("Failed") < runs.index("Succeeded")  # oldest first, the current last
     assert "exit code 2" in runs
     assert "<i>" not in html and "<b>it" not in html
+
+
+def test_attempts_read_oldest_first_each_with_its_start_and_its_whole_error(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    trace = ("exit code 1\nTraceback (most recent call last):\n  File \"x.py\", line 3\n"
+             "ValueError: " + "the fork at /tmp/forks/a is gone " * 6 + "<end>")
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {"a": {
+            "status": "running", "run_ids": ["20260101T100500-a-0-cafe"],
+            "started": "2026-01-01T10:05:00Z"}}})
+    st = {"kind": "step.status", "step": "a"}
+    store.append("v",
+                 # the first attempt's running record is gone (trimmed): its start comes
+                 # from its run id's stamp
+                 {**st, "from": "running", "to": "failed", "at": "2026-01-01T09:01:00Z",
+                  "error": "exit code 2", "run_ids": ["20260101T090000-a-0-beef"]},
+                 # failed before its start was written, with no run id: says when it ended
+                 {**st, "from": "pending", "to": "failed", "at": "2026-01-01T09:30:00Z",
+                  "error": "could not start the fn: no claude"},
+                 {**st, "from": "failed", "to": "pending", "at": "2026-01-01T09:40:00Z"},
+                 {**st, "from": "pending", "to": "running", "at": "2026-01-01T09:40:00Z"},
+                 {**st, "from": "running", "to": "failed", "at": "2026-01-01T09:50:30Z",
+                  "error": trace},
+                 {**st, "from": "failed", "to": "pending", "at": "2026-01-01T10:04:59Z"},
+                 {"kind": "run.adopt", "step": "a", "run": "20260101T100500-a-0-cafe",
+                  "outcome": "watching", "at": "2026-01-01T10:20:00Z"})
+    # the current run's own running record is past the log's end (trimmed or not yet read):
+    # the entry supplies it
+    page = views.step_detail(store, "v", "a")
+    runs = page[page.index("Attempts</h3>"):]
+    items = re.findall(r"<li class=\"(a-[a-z]+)[^\"]*\".*?</li>", runs, re.DOTALL)
+    assert items == ["a-failed", "a-failed", "a-failed", "a-running"]
+    lis = re.findall(r"<li .*?</li>", runs, re.DOTALL)
+    assert [re.search(r'<span class="a-n">(\d+)</span>', li)[1] for li in lis] == \
+        ["1", "2", "3", "4"]
+    # every attempt says when: its start (or, unknown, its end) as a <time> with the exact time
+    assert 'started <time datetime="2026-01-01T09:00:00Z"' in lis[0]  # from the run id
+    assert "took 1m" in lis[0]
+    assert 'ended <time datetime="2026-01-01T09:30:00Z"' in lis[1]
+    assert 'started <time datetime="2026-01-01T09:40:00Z"' in lis[2] and "took 10m 30s" in lis[2]
+    assert 'started <time datetime="2026-01-01T10:05:00Z"' in lis[3]
+    assert 'data-since="2026-01-01T10:05:00Z"' in lis[3] and "so far" in lis[3]
+    assert "kept through a runner restart" in lis[3]
+    assert 'class="a-running a-now" aria-current="step"' in lis[3]
+    # a failure: its headline, then all of it, whole and escaped, under "Show error"
+    assert '<p class="a-err">exit code 2</p>' in lis[0] and "<details" not in lis[0]
+    head = views.error_headline(trace)
+    assert f'<p class="a-err">{html.escape(head, quote=False)}</p>' in lis[2]
+    full = re.search(r'<details class="a-full".*?<pre class="err">(.*?)</pre>', lis[2],
+                     re.DOTALL)
+    assert full and html.unescape(full[1]) == trace and "<end>" not in lis[2]
+    assert "Show error" in lis[2]
 
 
 def test_a_running_steps_detail_shows_its_progress_and_what_it_submitted(store):

@@ -405,7 +405,11 @@ it runs after, its `when`, and what a failed step blocks: steps as links led by 
 glyphs), the Pause switch (only where pausing acts: pending, failed, stale; Resume on any
 paused step) and a muted link to its thread. Sections under small labels in need order:
 Error (its last line in 600, then all of it in a box that opens scrolled to its end),
-Progress, Outputs, Prompt, Inputs, Log output, Attempts (only past one). A value is a field:
+Progress, Outputs, Prompt, Inputs, Log output, Attempts (only past one: oldest first, each
+its number and outcome glyph in a column joined by a strong-hairline rail, the outcome word in
+600 and in meta "started 1h ago · took 54m", a failure's headline in ink at 500 with all of it
+under a "Show error" disclosure; the current attempt, last, on the secondary fill with its word
+in Archivo). A value is a field:
 its name in 600, a small `← source` link, its doc in meta, the value under it. Types are
 noise until asked for: in the name's title, and beside every name with the one Types switch
 (on the first section of values). Long values fold under a fade.

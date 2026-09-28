@@ -430,11 +430,39 @@ dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
                 color: var(--muted-foreground); }
 .types-toggle[aria-pressed="true"] { color: var(--foreground); background: var(--secondary);
                                      border-color: var(--border-strong); }
-ol.attempts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
-ol.attempts li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.a-n { font-size: 12px; color: var(--muted-foreground); min-width: 1.5em; }
-.a-failed { font-weight: 600; }
-.a-t { margin-left: auto; font-size: 12.5px; color: var(--muted-foreground); }
+/* attempts, oldest first: number and outcome glyph in a column, a hairline rail joining the
+   glyphs, the current attempt (last) on the secondary fill (as the current filter is); a
+   failure's headline in ink, all of it under "Show error" */
+ol.attempts { list-style: none; margin: 0; padding: 0; font-size: 14px; line-height: 20px; }
+ol.attempts > li { position: relative; display: grid; column-gap: 10px;
+                   grid-template-columns: 1.4em 16px minmax(0, 1fr); padding: 8px 0 12px; }
+ol.attempts > li:not(:last-child)::before {
+  content: ""; position: absolute; z-index: 1; left: calc(1.4em + 10px + 7.5px); top: 31px;
+  bottom: -7px; width: 1px; background: var(--border-strong); }
+ol.attempts > li:has(+ .a-now)::before { bottom: -11px; }  /* past the fill's top margin */
+ol.attempts > li.a-now { margin: 4px calc(-1 * var(--a-bleed, 12px)) 0;
+                         padding: 8px var(--a-bleed, 12px) 12px; background: var(--secondary);
+                         border-radius: var(--radius-md); }
+.a-n { font-size: 13px; line-height: 22px; color: var(--muted-foreground); text-align: right;
+       font-variant-numeric: tabular-nums; }
+.a-g .g { margin-top: 3px; }
+.a-b { min-width: 0; }
+.a-h { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; margin: 0;
+       line-height: 22px; }
+.a-o { font-weight: 600; }
+.a-now .a-o { font: 750 15px/22px var(--font-display); font-stretch: 105%; }
+.a-t { font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
+.a-err { margin: 4px 0 0; font-weight: 500; overflow-wrap: anywhere; max-width: 72ch; }
+.a-note { margin: 4px 0 0; color: var(--muted-foreground); overflow-wrap: anywhere;
+          max-width: 72ch; }
+details.a-full { margin-top: 4px; }
+details.a-full > summary { display: inline-block; list-style: none; font-size: 13px;
+                           text-decoration: underline; text-underline-offset: 3px;
+                           text-decoration-color: var(--border-strong); }
+details.a-full > summary::-webkit-details-marker { display: none; }
+details.a-full[open] .a-show, details.a-full:not([open]) .a-hide { display: none; }
+details.a-full .err-box { margin-top: 0; }
+details.a-full pre.err { font-size: 12px; line-height: 18px; }
 .prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; font-size: 14px;
           line-height: 21px; padding: 12px 14px; background: var(--muted);
           border-radius: var(--radius); }
@@ -692,7 +720,7 @@ main > .phead + * { margin-top: 0; }
   .row { gap: 8px 10px; }
   .legend { justify-content: flex-start; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
-  .drawer { width: 100vw; border-left: 0; --d-pad-t: 16px; --d-pad-x: 16px; }
+  .drawer { width: 100vw; border-left: 0; --d-pad-t: 16px; --d-pad-x: 16px; --a-bleed: 10px; }
   /* tap targets at least 44px tall */
   form.switch button, .pager a, nav.seg a, form.filters label, details.kinds > summary {
     min-height: 44px; display: inline-flex; align-items: center; }

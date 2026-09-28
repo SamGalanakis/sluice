@@ -210,16 +210,24 @@ def _when(iso: str) -> str:
     return f'<time datetime="{e(iso)}" title="{e(iso)}" data-ago>{e(_age(iso))}</time>'
 
 
-def _elapsed(block: Block) -> str:
-    """How long a step ran (live for a running one: `data-since`), or ''."""
-    start, end = _parse_iso(block.entry.get("started")), _parse_iso(block.entry.get("finished"))
-    if start is None or block.status == "pending":
+def _span(started: Any, finished: Any, running: bool) -> str:
+    """How long a run took, from its start to its end (live while it runs: `data-since`), or ''."""
+    start, end = _parse_iso(started), _parse_iso(finished)
+    if start is None:
         return ""
-    if block.status == "running":
-        iso = e(block.entry["started"])
+    if running:
+        iso = e(started)
         return (f'<time datetime="{iso}" data-since="{iso}">'
                 f"{e(dur((_now() - start).total_seconds()))}</time>")
     return e(dur((end - start).total_seconds())) if end else ""
+
+
+def _elapsed(block: Block) -> str:
+    """How long a step ran (live for a running one), or ''."""
+    if block.status == "pending":
+        return ""
+    return _span(block.entry.get("started"), block.entry.get("finished"),
+                 block.status == "running")
 
 
 def _money(cost: float | None) -> str:
@@ -1672,21 +1680,100 @@ def _value(value: Any, long_at: int = 160) -> str:
     return f'<pre class="v long">{_json(value)}</pre>'
 
 
-def _runs(recs: list[dict[str, Any]], sid: str) -> list[dict[str, Any]]:
-    """The step's attempts from its step.status records: started, finished, outcome."""
+RUN_STAMP = re.compile(r"^(\d{8}T\d{6})-")  # a run id starts with when it began (UTC)
+
+
+def _run_start(run_ids: Any) -> str | None:
+    """When the earliest of these runs began, from its id's stamp, as ISO; else None."""
+    stamps = sorted(m[1] for rid in (run_ids if isinstance(run_ids, list) else [])
+                    if isinstance(rid, str) and (m := RUN_STAMP.match(rid)))
+    if not stamps:
+        return None
+    try:
+        start = dt.datetime.strptime(stamps[0], "%Y%m%dT%H%M%S").replace(tzinfo=dt.UTC)
+    except ValueError:
+        return None
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _runs(recs: list[dict[str, Any]], sid: str,
+          entry: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """The step's attempts, oldest first, from its log records: `outcome` (a status: running,
+    succeeded, failed, manual; `ended` when a new run began with no record of how the last one
+    ended), `started`, `finished`, a failure's `error`, a hand-set value's `note` and whether a
+    restarted runner `adopted` it. An end whose `running` record the log no longer holds (it
+    was trimmed, or the step failed before its start was written) takes its start from the run
+    id's stamp; with no run id either, `started` is None and the attempt says when it ended.
+    A running step whose start the log lost still gets its current attempt, from `entry`."""
     runs: list[dict[str, Any]] = []
+    adopted: set[Any] = set()  # the runs a restarted runner took over
     for r in recs:
         if r.get("step") != sid:
             continue
-        if r["kind"] == "step.output":
-            runs.append({"started": r["at"], "finished": r["at"], "outcome": "set by hand",
+        kind, to = r.get("kind"), r.get("to")
+        live = runs[-1] if runs and runs[-1]["outcome"] == "running" else None
+        if kind == "step.output":
+            runs.append({"started": r["at"], "finished": r["at"], "outcome": "manual",
                          "note": r.get("reason") or ""})
-        elif r.get("to") == "running":
+        elif kind == "run.adopt":
+            adopted.add(r.get("run"))
+            if live is not None:
+                live["adopted"] = True
+        elif kind != "step.status":
+            continue
+        elif to == "running":
+            if live is not None:
+                live["outcome"] = "ended"
             runs.append({"started": r["at"], "outcome": "running"})
-        elif r.get("to") in ("succeeded", "failed") and runs and runs[-1]["outcome"] == "running":
-            runs[-1].update(finished=r["at"], outcome=r["to"],
-                            note=_line(r.get("error") or "", 120))
+        elif to in ("succeeded", "failed") and (live is not None
+                                                or r.get("from") in ("running", "pending")):
+            if live is None:  # its start is not in the log
+                live = {"started": _run_start(r.get("run_ids"))}
+                runs.append(live)
+            live.update(finished=r["at"], outcome=to, error=str(r.get("error") or "").strip())
+    if entry and entry.get("status") == "running" and entry.get("started") \
+            and not (runs and runs[-1]["outcome"] == "running"):
+        ids = entry.get("run_ids") if isinstance(entry.get("run_ids"), list) else []
+        runs.append({"started": entry["started"], "outcome": "running",
+                     "adopted": any(rid in adopted for rid in ids)})
     return runs
+
+
+def _attempt(n: int, run: dict[str, Any], now: bool) -> str:
+    """One attempt: its number and outcome glyph in a column (a rail joins them), the outcome,
+    when it started and how long it took; a failure's headline, all of it under "Show error"."""
+    outcome = run["outcome"]
+    word = {"manual": "Set by hand", "ended": "Ended, how is not in the log"}.get(
+        outcome, outcome.capitalize())
+    mark = glyph("skipped" if outcome == "ended" else outcome)
+    started, finished = run.get("started"), run.get("finished")
+    if outcome == "manual":
+        when = [f"set {_when(finished)}"]
+    elif started:
+        took = _span(started, finished, outcome == "running")
+        when = [f"started {_when(started)}"]
+        if took:
+            when.append(f"{took} so far" if outcome == "running" else f"took {took}")
+    else:
+        when = [f"ended {_when(finished)}"] if finished else []
+    if run.get("adopted"):
+        when.append("kept through a runner restart")
+    body = ""
+    if outcome == "failed" and (err := run.get("error")):
+        headline = error_headline(err)
+        body += f'<p class="a-err">{e(headline)}</p>'
+        if err != headline:
+            body += ('<details class="a-full" data-preserve-attr="open"><summary>'
+                     '<span class="a-show">Show error</span><span class="a-hide">Hide error</span>'
+                     f'</summary><div class="err-box"><pre class="err">{e(err)}</pre></div>'
+                     "</details>")
+    if run.get("note"):
+        body += f'<p class="a-note">{e(run["note"])}</p>'
+    cur = ' a-now" aria-current="step' if now else ""
+    return (f'<li class="a-{e(outcome)}{cur}"><span class="a-n">{n}</span>'
+            f'<span class="a-g" aria-hidden="true">{mark}</span><div class="a-b">'
+            f'<p class="a-h"><span class="a-o">{e(word)}</span>'
+            f'<span class="a-t">{" · ".join(when)}</span></p>{body}</div></li>')
 
 
 FOLD_LINES = 6  # a value longer than this folds, with "Show all"
@@ -1805,7 +1892,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     grid += "".join(f'<div class="wide"><dt>{k}</dt><dd>{v}</dd></div>' for k, v in wide)
     thread = f"step-{sid}"  # its conversation with the orchestrator, on the Threads tab
     recs = L.read(store.log_dir(project), threads=[thread],
-                  kinds=["step.status", "step.output", "message"])["records"]
+                  kinds=["step.status", "step.output", "run.adopt", "message"])["records"]
     msgs = [r for r in recs if r.get("kind") == "message"]
     talk = ""
     if msgs and live:
@@ -1930,18 +2017,10 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
             body = (f'<details data-preserve-attr="open"><summary>Show {len(lines)} lines'
                     f"</summary>{body}</details>")
         section("Log output" + which, body)
-    runs = _runs(recs, sid)
-    if len(runs) > 1:
-        items = []
-        for i, r in enumerate(reversed(runs)):
-            start, end = _parse_iso(r.get("started")), _parse_iso(r.get("finished"))
-            took = dur((end - start).total_seconds()) if start and end else ""
-            note = f'<span class="quiet">{e(r["note"])}</span>' if r.get("note") else ""
-            items.append(f'<li><span class="a-n">{len(runs) - i}</span>'
-                         f'<span class="a-o a-{e(r["outcome"].split()[0])}">{e(r["outcome"])}'
-                         f'</span>{note}<span class="a-t">{_when(r["started"])}'
-                         f'{" · " + e(took) if took else ""}</span></li>')
-        section("Attempts", f'<ol class="attempts">{"".join(items)}</ol>')
+    runs = _runs(recs, sid, b.entry)
+    if len(runs) > 1:  # oldest first: the current attempt closes the list
+        items = "".join(_attempt(i, r, i == len(runs)) for i, r in enumerate(runs, 1))
+        section("Attempts", f'<ol class="attempts">{items}</ol>')
     return f'{head}{"".join(sections)}'
 
 

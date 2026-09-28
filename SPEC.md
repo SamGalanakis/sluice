@@ -635,7 +635,10 @@ raw HTML escaped, unsafe link schemes refused).
   reads as markdown is rendered, other multi-line text and structures read as code, an inbox
   answer as what was chosen; a long value folds to its first lines ("Show all"). Then the
   stderr of a finished run ("Log output", folded past six lines) and, when it ran more than
-  once, its attempts from the log (outcome, when, how long, newest first).
+  once, its attempts from the log, oldest first so the current one closes the list: each its
+  outcome (glyph and word), when it started (from the run id's stamp when the log no longer
+  holds its start; when it ended if neither says), how long it took (live while it runs) and,
+  for a failure, its headline with the whole error under "Show error".
 - `GET /projects/<name>/log` (and `GET /log` for the home log): the log viewer. Newest first, 50
   records per page; `?before=<seq>` shows the 50 matching records below that seq, `?after=<seq>`
   the 50 above it, with newest / newer / older links. Filters are query parameters, so a URL is
