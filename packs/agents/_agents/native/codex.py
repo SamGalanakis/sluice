@@ -380,7 +380,8 @@ class Codex(Adapter):
                         break
                     except RuntimeError as e:
                         if not any(marker in str(e) for marker in
-                                   ("no rollout found", "list_turns is not supported yet")):
+                                   ("no rollout found", "is empty",
+                                    "list_turns is not supported yet")):
                             raise
                         time.sleep(0.2)
                 if not self.resuming:

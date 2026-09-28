@@ -116,6 +116,24 @@ def test_failed_steer_after_turn_end_starts_a_new_turn():
     assert codex.turn == "new"
 
 
+def test_resume_waits_for_the_new_threads_rollout_to_be_written():
+    codex = Codex()
+    codex.thread, codex.resuming = "t", False
+
+    class RpcEmpty(FakeRpc):
+        def request(self, method, params):
+            out = super().request(method, params)
+            if method == "thread/resume" and len(self.calls) < 4:
+                raise RuntimeError("Codex thread/resume: {'code': -32603, 'message': 'failed "
+                                   "to read thread: rollout at /h/rollout-t.jsonl is empty'}")
+            return out
+
+    codex.rpc = RpcEmpty()
+    codex.deliver(None, "task")
+    assert [m for m, _ in codex.rpc.calls] == ["turn/start", *["thread/resume"] * 3]
+    assert codex.resuming and codex.busy
+
+
 def test_codex_home_and_engine_environment(tmp_path, monkeypatch):
     import _agents.native.codex as mod
 
