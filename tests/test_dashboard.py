@@ -653,3 +653,87 @@ def test_the_log_stream_sends_the_table_when_the_filter_changes(store, port):
                     action=later(lambda: store.append("p", message("r", "late"))))
     assert len(patches(events)) == 1 and "late" not in patches(events)[0]
 
+
+
+# ---- versions and readers ------------------------------------------------------------------
+
+
+def test_page_versions_follow_the_database(store):
+    """A page's version moves with what it shows: the index with every project's rows and
+    the set of projects, a project page with its own rows and every inbox (the nav's badge),
+    the home log's page with the home log; a rolled-back write moves nothing."""
+    from sluice import dashboard as D
+
+    store.create_project("p")
+    store.create_project("q")
+
+    def vers():
+        return D.index_ver(store), D.project_ver(store, "p"), D.log_ver(store, None)
+
+    before = vers()
+    store.append(None, {"kind": "call", "call": "c", "fn": "f", "status": "pending"})
+    now = vers()
+    assert now[:2] == before[:2] and now[2] != before[2]  # the home log only
+    item = store.inbox_post("q", "question?")["id"]  # another project's inbox: the badge
+    after = vers()
+    assert after[0] != now[0] and after[1] != now[1]
+    store.inbox_answer("q", item, {"action": "answer", "text": "yes"}, "me")
+    assert vers()[1] != after[1]
+    before = vers()
+    store.update_project("p", description="new")  # metadata
+    assert vers()[0] != before[0] and vers()[1] != before[1]
+    before = vers()
+    try:
+        with store.tx():
+            store.append("p", message("t", "never"))
+            raise ValueError
+    except ValueError:
+        pass
+    assert vers() == before
+    store.update_project("q", archived=True)
+    before = vers()
+    store.delete_project("q")
+    assert vers()[0] != before[0]
+    before = vers()
+    store.create_project("r")
+    assert vers()[0] != before[0]
+
+
+def test_a_closed_stream_holds_no_reader(store, port):
+    """A page's stream reads in short snapshots: once it is closed (or between polls), a
+    checkpoint copies every frame back."""
+    import sqlite3
+
+    from sluice import db
+
+    store.create_project("p")
+    sig = signals_of(get(port, "/projects/p/log")[1])
+    stream(port, "/projects/p/log/stream", sig, seconds=0.5,
+           action=lambda: store.append("p", message("t", "hi")))
+    stream(port, "/projects/p/stream", {"ver": "old"}, seconds=0.3)
+    writer = sqlite3.connect(store.home / db.FILE, isolation_level=None)
+    for i in range(20):
+        writer.execute("INSERT INTO records (at, kind, data) VALUES ('x', 'message', '{}')")
+    busy, frames, done = writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+    writer.close()
+    assert busy == 0 and frames == done
+
+
+def test_the_history_tab_shows_every_edit_past_the_log_cap(tmp_path):
+    from tests.conftest import write_config
+
+    home = tmp_path / "home"
+    write_config(home, log_max=5)
+    from sluice.store import Store
+
+    store = Store(home)
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+    for i in range(10):
+        store.append("p", message("t", str(i)))
+    q = views.LogQuery.parse({"kind": ["plan.edit", "plan.input", "step.output", "step.retry"]})
+    assert q.history("p") and not q.history(None)
+    page = views.log_page(store, "p", q)
+    assert "rev 1 by test: test (1 op)" in page and "rev 2 by test: test (3 ops)" in page
+    assert "History · p" in page
+    plain = views.log_page(store, "p", views.LogQuery.parse({}))
+    assert "rev 1 by" not in plain  # the Log tab is the capped log
