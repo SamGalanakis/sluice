@@ -8,8 +8,8 @@
 // - <sluice-drawer>: the step drawer. A step link opens it (`#step:<id>` in the address;
 //   Datastar turns that into `$step` and streams the step's detail in); from 1200px the page
 //   makes room for it beside the board. Escape, the close button, the scrim or a click on the
-//   page around the board close it, and focus goes back to the card. On a phone it is a modal
-//   dialog over an inert page. A running step's log keeps its newest line in view unless the
+//   page around the board close it, and focus goes back to the card. Below 1200px (over the
+//   page) it is a modal dialog over an inert page. A running step's log keeps its newest line in view unless the
 //   reader scrolled up.
 // - <sluice-thread project thread last>: counts the messages this browser has not seen on a
 //   thread, marks them when it is opened, and opens the thread the address names.
@@ -62,6 +62,7 @@ function tick() {
     p.hidden = age < QUIET;
     $(".q", p).textContent = age >= QUIET ? `Quiet for ${dur(age)}.` : "";
   }
+  retitle();
 }
 setInterval(tick, 5000);
 
@@ -83,6 +84,16 @@ function markOpen(sid) {
 }
 
 const PHONE = matchMedia("(max-width: 720px)");  // one card per line, no edges; drawer a sheet
+const OVER = matchMedia("(max-width: 1199px)");  // the drawer over the page, a modal dialog
+// Opening or closing the drawer reflows the page, which can put a card under a pointer that
+// has not moved: that card does not trace until the pointer really moves.
+let still = false;
+document.addEventListener("pointermove", (evt) => {
+  if (!still || !(evt.movementX || evt.movementY)) return;
+  still = false;
+  const n = evt.target.closest?.(".node[data-node]"), host = n?.closest("sluice-board");
+  if (host) trace(host, n);
+}, { passive: true });
 // not inside a folded box (a closed <details> hides its content, which keeps its boxes)
 const shown = (n) => (n.checkVisibility ? n.checkVisibility() : n.getClientRects().length > 0);
 
@@ -310,7 +321,8 @@ rocket("sluice-board", {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         drawEdges(host, props.edges);
-        const held = $(".node:hover, .node:focus-visible", host);  // new paths: keep it lit
+        const held = $(still ? ".node:focus-visible" : ".node:hover, .node:focus-visible",
+                       host);  // new paths: keep it lit
         if (held) trace(host, held);
       });
     };
@@ -347,7 +359,7 @@ rocket("sluice-board", {
                             attributes: true, attributeFilter: ["class"],
                             attributeOldValue: true });
     const card = (evt) => evt.target.closest?.(".node[data-node]");
-    const over = (evt) => { const n = card(evt); if (n) trace(host, n); };
+    const over = (evt) => { const n = card(evt); if (n && !still) trace(host, n); };
     const out = (evt) => {
       const n = card(evt);
       if (!n || n.contains(evt.relatedTarget)) return;
@@ -411,10 +423,10 @@ rocket("sluice-drawer", {
       history.pushState(null, "", location.pathname + location.search);
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     };
-    // a phone's sheet is a modal dialog: the page behind it is inert; elsewhere the drawer is
-    // a region beside (or, below 1200px, over) the page
+    // below 1200px, over the page (a sheet on a phone), it is a modal dialog: the page behind
+    // it is inert; from 1200px it is a region beside the page
     const modal = () => {
-      const on = Boolean(currentStep()) && PHONE.matches;
+      const on = Boolean(currentStep()) && OVER.matches;
       drawer.setAttribute("role", on ? "dialog" : "complementary");
       drawer.toggleAttribute("aria-modal", on);
       if (on) drawer.setAttribute("aria-modal", "true");
@@ -425,6 +437,7 @@ rocket("sluice-drawer", {
     };
     const open = () => {
       const sid = currentStep();
+      if (sid || last) still = true;  // it opens, moves on or closes: the page reflows
       document.documentElement.classList.toggle("drawer-open", Boolean(sid));
       modal();
       markOpen(sid);
@@ -474,6 +487,9 @@ rocket("sluice-drawer", {
     };
     const scrolled = (evt) => {
       const pre = evt.target;
+      // (on the band, not the drawer: a change to the drawer's own attributes restarts its
+      // Datastar attributes, and so its stream)
+      if (pre === drawer) $(".d-top", drawer)?.classList.toggle("scrolled", drawer.scrollTop > 0);
       if (pre.classList?.contains("tail")) {
         pinned = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
       }
@@ -487,7 +503,7 @@ rocket("sluice-drawer", {
     document.addEventListener("click", away);
     document.addEventListener("keydown", escape);
     window.addEventListener("hashchange", open);
-    PHONE.addEventListener("change", modal);
+    OVER.addEventListener("change", modal);
     drawer.addEventListener("scroll", scrolled, true);
     open();
     cleanup(() => {
@@ -495,7 +511,7 @@ rocket("sluice-drawer", {
       document.removeEventListener("click", away);
       document.removeEventListener("keydown", escape);
       window.removeEventListener("hashchange", open);
-      PHONE.removeEventListener("change", modal);
+      OVER.removeEventListener("change", modal);
       follow.disconnect();
       delete window.sluiceStream;
       delete window.sluiceClose;
@@ -600,19 +616,24 @@ new MutationObserver(() => {
   }
 }).observe(document.body, { childList: true, subtree: true });
 
-// ---- the tab title: how many steps failed, first (`data-title-failed`, from the page) -------
+// ---- the tab title: how many steps failed, then how many runs went quiet, first -----------
+// (`data-title-failed`, and `data-title-quiet`: when each running step last wrote)
 
 function retitle() {
   const mark = $("[data-title-failed]");
   if (!mark) return;
-  const n = Number(mark.dataset.titleFailed) || 0;
-  const base = document.title.replace(/^\d+ failed · /, "");
-  const want = n ? `${n} failed · ${base}` : base;
+  const now = Date.now();
+  const failed = Number(mark.dataset.titleFailed) || 0;
+  const quiet = (mark.dataset.titleQuiet || "").split(" ")
+    .filter((t) => t && (now - Date.parse(t)) / 1000 >= QUIET).length;
+  const base = document.title.replace(/^(\d+ failed · )?(\d+ quiet · )?/, "");
+  const want = [failed && `${failed} failed`, quiet && `${quiet} quiet`, base]
+    .filter(Boolean).join(" · ");
   if (document.title !== want) document.title = want;
 }
-new MutationObserver(retitle).observe(document.body, { childList: true, subtree: true,
-                                                       attributes: true,
-                                                       attributeFilter: ["data-title-failed"] });
+new MutationObserver(retitle).observe(document.body, {
+  childList: true, subtree: true, attributes: true,
+  attributeFilter: ["data-title-failed", "data-title-quiet"] });
 
 // ---- the log's kind filter: folded behind its summary on a phone, which counts the kinds ----
 

@@ -26,6 +26,7 @@ import functools
 import html
 import json
 import re
+import signal
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -638,16 +639,65 @@ def _activity(store: Store, project: str, block: Block) -> tuple[str, float] | N
     return act.strftime("%Y-%m-%dT%H:%M:%SZ"), (_now() - act).total_seconds()
 
 
+def quiet_mark(store: Store, project: str, block: Block, after: bool) -> str:
+    """A running step's `quiet 42m` once it has written nothing for QUIET seconds (` · ` first
+    when it comes `after` something), kept current by the ticker (static/sluice.js) from
+    `data-quiet`; '' for a step with no live run."""
+    act = _activity(store, project, block)
+    if act is None:
+        return ""
+    text = f"{' · ' if after else ''}quiet {dur(act[1])}" if act[1] >= QUIET else ""
+    return f'<span class="quiet" data-quiet="{e(act[0])}">{e(text)}</span>'
+
+
+def quiet_since(store: Store, board: Board) -> list[str]:
+    """When each running step of the board last wrote (quiet or not): the tab title counts
+    those gone quiet, as the page ages."""
+    acts = (_activity(store, board.project, b) for b in board.blocks.values())
+    return [a[0] for a in acts if a is not None]
+
+
 def quiet_text(age: float, line: str) -> str:
     """A quiet running step's "what it says now" line: `Quiet for 42m. Last output: …`."""
     return f"Quiet for {dur(age)}. " + (f"Last output: {line}" if line else "No output yet.")
 
 
+EXC_CLASS = re.compile(r"^(?:[A-Za-z_]\w*\.)*[A-Z]\w*(?:Error|Exception|Exit|Interrupt|Failure)"
+                       r":\s+(?=\S)")
+EXIT_CODE = re.compile(r"\b(exited|exit (?:code|status)|non-zero exit status)( -?\d+)\b(?! \()")
+SIGNAL_WORDS = {"SIGTERM": "terminated", "SIGKILL": "killed", "SIGINT": "interrupted",
+                "SIGHUP": "hung up", "SIGQUIT": "quit", "SIGABRT": "aborted",
+                "SIGSEGV": "crashed", "SIGBUS": "crashed", "SIGPIPE": "broken pipe"}
+
+
+def exit_signal(code: int) -> str:
+    """What a command's exit code says about a signal that ended it: `terminated: SIGTERM`
+    for 143 (128 + n, or -n from Python), else ""."""
+    n = code - 128 if code > 128 else -code
+    try:
+        name = signal.Signals(n).name
+    except ValueError:
+        return ""
+    return f"{SIGNAL_WORDS.get(name, 'signalled')}: {name}"
+
+
 def error_headline(error: Any, width: int = 200) -> str:
-    """What went wrong, in one line: an error's last non-empty line (a traceback, or a
-    command's output, ends with the exception), at most `width` characters."""
+    """What went wrong, in one line and in sluice's words: an error's last non-empty line (a
+    traceback, or a command's output, ends with the exception) without the exception's class,
+    the home directory as `~`, an exit code that means a signal explained (`exited 143
+    (terminated: SIGTERM)`), at most `width` characters. The whole error is shown apart."""
     lines = [ln.strip() for ln in str(error or "").splitlines() if ln.strip()]
-    return _line(lines[-1], width) if lines else ""
+    if not lines:
+        return ""
+    line = EXC_CLASS.sub("", lines[-1])
+    home = str(Path.home()).rstrip("/")
+    if home:
+        line = re.sub(rf"{re.escape(home)}(?=/|\b|$)", "~", line)
+
+    def why(m: re.Match[str]) -> str:
+        said = exit_signal(int(m[2]))
+        return f"{m[0]} ({said})" if said else m[0]
+    return _line(EXIT_CODE.sub(why, line), width)
 
 
 def _short(value: Any, width: int = 120) -> str:
@@ -935,6 +985,91 @@ def _boxes(board: Board, groups: list[dict[int, list[str]]]) -> list[list[int]]:
     return list(boxes.values())
 
 
+ROOM = 960 - 36  # px a row of a box has: the column, less the box's padding
+CARD_GAP, LANE_GAP = 14, 36  # px between cards in a row, and before the next lane's first
+
+
+def _card_width(board: Board, b: Block) -> float:
+    """About how wide a step's card is drawn (px): its id in 14.5px Inter, and in 12px what
+    it says small (blocked, runs done, its time)."""
+    small = " · ".join(t for t in (
+        "blocked" if board.blocked(b.sid) else "",
+        f"{b.entry.get('done') or 0}/{b.entry['total']}" if "total" in b.entry else "",
+        re.sub(r"<[^>]+>", "", _elapsed(b))) if t)
+    return 50 + 7.7 * len(b.sid) + (8 + 6.7 * len(small) if small else 0)
+
+
+def _ups(board: Board, groups: list[dict[int, list[str]]],
+         box: list[int]) -> tuple[dict[str, int], dict[int, list[tuple[str, str]]]]:
+    """Each step's lane in a box, and the edges into each lane from the box's other lanes."""
+    lane = {sid: i for i in box for r in groups[i].values() for sid in r}
+    ups: dict[int, list[tuple[str, str]]] = {i: [] for i in box}
+    for a, b, _ in edges(board):
+        if a in lane and b in lane and lane[a] != lane[b]:
+            ups[lane[b]].append((a, b))
+    return lane, ups
+
+
+def _shifts(board: Board, groups: list[dict[int, list[str]]], box: list[int],
+            depth: dict[str, int], room: float = ROOM) -> dict[int, int]:
+    """How many rows each lane of a box moves down, so that each lane's cards stay together:
+    a lane that would crowd a row it shares past the box's width (`room`) starts below the
+    lanes placed before it instead of wrapping in among their rows. Lanes are placed in the
+    box's order, and none ever sits above a step it runs after. All lanes stay put when that
+    cannot hold (an `after` cycle between lanes)."""
+    lane, ups = _ups(board, groups, box)
+    shift: dict[int, int] = {}
+
+    def least(i: int) -> int:
+        return max((depth[a] + shift.get(lane[a], 0) + 1 - depth[b] for a, b in ups[i]),
+                   default=0)
+
+    used: dict[int, float] = {}  # each row's width so far
+    for i in box:
+        wide = {d: sum(_card_width(board, board.blocks[sid]) for sid in r)
+                + CARD_GAP * (len(r) - 1) for d, r in groups[i].items()}
+        k, clear = max(least(i), 0), max(used, default=-1) + 1 - min(wide)
+        while k < clear and any(used.get(d + k, -LANE_GAP) + LANE_GAP + w > room
+                                for d, w in wide.items()):
+            k += 1
+        shift[i] = k
+        for d, w in wide.items():
+            used[d + k] = used.get(d + k, -LANE_GAP) + LANE_GAP + w
+    for _ in box:  # a lane placed early may hang from one moved after it
+        moved = [i for i in box if least(i) > shift[i]]
+        if not moved:
+            return shift
+        for i in moved:
+            shift[i] = least(i)
+    return dict.fromkeys(box, 0)
+
+
+def _seats(board: Board, groups: list[dict[int, list[str]]], box: list[int],
+           shift: dict[int, int], at: list[int]) -> dict[int, list[int]]:
+    """The lanes in each row of a box (`at`), left to right. A lane keeps the side of the
+    row it stood on in the rows above (it takes the free place nearest its last one, before
+    the lanes starting there do); a lane starting takes the free place nearest the steps it
+    hangs from. So a lane does not jump across the box when another ends beside it."""
+    _, ups = _ups(board, groups, box)
+    place: dict[str, float] = {}  # each step's place across its row, 0 to 1
+    seat: dict[int, float] = {}  # each lane's place in the last row it stood in
+    out: dict[int, list[int]] = {}
+    for v in at:
+        here = [i for i in box if v - shift[i] in groups[i]]
+        free = [(k + .5) / len(here) for k in range(len(here))]
+        want = {}
+        for i in here:
+            xs = [place[a] for a, b in ups[i] if a in place and b in groups[i][v - shift[i]]]
+            want[i] = seat.get(i, sum(xs) / len(xs) if xs else .5)
+        for i in sorted(here, key=lambda i: (i not in seat, want[i])):
+            seat[i] = min(free, key=lambda f: abs(f - want[i]))
+            free.remove(seat[i])
+        out[v] = sorted(here, key=seat.__getitem__)
+        cards = [sid for i in out[v] for sid in groups[i][v - shift[i]]]
+        place.update((sid, (k + .5) / len(cards)) for k, sid in enumerate(cards))
+    return out
+
+
 def _by_neighbours(row: list[str], near: dict[str, list[str]], pos: dict[str, float]) -> None:
     """Sort a row by the mean place (0-1 across their row) of each step's neighbours in its
     lane (`pos` holds the lane's steps), then record the new places."""
@@ -1025,11 +1160,7 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
         small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
     if _elapsed(b):
         small.append(_elapsed(b))
-    inner = " · ".join(small)
-    if (act := _activity(store, board.project, b)) is not None:
-        # the ticker (static/sluice.js) keeps `quiet 42m` current from data-quiet
-        text = f"{' · ' if small else ''}quiet {dur(act[1])}" if act[1] >= QUIET else ""
-        inner += f'<span class="quiet" data-quiet="{e(act[0])}">{e(text)}</span>'
+    inner = " · ".join(small) + quiet_mark(store, board.project, b, bool(small))
     tail = f'<span class="dur">{inner}</span>' if inner else ""
     # a comma for the accessible name, inline in the id's box (a hidden box of its own would
     # read "a , 1h")
@@ -1056,27 +1187,30 @@ def board_html(store: Store, board: Board, live: bool = True) -> str:
     if not board.blocks:
         return ('<p class="empty">No steps yet. The orchestrator adds them with '
                 "<code>plan_patch</code>.</p>")
-    groups, _ = lanes(board)
+    groups, depth = lanes(board)
     boxes = _boxes(board, groups)
     html = []
     for box in boxes:
-        depths_in = sorted({d for i in box for d in groups[i]})
-        top = depths_in[0]
+        shift = _shifts(board, groups, box, depth, ROOM if len(boxes) > 1 else ROOM + 36)
+        at = sorted({d + shift[i] for i in box for d in groups[i]})  # the box's rows
+        seats = _seats(board, groups, box, shift, at)
+        top = at[0]
         rows = []
-        for d in depths_in:
+        for v in at:
             cards = []
-            for n, i in enumerate(box):
+            for i in seats[v]:
+                n, d = box.index(i), v - shift[i]
                 for k, sid in enumerate(groups[i].get(d, [])):
                     # the first card of the next lane in this row marks where it begins; on a
-                    # phone the box stacks its lanes one after another (`--o`: lane, then depth)
+                    # phone the box stacks its lanes one after another (`--o`: lane, then row)
                     cards.append(_card(store, board, board.blocks[sid], live,
                                        lane_start=k == 0 and bool(cards),
-                                       order=n * 1000 + d - top if len(box) > 1 else None,
+                                       order=n * 1000 + v - top if len(box) > 1 else None,
                                        lane_top=n > 0 and k == 0 and d == min(groups[i])))
-            rows.append(f'<li class="row" style="--r:{d - top + 1}">{"".join(cards)}</li>')
-        inner = (f'<ol class="rows" style="--rows:{depths_in[-1] - top + 1}">'
+            rows.append(f'<li class="row" style="--r:{v - top + 1}">{"".join(cards)}</li>')
+        inner = (f'<ol class="rows" style="--rows:{at[-1] - top + 1}">'
                  f'{"".join(rows)}</ol>')
-        ids = [sid for d in depths_in for i in box for sid in groups[i].get(d, [])]
+        ids = [sid for v in at for i in seats[v] for sid in groups[i][v - shift[i]]]
         if len(boxes) > 1 and len(ids) > 1 and _done(board, ids):
             html.append(f'<li class="box done">{_folded(board, ids, inner)}</li>')
         else:
@@ -1107,10 +1241,12 @@ def _folded(board: Board, ids: list[str], inner: str) -> str:
     ended; it opens to its cards (open across live updates, and per tab in sessionStorage)."""
     skipped = sum(board.blocks[sid].status == "skipped" for sid in ids)
     ended = f"{len(ids) - skipped} succeeded, {skipped} skipped" if skipped else "all succeeded"
+    # on a phone the first id takes the line and the count goes under it; the last id hides
     return (f'<details class="fold-box" data-preserve-attr="open" data-box="{e(ids[0])}">'
             f'<summary>{glyph("succeeded", ", ")}<span class="sid">{e(ids[0])}</span>'
-            f'<span class="fb-meta"><span aria-hidden="true"> … </span><span class="vh"> to </span>'
-            f'{e(ids[-1])} · {len(ids)} steps · {ended}</span>{CHEVRON}</summary>'
+            f'<span class="fb-meta"><span class="fb-last"><span aria-hidden="true"> … </span>'
+            f'<span class="vh"> to </span>{e(ids[-1])}<span class="fb-dot"> · </span></span>'
+            f'<span class="fb-n">{len(ids)} steps · {ended}</span></span>{CHEVRON}</summary>'
             f"{inner}</details>")
 
 
@@ -1218,9 +1354,19 @@ def failed_total(store: Store) -> int:
     return sum(p["counts"].get("failed", 0) for p in store.projects() if not p["archived"])
 
 
-def _title_mark(failed: int) -> str:
-    """What the tab title leads with (`2 failed · `), kept current by static/sluice.js."""
-    return f'<span hidden data-title-failed="{failed}"></span>'
+def _title_mark(failed: int, since: list[str] | None = None) -> str:
+    """What the tab title leads with (`2 failed · 1 quiet · `): how many steps failed, and
+    when each running step last wrote, so static/sluice.js counts the quiet ones as they age
+    and keeps the title current."""
+    quiet = f' data-title-quiet="{e(" ".join(since))}"' if since else ""
+    return f'<span hidden data-title-failed="{failed}"{quiet}></span>'
+
+
+def title_lead(failed: int, since: Iterable[str]) -> str:
+    """`2 failed · 1 quiet · `, or the part of it there is: a tab title's lead."""
+    now = _now()
+    quiet = sum(1 for t in since if (at := _parse_iso(t)) and (now - at).total_seconds() >= QUIET)
+    return "".join(f"{n} {w} · " for n, w in ((failed, "failed"), (quiet, "quiet")) if n)
 
 
 # ---- the project index ------------------------------------------------------------------
@@ -1291,7 +1437,8 @@ def _bar(counts: Mapping[str, int], total: int,
         if total else '<span class="bar" role="img" aria-label="no steps"></span>'
 
 
-def _project_row(store: Store, name: str) -> str:
+def _project_row(store: Store, name: str, since: list[str] | None = None) -> str:
+    """One project on the index (with `since`, it adds when each running step last wrote)."""
     info = store.project(name)
     href = f"/projects/{quote(name)}"
     about = f'<p class="about">{e(first_paragraph(info["description"]))}</p>' \
@@ -1307,11 +1454,13 @@ def _project_row(store: Store, name: str) -> str:
     counts, total = board.counts, len(board.blocks)
     stuck = attention(board, lambda sid: f"{href}#step:{quote(sid)}", mark=False)
     running = [b for b in board.blocks.values() if b.status == "running"]
+    if since is not None:
+        since += quiet_since(store, board)
     if running:
         now = "".join(
             f'<li><a href="{href}#step:{quote(b.sid)}">{glyph("running")}'
-            f'<span class="ttl">{e(b.title)}</span></a><span class="dur">{_elapsed(b)}</span>'
-            f"</li>" for b in running[:4])
+            f'<span class="ttl">{e(b.title)}</span></a><span class="dur">{_elapsed(b)}'
+            f"{quiet_mark(store, name, b, bool(_elapsed(b)))}</span></li>" for b in running[:4])
         more = f'<li class="more">and {len(running) - 4} more</li>' if len(running) > 4 else ""
         now = f'<ul class="now">{now}{more}</ul>'
     elif info.get("paused") is True:
@@ -1335,10 +1484,16 @@ def _project_row(store: Store, name: str) -> str:
 
 
 def index_parts(store: Store) -> dict[str, str]:
+    return _index_parts(store)[0]
+
+
+def _index_parts(store: Store) -> tuple[dict[str, str], str]:
+    """The index's parts, and its tab title's lead (`2 failed · 1 quiet · `)."""
     names = store.project_names()
     active = [n for n in names if not store.archived(n)]
     old = [n for n in names if n not in active]
-    rows = "".join(_project_row(store, n) for n in active)
+    since: list[str] = []
+    rows = "".join(_project_row(store, n, since) for n in active)
     body = f'<ul class="projects">{rows}</ul>' if rows else \
         ('<p class="empty">No projects yet. An orchestrator creates one with '
          "<code>project_create</code>.</p>" if not old else
@@ -1347,16 +1502,16 @@ def index_parts(store: Store) -> dict[str, str]:
         body += (f'<details class="archived" data-preserve-attr="open"><summary>Archived '
                  f'({len(old)})</summary><ul class="projects">'
                  f'{"".join(_project_row(store, n) for n in old)}</ul></details>')
-    return {"projects": _part("projects", runner_note(store) + body
-                              + _title_mark(failed_total(store))),
-            "nav-inbox": nav_inbox(open_count(store))}
+    failed = failed_total(store)
+    return ({"projects": _part("projects", runner_note(store) + body
+                               + _title_mark(failed, since)),
+             "nav-inbox": nav_inbox(open_count(store))}, title_lead(failed, since))
 
 
 def index(store: Store, ver: str | None = None) -> str:
     """The project index; live (streaming from /stream) when given the home's version `ver`."""
-    parts = index_parts(store)
-    failed = failed_total(store)
-    return layout(f"{failed} failed · Projects" if failed else "Projects",
+    parts, lead = _index_parts(store)
+    return layout(f"{lead}Projects",
                   f'<h1 class="vh">Projects</h1>'
                   f'{parts["projects"]}', stream="/stream" if ver else None,
                   signals={"ver": ver} if ver else None, inbox=open_count(store), here="/",
@@ -1414,8 +1569,9 @@ def _project(store: Store, project: str, live: bool) -> dict[str, str]:
     # first whether the work is moving (and the switches), then what the project is; what the
     # plan took and produced sits under the board
     parts = {"summary": _part("summary", line + note + _about(about)
-                              + _title_mark(len(board.failed))),
-             "graph": _part("graph", board_html(store, board, live)),
+                              + _title_mark(len(board.failed), quiet_since(store, board))),
+             # the skip link's target: focusable, so a keyboard lands on the plan
+             "graph": f'<div id="graph" tabindex="-1">{board_html(store, board, live)}</div>',
              "result": _part("result", result_panel(board) + inputs_strip(board), "section",
                              "plan-facts")}
     if live:
@@ -1427,8 +1583,8 @@ def _drawer(project: str) -> str:
     """The step drawer, a <sluice-drawer>: `$step` (from the address's `#step:<id>`) opens it
     and streams that step's detail into it; the component (static/sluice.js) opens it from a
     step link, closes it (Escape, the close button, the scrim, a click on the page around the
-    board) and gives focus back. A labelled region beside the page; on a phone a modal dialog
-    (the component sets its role and makes the page behind it inert). Then the polite live
+    board) and gives focus back. A labelled region beside the page; below 1200px, over it, a
+    modal dialog (the component sets its role and makes the page behind it inert). Then the polite live
     region the board announces status changes in."""
     url = f"'/projects/{quote(project)}/steps/' + encodeURIComponent($step) + '/stream'"
     effect = (f"$step ? @get({url}, {{retry: 'always', retryMaxCount: 1000000, "
@@ -1442,8 +1598,8 @@ def _drawer(project: str) -> str:
             f'<aside id="drawer" class="drawer" style="display:none" tabindex="-1" '
             f'aria-labelledby="d-title" data-show="$step != \'\'" data-effect="{e(effect)}" '
             f'data-init="{e(hash_to_step)}" data-on:hashchange__window="{e(hash_to_step)}">'
-            f'<button type="button" class="close" aria-label="Close" '
-            f'data-on:click="window.sluiceClose && window.sluiceClose()">{X_ICON}</button>'
+            f'<div class="d-top"><button type="button" class="close" aria-label="Close" '
+            f'data-on:click="window.sluiceClose && window.sluiceClose()">{X_ICON}</button></div>'
             f'<div id="step-detail"></div></aside></sluice-drawer>'
             f'<div id="announce" class="vh" role="status" aria-live="polite"></div>')
 
@@ -1457,13 +1613,13 @@ def project_page(store: Store, project: str, ver: str | None = None) -> str:
     body = (f'{project_head(project, "plan" if live else None)}{p["summary"]}'
             f'{p["graph"]}{p["result"]}')
     board = load_board(store, project)
-    failed = len(board.failed)
     if not live:
         body += "".join(
             f'<details class="std" id="step-{e(sid)}"><summary>{glyph(b.mark)}'
             f"<span>{e(b.title)}</span></summary>{step_detail(store, project, sid, False)}"
             f"</details>" for sid, b in board.blocks.items())
-    return layout(f"{failed} failed · {project}" if failed else project, body, nav=live,
+    lead = title_lead(len(board.failed), quiet_since(store, board))
+    return layout(f"{lead}{project}", body, nav=live,
                   stream=f"/projects/{project}/stream" if live else None,
                   signals={"ver": ver, "step": "", "sver": ""} if live else None,
                   inbox=open_count(store) if live else None, here="/", board=live,
@@ -1678,9 +1834,11 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
 
     if b.entry.get("error"):
         err = str(b.entry["error"]).strip()
+        headline = error_headline(err)
+        # all of it as it was raised, scrolled to its end (the cause is the last line)
         full = (f'<div class="err-box"><pre class="err">{e(err)}</pre></div>'
-                if "\n" in err else "")  # scrolled to its end: the cause is the last line
-        section("Error", f'<p class="err-line">{e(error_headline(err))}</p>{full}')
+                if err != headline else "")
+        section("Error", f'<p class="err-line">{e(headline)}</p>{full}')
     tail = ""
     if b.run_ids:
         d = _run_dir(store, project, b.run_ids[-1])
@@ -2031,15 +2189,17 @@ def log_page(store: Store, project: str | None, q: LogQuery) -> str:
             f"</label><button>Apply</button></form>")
     if project is None:
         title = '<h1 class="vh">Log</h1><p class="meta">Calls made without a project.</p>'
+        name = "Log"
     else:
         history = bool(q.kinds) and set(q.kinds) == set(L.HISTORY_KINDS) and not q.threads
         tab = "history" if history else "log"
         title = project_head(project, tab)
+        name = f'{"History" if history else "Log"} · {project}'  # as the Threads tab's
     signals = {"kinds": [k if k in q.kinds else "" for k in KIND_OPTIONS],
                "thread": ",".join(q.threads), "before": q.before or 0, "after": q.after or 0,
                "view": q.query(), "seen": last}
     url = "history.replaceState(null, '', location.pathname + ($view ? '?' + $view : ''))"
-    return layout(f"{project or 'home'} log", f"{title}{form}{view}",
+    return layout(name, f"{title}{form}{view}",
                   stream=f"{base}/stream", signals=signals,
                   main_attrs=f' data-effect="{e(url)}"', inbox=open_count(store),
                   here="/log" if project is None else "/", board=True,

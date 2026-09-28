@@ -103,6 +103,13 @@ def index_ver(store: Store) -> str:
                       for n in store.project_names()])
 
 
+def home_ver(store: Store) -> str:
+    """The version of the index: `index_ver` and the running steps' stderr, so a row's
+    `quiet 40m` goes when its run writes again."""
+    return _digest([index_ver(store), [[_stat(p) for p in _running_stderr(store, n)]
+                                       for n in store.project_names()]])
+
+
 def _running_stderr(store: Store, project: str) -> list[Path]:
     """The stderr.log of every running step's runs (cheap: state.json is small)."""
     try:
@@ -258,7 +265,7 @@ class Dashboard:
                                 status_code=400)
 
     def _index(self) -> str:
-        return views.index(self.store, index_ver(self.store))
+        return views.index(self.store, home_ver(self.store))
 
     def _project(self, name: str) -> str:
         self.store.project(name)
@@ -268,7 +275,7 @@ class Dashboard:
         return await self._page(self._index)
 
     async def index_stream(self, request: Request) -> Response:
-        return await self._stream(request, lambda: index_ver(self.store),
+        return await self._stream(request, lambda: home_ver(self.store),
                                   lambda: views.index_parts(self.store))
 
     async def project(self, request: Request) -> Response:

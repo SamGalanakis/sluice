@@ -127,7 +127,7 @@ def test_every_page_renders(store, port):
                                      r'<span>p</span></a>', index)
     assert "@get('/stream'" in index and '<div id="projects">' in index
     code, page = get(port, "/projects/p")
-    assert code == 200 and '<div id="graph">' in page and "@get('/projects/p/stream'" in page
+    assert code == 200 and '<div id="graph" tabindex="-1">' in page and "@get('/projects/p/stream'" in page
     assert '<a href="/projects/p/log">Log</a>' in page and 'data-step="a"' in page
     code, step = get(port, "/projects/p/steps/a")
     assert code == 200 and '<div id="step-detail">' in step and '<h2 id="d-title">a</h2>' in step
@@ -227,7 +227,7 @@ def test_the_project_stream_patches_only_after_a_change(store, port):
 
     events = stream(port, "/projects/p/stream", {"ver": ver}, action=later(fail))
     sent = patches(events)
-    graph = next(p for p in sent if p.startswith('elements <div id="graph">'))
+    graph = next(p for p in sent if p.startswith('elements <div id="graph" tabindex="-1">'))
     assert 'class="node card is-failed" id="n-a"' in graph
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in graph and "<script>alert" not in graph
     new_ver = [ev for ev in events if ev["event"] == "datastar-patch-signals"][-1]["data"]
@@ -270,7 +270,7 @@ def test_a_running_steps_stderr_moves_its_progress_line(store, port):
             f.write("second <b>line</b>\n")
 
     sent = patches(stream(port, "/projects/p/stream", {"ver": ver}, action=later(write)))
-    [graph] = [p for p in sent if p.startswith('elements <div id="graph">')]
+    [graph] = [p for p in sent if p.startswith('elements <div id="graph" tabindex="-1">')]
     assert 'title="second &lt;b&gt;line&lt;/b&gt;"' in graph  # the bubble's tooltip
     # the step's own stream (the drawer, or its page) follows the same file
     sver = signals_of(get(port, "/projects/p/steps/a")[1])["sver"]

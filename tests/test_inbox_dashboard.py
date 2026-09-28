@@ -326,6 +326,9 @@ def test_a_card_opens_the_step_drawer_and_escape_closes_it(store, port, chrome):
                         "b": {"run": "test.add", "in": {"a": {"source": "a/sum"}, "b": two},
                               "doc": "Second"}})
     chrome.open(f"http://127.0.0.1:{port}/projects/p")
+    # from 1200px the drawer stands beside the page, which stays in reach
+    chrome.send("Emulation.setDeviceMetricsOverride",
+                {"width": 1280, "height": 800, "deviceScaleFactor": 1, "mobile": False})
     chrome.wait("!!window.sluiceStream && !!document.querySelector('#n-a')")
     chrome.eval("document.querySelector('#n-a').click()")
     assert chrome.wait("document.querySelector('#step-detail h2')?.textContent") == "a"
@@ -338,9 +341,19 @@ def test_a_card_opens_the_step_drawer_and_escape_closes_it(store, port, chrome):
                        ".classList.contains('on')")
     chrome.eval("document.querySelector('#n-b').click()")
     chrome.wait("document.querySelector('#step-detail h2')?.textContent === 'b'")
+    assert chrome.eval("document.getElementById('drawer').getAttribute('role')") == \
+        "complementary"
     chrome.eval("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))")
     chrome.wait("getComputedStyle(document.getElementById('drawer')).display === 'none'")
     assert chrome.eval("location.hash") == ""
+    # below 1200px it is over the page: a modal dialog, the page behind it inert
+    chrome.send("Emulation.setDeviceMetricsOverride",
+                {"width": 1000, "height": 800, "deviceScaleFactor": 1, "mobile": False})
+    chrome.wait("matchMedia('(max-width: 1199px)').matches")
+    chrome.eval("document.querySelector('#n-a').click()")
+    chrome.wait("drawer.getAttribute('role') === 'dialog'")
+    assert chrome.eval("[drawer.getAttribute('aria-modal'), document.querySelector('main').inert]") \
+        == ["true", True]
 
 
 def test_archiving_a_project_lists_it_apart(store, port):

@@ -192,9 +192,10 @@ form.switch button { font-size: 13px; padding: 3px 10px; color: var(--muted-fore
 form.switch button:hover { color: var(--foreground); }
 .attn-note { font-size: 13px; color: var(--status-attention); }
 /* a project whose work a failure has stopped: said first, in ink (failure is not red) */
-.stuck { display: flex; gap: 8px; align-items: flex-start; font-weight: 500; max-width: 72ch;
-         overflow-wrap: anywhere; }
+.stuck { display: flex; gap: 8px; align-items: flex-start; font-weight: 500;
+         overflow-wrap: anywhere; text-wrap: balance; }
 .stuck .g { margin-top: 3px; display: flex; }
+.stuck a { white-space: nowrap; }  /* a step's id never breaks at its hyphens */
 .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; }
 .d-thread { font-size: 13px; color: var(--muted-foreground); }
 .d-thread:hover { color: var(--foreground); }
@@ -237,6 +238,7 @@ details.fold[open] > summary::after { content: "Show less"; }
    side by side and wrap, and every lane has the same rows, so depths line up across them.
    <sluice-board> draws the edges into the SVG under the cards. Details live in the drawer. */
 #graph { margin-top: 20px; }
+#graph:focus { outline: none; }  /* the skip link's target, not a control */
 sluice-board, sluice-thread { display: block; }
 sluice-drawer { display: contents; }
 .board { position: relative; padding: 8px 0 12px; --node-h: 36px; --row-gap: 40px; }
@@ -302,7 +304,8 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
        text-overflow: ellipsis; white-space: nowrap; }
 .node .dur { font-size: 12px; line-height: 16px; }
 .node .sep { font-size: 0; line-height: 0; vertical-align: top; }  /* read, not seen */
-.node .dur .quiet { color: var(--status-attention); }  /* a wedged run, in the attention voice */
+.node .dur .quiet, ul.now .dur .quiet {  /* a wedged run, in the attention voice */
+  color: var(--status-attention); }
 .is-pending .sid, .is-skipped .sid { color: color-mix(in oklch, var(--foreground) 65%, var(--card)); }
 .node.is-pending { border-color: transparent;
                    background: color-mix(in oklch, var(--card) 55%, transparent); }
@@ -328,7 +331,8 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 /* ---- the step drawer and page -------------------------------------------------------- */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 20; width: min(680px, 100vw);
           overflow-y: auto; background: var(--card); border-left: 1px solid var(--border);
-          box-shadow: var(--lift); padding: 20px 24px 40px;
+          box-shadow: var(--lift); --d-pad-t: 20px; --d-pad-x: 24px;
+          padding: var(--d-pad-t) var(--d-pad-x) 40px;
           animation: drawer-in 180ms cubic-bezier(.2, .8, .2, 1); }
 @keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } }
 .drawer:focus { outline: none; }
@@ -351,12 +355,19 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
     padding-left: max(var(--gutter), calc(100% - var(--column) - var(--drawer-gap)));
     padding-right: var(--drawer-gap); }
 }
-.drawer .close { position: sticky; top: 0; float: right; margin: -8px -12px 0 8px; width: 44px;
-                 height: 44px; display: grid; place-items: center; border: 0; border-radius: 8px;
+/* the close button stays at the top on a band of its own: clear at rest, opaque once the
+   drawer scrolls (`scrolled`, set by static/sluice.js), so what passes under it is hidden whole, never half-covered */
+.d-top { position: sticky; top: calc(-1 * var(--d-pad-t)); z-index: 3; display: flex; justify-content: flex-end;
+         height: 60px; padding: 10px 12px 0;
+         margin: calc(-1 * var(--d-pad-t)) calc(-1 * var(--d-pad-x)) calc(var(--d-pad-t) - 60px);
+         pointer-events: none; transition: background 150ms, box-shadow 150ms; }
+.d-top.scrolled { background: var(--card); box-shadow: 0 1px 0 var(--border); }
+.drawer .close { pointer-events: auto; width: 44px; height: 44px; display: grid;
+                 place-items: center; border: 0; border-radius: 8px;
                  background: var(--card); color: var(--muted-foreground); cursor: pointer; }
 .drawer .close:hover { color: var(--foreground); background: var(--muted); }
 .d-head { margin-bottom: 8px; }
-.d-head .hd { display: flex; gap: 10px; }
+.d-head .hd { display: flex; gap: 10px; padding-right: 40px; }  /* clear of the close */
 .d-head h2 { margin: 0; font-size: 20px; line-height: 26px; }
 .d-doc { margin: 6px 0 0 26px; color: var(--muted-foreground); max-width: 72ch; }
 .d-head .meta { margin: 6px 0 0 26px; }
@@ -615,6 +626,7 @@ main > .phead + * { margin-top: 0; }
 /* ---- narrow screens: one card per line, no edges; the drawer is a sheet ------------- */
 @media (max-width: 720px) {
   .m-lead { margin-left: 14px; }
+  .stuck a { white-space: normal; }  /* a long id may break rather than overflow */
   details.thread > summary, details.thread > .msgs, details.earlier {
     padding-left: 12px; padding-right: 12px; }
   :root { --gutter: 16px; --nav-pad: 8px; }
@@ -640,7 +652,15 @@ main > .phead + * { margin-top: 0; }
   .box .rows > .row { display: contents; }
   .box .rows .node { order: var(--o, 0); margin: 0 0 var(--row-gap); }
   .box .rows .node.lane-top { margin-top: 14px; }
-  .fold-box > summary { padding: 8px 10px 8px 12px; }
+  /* a folded box: its first id in full (wrapping), how many and how they ended under it */
+  .fold-box > summary { padding: 8px 10px 8px 12px; display: grid; column-gap: 8px;
+                        grid-template-columns: 16px minmax(0, 1fr) auto; }
+  .fold-box > summary .g { grid-row: 1 / span 2; align-self: start; }
+  .fold-box > summary .sid { grid-column: 2; max-width: none; white-space: normal;
+                             overflow-wrap: anywhere; }
+  .fold-box .fb-meta { grid-column: 2; white-space: normal; }
+  .fold-box .fb-last { display: none; }
+  .fold-box .chev { grid-column: 3; grid-row: 1 / span 2; }
   .fold-box > .rows { padding: 8px 12px 12px; }
   .row .lane-start { margin-left: 0; }
   .boxes { gap: 10px; }
@@ -648,7 +668,7 @@ main > .phead + * { margin-top: 0; }
   .row { gap: 8px 10px; }
   .legend { justify-content: flex-start; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
-  .drawer { width: 100vw; border-left: 0; padding: 16px 16px 40px; }
+  .drawer { width: 100vw; border-left: 0; --d-pad-t: 16px; --d-pad-x: 16px; }
   /* tap targets at least 44px tall */
   form.switch button, .pager a, nav.seg a, form.filters label, details.kinds > summary {
     min-height: 44px; display: inline-flex; align-items: center; }
@@ -659,6 +679,11 @@ main > .phead + * { margin-top: 0; }
                             border-radius: 8px; color: var(--foreground); }
   details.kinds[open] .chev { transform: rotate(180deg); }
   details.kinds[open] > summary { margin-bottom: 8px; }
+  /* in the drawer: the steps it links to, its thread and its folded log output */
+  .drawer dl.facts .dep a, .drawer .d-thread { display: inline-flex; align-items: center;
+                                               min-height: 44px; }
+  .drawer .d-sec details:not(.fold) > summary { padding-block: 12px; }
+  .drawer .d-sec details:not(.fold)[open] > summary { margin-bottom: 0; }
   /* the Types pill keeps its size; a clear border makes its target 44px tall */
   .types-toggle { border: 12px solid transparent; border-width: 12px 0;
                   background-clip: padding-box; box-shadow: inset 0 0 0 1px var(--input);

@@ -167,6 +167,30 @@ def test_each_independent_piece_of_work_is_its_own_box(store):
     assert '<ol class="boxes">' in views.project_page(store, "w", ver="abc")  # one: no box
 
 
+def test_a_lane_that_would_crowd_a_row_starts_below_instead(store):
+    # two long lanes side by side after a root; a third hangs from the second by an `after`
+    # at a depth where the two still run: three long cards will not fit a row, so the third
+    # lane starts below both, its cards together, instead of wrapping in among their rows
+    def lane(p, after):
+        ids = [f"{p}-{n}-step-of-a-rather-long-lane" for n in ("first", "second", "third")]
+        return {ids[0]: {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "after": [after]},
+                ids[1]: {"run": "test.add", "in": {"a": src(f"{ids[0]}/sum"), "b": d(1)}},
+                ids[2]: {"run": "test.add", "in": {"a": src(f"{ids[1]}/sum"), "b": d(1)}}}
+    create(store, "v", {"root": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        **lane("left", "root"), **lane("right", "root"),
+                        **lane("late", "right-first-step-of-a-rather-long-lane")})
+    rows = {r: [sid.split("-step")[0] for sid in ids]
+            for r, ids in lanes(views.project_page(store, "v", ver="x"))[0].items()}
+    assert rows == {1: ["root"], 2: ["left-first", "right-first"],
+                    3: ["left-second", "right-second"], 4: ["left-third", "right-third"],
+                    5: ["late-first"], 6: ["late-second"], 7: ["late-third"]}
+    # short ids fit a row: the third lane stays beside the others, at its own depth
+    create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
+                        "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}, "after": ["a"]}})
+    assert lanes(views.project_page(store, "w", ver="x")) == [{1: ["a"], 2: ["b", "c"]}]
+
+
 def test_the_board_lays_steps_out_in_lanes_of_rows_by_dependency_depth(store):
     board_project(store)
     page = views.project_page(store, "v", ver="abc")
@@ -406,6 +430,39 @@ def test_a_running_step_gone_quiet_says_so_on_its_card_and_in_its_drawer(store):
     assert "quiet 20m" in card(views.project_page(store, "v", ver="x"), "each")
 
 
+def test_the_index_and_the_tab_title_say_a_run_went_quiet(store):
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "b": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+                        "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    for r in ("r1", "r2"):
+        (store.runs_dir("v") / r).mkdir(parents=True)
+        (store.runs_dir("v") / r / "stderr.log").write_text("working\n")
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {
+            "a": {"status": "running", "run_ids": ["r1"], "started": "2026-01-01T10:00:00Z"},
+            "b": {"status": "running", "run_ids": ["r2"], "started": "2026-01-01T10:00:00Z"},
+            "c": {"status": "failed", "error": "boom"}}})
+    # both still writing: the index's running rows carry the live mark, nothing says quiet
+    index = views.index(store, ver="x")
+    now = re.search(r'<ul class="now">(.*?)</ul>', index)[1]
+    assert now.count('<span class="quiet" data-quiet=') == 2 and "quiet" not in \
+        re.sub(r'class="quiet" data-quiet="[^"]*"', "", now)
+    assert "<title>1 failed · Projects · sluice</title>" in index
+    # a's stderr quiet 40 minutes: its row says so as its card does, and the titles count it
+    _ago(store.runs_dir("v") / "r1" / "stderr.log", 40)
+    index = views.index(store, ver="x")
+    row = re.search(r'<li><a href="/projects/v#step:a">.*?</li>', index)[0]
+    assert re.search(r'<span class="quiet" data-quiet="[^"]+"> · quiet 40m</span>', row)
+    assert "quiet" not in re.sub(r'class="quiet" data-quiet="[^"]*"', "",
+                                 re.search(r'<li><a href="/projects/v#step:b">.*?</li>', index)[0])
+    assert "<title>1 failed · 1 quiet · Projects · sluice</title>" in index
+    page = views.project_page(store, "v", ver="x")
+    assert "<title>1 failed · 1 quiet · v · sluice</title>" in page
+    # the page carries when each run last wrote, so the title keeps counting as it ages
+    mark = re.search(r'<span hidden data-title-failed="1" data-title-quiet="([^"]*)">', page)[1]
+    assert len(mark.split()) == 2
+
+
 def test_the_log_hides_thread_post_calls_behind_their_message(store):
     create(store, "v", {})
     store.append("v",
@@ -581,6 +638,10 @@ def test_one_nav_whose_switcher_names_the_project_and_whose_sections_follow_it(s
     marked = {name: cur for cur, name in links(views.log_page(store, "v", history)) if cur}
     assert marked == {"History": "page"}
     assert ("page", "Log") in links(views.log_page(store, "v", views.LogQuery()))
+    # each tab's title names it, then the project, as the Threads tab's does
+    assert "<title>History · v · sluice</title>" in views.log_page(store, "v", history)
+    assert "<title>Log · v · sluice</title>" in views.log_page(store, "v", views.LogQuery())
+    assert "<title>Log · sluice</title>" in views.log_page(store, None, views.LogQuery())
     assert ("page", "Functions") in links(views.fns_page(store, "v"))
     step = views.step_page(store, "v", "a", "x")
     assert button(step) == "v" and ("true", "Plan") in links(step)
@@ -729,7 +790,7 @@ def test_while_something_runs_the_attention_line_does_not_say_stopped(store):
     assert 'class="stuck"' not in fine and "<title>fine · sluice</title>" in fine
 
 
-def test_a_failed_steps_drawer_leads_with_its_exception_and_what_it_blocks(store):
+def test_a_failed_steps_drawer_leads_with_its_cause_and_what_it_blocks(store):
     stuck_project(store)
     html_ = views.step_detail(store, "v", "lint")
     head = html_[:html_.index("</header>")]
@@ -737,16 +798,47 @@ def test_a_failed_steps_drawer_leads_with_its_exception_and_what_it_blocks(store
     blocks = re.search(r'<div class="wide"><dt>Blocks</dt><dd>(.*?)</dd></div>', head)[1]
     assert re.findall(r'data-step="([^"]+)"', blocks) == ["fix", "ship", "notes"]
     assert 'class="g g-paused"' in blocks
-    # the error: its last line first, then all of it in a box that starts at its end
-    assert ('<p class="err-line">ValueError: 3 lint errors</p><div class="err-box">'
-            '<pre class="err">') in html_
+    # the error: its last line first (without the exception's class), then all of it as it
+    # was raised, in a box that starts at its end
+    assert ('<p class="err-line">3 lint errors</p><div class="err-box">'
+            '<pre class="err">exit code 1\nTraceback') in html_
+    assert "ValueError: 3 lint errors</pre>" in html_
     assert views.error_headline("one line") == "one line" and views.error_headline(None) == ""
     # the same line in the card's tooltip and in the log
-    assert 'title="ValueError: 3 lint errors"' in card(views.project_page(store, "v", "x"), "lint")
+    assert 'title="3 lint errors"' in card(views.project_page(store, "v", "x"), "lint")
     rec = {"kind": "step.status", "step": "lint", "from": "running", "to": "failed",
            "error": "exit code 1\nValueError: 3 lint errors"}
-    assert views.log_summary(rec).endswith(": ValueError: 3 lint errors")
+    assert views.log_summary(rec).endswith(": 3 lint errors")
     assert "Blocks" not in views.step_detail(store, "v", "go")
+
+
+def test_a_failure_headline_is_in_sluices_words(store, monkeypatch):
+    monkeypatch.setenv("HOME", "/home/sam")
+    h = views.error_headline
+    # the exception's class goes, the home directory reads ~, a signal's exit code says so
+    raised = ("exit code 1\nTraceback (most recent call last):\n  File x\n"
+              "sluice.fn.ShError: /home/sam/.codex/bin/run exited 143: run: stopped at /work/a")
+    assert h(raised) == "~/.codex/bin/run exited 143 (terminated: SIGTERM): run: stopped at /work/a"
+    assert h("RuntimeError: boom") == "boom" and h("ValueError: 3 lint errors") == "3 lint errors"
+    assert h("exit code 137") == "exit code 137 (killed: SIGKILL)"
+    assert h("x exited 130") == "x exited 130 (interrupted: SIGINT)"
+    assert h("x exited 129") == "x exited 129 (hung up: SIGHUP)"  # 128 + n in general
+    assert h("returned non-zero exit status -15.") == \
+        "returned non-zero exit status -15 (terminated: SIGTERM)."
+    # what is not a class, a home or a signal stays as it was
+    assert h("exit code 1") == "exit code 1" and h("exited 300") == "exited 300"
+    assert h("Note: /home/samuel/x") == "Note: /home/samuel/x"
+    assert h("KeyboardInterrupt") == "KeyboardInterrupt"
+    # the card's tooltip and the drawer say it; the drawer keeps the error as raised under it
+    create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    with store.lock("v"):
+        store.write_state("v", {"inputs": {}, "steps": {"a": {
+            "status": "failed", "error": "RuntimeError: /home/sam/w exited 143"}}})
+    said = "~/w exited 143 (terminated: SIGTERM)"
+    assert f'title="{said}"' in card(views.project_page(store, "v", ver="x"), "a")
+    detail = views.step_detail(store, "v", "a")
+    assert (f'<p class="err-line">{said}</p><div class="err-box"><pre class="err">'
+            "RuntimeError: /home/sam/w exited 143</pre>") in detail
 
 
 def test_pause_shows_only_where_it_acts(store):
@@ -813,7 +905,11 @@ def test_a_finished_box_folds_to_one_line(store):
     folded = page[start:page.index("</details>", start)]
     assert '<details class="fold-box" data-preserve-attr="open" data-box="a1">' in folded
     assert '<span class="sid">a1</span>' in folded
-    assert "a3 · 3 steps · 2 succeeded, 1 skipped" in folded
+    # its last step, then how many and how they ended: a part of its own, which a phone
+    # keeps under the first id while the last one hides
+    assert ('<span class="fb-last"><span aria-hidden="true"> … </span><span class="vh"> to '
+            '</span>a3<span class="fb-dot"> · </span></span>'
+            '<span class="fb-n">3 steps · 2 succeeded, 1 skipped</span>') in folded
     assert 'id="n-a2"' in folded  # its cards are inside, one click away
     # a plan of one piece of work never folds
     create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},

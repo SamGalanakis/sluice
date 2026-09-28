@@ -189,7 +189,11 @@ without the edges; a plan of one piece has no box. A box is rows by dependency d
 between rows for the edges (10px on a phone, which draws none), from its first step; in a
 row the cards stand
 lane by lane (a lane: the steps joined by handoffs), the next lane's first card 22px apart,
-and a row too wide wraps within itself. On a phone a box stacks its lanes one after another,
+and a row too wide wraps within itself. A lane keeps its cards together: one that would
+crowd a row it shares past the box's width (it hangs from another only by an `after`)
+starts below the lanes before it instead of wrapping in among their rows, and a lane keeps
+its side of the box from row to row (one starting takes the place left free), so it does
+not jump across when another ends beside it. On a phone a box stacks its lanes one after another,
 each reading straight down, a lane after the first 14px apart. The server lays the board out;
 the `<sluice-board>` component draws the edges between measured cards (bottom to top, spread
 when several share a side, an arrowhead at the end; dashed for an `after` edge, which orders
@@ -197,7 +201,8 @@ two steps without passing data), threading an edge that passes rows through thei
 never hides behind a card. A quiet legend under the board names the two lines. A box of
 several steps that have all succeeded (or been skipped, beside at least one success) folds to
 one 44px line: the success glyph, its first step's id, then in meta "… its last step · n steps
-· all succeeded"; a native `<details>` that opens to its cards (open through live updates and,
+· all succeeded" (on a phone the first id in full, wrapping, and "n steps · all succeeded"
+under it; the last id gives way); a native `<details>` that opens to its cards (open through live updates and,
 per tab, a reload). No edge crosses between boxes, so a folded one hides only its own edges.
 The plan's order stays; nothing is sorted by attention. The head of a
 project page says first whether the work moves (progress bar, counts, Pause and Archive), then
@@ -206,10 +211,12 @@ follows the board. When the runner is down (its heartbeat stale), the index and 
 line say so first, in the attention amber. A project with failed steps leads its page and its
 index row with one sentence in ink, weight 500 (not red: the failure is the orchestrator's to
 retry, and only the inbox asks the person): "Stopped: a and b failed, blocking 4 steps · 11
-paused", each failed step a link (to its drawer), "Stopped:" only while nothing runs. The
-counts line and the bar's label count the blocked and paused steps too; the index row leads
-with the project's status glyph, and the tab title with "n failed ·". Text blocks hold a
-68-75ch measure.
+paused", each failed step a link (to its drawer), "Stopped:" only while nothing runs; it
+takes the column's width, balanced when it wraps, and never breaks inside a step's id (on a
+phone a long one may). The counts line and the bar's label count the blocked and paused
+steps too; the index row leads with the project's status glyph, and a running step there
+adds "quiet 40m" as its card does. The tab title leads with "n failed · n quiet ·" (the
+quiet count grows as the page ages). Text blocks hold a 68-75ch measure.
 
 ### Named Rules
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at
@@ -249,7 +256,9 @@ panel. Plan input and output nodes are dashed, since they are ends, not work.
 - **Step bubble**: a pill with the status glyph, the step id (14.5px, 550) and, in 12px meta,
   its time (and `done/total` when scattered). Nothing else: the doc and what it says now are
   its tooltip (a failed step's is its error's last line, the exception), and everything it
-  took and produced is in the drawer. Running bubbles take an active-blue border, failed a
+  took and produced is in the drawer. A failed step's line is said in sluice's words: no
+  exception class, the home directory as `~`, and an exit code a signal caused explained
+  ("exited 143 (terminated: SIGTERM)"); the error as raised stays in the drawer. Running bubbles take an active-blue border, failed a
   full-ink one over a 6% ink fill, stale an amber one. A pending step a failure holds up
   (directly or through other pending steps) is blocked: a dashed ink border at 45% and
   "blocked" in ink where its time would be (not red; a paused one keeps the paused look and
@@ -261,7 +270,8 @@ panel. Plan input and output nodes are dashed, since they are ends, not work.
 - **Tracing**: hovering or keyboard-focusing a bubble lights its edges and names; the other
   bubbles lose their border and fill and their text turns muted ink, so they stay readable
   (at least 3:1, measured 6.4:1). Opening the drawer clears any tracing; a focus given back
-  after a click does not trace.
+  after a click does not trace, and a card the reflow puts under a still pointer does not
+  trace until the pointer moves.
 - **Under the board**: the Result (`name value` rows; long text folds to 132px under a fade with
   "Show all") and the plan inputs (name, value, doc). The counts line (with the bar, Pause and
   Archive) heads the page instead.
@@ -306,10 +316,12 @@ A right-hand panel, full height. From 1200px it sits beside the page (`min(680px
 hairline and no lift): nav and page make room for it in one reflow while the drawer slides in
 (180ms ease-out, transform and opacity), the board redraws its edges, and the opened card
 scrolls into view. From 721 to 1199px it is over
-the page (680px) on a scrim that closes it. Below 720px it is a full-screen sheet over the
-scrim and a modal dialog (the page behind it inert). Escape, the close button, the scrim or
+the page (680px) on a scrim that closes it, and below 720px a full-screen sheet over the
+scrim; below 1200px it is a modal dialog (the page behind it inert, focus kept in it). The
+close button stays at the top on a band that turns opaque (card fill, a hairline) once the
+drawer scrolls, so what passes under it is hidden whole. Escape, the close button, the scrim or
 a click on the page around the board close it, and focus goes back to the card. A "Skip to
-plan" link is the page's first tab stop, and a polite live region says the statuses the live
+plan" link is the page's first tab stop (it moves focus to the plan), and a polite live region says the statuses the live
 board moves ("a failed").
 It reads like a run history (Temporal's event view is the reference): the step id (20px) and
 its doc, then a quiet grid of facts (status, "blocked" for a blocked step, function, started,
@@ -331,7 +343,8 @@ repeat the thread). On a phone the kind filter folds behind a 44px "Filter: all 
 
 ### Touch
 At phone width every control is at least 44px tall: Pause and Archive, the nav's sections,
-the log's filter labels and pager links, the inbox's status filter, a folded box's line;
+the log's filter labels and pager links, the inbox's status filter, a folded box's line,
+and in the drawer the steps its facts link to, its thread link and "Show n lines";
 the Types pill keeps its size with a clear border that makes its target 44px.
 
 ## Do's and Don'ts
