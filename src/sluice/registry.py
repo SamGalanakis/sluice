@@ -34,6 +34,7 @@ def _format(inp: dict[str, Any]) -> dict[str, Any]:
 NATIVE = {"core.echo": lambda inp: {"value": inp["value"]},
           "core.collect": lambda inp: {"items": inp["items"]},
           "core.format": _format}  # built-ins run inline; no main.py
+EXTERNAL = "core.external"  # a built-in the runner never starts (SPEC §5); no main.py
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 KEYS = {"name", "doc", "inputs", "outputs", "open", "submits"}
 SCOPES = ("builtin", "global", "project")
@@ -58,6 +59,11 @@ class Fn:
     @property
     def native(self) -> bool:
         return self.scope == "builtin" and self.name in NATIVE
+
+    @property
+    def external(self) -> bool:
+        """Work done outside sluice: its step waits to be settled by hand."""
+        return self.scope == "builtin" and self.name == EXTERNAL
 
     def summary(self) -> dict[str, Any]:
         out = {"name": self.name, "doc": self.doc, "inputs": self.raw["inputs"],
@@ -114,7 +120,7 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
             except T.TypeSyntaxError as e:
                 errs.append(str(e))
     submits, submit_docs = _submits(raw, ports.get("outputs", {}), errs)
-    if check_dir and not (scope == "builtin" and name in NATIVE) \
+    if check_dir and not (scope == "builtin" and (name in NATIVE or name == EXTERNAL)) \
             and not (fn_dir / "main.py").is_file():
         errs.append("main.py is missing")
     if errs:

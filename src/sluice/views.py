@@ -46,6 +46,7 @@ from .plan import (
     Source,
     Step,
     done_units,
+    is_ready,
     source_value,
     unit_done,
     units,
@@ -282,6 +283,20 @@ def _elapsed(block: Block) -> str:
                  block.status == "running")
 
 
+def _outside_since(board: Board, block: Block) -> str | None:
+    """When a ready core.external step became ready: the latest `finished` of the steps it
+    waits for (None when it waits for none)."""
+    ends = [f for d in block.waits if d in board.blocks
+            and _parse_iso(f := board.blocks[d].entry.get("finished"))]
+    return max(ends) if ends else None
+
+
+def _outside(board: Board, block: Block) -> str:
+    """How long a ready core.external step's work has been outside sluice, live, or ''."""
+    since = _outside_since(board, block)
+    return _span(since, None, True) if since else ""
+
+
 def _money(cost: float | None) -> str:
     return "" if cost is None else f"${cost:,.2f}"
 
@@ -311,8 +326,13 @@ GLYPHS = {
               'stroke-width="1.5" stroke-linecap="round"/>',
     "skipped": _RING + ' stroke-dasharray="2.6 2.2"/><path d="M5.3 10.7l5.4-5.4" fill="none" '
                'stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+    # an arrow leaving a box: the work is done outside sluice
+    "external": '<path d="M7 3.2H4.6a1.4 1.4 0 0 0-1.4 1.4v6.8a1.4 1.4 0 0 0 1.4 1.4h6.8a1.4 '
+                '1.4 0 0 0 1.4-1.4V9M9.6 3.2h3.2v3.2M12.6 3.4L8 8" fill="none" '
+                'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
+                'stroke-linejoin="round"/>',
 }
-WORDS = {"manual": "set by hand", "paused": "paused"}
+WORDS = {"manual": "set by hand", "paused": "paused", "external": "external"}
 X_ICON = ('<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path '
           'd="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" '
           'stroke-linecap="round"/></svg>')
@@ -567,6 +587,7 @@ class Block:
     fn_outputs: dict[str, str]  # its declared outputs first (open fns), then its fn's
     output_docs: dict[str, str] = dataclasses.field(default_factory=dict)
     submitted: frozenset[str] = frozenset()  # its outputs the agent submits (declared, submits)
+    outside: bool = False  # a ready core.external step: its work goes on outside sluice
 
     @property
     def sid(self) -> str:
@@ -587,9 +608,11 @@ class Block:
     @property
     def mark(self) -> str:
         """The glyph's status: `manual` for a value set by hand, `paused` for a held step that
-        has not started."""
+        has not started, `external` for a ready core.external step (live work outside)."""
         if self.paused and self.status == "pending":
             return "paused"
+        if self.outside:
+            return "external"
         return "manual" if self.entry.get("manual") and self.status == "succeeded" \
             else self.status
 
@@ -751,11 +774,14 @@ def load_board(store: Store, project: str) -> Board:
     for sid, step in plan.steps.items():
         declared = step.declared
         extra = step.extra
+        entry = S.entry_of(state, sid)
         blocks[sid] = Block(
-            step, S.entry_of(state, sid), step.fn.native,
+            step, entry, step.fn.native,
             {k: str(v) for k, v in {**step.fn.inputs, **extra}.items()},
             {k: str(v) for k, v in {**declared, **step.fn.outputs}.items()},
-            dict(step.output_docs), frozenset(step.declared))
+            dict(step.output_docs), frozenset(step.declared),
+            step.fn.external and entry["status"] == "pending" and not step.paused
+            and is_ready(step, plan, state))
     return Board(project, info, doc, plan, state, blocks)
 
 
@@ -1152,6 +1178,7 @@ def _card_width(board: Board, b: Block, quiet: bool = False, behind: int = 0) ->
     small = " · ".join(t for t in (
         "blocked" if board.blocked(b.sid) else "",
         f"{b.entry.get('done') or 0}/{b.entry['total']}" if "total" in b.entry else "",
+        "outside" if b.outside else "", re.sub(r"<[^>]+>", "", _outside(board, b)),
         re.sub(r"<[^>]+>", "", _elapsed(b)), f"+{behind} behind" if behind else "") if t)
     return (50 + 7.7 * len(b.sid) + (8 + 6.7 * len(small) if small else 0)
             + (84 if quiet else 0))
@@ -1322,6 +1349,8 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
     small = ["blocked"] if board.blocked(b.sid) else []
     if "total" in b.entry:
         small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
+    if b.outside:  # its work goes on outside sluice, since it became ready
+        small += [x for x in ("outside", _outside(board, b)) if x]
     if _elapsed(b):
         small.append(_elapsed(b))
     if behind:
@@ -1405,7 +1434,7 @@ def rank(board: Board, ids: Iterable[str], quiet: frozenset[str],
     0 `attention`: it failed; or it is running but has gone quiet (`quiet`); or it asks
       something in an open inbox item (`asking`, the items' `from`); or it is pending on a
       plan input that has no value;
-    1 `running`: it is running;
+    1 `running`: it is running, or its work goes on outside sluice (a ready core.external);
     2 `ready`: it is pending, next in line or further off, or paused;
     3 `held`: a failure upstream blocks it, or it is stale;
     4 `done`: it succeeded (by hand too) or was skipped.
@@ -1416,7 +1445,7 @@ def rank(board: Board, ids: Iterable[str], quiet: frozenset[str],
         if b.status == "failed" or sid in quiet or sid in asking \
                 or (b.status == "pending" and _missing_inputs(board, b)):
             return 0
-        if b.status == "running":
+        if b.status == "running" or b.outside:
             return 1
         if board.blocked(sid) or b.status == "stale":
             return 3
@@ -1725,7 +1754,7 @@ def attention(board: Board, link: Callable[[str], str], drawer: bool = False,
     """The line a project with failed steps leads with: which steps failed (each a link, from
     `link(sid)`; with `drawer`, one that opens the step drawer; after the glyph unless not
     `mark`), how many pending steps they block, how many are paused; "Stopped:" first when
-    nothing is running. Failures are the orchestrator's to retry, so this reports and does not
+    nothing is running, in sluice or outside it (a ready core.external step). Failures are the orchestrator's to retry, so this reports and does not
     ask (the inbox asks). Empty for a project with none."""
     failed, stuck = board.failed, board.stuck
     if not failed:
@@ -1740,7 +1769,8 @@ def attention(board: Board, link: Callable[[str], str], drawer: bool = False,
         text += f', blocking {stuck["blocked"]} step{"s" if stuck["blocked"] != 1 else ""}'
     if stuck["paused"]:
         text += f' · {stuck["paused"]} paused'
-    lead = "" if board.counts.get("running") else "Stopped: "
+    moving = board.counts.get("running") or any(b.outside for b in board.blocks.values())
+    lead = "" if moving else "Stopped: "
     icon = f'<span aria-hidden="true">{glyph("failed")}</span>' if mark else ""
     return f'<p class="stuck">{icon}<span>{lead}{text}</span></p>'
 
@@ -1848,6 +1878,7 @@ def _project_row(store: Store, name: str, since: list[str] | None = None) -> str
     counts, total = board.counts, len(board.blocks)
     stuck = attention(board, lambda sid: f"{href}#step:{quote(sid)}", mark=False)
     running = [b for b in board.blocks.values() if b.status == "running"]
+    outside = sum(b.outside for b in board.blocks.values())
     if since is not None:
         since += quiet_since(store, board)
     if running:
@@ -1861,6 +1892,8 @@ def _project_row(store: Store, name: str, since: list[str] | None = None) -> str
         now = '<p class="now">Paused.</p>'
     elif total and counts.get("succeeded", 0) + counts.get("skipped", 0) == total:
         now = '<p class="now">Finished.</p>'
+    elif outside:
+        now = f'<p class="now">Waiting on {_plural(outside, "step")} done outside sluice.</p>'
     elif stuck:
         now = ""  # the attention line says it
     elif counts.get("failed") or counts.get("stale"):
@@ -2337,6 +2370,9 @@ def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable
         tip = f"started {started}" + (f", ended {finished}"
                                       if finished and b.status != "running" else "")
         badges.append(f'<span class="tag" title="{e(tip)}">{took}</span>')
+    if b.outside and (away := _outside(board, b)):
+        tip = f"outside sluice since {_outside_since(board, b)}"
+        badges.append(f'<span class="tag" title="{e(tip)}">outside {away}</span>')
     badges.append(quiet_badge(store, board.project, b))
     if b.status != "running" and finished and _parse_iso(finished):
         badges.append(f'<span class="d-ago">ended {_when(finished)}</span>')
@@ -2344,7 +2380,7 @@ def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable
     hid = ' id="d-title"' if live else ""
     out = (f'<div class="hd"><h2{hid}>{e(b.sid)}</h2><p class="d-badges">'
            f'{sep.join(x for x in badges if x)}</p></div>')
-    if b.doc.strip():
+    if b.doc.strip() and not _awaits_outside(b):  # an outside step's doc has its own section
         out += f'<p class="d-doc">{e(" ".join(b.doc.split()))}</p>'
     if b.status == "skipped" and b.entry.get("skipped"):
         out += f'<p class="d-doc">Skipped: {e(b.entry["skipped"])}</p>'
@@ -2361,6 +2397,15 @@ def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable
     if b.tags:
         meta.append("".join(f'<span class="tag">{e(t)}</span>' for t in b.tags))
     return out + f'<p class="d-meta meta">{" · ".join(meta)}</p>'
+
+
+def _awaits_outside(b: Block) -> bool:
+    """A core.external step still pending: its work is (or will be) done outside sluice."""
+    return b.step.fn.external and b.status == "pending"
+
+
+OUTSIDE_NOTE = ("Done outside sluice. Set its outputs with <code>step_set_output</code> when "
+                "the work lands, or cancel it.")
 
 
 def _relations(board: Board, b: Block, steps: Callable[[Iterable[str]], str]) -> str:
@@ -2444,6 +2489,10 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
         full = (f'<div class="err-box"><pre class="err">{e(err)}</pre></div>'
                 if err != headline else "")
         section("Error", f'<p class="err-line">{e(headline)}</p>{full}')
+    if _awaits_outside(b):  # who is doing it and where: its doc, up front
+        where = (f'<div class="outside md">{markdown(b.doc)}</div>' if b.doc.strip() else
+                 '<p class="quiet">Its doc does not say who is doing it or where.</p>')
+        section("Outside sluice", f'{where}<p class="d-note">{OUTSIDE_NOTE}</p>')
     tail = ""
     if b.run_ids:
         d = _run_dir(store, project, b.run_ids[-1])
@@ -2470,6 +2519,10 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
                   for n in dict.fromkeys([*declared, *outs]) if n not in RUN_FACTS]
         if fields:
             section(title, _fields(fields), types_switch())
+    elif own and b.step.fn.external:  # what it will get, each with its type and doc
+        section("Outputs", _fields([_field(n, ('<span class="v quiet">not set yet</span>', False),
+                                           t, b.output_docs.get(n, "")) for n, t in own.items()]),
+                types_switch())
     elif own:
         names = ", ".join(e(n) for n in own)
         section("Outputs", f'<p class="quiet">None yet: {names}.</p>')

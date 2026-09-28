@@ -215,6 +215,29 @@ steps so you can pause or release them together.
   step turns stale once those values are all there.
 - `step_retry(project, steps=[...])`: run failed, stale or manually set steps again.
 
+## Work done outside sluice
+A step whose work happens elsewhere (a person, another orchestrator's workers, a CI run) runs
+the built-in `core.external`. The runner never starts it: once ready it waits (`status` says
+`external: set its outputs with step_set_output`) until you set its outputs with
+`step_set_output`, or `step_cancel` it (it fails `cancelled: <reason>`). Declare the outputs it
+will get, bind extra inputs to order it after their sources, and say in its `doc` who is doing
+the work and where; the dashboard shows it as live outside work, and the steps behind it wait
+for it. It does not scatter.
+
+```json
+{"inputs": {"spec": "string"}, "outputs": {},
+ "steps": {"work":  {"run": "core.external", "doc": "Five lash workers in wt-a..wt-e; the orchestrator sets final when they land",
+                     "in": {"spec": {"source": "spec"}}, "outputs": {"final": "string"}},
+           "notes": {"run": "core.format", "in": {"template": {"default": "Landed: {0}"},
+                                                  "values": {"source": ["work/final"]}}}}}
+```
+
+To move a step's work out (say a long agent step you fan out yourself), patch its `run` to
+`core.external` and `step_retry` it. Its inputs stay (the old function's own inputs become
+extra inputs) and so do its declared outputs; declare any output of the old function a
+dependent reads (`{"op": "add", "path": "/steps/w/outputs/final", "value": "string"}`), and
+drop its `scatter`.
+
 Every edit, manual value and step status change is a record in the project's log:
 `plan_history(project)` shows every edit (back to rev 1) and the manual values the log still
 has, `log_read(project)` everything (`docs("threads")`).

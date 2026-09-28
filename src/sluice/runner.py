@@ -880,6 +880,8 @@ class Runner:
                     if settle_skip(step, plan, state):  # its `when` says no, or it reads a skip
                         progress = True
                         continue
+                    if step.fn.external:
+                        continue  # done outside sluice: it waits to be settled by hand
                     if (a := self._begin(project, step, plan, state)) is not None:
                         launch[sid] = a
                     progress = True

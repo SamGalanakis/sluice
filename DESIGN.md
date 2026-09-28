@@ -235,6 +235,9 @@ oklch navy and cream meet by way of teal.
 Each status keeps its drawn glyph; colour repeats it and stays clear of the accent's other uses
 only by shape, and of coral always.
 - **Running**: the logo's blue (a spinning ring; the bubble's border at 65%).
+- **External** (a ready `core.external` step, its work going on outside sluice): live work,
+  so running's blue and the running bubble's border, told apart by its glyph (an arrow
+  leaving a box) and "outside · 2h 5m" where its time would be. No colour of its own.
 - **Succeeded** and set by hand: a kelly green (`#11813c`; `#58cd78` in the dark).
 - **Stale** and a message awaiting a reply, and a running step gone quiet: harvest gold
   (`#916100`; `#f1bf4e` in the dark), the attention voice.
@@ -308,7 +311,7 @@ list; a test fails if a block is missing a token or a theme has no block. Then m
 
 **The Shape Carries It Rule.** Every status has its own drawn glyph (dashed ring, spinning
 ring, check, ring and dot, circular arrow, cross, ring with two bars for paused, dashed ring
-with a slash for skipped) plus a
+with a slash for skipped, an arrow leaving a box for external) plus a
 visually hidden word; colour only repeats what the shape says. A paused bubble also has a
 dashed plum border.
 
@@ -425,7 +428,12 @@ badge, the Types switch's track, a boolean value and the "n new" pill: a bubble 
   counts as paused). A pending step next in line (its unfinished upstream all running) keeps
   a strong hairline and ink id; pending steps further off lose their border and dim (the id
   at 72% ink, 5.0:1 on the box), so what
-  starts next stands out. Glue steps (`core.*`) are dashed and muted. The step in the drawer
+  starts next stands out. Glue steps (the inline `core.*`) are dashed and muted. A ready
+  `core.external` step reads as live work outside sluice: the external glyph in the
+  running blue, the running border, and "outside · 2h 5m" (the time since it became ready,
+  live; "outside" alone when it waits on nothing); its drawer leads with its doc (who is
+  doing it, where) on the quiet fill, one muted line on how to settle it, and its declared
+  outputs as fields, "not set yet". The step in the drawer
   wears the ring 2px outside its border (canvas, then the blue ring: it is the selection), so
   it never reads as the card's own border.
   A bubble's accessible name is "failed, id, 1h 14m" (visually hidden commas; ", quiet

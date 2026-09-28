@@ -1,0 +1,7 @@
+{
+  "name": "core.external",
+  "doc": "Work done outside sluice. The runner never starts it: once ready it waits until its outputs are set by hand with step_set_output, or it is cancelled. Declare the outputs it will get; bind extra inputs to order it after them.",
+  "inputs": {},
+  "outputs": {},
+  "open": true
+}

@@ -20,7 +20,7 @@ from typing import Any
 from . import db
 from . import log as L
 from . import types as T
-from .errors import InvalidPlan, NotFound
+from .errors import BadRequest, InvalidPlan, NotFound
 from .registry import Fn
 from .store import Store
 from .util import now_iso, tail_text
@@ -49,6 +49,9 @@ def create(store: Store, name: str, inputs: Any, project: str | None,
     fn = reg.get(name)
     if fn is None:
         raise NotFound(f"no fn {name!r}" + (f" in project {project}" if project else ""))
+    if fn.external:
+        raise BadRequest(f"fn {name} is work done outside sluice and never runs: use it as a "
+                         "step of a plan and set its outputs with step_set_output")
     check_inputs(fn, inputs)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     call = f"{stamp}-{secrets.token_hex(3)}"

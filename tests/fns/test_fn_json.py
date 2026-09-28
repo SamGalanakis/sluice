@@ -13,6 +13,7 @@ EXPECTED = {
     "core.echo": [{"value": "Any"}, {"value": "Any"}],
     "core.collect": [{"items": "Any[]"}, {"items": "Any[]"}],
     "core.format": [{"template": "string", "values": "Any"}, {"text": "string"}],
+    "core.external": [{}, {}],
     "thread.post": [{"thread": "string", "body": "string", "from": "string", "needs_reply": "boolean?",
                      "to": "string?", "data": "Any?"},
                     {"seq": "int"}],

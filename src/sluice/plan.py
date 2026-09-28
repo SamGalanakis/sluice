@@ -291,7 +291,11 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
         errs.extend(f"{p}.in.{k}: required input is not bound" for k, t in fn.inputs.items()
                     if k not in ins and not isinstance(t, T.Optional))
         scatter = raw.get("scatter")
-        if scatter is not None and scatter not in ins:
+        if scatter is not None and fn.external:
+            errs.append(f"{p}.scatter: fn {fn.name} is one piece of work done outside sluice; "
+                        "it does not scatter")
+            scatter = None
+        elif scatter is not None and scatter not in ins:
             errs.append(f"{p}.scatter: {scatter!r} is not a bound input of the step")
             scatter = None
         paused = raw.get("paused", False)

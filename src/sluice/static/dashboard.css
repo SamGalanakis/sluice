@@ -472,7 +472,8 @@ span.picon { display: inline-flex; align-items: center; justify-content: center;
 .g { display: inline-flex; flex: none; width: 16px; height: 16px; margin-top: 2px; }
 .g svg { display: block; }
 .g-pending, .g-skipped { color: var(--status-idle); }
-.g-running { color: var(--status-active); }
+/* work going on outside sluice (a ready core.external step) is live work: running's blue */
+.g-running, .g-external { color: var(--status-active); }
 .g-succeeded, .g-manual { color: var(--status-success); }
 .g-stale { color: var(--status-attention); }
 .g-paused { color: var(--status-paused); }
@@ -638,7 +639,8 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .node.is-pending.is-next { border-color: var(--border-strong); background: var(--card); }
 .node.is-pending.is-next .sid { color: var(--foreground); }
 .node.is-skipped { border-style: dashed; }
-.node.is-running { border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
+.node.is-running, .node.is-external {
+  border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
 .node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground);
                   background: color-mix(in srgb, var(--foreground) 6%, var(--card)); }
 /* a pending step a failure holds up: dashed in ink, and it says "blocked" */
@@ -848,6 +850,12 @@ details.a-full > summary::-webkit-details-marker { display: none; }
 details.a-full[open] .a-show, details.a-full:not([open]) .a-hide { display: none; }
 details.a-full .err-box { margin-top: 0; }
 details.a-full pre.err { font-size: 12px; line-height: 18px; }
+/* a core.external step's doc: who is doing its work, and where */
+.outside { max-width: 72ch; font-size: 14px; line-height: 21px; padding: 12px 14px;
+           overflow-wrap: anywhere; background: var(--muted); border-radius: var(--radius); }
+.d-note { margin: 8px 0 0; font-size: 13px; line-height: 18px; color: var(--muted-foreground);
+          max-width: 72ch; }
+.d-note code { font-size: 12.5px; }
 .prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; font-size: 14px;
           line-height: 21px; padding: 12px 14px; background: var(--muted);
           border-radius: var(--radius); }

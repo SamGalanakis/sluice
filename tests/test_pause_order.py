@@ -101,7 +101,8 @@ def test_cancel_stops_a_running_step(store, runner):
     create(store, "p", {"w": window(30), "x": add(d(1), d(1))})
     settle(runner, store, "p", until=lambda s: s["w"]["status"] == "running"
            and s["x"]["status"] == "succeeded")
-    with pytest.raises(BadRequest, match="only a running step can be cancelled: x is succeeded"):
+    with pytest.raises(BadRequest, match=r"only a running step \(or a pending core.external one\) "
+                                         "can be cancelled: x is succeeded"):
         store.cancel_steps("p", "x", author="t")
     store.cancel_steps("p", "w", author="t", reason="too slow")
     steps = settle(runner, store, "p", timeout=10)

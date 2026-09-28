@@ -393,8 +393,9 @@ def build_server(store: Store, stop: threading.Event | None = None,
     def step_cancel(project: str, steps: list[str] | str | None = None,
                     tags: list[str] | str | None = None, reason: str = "") -> Any:
         """Stop running steps, selected by ids and/or tags: the runner kills their processes
-        and fails each with `cancelled: <reason>`; step_retry runs them again. Refused unless
-        every selected step is running. Returns {steps}.
+        and fails each with `cancelled: <reason>`; step_retry runs them again. A pending
+        core.external step (work done outside sluice) fails the same way at once. Refused
+        unless every selected step is running or a pending core.external one. Returns {steps}.
 
         Args:
             project: the project.

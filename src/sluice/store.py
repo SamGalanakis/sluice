@@ -54,6 +54,8 @@ def default_home() -> Path:
 
 
 BRIEF = 200  # characters of a string value `status(brief=True)` keeps
+# a ready core.external step's `waiting`: nothing in sluice will start it
+EXTERNAL_WAIT = "external: set its outputs with step_set_output"
 
 
 def _brief(value: Any) -> Any:
@@ -669,20 +671,33 @@ class Store:
     def cancel_steps(self, project: str, steps: Any = None, tags: Any = None,
                      author: str = "", reason: str = "") -> list[str]:
         """Ask the runner to stop the selected running steps: it kills their processes and
-        fails them with `cancelled` (and the reason). Refused unless every one is running."""
+        fails them with `cancelled` (and the reason). A pending core.external step (work done
+        outside sluice) fails so at once. Refused unless every one is either."""
         with self.tx():
             chosen = self.select_steps(project, steps, tags)
+            _, plan = self.plan(project)
             state = self.read_state(project)
+            outside = {s for s in chosen if plan.steps[s].fn.external
+                       and S.entry_of(state, s)["status"] == "pending"}
             idle = [f"{s} is {S.entry_of(state, s)['status']}"
                     for s in chosen
-                    if S.entry_of(state, s)["status"] != "running"]
+                    if S.entry_of(state, s)["status"] != "running" and s not in outside]
             if idle:
-                raise BadRequest(f"only a running step can be cancelled: {', '.join(idle)}")
+                raise BadRequest("only a running step (or a pending core.external one) can be "
+                                 f"cancelled: {', '.join(idle)}")
             for sid in chosen:
-                state["steps"][sid].update(S.cancel(reason))
+                if sid in outside:
+                    why = S.cancel(reason)["cancel"]
+                    state["steps"][sid] = S.failed(
+                        "cancelled" + (f": {why}" if why != "cancelled" else ""))
+                else:
+                    state["steps"][sid].update(S.cancel(reason))
             self.write_state(project, state)
             self.append(project, *({"kind": "step.cancel", "step": sid, "author": author,
-                                    "reason": reason} for sid in chosen))
+                                    "reason": reason} for sid in chosen),
+                        *({"kind": "step.status", "step": sid, "from": "pending",
+                           "to": "failed", "error": state["steps"][sid]["error"]}
+                          for sid in chosen if sid in outside))
             self.notify()
         return chosen
 
@@ -810,6 +825,8 @@ class Store:
                         if step.paused else [])
                 held += ["the project is paused"] if project_paused else []
                 row["waiting"] = held + P.not_ready(step, plan, state)
+                if step.fn.external and not row["waiting"]:
+                    row["waiting"] = [EXTERNAL_WAIT]
             rows.append({**row, "manual": bool(e.get("manual"))})
         out = {"rev": doc["rev"], "paused": project_paused,
                "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}

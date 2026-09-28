@@ -283,6 +283,32 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   fn's returned values win on a name they share); a required declared output never submitted
   fails the step with `declared outputs not submitted: <names> (the agent must call
   step_submit ...)`. An unsubmitted optional one is null.
+- **Work done outside sluice.** A step running the built-in `core.external` (open, no
+  inputs or outputs of its own) stands for work that happens elsewhere: a person, another
+  orchestrator's workers, a CI pipeline. The runner never starts it: once ready it stays
+  `pending` (`waiting`: `external: set its outputs with step_set_output`, §8) until its
+  outputs are set by hand (`step_set_output`, §6) or it is cancelled (`step_cancel` fails a
+  pending `core.external` step at once). It declares the outputs it will get and may bind
+  extra inputs, which order it after their sources (as any open fn's step). It does not
+  scatter (a validation error: it is one piece of outside work), and `fn_call` refuses it.
+  Its doc says who is doing the work and where; the dashboard shows it as live outside work
+  (§8). **Moving a step's work out** needs no tool of its own: patch the step's `run` to
+  `core.external` and retry it. Its bindings stay valid (the old fn's own inputs, now unknown
+  to `core.external`, become extra inputs, typed by their sources: a default is `Any`), and so
+  do its declared outputs; a step that reads an output of the old fn needs that output
+  declared too (`steps.b.in.x: step w (fn core.external) has no output results` otherwise),
+  and a scattered step drops its `scatter`. For a failed `agent.run` step `w` whose
+  dependents read `w/final`:
+
+  ```json
+  [{"op": "replace", "path": "/steps/w/run", "value": "core.external"},
+   {"op": "add", "path": "/steps/w/outputs/final", "value": "string"},
+   {"op": "replace", "path": "/steps/w/doc", "value": "Fanned out to five lash workers; the orchestrator sets final when they land"}]
+  ```
+
+  then `step_retry(project, ["w"])`: `w` is pending again and waits, and
+  `step_set_output(project, "w", {"final": ...})` settles it once the work lands, so its
+  dependents run.
 - A step is **ready** when every plan input and step it reads has a value / has `succeeded`.
 - **Units.** The plan's units are the connected components of its steps over every edge
   (handoffs, `when`, `after`; a plan input shared by two steps is no edge), in plan order (by
@@ -396,7 +422,9 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    start every ready `pending` step (what it reads is there, what it runs `after` has
    succeeded or been skipped) that is not paused (a step's `paused`, or its project's
    `paused`: it stays `pending`, whatever it would read held, until
-   unpaused; pausing never stops a running step). Built-in fns run inline;
+   unpaused; pausing never stops a running step). A ready `core.external` step is never
+   started (§5): it stays `pending`, with no process, run dir or record, and counts as no
+   work to start. Built-in fns run inline;
    staleness is re-checked after each round of inline results, so nothing starts from a result
    that no longer holds.
 4. If anything changed, write the state and a `step.status` record per step whose status
@@ -479,7 +507,8 @@ record):
   `stale` once those values are all there). It is never run afterwards unless retried. Record
   `step.output` `{step, outputs, force?}`.
 - `step_retry(steps?, tags?)`: sets the selected steps, each `failed`, `stale` or manual, back to
-  `pending` (refused, changing nothing, unless every one is). A failed scattered step with
+  `pending` (refused, changing nothing, unless every one is); a `core.external` step goes
+  back to waiting to be settled. A failed scattered step with
   `results` goes back keeping `{inputs_hash, run_ids, results}` under `kept`: when it starts,
   an unchanged inputs hash and one kept result per item mean the runs that already succeeded
   are not re-run (their kept run ids stand in `run_ids`); a different hash or count drops
@@ -487,6 +516,10 @@ record):
   `stale` when they produce a different result. Record `step.retry` `{step}` per step.
 - Setting a step's input by hand is an edit: `step_set_input(step, input, value)` patches its
   binding to `{"default": value}`.
+- `step_cancel(steps?, tags?, reason?)` on a pending `core.external` step (§5) fails it at
+  once with `cancelled: <reason>` (`cancelled` without one) and appends its `step.cancel`
+  and `step.status` records, so an abandoned outside job reads like any cancelled step (a
+  running step is failed so by the runner, which stops it first). `step_retry` puts it back.
 
 **Built-in fns** (in `src/sluice/fns/`, run inline):
 - `core.echo`: inputs `{"value": "Any"}`, outputs `{"value": "Any"}`.
@@ -494,6 +527,8 @@ record):
 - `core.format`: inputs `{"template": "string", "values": "Any"}`, outputs `{"text": "string"}`.
   Python `str.format`: an array fills `{0}`, `{1}`...; a record fills `{name}`. Non-string values are
   rendered as JSON. Builds prompts from upstream outputs.
+- `core.external`: open, inputs `{}`, outputs `{}`, no `main.py`; never run, inline or
+  otherwise: a step of work done outside sluice (§5).
 
 ## 6a. Verify
 
@@ -538,7 +573,7 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 | `plan.input` | `rev, author, reason, name, value` | `plan_set_input` |
 | `step.output` | `rev, author, reason, step, outputs, force?` | `step_set_output` |
 | `step.retry` | `rev, author, reason, step` | `step_retry` |
-| `step.cancel` | `step, author, reason` | `step_cancel`: the runner then kills the step and fails it with `cancelled: <reason>` |
+| `step.cancel` | `step, author, reason` | `step_cancel`: the runner then kills the step and fails it with `cancelled: <reason>` (a pending `core.external` step fails at once) |
 | `step.submit` | `step, run, outputs` | every accepted `step_submit` (§5) |
 | `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
 | `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs`; a direct call's running record also its `pid` and `pid_start` |
@@ -641,7 +676,7 @@ dashboard's one coral badge (none when nothing waits); coral, the logo's, is spe
 else, and a failure is never coral or red. A step's status is a
 drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
 hand, circular arrow stale, cross failed, ring with two bars paused, dashed ring with a slash
-skipped) with its word for assistive technology, never colour
+skipped, an arrow leaving a box external) with its word for assistive technology, never colour
 alone. Every script the dashboard runs is served by sluice from `static/`: its own, and
 vendored copies (the version in each name) of Datastar v1.0.4 (`datastar-rocket-1.0.4.js`)
 and, on inbox pages, `@openuidev/lang-core@0.3.0` (jsDelivr's ESM build, with its imports of
@@ -685,7 +720,8 @@ raw HTML escaped, unsafe link schemes refused).
   pending steps, is **blocked** (a paused one counts as paused instead). A project with failed
   steps leads its page and its index row with one line: the failed steps (the first two, each
   a link to its detail, then "n more"), "failed", how many steps they block and how many are
-  paused, after "Stopped:" when nothing is running (`Stopped: a and b failed, blocking 4
+  paused, after "Stopped:" when nothing is running, in sluice or outside it (a ready
+  `core.external` step, which is never named there) (`Stopped: a and b failed, blocking 4
   steps · 11 paused`). It reports; it does not ask (not red, not the inbox). The browser tab's
   title leads with `n failed ·` and then `n quiet ·` (running steps gone quiet; the
   project's, or on the index every active project's), kept current as the page's parts
@@ -728,7 +764,8 @@ raw HTML escaped, unsafe link schemes refused).
   to its clean query; an unknown `order`, `show` or `steps` is a 400). The order (`order`) is live
   first by default: each box ranks by its most urgent step, 1 attention (failed; running but
   quiet; asking in an open inbox item, whose `from` is the step; pending on a plan input
-  with no value), 2 running, 3 ready (pending or paused), 4 held (blocked by a failure, or
+  with no value), 2 running (or its work going on outside sluice, a ready `core.external`
+  step), 3 ready (pending or paused), 4 held (blocked by a failure, or
   stale), 5 done (succeeded or skipped), the plan's order within a rank, so a box moves only
   when its rank changes; `?order=plan` is the plan's order. `?show=` filters by rank:
   `active` (not done), `attention` or `done` (default all); `?tag=<tag>` (a select, shown
@@ -741,7 +778,9 @@ raw HTML escaped, unsafe link schemes refused).
   pending and paused (in the plan; a project's pause does not count), that is pending on a
   plan input with no value, or that can't run itself. The failed, stale, paused or waiting
   step is where a person acts, so it stays unless something above it holds it too;
-  and a step behind one that can't run can't run, so no step left waits on a hidden one. The
+  and a step behind one that can't run can't run, so no step left waits on a hidden one. A
+  ready `core.external` step is none of these: its work goes on outside sluice and the
+  steps behind it run once it is settled, so they stay. The
   boxes stay the plan's pieces of work, their cards laid out again without the hidden ones
   (rows, lanes, wrapping) and their edges dropped; a box left with none goes; a finished box's
   folded line still counts all its steps. A step that hidden steps wait behind says how many
@@ -767,7 +806,13 @@ raw HTML escaped, unsafe link schemes refused).
   has written nothing for 15 minutes (the newest stderr.log mtime of its runs that have not
   finished, else their run dirs') is quiet: its card, its index row and its drawer's title
   wear a `quiet 42m` badge in the attention voice, kept current to the minute (and nothing
-  more: its tooltip stays its last output, and its progress shows the tail). A blocked step's card says `blocked`. A failed step's
+  more: its tooltip stays its last output, and its progress shows the tail). A blocked step's card says `blocked`.
+  A ready `core.external` step (§5) is live work outside sluice, not idle pending: its own
+  glyph in the running blue, the running card's blue border, and `outside · 2h 5m` where
+  its time would be, the time since it became ready (the latest `finished` among the steps
+  it waits for, kept current; none: `outside` alone); before it is ready it is a pending
+  step like any other, and it counts as pending in the summary line and the bar. The index
+  row of a project with nothing running says `Waiting on n steps done outside sluice.` A failed step's
   line (tooltip, log summary, the head of its Error) is its error's last non-empty line,
   where a traceback names the exception, in sluice's words: without a leading exception class
   (`sluice.fn.ShError: `), the home directory as `~`, and an exit code of 128 + n (or -n)
@@ -775,7 +820,8 @@ raw HTML escaped, unsafe link schemes refused).
   whole error as raised under it. Nothing is inferred from other records. A pending step whose
   unfinished upstream steps are all running is next in line and reads at full strength;
   pending steps further off are faint. Everything else is one click away in the step's detail.
-  Built-ins that run inline (`core.*`) are dashed bubbles. The server lays out the board, so
+  Built-ins that run inline (`core.echo`, `core.collect`, `core.format`) are dashed
+  bubbles. The server lays out the board, so
   the order reads without JavaScript; the `<sluice-board>` component draws an edge per handoff
   from the bottom of a bubble to the top of the one it feeds, with an arrowhead, several edges
   on one side spread along it (from its `edges` attribute: `[from, to, "output → input"]`); an
@@ -840,6 +886,11 @@ raw HTML escaped, unsafe link schemes refused).
   holds its start; when it ended if neither says) and how long it took (the current run: its
   live time alone, the start in its tooltip) and,
   for a failure, its headline with the whole error under "Show error".
+  A pending `core.external` step (§5) shows its doc up front instead of in the head (an
+  "Outside sluice" section, markdown rendered: who is doing the work and where) with one
+  line, "Done outside sluice. Set its outputs with step_set_output when the work lands, or
+  cancel it.", then its declared outputs as fields ("not set yet", each with its type and
+  doc); once ready, its state badges add `outside 2h 5m`.
 - `GET /projects/<name>/log` (and `GET /log` for the home log): the log viewer. Newest first, 50
   records per page; `?before=<seq>` shows the 50 matching records below that seq, `?after=<seq>`
   the 50 above it, with newest / newer / older links. Filters are query parameters, so a URL is
@@ -986,7 +1037,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
-| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed) |
+| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed); refused (`bad_request`) for `core.external`, which never runs |
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's row (a finished call's row goes with its last record, §6b) |
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
@@ -996,7 +1047,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `step_update` | `project, step, changes, reason?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
 | `step_remove` | `project, steps?, tags?, reason?` | `{rev, steps}`: removes the selected steps in one edit; refused while one runs or something left reads it |
 | `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
-| `step_cancel` | `project, steps?, tags?, reason?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); refused unless every one is running |
+| `step_cancel` | `project, steps?, tags?, reason?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); a selected pending `core.external` step fails so at once (§6); refused, changing nothing, unless every one is running or a pending `core.external` step |
 | `plan_history` | `project, since_rev?` | every edit (`plan.edit` records from `plan_edits`, back to rev 1) and the `plan.input`, `step.output` and `step.retry` records still in the log, in seq order, each with its `seq` (with `rev` > `since_rev`) |
 | `plan_set_input` | `project, name, value, reason?` | `{ok}` |
 | `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
@@ -1013,7 +1064,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
 | `plan_prune` | `project, older_than_hours? = 0, author?, reason?` | `{rev, units, steps}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago, in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed. A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
-| `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |
+| `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
 | `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
