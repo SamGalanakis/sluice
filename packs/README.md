@@ -22,7 +22,11 @@ to submit them) and the step-thread note (`listen: false` drops only the note). 
 if the agent finishes without submitting a required output.
 
 Claude always runs Opus. Codex takes `model` `sol` (default) or `astra`, and `effort`
-(`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high`.
+(`minimal`, `low`, `medium`, `high`, `xhigh`, `max`); left out, effort is `high`. Devin
+takes `model` `swe-2-high` (default, alias `high`) or `fusion` — Fusion (Claude Opus 5.5
+High + SWE-2 Medium), whose full id `fusion-claude-opus-5-5-high-sidekick-swe-2-medium`
+is also accepted. `effort` stays codex-only. The allowlist is deliberate: each accepted
+model is a cost the owner opted into.
 Projects choose which engine runs each kind of work.
 
 Every agent function takes `session?: string` and returns `session: string` (the engine's
@@ -133,9 +137,11 @@ nudges use `SLUICE_AGENT_SETTLE_S`.
 
 ### Devin: idle is not done
 
-The Devin adapter runs `devin` in the private tmux server with `--model swe-2-high`,
+The Devin adapter runs `devin` in the private tmux server with `--model` naming the
+chosen model (`swe-2-high` unless the step's `model` input picks `fusion`),
 `--permission-mode dangerous`, `--respect-workspace-trust false`, `--export` and a per-run
-`--config`. That config retains the owner's settings and hooks, then adds lifecycle hooks
+`--config`. That config retains the owner's settings and hooks, pins `agent.model` to the
+chosen model, then adds lifecycle hooks
 which append to `<run_dir>/hooks.jsonl`. `SessionStart` supplies the session id;
 `UserPromptSubmit` marks a busy turn; `PreToolUse` and `PostToolUse` supply progress;
 `Stop` supplies its final message and turn end. The export is saved as `<log>.json`, with

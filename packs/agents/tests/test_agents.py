@@ -28,6 +28,7 @@ AGENTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENTS))
 
 from _agents.native import task_text
+from _agents.native.devin import FUSION
 from _agents.native.tmux import descendants
 
 requires_live = pytest.mark.skipif(
@@ -124,6 +125,34 @@ def test_devin_log_and_report_path(call_fn, tmp_path):
     assert code == 0, err
     assert out["log"] == str(log) and out["report"] == "REPORT BODY"
     assert (tmp_path / "custom.log.final").read_text() == "done"
+
+
+def test_devin_fusion_model_launches_and_resumes_on_fusion(call_fn, tmp_path):
+    """agent.devin's model input passes through to the launch, fresh and resumed."""
+    env, rec = make_devin(tmp_path, [{"reply": "devin finished"}])
+    code, out, err = call_fn(
+        AGENTS / "agent.devin",
+        {"cwd": str(tmp_path), "spec": "s", "model": "fusion"}, env=env)
+    assert code == 0, err
+    assert rec.argv()[rec.argv().index("--model") + 1] == FUSION
+    sid = out["session"]
+    env, rec = make_devin(tmp_path, [{"reply": "again"}])
+    code, out, err = call_fn(
+        AGENTS / "agent.devin",
+        {"cwd": str(tmp_path), "spec": "s", "model": "fusion", "session": sid}, env=env)
+    assert code == 0, err
+    argv = rec.argv()
+    assert argv[argv.index("--model") + 1] == FUSION
+    assert argv[-2:] == ["--resume", sid]
+
+
+def test_devin_rejects_an_unknown_model(call_fn, tmp_path):
+    env, _ = make_devin(tmp_path)
+    code, out, err = call_fn(
+        AGENTS / "agent.devin",
+        {"cwd": str(tmp_path), "spec": "s", "model": "swe-2-medium"}, env=env)
+    assert code == 1 and out is None
+    assert "swe-2-high" in err and FUSION in err
 
 
 def test_devin_transient(call_fn, tmp_path):
@@ -779,6 +808,14 @@ def test_run_devin(call_fn, tmp_path):
                    "session": session_of(call_fn)}
     assert "do it" in rec.prompts()[0]
     assert rec.argv()[rec.argv().index("--model") + 1] == "swe-2-high"
+
+    env, rec = make_devin(tmp_path, [{"reply": "fusion finished"}])
+    code, out, err = call_fn(
+        AGENTS / "agent.run",
+        {"engine": "devin", "cwd": str(cwd), "spec": "do it", "model": "fusion"}, env=env)
+    assert code == 0, err
+    assert out["final"] == "fusion finished"
+    assert rec.argv()[rec.argv().index("--model") + 1] == FUSION
 
 
 def test_run_claude(call_fn, tmp_path):

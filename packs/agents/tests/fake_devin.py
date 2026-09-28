@@ -76,7 +76,8 @@ def main():
                                                    "message": turn.get("reply", "ok")}] }))
             draft = composer.draft.split("\n")[0]
             placeholder = "Ask Devin to build features, fix bugs, or work on your code"
-            draw([RULE, "❯ " + (draft or placeholder), RULE, "swe-2-high"])
+            draw([RULE, "❯ " + (draft or placeholder), RULE,
+                  arg(argv, "--model") or "swe-2-high"])
 
 
 if __name__ == "__main__":

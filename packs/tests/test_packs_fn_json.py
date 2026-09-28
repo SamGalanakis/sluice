@@ -16,6 +16,7 @@ EXPECTED = {
             {
                 "cwd": "string",
                 "spec": "string",
+                "model": "string?",
                 "log": "string?",
                 "session": "string?",
                 "report_path": "string?",

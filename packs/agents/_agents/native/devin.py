@@ -22,6 +22,9 @@ GUARDRAIL = ("You are running as a delegated worker. Nobody can answer questions
              "reasonable choices and record unresolved questions in your report. Follow "
              "AGENTS.md and CLAUDE.md. Work only in the requested directory. Never add "
              "co-author trailers or tool attribution. Never merge a PR and never push to main.")
+FUSION = "fusion-claude-opus-5-5-high-sidekick-swe-2-medium"
+MODELS = {None: "swe-2-high", "swe-2-high": "swe-2-high", "high": "swe-2-high",
+          "fusion": FUSION, FUSION: FUSION}
 
 
 def _config_path():
@@ -121,9 +124,11 @@ class Devin(Adapter):
     wait_signal = False
 
     def __init__(self, model=None, log=None):
-        if model not in (None, "swe-2-high", "high"):
-            raise ValueError("only swe-2-high is allowed for Devin")
-        self.model = "swe-2-high"
+        if model not in MODELS:
+            raise ValueError(f"unknown Devin model {model!r}; accepted values: "
+                             "swe-2-high (or high, the default), fusion (or "
+                             f"{FUSION})")
+        self.model = MODELS[model]
         self.log = Path(log) if log else None
         self.sid = ""
         self.turns = 0
@@ -157,6 +162,10 @@ class Devin(Adapter):
         for event, entries in _hook_config(cmd).items():
             hooks[event] = [*(hooks.get(event) or []), *entries]
         cfg["hooks"] = hooks
+        agent = cfg.get("agent")
+        if agent is not None and not isinstance(agent, dict):
+            raise ValueError("Devin user config agent must be an object")
+        cfg["agent"] = {**(agent or {}), "model": self.model}
         self.config_file = self.run_dir / "devin-config.json"
         fd = os.open(self.config_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         os.fchmod(fd, 0o600)

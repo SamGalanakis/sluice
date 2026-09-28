@@ -16,14 +16,37 @@ from sluice.store import Store
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _agents.native.devin import GUARDRAIL, Composer, Devin
+from _agents.native.devin import FUSION, GUARDRAIL, Composer, Devin
+
+
+def test_devin_model_allowlist_maps_to_cli_ids():
+    assert Devin().model == "swe-2-high"
+    for name in ("swe-2-high", "high"):
+        assert Devin(name).model == "swe-2-high"
+    for name in ("fusion", FUSION):
+        assert Devin(name).model == FUSION
+    with pytest.raises(ValueError) as err:
+        Devin("swe-2-medium")
+    message = str(err.value)
+    assert "swe-2-medium" in message and "swe-2-high" in message and FUSION in message
+
+
+def test_devin_config_pins_the_chosen_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    devin = Devin("fusion")
+    devin.prepare(run_dir, str(tmp_path), None)
+    cfg = json.loads(devin.config_file.read_text())
+    assert cfg["agent"]["model"] == FUSION
+    assert devin.argv()[devin.argv().index("--model") + 1] == FUSION
 
 
 def test_devin_config_keeps_user_settings_and_registers_hooks(tmp_path, monkeypatch):
     home = tmp_path / "config"
     home.joinpath("devin").mkdir(parents=True)
     home.joinpath("devin/config.json").write_text(
-        '// comment\n{"theme_mode": "dark", "agent": {"model": "swe-2-high"}, '
+        '// comment\n{"theme_mode": "dark", "agent": {"model": "swe-1-6-fast"}, '
         '"permissions": {"allow": ["read"]}, '
         '"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "true"}]}]}, '
         '"link": "https://example.org/a//b"} /* end */')
@@ -37,6 +60,7 @@ def test_devin_config_keeps_user_settings_and_registers_hooks(tmp_path, monkeypa
     assert cfg["permissions"] == {"allow": ["read"]}
     assert cfg["link"] == "https://example.org/a//b"
     assert set(cfg["hooks"]) >= {"SessionStart", "UserPromptSubmit", "Stop"}
+    assert cfg["agent"]["model"] == "swe-2-high"  # the launch's model, not the user's
     assert len(cfg["hooks"]["SessionStart"]) == 2
     assert devin.argv()[-4:] == ["--permission-mode", "dangerous",
                                  "--respect-workspace-trust", "false"]
@@ -184,3 +208,54 @@ def test_devin_live_declared_output_and_resume():
         assert state["pick"]["outputs"]["word"] == "blue"
         assert state["again"]["outputs"]["again"] == "blue"
         assert state["again"]["outputs"]["session"] == state["pick"]["outputs"]["session"]
+
+
+@pytest.mark.skipif(os.environ.get("SLUICE_LIVE") != "1", reason="set SLUICE_LIVE=1")
+@pytest.mark.live
+def test_devin_live_fusion_model():
+    """model "fusion" launches the Fusion pairing: the session Devin records for the step
+    carries the fusion model id."""
+    scratch = Path("/workspace/tmp/claude-1000/-workspace-code-lash/"
+                   "8dfa931c-0520-4166-a225-16dc65dc37d8/scratchpad/native")
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="devin-live-", dir=scratch) as root:
+        root = Path(root)
+        home, work = root / "home", root / "work"
+        home.mkdir()
+        work.mkdir()
+        (home / "config.json").write_text(json.dumps({
+            "fn_dirs": [str(Path(__file__).parents[1])]}))
+        (home / ".env").write_text("SLUICE_AGENT_GRACE_MIN=0.02\n"
+                                   "SLUICE_AGENT_SETTLE_S=0.5\n")
+        store = Store(home)
+        store.create_project("p", "", "t", "t")
+        steps = {
+            "pick": {"run": "agent.devin", "outputs": {"word": "string"},
+                     "in": {"cwd": {"default": str(work)},
+                            "model": {"default": "fusion"},
+                            "spec": {"default": "Submit the literal word blue as `word` "
+                                                "with the command in your task. Then finish."}}},
+        }
+        store.patch("p", 1, [{"op": "replace", "path": "/steps", "value": steps}], "t", "t")
+        runner = Runner(store)
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            runner.tick()
+            state = store.read_state("p")["steps"]
+            if state.get("pick", {}).get("status") in ("succeeded", "failed"):
+                break
+            time.sleep(0.2)
+        state = store.read_state("p")["steps"]
+        run_dir = store.runs_dir("p") / state["pick"]["run_ids"][-1]
+        assert state["pick"]["status"] == "succeeded", \
+            (state["pick"].get("error"), (run_dir / "stderr.log").read_text())
+        assert not (run_dir / "tmux.sock").exists()
+        assert state["pick"]["outputs"]["word"] == "blue"
+        session = state["pick"]["outputs"]["session"]
+        db = Path.home() / ".local/share/devin/cli/sessions.db"
+        with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
+            row = con.execute("SELECT model FROM sessions WHERE id = ?",
+                              (session,)).fetchone()
+        assert row and row[0] == FUSION
+        exported = json.loads((run_dir / "devin.log.json").read_text())
+        assert "fusion" in exported["agent"]["model_name"].lower()

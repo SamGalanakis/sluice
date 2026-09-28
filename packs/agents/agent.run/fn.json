@@ -1,6 +1,6 @@
 {
   "name": "agent.run",
-  "doc": "Run a spec in a supervised interactive session on the named engine. Submit declared step outputs before the session ends; pass session to resume in the same directory. Codex model is sol (default) or astra and effort defaults to high; Claude always runs Opus; Devin defaults to swe-2-high.",
+  "doc": "Run a spec in a supervised interactive session on the named engine. Submit declared step outputs before the session ends; pass session to resume in the same directory. Codex model is sol (default) or astra and effort defaults to high; Claude always runs Opus; Devin defaults to swe-2-high and model \"fusion\" runs Fusion (Claude Opus 5.5 High + SWE-2 Medium).",
   "open": true,
   "inputs": {
     "engine": {

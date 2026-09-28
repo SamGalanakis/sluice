@@ -1,10 +1,11 @@
 {
   "name": "agent.devin",
-  "doc": "Run a supervised interactive Devin session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory.",
+  "doc": "Run a supervised interactive Devin session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. Devin defaults to swe-2-high; model \"fusion\" runs Fusion (Claude Opus 5.5 High + SWE-2 Medium).",
   "open": true,
   "inputs": {
     "cwd": "string",
     "spec": "string",
+    "model": "string?",
     "log": "string?",
     "session": "string?",
     "report_path": "string?",
