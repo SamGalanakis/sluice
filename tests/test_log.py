@@ -259,7 +259,7 @@ def test_wait_accumulates_and_holds_notes_until_a_waking_record(store):
 def live(store):
     from sluice.runner import Runner
 
-    runner = Runner(store)
+    runner = Runner(store, kill_runs=True)  # leave no runs running past teardown
     store.listeners.append(runner.wake)
     t = threading.Thread(target=runner.run_forever, kwargs={"interval": 0.2}, daemon=True)
     t.start()

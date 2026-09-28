@@ -26,8 +26,9 @@ run(lambda inp, ctx: {"text": inp["text"].upper()})
 
 @pytest.fixture
 def live(store):
-    """The store with a runner loop in a thread, woken right after in-process edits."""
-    runner = Runner(store)
+    """The store with a runner loop in a thread, woken right after in-process edits.
+    kill_runs: teardown stops the runs it started instead of leaving them behind."""
+    runner = Runner(store, kill_runs=True)
     store.listeners.append(runner.wake)
     t = threading.Thread(target=runner.run_forever, kwargs={"interval": 0.2}, daemon=True)
     t.start()

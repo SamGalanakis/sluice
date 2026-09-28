@@ -25,8 +25,9 @@ from typing import Any
 from .util import now_iso
 
 KINDS = ("plan.edit", "plan.input", "step.output", "step.retry", "step.status", "step.submit",
-         "call", "message", "inbox.post", "inbox.answer", "inbox.close")
-GROUPS = ("plan", "step", "inbox")  # a group name matches every kind under it, e.g. step.status
+         "call", "message", "inbox.post", "inbox.answer", "inbox.close",
+         "run.adopt", "run.orphan")
+GROUPS = ("plan", "step", "inbox", "run")  # a group name matches every kind under it
 HISTORY_KINDS = ("plan.edit", "plan.input", "step.output", "step.retry")
 LIVE = ("pending", "running")
 DEFAULT_MAX = 10000
@@ -307,6 +308,8 @@ def refs(rec: dict[str, Any]) -> set[str]:
     """Run ids a record refers to: a call's run dir, a finished step's run dirs."""
     if rec.get("kind") == "call":
         return {rec.get("call", "")}
+    if rec.get("kind") in ("run.adopt", "run.orphan"):
+        return {rec.get("run", "")}
     if rec.get("kind") == "step.status":
         return set(rec.get("run_ids") or [])
     return set()

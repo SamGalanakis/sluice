@@ -10,7 +10,15 @@ import pytest
 
 from sluice import cli
 from sluice.store import Store
-from tests.conftest import SPAWN_STEPS, create, pid_alive, spawned_children, wait_gone, write_config
+from tests.conftest import (
+    SPAWN_STEPS,
+    create,
+    d,
+    pid_alive,
+    spawned_children,
+    wait_gone,
+    write_config,
+)
 
 PLAN = {"inputs": {"n": "int"}, "outputs": {"total": {"source": "b/sum"}},
         "steps": {"a": {"run": "test.add", "in": {"a": {"source": "n"}, "b": {"default": 2}}},
@@ -148,13 +156,13 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
     assert json.loads(missing.stderr)["error"] == "not_found"
 
 
-def test_sighup_stops_the_loop_and_every_process_its_fns_started(home):
-    """Closing the terminal (`tmux kill-session`) sends SIGHUP: the loop stops its fns like on
-    SIGTERM, including a child in a session of its own that only the fn's SIGTERM handling
-    reaches, and exits 0."""
+def test_sighup_stops_a_kill_runs_loop_and_every_process_its_fns_started(home):
+    """`sluice loop --kill-runs`: closing the terminal (`tmux kill-session`) sends SIGHUP: the
+    loop stops its fns like on SIGTERM, including a child in a session of its own that only
+    the fn's SIGTERM handling reaches, and exits 0."""
     store = Store(home)
     create(store, "p", SPAWN_STEPS)
-    loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"],
+    loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop", "--kill-runs"],
                             env={**os.environ, "SLUICE_HOME": str(home)},
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
@@ -163,6 +171,58 @@ def test_sighup_stops_the_loop_and_every_process_its_fns_started(home):
         loop.send_signal(signal.SIGHUP)
         assert loop.wait(timeout=20) == 0, loop.stderr.read().decode()
         assert wait_gone(pids) == []
+    finally:
+        if loop.poll() is None:
+            loop.kill()
+            loop.wait()
+
+
+def test_sighup_leaves_a_default_loops_runs_for_the_next_loop_to_adopt(home):
+    """`sluice loop` with no --kill-runs: SIGHUP (a closed terminal) exits 0 but leaves a
+    running fn alive; the next loop adopts it and the step still succeeds."""
+    store = Store(home)
+    create(store, "p", {"w": {"run": "test.wait", "in": {"value": d("x")}}})
+    env = {**os.environ, "SLUICE_HOME": str(home)}
+    runs = home / "projects" / "p" / "runs"
+
+    def shim_of():  # the run dir and its shim's pid once the first loop has spawned it
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            for rd in sorted(runs.glob("*")):
+                if (rd / "shim.json").exists():
+                    return rd, json.loads((rd / "shim.json").read_text())["pid"]
+            time.sleep(0.1)
+        raise AssertionError("the step's run never started")
+
+    def adopted():  # the next loop's run.adopt record in the project log
+        deadline = time.time() + 30
+        log = home / "projects" / "p" / "log.jsonl"
+        while time.time() < deadline:
+            if log.exists() and '"run.adopt"' in log.read_text():
+                return
+            time.sleep(0.1)
+        raise AssertionError("the run was never adopted")
+
+    def step_status():
+        return json.loads((home / "projects" / "p" / "state.json").read_text()
+                          )["steps"]["w"]["status"]
+
+    loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        run_dir, shim_pid = shim_of()
+        loop.send_signal(signal.SIGHUP)
+        assert loop.wait(timeout=20) == 0, loop.stderr.read().decode()
+        assert pid_alive(shim_pid)  # left running for the next runner
+
+        loop = subprocess.Popen([sys.executable, "-m", "sluice.cli", "loop"], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        adopted()
+        (run_dir / "go").write_text("")
+        deadline = time.time() + 30
+        while step_status() != "succeeded" and time.time() < deadline:
+            time.sleep(0.1)
+        assert step_status() == "succeeded"
     finally:
         if loop.poll() is None:
             loop.kill()

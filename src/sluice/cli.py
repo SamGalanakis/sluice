@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ipaddress
 import json
 import signal
 import sys
@@ -16,9 +17,17 @@ from .runner import Runner
 from .store import DEFAULT_CONFIG, Store, default_home
 from .util import atomic_write_json
 
-# `serve` and `loop` stop their fns and exit 0 on these; SIGHUP is what closing the terminal
-# (or `tmux kill-session`) sends.
+# `serve` and `loop` exit 0 on these; SIGHUP is what closing the terminal (or
+# `tmux kill-session`) sends. Their runs are left running (the next runner adopts them)
+# unless --kill-runs.
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+
+def _loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
 
 
 def ensure_home(quiet: bool = False) -> None:
@@ -37,7 +46,11 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
 
     host = a.host or store.config["http"]["host"]
     port = a.port or int(store.config["http"]["port"])
-    runner = None if a.no_runner else Runner(store)
+    if not _loopback(host):
+        print(f"sluice: WARNING: {host} is not loopback — the tools (fn_save, fn_call: running "
+              "code) are served without authentication to anyone who can reach this port",
+              file=sys.stderr, flush=True)
+    runner = None if a.no_runner else Runner(store, kill_runs=a.kill_runs)
     if runner:  # else a separate `sluice loop` runs the steps and outlives server restarts
         store.listeners.append(runner.wake)
         thread = threading.Thread(target=runner.run_forever, name="sluice-runner", daemon=True)
@@ -75,7 +88,7 @@ def cmd_serve(a: argparse.Namespace, store: Store) -> int:
 
 
 def cmd_loop(a: argparse.Namespace, store: Store) -> int:
-    runner = Runner(store)
+    runner = Runner(store, kill_runs=a.kill_runs)
     for sig in STOP_SIGNALS:
         signal.signal(sig, lambda *_: runner.stop())
     runner.run_forever()
@@ -147,7 +160,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-runner", action="store_true",
                    help="serve only; run `sluice loop` separately so restarting the server "
                    "leaves running steps alone")
-    sub.add_parser("loop", help="runner only")
+    s.add_argument("--kill-runs", action="store_true",
+                   help="on exit, stop the runs this runner started instead of leaving them "
+                   "for the next runner to adopt")
+    s = sub.add_parser("loop", help="runner only")
+    s.add_argument("--kill-runs", action="store_true",
+                   help="on exit, stop the runs this runner started instead of leaving them "
+                   "for the next runner to adopt")
     s = sub.add_parser("tool", help="list the MCP tools, or call one in-process",
                        description="Without a name, list the tools. With one, call it with a "
                        "JSON object of arguments and print the result. Exit 1 on an error or "

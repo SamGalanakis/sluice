@@ -23,7 +23,8 @@ change.
   status changes, calls, thread messages). It is history; `plan.json` and `state.json` are the
   current truth.
 - **Runner:** starts a step once everything it reads is available, records its outputs or its
-  failure. A failed step shows up in `status`; an orchestrator decides what next.
+  failure. A failed step shows up in `status`; an orchestrator decides what next. Runs survive
+  a runner restart: the next one adopts them (§6).
 - **Inbox:** each project's items waiting on a person (a question, optionally with an OpenUI
   form, optionally setting a plan input). A person answers in the dashboard; agents post, wait
   on the log and read the answer (§8a).
@@ -36,10 +37,13 @@ change.
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                              "log_max": 10000}
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
+runner.json                 the runner's heartbeat {pid, started, beat}, refreshed about once
+                            a second; stale means the runner is down
 .env                        global secrets (KEY=value lines)
 fns/                        global user functions
 log.jsonl                   the home log: fn_call runs without a project (§6b)
-runs/<call_id>/             input.json, output.json, stderr.log of those calls
+runs/<call_id>/             input.json, output.json, stderr.log, shim.json, child.json,
+                            shim.lock and exit.json of those calls (§4)
 .lock                       flock target for appends to the home log
 projects/<name>/
   project.json              {"name", "description", "archived"?, "paused"?}
@@ -52,7 +56,9 @@ projects/<name>/
   .env                      project secrets (override global ones)
   runs/<run_id>/            input.json, output.json, stderr.log for one fn execution (a step run,
                             or a call: then run_id is the call id); submitted.json, what its
-                            agent submitted (§5)
+                            agent submitted (§5); shim.json, child.json, shim.lock and
+                            exit.json, the supervising shim's identity, the fn child's pid +
+                            start time, liveness lock and exit record (§4)
   .lock                     flock target for read-modify-write in this project and log appends
 ```
 
@@ -126,8 +132,19 @@ submits on every step: `"submits": {name: type or {"type", "doc"}}`, names apart
 may not declare one again): they are typed for refs, required unless optional, told to the
 agent in `SLUICE_STEP_OUTPUTS`, and submitted with `step_submit`.
 
-**Process contract.** The runner runs `uv run --quiet --script <fn_dir>/main.py` with stdin = an
-object keyed by input name (unbound optional inputs are `null`); env `SLUICE_HOME`,
+**Process contract.** The runner runs each fn under a shim,
+`python -m sluice.exec <run_dir> -- uv run --quiet --script <fn_dir>/main.py` — every run
+carries this small supervising Python process for its whole life. The shim takes an
+exclusive flock on the run dir's `shim.lock` — retrying briefly, so a liveness probe
+landing in the gap never makes it refuse — and holds it for its whole life (that lock is
+the run's liveness — a pid is never trusted, pids get reused), writes `shim.json`
+`{pid, started, argv}` before starting the fn and `child.json` `{pid, pid_start}` right
+after (so a fn that outlives its shim can still be found and stopped), and once the fn
+exits writes `exit.json` `{code, signal, finished}` — `code` 127 with an `error` when the
+fn could not even be started — the only evidence a run is done (`output.json` alone never
+is) — then exits as the fn did.
+The fn runs with stdin = an object keyed by input name (unbound optional inputs are `null`),
+stdout to `output.json`, stderr to `stderr.log`; env `SLUICE_HOME`,
 `SLUICE_PROJECT`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
 `PYTHONPATH` containing sluice's `src` dir, plus every `KEY=value` line of `SLUICE_HOME/.env` and
 then the project's `.env` (project values win). A step of an open fn also gets, when it has
@@ -138,12 +155,15 @@ dir. `SLUICE_PROJECT` names the project (empty for a call without one); for a ca
 `SLUICE_STEP` is empty and `SLUICE_RUN_ID` is the call id. The fn writes one JSON object keyed
 by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
 fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
-(`run(main, retries=N)`, §7). Each fn process starts its own session; when the runner stops a
-run (runner shutdown, a removed step, a failed sibling scatter run) it sends the whole process
-group SIGTERM, then SIGKILL to whatever is left after 5 s, so nothing started under `uv run`
-outlives it (SIGTERM first lets an agent CLI stop tool processes it started in sessions of
-their own). `sluice serve` and `sluice loop` stop their fns this way on SIGINT, SIGTERM and
-SIGHUP (a closed terminal or `tmux kill-session`), then exit 0.
+(`run(main, retries=N)`, §7). Each run is its own session, led by the shim: signals sent to the
+group reach the fn (the shim ignores SIGINT, SIGTERM and SIGHUP itself and still records how the
+fn went). When the runner stops a run (a cancelled step, a removed step, a failed sibling
+scatter run, or shutdown with `--kill-runs`) it sends the whole process group SIGTERM, then
+SIGKILL to whatever is left after 5 s, so nothing started under `uv run` outlives it (SIGTERM
+first lets an agent CLI stop tool processes it started in sessions of their own). `sluice
+serve` and `sluice loop` exit 0 on SIGINT, SIGTERM and SIGHUP (a closed terminal or `tmux
+kill-session`), leaving their runs going for the next runner to adopt (§6); with `--kill-runs`
+they stop them first.
 
 ## 5. Plans
 
@@ -265,10 +285,10 @@ with no `inputs_hash` at all (state written before hashes existed) adopts the cu
 Loop (every ~1 s, and right after an in-process edit), over all projects:
 1. New steps get `pending`. State entries of steps removed from the plan, and values of plan
    inputs removed from it, are dropped.
-2. Finished processes: exit 0 with valid outputs → `succeeded` with `outputs` (for a step
-   that declares outputs, merged with what its agent submitted, §5); otherwise `failed` with
-   `error` (exit code, type errors or declared outputs not submitted, plus the stderr tail).
-   A scattered step collects its runs as they finish.
+2. Finished runs — `exit.json` written (§4): code 0 with valid outputs → `succeeded` with
+   `outputs` (for a step that declares outputs, merged with what its agent submitted, §5);
+   otherwise `failed` with `error` (exit code, type errors or declared outputs not submitted,
+   plus the stderr tail). A scattered step collects its runs as they finish.
 3. Mark stale steps (above), settle `when` (§5: skip what its condition or a skipped input
    rules out, and put back to `pending` a skipped step whose reason no longer holds), then
    start every ready `pending` step (what it reads is there, what it runs `after` has
@@ -281,10 +301,29 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    status changed in this pass (§6b).
 5. Calls: follow the log's `call` records; start `pending` calls and log each status change (§6b). `call_status` reads a call's latest record.
 
-On startup, steps and calls left `running` by a previous runner are marked `failed` with
-`error: "runner restarted"`. A `direct` call (§8 `fn_call`) is run by the process that made it,
-never by the runner; if that process dies before logging the end, the runner logs the call
-`failed` with `error: "the process running this direct call is gone"`.
+On startup — once, under `runner.lock`, before the first tick — the runner adopts what a
+previous one left. For every step entry still `running` and every `running` non-direct call it
+looks at each run dir (a step's `run_ids`; a call's is `runs/<call>`): `exit.json` → the run
+is finished from it (its `code`, then §6 step 2 decides outputs or error); a held `shim.lock`
+→ the run lives on and is watched; an entry `running` with no `run_ids` at all, or a run dir
+without `shim.json` (both from before this contract) → the step fails `runner restarted`; a
+free lock with no `exit.json` → `run outcome unknown (its supervisor died)` — never an
+invented exit code — and a `child.json` that still names a live fn process then has its
+process group killed, so a retry never runs two agents. A run a `--kill-runs` shutdown
+stopped is adopted the same way: usually `finished` off the `exit.json` its shim still
+wrote (`exit code -15`), `unknown` when the shim went down with it — never `runner
+restarted`. Adoption kills use the recorded shim pid only while its lock is held and it
+still leads a live process group, so a reused or tampered pid's group is never signalled;
+`step_cancel` and a step removed from the plan stop an adopted run like one this runner
+started — and a running entry no Active could be built for is still killed by its recorded
+shim pids. Each adopted run appends `run.adopt` `{step or call, run, outcome}`
+(`watching`/`finished`/`unknown`/`restarted`), and a run dir whose shim lives — or whose
+recorded fn child lives on past it — but which no running step or call references (the old
+runner died between spawning it and recording it) is killed and logged `run.orphan` `{run}`
+— only when something was actually signalled. A `direct` call (§8 `fn_call`) is
+run by the process that made it, never by the runner; if that process dies before logging the
+end, the runner logs the call `failed` with `error: "the process running this direct call is
+gone"` — the pid is checked with its recorded start time, so a reused pid does not pass for it.
 
 **Manual values** (recorded in state and as log records with the current `rev`, `author` and
 `reason`, so the history shows who set what; a manual status change also gets its `step.status`
@@ -352,12 +391,14 @@ fn process posting to a thread) get distinct, increasing seqs; the file is in se
 | `step.retry` | `rev, author, reason, step` | `step_retry` |
 | `step.cancel` | `step, author, reason` | `step_cancel`: the runner then kills the step and fails it with `cancelled: <reason>` |
 | `step.submit` | `step, run, outputs` | every accepted `step_submit` (§5) |
-| `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per pass (`from` is the status before the pass, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
-| `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` |
+| `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
+| `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs`; a direct call's running record also its `pid` and `pid_start` |
 | `message` | `thread, from, to?, body, data?` | `thread.post` (§10) |
 | `inbox.post` | `item, title, from?, input?` | `inbox_post`, `inbox.ask` (§8a) |
 | `inbox.answer` | `item, answer, by` | `inbox_answer` and the dashboard's answer route |
 | `inbox.close` | `item, reason?, by` | `inbox_close` |
+| `run.adopt` | `step or call, run, outcome` | the runner, once per leftover run at startup: what its dir showed (`watching`, `finished`, `unknown`, `restarted`, §6) |
+| `run.orphan` | `run` | a live run nothing referenced, killed at startup (§6) |
 
 The log is history, not the source of truth, so it is capped at `config.log_max` records
 (default 10000): when an append takes it past the cap, the oldest records are dropped under the
@@ -369,7 +410,7 @@ back only as far as the log does.
 
 Readers take no lock: a line not yet complete is left out until it is. `log_read` and `log_wait`
 (§8), `thread.wait` and `sluice watch` share one filter: `kinds` (exact kinds, or a group name,
-`step`, `plan` or `inbox`, for every kind under it) and `threads` (messages only on these threads; given
+`step`, `plan`, `inbox` or `run`, for every kind under it) and `threads` (messages only on these threads; given
 without `kinds`, only messages at all).
 
 ## 7. Helper library `sluice.fn` (stdlib only)
@@ -410,8 +451,11 @@ stripped out), so a tool the fn starts runs the host's `python3`, not the fn's i
 `sluice serve` runs the runner and an MCP server (official `mcp` SDK, streamable HTTP) at
 `http://<host>:<port>/mcp` in one process. With `--no-runner` it serves only, and a separate
 `sluice loop` runs the steps: the two share nothing but the files (the runner polls about once
-a second), so the server can restart without ending running steps. Stopping the runner ends
-the fns it is running. Errors are tool errors whose message is JSON
+a second), so the server can restart without ending running steps. Stopping the runner leaves
+its runs going — a later runner adopts them (§6) — unless it was started with `--kill-runs`.
+A `--host` that is not loopback warns loudly on stderr: the tools (fn_save, fn_call — running
+code) are served without authentication to anyone who can reach the port. Errors are tool
+errors whose message is JSON
 `{"error": "not_found"|"conflict"|"invalid"|"bad_request", "message", ...}` (`conflict` carries
 `current_rev` for a plan edit, or `status` for an inbox item that is no longer open; `invalid`
 carries `errors`). `rev` is optional on the convenience tools (they apply
@@ -689,9 +733,10 @@ fields' `rules` with lang-core's validators and shows what fails.
 MCP is the interface; the CLI only starts it and reaches the same tools from a shell:
 
 ```
-sluice serve [--host H] [--port P] [--no-runner]
-                                      runner + MCP server + dashboard (with the inbox)
-sluice loop                           runner only
+sluice serve [--host H] [--port P] [--no-runner] [--kill-runs]
+                                      runner + MCP server + dashboard (with the inbox);
+                                      --kill-runs stops runs on exit instead of leaving them
+sluice loop [--kill-runs]             runner only
 sluice tool                           list the MCP tools with one-line descriptions
 sluice tool <name> '<json args>'      call that tool in-process and print its result
 sluice watch [-p P] [--kinds k1,k2] [--threads a,b] [--since-seq N]

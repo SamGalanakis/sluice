@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import time
+from pathlib import Path
 from typing import Any
 
 from . import log as L
@@ -24,7 +25,7 @@ from .util import tail_text
 CALL_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 DONE = ("succeeded", "failed")
 GONE = "the process running this direct call is gone"
-FIELDS = ("call", "fn", "status", "inputs", "outputs", "error", "direct", "pid")
+FIELDS = ("call", "fn", "status", "inputs", "outputs", "error", "direct", "pid", "pid_start")
 
 
 def check_inputs(fn: Fn, inputs: Any) -> None:
@@ -53,6 +54,8 @@ def create(store: Store, name: str, inputs: Any, project: str | None,
                            "status": "running" if direct else "pending", "inputs": full}
     if direct:
         rec.update(direct=True, pid=os.getpid())
+        if (start := pid_start(os.getpid())) is not None:
+            rec["pid_start"] = start
     store.append(project, rec)
     return call
 
@@ -86,10 +89,28 @@ def result(rec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def alive(pid: Any) -> bool:
+def pid_start(pid: int) -> str | None:
+    """The process's start time (/proc/<pid>/stat field 22): together with the pid it pins a
+    process's identity, so a reused pid doesn't pass for the recorded one. None where /proc
+    is missing or unreadable."""
     try:
-        os.kill(int(pid), 0)
-    except (OSError, ValueError, TypeError):
+        return Path(f"/proc/{int(pid)}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def alive(pid: Any, started: Any = None) -> bool:
+    """Whether the recorded process is still there: the pid exists and — when a start time
+    was recorded and /proc can be read — it is the same process, not a reused pid."""
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return False
+    if started is not None and (now := pid_start(pid)) is not None:
+        return now == str(started)
+    try:
+        os.kill(pid, 0)
+    except OSError:
         return False
     return True
 
@@ -98,7 +119,8 @@ def status(store: Store, call: str, project: str | None) -> dict[str, Any]:
     """call_status: the latest record's result plus the tail of the fn's stderr."""
     rec = latest(store, call, project)
     out = result(rec)
-    if rec["status"] == "running" and rec.get("direct") and not alive(rec.get("pid")):
+    if rec["status"] == "running" and rec.get("direct") \
+            and not alive(rec.get("pid"), rec.get("pid_start")):
         out.update(status="failed", error=GONE)
     tail = tail_text(store.runs_dir(project) / call / "stderr.log", 2000).strip()
     if tail:

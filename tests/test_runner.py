@@ -7,7 +7,7 @@ import pytest
 
 from sluice import log as L
 from sluice.errors import InvalidPlan
-from sluice.runner import RESTARTED, Runner
+from sluice.runner import Runner
 from tests.conftest import add, create, d, settle, src, statuses, window
 
 
@@ -208,15 +208,21 @@ def test_a_paused_project_starts_nothing_and_a_running_step_can_be_paused(store,
     assert settle(runner, store, "q")["a"]["outputs"] == {"sum": 3}
 
 
-def test_a_new_runner_marks_leftover_running_steps_failed(store, runner):
-    create(store, "p", {"w": window(30), "after": {"run": "core.echo",
-                                                   "in": {"value": src("w/end")}}})
-    settle(runner, store, "p", until=lambda s: s["w"]["status"] == "running")
-    fresh = Runner(store)
+def test_a_new_runner_adopts_leftover_running_steps(store, runner):
+    create(store, "p", {"w": {"run": "test.wait", "in": {"value": d("x")}},
+                        "after": {"run": "core.echo", "in": {"value": src("w/value")}}})
+    settle(runner, store, "p", until=lambda s: s["w"]["status"] == "running"
+                                     and s["w"].get("run_ids"))
+    [rid] = store.read_state("p")["steps"]["w"]["run_ids"]
+    fresh = Runner(store)  # a runner that did not start the run picks it up
     fresh.tick()
-    e = store.read_state("p")["steps"]["w"]
-    assert (e["status"], e["error"]) == ("failed", RESTARTED)
-    assert statuses(store, "p")["after"] == "pending"
+    assert statuses(store, "p") == {"w": "running", "after": "pending"}
+    (store.runs_dir("p") / rid / "go").write_text("")
+    steps = settle(fresh, store, "p")
+    assert steps["w"]["outputs"] == {"value": "x"} and steps["after"]["outputs"] == \
+        {"value": "x"}
+    [rec] = L.read(store.log_dir("p"), kinds=["run.adopt"])["records"]
+    assert (rec["step"], rec["run"], rec["outcome"]) == ("w", rid, "watching")
 
 
 def _procs_in(run_dir) -> list[int]:

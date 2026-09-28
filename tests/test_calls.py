@@ -9,7 +9,7 @@ import pytest
 from sluice import calls
 from sluice import log as L
 from sluice.errors import InvalidPlan, NotFound
-from sluice.runner import RESTARTED, Runner, run_call_direct
+from sluice.runner import Runner, run_call_direct
 from sluice.store import Store
 from tests.conftest import create, write_config, write_fn
 
@@ -117,13 +117,22 @@ def test_the_runner_leaves_direct_calls_alone(store, runner):
     assert calls.status(store, call, None)["error"] == calls.GONE
 
 
-def test_a_new_runner_fails_calls_left_running(store, runner):
-    call = calls.create(store, "test.window", {"seconds": 30}, None)
+def test_a_new_runner_adopts_calls_left_running(store, runner):
+    call = calls.create(store, "test.wait", {"value": "x"}, None)
     runner.tick()
     assert calls.status(store, call, None)["status"] == "running"
-    Runner(store).tick()
-    res = calls.status(store, call, None)
-    assert (res["status"], res["error"]) == ("failed", RESTARTED)
+    d = store.home / "runs" / call
+    deadline = time.time() + 10  # its shim is up once shim.json is written
+    while not (d / "shim.json").exists() and time.time() < deadline:
+        time.sleep(0.05)
+    fresh = Runner(store)  # a runner that did not start the run picks it up
+    fresh.tick()
+    assert calls.status(store, call, None)["status"] == "running"
+    (d / "go").write_text("")
+    res = settle_call(fresh, store, call)
+    assert (res["status"], res["outputs"]) == ("succeeded", {"value": "x"})
+    [rec] = [r for r in L.read(store.home, kinds=["run.adopt"])["records"]]
+    assert (rec["call"], rec["run"], rec["outcome"]) == (call, call, "watching")
 
 
 def test_calls_are_refused_in_a_blocked_project(store):

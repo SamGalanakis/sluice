@@ -141,7 +141,8 @@ def test_sighup_stops_serve_and_every_process_its_runner_started(home):
     store = Store(home)
     create(store, "p", SPAWN_STEPS)
     port = free_port()
-    proc = subprocess.Popen([sys.executable, "-m", "sluice.cli", "serve", "--port", str(port)],
+    proc = subprocess.Popen([sys.executable, "-m", "sluice.cli", "serve", "--port", str(port),
+                             "--kill-runs"],
                             env={**os.environ, "SLUICE_HOME": str(home)},
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
