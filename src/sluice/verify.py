@@ -1,17 +1,15 @@
-"""verify (SPEC §6a): check functions, projects, plans and state; report every problem found
-with where it is. Changes nothing."""
+"""verify (SPEC §6a): check functions, .env files, plans and state; report every problem found
+with where it is, and leftover project directories as warnings. Changes nothing."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from . import plan as P
 from . import state as S
 from . import types as T
-from .errors import NotFound
-from .store import PROJECT_KEYS, Store
+from .store import Store
 from .util import parse_dotenv
 
 STATUSES = S.STATUSES
@@ -20,11 +18,15 @@ STATUSES = S.STATUSES
 class Report:
     def __init__(self) -> None:
         self.problems: list[dict[str, str]] = []
+        self.warnings: list[dict[str, str]] = []
 
     def add(self, where: str, message: str) -> None:
         p = {"where": where, "message": message}
         if p not in self.problems:
             self.problems.append(p)
+
+    def warn(self, where: str, message: str) -> None:
+        self.warnings.append({"where": where, "message": message})
 
     def add_path_errors(self, file: str, errors: list[str]) -> None:
         """Errors that read `<path>: <message>` become `<file>#<path>`."""
@@ -39,27 +41,21 @@ def verify(store: Store, project: str | None = None) -> dict[str, Any]:
         r.add(p["where"], p["message"])
     _check_env(store, r, store.home / ".env")
     if project is None:
+        names = store.project_names()
         root = store.home / "projects"
-        names = sorted(d.name for d in root.iterdir() if d.is_dir()) if root.is_dir() else []
+        for d in sorted(root.iterdir()) if root.is_dir() else []:
+            if d.is_dir() and d.name not in names:
+                r.warn(store.show(d), "a directory of no project: left over, or prepared "
+                                      "(fns/, .env) for a project not created yet")
     else:
-        if not store.project_dir(project).is_dir():
-            raise NotFound(f"no project {project!r}")
+        store.project(project)
         names = [project]
     for name in names:
         _check_project(store, r, name)
-    return {"ok": not r.problems, "problems": r.problems}
-
-
-def _read(r: Report, store: Store, path: Path, required: bool = True) -> tuple[bool, Any]:
-    """(True, the JSON) or (False, None) after reporting why it is missing or unreadable."""
-    try:
-        return True, json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        if required:
-            r.add(store.show(path), "missing")
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-        r.add(store.show(path), f"not readable JSON: {e}")
-    return False, None
+    out: dict[str, Any] = {"ok": not r.problems, "problems": r.problems}
+    if r.warnings:
+        out["warnings"] = r.warnings
+    return out
 
 
 def _check_env(store: Store, r: Report, path: Path) -> None:
@@ -75,63 +71,28 @@ def _check_env(store: Store, r: Report, path: Path) -> None:
 
 
 def _check_project(store: Store, r: Report, name: str) -> None:
-    d = store.home / "projects" / name
-    show = store.show(d)
-    if not P.ID_RE.match(name):
-        r.add(show, f"not a project: names match {P.ID_RE.pattern}")
-        return
-    found, info = _read(r, store, d / "project.json")
-    if not found:
-        return
-    if not isinstance(info, dict):
-        r.add(f"{show}/project.json",
-              "expected an object {name, description?, archived?, paused?, icon?}")
-    else:
-        for k in info:
-            if k not in PROJECT_KEYS:
-                r.add(f"{show}/project.json#{k}", "unknown key")
-        if info.get("name") != name:
-            r.add(f"{show}/project.json#name",
-                  f"expected {name!r} (the directory name), got {info.get('name')!r}")
-        for k in ("description", "icon"):
-            if not isinstance(info.get(k, ""), str):
-                r.add(f"{show}/project.json#{k}", "expected a string")
-    _check_env(store, r, d / ".env")
-
+    _check_env(store, r, store.project_dir(name) / ".env")
     reg = store.registry(name)
     shared = store.registry(None).problems
     for p in reg.problems:
         if p not in shared:
             r.add(p["where"], p["message"])
-
-    found, doc = _read(r, store, d / "plan.json")
-    if not found:
-        return
-    body = doc
-    if isinstance(doc, dict):
-        if not isinstance(doc.get("rev"), int):
-            r.add(f"{show}/plan.json#rev", "expected an int")
-        body = {k: v for k, v in doc.items() if k != "rev"}
+    with store.rx():
+        doc, state = store.get(name), store.read_state(name)
+    body = {k: v for k, v in doc.items() if k != "rev"}
     errs, plan = P.validate(body, reg)
-    r.add_path_errors(f"{show}/plan.json", errs)
-
-    found, state = _read(r, store, d / "state.json", required=False)
-    if not found:
-        return
-    where = f"{show}/state.json"
-    if not isinstance(state, dict) or not isinstance(state.get("inputs"), dict) \
-            or not isinstance(state.get("steps"), dict):
+    r.add_path_errors(f"project {name}: plan", errs)
+    where = f"project {name}: state"
+    if not isinstance(state.get("inputs"), dict) or not isinstance(state.get("steps"), dict):
         r.add(where, "expected an object {inputs, steps}")
         return
-    declared = body.get("inputs") if isinstance(body, dict) else None
-    declared = declared if isinstance(declared, dict) else {}
+    declared = body.get("inputs") if isinstance(body.get("inputs"), dict) else {}
     for n, v in state["inputs"].items():
         if n not in declared:
             r.add(f"{where}#inputs.{n}", f"a value for {n}, which the plan does not declare")
         elif n in plan.inputs:
             r.add_path_errors(where, T.check_value(plan.inputs[n], v, f"inputs.{n}"))
-    steps = body.get("steps") if isinstance(body, dict) else None
-    steps = steps if isinstance(steps, dict) else {}
+    steps = body.get("steps") if isinstance(body.get("steps"), dict) else {}
     for sid, e in state["steps"].items():
         at = f"{where}#steps.{sid}"
         if sid not in steps:

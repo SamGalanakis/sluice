@@ -43,6 +43,7 @@ def test_two_projects_have_separate_plans_state_fns_and_env(store, runner):
     create(store, "q", {}, inputs={"n": "string"})
     store.fn_save(*upper("p:"), project="p")
     store.fn_save(*upper("q:"), project="q")
+    store.project_dir("q").mkdir(parents=True, exist_ok=True)  # made lazily
     (store.project_dir("q") / ".env").write_text("TEST_WHO=q\n")
     store.patch("p", 2, [{"op": "add", "path": "/steps/u", "value": step("text.upper", text="a")},
                          {"op": "add", "path": "/steps/e", "value": step("test.env")}], "t", "x")

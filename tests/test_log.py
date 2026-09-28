@@ -1,5 +1,5 @@
-"""The log (SPEC §6b): one log.jsonl per project (and one in the home), seq-ordered records of
-every kind, capped; read through log_read / log_wait."""
+"""The log (SPEC §6b): the database's records, one log per project (and one for the home),
+seq-ordered records of every kind, capped; read through log_read / log_wait."""
 
 import json
 import multiprocessing
@@ -33,8 +33,9 @@ def test_one_log_holds_every_kind_in_seq_order(store, runner):
     settle(runner, store, "p")
     store.set_output("p", "boom", {"done": True}, "me", "by hand")
     store.retry("p", "boom", author="me", reason="again")
-    recs = L.read(store.project_dir("p"))["records"]
-    assert [r["seq"] for r in recs] == list(range(1, len(recs) + 1))
+    recs = L.read(store.home, "p")["records"]
+    seqs = [r["seq"] for r in recs]
+    assert seqs == sorted(set(seqs))
     assert all(set(r) >= {"seq", "at", "kind"} for r in recs)
     assert set(kinds(recs)) == {"plan.edit", "plan.input", "step.status", "step.output",
                                 "step.retry"}
@@ -44,15 +45,16 @@ def test_one_log_holds_every_kind_in_seq_order(store, runner):
     assert status[-2:] == [("boom", "failed", "succeeded"), ("boom", "succeeded", "pending")]
     failed = next(r for r in recs if r["kind"] == "step.status" and r["to"] == "failed")
     assert "about to explode" in failed["error"] and failed["run_ids"]
-    assert not (store.project_dir("p") / "plan.log.jsonl").exists()
+    assert not list(store.home.rglob("*.jsonl"))
 
 
 def test_concurrent_writers_in_processes_get_distinct_increasing_seqs(store, home):
     store.create_project("p")
     with multiprocessing.get_context("spawn").Pool(4) as pool:
         pool.starmap(_post, [(str(home), 25, f"w{k}") for k in range(4)])
-    recs = L.read(store.project_dir("p"))["records"]
-    assert [r["seq"] for r in recs] == list(range(1, 102))  # the creation edit, then 100
+    recs = L.read(store.home, "p")["records"]
+    seqs = [r["seq"] for r in recs]
+    assert len(recs) == 101 and seqs == sorted(set(seqs))  # the creation edit, then 100
     for k in range(4):  # each writer's own messages keep their order
         assert [r["body"] for r in recs if r.get("from") == f"w{k}"] == [str(i)
                                                                           for i in range(25)]
@@ -60,63 +62,88 @@ def test_concurrent_writers_in_processes_get_distinct_increasing_seqs(store, hom
 
 def test_read_filters_by_kind_group_thread_since_and_limit(store):
     store.create_project("p")
+    store.create_project("other")
+    s = [L.last_seq(store.home, "p")]  # s[0]: the creation edit; s[i]: the i-th append
     for i in range(6):
-        store.append("p", {"kind": "message", "thread": "ab"[i % 2], "from": "x", "body": str(i)})
-    store.append("p", {"kind": "step.status", "step": "s", "from": None, "to": "pending"})
-    ld = store.project_dir("p")
-    assert kinds(L.read(ld, kinds=["step"])["records"]) == ["step.status"]
-    assert kinds(L.read(ld, kinds=["plan"])["records"]) == ["plan.edit"]
-    a = L.read(ld, threads=["a"])  # threads alone: only messages on them
-    assert [r["body"] for r in a["records"]] == ["0", "2", "4"] and a["last_seq"] == 8
-    both = L.read(ld, kinds=["message", "step.status"], threads=["b"])["records"]
+        s += store.append("p", {"kind": "message", "thread": "ab"[i % 2], "from": "x",
+                                "body": str(i)})
+        store.append("other", {"kind": "message", "thread": "a", "from": "x", "body": "o"})
+    s += store.append("p", {"kind": "step.status", "step": "s", "from": None, "to": "pending"})
+    h = store.home
+    assert kinds(L.read(h, "p", kinds=["step"])["records"]) == ["step.status"]
+    assert kinds(L.read(h, "p", kinds=["plan"])["records"]) == ["plan.edit"]
+    a = L.read(h, "p", threads=["a"])  # threads alone: only messages on them
+    assert [r["body"] for r in a["records"]] == ["0", "2", "4"] and a["last_seq"] == s[7]
+    both = L.read(h, "p", kinds=["message", "step.status"], threads=["b"])["records"]
     assert [r.get("body", r["kind"]) for r in both] == ["1", "3", "5", "step.status"]
-    tail = L.read(ld, limit=2)  # without since_seq: the last `limit`
-    assert [r["seq"] for r in tail["records"]] == [7, 8] and tail["last_seq"] == 8
-    page = L.read(ld, since_seq=2, kinds=["message"], limit=2)  # with it: the next `limit`
-    assert [r["seq"] for r in page["records"]] == [3, 4] and page["last_seq"] == 4
-    rest = L.read(ld, since_seq=page["last_seq"], kinds=["message"], limit=10)
-    assert [r["seq"] for r in rest["records"]] == [5, 6, 7] and rest["last_seq"] == 8
-    assert L.read(ld, since_seq=8) == {"records": [], "last_seq": 8}
+    tail = L.read(h, "p", limit=2)  # without since_seq: the last `limit`
+    assert [r["seq"] for r in tail["records"]] == s[6:8] and tail["last_seq"] == s[7]
+    page = L.read(h, "p", since_seq=s[2], kinds=["message"], limit=2)  # the next `limit`
+    assert [r["seq"] for r in page["records"]] == s[3:5] and page["last_seq"] == s[4]
+    rest = L.read(h, "p", since_seq=page["last_seq"], kinds=["message"], limit=10)
+    assert [r["seq"] for r in rest["records"]] == s[5:7] and rest["last_seq"] == s[7]
+    assert L.read(h, "p", since_seq=s[7]) == {"records": [], "last_seq": s[7]}
+    # a cursor past this log's end (another log's seq) is never moved back
+    [later] = store.append("other", {"kind": "message", "thread": "a", "from": "x",
+                                     "body": "o"})
+    assert later > s[7] and L.read(h, "p", since_seq=later)["last_seq"] == later
     assert L.check_kinds(["step", "message", "nope"]) == [
         "unknown kind 'nope'; kinds: " + ", ".join((*L.KINDS, *L.GROUPS))]
     assert L.check_kinds(["step.cancel"]) == []
 
 
-def test_a_half_written_last_line_is_not_read_yet(store):
+def test_a_page_of_records_and_its_cursor_come_from_one_snapshot(store, monkeypatch):
+    """An append between reading the rows and the cursor must not be skipped: the next read
+    from the cursor returns it."""
     store.create_project("p")
-    path = store.project_dir("p") / L.FILE
-    with open(path, "a") as f:
-        f.write('{"seq": 2, "at": "x", "kind": "message", "thread": "t", "bo')
-    assert [r["seq"] for r in L.read(store.project_dir("p"))["records"]] == [1]
-    assert L.read(store.project_dir("p"), since_seq=0)["last_seq"] == 1
-    assert L.last_seq(store.project_dir("p")) == 1
-    assert L.last_record(store.project_dir("p"))["seq"] == 1
+    store.create_project("q")
+    real = L._high
+
+    def racing(conn, project, src="records"):  # another process appends to both logs
+        other = Store(store.home)
+        t = threading.Thread(target=lambda: (other.append("p", msg("late")),
+                                             other.append("q", msg("q"))))
+        t.start()
+        t.join()
+        return real(conn, project, src)
+
+    first = L.read(store.home, "p", since_seq=0)
+    monkeypatch.setattr(L, "_high", racing)
+    res = L.read(store.home, "p", since_seq=first["last_seq"])
+    monkeypatch.setattr(L, "_high", real)
+    assert res["records"] == [] and res["last_seq"] == first["last_seq"]
+    again = L.read(store.home, "p", since_seq=res["last_seq"])
+    assert [r["body"] for r in again["records"]] == ["late"]
 
 
-def test_last_seq_and_last_record_on_an_empty_log(store, tmp_path):
-    missing = tmp_path / "no-such-dir"  # no log file at all
-    assert L.last_seq(missing) == 0 and L.last_record(missing) is None
-    (tmp_path / L.FILE).write_bytes(b"")  # a file with nothing in it
-    assert L.last_seq(tmp_path) == 0 and L.last_record(tmp_path) is None
+def msg(body):
+    return {"kind": "message", "thread": "t", "from": "x", "body": body}
+
+
+def test_last_seq_of_an_empty_log(store):
+    assert L.last_seq(store.home, None) == 0
     store.create_project("p")
-    assert L.last_seq(store.project_dir("p")) == 1
-    assert L.last_record(store.project_dir("p"))["kind"] == "plan.edit"
+    assert L.last_seq(store.home, "p") == L.read(store.home, "p")["records"][-1]["seq"]
+    assert L.last_seq(store.home, None) == 0
 
 
-def test_reading_backwards_across_blocks(store, monkeypatch):
-    monkeypatch.setattr(L, "BLOCK", 64)  # records longer than a block
+def test_the_cap_drops_the_oldest_records_of_that_log_only(tmp_path):
+    home = tmp_path / "home"
+    write_config(home, log_max=10)
+    store = Store(home)
     store.create_project("p")
-    for i in range(5):
-        store.append("p", {"kind": "message", "thread": "t", "from": "x",
-                           "body": "y" * 150 + str(i)})
-    ld = store.project_dir("p")
-    res = L.read(ld, since_seq=3)
-    assert [r["seq"] for r in res["records"]] == [4, 5, 6] and res["last_seq"] == 6
-    assert res["records"][-1]["body"].endswith("4")
-    assert L.last_record(ld)["seq"] == 6
+    store.create_project("q")
+    for i in range(9):
+        store.append("p", msg(str(i)))
+        store.append("q", msg(str(i)))
+    recs = L.read(home, "p")["records"]
+    assert len(recs) == 10 and recs[0]["kind"] == "plan.edit"  # counted per log, not by seqs
+    store.append("p", msg("x"))  # past the cap: down to 90% of it
+    assert [r["body"] for r in L.read(home, "p")["records"]] == [*map(str, range(1, 9)), "x"]
+    assert len(L.read(home, "q")["records"]) == 10
 
 
-def test_the_cap_keeps_run_dirs_that_state_still_uses(tmp_path):
+def test_the_cap_keeps_the_plan_history_and_every_run_dir(tmp_path):
     home = tmp_path / "home"
     write_config(home, log_max=6)
     store = Store(home)
@@ -127,29 +154,60 @@ def test_the_cap_keeps_run_dirs_that_state_still_uses(tmp_path):
     settle(runner, store, "p")
     [run_id] = store.read_state("p")["steps"]["a"]["run_ids"]
     for i in range(12):
-        store.append("p", {"kind": "message", "thread": "t", "from": "x", "body": str(i)})
-    recs = L.read(store.project_dir("p"))["records"]
+        store.append("p", msg(str(i)))
+    recs = L.read(home, "p")["records"]
     assert len(recs) <= 6 and "plan.edit" not in kinds(recs)
-    assert (store.runs_dir("p") / run_id).is_dir()  # state.json still refers to it
-    assert store.history("p") == []  # history only goes back as far as the log
+    assert (store.runs_dir("p") / run_id).is_dir()  # the trim removes rows only
+    runner._gc()
+    assert (store.runs_dir("p") / run_id).is_dir()  # the state still refers to it
+    edits = store.history("p")  # every edit, though the log no longer has them
+    assert [(e["kind"], e["rev"]) for e in edits] == [("plan.edit", 1), ("plan.edit", 2)]
+    assert edits[1]["ops"] and all(isinstance(e["seq"], int) for e in edits)
 
 
-def test_the_cap_keeps_the_run_dirs_a_retried_scatter_keeps(tmp_path):
+def test_the_cap_drops_finished_calls_and_submissions_nothing_refers_to(tmp_path):
     home = tmp_path / "home"
-    write_config(home, log_max=6)
+    write_config(home, log_max=5)
     store = Store(home)
-    from sluice.runner import Runner
+    store.create_project("p")
+    with store.tx() as conn:
+        for call, status in (("done", "succeeded"), ("live", "running")):
+            conn.execute("INSERT INTO calls (call, project, fn, status, inputs, created) "
+                         "VALUES (?, 'p', 'core.echo', ?, '{}', 'now')", (call, status))
+        conn.execute("INSERT INTO submissions (project, run, step, outputs, at) "
+                     "VALUES ('p', 'r1', 's', '{}', 'now')")
+    store.append("p", {"kind": "call", "call": "done", "fn": "core.echo",
+                       "status": "succeeded"})
+    for i in range(3):
+        store.append("p", msg(str(i)))
+    with store.rx() as conn:
+        assert {r[0] for r in conn.execute("SELECT call FROM calls")} == {"done", "live"}
+    for i in range(5):  # the `call` record goes: so does the finished call
+        store.append("p", msg(str(i)))
+    with store.rx() as conn:
+        assert [r[0] for r in conn.execute("SELECT call FROM calls")] == ["live"]
+        assert conn.execute("SELECT count(*) FROM submissions").fetchone()[0] == 0
 
-    runner = Runner(store)
-    create(store, "p", {"a": add(d(1), d(1))})
-    settle(runner, store, "p")
-    state = store.read_state("p")
-    [run_id] = state["steps"]["a"]["run_ids"]
-    state["steps"]["a"] = {"status": "pending", "kept": {"run_ids": [run_id]}}
-    store.write_state("p", state)
-    for i in range(12):
-        store.append("p", {"kind": "message", "thread": "t", "from": "x", "body": str(i)})
-    assert (store.runs_dir("p") / run_id).is_dir()  # the pending retry still needs it
+
+def test_a_trim_that_rolls_back_changes_nothing(tmp_path):
+    home = tmp_path / "home"
+    write_config(home, log_max=3)
+    store = Store(home)
+    store.create_project("p")
+    for i in range(2):
+        store.append("p", msg(str(i)))
+    run_dir = store.runs_dir("p") / "r1"
+    run_dir.mkdir(parents=True)
+    store.append("p", {"kind": "run.orphan", "run": "r1"})
+    before = L.read(home, "p")["records"]
+    try:
+        with store.tx():
+            store.append("p", msg("over the cap"))  # trims inside the transaction
+            assert len(L.read(home, "p")["records"]) < len(before) + 1
+            raise RuntimeError("the change fails after its trim")
+    except RuntimeError:
+        pass
+    assert L.read(home, "p")["records"] == before and run_dir.is_dir()
 
 
 def test_log_read_and_log_wait_tools(live):
@@ -162,15 +220,16 @@ def test_log_read_and_log_wait_tools(live):
                 return r.is_error, json.loads(r.content[0].text)
 
             err, res = await tool("log_read", project="p")
-            assert not err and kinds(res["records"]) == ["plan.edit"] and res["last_seq"] == 1
+            first = res["records"][0]["seq"]
+            assert not err and kinds(res["records"]) == ["plan.edit"] and res["last_seq"] == first
             err, bad = await tool("log_read", project="p", kinds=["nope"])
             assert err and bad["error"] == "bad_request"
             err, missing = await tool("log_read", project="zz")
             assert err and missing["error"] == "not_found"
 
             t0 = time.monotonic()
-            err, res = await tool("log_wait", project="p", since_seq=1, timeout=1)
-            assert not err and res == {"records": [], "last_seq": 1}
+            err, res = await tool("log_wait", project="p", since_seq=first, timeout=1)
+            assert not err and res == {"records": [], "last_seq": first}
             assert 0.9 <= time.monotonic() - t0 < 5
 
             def later():
@@ -184,7 +243,7 @@ def test_log_read_and_log_wait_tools(live):
             waited = {}
 
             async def wait():
-                waited["res"] = (await tool("log_wait", project="p", since_seq=1,
+                waited["res"] = (await tool("log_wait", project="p", since_seq=first,
                                             threads=["q"], timeout=20))[1]
                 waited["at"] = time.monotonic()
 
@@ -196,7 +255,7 @@ def test_log_read_and_log_wait_tools(live):
                 assert not err and other[0]["name"] == "p" and time.monotonic() - t1 < 1
                 assert "res" not in waited
             assert [r["body"] for r in waited["res"]["records"]] == ["hi"]
-            assert waited["res"]["last_seq"] == 3
+            assert waited["res"]["last_seq"] == L.last_seq(live.home, "p")
 
             err, home = await tool("log_read")  # the home log: calls without a project
             assert not err and home == {"records": [], "last_seq": 0}
@@ -258,14 +317,14 @@ def test_log_wait_sees_an_append_from_another_process(live, home):
 
 def test_wait_accumulates_and_holds_notes_until_a_waking_record(store):
     store.create_project("p")
-    ld = store.project_dir("p")
+    h, s0 = store.home, L.last_seq(store.home, "p")
     note = {"kind": "message", "thread": "t", "from": "w", "body": "fyi",
             "needs_reply": False}
-    store.append("p", note)
+    [s1] = store.append("p", note)
     t0 = time.monotonic()
-    res = L.wait(ld, 1, ["message"], wake="questions", timeout=0.2, interval=0.02)
+    res = L.wait(h, "p", s0, ["message"], wake="questions", timeout=0.2, interval=0.02)
     assert time.monotonic() - t0 >= 0.19  # a note alone does not wake it
-    assert res["records"] == [] and res["last_seq"] == 2
+    assert res["records"] == [] and res["last_seq"] == s1
     assert [r["body"] for r in res["held"]] == ["fyi"]  # it comes back at the timeout
 
     def later():
@@ -275,15 +334,16 @@ def test_wait_accumulates_and_holds_notes_until_a_waking_record(store):
                      {**note, "body": "meanwhile"})
 
     threading.Thread(target=later, daemon=True).start()
-    res = L.wait(ld, 1, ["message"], wake="questions", timeout=10, interval=0.02)
+    res = L.wait(h, "p", s0, ["message"], wake="questions", timeout=10, interval=0.02)
     assert [r["body"] for r in res["records"]] == ["fyi", "which db?"]
     assert [r["body"] for r in res["held"]] == ["meanwhile"]  # after the waking record
-    assert res["last_seq"] == 4
-    res = L.wait(ld, res["last_seq"], ["message"], timeout=0.1, interval=0.02)
-    assert res == {"records": [], "held": [], "last_seq": 4}
-    res = L.wait(ld, 1, ["message"], timeout=5, interval=0.02, limit=2)
+    last = L.last_seq(h, "p")
+    assert res["last_seq"] == last
+    res = L.wait(h, "p", res["last_seq"], ["message"], timeout=0.1, interval=0.02)
+    assert res == {"records": [], "held": [], "last_seq": last}
+    res = L.wait(h, "p", s0, ["message"], timeout=5, interval=0.02, limit=2)
     assert [r["body"] for r in res["records"]] == ["fyi", "which db?"]
-    assert res["held"] == [] and res["last_seq"] == 3  # the limit ends the wait early
+    assert res["held"] == [] and res["last_seq"] == res["records"][-1]["seq"]  # the limit
 
 
 @pytest.fixture
@@ -300,34 +360,37 @@ def live(store):
 
 
 def test_page_pages_newest_first_by_seq_with_the_filter(store):
-    ld = store.home
-    for i in range(1, 13):  # seqs 1..12: messages on a (odd) and b (even), a step change at 12
+    h = store.home
+    store.create_project("noise")
+    s = [0]  # s[i]: the i-th record: messages on a (odd) and b (even), a step change last
+    for i in range(1, 13):
         rec = ({"kind": "step.status", "step": "s", "from": None, "to": "pending"} if i == 12
                else {"kind": "message", "thread": "a" if i % 2 else "b", "from": "t",
                      "body": str(i)})
-        store.append(None, rec)
+        s += store.append(None, rec)
+        store.append("noise", msg("gap"))  # another log's records: gaps in this one's seqs
 
     def seqs(res):
-        return [r["seq"] for r in res["records"]]
+        return [s.index(r["seq"]) for r in res["records"]]
 
-    newest = L.page(ld, size=5)
+    newest = L.page(h, None, size=5)
     assert seqs(newest) == [12, 11, 10, 9, 8] and not newest["newer"] and newest["older"]
-    assert newest["last_seq"] == 12
-    older = L.page(ld, before=8, size=5)
+    assert newest["last_seq"] == s[12]
+    older = L.page(h, None, before=s[8], size=5)
     assert seqs(older) == [7, 6, 5, 4, 3] and older["newer"] and older["older"]
-    last = L.page(ld, before=3, size=5)
+    last = L.page(h, None, before=s[3], size=5)
     assert seqs(last) == [2, 1] and last["newer"] and not last["older"]
-    assert seqs(L.page(ld, before=1, size=5)) == []
-    exact = L.page(ld, before=6, size=5)
+    assert seqs(L.page(h, None, before=s[1], size=5)) == []
+    exact = L.page(h, None, before=s[6], size=5)
     assert seqs(exact) == [5, 4, 3, 2, 1] and not exact["older"]
-    newer = L.page(ld, after=2, size=5)
+    newer = L.page(h, None, after=s[2], size=5)
     assert seqs(newer) == [7, 6, 5, 4, 3] and newer["newer"] and newer["older"]
-    top = L.page(ld, after=7, size=5)
+    top = L.page(h, None, after=s[7], size=5)
     assert seqs(top) == [12, 11, 10, 9, 8] and not top["newer"] and top["older"]
-    assert seqs(L.page(ld, after=12, size=5)) == []
-    a = L.page(ld, threads=["a"], size=3)
+    assert seqs(L.page(h, None, after=s[12], size=5)) == []
+    a = L.page(h, None, threads=["a"], size=3)
     assert seqs(a) == [11, 9, 7] and a["older"] and not a["newer"]
-    assert seqs(L.page(ld, threads=["a"], before=7, size=3)) == [5, 3, 1]
-    assert seqs(L.page(ld, kinds=["step"])) == [12]
-    both = L.page(ld, kinds=["step", "message"], threads=["b"], size=3)
+    assert seqs(L.page(h, None, threads=["a"], before=s[7], size=3)) == [5, 3, 1]
+    assert seqs(L.page(h, None, kinds=["step"])) == [12]
+    both = L.page(h, None, kinds=["step", "message"], threads=["b"], size=3)
     assert seqs(both) == [12, 10, 8] and both["older"]

@@ -1,13 +1,15 @@
-"""One-off fn calls outside the plan (SPEC §8 fn_call). A call is a series of `call` records in
-the log (the project's, or the home's for a call without a project), one per status change:
-`{"kind": "call", "call", "fn", "status", "inputs"?, "outputs"?, "error"?}`. The latest record
-is the call's status. Its run dir is `runs/<call id>/` next to the log.
+"""One-off fn calls outside the plan (SPEC §8 fn_call). A call is a row of the `calls` table
+(the call's truth, its inputs kept for its whole life), and every status change updates the row
+and appends a `call` record to the log (the project's, or the home's for a call without a
+project) in one transaction, so log_wait wakes on it: `{"kind": "call", "call", "fn",
+"status", "inputs"?, "outputs"?, "error"?}`. Its run dir is `runs/<call id>/`.
 
 The runner starts pending calls; a direct call is run by the process that made it.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -15,15 +17,17 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import db
 from . import log as L
 from . import types as T
 from .errors import InvalidPlan, NotFound
 from .registry import Fn
 from .store import Store
-from .util import tail_text
+from .util import now_iso, tail_text
 
 CALL_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 DONE = ("succeeded", "failed")
+LIVE = ("pending", "running")
 GONE = "the process running this direct call is gone"
 FIELDS = ("call", "fn", "status", "inputs", "outputs", "error", "direct", "pid", "pid_start")
 
@@ -39,7 +43,7 @@ def check_inputs(fn: Fn, inputs: Any) -> None:
 
 def create(store: Store, name: str, inputs: Any, project: str | None,
            direct: bool = False) -> str:
-    """Check the fn and its inputs, then log the call: pending (for the runner) or, when
+    """Check the fn and its inputs, then add the call: pending (for the runner) or, when
     `direct`, running in this process."""
     reg = store.usable_registry(project)
     fn = reg.get(name)
@@ -50,36 +54,79 @@ def create(store: Store, name: str, inputs: Any, project: str | None,
     call = f"{stamp}-{secrets.token_hex(3)}"
     full = {k: None for k in fn.inputs}
     full.update(inputs)
-    rec: dict[str, Any] = {"kind": "call", "call": call, "fn": name,
+    rec: dict[str, Any] = {"call": call, "fn": name,
                            "status": "running" if direct else "pending", "inputs": full}
     if direct:
         rec.update(direct=True, pid=os.getpid())
         if (start := pid_start(os.getpid())) is not None:
             rec["pid_start"] = start
-    store.append(project, rec)
+    with store.tx() as conn:
+        L.append(conn, project, [{"kind": "call", **rec}], store.log_cap())
+        conn.execute("INSERT INTO calls (call, project, fn, status, inputs, direct, pid, "
+                     "pid_start, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (call, project, name, rec["status"], json.dumps(full, ensure_ascii=False),
+                      int(direct), rec.get("pid"), rec.get("pid_start"), now_iso()))
     return call
 
 
-def latest(store: Store, call: str, project: str | None) -> dict[str, Any]:
-    """The call's latest record."""
-    if not isinstance(call, str) or not CALL_RE.match(call):
-        raise NotFound(f"no call {call!r}")
-    if project is not None:
-        store.project(project)
-    rec = L.latest_call(store.log_dir(project), call)
-    if rec is None:
-        raise NotFound(f"no call {call!r}" + (f" in project {project}" if project else ""))
+def _call(row: Any) -> dict[str, Any]:
+    rec = {"call": row["call"], "fn": row["fn"], "status": row["status"],
+           "inputs": json.loads(row["inputs"])}
+    if row["outputs"] is not None:
+        rec["outputs"] = json.loads(row["outputs"])
+    rec.update({k: row[k] for k in ("error", "pid", "pid_start") if row[k] is not None})
+    if row["direct"]:
+        rec["direct"] = True
     return rec
 
 
-def record(store: Store, project: str | None, rec: dict[str, Any]) -> None:
-    """Log the call's new status (`rec` is its latest record, updated)."""
+def latest(store: Store, call: str, project: str | None) -> dict[str, Any]:
+    """The call as it stands: {call, fn, status, inputs, outputs?, error?, direct?, pid?,
+    pid_start?}."""
+    if not isinstance(call, str) or not CALL_RE.match(call):
+        raise NotFound(f"no call {call!r}")
+    with store.rx() as conn:
+        if project is not None:
+            store._row(conn, project)
+        row = db.one(conn, "SELECT * FROM calls WHERE call = ? AND project IS ?",
+                     (call, project))
+    if row is None:
+        raise NotFound(f"no call {call!r}" + (f" in project {project}" if project else ""))
+    return _call(row)
+
+
+def live(store: Store, project: str | None) -> list[dict[str, Any]]:
+    """The project's (or the home's) pending and running calls, oldest first."""
+    with store.rx() as conn:
+        rows = db.all_rows(conn, "SELECT * FROM calls WHERE project IS ? AND status IN "
+                                 "('pending', 'running') ORDER BY created, call", (project,))
+    return [_call(r) for r in rows]
+
+
+def record(store: Store, project: str | None, rec: dict[str, Any],
+           was: tuple[str, ...] = LIVE) -> bool:
+    """Record the call's new status (`rec` is the call, updated): its row and its `call` record,
+    in one transaction, and only while the row's status is still one of `was` (a finished call
+    never changes again). Returns whether it was recorded; nothing is written for a call (or a
+    project) that is gone."""
     new = {k: rec[k] for k in FIELDS if rec.get(k) is not None}
     if new["status"] != "pending":
-        new.pop("inputs", None)  # the pending record has them; the run dir has input.json
+        new.pop("inputs", None)  # the pending record has them; so does the row
     if new["status"] in DONE:
         new.pop("pid", None)
-    store.append(project, {"kind": "call", **new})
+    with store.tx() as conn:
+        cur = conn.execute(
+            "UPDATE calls SET status = ?, outputs = ?, error = ?, pid = ?, pid_start = ?, "
+            f"finished = ? WHERE call = ? AND project IS ? AND status IN "
+            f"({', '.join('?' * len(was))})",
+            (rec["status"], None if rec.get("outputs") is None else
+             json.dumps(rec["outputs"], ensure_ascii=False), rec.get("error"), rec.get("pid"),
+             rec.get("pid_start"), now_iso() if rec["status"] in DONE else None, rec["call"],
+             project, *was))
+        if cur.rowcount == 0:
+            return False
+        L.append(conn, project, [{"kind": "call", **new}], store.log_cap())
+    return True
 
 
 def result(rec: dict[str, Any]) -> dict[str, Any]:
@@ -116,7 +163,7 @@ def alive(pid: Any, started: Any = None) -> bool:
 
 
 def status(store: Store, call: str, project: str | None) -> dict[str, Any]:
-    """call_status: the latest record's result plus the tail of the fn's stderr."""
+    """call_status: the call's result plus the tail of the fn's stderr."""
     rec = latest(store, call, project)
     out = result(rec)
     if rec["status"] == "running" and rec.get("direct") \

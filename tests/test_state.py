@@ -1,4 +1,4 @@
-"""state.json step entries: `entry_of` (absent means pending) and the constructors."""
+"""State entries: `entry_of` (absent means pending) and the constructors."""
 
 import re
 

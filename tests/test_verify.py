@@ -55,20 +55,18 @@ def test_collisions_across_scopes(store):
         "fn test.add collides with the global fn")
 
 
-def test_project_json_and_env_files(store):
+def test_env_files_and_leftover_project_dirs(store):
     create(store, "p", {})
-    (store.project_dir("p") / "project.json").write_text(
-        json.dumps({"name": "q", "description": 3, "owner": "me"}))
+    store.project_dir("p").mkdir(parents=True)
     (store.project_dir("p") / ".env").write_text("OK=1\nnot a line\n")
     (store.home / ".env").write_text("= nothing\n")
     (store.home / "projects" / "stray").mkdir()
-    assert where(store) == {
-        "projects/p/project.json#owner": "unknown key",
-        "projects/p/project.json#name": "expected 'p' (the directory name), got 'q'",
-        "projects/p/project.json#description": "expected a string",
-        "projects/p/.env:2": "not a KEY=value line",
-        ".env:1": "not a KEY=value line",
-        "projects/stray/project.json": "missing"}
+    assert where(store) == {"projects/p/.env:2": "not a KEY=value line",
+                            ".env:1": "not a KEY=value line"}
+    assert verify(store)["warnings"] == [{"where": "projects/stray", "message": (
+        "a directory of no project: left over, or prepared (fns/, .env) for a project not "
+        "created yet")}]
+    assert "warnings" not in verify(store, "p")
 
 
 def test_an_archived_and_paused_project_verifies_clean(store):
@@ -81,33 +79,35 @@ def test_an_archived_and_paused_project_verifies_clean(store):
 def test_the_plan_is_fully_validated(store):
     create(store, "p", {"a": {"run": "test.add", "in": {"a": {"default": 1},
                                                         "b": {"default": 1}}}})
-    path = store.project_dir("p") / "plan.json"
-    doc = json.loads(path.read_text())
+    doc = store.get("p")
     doc["steps"]["a"]["in"]["a"] = {"default": "x"}
     doc["steps"]["b"] = {"run": "no.such", "in": {}}
-    path.write_text(json.dumps(doc))
-    assert where(store, "p") == {"projects/p/plan.json#steps.a.in.a": 'expected int, got "x"',
-                                 "projects/p/plan.json#steps.b.run": "unknown fn 'no.such'"}
+    with store.tx() as conn:  # a plan that no longer validates (e.g. its fn changed)
+        conn.execute("UPDATE plans SET doc = ? WHERE project = 'p'",
+                     (json.dumps({k: v for k, v in doc.items() if k != "rev"}),))
+    assert where(store, "p") == {"project p: plan#steps.a.in.a": 'expected int, got "x"',
+                                 "project p: plan#steps.b.run": "unknown fn 'no.such'"}
 
 
 def test_state_agrees_with_the_plan(store):
     create(store, "p", {"a": {"run": "test.add", "in": {"a": {"default": 1},
                                                         "b": {"default": 1}}}},
            inputs={"n": "int"})
-    with store.lock("p"):
+    with store.tx():
         store.write_state("p", {"inputs": {"n": "one", "gone": 1}, "steps": {
             "a": {"status": "succeeded", "outputs": {"sum": "two"}},
             "zz": {"status": "pending"}}})
     assert where(store, "p") == {
-        "projects/p/state.json#inputs.n": 'expected int, got "one"',
-        "projects/p/state.json#inputs.gone": "a value for gone, which the plan does not declare",
-        "projects/p/state.json#steps.a.outputs.sum": 'expected int, got "two"',
-        "projects/p/state.json#steps.zz": "state for step zz, which is not in the plan"}
+        "project p: state#inputs.n": 'expected int, got "one"',
+        "project p: state#inputs.gone": "a value for gone, which the plan does not declare",
+        "project p: state#steps.a.outputs.sum": 'expected int, got "two"',
+        "project p: state#steps.zz": "state for step zz, which is not in the plan"}
 
 
 def test_a_project_verify_covers_the_shared_scopes_but_not_other_projects(store):
     create(store, "p", {})
     create(store, "q", {})
+    store.project_dir("q").mkdir(parents=True)
     (store.project_dir("q") / ".env").write_text("bad\n")
     write_fn(store.home / "fns", "x.fn", main=None)
     assert set(where(store, "p")) == {"fns/x.fn/fn.json"}
