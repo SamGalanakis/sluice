@@ -1140,8 +1140,9 @@ one after S (null: pending); with no `step.status` record at all, its status now
 shape (steps, edges, pauses, fns) is the current plan's.
 
 A step's **unit** is the steps sharing its `unit:<name>` tag (a recipe unit, §5, named
-`<name>`); a step without one belongs to its `plan.units` component when that has more than one
-step (named by its first step); otherwise it is standalone. A unit is **settled** when none of
+`<name>`); a step without one belongs to its component among the steps without one (`plan.units`
+over just those, so an untagged step after a recipe unit never joins it) when that has more
+than one step (named by its first step); otherwise it is standalone. A unit is **settled** when none of
 its steps is running or pending and startable: each is succeeded, skipped, failed or stale, or
 pending and **held** — paused, its project paused, a `core.external` step, reading a plan input
 with no value, or waiting (through reads or `after`) on a step that is failed, stale or itself
@@ -1161,8 +1162,9 @@ held (a step outside the unit counts by the same rule). **Wakes:**
 Notes (`needs_reply: false`) not from `--me` are held and printed first, like `sluice watch
 --wake questions`. A record that settles its unit carries `unit: {name, settled: true, steps:
 [{id, status, held?, outputs}]}` (steps in plan order, status as of the record, `held: true`
-on a held pending step, `outputs` the non-null outputs now of a step succeeded as of the
-record, else `{}`). Each record prints as one block: `STEP fix-x running -> failed: <last line
+on a held pending step, `outputs` a step's outputs now if it succeeded as of the record — the
+ones the step declares when it declares any (its contract, e.g. `landed`, `summary`), else its
+fn's — leaving out null and empty values; else `{}`). Each record prints as one block: `STEP fix-x running -> failed: <last line
 of the error>`, `MSG step-fix-x fix-x -> orchestrator: <body>`, `NOTE …` for a held note,
 `INBOX post i3 <title>`; a unit settled by a success as
 

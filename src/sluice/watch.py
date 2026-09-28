@@ -11,6 +11,7 @@ and print each compactly (line).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import time
@@ -86,11 +87,19 @@ def _unit(plan: P.Plan, sid: str) -> tuple[str, list[str]] | None:
     step = plan.steps.get(sid)
     if step is None:
         return None
-    tag = next((t for t in step.tags if t.startswith("unit:")), None)
+    tag = _tag(step)
     if tag is not None:
         return tag.removeprefix("unit:"), [s for s, x in plan.steps.items() if tag in x.tags]
-    ids = next(u for u in P.units(plan) if sid in u)
+    # an untagged step's component among the untagged steps: a recipe unit it follows stays
+    # a unit of its own
+    loose = dataclasses.replace(plan, steps={s: x for s, x in plan.steps.items()
+                                             if _tag(x) is None})
+    ids = next(u for u in P.units(loose) if sid in u)
     return (ids[0], ids) if len(ids) > 1 else None
+
+
+def _tag(step: P.Step) -> str | None:
+    return next((t for t in step.tags if t.startswith("unit:")), None)
 
 
 def _upstream(plan: P.Plan, ids: list[str]) -> list[str]:
@@ -161,8 +170,9 @@ def _settles(store: Store, view: View, rec: dict[str, Any],
     for sid in ids:
         status, held = marks[sid]
         outs = S.entry_of(view[1], sid).get("outputs") if status == "succeeded" else None
-        outs = {k: outs[k] for k in view[0].steps[sid].outputs if outs.get(k) is not None} \
-            if isinstance(outs, dict) else {}
+        step = view[0].steps[sid]  # the outputs it declares when it has any: its contract
+        outs = {k: outs[k] for k in (step.declared or step.outputs)
+                if outs.get(k) not in (None, "", [], {})} if isinstance(outs, dict) else {}
         steps.append({"id": sid, "status": status, **({"held": True} if held else {}),
                       "outputs": outs})
     return {"name": name, "settled": True, "steps": steps}

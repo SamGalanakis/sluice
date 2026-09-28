@@ -239,13 +239,13 @@ def test_a_landed_lane_wakes_once_read_live_or_late(store):
     assert [(s["id"], s["status"]) for s in unit["steps"]] == [
         ("u-fork", "succeeded"), ("u-work", "succeeded"), ("u-close", "succeeded"),
         ("u-rm", "succeeded")]
-    assert unit["steps"][1]["outputs"] == WORK_OUT
+    assert unit["steps"][1]["outputs"] == {"landed": True, "summary": "all done"}  # declared
     # read late: every record is already there, each judged as of its own seq
     lines = next_run(store.home, "-p", "p", "--since-seq", str(since), "--settle",
                      "0.3").splitlines()
     assert lines == [
         "UNIT u settled: fork succeeded · work succeeded · close succeeded · rm succeeded",
-        "  fork.sum: 3", "  work.ports: {}", "  work.extra: {}", "  work.results: []",
+        "  fork.sum: 3",
         "  work.landed: true", "  work.summary: all done", "  close.sum: 2", "  rm.sum: 0",
         f"seq {rm}"]
 
@@ -397,6 +397,26 @@ def test_an_untagged_component_is_a_unit_named_by_its_first_step(store):
     lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
     assert lines[:3] == ["UNIT a settled: a succeeded · b succeeded", "  a.sum: 3",
                          "  b.sum: 4"]
+
+
+def test_an_untagged_step_after_a_recipe_unit_does_not_join_it(store):
+    plan = lane()
+    plan["audit"] = add(d(1), d(1), after=["u-work"])  # untagged, reads nothing: standalone
+    create(store, "p", plan)
+    since = L.last_seq(store.home, "p")
+    run_step(store, "p", "u-fork", {"sum": 3})
+    run_step(store, "p", "u-work", {"landed": True, "summary": "ok", "ports": {}, "extra": {},
+                                    "results": []})
+    run_step(store, "p", "audit", {"sum": 2})  # a plain standalone success: no wake
+    out = next_run(store.home, "-p", "p", "--since-seq", str(since), "--timeout", "1")
+    assert out.splitlines()[-1].startswith("timeout seq ")
+    run_step(store, "p", "u-close", {"sum": 2})
+    run_step(store, "p", "u-rm", {"sum": 0})
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    assert lines[0] == "UNIT u settled: fork succeeded · work succeeded · close succeeded · " \
+                       "rm succeeded"
+    assert "  work.landed: true" in lines and "  work.summary: ok" in lines
+    assert not any(x.startswith("  work.ports") for x in lines)  # declared outputs only
 
 
 def test_all_wakes_on_every_record(store):
