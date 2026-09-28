@@ -687,9 +687,8 @@ class Store:
                                  f"cancelled: {', '.join(idle)}")
             for sid in chosen:
                 if sid in outside:
-                    why = S.cancel(reason)["cancel"]
-                    state["steps"][sid] = S.failed(
-                        "cancelled" + (f": {why}" if why != "cancelled" else ""))
+                    state["steps"][sid] = S.failed(f"cancelled: {reason}" if reason
+                                                   else "cancelled")
                 else:
                     state["steps"][sid].update(S.cancel(reason))
             self.write_state(project, state)
