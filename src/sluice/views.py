@@ -439,8 +439,8 @@ def settings_menu() -> str:
     chosen = viewer.theme  # None: nothing picked yet, the page follows the OS
     themes = "".join(
         f'<label><input type="radio" name="theme" value="{t}"'
-        f'{" checked" if t == chosen else ""}>{theme_swatch(t)}<span>{e(name)}</span>'
-        f'{TICK}</label>'
+        f'{" checked" if t == chosen else ""}>{TICK}<span>{e(name)}</span>'
+        f'{theme_swatch(t)}</label>'
         for t, name in THEMES.items())
     types = " checked" if viewer.types else ""
     return (f'<details class="settings"><summary aria-label="Settings" title="Settings">'

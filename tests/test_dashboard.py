@@ -256,11 +256,12 @@ def test_the_theme_picker_lists_every_preset_with_its_swatch(store, port):
     create(store, "p", {})
     _, page = get(port, "/projects/p")
     menu = re.search(r'<fieldset class="themes">.*?</fieldset>', page)[0]
+    # the tick's slot, the name, then the swatch at the end
     rows = re.findall(r'<label><input type="radio" name="theme" value="([\w-]+)"(?: checked)?>'
-                      r'(<span class="swatch.*?</span>)<span>([^<]+)</span><svg class="tick"',
-                      menu)
-    assert [(t, name) for t, _, name in rows] == list(views.THEMES.items())
-    for theme, swatch, _ in rows:
+                      r'<svg class="tick".*?</svg><span>([^<]+)</span>(<span class="swatch.*?</span>)'
+                      r'</label>', menu)
+    assert [(t, name) for t, name, _ in rows] == list(views.THEMES.items())
+    for theme, _, swatch in rows:
         # drawn in the theme's own tokens: its canvas, ink, accent and badge
         assert swatch == (f'<span class="swatch" data-theme="{theme}" aria-hidden="true">'
                           'Aa<i class="sw-accent"></i><i class="sw-badge"></i></span>'), theme
