@@ -1,11 +1,14 @@
 """A binding that reads a file (SPEC §5): `{"file": "/abs/path"}` is the file's text, read
 each time its step starts; its staleness covers the path, not the content (SPEC §6)."""
 
+import hashlib
+
 import pytest
 
 from sluice import plan as P
 from sluice import types as T
 from sluice.errors import InvalidPlan
+from sluice.util import canonical
 from sluice.verify import verify
 from tests.conftest import add, create, d, settle, statuses
 
@@ -34,7 +37,9 @@ def test_staleness_covers_the_path_not_the_content(store, runner, tmp_path):
     create(store, "p", {"s": split(spec)})
     steps = settle(runner, store, "p")
     h = steps["s"]["inputs_hash"]
-    assert h == P.inputs_hash({"text": {"file": str(spec)}})
+    _, plan = store.plan("p")
+    assert h == P.inputs_hash(plan.steps["s"], plan, store.read_state("p"))
+    assert h == hashlib.sha256(canonical({"text": {"file": str(spec)}}).encode()).hexdigest()[:32]
     spec.write_text("c d e")  # edited after the step succeeded
     for _ in range(3):
         runner.tick()
