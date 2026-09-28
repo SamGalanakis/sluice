@@ -1,4 +1,4 @@
-"""state.json step entries (SPEC §6): the one definition of their shape.
+"""A project's state entries (SPEC §6): the one definition of their shape.
 
 Absent means pending: a step with no entry has not run. Every entry carries `status`
 (one of STATUSES); the constructors below give the rest of the shape, timestamps
@@ -15,7 +15,7 @@ STATUSES = ("pending", "running", "succeeded", "skipped", "stale", "failed")
 
 
 def entry_of(state: dict[str, Any], sid: str) -> dict[str, Any]:
-    """The step's entry in state.json; absent means pending."""
+    """The step's entry in the state; absent means pending."""
     return state["steps"].get(sid, pending())
 
 

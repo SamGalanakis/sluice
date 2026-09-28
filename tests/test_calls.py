@@ -1,5 +1,5 @@
-"""fn_call outside the plan (SPEC §8): `call` records in the home's or a project's log, run
-dirs under runs/<call id>/ next to it."""
+"""fn_call outside the plan (SPEC §8): a `calls` row per call and a `call` record per status
+change in the home's or a project's log, run dirs under runs/<call id>/."""
 
 import json
 import time
@@ -32,14 +32,14 @@ def settle_call(runner, store, call, project=None, timeout=30.0):
     raise AssertionError(f"timed out: {res}")
 
 
-def call_records(directory, call=None):
-    return [r for r in L.read(directory)["records"]
+def call_records(store, project, call=None):
+    return [r for r in L.read(store.home, project)["records"]
             if r["kind"] == "call" and call in (None, r["call"])]
 
 
 def test_a_call_without_a_project_runs_under_the_home(store, runner):
     call = calls.create(store, "test.add", {"a": 2, "b": 3}, None)
-    [rec] = call_records(store.home, call)
+    [rec] = call_records(store, None, call)
     assert (rec["status"], rec["fn"], rec["inputs"]) == ("pending", "test.add", {"a": 2, "b": 3})
     assert calls.status(store, call, None) == {"call": call, "status": "pending"}
     res = settle_call(runner, store, call)
@@ -49,7 +49,7 @@ def test_a_call_without_a_project_runs_under_the_home(store, runner):
     assert json.loads((d / "output.json").read_text()) == {"sum": 5}
     assert json.loads((d / "input.json").read_text()) == {"a": 2, "b": 3}
     assert store.project_names() == []
-    recs = call_records(store.home, call)  # one record per status change, seqs increasing
+    recs = call_records(store, None, call)  # one record per status change, seqs increasing
     assert [r["status"] for r in recs] == ["pending", "running", "succeeded"]
     assert [r["seq"] for r in recs] == sorted({r["seq"] for r in recs})
     assert recs[-1]["outputs"] == {"sum": 5} and "inputs" not in recs[-1]
@@ -58,11 +58,12 @@ def test_a_call_without_a_project_runs_under_the_home(store, runner):
 def test_a_call_in_a_project_uses_its_fns_and_env(store, runner):
     create(store, "p", {})
     (store.home / ".env").write_text("TEST_A=home\nTEST_B=home\n")
+    store.project_dir("p").mkdir(parents=True, exist_ok=True)  # made lazily
     (store.project_dir("p") / ".env").write_text("TEST_B=project\n")
     write_fn(store.project_dir("p") / "fns", "p.env", {}, {"env": "Any"}, main=ENV_MAIN)
     call = calls.create(store, "p.env", {}, "p")
-    assert [r["status"] for r in call_records(store.project_dir("p"), call)] == ["pending"]
-    assert call_records(store.home) == []
+    assert [r["status"] for r in call_records(store, "p", call)] == ["pending"]
+    assert call_records(store, None) == []
     with pytest.raises(NotFound):
         calls.create(store, "p.env", {}, None)  # not visible without the project
     res = settle_call(runner, store, call, "p")
@@ -86,7 +87,7 @@ def test_call_inputs_are_checked_before_anything_runs(store):
         calls.create(store, "test.add", {"a": 1, "b": 1}, "zz")
     with pytest.raises(NotFound):
         calls.status(store, "../../etc", None)
-    assert not (store.home / L.FILE).exists()
+    assert L.read(store.home, None)["records"] == []
 
 
 def test_a_direct_call_runs_in_this_process(store):
@@ -105,16 +106,16 @@ def test_a_direct_call_runs_in_this_process(store):
 def test_the_runner_leaves_direct_calls_alone(store, runner):
     call = calls.create(store, "test.add", {"a": 1, "b": 1}, None, direct=True)
     runner.tick()
-    assert [r["status"] for r in call_records(store.home, call)] == ["running"]
+    assert [r["status"] for r in call_records(store, None, call)] == ["running"]
     assert calls.status(store, call, None)["status"] == "running"
-    rec = calls.latest(store, call, None)
-    store.append(None, {k: v for k, v in rec.items() if k not in ("seq", "at")}
-                 | {"pid": 2 ** 22 + 12345})  # the latest record names a process that is gone
+    with store.tx() as conn:  # the call names a process that is gone
+        conn.execute("UPDATE calls SET pid = ?, pid_start = NULL WHERE call = ?",
+                     (2 ** 22 + 12345, call))
     assert calls.status(store, call, None)["status"] == "failed"
-    runner.tick()  # the runner records that it ended, so the log need not keep it
-    assert [r["status"] for r in call_records(store.home, call)] == ["running", "running",
-                                                                     "failed"]
+    runner.tick()  # the runner records that it ended
+    assert [r["status"] for r in call_records(store, None, call)] == ["running", "failed"]
     assert calls.status(store, call, None)["error"] == calls.GONE
+    assert calls.latest(store, call, None)["status"] == "failed"
 
 
 def test_a_new_runner_adopts_calls_left_running(store, runner):
@@ -131,7 +132,7 @@ def test_a_new_runner_adopts_calls_left_running(store, runner):
     (d / "go").write_text("")
     res = settle_call(fresh, store, call)
     assert (res["status"], res["outputs"]) == ("succeeded", {"value": "x"})
-    [rec] = [r for r in L.read(store.home, kinds=["run.adopt"])["records"]]
+    [rec] = [r for r in L.read(store.home, None, kinds=["run.adopt"])["records"]]
     assert (rec["call"], rec["run"], rec["outcome"]) == (call, call, "watching")
 
 
@@ -143,19 +144,23 @@ def test_calls_are_refused_in_a_blocked_project(store):
     assert calls.create(store, "test.add", {"a": 1, "b": 1}, None)  # the home is fine
 
 
-def test_call_status_reads_the_latest_record(store):
+def test_call_status_reads_the_call_and_a_finished_call_never_changes(store):
     call = calls.create(store, "test.add", {"a": 1, "b": 1}, None)
     other = calls.create(store, "test.add", {"a": 2, "b": 2}, None)
-    store.append(None, {"kind": "call", "call": call, "fn": "test.add", "status": "running"})
-    store.append(None, {"kind": "call", "call": call, "fn": "test.add", "status": "failed",
-                        "error": "first"})
+    rec = calls.latest(store, call, None)
+    assert calls.record(store, None, {**rec, "status": "running"}, ("pending",))
+    assert calls.record(store, None, {**rec, "status": "failed", "error": "first"})
+    assert not calls.record(store, None, {**rec, "status": "succeeded", "outputs": {"sum": 2}})
     store.append(None, {"kind": "message", "thread": "t", "from": "x", "body": "noise"})
     assert calls.status(store, call, None) == {"call": call, "status": "failed",
                                                "error": "first"}
+    assert calls.latest(store, call, None)["inputs"] == {"a": 1, "b": 1}  # for its whole life
     assert calls.status(store, other, None) == {"call": other, "status": "pending"}
+    assert [r["status"] for r in call_records(store, None, call)] == ["pending", "running",
+                                                                      "failed"]
 
 
-def test_the_log_is_capped_trimming_the_oldest_records_and_their_run_dirs(tmp_path):
+def test_the_cap_drops_finished_calls_with_their_records_and_gc_their_run_dirs(tmp_path):
     home = tmp_path / "home"
     write_config(home, log_max=10)
     store = Store(home)
@@ -169,12 +174,15 @@ def test_the_log_is_capped_trimming_the_oldest_records_and_their_run_dirs(tmp_pa
     stray.mkdir()
     for i in range(5):
         store.append(None, {"kind": "message", "thread": "t", "from": "x", "body": str(i)})
-    # past 10 records the oldest go, down to 9: at seq 11 (3..11 left), again at 13 (5..13)
-    assert [r["seq"] for r in L.read(home)["records"]] == list(range(5, 15))
+    # past 10 records the oldest go, down to 9: at the 11th and again at the 13th
+    recs = L.read(home, None)["records"]
+    assert len(recs) == 10 and (recs[0]["call"], recs[0]["status"]) == (done[1], "running")
     with pytest.raises(NotFound):
-        calls.status(store, done[0], None)
-    assert not (home / "runs" / done[0]).exists()  # no record refers to it any more
-    assert (home / "runs" / done[2]).is_dir() and stray.is_dir()
+        calls.status(store, done[0], None)  # no record refers to it: its row went too
+    assert (home / "runs" / done[0]).is_dir()  # a trim deletes rows only
+    runner._gc()  # the runner's GC removes the dirs nothing references
+    assert not (home / "runs" / done[0]).exists() and not stray.exists()
+    assert (home / "runs" / done[1]).is_dir() and (home / "runs" / done[2]).is_dir()
     assert calls.status(store, done[2], None)["outputs"] == {"sum": 2}
 
 
@@ -186,10 +194,9 @@ def test_trimming_never_drops_a_call_that_is_still_pending_or_running(tmp_path):
     running = calls.create(store, "test.add", {"a": 1, "b": 1}, None, direct=True)
     for i in range(20):
         store.append(None, {"kind": "message", "thread": "t", "from": "x", "body": str(i)})
-    recs = L.read(home)["records"]
-    assert len(recs) <= 5
-    assert [r.get("call") for r in recs[:2]] == [waiting, running]
-    assert calls.status(store, waiting, None)["status"] == "pending"
+    recs = L.read(home, None)["records"]
+    assert len(recs) <= 5 and "call" not in [r["kind"] for r in recs]
+    assert calls.status(store, waiting, None)["status"] == "pending"  # the rows stay
     runner = Runner(store)
     assert settle_call(runner, store, waiting)["outputs"] == {"sum": 3}  # inputs survived
     assert run_call_direct(store, running, None)["outputs"] == {"sum": 2}

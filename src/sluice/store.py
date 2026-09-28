@@ -1,23 +1,29 @@
-"""The workspace on disk (SPEC §2, §5, §6): config, function scopes, projects with their plan,
-edit log and state, and the edits made by hand (manual values)."""
+"""The workspace (SPEC §2, §5, §6): config and function scopes on disk; projects with their
+plan, edit history, state, calls, inbox and log in the home's database (db.py); and the edits
+made by hand (manual values). Each logical change is one write transaction."""
 
 from __future__ import annotations
 
-import contextlib
 import copy
+import hashlib
+import json
 import os
+import secrets
 import shutil
 import threading
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
+from sqlite3 import Connection
 from typing import Any
 
 import jsonpatch
 import jsonpointer
 
+from . import db
 from . import inbox as I
 from . import log as L
 from . import plan as P
@@ -25,19 +31,19 @@ from . import registry as R
 from . import state as S
 from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound, NotOpen
-from .util import atomic_write_bytes, atomic_write_json, atomic_write_text, now_iso, read_json
+from .util import atomic_write_json, atomic_write_text, now_iso, read_json
 
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                                   "log_max": L.DEFAULT_MAX}
-PROJECT_KEYS = {"name", "description", "archived", "paused", "icon"}
-# the image types an icon may be, icon.<ext> -> its content type, sniffed from the file's
-# content (never its name): an SVG parses as XML with an <svg> root, the rest by magic bytes
+# the image types an icon may be, sniffed from the file's content (never its name): an SVG
+# parses as XML with an <svg> root, the rest by magic bytes
 ICON_TYPES = {"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp",
               "jpg": "image/jpeg", "gif": "image/gif"}
 ICON_MAX = 256 * 1024  # the largest image icon (bytes)
 ICON_TEXT_MAX = 16  # characters of a text icon, stripped
-SUBMITTED = "submitted.json"  # in a run dir: the outputs its agent submitted (step_submit)
 ANSWER_KEYS = {"action": str, "params": dict, "values": dict, "text": str}
+# what a projects/<name>/ dir may already hold when a project of that name is created
+PREPARED = {"fns", ".env"}
 
 
 def default_home() -> Path:
@@ -87,8 +93,14 @@ def _sniff_icon(path: Path) -> tuple[str, bytes]:
         return "svg", data
     raise BadRequest(f"icon: {path} is not an SVG, PNG, WebP, JPEG or GIF image")
 
+
+def _dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 class Store:
-    """All reads and writes of a SLUICE_HOME. Safe across threads and processes (flock)."""
+    """All reads and writes of a SLUICE_HOME. Safe across threads and processes: every write
+    is one transaction of the home's database (db.py)."""
 
     def __init__(self, home: Path | str | None = None):
         self.home = Path(home) if home is not None else default_home()
@@ -96,7 +108,6 @@ class Store:
         if (self.home / "config.json").exists():
             self.config.update(read_json(self.home / "config.json"))
         self.listeners: list[Callable[[], None]] = []  # called after every accepted edit
-        self._held = threading.local()
         self._parsed: dict[str, tuple[Any, P.Plan]] = {}
         self._scans: dict[tuple, tuple[tuple, tuple[list[R.Entry], list]]] = {}
         self._scan_lock = threading.Lock()
@@ -111,45 +122,46 @@ class Store:
             return str(path)
 
     def project_dir(self, name: str) -> Path:
+        """Where a project's files live (its fns/, .env and runs/)."""
         if not isinstance(name, str) or not P.ID_RE.match(name):
             raise NotFound(f"no project {name!r} (project names match {P.ID_RE.pattern})")
         return self.home / "projects" / name
 
-    def log_dir(self, project: str | None) -> Path:
-        """Where a log lives: the project's dir, or SLUICE_HOME for calls without a project."""
-        return self.project_dir(project) if project else self.home
-
     def runs_dir(self, project: str | None) -> Path:
-        return self.log_dir(project) / "runs"
+        """The run dirs of a project, or of the calls without one (SLUICE_HOME/runs)."""
+        return (self.project_dir(project) if project else self.home) / "runs"
 
     def global_fn_dirs(self) -> list[Path]:
         return [self.home / "fns", *(self.home / d for d in self.config["fn_dirs"])]
 
-    @contextlib.contextmanager
-    def lock(self, project: str | None) -> Iterator[None]:
-        """Exclusive flock on the project's .lock (SLUICE_HOME/.lock without a project), the
-        lock of its state and its log; re-entrant within a thread."""
-        held: set[str] = self._held.__dict__.setdefault("projects", set())
-        key = project or ""
-        if key in held:
-            yield
-            return
-        if project and not self.project_dir(project).is_dir():  # deleted: never recreate it
-            raise NotFound(f"no project {project!r}")
-        with L.flock(self.log_dir(project) / L.LOCK):
-            held.add(key)
-            try:
-                yield
-            finally:
-                held.discard(key)
+    # ---- the database ----
+
+    def tx(self) -> AbstractContextManager[Connection]:
+        """A write transaction (db.write): nested ones join it; listeners hear of it once it
+        commits."""
+        return db.write(self.home)
+
+    def rx(self) -> AbstractContextManager[Connection]:
+        """A read transaction (db.read): one snapshot for the reads inside it."""
+        return db.read(self.home)
+
+    def _row(self, conn: Connection, name: str) -> Any:
+        """The project's row, or NotFound."""
+        row = db.one(conn, "SELECT * FROM projects WHERE name = ?", (name,)) \
+            if isinstance(name, str) else None
+        if row is None:
+            raise NotFound(f"no project {name!r}")
+        return row
 
     # ---- the log (SPEC §6b) ----
 
+    def log_cap(self) -> int:
+        return int(self.config.get("log_max") or L.DEFAULT_MAX)
+
     def append(self, project: str | None, *records: dict[str, Any]) -> list[int]:
         """Append records to the project's (or the home's) log; returns their seqs."""
-        with self.lock(project):
-            return L.append(self.log_dir(project), list(records),
-                            int(self.config.get("log_max") or L.DEFAULT_MAX))
+        with self.tx() as conn:
+            return L.append(conn, project, list(records), self.log_cap())
 
     # ---- functions (SPEC §2 scopes) ----
 
@@ -237,41 +249,49 @@ class Store:
     # ---- projects ----
 
     def project_names(self) -> list[str]:
-        root = self.home / "projects"
-        if not root.is_dir():
-            return []
-        return sorted(p.name for p in root.iterdir()
-                      if P.ID_RE.match(p.name) and (p / "project.json").is_file())
+        with self.rx() as conn:
+            return [r[0] for r in db.all_rows(conn, "SELECT name FROM projects ORDER BY name")]
 
     def project(self, name: str) -> dict[str, Any]:
-        path = self.project_dir(name) / "project.json"
-        if not path.is_file():
-            raise NotFound(f"no project {name!r}")
-        return read_json(path)
+        """{name, description, archived, paused, icon?} (icon: a text icon's text)."""
+        with self.rx() as conn:
+            row = self._row(conn, name)
+        info = {"name": row["name"], "description": row["description"],
+                "archived": bool(row["archived"]), "paused": bool(row["paused"])}
+        if row["icon_text"] is not None:
+            info["icon"] = row["icon_text"]
+        return info
 
     def create_project(self, name: str, description: str = "", author: str = "",
                        reason: str = "", icon: str | None = None) -> dict[str, str]:
-        """A project with the empty plan at rev 1 (SPEC §5); `icon` as in update_project."""
+        """A project with the empty plan at rev 1 and an empty state (SPEC §5); `icon` as in
+        update_project. Its directory comes when something needs it (runs/, fns/); one that is
+        already there may hold only fns/ and .env."""
         if not isinstance(name, str) or not P.ID_RE.match(name):
             raise BadRequest(f"project names match {P.ID_RE.pattern}, got {name!r}")
         if not isinstance(description, str):
             raise BadRequest("description: expected a string")
         resolved = self._read_icon(icon) if icon is not None else None
         d = self.project_dir(name)
-        d.mkdir(parents=True, exist_ok=True)
-        with self.lock(name):
-            if (d / "project.json").exists():
+        with self.tx() as conn:
+            if db.one(conn, "SELECT 1 FROM projects WHERE name = ?", (name,)) is not None:
                 raise BadRequest(f"project {name!r} already exists")
+            left = sorted(p.name for p in d.iterdir() if p.name not in PREPARED) \
+                if d.is_dir() else []
+            if left:
+                raise BadRequest(f"{self.show(d)} is left over from an earlier project (it holds "
+                                 f"{', '.join(left)}); remove it first")
+            conn.execute("INSERT INTO projects (name, description, created) VALUES (?, ?, ?)",
+                         (name, description, now_iso()))
+            self._set_icon(conn, name, resolved)
             doc = copy.deepcopy(P.EMPTY)
-            (d / L.FILE).unlink(missing_ok=True)
-            atomic_write_json(d / "plan.json", {**doc, "rev": 1})
-            info: dict[str, Any] = {"name": name, "description": description}
-            if icon is not None:
-                self._apply_icon(d, info, resolved)
-            atomic_write_json(d / "project.json", info)
-            self._log(name, 1, author, reason or "project created",
+            conn.execute("INSERT INTO plans (project, rev, doc) VALUES (?, 1, ?)",
+                         (name, _dumps(doc)))
+            conn.execute("INSERT INTO states (project, doc) VALUES (?, ?)",
+                         (name, _dumps({"inputs": {}, "steps": {}})))
+            self._log(conn, name, 1, author, reason or "project created",
                       [{"op": "add", "path": "", "value": doc}])
-        self.notify()
+            self.notify()
         return {"name": name}
 
     def update_project(self, name: str, description: str | None = None,
@@ -280,27 +300,25 @@ class Store:
         """Replace the description and/or set `archived` (an archived project stays whole and
         keeps running; the dashboard lists it apart) and/or
         `paused` (no step of it starts until unpaused; running ones finish) and/or the icon:
-        an absolute path to an image (SVG, PNG, WebP, JPEG or GIF, at most 256 KB, copied in
-        as icon.<ext>) or a short text icon (at most 16 characters, no control characters);
-        "" removes the icon. A project has at most one of the two."""
+        an absolute path to an image (SVG, PNG, WebP, JPEG or GIF, at most 256 KB, copied in)
+        or a short text icon (at most 16 characters, no control characters); "" removes the
+        icon. A project has at most one of the two."""
         if description is not None and not isinstance(description, str):
             raise BadRequest("description: expected a string")
         for key, value in (("archived", archived), ("paused", paused)):
             if value is not None and not isinstance(value, bool):
                 raise BadRequest(f"{key}: expected true or false")
         resolved = self._read_icon(icon) if icon is not None else None
-        with self.lock(name):
-            new = dict(self.project(name))
-            if description is not None:
-                new["description"] = description
-            if archived is not None:
-                new["archived"] = archived
-            if paused is not None:
-                new["paused"] = paused
+        with self.tx() as conn:
+            row = self._row(conn, name)
+            new = {k: v for k, v in (("description", description), ("archived", archived),
+                                     ("paused", paused)) if v is not None and row[k] != v}
+            if new:
+                conn.execute(f"UPDATE projects SET {', '.join(f'{k} = ?' for k in new)} "
+                             "WHERE name = ?", (*new.values(), name))
             if icon is not None:
-                self._apply_icon(self.project_dir(name), new, resolved)
-            atomic_write_json(self.project_dir(name) / "project.json", new)
-        self.notify()
+                self._set_icon(conn, name, resolved)
+            self.notify()
         return {"name": name}
 
     def _read_icon(self, icon: Any) -> tuple[str, Any] | None:
@@ -320,90 +338,102 @@ class Store:
             raise BadRequest("icon: a text icon may not contain control characters")
         return "text", icon
 
-    def _apply_icon(self, d: Path, doc: dict[str, Any],
-                    resolved: tuple[str, Any] | None) -> None:
-        """Store a resolved icon: its image as icon.<ext>, or its text in `doc` (the
-        project.json being written). Setting either clears the other."""
-        for ext in ICON_TYPES:
-            (d / f"icon.{ext}").unlink(missing_ok=True)
-        doc.pop("icon", None)
-        if resolved is None:
-            return
-        if resolved[0] == "image":
+    def _set_icon(self, conn: Connection, name: str, resolved: tuple[str, Any] | None) -> None:
+        """Store a resolved icon: an image's bytes, type and sha256, or a text; setting either
+        clears the other, None clears both. Nothing is written when nothing changes."""
+        text = kind = data = digest = None
+        if resolved is not None and resolved[0] == "image":
             ext, data = resolved[1]
-            atomic_write_bytes(d / f"icon.{ext}", data)
-        else:
-            doc["icon"] = resolved[1]
+            kind, digest = ICON_TYPES[ext], hashlib.sha256(data).hexdigest()
+        elif resolved is not None:
+            text = resolved[1]
+        row = db.one(conn, "SELECT icon_text, icon_hash FROM projects WHERE name = ?", (name,))
+        if (row["icon_text"], row["icon_hash"]) != (text, digest):
+            conn.execute("UPDATE projects SET icon_text = ?, icon_type = ?, icon = ?, "
+                         "icon_hash = ? WHERE name = ?", (text, kind, data, digest, name))
 
-    def icon_file(self, name: str) -> Path | None:
-        """The project's image icon (icon.<ext>), or None."""
-        d = self.project_dir(name)
-        for ext in ICON_TYPES:
-            f = d / f"icon.{ext}"
-            if f.is_file():
-                return f
-        return None
-
-    def icon(self, name: str, info: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def icon(self, name: str) -> dict[str, Any] | None:
         """The project's icon, as projects_list reports it: {"kind": "image", "type":
-        <content type>} for an icon.<ext> file, {"kind": "text", "text": <text>} for
-        project.json's "icon"; None when it has neither (an image file wins over a stray
-        text icon)."""
-        f = self.icon_file(name)
-        if f is not None:
-            return {"kind": "image", "type": ICON_TYPES[f.suffix[1:]]}
-        text = (self.project(name) if info is None else info).get("icon")
-        return {"kind": "text", "text": text} if isinstance(text, str) else None
+        <content type>} or {"kind": "text", "text": <text>}; None when it has neither."""
+        with self.rx() as conn:
+            row = self._row(conn, name)
+        return _icon(row)
+
+    def icon_image(self, name: str) -> tuple[str, bytes, str] | None:
+        """The project's image icon: (content type, bytes, sha256), or None."""
+        with self.rx() as conn:
+            row = db.one(conn, "SELECT icon_type, icon, icon_hash FROM projects WHERE name = ?",
+                         (name,))
+        if row is None:
+            raise NotFound(f"no project {name!r}")
+        return (row["icon_type"], row["icon"], row["icon_hash"]) if row["icon"] else None
+
+    def icon_hash(self, name: str) -> str | None:
+        """The sha256 of the project's image icon (its cache identity), or None."""
+        with self.rx() as conn:
+            row = db.one(conn, "SELECT icon_hash FROM projects WHERE name = ?", (name,))
+        return row["icon_hash"] if row else None
 
     def delete_project(self, name: str) -> dict[str, Any]:
-        """Delete a project and everything it holds (plan, state, log, inbox, runs). Refused
-        unless it is archived first, none of its steps is running and no non-direct call on
-        it is pending or running (a direct call runs in the caller's own process)."""
-        with self.lock(name):
-            if not self.archived(name):
+        """Delete a project and everything it holds (plan, state, log, inbox, calls, runs).
+        Refused unless it is archived first, none of its steps is running and no non-direct
+        call on it is pending or running (a direct call runs in the caller's own process; it
+        can record nothing once the project is gone). The rows go in one transaction; then its
+        directory moves to SLUICE_HOME/trash/ and is removed (the runner's GC finishes a
+        removal that failed)."""
+        with self.tx() as conn:
+            if not self._row(conn, name)["archived"]:
                 raise BadRequest(f"archive project {name!r} before deleting it")
             running = [s for s, e in self.read_state(name)["steps"].items()
                        if e.get("status") == "running"]
             if running:
                 raise BadRequest(f"project {name!r} has running steps: {', '.join(running)}")
-            d = self.project_dir(name)
-            latest: dict[str, dict[str, Any]] = {}
-            for rec in L.read(d, kinds=["call"])["records"]:
-                latest[rec["call"]] = rec
-            live = sorted(f"{c} ({r['status']})" for c, r in latest.items()
-                          if r.get("status") in L.LIVE and not r.get("direct"))
+            live = [f"{r['call']} ({r['status']})" for r in db.all_rows(
+                conn, "SELECT call, status FROM calls WHERE project = ? AND direct = 0 AND "
+                      "status IN ('pending', 'running') ORDER BY call", (name,))]
             if live:
                 raise BadRequest(
                     f"project {name!r} has pending or running calls: {', '.join(live)}")
-            (d / "project.json").unlink()  # first: from here on it is not a project
-            shutil.rmtree(d)
+            conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+            self.notify()
         self._parsed.pop(name, None)
-        self.notify()
+        d = self.project_dir(name)
+        if d.exists():
+            trash = self.home / "trash" / f"{name}-{secrets.token_hex(4)}"
+            try:
+                trash.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(d, trash)
+            except OSError:
+                return {"deleted": name}  # left in place: a new project of the name refuses it
+            shutil.rmtree(trash, ignore_errors=True)
         return {"deleted": name}
 
     def archived(self, name: str) -> bool:
         try:
-            return self.project(name).get("archived") is True
-        except (NotFound, OSError, ValueError):
+            return self.project(name)["archived"]
+        except NotFound:
             return False
 
     def paused(self, name: str) -> bool:
         try:
-            return self.project(name).get("paused") is True
-        except (NotFound, OSError, ValueError):
+            return self.project(name)["paused"]
+        except NotFound:
             return False
 
     def projects(self) -> list[dict[str, Any]]:
         out = []
-        for name in self.project_names():
-            info, doc = self.project(name), self.get(name)
-            state = self.read_state(name)
+        with self.rx() as conn:
+            rows = db.all_rows(conn, "SELECT p.name, p.description, p.archived, p.paused, "
+                                     "p.icon_text, p.icon_type, l.rev, l.doc, s.doc AS state "
+                                     "FROM projects p JOIN plans l ON l.project = p.name "
+                                     "JOIN states s ON s.project = p.name ORDER BY p.name")
+        for row in rows:
+            doc, state = json.loads(row["doc"]), json.loads(row["state"])
             counts = Counter(S.entry_of(state, s)["status"] for s in doc["steps"])
-            entry = {"name": name, "description": info.get("description", ""),
-                     "rev": doc["rev"], "counts": dict(counts),
-                     "archived": info.get("archived") is True,
-                     "paused": info.get("paused") is True}
-            if (icon := self.icon(name, info)) is not None:
+            entry = {"name": row["name"], "description": row["description"],
+                     "rev": row["rev"], "counts": dict(counts),
+                     "archived": bool(row["archived"]), "paused": bool(row["paused"])}
+            if (icon := _icon(row)) is not None:
                 entry["icon"] = icon
             out.append(entry)
         return out
@@ -412,8 +442,11 @@ class Store:
 
     def get(self, project: str) -> dict[str, Any]:
         """The project's current plan, including `rev`."""
-        self.project(project)
-        return read_json(self.project_dir(project) / "plan.json")
+        with self.rx() as conn:
+            row = db.one(conn, "SELECT rev, doc FROM plans WHERE project = ?", (project,))
+        if row is None:
+            raise NotFound(f"no project {project!r}")
+        return {**json.loads(row["doc"]), "rev": row["rev"]}
 
     def plan(self, project: str) -> tuple[dict[str, Any], P.Plan]:
         """The current document and its parsed plan (cached per rev and fn set)."""
@@ -433,7 +466,7 @@ class Store:
         """Apply an RFC 6902 patch at `rev`. Unless `start`, a step it adds comes in paused
         (unless the step itself says `paused`); that pause is one more op in the history.
         Raises Conflict, InvalidPlan or NotFound."""
-        with self.lock(project):
+        with self.tx() as conn:
             cur = self.get(project)
             if rev != cur["rev"]:
                 raise Conflict(cur["rev"])
@@ -458,9 +491,10 @@ class Store:
                     errs.append(f"steps.{sid}: cannot change a running step (only pause it)")
             if errs:
                 raise InvalidPlan(errs)
-            atomic_write_json(self.project_dir(project) / "plan.json", {**new, "rev": rev + 1})
-            self._log(project, rev + 1, author, reason, ops)
-        self.notify()
+            conn.execute("UPDATE plans SET rev = ?, doc = ? WHERE project = ?",
+                         (rev + 1, _dumps(new), project))
+            self._log(conn, project, rev + 1, author, reason, ops)
+            self.notify()
         return rev + 1
 
     # ---- one step of the plan: plan_patch for a single step, at the current rev ----
@@ -469,7 +503,7 @@ class Store:
                  start: bool = False) -> int:
         if not isinstance(sid, str) or not P.ID_RE.match(sid):
             raise BadRequest(f"step ids match {P.ID_RE.pattern}, got {sid!r}")
-        with self.lock(project):
+        with self.tx():
             cur = self.get(project)
             if sid in cur["steps"]:
                 raise BadRequest(f"step {sid!r} already exists (step_update changes it)")
@@ -482,7 +516,7 @@ class Store:
         """Merge `changes` into a step: each key replaces that field of it, null removes it."""
         if not isinstance(changes, dict) or not changes:
             raise BadRequest("changes: expected an object of step field -> new value")
-        with self.lock(project):
+        with self.tx():
             cur = self.get(project)
             if sid not in cur["steps"]:
                 raise NotFound(f"the plan of project {project} has no step {sid!r}")
@@ -499,7 +533,7 @@ class Store:
     def remove_steps(self, project: str, steps: Any = None, tags: Any = None,
                      author: str = "", reason: str = "") -> dict[str, Any]:
         """Remove the selected steps in one edit. Returns {rev, steps}."""
-        with self.lock(project):
+        with self.tx():
             chosen = self.select_steps(project, steps, tags)
             cur = self.get(project)
             rev = self.patch(project, cur["rev"],
@@ -545,7 +579,7 @@ class Store:
         one is given, else true; unpausing removes it. Returns {rev, steps}."""
         if not isinstance(paused, bool):
             raise BadRequest("paused: expected true or false")
-        with self.lock(project):
+        with self.tx():
             chosen = self.select_steps(project, steps, tags, subtree)
             cur = self.get(project)
             mark: Any = (reason.strip() or True) if paused else None
@@ -570,7 +604,7 @@ class Store:
                      author: str = "", reason: str = "") -> list[str]:
         """Ask the runner to stop the selected running steps: it kills their processes and
         fails them with `cancelled` (and the reason). Refused unless every one is running."""
-        with self.lock(project):
+        with self.tx():
             chosen = self.select_steps(project, steps, tags)
             state = self.read_state(project)
             idle = [f"{s} is {S.entry_of(state, s)['status']}"
@@ -583,46 +617,60 @@ class Store:
             self.write_state(project, state)
             self.append(project, *({"kind": "step.cancel", "step": sid, "author": author,
                                     "reason": reason} for sid in chosen))
-        self.notify()
+            self.notify()
         return chosen
 
-    def _log(self, project: str, rev: int, author: str, reason: str, ops: list | None = None,
-             kind: str = "plan.edit", **fields: Any) -> None:
-        """A history record: an edit (`plan.edit` with `ops`), or a manual value (its kind and
-        arguments). Callers hold the project lock."""
+    def _log(self, conn: Connection, project: str, rev: int, author: str, reason: str,
+             ops: list | None = None, kind: str = "plan.edit", **fields: Any) -> None:
+        """A history record: an edit (`plan.edit` with `ops`, also kept in plan_edits with its
+        seq), or a manual value (its kind and arguments). In the caller's transaction."""
         rec = {"kind": kind, "rev": rev, "author": author, "reason": reason, **fields}
         if ops is not None:
             rec["ops"] = ops
-        self.append(project, rec)
+        seq = L.append(conn, project, [rec], self.log_cap())[0]
+        if kind == "plan.edit":
+            conn.execute("INSERT INTO plan_edits (project, rev, seq, at, author, reason, ops) "
+                         "SELECT project, ?, seq, at, ?, ?, ? FROM records WHERE seq = ?",
+                         (rev, author, reason, _dumps(ops), seq))
 
     def notify(self) -> None:
-        for fn in list(self.listeners):
-            fn()
+        """Tell the listeners of an accepted change: once the transaction around it commits."""
+        db.after_commit(self.home, lambda: [fn() for fn in list(self.listeners)])
 
     def history(self, project: str, since_rev: int | None = None) -> list[dict[str, Any]]:
-        """plan_history: the plan edits and manual values still in the log."""
+        """plan_history: every edit of the plan (plan_edits) and the manual values still in the
+        log, in seq order."""
         self.project(project)
-        recs = L.read(self.log_dir(project), kinds=L.HISTORY_KINDS)["records"]
+        recs = L.read(self.home, project, kinds=L.HISTORY_KINDS, history=True)["records"]
         return [e for e in recs if since_rev is None or e["rev"] > since_rev]
 
     # ---- state ----
 
     def read_state(self, project: str) -> dict[str, Any]:
-        path = self.project_dir(project) / "state.json"
-        return read_json(path) if path.exists() else {"inputs": {}, "steps": {}}
+        with self.rx() as conn:
+            row = db.one(conn, "SELECT doc FROM states WHERE project = ?", (project,))
+        if row is None:
+            raise NotFound(f"no project {project!r}")
+        return json.loads(row["doc"])
 
     def write_state(self, project: str, state: dict[str, Any]) -> None:
-        """Callers hold the project lock."""
-        atomic_write_json(self.project_dir(project) / "state.json", state)
+        """Replace the project's state (in the caller's transaction, if any)."""
+        with self.tx() as conn:
+            text = _dumps(state)
+            cur = conn.execute("UPDATE states SET doc = ? WHERE project = ? AND doc != ?",
+                               (text, project, text))
+            if cur.rowcount == 0:
+                self._row(conn, project)
 
     def status(self, project: str, steps: Any = None, tags: Any = None,
                brief: bool = False) -> dict[str, Any]:
         """The plan's inputs, outputs and steps (with `steps` and/or `tags`, only those); with
-        `brief`, their long strings cut (`_brief`)."""
-        only = set(self.select_steps(project, steps, tags)) if steps or tags else None
-        doc, plan = self.plan(project)
-        state = self.read_state(project)
-        project_paused = self.paused(project)
+        `brief`, their long strings cut (`_brief`). One snapshot of plan, state and project."""
+        with self.rx():
+            only = set(self.select_steps(project, steps, tags)) if steps or tags else None
+            doc, plan = self.plan(project)
+            state = self.read_state(project)
+            project_paused = self.paused(project)
         outputs = {}
         for name, ref in plan.outputs.items():
             ok, v = P.value_of(ref, plan, state)
@@ -665,7 +713,7 @@ class Store:
         return self.plan(project)
 
     def set_input(self, project: str, name: str, value: Any, author: str, reason: str) -> None:
-        with self.lock(project):
+        with self.tx() as conn:
             doc, plan = self._plan_for_write(project)
             if name not in plan.inputs:
                 raise NotFound(f"the plan of project {project} has no input {name!r}")
@@ -675,13 +723,13 @@ class Store:
             state = self.read_state(project)
             state["inputs"][name] = value
             self.write_state(project, state)
-            self._log(project, doc["rev"], author, reason, kind="plan.input", name=name,
+            self._log(conn, project, doc["rev"], author, reason, kind="plan.input", name=name,
                       value=value)
-        self.notify()
+            self.notify()
 
     def set_step_input(self, project: str, step: str, name: str, value: Any, author: str,
                        reason: str, rev: int | None = None) -> int:
-        with self.lock(project):
+        with self.tx():
             cur = self.get(project)
             if step not in cur["steps"]:
                 raise NotFound(f"the plan of project {project} has no step {step!r}")
@@ -700,7 +748,7 @@ class Store:
         """step_set_output: the step succeeds with these outputs (manual). Refused while what
         it reads is not ready, unless `force` (then its inputs are unknown: it turns stale once
         they are all there)."""
-        with self.lock(project):
+        with self.tx() as conn:
             doc, plan = self._plan_for_write(project)
             if step not in plan.steps:
                 raise NotFound(f"the plan of project {project} has no step {step!r}")
@@ -725,10 +773,10 @@ class Store:
             state["steps"][step] = S.manual(outputs, h)
             self.write_state(project, state)
             extra = {"force": True} if force else {}
-            self._log(project, doc["rev"], author, reason, kind="step.output", step=step,
+            self._log(conn, project, doc["rev"], author, reason, kind="step.output", step=step,
                       outputs=outputs, **extra)
             self._status_change(project, step, before, "succeeded")
-        self.notify()
+            self.notify()
 
     def retry(self, project: str, steps: Any = None, tags: Any = None, author: str = "",
               reason: str = "") -> list[str]:
@@ -736,7 +784,7 @@ class Store:
         pending (refused, changing nothing, unless every one of them is). A failed
         scattered step keeps its finished items under `kept` so the retry re-runs only
         what failed (SPEC §6)."""
-        with self.lock(project):
+        with self.tx() as conn:
             doc, plan = self._plan_for_write(project)
             chosen = self.select_steps(project, steps, tags)
             state = self.read_state(project)
@@ -756,18 +804,18 @@ class Store:
                     state["steps"][sid] = S.pending()
             self.write_state(project, state)
             for sid, e in was.items():
-                self._log(project, doc["rev"], author, reason, kind="step.retry", step=sid)
+                self._log(conn, project, doc["rev"], author, reason, kind="step.retry", step=sid)
                 self._status_change(project, sid, e["status"], "pending")
-        self.notify()
+            self.notify()
         return chosen
 
     def submit(self, project: str, step: str, outputs: Any,
                run: str | None = None) -> dict[str, Any]:
         """step_submit: the agent of a running step hands over the outputs the step declares
-        (SPEC §5). Checked against them: every required one, fitting types, no others. Written
-        to the run's submitted.json (a resubmit replaces it) and logged as `step.submit`; the
-        runner merges them into the step's outputs when the fn exits."""
-        with self.lock(project):
+        (SPEC §5). Checked against them: every required one, fitting types, no others. Kept as
+        the run's submission (a resubmit replaces it) with its `step.submit` record, in one
+        transaction; the runner merges them into the step's outputs when the fn exits."""
+        with self.tx() as conn:
             _, plan = self.plan(project)
             s = plan.steps.get(step)
             if s is None:
@@ -793,15 +841,18 @@ class Store:
                          for k in outputs if k not in s.declared]
             if errs:
                 raise InvalidPlan(errs, f"outputs do not match what step {step} declares")
-            atomic_write_json(self.runs_dir(project) / run / SUBMITTED, outputs)
+            conn.execute("INSERT OR REPLACE INTO submissions (project, run, step, outputs, at) "
+                         "VALUES (?, ?, ?, ?, ?)", (project, run, step, _dumps(outputs),
+                                                    now_iso()))
             self.append(project, {"kind": "step.submit", "step": step, "run": run,
                                   "outputs": outputs})
         return {"ok": True, "run": run}
 
-    # ---- the inbox (SPEC §8) ----
+    def submission(self, project: str, run: str) -> dict[str, Any] | None:
+        """What the agent of a run has submitted (step_submit), or None."""
+        return db.submission(self.home, project, run)
 
-    def log_cap(self) -> int:
-        return int(self.config.get("log_max") or L.DEFAULT_MAX)
+    # ---- the inbox (SPEC §8) ----
 
     def inbox(self, project: str | None = None, status: str = "open") -> list[dict[str, Any]]:
         """inbox_list: the items with this status ("all" for every one) of the project, or of
@@ -809,13 +860,10 @@ class Store:
         if status not in (*I.STATUSES, "all"):
             raise BadRequest(f"status: expected one of {', '.join(I.STATUSES)} or all, "
                              f"got {status!r}")
-        if project is not None:
-            self.project(project)
-        out = [{"project": name, **item}
-               for name in ([project] if project else self.project_names())
-               for item in I.items(self.project_dir(name))
-               if status in ("all", item["status"])]
-        return sorted(out, key=lambda item: item["created"])
+        with self.rx() as conn:
+            if project is not None:
+                self._row(conn, project)
+            return I.items(conn, project, None if status == "all" else status)
 
     def inbox_post(self, project: str, title: str, body: str | None = None,
                    ui: str | None = None, input: str | None = None,
@@ -824,23 +872,21 @@ class Store:
         must declare it; without a body, the item's body is that input's doc."""
         if not isinstance(title, str) or not title.strip():
             raise BadRequest("title: expected a non-empty string")
-        with self.lock(project):
-            self.project(project)
+        with self.tx() as conn:
+            self._row(conn, project)
             if input is not None:
                 plan = self.plan(project)[1]
                 if input not in plan.inputs:
                     raise NotFound(f"the plan of project {project} has no input {input!r}")
                 body = plan.input_docs.get(input) if body is None else body
-            item = I.post(self.project_dir(project), self.log_cap(), title, body, ui, input,
-                          sender)
-        self.notify()
+            item = I.post(conn, project, self.log_cap(), title, body, ui, input, sender)
+            self.notify()
         return item
 
-    def _open_item(self, project: str, item_id: str) -> dict[str, Any]:
-        """The item, refusing an unknown one (NotFound) or one that is not open (NotOpen).
-        Callers hold the project lock."""
-        self.project(project)
-        item = I.find(self.project_dir(project), item_id)
+    def _open_item(self, conn: Connection, project: str, item_id: str) -> dict[str, Any]:
+        """The item, refusing an unknown one (NotFound) or one that is not open (NotOpen)."""
+        self._row(conn, project)
+        item = I.find(conn, project, item_id)
         if item is None:
             raise NotFound(f"project {project} has no inbox item {item_id!r}")
         if item["status"] != "open":
@@ -850,13 +896,13 @@ class Store:
     def inbox_answer(self, project: str, item_id: str, answer: Any,
                      author: str) -> dict[str, Any]:
         """Answer an open item. When it names a plan input, the answer's value (answer_value)
-        goes through set_input first; a value that does not fit refuses the answer and the item
-        stays open. The one write path for MCP and the dashboard."""
+        goes through set_input in the same transaction; a value that does not fit refuses the
+        answer and the item stays open. The one write path for MCP and the dashboard."""
         errs = check_answer(answer)
         if errs:
             raise InvalidPlan(errs, "not a valid answer")
-        with self.lock(project):
-            item = self._open_item(project, item_id)
+        with self.tx() as conn:
+            item = self._open_item(conn, project, item_id)
             if item.get("input"):
                 name = item["input"]
                 value = answer_value(answer)
@@ -870,23 +916,31 @@ class Store:
                 except InvalidPlan as e:
                     raise InvalidPlan(e.errors, f"inbox item {item_id}: the answer does not "
                                       f"fit plan input {name}") from e
-            item = I.finish(self.project_dir(project), self.log_cap(), item_id,
+            item = I.finish(conn, project, self.log_cap(), item_id,
                             {"status": "answered", "answer": answer, "answered": now_iso()},
                             {"kind": "inbox.answer", "answer": answer, "by": author})
-        self.notify()
+            self.notify()
         return item
 
     def inbox_close(self, project: str, item_id: str, reason: str | None,
                     author: str) -> dict[str, Any]:
         """Withdraw an open item (the poster no longer needs it)."""
-        with self.lock(project):
-            self._open_item(project, item_id)
+        with self.tx() as conn:
+            self._open_item(conn, project, item_id)
             extra = {"reason": reason} if reason else {}
-            item = I.finish(self.project_dir(project), self.log_cap(), item_id,
+            item = I.finish(conn, project, self.log_cap(), item_id,
                             {"status": "closed", "closed": now_iso(), **extra},
                             {"kind": "inbox.close", **extra, "by": author})
-        self.notify()
+            self.notify()
         return item
+
+
+def _icon(row: Any) -> dict[str, Any] | None:
+    if row["icon_type"] is not None:
+        return {"kind": "image", "type": row["icon_type"]}
+    if row["icon_text"] is not None:
+        return {"kind": "text", "text": row["icon_text"]}
+    return None
 
 
 def check_answer(answer: Any) -> list[str]:

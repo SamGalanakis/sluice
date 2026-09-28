@@ -17,7 +17,7 @@ from tests.conftest import create, settle, src, statuses, write_config
 
 def kinds(store, project):
     return [(r["kind"], r.get("item")) for r in
-            L.read(store.project_dir(project), kinds=["inbox"])["records"]]
+            L.read(store.home, project, kinds=["inbox"])["records"]]
 
 
 async def call(c, tool, **args):
@@ -67,7 +67,7 @@ async def test_post_list_answer_close_round_trip_over_mcp(store):
 
     assert kinds(store, "p") == [("inbox.post", "i1"), ("inbox.post", "i2"),
                                  ("inbox.answer", "i1"), ("inbox.close", "i2")]
-    recs = L.read(store.project_dir("p"), kinds=["inbox"])["records"]
+    recs = L.read(store.home, "p", kinds=["inbox"])["records"]
     assert (recs[0]["title"], recs[0]["from"]) == ("Ship it?", "review")
     assert (recs[2]["answer"], recs[2]["by"]) == (answer, "mcp")
     assert recs[3]["reason"] == "not needed"
@@ -178,11 +178,12 @@ def test_items_survive_log_trimming(tmp_path):
     i = store.inbox_post("p", "Still there?")["id"]
     for n in range(30):
         store.append("p", {"kind": "message", "thread": "t", "from": "x", "body": str(n)})
-    assert L.read(store.project_dir("p"))["records"][0]["seq"] > 2  # the post record is gone
+    assert "inbox.post" not in kinds(store, "p")  # the post record is gone
     assert [x["id"] for x in store.inbox("p")] == [i]
     store.inbox_answer("p", i, {"action": "answer", "text": "yes"}, "me")
     assert store.inbox("p", "answered")[0]["answer"]["text"] == "yes"
-    assert I.find(store.project_dir("p"), i)["status"] == "answered"
+    with store.rx() as conn:
+        assert I.find(conn, "p", i)["status"] == "answered"
 
 
 # ---- inbox.ask as a plan step ----------------------------------------------------------

@@ -1,15 +1,15 @@
 import copy
-import json
 import multiprocessing
+import sqlite3
 import threading
 
 import jsonpatch
 import pytest
 
+from sluice import db
 from sluice import log as L
 from sluice.errors import BadRequest, Conflict, InvalidPlan, NotFound
 from sluice.store import Store
-from sluice.util import read_json
 from tests.conftest import add, create, d
 
 
@@ -26,11 +26,12 @@ def replay(store, project):
 
 def test_a_project_starts_with_an_empty_plan_at_rev_1(store):
     assert store.create_project("p", "does things", "me", "start") == {"name": "p"}
-    pd = store.project_dir("p")
-    assert json.loads((pd / "project.json").read_text()) == {"name": "p",
-                                                             "description": "does things"}
+    assert store.project("p") == {"name": "p", "description": "does things",
+                                  "archived": False, "paused": False}
     empty = {"inputs": {}, "outputs": {}, "steps": {}}
-    assert json.loads((pd / "plan.json").read_text()) == {**empty, "rev": 1}
+    assert store.get("p") == {**empty, "rev": 1}
+    assert store.read_state("p") == {"inputs": {}, "steps": {}}
+    assert not store.project_dir("p").exists()  # made when something needs it
     [entry] = store.history("p")
     assert (entry["rev"], entry["author"], entry["reason"]) == (1, "me", "start")
     assert entry["ops"] == [{"op": "add", "path": "", "value": empty}]
@@ -45,7 +46,7 @@ def test_projects_are_listed_and_updated(store):
     create(store, "b", {"a": add(d(1), d(1)), "c": add(d(2), d(1))})
     store.create_project("a", "")
     store.update_project("a", "now described")
-    with store.lock("b"):
+    with store.tx():
         store.write_state("b", {"inputs": {}, "steps": {"a": {"status": "failed"}}})
     assert store.projects() == [
         {"name": "a", "description": "now described", "rev": 1, "counts": {}, "archived": False,
@@ -68,22 +69,31 @@ def test_an_invalid_edit_writes_nothing(store):
     assert store.get("p")["rev"] == 1 and len(store.history("p")) == 1
 
 
-def test_the_plan_lands_on_disk_before_its_edit_record(store, monkeypatch):
-    """plan.json is the truth: at the moment a plan.edit record is appended, the plan file
-    already holds the rev the record names."""
-    revs = []
+def test_a_plan_edit_and_its_record_commit_together(store, monkeypatch):
+    """Another connection sees neither the new rev nor its plan.edit record until the edit
+    commits, then both (with its plan_edits row)."""
+    seen = []
     real_append = L.append
 
-    def spy(directory, records, cap):
-        plan = store.project_dir("p") / "plan.json"
-        revs.append(read_json(plan)["rev"] if plan.exists() else None)
-        return real_append(directory, records, cap)
+    def outside():
+        conn = sqlite3.connect(store.home / db.FILE)
+        try:
+            return (conn.execute("SELECT rev FROM plans WHERE project = 'p'").fetchall(),
+                    conn.execute("SELECT count(*) FROM records WHERE kind = 'plan.edit'")
+                    .fetchone()[0],
+                    conn.execute("SELECT count(*) FROM plan_edits").fetchone()[0])
+        finally:
+            conn.close()
 
-    monkeypatch.setattr(L, "append", spy)
+    def spy(conn, project, records, cap):
+        seen.append(outside())
+        return real_append(conn, project, records, cap)
+
     store.create_project("p")
+    monkeypatch.setattr(L, "append", spy)
     store.patch("p", 1, [{"op": "add", "path": "/steps/a", "value": add(d(1), d(2))}],
                 "me", "add a")
-    assert revs == [1, 2]  # rev 1 for the project's own record, 2 for the edit's
+    assert seen == [([(1,)], 1, 1)] and outside() == ([(2,)], 2, 2)
 
 
 def test_patch_is_compare_and_swap(store):
@@ -117,7 +127,7 @@ def test_patch_rejects_invalid_results_and_bad_ops(store):
 
 def test_running_steps_cannot_be_removed_or_changed(store):
     create(store, "p", {"a": add(d(1), d(1)), "b": add(d(2), d(1))})
-    with store.lock("p"):
+    with store.tx():
         store.write_state("p", {"inputs": {}, "steps": {"a": {"status": "running"}}})
     with pytest.raises(InvalidPlan) as e:
         store.patch("p", 2, [{"op": "remove", "path": "/steps/a"}], "me", "drop")
@@ -190,7 +200,7 @@ def test_set_input_is_typed_logged_and_may_change_after_a_read(store):
     assert (last["kind"], last["name"], last["value"], last["author"]) == (
         "plan.input", "n", 1, "me")
     assert "ops" not in last
-    with store.lock("p"):
+    with store.tx():
         st = store.read_state("p")
         st["steps"]["a"] = {"status": "running"}
         store.write_state("p", st)

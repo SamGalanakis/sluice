@@ -107,7 +107,7 @@ def test_open_shows_in_fn_list(store):
 
 def records(store, project, kind):
     from sluice import log as L
-    return L.read(store.log_dir(project), kinds=[kind])["records"]
+    return L.read(store.home, project, kinds=[kind])["records"]
 
 
 def test_submitted_outputs_join_the_steps_outputs(store, runner):
@@ -134,8 +134,7 @@ def test_submitted_outputs_join_the_steps_outputs(store, runner):
     assert steps["b"]["outputs"] == {"value": "hi"}
     [rec] = records(store, "p", "step.submit")
     assert (rec["step"], rec["run"], rec["outputs"]) == ("a", run_id, {"word": "hi", "n": 2})
-    run_dir = store.runs_dir("p") / run_id
-    assert json.loads((run_dir / "submitted.json").read_text()) == {"word": "hi", "n": 2}
+    assert store.submission("p", run_id) == {"word": "hi", "n": 2}  # the run's submission
 
 
 def test_a_resubmit_replaces_the_last(store, runner):
