@@ -15,7 +15,15 @@ colors:
   hairline: "oklch(0.308 0.112 262 / 11%)"
   hairline-strong: "oklch(0.308 0.112 262 / 24%)"
   ring: "oklch(0.617 0.2 257)"
-  edge: "oklch(0.46 0.06 262 / 45%)"
+  edge: "oklch(0.46 0.07 258 / 45%)"
+  box: "oklch(0.945 0.024 240)"
+  nav: "oklch(0.308 0.112 262)"
+  nav-ink: "oklch(0.975 0.017 88)"
+  nav-muted: "oklch(0.84 0.045 245)"
+  stripe-1: "oklch(0.617 0.2 257)"
+  stripe-2: "oklch(0.82 0.09 232)"
+  stripe-3: "oklch(0.85 0.09 80)"
+  heading-accent: "oklch(0.48 0.14 258)"
   status-active: "oklch(0.617 0.2 257)"
   status-idle: "oklch(0.6 0.025 262)"
   status-success: "oklch(0.53 0.14 150)"
@@ -25,8 +33,9 @@ colors:
   badge-ink: "oklch(0.2 0.06 262)"
   canvas-dark: "oklch(0.2 0.06 263)"
   ink-dark: "oklch(0.955 0.022 88)"
-  card-dark: "oklch(0.245 0.07 263)"
-  quiet-fill-dark: "oklch(0.225 0.066 263)"
+  card-dark: "oklch(0.27 0.07 263)"
+  box-dark: "oklch(0.24 0.075 257)"
+  quiet-fill-dark: "oklch(0.235 0.066 263)"
   muted-ink-dark: "oklch(0.8 0.035 88)"
   accent-dark: "oklch(0.64 0.195 256)"
   accent-ink-dark: "oklch(0.76 0.12 252)"
@@ -34,6 +43,7 @@ colors:
   status-success-dark: "oklch(0.76 0.16 150)"
   status-attention-dark: "oklch(0.83 0.14 85)"
   status-paused-dark: "oklch(0.76 0.11 330)"
+  heading-accent-dark: "oklch(0.82 0.08 235)"
 typography:
   title:
     fontFamily: "Archivo Variable, Archivo, ui-sans-serif, system-ui, sans-serif"
@@ -116,7 +126,7 @@ components:
     rounded: "{rounded.pill}"
     padding: "7px 14px 7px 10px"
   board-box:
-    backgroundColor: "{colors.quiet-fill}"
+    backgroundColor: "{colors.box}"
     rounded: "{rounded.lg}"
     padding: "16px 18px"
   button-primary:
@@ -135,13 +145,17 @@ components:
     typography: "{typography.meta}"
     rounded: "{rounded.pill}"
     height: "20px"
+  nav-bar:
+    backgroundColor: "{colors.nav}"
+    textColor: "{colors.nav-ink}"
+    height: "52px"
   nav-link-current:
-    textColor: "{colors.ink}"
+    textColor: "{colors.nav-ink}"
     padding: "0 10px"
     height: "52px"
   project-switcher:
-    backgroundColor: "{colors.card}"
-    textColor: "{colors.ink}"
+    backgroundColor: "{colors.nav}"
+    textColor: "{colors.nav-ink}"
     rounded: "{rounded.md}"
     padding: "0 10px"
     height: "34px"
@@ -165,12 +179,14 @@ The dashboard is an Operate surface for one person, Sam, who supervises many age
 second screen or a phone. Its world is the logo's: a rounded square in 1970s American
 supergraphics, coral corners, two navy channel walls and a bright blue channel of water running
 down the middle. The page takes the logo's own colours: navy ink on a cream canvas (cream on
-deep navy in the dark), cards a warmer white one step above it, navy hairlines, the logo's blue
-as the one accent and the colour of running, coral for the inbox count alone. The display voice
+deep navy in the dark), the nav a band of the logo's navy with three stripes under it (the
+logo's water, the sky, the sand), the board's boxes pale water, cards a warmer white one step
+above both, navy hairlines, the logo's blue as the one accent and the colour of running, coral
+for the inbox count alone. The display voice
 is Archivo, heavy and a touch wide like the wordmark; text is Public Sans, a plain American
 grotesque; corners are the mark's generous rounding at a smaller scale. The rest is quiet on
-purpose: the brand lives in the mark, the heavy titles, the flat colour and the corners, never
-in decoration over the work. The plan is the
+purpose: the brand lives in the mark, the nav's band and stripes, the heavy titles, the flat
+colour and the corners, never in decoration over the work. The plan is the
 page: a left-to-right board of the blocks of work, each card saying one thing per slot. Ids,
 fn names, bindings and run history live in the step drawer, never on the board. Nothing is
 repeated: plan inputs and outputs are board nodes, not tables; history is the log filtered.
@@ -199,10 +215,17 @@ oklch navy and cream meet by way of teal.
   step's id in the stuck sentence stays ink.
 
 ### Neutral
-- **Canvas / card / quiet fill / secondary fill**: cream under everything, cards a warmer white
-  one step above it, the quiet fill (a deeper cream) behind the board's boxes, prompts, facts
-  and code, the secondary fill for hover, the current filter and the progress track. In the
-  dark: deep navy, a navy step up for cards, the quiet fill between them.
+- **Canvas / box / card / quiet fill / secondary fill**: cream under everything, the box tone
+  (pale water, `box`) behind the board's pieces of work, cards a warmer white one step above
+  both, the quiet fill (a deeper cream) behind prompts, facts and code, the secondary fill for
+  hover, the current filter and the progress track. In the dark: deep navy, a bluer navy for
+  the boxes, a navy step up for cards, the quiet fill between canvas and card.
+- **The nav band and its stripes**: the nav is a band of the logo's navy (`nav-bg`, in both
+  schemes) with cream text (`nav-ink`; the sections at rest `nav-muted`, a pale blue), and
+  under it three 4px stripes (3px on a phone), top down the logo's water (`stripe-1`), the
+  sky (`stripe-2`) and the sand of the shore (`stripe-3`): the 1970s racing stripe, the
+  theme's signature. Section heads (the drawer's, those under the board, a page's `h2`) take
+  `heading-accent`, a deep blue (a pale sky in the dark).
 - **Ink / muted ink**: navy text (cream in the dark); muted ink, a greyed navy (a warm grey
   cream in the dark), for meta, summaries, labels. Hairlines are ink at 11% (24% when
   stronger).
@@ -234,35 +257,48 @@ The settings menu offers seven presets; until one is picked the page follows the
 the house pair (their shared block is also the fallback, `:root:not([data-theme])`). Each
 preset is a full set of
 the colour tokens under `[data-theme="<id>"]` in `dashboard.css`, with its `color-scheme`:
-`background`, `foreground`, `card`, `secondary`, `muted`, `muted-foreground`, `accent`,
-`accent-ink`, `primary`, `primary-foreground`, `border`, `border-strong`, `input`, `edge`,
-`edge-head`, `status-idle`, `status-success`, `status-attention`, `status-paused`, `badge`,
-`badge-ink`, `lift` and `scrim`. `ring` and `status-active` are the accent in every theme, set
-once on `:root`. The selectors are bare attributes, not `:root`'s, so a swatch that carries a
-theme's `data-theme` draws itself in that theme's tokens.
+`background`, `foreground`, `card`, `box`, `secondary`, `muted`, `muted-foreground`,
+`accent`, `accent-ink`, `primary`, `primary-foreground`, `border`, `border-strong`, `input`,
+`edge`, `edge-head`, `status-idle`, `status-success`, `status-attention`, `status-paused`,
+`badge`, `badge-ink`, `nav-bg`, `nav-ink`, `nav-muted`, `stripe-1`, `stripe-2`, `stripe-3`,
+`heading-accent`, `lift` and `scrim`. `ring` and `status-active` are the accent in every
+theme, set once on `:root`. The selectors are bare attributes, not `:root`'s, so a swatch that
+carries a theme's `data-theme` draws itself in that theme's tokens.
 
-| Theme (id) | Scheme | The idea | Canvas · ink · accent · badge |
-|---|---|---|---|
-| Sluice Light (`light`) | light | the logo: navy on cream | cream · navy · the logo's blue · coral |
-| Sluice Dark (`dark`) | dark | the logo at night: cream on deep navy | deep navy · cream · the logo's blue · coral |
-| Canyon (`canyon`) | light | desert sandstone, a cliff's shadow, turquoise water | sandstone `oklch(0.945 0.028 62)` · canyon brown `oklch(0.3 0.07 40)` · turquoise `oklch(0.56 0.1 205)` · poppy `oklch(0.63 0.2 28)` |
-| Ranger (`ranger`) | light | a park service's parchment, pine and lake, ochre signs | parchment `oklch(0.955 0.03 95)` · pine `oklch(0.3 0.07 158)` · lake blue `oklch(0.55 0.12 240)` · fire-danger orange `oklch(0.66 0.18 45)` |
-| Diner (`diner`) | light | mint walls, chrome, charcoal lettering, a jukebox | mint `oklch(0.955 0.028 175)` · charcoal `oklch(0.27 0.025 230)` · jukebox blue `oklch(0.56 0.15 255)` · cherry `oklch(0.56 0.2 22)` |
-| Night Sky (`night-sky`) | dark | a desert night: indigo, starlight, moonlit cyan | indigo `oklch(0.2 0.06 285)` · starlight `oklch(0.945 0.02 90)` · cyan `oklch(0.78 0.11 210)` · sunset coral `oklch(0.72 0.17 35)` |
-| Wood Panel (`wood-panel`) | dark | a 1970s den: walnut, harvest gold, avocado, the TV's glow | walnut `oklch(0.22 0.03 55)` · cream `oklch(0.935 0.03 85)` · TV blue `oklch(0.74 0.1 225)` · burnt orange `oklch(0.7 0.17 45)` |
+**The Two-Tone Rule.** A theme is two or three hues with a job each, never one hue washed over
+the page. Its deepest colour is the nav band; three stripes under the band are its signature,
+in analogous tones that step from the band towards the canvas; the board's boxes take a tone
+of their own, apart from the canvas in hue, not only in lightness; cards are a lighter step off
+both; section heads take `heading-accent`. The graph itself stays calm: no stripe, pattern or
+gradient inside a box, behind text or on a card.
+
+| Theme (id) | Scheme | The idea | Canvas · ink · accent · badge | Band · stripes (top down) · boxes · heads |
+|---|---|---|---|---|
+| Sluice Light (`light`) | light | the logo: navy on cream | cream · navy · the logo's blue · coral | the logo's navy · its water, sky, sand · pale water · deep blue |
+| Sluice Dark (`dark`) | dark | the logo at night: cream on deep navy | deep navy · cream · the logo's blue · coral | the logo's navy · water, sky, sand · a bluer navy · pale sky |
+| Canyon (`canyon`) | light | desert sandstone, a cliff's shadow, turquoise water; signature: the sunset | sandstone `oklch(0.945 0.028 62)` · canyon brown `oklch(0.3 0.07 40)` · turquoise `oklch(0.56 0.1 205)` · poppy `oklch(0.63 0.2 28)` | cliff brown `oklch(0.33 0.07 40)` · terracotta, sundown orange, the last gold · desert sage `oklch(0.925 0.03 150)` · terracotta |
+| Ranger (`ranger`) | light | a park service's parchment, pine and lake, ochre signs; signature: the forest band with ochre | parchment `oklch(0.955 0.03 95)` · pine `oklch(0.3 0.07 158)` · lake blue `oklch(0.55 0.12 240)` · fire-danger orange `oklch(0.66 0.18 45)` | pine `oklch(0.33 0.07 158)` · ochre, bark, moss · meadow `oklch(0.928 0.04 135)` · bark brown |
+| Diner (`diner`) | light | chrome, mint walls, charcoal lettering, a jukebox; signature: the turquoise sign trimmed in chrome | chrome white `oklch(0.97 0.006 210)` · charcoal `oklch(0.27 0.025 230)` · jukebox blue `oklch(0.56 0.15 255)` · cherry `oklch(0.56 0.2 22)` | turquoise `oklch(0.47 0.085 193)` · chrome, charcoal, mint · mint `oklch(0.925 0.045 172)` · deep turquoise |
+| Night Sky (`night-sky`) | dark | a desert night: indigo, starlight, moonlit cyan; signature: indigo with a star-white stripe | indigo `oklch(0.2 0.06 285)` · starlight `oklch(0.945 0.02 90)` · cyan `oklch(0.78 0.11 210)` · sunset coral `oklch(0.72 0.17 35)` | deepest night `oklch(0.155 0.05 285)` · violet, periwinkle, starlight · violet dusk `oklch(0.245 0.08 298)` · pale periwinkle |
+| Wood Panel (`wood-panel`) | dark | a 1970s den: walnut, harvest gold, avocado, the TV's glow; signature: walnut with harvest gold | walnut `oklch(0.22 0.03 55)` · cream `oklch(0.935 0.03 85)` · TV blue `oklch(0.74 0.1 225)` · burnt orange `oklch(0.7 0.17 45)` | dark walnut `oklch(0.17 0.025 50)` · harvest gold, avocado, teak · avocado shade `oklch(0.275 0.04 108)` · pale teak |
 
 Every preset keeps these, measured when it is added:
-- **One alert colour**: `badge` is used by the inbox count alone (and the swatch's dot).
+- **One alert colour**: `badge` is used by the inbox count alone; no stripe, band or head
+  takes its hue (each stripe at least 0.13 from it in OKLab). On the band the count wears a
+  1.5px rim of `nav-ink`, so it stands off a band whatever its colour.
 - **Distinct states**: running (the accent), succeeded, stale and quiet (the attention gold),
   paused, pending, failed (ink) and the badge are apart from each other (the closest pair at
   least 0.11 in OKLab), and the glyphs still carry every state.
-- **Contrast**: text (`foreground`, `muted-foreground`, `accent-ink`, `status-attention`, a
-  far-off pending id at 72% ink) at least 4.5:1 on the canvas, the card and the box fill;
-  `primary-foreground` on `primary` and `badge-ink` on `badge` at least 4.5:1; the status
-  glyphs, the ring and the edges' arrowheads at least 3:1 on all three.
+- **Contrast**: text (`foreground`, `muted-foreground`, `accent-ink`, `status-attention`,
+  `heading-accent`, a far-off pending id at 72% ink) at least 4.5:1 on the canvas, the card
+  and the box, and on a pending card over the box; `nav-ink` and `nav-muted` at least 4.5:1 on
+  the band; `primary-foreground` on `primary` and `badge-ink` on `badge` at least 4.5:1; the
+  status glyphs, the ring and the edges' arrowheads at least 3:1 on the canvas, the card and
+  the box (a focus ring on the band is `nav-ink`).
 - **The mark** keeps its own colours in every theme: it is an `<img>`, never recoloured.
-- **The pair's structure**: canvas under everything, cards one step off it, the box fill between,
-  the secondary fill for hover and the current choice, hairlines as ink at 11-12% and 24-26%.
+- **The structure**: canvas under everything, the box tone behind the board's pieces, cards one
+  step off both, the secondary fill for hover and the current choice, hairlines as ink at
+  11-12% and 24-26%.
 
 **Adding a theme**: a line `"<id>": "<Name>"` in `THEMES` in `views.py` (its place there is its
 place in the menu), and a block `[data-theme="<id>"] { color-scheme: light|dark; … }` in
@@ -296,7 +332,7 @@ label stays in the text face even on an `h2`.
 ## Layout
 
 The plan reads top to bottom, inside the column. Each independent piece of work (the steps any
-edge joins, handoff or `after`) is a quiet box when there are several (the muted fill,
+edge joins, handoff or `after`) is a quiet box when there are several (the theme's box tone,
 0.625rem radius, 16px by 18px padding, 12px on a phone; 14px apart, 10px on a phone; no border:
 a region, not a card, since the bubbles carry the borders), so what belongs together reads
 without the edges; a plan of one piece has no box. A box is rows by dependency depth with 40px
@@ -409,7 +445,8 @@ card-coloured with an input hairline. The progress bar is an 8px pill, 200px wid
 phone), its segments 2px apart: green, blue, gold, ink, then the track.
 
 ### Navigation
-- **One bar** (52px, card fill, on the column), the only navigation: the brand (the owner's
+- **One bar** (52px, the theme's band, `nav-bg`, the full width of the window with its
+  content on the column, and its three stripes under it), the only navigation: the brand (the owner's
   mark, `static/logo.svg` at 27 by 26px, and the wordmark "sluice" beside it as live text;
   one link to All projects, named "sluice: all projects"), the **project switcher**, then the
   sections; Inbox, with the one coral badge, then the settings cog at the right edge. Every page links
@@ -418,13 +455,14 @@ phone), its segments 2px apart: green, blue, gold, ink, then the track.
   projects") and a chevron; it opens a menu of All projects, then every project with its status
   glyph, the archived ones last under a label. A `<details>`, so it works without script;
   `nav.js` closes it on a click elsewhere or Escape.
-- **Settings**: a drawn cog (20px, the tray's stroke) in muted ink on a 44px target, its
-  36px fill the sections' hover (the secondary fill while open), its edge on the column's;
+- **Settings**: a drawn cog (20px, the tray's stroke) in the band's muted ink on a 44px
+  target, its 36px fill the sections' hover (a stronger one while open), its edge on the column's;
   named "Settings". A `<details>` like the switcher (`nav.js` closes it on a click elsewhere
   or Escape, focus back on the cog) whose card, 256px, hangs under it flush with the column's
   right edge, with the lift: "Theme" (a label in meta) over a radio list of the themes, each
-  a 36px row of its swatch (a 50 by 26px chip of its canvas with "Aa" in its ink, 13px Archivo
-  800, and a 7px dot of its accent and of its badge, drawn by its own tokens) and its name,
+  a 36px row of its name and its swatch (a 58 by 26px chip of its canvas with "Aa" in its
+  ink, 13px Archivo 800, and its signature cutting across the right corner at 118 degrees: its
+  band's colour and its three stripes, drawn by its own tokens),
   the choice in the secondary fill with a strong hairline as the inbox's filter and a tick at
   the row's end (until one is picked the page follows the OS, and the menu marks the preset
   the OS chose); a hairline; then "Show value
@@ -432,9 +470,10 @@ phone), its segments 2px apart: green, blue, gold, ink, then the track.
   the page comes back in the chosen theme; with script a choice applies at once and Save is
   hidden. Its rows are 44px on a phone.
 - **Sections** follow the switcher: in a project, Plan, Threads, Log, History, Functions; with
-  none chosen, Log, Functions (the switcher's "All projects" is the index). The current one is ink with a 2px ink bar on the bar's
-  bottom hairline and `aria-current` (`page`, or `true` on a page inside it: a step is inside
-  Plan); the rest are muted ink, with a quiet fill on hover.
+  none chosen, Log, Functions (the switcher's "All projects" is the index). The current one is `nav-ink` with a 3px bar of it on the
+  band's bottom edge and `aria-current` (`page`, or `true` on a page inside it: a step is inside
+  Plan); the rest are `nav-muted`, with a fill of `nav-ink` at 12% on hover. On the band the
+  switcher is `nav-ink` on a 7% fill of it with a 32% border.
 - **Phone** (below 720px): the brand gives way to the switcher (whose menu leads to All
   projects), the switcher's label clips at 120px, and Inbox is a tray icon with its badge, the
   cog beside it; the sections scroll sideways inside themselves when they do not fit (a

@@ -422,11 +422,10 @@ TICK = ('<svg class="tick" viewBox="0 0 16 16" width="16" height="16" aria-hidde
 
 
 def theme_swatch(theme: str) -> str:
-    """A theme's swatch in the settings menu: a chip of its canvas with "Aa" in its ink and a
-    dot each of its accent and its badge, drawn by the theme's own tokens (the chip carries
-    its data-theme)."""
-    return (f'<span class="swatch" data-theme="{e(theme)}" aria-hidden="true">Aa'
-            f'<i class="sw-accent"></i><i class="sw-badge"></i></span>')
+    """A theme's swatch in the settings menu: a chip of its canvas with "Aa" in its ink and
+    its signature, the nav band and its stripes, across the corner, drawn by the theme's own
+    tokens (the chip carries its data-theme)."""
+    return f'<span class="swatch" data-theme="{e(theme)}" aria-hidden="true">Aa</span>'
 
 
 def settings_menu() -> str:

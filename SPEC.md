@@ -750,8 +750,9 @@ Streams end when the server shuts down; the client reconnects with backoff.
   lists a step's After and Tags.
 - **Settings**: the nav's cog (named "Settings", on every page and at every width) opens a
   menu (a `<details>`; a click elsewhere or Escape closes it) holding a form: the theme, a
-  radio group (legend "Theme") of every preset in `views.THEMES`, each row its swatch (the
-  theme's canvas with "Aa" in its ink and a dot of its accent and of its badge) and its name,
+  radio group (legend "Theme") of every preset in `views.THEMES`, each row its name and its
+  swatch (the theme's canvas with "Aa" in its ink, and its nav band and stripes across the
+  corner),
   the chosen one ticked: Sluice Light (`light`), Sluice Dark (`dark`), Canyon (`canyon`),
   Ranger (`ranger`), Diner (`diner`), Night Sky (`night-sky`) and Wood Panel (`wood-panel`)
   (until one is picked, the page follows the OS's `prefers-color-scheme` between the two

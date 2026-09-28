@@ -16,6 +16,7 @@
   --column: 960px;  /* the one reading column every page and the nav sit on */
   --gutter: 24px;   /* the least space beside it */
   --nav-pad: 10px;
+  --stripe: 4px;    /* each of the three stripes under the nav */
   --plane-pad: 12px;
   --drawer-w: min(680px, 45vw);  /* the step drawer beside the page, from 1200px */
   --drawer-gap: 40px;            /* between the board and the drawer beside it */
@@ -23,20 +24,26 @@
 
 /* ---- themes: each a full set of colour tokens under its id, and its color-scheme. The
    selectors are bare attributes, not :root's, so a swatch in the settings menu that carries a
-   theme's data-theme draws itself in that theme's colours. ------------------------------- */
+   theme's data-theme draws itself in that theme's colours. Each has two or three hues with a
+   job apiece: the canvas, a box tone of its own behind the board's pieces of work, cards a
+   lighter step off both; the nav a band of the theme's deepest colour (`nav-bg`, with its
+   `nav-ink` and `nav-muted`), with three stripes under it (`stripe-1..3`, top down: the 1970s
+   racing stripe, never the badge's hue); `heading-accent` for section heads. ---------------- */
 
 /* Sluice Light and Sluice Dark, the pair an unpicked page follows the OS between: each colour
    is light-dark(light, dark), so the pair is color-scheme alone (the OS's, by
-   prefers-color-scheme) */
+   prefers-color-scheme). The logo's channel: a navy band, then its blue water, the sky and
+   the sand of the shore; the boxes pale water on the cream */
 :root:not([data-theme]), [data-theme="light"], [data-theme="dark"] {
   color-scheme: light dark;
   --background: light-dark(oklch(0.98 0.017 88),      /* cream, #fdf8ec */
                            oklch(0.2 0.06 263));      /* deep navy */
   --foreground: light-dark(oklch(0.308 0.112 262),    /* the logo's navy, #0d2b67 */
                            oklch(0.955 0.022 88));    /* cream */
-  --card: light-dark(oklch(0.995 0.007 88), oklch(0.245 0.07 263));
-  --secondary: light-dark(oklch(0.925 0.028 88), oklch(0.29 0.075 263));
-  --muted: light-dark(oklch(0.95 0.022 88), oklch(0.225 0.066 263));
+  --card: light-dark(oklch(0.995 0.007 88), oklch(0.27 0.07 263));
+  --box: light-dark(oklch(0.945 0.024 240), oklch(0.24 0.075 257));
+  --secondary: light-dark(oklch(0.925 0.028 88), oklch(0.315 0.075 263));
+  --muted: light-dark(oklch(0.95 0.022 88), oklch(0.235 0.066 263));
   --muted-foreground: light-dark(oklch(0.46 0.06 262), oklch(0.8 0.035 88));
   --accent: light-dark(oklch(0.617 0.2 257),          /* the logo's blue, #1f81fa */
                        oklch(0.64 0.195 256));        /* and #258aff */
@@ -48,14 +55,21 @@
   --border: light-dark(oklch(0.308 0.112 262 / 11%), oklch(0.955 0.022 88 / 11%));
   --border-strong: light-dark(oklch(0.308 0.112 262 / 24%), oklch(0.955 0.022 88 / 24%));
   --input: light-dark(oklch(0.308 0.112 262 / 22%), oklch(0.955 0.022 88 / 20%));
-  --edge: light-dark(oklch(0.46 0.06 262 / 45%), oklch(0.8 0.035 88 / 42%));
-  --edge-head: light-dark(oklch(0.46 0.06 262 / 72%), oklch(0.8 0.035 88 / 70%));
+  --edge: light-dark(oklch(0.46 0.07 258 / 45%), oklch(0.8 0.05 240 / 42%));
+  --edge-head: light-dark(oklch(0.46 0.07 258 / 78%), oklch(0.8 0.05 240 / 72%));
   --status-idle: light-dark(oklch(0.6 0.025 262), oklch(0.66 0.03 262));
   --status-success: light-dark(oklch(0.53 0.14 150), oklch(0.76 0.16 150));
   --status-attention: light-dark(oklch(0.53 0.12 78), oklch(0.83 0.14 85));
   --status-paused: light-dark(oklch(0.5 0.13 330), oklch(0.76 0.11 330));
   --badge: oklch(0.69 0.2 30);                 /* the logo's coral, #ff604d */
   --badge-ink: light-dark(oklch(0.2 0.06 262), oklch(0.2 0.06 263));
+  --nav-bg: oklch(0.308 0.112 262);            /* the logo's navy in both */
+  --nav-ink: oklch(0.975 0.017 88);
+  --nav-muted: oklch(0.84 0.045 245);
+  --stripe-1: oklch(0.617 0.2 257);            /* the water */
+  --stripe-2: oklch(0.82 0.09 232);            /* the sky */
+  --stripe-3: oklch(0.85 0.09 80);             /* the sand */
+  --heading-accent: light-dark(oklch(0.48 0.14 258), oklch(0.82 0.08 235));
   /* a navy-tinted lift; in the dark a deeper shadow and a faint light edge */
   --lift: inset 1px 0 0 light-dark(transparent, oklch(1 0 0 / 6%)),
           0 1px 2px light-dark(oklch(0.308 0.112 262 / 8%), transparent),
@@ -66,14 +80,16 @@
 [data-theme="dark"] { color-scheme: dark; }
 
 /* Canyon: desert sandstone, the shadow brown of a cliff, turquoise water, a poppy for the
-   badge */
+   badge. A cliff-brown band, then the sunset (terracotta, orange, gold); the boxes the pale
+   green of desert sage on the sandstone */
 [data-theme="canyon"] {
   color-scheme: light;
   --background: oklch(0.945 0.028 62);
   --foreground: oklch(0.3 0.07 40);
-  --card: oklch(0.985 0.011 70);
+  --card: oklch(0.99 0.009 75);
+  --box: oklch(0.925 0.03 150);
   --secondary: oklch(0.885 0.042 55);
-  --muted: oklch(0.915 0.036 58);
+  --muted: oklch(0.925 0.034 60);
   --muted-foreground: oklch(0.46 0.06 42);
   --accent: oklch(0.56 0.1 205);
   --accent-ink: oklch(0.47 0.09 208);
@@ -82,28 +98,37 @@
   --border: oklch(0.3 0.07 40 / 12%);
   --border-strong: oklch(0.3 0.07 40 / 26%);
   --input: oklch(0.3 0.07 40 / 24%);
-  --edge: oklch(0.46 0.06 42 / 45%);
-  --edge-head: oklch(0.46 0.06 42 / 72%);
+  --edge: oklch(0.44 0.06 60 / 45%);
+  --edge-head: oklch(0.44 0.06 60 / 78%);
   --status-idle: oklch(0.58 0.015 20);
   --status-success: oklch(0.52 0.13 140);
   --status-attention: oklch(0.5 0.105 78);
   --status-paused: oklch(0.48 0.13 330);
   --badge: oklch(0.63 0.2 28);
   --badge-ink: oklch(0.2 0.05 38);
+  --nav-bg: oklch(0.33 0.07 40);
+  --nav-ink: oklch(0.97 0.02 75);
+  --nav-muted: oklch(0.85 0.045 62);
+  --stripe-1: oklch(0.52 0.12 45);             /* terracotta */
+  --stripe-2: oklch(0.7 0.15 62);              /* the sun going down */
+  --stripe-3: oklch(0.85 0.13 88);             /* the last gold */
+  --heading-accent: oklch(0.47 0.11 45);
   --lift: 0 1px 2px oklch(0.3 0.07 40 / 8%), 0 14px 36px oklch(0.3 0.07 40 / 15%);
   --scrim: oklch(0.22 0.05 40 / 45%);
 }
 
 /* Ranger: a park service's parchment, pine green, lake blue, the ochre of its signs, the
-   fire-danger orange for the badge */
+   fire-danger orange for the badge. A pine band over ochre, bark and moss; the boxes the pale
+   green of a meadow on the parchment */
 [data-theme="ranger"] {
   color-scheme: light;
   --background: oklch(0.955 0.03 95);
   --foreground: oklch(0.3 0.07 158);
   --card: oklch(0.99 0.012 95);
+  --box: oklch(0.928 0.04 135);
   --secondary: oklch(0.895 0.04 100);
   --muted: oklch(0.925 0.036 96);
-  --muted-foreground: oklch(0.46 0.045 150);
+  --muted-foreground: oklch(0.45 0.05 150);
   --accent: oklch(0.55 0.12 240);
   --accent-ink: oklch(0.47 0.11 245);
   --primary: oklch(0.48 0.11 245);
@@ -111,27 +136,36 @@
   --border: oklch(0.3 0.07 158 / 12%);
   --border-strong: oklch(0.3 0.07 158 / 26%);
   --input: oklch(0.3 0.07 158 / 24%);
-  --edge: oklch(0.46 0.045 150 / 45%);
-  --edge-head: oklch(0.46 0.045 150 / 72%);
+  --edge: oklch(0.42 0.05 150 / 45%);
+  --edge-head: oklch(0.42 0.05 150 / 78%);
   --status-idle: oklch(0.58 0.025 140);
   --status-success: oklch(0.52 0.14 138);
   --status-attention: oklch(0.5 0.105 72);
   --status-paused: oklch(0.48 0.12 330);
   --badge: oklch(0.66 0.18 45);
   --badge-ink: oklch(0.22 0.04 160);
+  --nav-bg: oklch(0.33 0.07 158);
+  --nav-ink: oklch(0.975 0.025 95);
+  --nav-muted: oklch(0.86 0.05 120);
+  --stripe-1: oklch(0.76 0.13 82);             /* the signs' ochre */
+  --stripe-2: oklch(0.47 0.07 55);             /* bark */
+  --stripe-3: oklch(0.72 0.09 135);            /* moss */
+  --heading-accent: oklch(0.45 0.08 55);
   --lift: 0 1px 2px oklch(0.3 0.07 158 / 8%), 0 14px 36px oklch(0.3 0.07 158 / 15%);
   --scrim: oklch(0.2 0.04 160 / 45%);
 }
 
 /* Diner: mint walls, chrome, charcoal lettering, a jukebox blue, the booths' cherry for the
-   badge */
+   badge alone. A turquoise sign band trimmed in chrome and charcoal; the canvas chrome-white,
+   the boxes mint */
 [data-theme="diner"] {
   color-scheme: light;
-  --background: oklch(0.955 0.028 175);
+  --background: oklch(0.97 0.006 210);
   --foreground: oklch(0.27 0.025 230);
-  --card: oklch(0.992 0.006 180);
-  --secondary: oklch(0.895 0.038 178);
-  --muted: oklch(0.925 0.033 176);
+  --card: oklch(0.997 0.003 180);
+  --box: oklch(0.925 0.045 172);
+  --secondary: oklch(0.91 0.02 200);
+  --muted: oklch(0.945 0.01 205);
   --muted-foreground: oklch(0.45 0.03 220);
   --accent: oklch(0.56 0.15 255);
   --accent-ink: oklch(0.48 0.15 258);
@@ -140,28 +174,37 @@
   --border: oklch(0.27 0.025 230 / 12%);
   --border-strong: oklch(0.27 0.025 230 / 26%);
   --input: oklch(0.27 0.025 230 / 24%);
-  --edge: oklch(0.45 0.03 220 / 45%);
-  --edge-head: oklch(0.45 0.03 220 / 72%);
+  --edge: oklch(0.42 0.04 205 / 45%);
+  --edge-head: oklch(0.42 0.04 205 / 78%);
   --status-idle: oklch(0.59 0.02 220);
   --status-success: oklch(0.52 0.13 150);
   --status-attention: oklch(0.505 0.11 78);
   --status-paused: oklch(0.5 0.13 330);
   --badge: oklch(0.56 0.2 22);
   --badge-ink: oklch(0.99 0.006 180);
+  --nav-bg: oklch(0.47 0.085 193);
+  --nav-ink: oklch(0.995 0.004 180);
+  --nav-muted: oklch(0.92 0.035 185);
+  --stripe-1: oklch(0.88 0.01 230);            /* chrome */
+  --stripe-2: oklch(0.32 0.02 230);            /* charcoal */
+  --stripe-3: oklch(0.82 0.08 172);            /* mint */
+  --heading-accent: oklch(0.45 0.08 195);
   --lift: 0 1px 2px oklch(0.27 0.025 230 / 8%), 0 14px 36px oklch(0.27 0.025 230 / 15%);
   --scrim: oklch(0.2 0.02 230 / 45%);
 }
 
 /* Night Sky: a desert night's indigo, starlight, a moonlit cyan, a sunset coral for the
-   badge */
+   badge. A band of the deepest night over violet, periwinkle and starlight; the boxes a
+   violet dusk on the indigo */
 [data-theme="night-sky"] {
   color-scheme: dark;
   --background: oklch(0.2 0.06 285);
   --foreground: oklch(0.945 0.02 90);
-  --card: oklch(0.245 0.07 285);
-  --secondary: oklch(0.3 0.075 285);
-  --muted: oklch(0.225 0.065 285);
-  --muted-foreground: oklch(0.79 0.04 280);
+  --card: oklch(0.28 0.065 282);
+  --box: oklch(0.245 0.08 298);
+  --secondary: oklch(0.32 0.075 285);
+  --muted: oklch(0.235 0.065 285);
+  --muted-foreground: oklch(0.8 0.04 280);
   --accent: oklch(0.78 0.11 210);
   --accent-ink: oklch(0.84 0.09 210);
   --primary: oklch(0.78 0.11 210);
@@ -169,28 +212,37 @@
   --border: oklch(0.945 0.02 90 / 11%);
   --border-strong: oklch(0.945 0.02 90 / 24%);
   --input: oklch(0.945 0.02 90 / 20%);
-  --edge: oklch(0.79 0.04 280 / 42%);
-  --edge-head: oklch(0.79 0.04 280 / 70%);
-  --status-idle: oklch(0.66 0.035 280);
+  --edge: oklch(0.8 0.06 280 / 42%);
+  --edge-head: oklch(0.8 0.06 280 / 72%);
+  --status-idle: oklch(0.68 0.035 280);
   --status-success: oklch(0.78 0.15 150);
   --status-attention: oklch(0.84 0.14 88);
-  --status-paused: oklch(0.76 0.12 330);
+  --status-paused: oklch(0.78 0.12 330);
   --badge: oklch(0.72 0.17 35);
   --badge-ink: oklch(0.2 0.06 285);
+  --nav-bg: oklch(0.155 0.05 285);
+  --nav-ink: oklch(0.955 0.02 90);
+  --nav-muted: oklch(0.8 0.05 280);
+  --stripe-1: oklch(0.48 0.16 300);            /* violet */
+  --stripe-2: oklch(0.68 0.12 272);            /* periwinkle */
+  --stripe-3: oklch(0.94 0.03 90);             /* starlight */
+  --heading-accent: oklch(0.84 0.08 285);
   --lift: inset 1px 0 0 oklch(1 0 0 / 6%), 0 14px 36px oklch(0.1 0.04 285 / 55%);
   --scrim: oklch(0.1 0.04 285 / 60%);
 }
 
 /* Wood Panel: a 1970s den, walnut panelling, harvest gold, avocado, the television's blue
-   glow, burnt orange for the badge */
+   glow, burnt orange for the badge. A dark walnut band over harvest gold, avocado and teak;
+   the boxes an avocado shade on the walnut */
 [data-theme="wood-panel"] {
   color-scheme: dark;
   --background: oklch(0.22 0.03 55);
   --foreground: oklch(0.935 0.03 85);
-  --card: oklch(0.265 0.035 55);
-  --secondary: oklch(0.315 0.04 55);
-  --muted: oklch(0.24 0.032 55);
-  --muted-foreground: oklch(0.79 0.04 75);
+  --card: oklch(0.31 0.035 62);
+  --box: oklch(0.275 0.04 108);
+  --secondary: oklch(0.34 0.04 60);
+  --muted: oklch(0.25 0.032 58);
+  --muted-foreground: oklch(0.8 0.04 75);
   --accent: oklch(0.74 0.1 225);
   --accent-ink: oklch(0.82 0.08 225);
   --primary: oklch(0.74 0.1 225);
@@ -198,14 +250,21 @@
   --border: oklch(0.935 0.03 85 / 11%);
   --border-strong: oklch(0.935 0.03 85 / 24%);
   --input: oklch(0.935 0.03 85 / 20%);
-  --edge: oklch(0.79 0.04 75 / 42%);
-  --edge-head: oklch(0.79 0.04 75 / 70%);
-  --status-idle: oklch(0.65 0.03 60);
-  --status-success: oklch(0.74 0.15 135);
-  --status-attention: oklch(0.83 0.14 85);
-  --status-paused: oklch(0.76 0.1 340);
+  --edge: oklch(0.8 0.05 90 / 42%);
+  --edge-head: oklch(0.8 0.05 90 / 72%);
+  --status-idle: oklch(0.67 0.03 60);
+  --status-success: oklch(0.76 0.15 135);
+  --status-attention: oklch(0.84 0.14 85);
+  --status-paused: oklch(0.78 0.1 340);
   --badge: oklch(0.7 0.17 45);
   --badge-ink: oklch(0.22 0.03 55);
+  --nav-bg: oklch(0.17 0.025 50);
+  --nav-ink: oklch(0.935 0.03 85);
+  --nav-muted: oklch(0.8 0.04 75);
+  --stripe-1: oklch(0.8 0.14 82);              /* harvest gold */
+  --stripe-2: oklch(0.6 0.11 120);             /* avocado */
+  --stripe-3: oklch(0.5 0.08 55);              /* teak */
+  --heading-accent: oklch(0.84 0.07 68);
   --lift: inset 1px 0 0 oklch(1 0 0 / 6%), 0 14px 36px oklch(0.12 0.02 55 / 55%);
   --scrim: oklch(0.1 0.02 55 / 60%);
 }
@@ -268,27 +327,34 @@ main { display: grid; padding: 20px 0 48px;
                               minmax(var(--gutter), 1fr) [full-end]; }
 main > *, #graph > * { grid-column: col; }
 
-/* ---- nav ---------------------------------------------------------------------------- */
-nav.top { display: flex; align-items: stretch; height: 52px; font-size: 15px;
+/* ---- nav: a band of the theme's deepest colour, its three stripes under it --------------- */
+nav.top { position: relative; display: flex; align-items: stretch; height: 52px; font-size: 15px;
           padding: 0 max(var(--gutter), calc((100% - var(--column)) / 2));
-          border-bottom: 1px solid var(--border); background: var(--card); }
+          margin-bottom: calc(3 * var(--stripe)); background: var(--nav-bg); color: var(--nav-ink); }
+nav.top::after { content: ""; position: absolute; top: 100%; left: 0; right: 0;
+                 height: calc(3 * var(--stripe)); pointer-events: none;
+                 background: linear-gradient(var(--stripe-1) 0 var(--stripe),
+                                             var(--stripe-2) 0 calc(2 * var(--stripe)),
+                                             var(--stripe-3) 0); }
 nav.top .links { display: flex; align-items: stretch; min-width: 0; overflow-x: auto;
                 scrollbar-width: none; }
 nav.top .links > a, #nav-inbox { position: relative; isolation: isolate; display: flex;
             align-items: center; padding: 0 var(--nav-pad); text-decoration: none;
-            white-space: nowrap; color: var(--muted-foreground); font-weight: 500; }
+            white-space: nowrap; color: var(--nav-muted); font-weight: 500; }
 nav.top .links > a::before, #nav-inbox::before { content: ""; position: absolute;
             inset: 8px 2px; z-index: -1; border-radius: var(--radius-md); }
-nav.top .links > a:hover, #nav-inbox:hover { color: var(--foreground); }
-nav.top .links > a:hover::before, #nav-inbox:hover::before { background: var(--muted); }
-nav.top .links > a[aria-current], #nav-inbox[aria-current] { color: var(--foreground); }
+nav.top .links > a:hover, #nav-inbox:hover { color: var(--nav-ink); }
+nav.top .links > a:hover::before, #nav-inbox:hover::before {
+  background: color-mix(in srgb, var(--nav-ink) 12%, transparent); }
+nav.top .links > a[aria-current], #nav-inbox[aria-current] { color: var(--nav-ink); }
 nav.top .links > a[aria-current]::after, #nav-inbox[aria-current]::after {
-  content: ""; position: absolute; left: var(--nav-pad); right: var(--nav-pad); bottom: -1px;
-  height: 3px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: var(--foreground); }
+  content: ""; position: absolute; left: var(--nav-pad); right: var(--nav-pad); bottom: 0;
+  height: 3px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: var(--nav-ink); }
 /* the sections scroll inside themselves, which would clip a ring drawn outside a link */
 nav.top .links > a:focus-visible, #nav-inbox:focus-visible { outline-offset: -4px; }
+nav.top :focus-visible { outline-color: var(--nav-ink); }  /* the accent may sit close to the band */
 nav.top a.brand { display: flex; align-items: center; gap: 8px; margin-right: 14px;
-                  color: var(--foreground); text-decoration: none; }
+                  color: var(--nav-ink); text-decoration: none; }
 nav.top .mark { display: block; flex: none; }
 .wordmark { font: 800 22px/1 var(--font-display); font-stretch: 112%; letter-spacing: -0.025em;
             padding-bottom: 3px; }  /* on the mark's optical centre, not its box's */
@@ -296,19 +362,22 @@ nav.top .mark { display: block; flex: none; }
 #nav-inbox .tray { display: none; }
 .badge { display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px;
          border-radius: 999px; background: var(--badge); color: var(--badge-ink); font-size: 12px;
-         line-height: 20px; font-weight: 750; text-align: center; }
+         line-height: 20px; font-weight: 750; text-align: center;
+         box-shadow: 0 0 0 1.5px var(--nav-ink); }  /* rimmed, so it stands off any band */
 
 /* ---- the project switcher: its button is the project's name --------------------------- */
 details.switcher { position: relative; display: flex; align-items: center; flex: none;
                    margin-right: 12px; }
 details.switcher > summary { display: flex; align-items: center; gap: 6px; height: 34px;
-  max-width: 260px; padding: 0 10px; border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md); list-style: none; cursor: pointer; color: var(--foreground);
+  max-width: 260px; padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--nav-ink) 32%, transparent);
+  border-radius: var(--radius-md); list-style: none; cursor: pointer; color: var(--nav-ink);
   font: 700 15px/20px var(--font-display); font-stretch: 105%;
-  background: var(--card); user-select: none; }
+  background: color-mix(in srgb, var(--nav-ink) 7%, transparent); user-select: none; }
 details.switcher > summary::-webkit-details-marker { display: none; }
-details.switcher > summary:hover { background: var(--muted); }
-details.switcher[open] > summary { border-color: var(--border-strong); }
+details.switcher > summary:hover, details.switcher[open] > summary {
+  background: color-mix(in srgb, var(--nav-ink) 14%, transparent); }
+details.switcher > summary .chev { color: var(--nav-muted); }
 .sw-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chev { flex: none; color: var(--muted-foreground); transition: transform 120ms ease-out; }
 details.switcher[open] .chev { transform: rotate(180deg); }
@@ -316,7 +385,7 @@ details.switcher .menu { position: absolute; top: calc(100% + 6px); left: 0; z-i
   min-width: 220px; max-width: min(360px, calc(100vw - 2 * var(--gutter)));
   max-height: min(70vh, 480px); overflow-y: auto; padding: 6px;
   border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card);
-  box-shadow: var(--lift); font: 15px/22px var(--font-sans); }
+  box-shadow: var(--lift); font: 15px/22px var(--font-sans); color: var(--foreground); }
 details.switcher .menu a { display: flex; align-items: center; gap: 8px; padding: 7px 10px;
   border-radius: var(--radius-sm); text-decoration: none; color: var(--foreground);
   white-space: nowrap; }
@@ -336,20 +405,22 @@ details.settings { position: relative; display: flex; align-items: center; flex:
                    margin-right: -12px; }  /* the cog's own edge on the column's */
 details.settings > summary { position: relative; isolation: isolate; display: grid;
   place-items: center; width: 44px; height: 44px; list-style: none; cursor: pointer;
-  color: var(--muted-foreground); user-select: none; }
+  color: var(--nav-muted); user-select: none; }
 details.settings > summary::-webkit-details-marker { display: none; }
 details.settings > summary::before { content: ""; position: absolute; inset: 4px; z-index: -1;
                                      border-radius: var(--radius-md); }
-details.settings > summary:hover, details.settings[open] > summary { color: var(--foreground); }
-details.settings > summary:hover::before { background: var(--muted); }
-details.settings[open] > summary::before { background: var(--secondary); }
+details.settings > summary:hover, details.settings[open] > summary { color: var(--nav-ink); }
+details.settings > summary:hover::before {
+  background: color-mix(in srgb, var(--nav-ink) 12%, transparent); }
+details.settings[open] > summary::before {
+  background: color-mix(in srgb, var(--nav-ink) 18%, transparent); }
 details.settings > summary:focus-visible { outline-offset: -4px; border-radius: var(--radius-md); }
 details.settings .menu { -webkit-user-select: none; user-select: none; }  /* toggles, not text: a click never selects a word */
 details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px; z-index: 30;
   width: 256px; max-width: calc(100vw - 2 * var(--gutter)); padding: 12px 14px 14px;
   max-height: calc(100dvh - 64px); overflow-y: auto;
   border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card);
-  box-shadow: var(--lift); font: 15px/22px var(--font-sans); }
+  box-shadow: var(--lift); font: 15px/22px var(--font-sans); color: var(--foreground); }
 .prefs fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .prefs legend { padding: 0; margin-bottom: 6px; font: 500 13px/18px var(--font-sans);
                 color: var(--muted-foreground); }
@@ -367,16 +438,17 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
 .prefs .themes .tick { flex: none; visibility: hidden; }  /* its slot keeps the names aligned */
 .prefs .themes .swatch { margin-left: auto; }  /* the name first, its swatch at the end */
 .prefs .themes label:has(:checked) .tick { visibility: visible; }
-/* a theme's swatch: its canvas, "Aa" in its ink, a dot of its accent and of its badge, all in
-   its own tokens (the chip carries its data-theme) */
-.swatch { display: inline-flex; align-items: center; gap: 4px; flex: none; width: 50px;
+/* a theme's swatch: "Aa" in its ink on its canvas, and its signature cutting across the
+   corner, the nav band and its three stripes, all in its own tokens (the chip carries its
+   data-theme) */
+.swatch { display: inline-flex; align-items: center; flex: none; width: 58px;
   height: 26px; padding: 0 7px; border-radius: var(--radius-sm); overflow: hidden;
-  background: var(--background); color: var(--foreground);
+  background: linear-gradient(118deg, transparent 0 52%, var(--nav-bg) 52% 64%,
+                              var(--stripe-1) 64% 76%, var(--stripe-2) 76% 88%,
+                              var(--stripe-3) 88%) var(--background);
+  color: var(--foreground);
   outline: 1px solid var(--border-strong); outline-offset: -1px;
   font: 800 13px/1 var(--font-display); font-stretch: 105%; letter-spacing: -0.01em; }
-.swatch i { width: 7px; height: 7px; border-radius: 999px; flex: none; }
-.swatch .sw-accent { margin-left: auto; background: var(--accent); }
-.swatch .sw-badge { background: var(--badge); }
 
 .prefs label.check { display: flex; align-items: center; gap: 10px; min-height: 36px;
   margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); cursor: pointer; }
@@ -477,7 +549,7 @@ sluice-drawer { display: contents; }
 .boxes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 14px;
          justify-content: center; align-items: flex-start; }
 .box { flex: 1 1 auto; min-width: 0; max-width: 100%; box-sizing: border-box; }
-.boxes.boxed > .box { padding: 16px 18px; border-radius: var(--radius); background: var(--muted); }
+.boxes.boxed > .box { padding: 16px 18px; border-radius: var(--radius); background: var(--box); }
 /* a finished piece of work, folded to one line; it opens to its cards */
 .boxes.boxed > .box.done { padding: 0; }
 .fold-box > summary { display: flex; align-items: center; gap: 8px; min-height: 44px;
@@ -612,6 +684,8 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .d-sec-h { display: flex; align-items: baseline; gap: 12px;
            margin-bottom: 10px; }
 .d-sec-h .label { margin: 0; }
+/* a section's head in the theme's second voice */
+.d-sec-h .label, .plan-facts .label, main h2:not(.label) { color: var(--heading-accent); }
 .d-sec .meta { margin-bottom: 4px; }
 /* how the step stands to the others: a label, then the steps as links led by their glyphs */
 dl.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px;
@@ -966,7 +1040,7 @@ main > .phead + * { margin-top: 0; }
   .stuck a { white-space: normal; }  /* a long id may break rather than overflow */
   details.thread > summary, details.thread > .msgs, details.earlier {
     padding-left: 12px; padding-right: 12px; }
-  :root { --gutter: 16px; --nav-pad: 8px; }
+  :root { --gutter: 16px; --nav-pad: 8px; --stripe: 3px; }
   body { font-size: 15px; }
   main { padding: 16px 0 40px; }
   h1 { font-size: 24px; line-height: 30px; }

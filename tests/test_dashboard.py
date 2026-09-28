@@ -262,9 +262,8 @@ def test_the_theme_picker_lists_every_preset_with_its_swatch(store, port):
                       r'</label>', menu)
     assert [(t, name) for t, name, _ in rows] == list(views.THEMES.items())
     for theme, _, swatch in rows:
-        # drawn in the theme's own tokens: its canvas, ink, accent and badge
-        assert swatch == (f'<span class="swatch" data-theme="{theme}" aria-hidden="true">'
-                          'Aa<i class="sw-accent"></i><i class="sw-badge"></i></span>'), theme
+        # drawn in the theme's own tokens: its canvas, ink, nav band and stripes
+        assert swatch == f'<span class="swatch" data-theme="{theme}" aria-hidden="true">Aa</span>', theme
 
 
 def test_every_theme_round_trips_through_the_route_to_the_page(store, port):
@@ -309,7 +308,9 @@ def test_every_theme_defines_every_colour_token(store):
     themes = _theme_tokens()
     default = themes.pop("default")
     colours = {k for k in default if k.startswith("--")}
-    assert {"--background", "--foreground", "--accent", "--badge", "--lift"} <= colours
+    assert {"--background", "--foreground", "--accent", "--badge", "--lift", "--box",
+            "--nav-bg", "--nav-ink", "--nav-muted", "--stripe-1", "--stripe-2", "--stripe-3",
+            "--heading-accent"} <= colours
     # the CSS has a block for every preset (Sluice Light and Sluice Dark share the fallback's
     # selector), and no other
     assert set(themes) == set(views.THEMES)
