@@ -62,22 +62,10 @@ def _merged(home: Path, projects: list[str], seq: int) -> tuple[list[dict[str, A
 
 
 def _unit(store: Store, project: str, sid: str) -> list[str]:
-    """The step's unit, in plan order: it and every step connected to it by a handoff
-    (reading its outputs) or an `after`, transitively — one independent piece of work."""
+    """The step's unit (plan.units: it and every step joined to it by any edge), in plan
+    order."""
     _, plan = store.plan(project)
-    joined: dict[str, set[str]] = {s: set() for s in plan.steps}
-    for s, step in plan.steps.items():
-        for w in step.waits:
-            if w in joined:
-                joined[s].add(w)
-                joined[w].add(s)
-    unit, todo = set(), [sid]
-    while todo:
-        s = todo.pop()
-        if s not in unit:
-            unit.add(s)
-            todo += joined.get(s, ())
-    return [s for s in P.topo_order(plan) if s in unit]
+    return next((u for u in P.units(plan) if sid in u), [sid])
 
 
 def _classify(store: Store, rec: dict[str, Any], me: str) -> str:
