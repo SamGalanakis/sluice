@@ -5,6 +5,9 @@
   `uv run ruff check src tests packs`.
 - `SPEC.md` is the contract, `DESIGN.md` the dashboard's look; change them with the code.
 - Commits: plain sentences, the user as sole author; no AI co-author trailers or mentions.
+- The live home runs a deployed build, never this working tree: `scripts/deploy [REF]` (default
+  `origin/main`) installs that commit non-editable, refreshes the pack fns the home has, and
+  restarts `serve`/`loop` (running steps are adopted). Deploy after pushing to main.
 
 ## UI changes
 

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Deploy sluice from one commit (default origin/main) so running steps never import a working
+# tree: a non-editable install of that commit, the first-party pack fns this home has
+# installed refreshed from it, then `sluice serve --no-runner` and `sluice loop` restarted in
+# their tmux sessions. Stopping them leaves runs running; the new runner adopts them.
+#   scripts/deploy [REF]
+set -euo pipefail
+
+ref=${1:-origin/main}
+repo=$(cd "$(dirname "$0")/.." && pwd)
+home=${SLUICE_HOME:-$HOME/.sluice}
+
+git -C "$repo" fetch -q origin
+sha=$(git -C "$repo" rev-parse --verify "$ref^{commit}")
+build=$(mktemp -d)
+trap 'rm -rf "$build"' EXIT
+git -C "$repo" archive "$sha" | tar -x -C "$build"
+uv build -q --wheel -o "$build/dist" "$build"
+uv tool install -q --force "$build"/dist/sluice-*.whl
+
+# A pack fn is refreshed only where the home already has it (packs are opt-in).
+for src in "$build"/packs/*/*/; do
+  name=$(basename "$src")
+  if [ -d "$home/fns/$name" ]; then
+    rsync -a --delete --exclude __pycache__ "$src" "$home/fns/$name/"
+  fi
+done
+
+# restart SESSION PATTERN COMMAND: stop the session (SIGHUP: exit 0, runs left running),
+# wait for the old process to go, start the new one.
+restart() {
+  local session=$1 pattern=$2 command=$3
+  local old
+  old=$(pgrep -f "^[^ ]*python[^ ]* [^ ]*/sluice $pattern" || true)
+  tmux kill-session -t "$session" 2>/dev/null || true
+  for pid in $old; do
+    for _ in $(seq 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+  done
+  tmux new-session -d -s "$session" "$command"
+}
+restart sluice-runner "loop" "sluice loop 2>&1 | tee -a $home/runner.out"
+restart sluice "serve" "sluice serve --no-runner 2>&1 | tee -a $home/serve.out"
+
+printf '%s\n' "$sha" > "$home/deployed"
+echo "deployed $(git -C "$repo" log -1 --format='%h %s' "$sha")"

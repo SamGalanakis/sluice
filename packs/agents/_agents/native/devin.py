@@ -21,7 +21,8 @@ TRANSIENT = ("capacity issues", "rate limit", "rate_limit", "overloaded")
 GUARDRAIL = ("You are running as a delegated worker. Nobody can answer questions, so make "
              "reasonable choices and record unresolved questions in your report. Follow "
              "AGENTS.md and CLAUDE.md. Work only in the requested directory. Never add "
-             "co-author trailers or tool attribution. Never merge a PR and never push to main.")
+             "co-author trailers or tool attribution. Never merge a PR; push only when the task "
+             "says so.")
 FUSION = "fusion-claude-opus-5-5-high-sidekick-swe-2-medium"
 MODELS = {None: "swe-2-high", "swe-2-high": "swe-2-high", "high": "swe-2-high",
           "fusion": FUSION, FUSION: FUSION}

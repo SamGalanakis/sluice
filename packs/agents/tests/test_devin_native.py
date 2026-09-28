@@ -66,7 +66,7 @@ def test_devin_config_keeps_user_settings_and_registers_hooks(tmp_path, monkeypa
                                  "--respect-workspace-trust", "false"]
     assert devin.config_file.stat().st_mode & 0o777 == 0o600
     assert "/bin/sh -c 'cat >>" in cfg["hooks"]["Stop"][-1]["hooks"][0]["command"]
-    assert "Never merge a PR and never push to main" in GUARDRAIL
+    assert "push only when the task says so" in GUARDRAIL and "push to main" not in GUARDRAIL
     command = cfg["hooks"]["Stop"][-1]["hooks"][0]["command"]
     for _ in range(2):
         subprocess.run(["sh", "-c", command], input='{"hook_event_name":"Stop"}',
