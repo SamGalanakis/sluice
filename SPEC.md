@@ -1075,8 +1075,8 @@ sluice drain [-p P …] [--no-wait] [--release]
                                       pause projects for maintenance and wait out their
                                       running work; --release unpauses what it paused
 sluice me [--project P] [--step S]      where this step stands, for its agent (§10)
-sluice query [SQL [PARAM …]] [--limit N] [--width N] [--json]
-                                      one read-only SELECT, printed as a table
+sluice query [SQL [PARAM …]] [--limit N] [--table [--width N]]
+                                      one read-only SELECT: its rows as JSON, or a table
 ```
 
 `sluice next` blocks until the projects' logs (the given ones, or every project not archived)
@@ -1114,12 +1114,13 @@ name ends in `report` or `path`); the messages on its `step-<id>` thread still u
 newest last; the outputs it must submit (required first) and the exact `sluice tool
 step_submit '{…}'` with its run id; and its thread with the command to ask a question.
 
-`sluice query` runs one SELECT through the `query` tool's guards and limits (§8) and prints
-an aligned table — NULL blank, whitespace collapsed, each cell cut to `--width` characters
+`sluice query` runs one SELECT through the `query` tool's guards and limits (§8) and prints the
+tool's `{columns, rows, truncated}` as JSON, one row per line. Each PARAM binds a `?` in order:
+as JSON when it parses (`42`, `null`), else as its text. `--table` prints an aligned table for
+people instead — NULL blank, whitespace collapsed, each cell cut to `--width` characters
 (default 60, 0 never) — then `(n rows)`, `, truncated` when the limit or size cap cut it.
-Each PARAM binds a `?` in order: as JSON when it parses (`42`, `null`), else as its text.
-`--json` prints the tool's `{columns, rows, truncated}`; without SQL it lists the tables and
-views with their columns. A refused or failed query exits 1 with the error on stderr.
+Without SQL it lists the tables and views with their columns. A refused or failed query exits 1
+with the error on stderr.
 
 Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
 builds the same MCP server object `serve` exposes and calls its tool (same argument validation,

@@ -104,16 +104,19 @@ def test_query_prints_a_table_binds_params_and_lists_the_schema(sluice):
     sluice.tool("project_create", name="p", description="a  long\ndescription")
     sluice.tool("project_create", name="q")
     out = sluice("query", "SELECT name, description, archived FROM projects "
-                 "WHERE name = ? OR archived = ? ORDER BY name", "p", "1").stdout
+                 "WHERE name = ? OR archived = ? ORDER BY name", "p", "1", "--table").stdout
     assert out.splitlines() == ["name  description         archived",
                                 "----  ------------------  --------",
                                 "p     a long description  0",
                                 "(1 row)"]
     cut = sluice("query", "SELECT name, description FROM projects ORDER BY name",
-                 "--width", "5", "--limit", "1").stdout.splitlines()
+                 "--table", "--width", "5", "--limit", "1").stdout.splitlines()
     assert cut[2] == "p     a lo…" and cut[-1] == "(1 row, truncated)"
-    assert json_out(sluice("query", "SELECT ? AS n, ? AS s", "null", "x y", "--json")) == {
-        "columns": ["n", "s"], "rows": [[None, "x y"]], "truncated": False}
+    two = sluice("query", "SELECT ? AS n, ? AS s UNION ALL SELECT 1, 'z'", "null", "x y")
+    assert json_out(two) == {"columns": ["n", "s"], "rows": [[None, "x y"], [1, "z"]],
+                             "truncated": False}
+    assert two.stdout.splitlines()[-2:] == ['  [null, "x y"],', '  [1, "z"]]}']
+    assert json_out(sluice("query", "SELECT 1 WHERE 0"))["rows"] == []
     listing = sluice("query").stdout.splitlines()
     assert "view  log(" in "\n".join(listing) and listing[0].startswith("table projects(name")
     bad = sluice("query", "DELETE FROM projects", check=False)
