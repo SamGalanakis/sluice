@@ -423,15 +423,10 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
         top = f'<a class="skip" href="#{e(skip[0])}">{e(skip[1])}</a>{top}'
     if stream:
         main_attrs += f' data-init="@get(\'{e(stream)}\', {STREAM_OPTIONS})"'
-    fav = ""  # a project's image icon is the favicon of its pages
-    if store is not None and project is not None \
-            and (f := store.icon_file(project)) is not None:
-        fav = (f'<link rel="icon" href="/projects/{e(quote(project))}/icon'
-               f'?v={f.stat().st_mtime_ns}">')
     return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{e(title)} · sluice</title>"
-            + (fav or '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">')
+            + '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
             + "".join(f'<link rel="stylesheet" href="{u}">' for u in FONT_CSS)
             + f"<style>{CSS}</style>{head}</head>\n"
             f"<body{body_attrs}>{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"

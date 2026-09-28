@@ -121,7 +121,8 @@ def test_the_dashboard_shows_the_icon_by_the_projects_name(store, tmp_path):
           f'{store.icon_file("q").stat().st_mtime_ns}" alt="" width="20" height="20">'
     assert img in page
     board = views.project_page(store, "q", ver="x")
-    assert '<link rel="icon" href="/projects/q/icon?v=' in board  # the favicon
+    assert '<link rel="icon" href="/static/favicon.svg"' in board  # the favicon stays sluice's
+    assert '<link rel="icon" href="/projects/' not in board
     menu = re.search(r'<div class="menu">(.*?)</div></details>', board)[1]
     assert img in menu and "a&lt;b" in menu  # every menu entry
     summary = re.search(r"<summary[^>]*>(.*?)</summary>", board)[1]

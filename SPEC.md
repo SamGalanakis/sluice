@@ -637,8 +637,8 @@ raw HTML escaped, unsafe link schemes refused).
   img-src data:` so a script inside it cannot run even opened directly; 404 when the project
   has no image icon. Wherever a project's name shows — its index row, the switcher's button
   and menu entries, its page head — an image icon is an `<img>` of this URL (a `?v=` of the
-  file's mtime busts a stale cache), a text icon is escaped text in the same box, and an
-  image icon is also the page's favicon.
+  file's mtime busts a stale cache) and a text icon is escaped text in the same box. The
+  page's favicon stays sluice's mark.
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
   read like a run history: its id with its state as badges beside it (the status glyph and
   word, `blocked` for a blocked step; runs done of total for a scattered step; how long it
