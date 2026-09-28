@@ -893,6 +893,20 @@ nav's menus and settings; `GET /static/logo.svg`,
 document from the same renderer: the summary and the board (cards without links), then every
 step's detail in a disclosure (no nav, no drawer, no stream, no script).
 
+The `query` tool gives trusted agents one SELECT (or WITH) against the database itself — for
+questions the other tools do not answer: joins, aggregates, looking across projects. Each call
+opens its own read-only connection (`PRAGMA query_only`), lets an authorizer allow only reads —
+no writes, ATTACH, PRAGMA or load_extension — and turns SQLite's limits down (100 KB of SQL,
+200 columns and expression depth, 50 compound selects, 1 MB values, 250,000 VM operations); a
+statement still running after 2 s is interrupted (a cooperative check between VM instructions,
+so one huge scalar can run past it, bounded by the value limit). It returns {columns, rows,
+truncated}: at most `limit` rows (an int in 1–1000, default 200), fetched as `limit + 1` so a
+full page is marked `truncated`, and stopping early once the rows' JSON passes ~1 MB. A BLOB
+cell is refused with the hint to select `hex(col)` or `length(col)`; `params` binds `?`
+placeholders. The `steps`, `messages`, `step_changes`, `edits` and `log` views (§2) join the
+raw tables into readable shapes, and the tool's description names every table and view with
+its columns.
+
 Every tool refuses an argument it does not take (`bad_request`, naming it and the arguments
 the tool does take) rather than ignore it. A tool that changes one step's contents takes
 `step`; a tool that acts on a selection (`step_pause`, `step_retry`, `step_cancel`,
@@ -925,6 +939,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
+| `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html"` | the diagram or page as text |
 | `status` | `project, steps?, tags?, brief? = false` | only the steps selected by id and/or tag when given; with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}]}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`) |

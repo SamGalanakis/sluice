@@ -20,6 +20,7 @@ from pydantic import Field, ValidationError
 
 from . import calls, runner, views
 from . import log as L
+from . import query as query_mod
 from . import verify as verify_mod
 from .dashboard import Dashboard
 from .errors import BadRequest, NotFound, SluiceError
@@ -516,6 +517,12 @@ def build_server(store: Store, stop: threading.Event | None = None,
             functools.partial(L.wait, store.home, project, since_seq, kinds, threads, wake,
                               min(max(0, timeout), WAIT_CAP), 0.25, limit))
         return {"records": res["records"] + res["held"], "last_seq": res["last_seq"]}
+
+    def query(sql: str, params: list | None = None, limit: int = 200) -> Any:
+        return query_mod.run(store.home, sql, params, limit)
+
+    query.__doc__ = query_mod.doc()
+    tool(query)
 
     @tool
     def verify(project: str | None = None) -> Any:
