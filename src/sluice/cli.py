@@ -1,7 +1,7 @@
 """The `sluice` command line (SPEC §9): `serve`, `loop`, `tool` to call any MCP tool
 in-process through the same server object `serve` exposes, `watch` to follow a log,
-`next` for the one record an orchestrator acts on and `drain` to pause projects for
-maintenance."""
+`next` for the one record an orchestrator acts on, `drain` to pause projects for
+maintenance, and `me` for a step's context."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import argparse
 import contextlib
 import ipaddress
 import json
+import os
 import signal
 import sys
 import threading
@@ -219,6 +220,22 @@ def cmd_drain(a: argparse.Namespace, store: Store) -> int:
     return 0
 
 
+def cmd_me(a: argparse.Namespace, store: Store) -> int:
+    """Where this step stands: its fn, status, inputs, upstreams, unanswered messages and
+    the outputs it must submit — for the agent doing it."""
+    from . import me as M
+
+    project = a.project or os.environ.get("SLUICE_PROJECT", "")
+    step = a.step or os.environ.get("SLUICE_STEP", "")
+    if not project or not step:
+        print("sluice me: not inside a step (SLUICE_PROJECT and SLUICE_STEP are not set); "
+              "pass --project and --step", file=sys.stderr)
+        return 1
+    print(M.render(M.context(store, project, step,
+                             os.environ.get("SLUICE_RUN_ID") or None)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
@@ -292,17 +309,27 @@ def build_parser() -> argparse.ArgumentParser:
                    help="pause and exit without waiting")
     s.add_argument("--release", action="store_true",
                    help="unpause the projects drain.json lists, delete it")
+    s = sub.add_parser("me", help="where this step stands (run inside a step)",
+                       description="Print the step's context for its agent: fn, doc, "
+                       "status and running time, inputs, upstream outputs, unanswered "
+                       "messages on its thread, the outputs it must submit and the exact "
+                       "step_submit command, and how to ask a question. Reads "
+                       "SLUICE_PROJECT/SLUICE_STEP/SLUICE_RUN_ID from the environment; "
+                       "exits 1 outside a step.")
+    s.add_argument("--project", help="the project (default: SLUICE_PROJECT)")
+    s.add_argument("--step", help="the step id (default: SLUICE_STEP)")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     try:
-        ensure_home(quiet=a.cmd in ("tool", "watch", "next"))
+        ensure_home(quiet=a.cmd in ("tool", "watch", "next", "me"))
         store = Store()
         db.connect(store.home)  # refuses a home from before the SQLite store, up front
         return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool,
-                "watch": cmd_watch, "next": cmd_next, "drain": cmd_drain}[a.cmd](a, store)
+                "watch": cmd_watch, "next": cmd_next, "drain": cmd_drain,
+                "me": cmd_me}[a.cmd](a, store)
     except SluiceError as e:
         print(json.dumps(e.payload(), indent=2), file=sys.stderr)
         return 1

@@ -21,6 +21,7 @@ from pydantic import Field, ValidationError
 from . import calls, runner, views
 from . import drain as drain_mod
 from . import log as L
+from . import me as me_mod
 from . import query as query_mod
 from . import verify as verify_mod
 from . import watch as watch_mod
@@ -602,6 +603,20 @@ def build_server(store: Store, stop: threading.Event | None = None,
         """Unpause exactly the projects drain.json lists — what `sluice drain --release`
         does — and delete it. Projects paused otherwise stay paused. Returns {released}."""
         return {"released": drain_mod.release(store)}
+
+    @tool
+    def step_context(project: str, step: str) -> Any:
+        """Where a step stands, for the agent doing it — the same as `sluice me` inside the
+        step: its fn, doc, status and running time, inputs, the status and short outputs of
+        every step it reads or runs after, the unanswered messages on its thread
+        (step-<id>), the outputs it must submit with the exact step_submit command, and the
+        thread with the command to ask a question.
+
+        Args:
+            project: the project.
+            step: the step id.
+        """
+        return me_mod.context(store, project, step)
 
     def query(sql: str, params: list | None = None, limit: int = 200) -> Any:
         return query_mod.run(store.home, sql, params, limit)

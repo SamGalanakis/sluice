@@ -1008,6 +1008,7 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false` | `{records: [it], notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped; an open-fn or unit-completing success; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record). `notes` are the notes held since the last wake — read them before the record. `last_seq` is past everything read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout returns `records` empty and `timed_out` true (`timeout` capped at 3600) |
 | `drain` | `projects?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in `drain.json` so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
 | `release` | – | unpauses exactly the projects `drain.json` lists and deletes it; `{released}`. Projects paused otherwise stay paused |
+| `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` |
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
@@ -1073,6 +1074,7 @@ sluice next [-p P …] [--since-seq N | --cursor FILE] [--me NAME] [--timeout S]
 sluice drain [-p P …] [--no-wait] [--release]
                                       pause projects for maintenance and wait out their
                                       running work; --release unpauses what it paused
+sluice me [--project P] [--step S]      where this step stands, for its agent (§10)
 ```
 
 `sluice next` blocks until the projects' logs (the given ones, or every project not archived)
@@ -1099,6 +1101,16 @@ changes (`running: lash 1 (fix-x), sluice 0; calls 0`) — until none of them ha
 step or a pending or running non-direct call, and exits 0 printing `drained`. `--no-wait`
 pauses and exits. `--release` unpauses exactly the projects `drain.json` lists — not ones
 paused otherwise — deletes the file and prints what it released.
+
+`sluice me` reads `SLUICE_PROJECT`, `SLUICE_STEP` and `SLUICE_RUN_ID` from the environment
+(the runner sets them for every run, and the native agent packs pass them through to the
+engine); outside a step it says so and exits 1, and `--project`/`--step` work anywhere. It
+prints, compactly: the step, its fn, doc, status and running time; its inputs (cut like
+`status`'s `brief`); each step it reads or runs after, with its status and short outputs
+(an output named `summary` whole, else `final` cut to ~300 characters, plus any output whose
+name ends in `report` or `path`); the messages on its `step-<id>` thread still unanswered,
+newest last; the outputs it must submit (required first) and the exact `sluice tool
+step_submit '{…}'` with its run id; and its thread with the command to ask a question.
 
 Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
 builds the same MCP server object `serve` exposes and calls its tool (same argument validation,
@@ -1201,7 +1213,8 @@ printing each matching record as one JSON line (flushed) as it is appended, and 
 (`--wake questions` holds notes and prints them with the next record that is not one). It
 reads the home's database only; it needs no runner or server. When the next thing to act on
 is what an orchestrator wants — not a stream — `next` (the tool) and `sluice next` (§9) wait
-for exactly one waking record.
+for exactly one waking record; a worker agent asks where its own step stands with
+`step_context` or `sluice me` inside the step (§9).
 
 ## 11. Conventions
 
