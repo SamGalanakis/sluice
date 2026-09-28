@@ -1,7 +1,7 @@
 """The `sluice` command line (SPEC §9): `serve`, `loop`, `tool` to call any MCP tool
 in-process through the same server object `serve` exposes, `watch` to follow a log,
 `next` for the one record an orchestrator acts on, `drain` to pause projects for
-maintenance, and `me` for a step's context."""
+maintenance, `me` for a step's context, and `query` to read the database as a table."""
 
 from __future__ import annotations
 
@@ -236,6 +236,46 @@ def cmd_me(a: argparse.Namespace, store: Store) -> int:
     return 0
 
 
+def _param(text: str) -> Any:
+    """A query parameter from the shell: JSON when it parses (42, null, true), else the text."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _table(columns: list[str], rows: list[list[Any]], width: int) -> list[str]:
+    """Rows as aligned text columns: NULL blank, JSON-ish cells on one line, each cut to
+    `width` characters (0: never cut)."""
+    def cell(v: Any) -> str:
+        t = "" if v is None else " ".join(str(v).split())
+        return t if not width or len(t) <= width else t[:width - 1] + "…"
+
+    grid = [columns, *([cell(v) for v in r] for r in rows)]
+    widths = [max(len(r[i]) for r in grid) for i in range(len(columns))]
+    lines = ["  ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in grid]
+    return [lines[0], "  ".join("-" * w for w in widths), *lines[1:]]
+
+
+def cmd_query(a: argparse.Namespace, store: Store) -> int:
+    """Run one read-only SELECT and print it as a table (or JSON); without SQL, list the
+    tables and views with their columns."""
+    from . import query as Q
+
+    if a.sql is None:
+        for kind, name, cols in Q.objects():
+            print(f"{kind:<5} {name}({', '.join(cols)})")
+        return 0
+    res = Q.run(store.home, a.sql, [_param(v) for v in a.params], limit=a.limit)
+    if a.json:
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0
+    print("\n".join(_table(res["columns"], res["rows"], a.width)))
+    n = len(res["rows"])
+    print(f"({n} row{'' if n == 1 else 's'}{', truncated' if res['truncated'] else ''})")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
@@ -318,18 +358,32 @@ def build_parser() -> argparse.ArgumentParser:
                        "exits 1 outside a step.")
     s.add_argument("--project", help="the project (default: SLUICE_PROJECT)")
     s.add_argument("--step", help="the step id (default: SLUICE_STEP)")
+    s = sub.add_parser("query", help="run a read-only SELECT on the database, as a table",
+                       description="Run one read-only SELECT (or WITH) against the home's "
+                       "sluice.db and print the rows as a table — the `query` tool's limits "
+                       "apply. Without SQL, list the tables and views with their columns.")
+    s.add_argument("sql", nargs="?", help="one SELECT; ? placeholders bind the PARAMs")
+    s.add_argument("params", nargs="*", metavar="PARAM",
+                   help="placeholder values in order: JSON when it parses (42, null), "
+                   "else the text")
+    s.add_argument("--limit", type=int, default=200, help="at most this many rows, 1-1000 "
+                   "(default 200)")
+    s.add_argument("--width", type=int, default=60, metavar="N",
+                   help="cut each cell to N characters, 0 for never (default 60)")
+    s.add_argument("--json", action="store_true",
+                   help="print {columns, rows, truncated} as JSON instead")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     try:
-        ensure_home(quiet=a.cmd in ("tool", "watch", "next", "me"))
+        ensure_home(quiet=a.cmd in ("tool", "watch", "next", "me", "query"))
         store = Store()
         db.connect(store.home)  # refuses a home from before the SQLite store, up front
         return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool,
                 "watch": cmd_watch, "next": cmd_next, "drain": cmd_drain,
-                "me": cmd_me}[a.cmd](a, store)
+                "me": cmd_me, "query": cmd_query}[a.cmd](a, store)
     except SluiceError as e:
         print(json.dumps(e.payload(), indent=2), file=sys.stderr)
         return 1

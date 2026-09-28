@@ -99,6 +99,27 @@ def test_verify_exits_non_zero_on_problems(sluice):
         {"where": "projects/p/.env:1", "message": "not a KEY=value line"}]
 
 
+def test_query_prints_a_table_binds_params_and_lists_the_schema(sluice):
+    write_config(sluice.home)
+    sluice.tool("project_create", name="p", description="a  long\ndescription")
+    sluice.tool("project_create", name="q")
+    out = sluice("query", "SELECT name, description, archived FROM projects "
+                 "WHERE name = ? OR archived = ? ORDER BY name", "p", "1").stdout
+    assert out.splitlines() == ["name  description         archived",
+                                "----  ------------------  --------",
+                                "p     a long description  0",
+                                "(1 row)"]
+    cut = sluice("query", "SELECT name, description FROM projects ORDER BY name",
+                 "--width", "5", "--limit", "1").stdout.splitlines()
+    assert cut[2] == "p     a lo…" and cut[-1] == "(1 row, truncated)"
+    assert json_out(sluice("query", "SELECT ? AS n, ? AS s", "null", "x y", "--json")) == {
+        "columns": ["n", "s"], "rows": [[None, "x y"]], "truncated": False}
+    listing = sluice("query").stdout.splitlines()
+    assert "view  log(" in "\n".join(listing) and listing[0].startswith("table projects(name")
+    bad = sluice("query", "DELETE FROM projects", check=False)
+    assert bad.returncode == 1 and json.loads(bad.stderr)["error"] == "bad_request"
+
+
 def test_a_direct_fn_call_needs_no_runner(sluice):
     write_config(sluice.home)
     res = json_out(sluice.tool("fn_call", name="test.add", inputs={"a": 1, "b": 2},

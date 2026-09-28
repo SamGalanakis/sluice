@@ -151,7 +151,7 @@ def _alias(item: str) -> str:
     return (m.group(1) if m else item.split()[-1]).strip("\"'`[]").rsplit(".", 1)[-1]
 
 
-def _objects() -> list[tuple[str, str, list[str]]]:
+def objects() -> list[tuple[str, str, list[str]]]:
     """(kind, name, columns) of every CREATE TABLE and CREATE VIEW in db.SCHEMA."""
     out = []
     for m in re.finditer(r"CREATE (TABLE|VIEW) (\w+)", db.SCHEMA):
@@ -199,7 +199,7 @@ def doc() -> str:
     columns (parsed from db.py's schema text, so the docs cannot drift) and examples."""
     parts = [_INTRO, ""]
     kinds = {"table": [], "view": []}
-    for kind, name, cols in _objects():
+    for kind, name, cols in objects():
         kinds[kind].append(f"  {name}({', '.join(cols)})")
     parts += ["Tables:", *kinds["table"], "", "Views:", *kinds["view"], "", _EXAMPLES]
     return "\n".join(parts)
