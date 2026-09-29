@@ -239,8 +239,10 @@ only by shape, and of coral always.
   so running's blue and the running bubble's border, told apart by its glyph (an arrow
   leaving a box) and "outside · 2h 5m" where its time would be. No colour of its own.
 - **Succeeded** and set by hand: a kelly green (`#11813c`; `#58cd78` in the dark).
-- **Stale** and a message awaiting a reply, and a running step gone quiet: harvest gold
-  (`#916100`; `#f1bf4e` in the dark), the attention voice.
+- **Stale** and a message awaiting a reply, a running step gone quiet, and an open inbox item
+  nobody is waiting for any more ("Nobody is waiting — build is failed", a 500 line under its
+  meta, the item listed after the live ones): harvest gold (`#916100`; `#f1bf4e` in the dark),
+  the attention voice.
 - **Paused**: plum (`#8b4486`; `#d997d2` in the dark) and a dashed plum border, a hold someone
   chose, apart from attention.
 - **Pending** and skipped: idle, a grey navy (`#788190`; `#8893a5` in the dark).

@@ -2729,7 +2729,13 @@ def log_summary(rec: dict[str, Any]) -> str:
     if kind == "inbox.answer":
         answer = rec.get("answer") or {}
         text = f": {_line(answer['text'], 60)}" if answer.get("text") else ""
-        return e(f"{rec.get('item')} answered by {rec.get('by')} ({answer.get('action')}){text}")
+        gone = " while nobody was waiting" if rec.get("waiting") is False else ""
+        return e(f"{rec.get('item')} answered by {rec.get('by')}{gone} "
+                 f"({answer.get('action')}){text}")
+    if kind == "inbox.adopt":
+        run = f" run {rec['run']}" if rec.get("run") else ""
+        answer = " and its answer" if rec.get("status") == "answered" else ""
+        return e(f"{rec.get('item')}{answer} taken up again by {rec.get('from')}{run}")
     if kind == "inbox.close":
         why = f": {_line(rec['reason'], 80)}" if rec.get("reason") else ""
         return e(f"{rec.get('item')} closed by {rec.get('by')}{why}")
@@ -2937,11 +2943,18 @@ def _item(item: dict[str, Any], back: str, all_projects: bool) -> str:
             f'<span class="quiet">{e(iid)}</span>']
     out = [f'<h3>{e(item["title"])}</h3>',
            f'<p class="meta">{" · ".join(m for m in meta if m)}</p>']
+    if item.get("waiting") is False:
+        out.append(f'<p class="meta gone">Nobody is waiting — {e(item.get("stopped", ""))}</p>')
     if item.get("body"):
         out.append(f'<div class="md">{markdown(item["body"])}</div>')
     url = f"/projects/{p}/inbox/{iid}/answer"
     if item["status"] == "open":
         ui = f' data-ui="{e(item["ui"])}"' if item.get("ui") else ""
+        # the note sits outside the morph-ignored box, so it goes when a retry takes the item up
+        if item.get("waiting") is False:
+            unless = ": the call has ended" if str(item.get("from", "")).startswith("call ") \
+                else " unless the step is retried"
+            out.append(f'<p class="meta gone-note">An answer will not be delivered{unless}.</p>')
         out.append(
             f'<div class="answer" data-ignore-morph data-url="{e(url)}" '
             f'data-key="{e(p)}/{e(iid)}"{ui}><form method="post" action="{e(url)}">'
@@ -2968,7 +2981,9 @@ def inbox_parts(store: Store, project: str | None, status: str) -> dict[str, str
     """The inbox page's parts: its items (open ones oldest first, the rest newest first), on
     the open view the plan inputs waiting on a person, and the nav badge."""
     items = store.inbox(project, status)
-    items = items if status == "open" else items[::-1]
+    # open: oldest first, the ones nobody waits for any more after the live ones
+    items = sorted(items, key=lambda i: i.get("waiting") is False) if status == "open" \
+        else items[::-1]
     back = inbox_base(project) + ("" if status == "open" else f"?status={status}")
     empty = {"open": "Nothing is waiting on you."}.get(status, f"No {status} items.")
     body = "".join(_item(i, back, project is None) for i in items) \

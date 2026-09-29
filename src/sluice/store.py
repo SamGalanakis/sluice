@@ -1065,9 +1065,10 @@ class Store:
 
     def inbox_post(self, project: str, title: str, body: str | None = None,
                    ui: str | None = None, input: str | None = None,
-                   sender: str | None = None) -> dict[str, Any]:
+                   sender: str | None = None, run: str | None = None) -> dict[str, Any]:
         """Post an open item. With `input`, answering it sets that plan input, so the plan
-        must declare it; without a body, the item's body is that input's doc."""
+        must declare it; without a body, the item's body is that input's doc. `run`: the run
+        of the step `sender` names that asks (its item says when nobody waits any more)."""
         if not isinstance(title, str) or not title.strip():
             raise BadRequest("title: expected a non-empty string")
         with self.tx() as conn:
@@ -1077,7 +1078,8 @@ class Store:
                 if input not in plan.inputs:
                     raise NotFound(f"the plan of project {project} has no input {input!r}")
                 body = plan.input_docs.get(input) if body is None else body
-            item = I.post(conn, project, self.log_cap(), title, body, ui, input, sender)
+            item = I.post(conn, project, self.log_cap(), title, body, ui, input, sender,
+                          run)
             self.notify()
         return item
 
@@ -1114,9 +1116,11 @@ class Store:
                 except InvalidPlan as e:
                     raise InvalidPlan(e.errors, f"inbox item {item_id}: the answer does not "
                                       f"fit plan input {name}") from e
+            # an answer nobody waits for says so: a retry of its step takes it up (inbox.ask)
+            gone = {"waiting": False} if I.waiting(conn, project, item) is False else {}
             item = I.finish(conn, project, self.log_cap(), item_id,
                             {"status": "answered", "answer": answer, "answered": now_iso()},
-                            {"kind": "inbox.answer", "answer": answer, "by": author})
+                            {"kind": "inbox.answer", "answer": answer, "by": author, **gone})
             self.notify()
         return item
 

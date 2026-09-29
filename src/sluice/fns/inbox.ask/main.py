@@ -13,14 +13,12 @@ from sluice.fns._lib.threads import project_log
 
 
 def ask(ctx, title, body=None, ui=None, interval=0.5):
-    """Post (or, after a runner restart, find again) this step's open item and poll it."""
+    """Post this step's item and poll it, or take up the step's own earlier one with the same
+    title (a failed, cancelled or restarted run's, or one answered while nobody waited)."""
     home, project = project_log()
-    sender = ctx.step or f"call {ctx.run_id}"
-    fields = {"title": title, "body": body, "ui": ui, "sender": sender}
+    sender, run = (ctx.step, ctx.run_id or None) if ctx.step else (f"call {ctx.run_id}", None)
     with db.write(home) as conn:
-        same = [i for i in inbox.items(conn, project, "open") if i.get("from") == sender
-                and (i["title"], i.get("body"), i.get("ui")) == (title, body, ui)]
-        item = same[-1] if same else inbox.post(conn, project, L.cap_of(home), **fields)
+        item = inbox.ask(conn, project, L.cap_of(home), title, body, ui, sender, run)
     ctx.log(f"waiting for an answer to inbox item {item['id']}")
     while True:
         with db.read(home) as conn:

@@ -9,8 +9,9 @@ nav; the person answers there (or anyone calls `inbox_answer`), and you read the
   the question in one line, `body` any context as markdown, `ui` an OpenUI Lang program with
   buttons or a form (below; without it the person gets a text box), `from` who is asking.
 - Wait with `log_wait(project, since_seq, kinds=["inbox"])`: every post, answer and close is a
-  log record (`inbox.post {item, title, from?, input?}`, `inbox.answer {item, answer, by}`,
-  `inbox.close {item, reason?, by}`). Or read `inbox_list(project, status="answered")`.
+  log record (`inbox.post {item, title, from?, run?, input?}`, `inbox.answer {item, answer,
+  by, waiting?}`, `inbox.close {item, reason?, by}`, `inbox.adopt {item, from, run?, was?,
+  status}`). Or read `inbox_list(project, status="answered")`.
 - An answer is `{action, params?, values?, text?}`: a Button sends its `action` and `params`
   plus the `values` of its form's fields; the text box sends `{"action": "answer", "text"}`.
 - `inbox_close(project, id, reason?)` withdraws an item you no longer need.
@@ -30,6 +31,13 @@ the input's `doc` (`docs("plans")`), so a well-documented input needs only a tit
 `inbox.ask` `{title, body?, ui?}` → `{answer}` posts an item (`from` = the step) and waits for
 it, so a human decision is a plain step: read `ask/answer.action`, `ask/answer.values`,
 `ask/answer.text`. If the item is closed instead, the step fails.
+
+While the step's run waits, its open item has `waiting: true`. Once that run has stopped
+(failed, cancelled, finished some other way), the item says `waiting: false` and `stopped`
+("ask is failed"), and the dashboard shows "nobody is waiting". It stays open: retrying the
+step takes it up again — a run of the same step asking the same title reuses the step's open
+item instead of posting another, and an answer given while nobody was waiting is delivered to
+it (`inbox.adopt` in the log). Close an item you do not mean to ask again.
 
 ```json
 {"inputs": {},

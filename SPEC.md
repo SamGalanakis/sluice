@@ -597,9 +597,10 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 | `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
 | `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?, author?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` and the `author`; a direct call's running record also its `pid` and `pid_start` |
 | `message` | `thread, from, to?, body, data?` | `thread.post` (§10) |
-| `inbox.post` | `item, title, from?, input?` | `inbox_post`, `inbox.ask` (§8a) |
-| `inbox.answer` | `item, answer, by` | `inbox_answer` and the dashboard's answer route |
+| `inbox.post` | `item, title, from?, run?, input?` | `inbox_post`, `inbox.ask` (§8a); `run` when a step's run asks |
+| `inbox.answer` | `item, answer, by, waiting?` | `inbox_answer` and the dashboard's answer route; `waiting: false` when the item's asker had stopped (§8a) |
 | `inbox.close` | `item, reason?, by` | `inbox_close` (`by`, like `inbox.answer`'s, is the author) |
+| `inbox.adopt` | `item, from, run?, was?, status` | `inbox.ask` taking up its step's own earlier item (`status` open, or answered while nobody waited); `was` the run that asked before (§8a) |
 | `project.pause` | `paused, reason?, author` | `project_update` (or `drain`, `release`, the dashboard's Pause) that changes `paused` |
 | `project.archive` | `archived, reason?, author` | `project_update` (or the dashboard's Archive) that changes `archived` |
 | `project.update` | `fields, reason?, author` | `project_update` that changes the description and/or the icon: `fields` names them |
@@ -975,7 +976,10 @@ Streams end when the server shuts down; the client reconnects with backoff.
 - `GET /inbox` (every project) and `GET /projects/<name>/inbox`: the items, filtered by
   `?status=open|answered|closed|all` (default open; open oldest first, the others newest first).
   An item shows its title, project, id, `from`, age, the input it sets, and its body as markdown.
-  An open item has an answer box that works without JavaScript (a form POST of `text`, then a
+  An open item nobody waits for (§8a) says, in the attention gold under that line, `Nobody is
+  waiting — <stopped>`, above its answer box `An answer will not be delivered unless the step is
+  retried.` (for a call, `: the call has ended`), and lists after the open items somebody waits
+  for. An open item has an answer box that works without JavaScript (a form POST of `text`, then a
   303 back); with it, `/static/inbox.js` draws the item's `ui` (§8a) above the box, and folds
   the box away when the program has buttons. An answered item shows its answer, a closed one
   its reason. The page streams like
@@ -1099,7 +1103,7 @@ the tool does take) rather than ignore it. Every tool whose write leaves a recor
 | `plan_prune` | `project, older_than_hours? = 0, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago, in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
 | `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
-| `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
+| `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project`; an open item a step or a call asked carries `waiting` (and `stopped` when false, §8a) |
 | `inbox_answer` | `project, id, answer, author?` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
 | `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
 
@@ -1107,10 +1111,11 @@ the tool does take) rather than ignore it. Every tool whose write leaves a recor
 
 Each project has an inbox: its `inbox` rows (§2) in posting order, not trimmed with the log.
 An item is `{id,
-title, body?, ui?, input?, from?, status, created, answer?, answered?, closed?, reason?}`: `id`
-is `i<n>` (one more than the highest in the project), `body` markdown, `ui` an OpenUI Lang
-program, `input` a plan input, `from` who asked (a step id, an agent), `status` `open`,
-`answered` or `closed`, the times ISO UTC. Only an open item changes, once: answering or closing
+title, body?, ui?, input?, from?, run?, status, created, answer?, answered?, closed?, reason?,
+waiting?, stopped?}`: `id` is `i<n>` (one more than the highest in the project), `body`
+markdown, `ui` an OpenUI Lang program, `input` a plan input, `from` who asked (a step id, an
+agent), `run` the run of that step that asks, `status` `open`, `answered` or `closed`, the times
+ISO UTC. `from` and `run` share the row's `sender` column as `<from>#<run>`. Only an open item changes, once: answering or closing
 anything else is refused (`conflict` with its `status`), which is what makes a stale button or a
 second answer harmless. Every change appends one log record (§6b) in the same transaction as
 the item's change (an answer that sets a plan input, that input's too), so `log_wait(project,
@@ -1123,6 +1128,23 @@ the item is marked answered; the value is the first present of `values.value`, `
 and `text`. None present, or a value that does not fit, refuses the answer (`invalid`) and the
 item stays open. `inbox_post` refuses an `input` the plan does not declare; without a `body`,
 the item's body is that input's doc (§5), if it has one.
+
+**Nobody waiting.** An open item that came from a step — `from` is a plan step's id or
+`step:<id>`, or names a step that has left the plan and has a `run` — or from a call (`call
+<run_id>`) carries a derived `waiting`, read from the state each time the item is read: true
+while the step is running the item's `run` (any run of it when the item has none) and has not
+been asked to cancel, or while the call is pending or running. Otherwise it is false and
+`stopped` says why, `<step> is <status>` (`cancelled` for a failure by cancel; `being
+cancelled`; `running another run`; `not in the plan`; `call <id> is <status>`). Nothing closes
+such an item: answering it still works (its `inbox.answer` record then carries `waiting:
+false`), and the dashboard says it will not be delivered unless the step is retried. When a
+retried step's `inbox.ask` asks with the same title, it **takes up** the step's own latest
+earlier item instead of posting another: an open one whose asker no longer waits (or that has
+no `run`), which then records the new run; or an answered one whose answer nobody read — its
+last `inbox.answer`/`inbox.adopt` record is the answer with `waiting: false` — whose answer it
+returns at once. Each take-up logs `inbox.adopt`. An open item another live run of the same
+step waits on (a scattered step's) is left to it, and an answer the log no longer shows unread
+is never reused: the step asks again.
 
 **The ui.** `ui` is OpenUI Lang (openui.com), drawn in the browser by a small vanilla-DOM
 renderer (`src/sluice/static/inbox.js`, no build step) around lang-core's parser. The vocabulary
@@ -1361,11 +1383,12 @@ variable; `value` is what it assigns to `out`, declared outputs come from `out` 
 
 **`inbox.ask`**: inputs `{title: string, body: string?, ui: string?}`, outputs `{answer: {action:
 string, params: Any?, values: Any?, text: string?}}`. It posts an item to the project's inbox
-(§8a) with `from` = the step (`call <run_id>` for a call) and reads the item every 0.5 s
+(§8a) with `from` = the step and `run` = its run (`from` = `call <run_id>` for a call) and reads the item every 0.5 s
 until the item is answered (the answer is the output) or closed (the step fails with `inbox item
-<id> was closed without an answer: <reason>`). It waits as long as it takes. If this step
-already has an open item with the same title, body and ui (a run killed by a runner restart,
-then retried), it waits on that one instead of posting again. Like the thread fns, it needs a
+<id> was closed without an answer: <reason>`). It waits as long as it takes. A retried step
+asking the same title takes up its own earlier item instead of posting again (§8a): an open one
+nobody waits on any more (a run that failed, was cancelled or died with a runner restart), or
+one answered while nobody waited, whose answer it returns at once. Like the thread fns, it needs a
 project.
 
 **Watching.** Agents watch through MCP: `log_wait` in a loop, passing back `last_seq`. For

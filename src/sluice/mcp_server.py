@@ -582,8 +582,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
         """Read the log: {records, last_seq}. Records are {seq, at, kind, ...} oldest first
         (seqs increase across the whole home, so one log's have gaps);
         kinds: plan.edit, plan.input, step.output, step.retry, step.status, step.submit,
-        step.cancel, call, message, inbox.post, inbox.answer, inbox.close, run.adopt,
-        run.orphan, project.pause, project.archive, project.update.
+        step.cancel, call, message, inbox.post, inbox.answer, inbox.close, inbox.adopt,
+        run.adopt, run.orphan, project.pause, project.archive, project.update.
 
         Args:
             project: the project's log; leave out for the home log (calls without a project).
@@ -807,8 +807,11 @@ def build_server(store: Store, stop: threading.Event | None = None,
     @tool
     def inbox_list(project: str | None = None, status: str = "open") -> Any:
         """List inbox items, oldest first: [{project, id, title, body?, ui?, input?, from?,
-        status, created, answer?, answered?, closed?, reason?}]. An answer is {action,
-        params?, values?, text?}.
+        run?, status, created, answer?, answered?, closed?, reason?, waiting?, stopped?}]. An
+        answer is {action, params?, values?, text?}. An open item a step (or a call) asked
+        carries `waiting`: false once nothing waits for its answer, with `stopped` saying why
+        ("build is failed"); retrying the step takes the item (and an answer given
+        meanwhile) up again.
 
         Args:
             project: only this project's items; leave out for every project.

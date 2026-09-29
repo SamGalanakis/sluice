@@ -1041,6 +1041,9 @@ article.item { background: var(--card); border: 1px solid var(--border);
                border-radius: var(--radius); padding: 14px 16px; margin: 12px 0; }
 .item > h3 { font: 750 17px/23px var(--font-display); font-stretch: 105%; }
 .item > .meta { margin: 2px 0 6px; }
+/* an open item whose asker has stopped: said in the attention gold, once, under its meta */
+.item > .gone { margin: 0 0 6px; color: var(--status-attention); font-weight: 500; }
+.item > .gone-note { margin: 8px 0 0; }
 .item .md { max-width: 72ch; }
 .item .md > :first-child { margin-top: 6px; }
 .item .md > :last-child { margin-bottom: 6px; }
