@@ -431,6 +431,16 @@ def test_a_unit_added_paused_does_not_settle_until_a_step_finishes(store):
     assert lines[0].startswith("UNIT u settled: fork succeeded · work pending (held)")
 
 
+def test_a_project_paused_by_someone_else_wakes_it(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    since = L.last_seq(store.home, "p")
+    store.update_project("p", paused=True, author="orchestrator", reason="mine")  # my own
+    store.update_project("p", paused=False, author="orchestrator")
+    store.update_project("p", paused=True, author="dashboard", reason="deploying")
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    assert lines[0] == "PROJECT p paused by dashboard: deploying"
+
+
 def test_all_wakes_on_every_record(store):
     create(store, "p", lane())
     since = L.last_seq(store.home, "p")

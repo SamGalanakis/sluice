@@ -1184,7 +1184,8 @@ outside the unit counts by the same rule). **Wakes:**
 
 - a `step.status` to `failed`, `stale` or `skipped`, inside a unit too; a `message` needing a
   reply, not from `--me` (default `orchestrator`), addressed to `--me` or to nobody; an
-  `inbox.post` or `inbox.answer`;
+  `inbox.post` or `inbox.answer`; a `project.pause` or `project.archive` not by `--me`
+  (`PROJECT lash paused by dashboard: <reason>`);
 - a unit **once, when it settles**: the `step.status` record (any `to`) of one of its steps at
   which it is settled while it was not at its previous `step.status` record. A step inside a
   unit never wakes on its own success. When that record is itself a failure (or stale or

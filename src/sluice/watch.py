@@ -199,6 +199,8 @@ def _classify(store: Store, rec: dict[str, Any], me: str,
         if rec.get("needs_reply", True) is False:
             return "note"
         return "wake" if rec.get("to") in (None, me) else "skip"
+    if kind in ("project.pause", "project.archive"):  # someone else stopped or started it
+        return "wake" if rec.get("author") != me else "skip"
     if kind != "step.status":
         return "wake" if kind in ("inbox.post", "inbox.answer") else "skip"
     view = _view(store, rec["project"], views)
@@ -300,6 +302,11 @@ def line(rec: dict[str, Any]) -> str:
         tag = "NOTE" if rec.get("needs_reply") is False else "MSG"
         return (f"{tag} {rec.get('thread')} {rec.get('from')} -> {rec.get('to') or '-'}: "
                 f"{_one(rec.get('body'))}")
+    if kind in ("project.pause", "project.archive"):
+        what = ("paused" if rec.get("paused") else "unpaused") if kind == "project.pause" \
+            else ("archived" if rec.get("archived") else "unarchived")
+        why = f": {_one(rec['reason'])}" if rec.get("reason") else ""
+        return f"PROJECT {rec.get('project')} {what} by {rec.get('author')}{why}"
     if isinstance(kind, str) and kind.startswith("inbox."):
         what = rec.get("title")
         if what is None:
