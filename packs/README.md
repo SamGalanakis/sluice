@@ -160,7 +160,10 @@ status is read before the hooks, and an idle status only counts once the prompt'
 in (an interrupted turn, which has no `Stop`, counts after 5 s).
 
 A new directory's workspace-trust dialog is answered yes (its default is "No, exit"), as
-`claude -p` never asked. The session's environment drops the markers a parent Claude Code
+`claude -p` never asked. The session has the owner's MCP servers unless
+`SLUICE_CLAUDE_MCP_CONFIG` is set (e.g. in a project's `.env`): a file or JSON string passed
+as `--mcp-config` with `--strict-mcp-config`, so the session has only those servers
+(`{"mcpServers": {}}`: none). The session's environment drops the markers a parent Claude Code
 session sets (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, …): inherited, they turn off the
 child's transcript and status file. `cost_usd` is the `lastCost` Claude Code records for the
 directory at exit (for a resumed session it includes the earlier turns). The context fill, the
