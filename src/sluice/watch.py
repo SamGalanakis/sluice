@@ -12,6 +12,7 @@ and print each compactly (line).
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import json
 import re
 import time
@@ -19,11 +20,13 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import IO, Any
 
+from . import inbox as I
 from . import log as L
 from . import plan as P
 from . import state as S
 from .errors import SluiceError
 from .store import Store
+from .util import atomic_write_json, now_iso, read_json
 
 
 def follow(home: Path, project: str | None, out: IO[str], kinds: Iterable[str] | None = None,
@@ -52,6 +55,8 @@ def follow(home: Path, project: str | None, out: IO[str], kinds: Iterable[str] |
 ATTENTION = ("failed", "stale", "skipped")  # a step going to one of these always wakes
 FINAL = ("succeeded", "skipped", "failed", "stale")  # a step in one of these will not run now
 CUT = 600  # the text form's cut for one output value
+READERS = "next.json"  # SLUICE_HOME/next.json: how far `next` has read each project's log
+BEAT = 30.0  # seconds between a waiting next_up's notes that it is still reading
 
 
 def _merged(home: Path, projects: list[str], seq: int) -> tuple[list[dict[str, Any]], int]:
@@ -232,7 +237,11 @@ def next_up(store: Store, projects: list[str], since_seq: int | None = None,
     seq, records, notes = since_seq, [], []
     start = time.monotonic()
     first = last = 0.0
+    beat = -BEAT
     while True:
+        if time.monotonic() - beat >= BEAT:  # still reading, up to since_seq
+            beat = time.monotonic()
+            _reading(store, projects, me, since_seq)
         batch, top = _merged(store.home, projects, seq)
         views: dict[str, View | None] = {}
         for rec in batch:
@@ -244,15 +253,85 @@ def next_up(store: Store, projects: list[str], since_seq: int | None = None,
                 last = time.monotonic()
                 first = first or last
                 if settle <= 0:  # stop at it: what follows is the next call's
+                    _reading(store, projects, me, rec["seq"])
                     return {"records": records, "notes": notes, "last_seq": rec["seq"],
                             "timed_out": False}
         seq = top
         now = time.monotonic()
         if records and (now - last >= settle or now - first >= settle_max):
+            _reading(store, projects, me, seq)
             return {"records": records, "notes": notes, "last_seq": seq, "timed_out": False}
         if not records and timeout is not None and now - start >= timeout:
+            _reading(store, projects, me, seq)
             return {"records": [], "notes": notes, "last_seq": seq, "timed_out": True}
         time.sleep(interval)
+
+
+# ---- nobody reading: a waking record no orchestrator has read -------------------------------
+
+def _readers(store: Store) -> dict[str, Any]:
+    try:
+        got = read_json(store.home / READERS)
+    except (OSError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _reading(store: Store, projects: list[str], me: str, seq: int) -> None:
+    """Note in next.json that `me` reads `projects` now and has read their logs up to `seq`:
+    per project {seq, at, me}, the seq never going back. Best effort: next never fails
+    over it."""
+    got, at = _readers(store), now_iso()
+    for p in projects:
+        old = got.get(p) if isinstance(got.get(p), dict) else {}
+        top = old.get("seq") if isinstance(old.get("seq"), int) else 0
+        got[p] = {"seq": max(seq, top), "at": at, "me": me}
+    try:
+        atomic_write_json(store.home / READERS, got)
+    except OSError:
+        pass
+
+
+def _epoch(iso: Any) -> float | None:
+    try:
+        return dt.datetime.strptime(str(iso), "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=dt.UTC).timestamp()
+    except ValueError:
+        return None
+
+
+def unread_alerts(store: Store, minutes: float, now: float | None = None) -> list[dict]:
+    """Post one inbox item (`from` sluice) for each project `next` has read (next.json) whose
+    log holds a record that would wake it (the wake rule, as `me`), when that record is at
+    least `minutes` old and no `next` has read the project for as long: its orchestrator is
+    likely gone. One item per such record, whatever became of it. Returns the items posted."""
+    now = time.time() if now is None else now
+    live = {p["name"] for p in store.projects() if not p["archived"]}
+    posted = []
+    for project, r in _readers(store).items():
+        at = _epoch(r.get("at")) if isinstance(r, dict) else None
+        if project not in live or at is None or now - at < minutes * 60:
+            continue
+        me, views = str(r.get("me") or "orchestrator"), {}
+        seq = r.get("seq") if isinstance(r.get("seq"), int) else 0
+        rec = next((x for x in L.read(store.home, project, seq)["records"]
+                    if _classify(store, {**x, "project": project}, me, views) == "wake"), None)
+        when = _epoch(rec["at"]) if rec else None
+        if when is None or now - when < minutes * 60:
+            continue
+        title = (f"No orchestrator has read {project}'s log for {minutes:g} min "
+                 f"(seq {rec['seq']})")
+        with store.rx() as conn:
+            if any(i.get("from") == "sluice" and i["title"] == title
+                   for i in I.items(conn, project)):
+                continue
+        body = (f"`next` last read this project at {r['at']} (as `{me}`). Since then this "
+                f"record would have woken it, and nobody has read it:\n\n```\n"
+                f"{line({**rec, 'project': project})}\n```\n\nThe orchestrator's session "
+                f"may have ended. Restart it from where it stopped (`sluice next -p {project} "
+                f"--since-seq {seq}`), or close this item.")
+        posted.append(store.inbox_post(project, title, body, sender="sluice"))
+    return posted
 
 
 def _one(value: Any, cut: int = 400) -> str:

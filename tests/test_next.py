@@ -13,7 +13,8 @@ from mcp import Client
 
 from sluice import log as L
 from sluice.mcp_server import build_server
-from sluice.watch import next_up
+from sluice.runner import Runner
+from sluice.watch import next_up, unread_alerts
 from tests.conftest import add, create, d, src
 
 
@@ -463,3 +464,73 @@ async def test_the_mcp_tool_returns_a_batch(store):
         assert [x["error"] for x in res["records"]] == ["one", "two"]
         assert [x["body"] for x in res["notes"]] == ["fyi"]
         assert res["last_seq"] == res["records"][-1]["seq"]
+
+
+# ---- nobody reading ----------------------------------------------------------------------
+
+def readers(store):
+    return json.loads((store.home / "next.json").read_text())
+
+
+def test_next_notes_how_far_it_has_read_each_project(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    create(store, "q", {"x": add(d(1), d(2))})
+    since = L.last_seq(store.home, "q")
+    got = next_up(store, ["p", "q"], since, me="lead", timeout=0)
+    assert got["timed_out"]
+    assert {p: (r["seq"], r["me"]) for p, r in readers(store).items()} == {
+        "p": (since, "lead"), "q": (since, "lead")}
+    seq = status_rec(store, "p", "x", "failed", error="boom")
+    next_up(store, ["p"], since, me="lead", timeout=5, settle=0)
+    assert readers(store)["p"]["seq"] == seq and readers(store)["q"]["seq"] == since
+
+
+def test_a_waking_record_nobody_reads_is_posted_to_the_inbox_once(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    create(store, "quiet", {"x": add(d(1), d(2))})  # never read by next: never alerted
+    since = L.last_seq(store.home, "p")
+    next_up(store, ["p"], since, timeout=0)  # the orchestrator reads once, then is gone
+    status_rec(store, "quiet", "x", "failed", error="boom")
+    seq = status_rec(store, "p", "fix-x", "failed", error="first\nboom")
+    msg(store, "p", "a note", needs_reply=False)  # not a waking record
+    assert unread_alerts(store, 30) == []  # it is fresh
+    later = time.time() + 3600
+    [item] = unread_alerts(store, 30, now=later)
+    assert item["title"] == f"No orchestrator has read p's log for 30 min (seq {seq})"
+    assert item["from"] == "sluice"
+    assert "STEP fix-x running -> failed: boom" in item["body"]
+    assert f"sluice next -p p --since-seq {since}" in item["body"]
+    # its own inbox.post wakes too, but the first unread record is the same: no second item
+    assert unread_alerts(store, 30, now=later) == []
+    store.inbox_close("p", item["id"], "seen", "test")
+    assert unread_alerts(store, 30, now=later) == []
+    # the orchestrator is back and reads it all: nothing is unread
+    next_up(store, ["p"], since, timeout=5, settle=0.1, settle_max=1)
+    assert unread_alerts(store, 30, now=later + 3600) == []
+    assert [i["title"] for i in store.inbox("quiet", "all")] == []
+
+
+def test_no_alert_while_next_has_read_the_project_lately(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    next_up(store, ["p"], L.last_seq(store.home, "p"), timeout=0)
+    status_rec(store, "p", "x", "failed", error="boom")
+    rec = readers(store)
+    assert unread_alerts(store, 30, now=time.time() + 60) == []  # read a minute ago
+    rec["p"]["at"] = "2020-01-01T00:00:00Z"
+    (store.home / "next.json").write_text(json.dumps(rec))
+    assert len(unread_alerts(store, 30, now=time.time() + 3600)) == 1
+
+
+def test_the_runner_alerts_only_with_unread_alert_min(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    next_up(store, ["p"], L.last_seq(store.home, "p"), timeout=0)
+    rec = readers(store)
+    rec["p"]["at"] = "2020-01-01T00:00:00Z"
+    (store.home / "next.json").write_text(json.dumps(rec))
+    status_rec(store, "p", "y", "failed", error="boom")
+    time.sleep(1.1)  # the record's `at` has whole seconds
+    Runner(store).tick()
+    assert store.inbox("p", "all") == []
+    store.config["unread_alert_min"] = 0.001
+    Runner(store).tick()
+    assert [i["from"] for i in store.inbox("p", "all")] == ["sluice"]

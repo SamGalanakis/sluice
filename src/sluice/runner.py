@@ -26,7 +26,7 @@ from . import log as L
 from . import state as S
 from . import types as T
 from .db import Busy
-from .errors import BadRequest, InvalidPlan, NotFound
+from .errors import BadRequest, InvalidPlan, NotFound, SluiceError
 from .fn import HOST_VARS
 from .plan import (
     Plan,
@@ -570,8 +570,24 @@ class Runner:
         self._calls(None)
         if self._gc_at is None or time.monotonic() - self._gc_at >= GC_EVERY:
             self._gc_at = time.monotonic()
+            self._unread()
             self._gc()
         return changed
+
+    def _unread(self) -> None:
+        """With `unread_alert_min` in config.json, tell the inbox about a waking record no
+        orchestrator has read for that long (watch.unread_alerts)."""
+        from .watch import unread_alerts
+
+        minutes = self.store.config.get("unread_alert_min")
+        if not isinstance(minutes, (int, float)) or minutes <= 0:
+            return
+        try:
+            unread_alerts(self.store, float(minutes))
+        except Busy as e:
+            self._report("home", e.message)
+        except (SluiceError, OSError, ValueError, LookupError, TypeError) as e:
+            self._report("home", f"cannot check for unread records: {e}")
 
     def _calls(self, project: str | None) -> None:
         try:

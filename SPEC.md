@@ -35,13 +35,15 @@ change.
 
 ```
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
-                             "log_max": 10000}
+                             "log_max": 10000}; optional "unread_alert_min" (§9, off by default)
 sluice.db                   the home's database (SQLite, WAL): every project, plan, edit, state,
                             call, submission, inbox item, log record and the outcome of every
                             finished step removed from a plan (below)
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 runner.json                 the runner's heartbeat {pid, started, beat}, refreshed about once
                             a second; stale means the runner is down
+next.json                   how far `next` has read each project's log: {<project>: {seq, at,
+                            me}} (§9)
 .env                        global secrets (KEY=value lines)
 fns/                        global user functions
 recipes/<name>.json         global recipes (§5)
@@ -749,7 +751,8 @@ raw HTML escaped, unsafe link schemes refused).
 - **What waits on a person is the inbox alone** (§8a): its open items, counted by the nav's
   coral badge. The orchestrator posts there whatever it needs from a person. Failed steps,
   missing inputs and messages between agents are the orchestrator's: they show on the board,
-  in the summary line and on the Threads tab, never as a call to the person.
+  in the summary line and on the Threads tab, never as a call to the person (unless no
+  orchestrator reads them, with `unread_alert_min` set: §9).
 - `GET /projects/<name>/threads` (**Threads**, a tab of the project): every conversation of
   the project, one per thread, the latest first, each a `<sluice-thread>`. A thread shows its
   step (glyph, id, doc) or its name, how many messages, when the last came and a line of it; it
@@ -1284,6 +1287,18 @@ and writes back, once and atomically, the seq of the last record consumed — re
 record, then exits 0 printing `timeout seq <N>` (and writes the cursor); `--json` prints the
 records as JSON lines, `unit` included with its outputs whole, and a final `{"seq": N,
 "timed_out": …}`. Exit 0 on a wake or a timeout.
+
+**Nobody reading.** `next` (the CLI and the tool) notes in `SLUICE_HOME/next.json`, per project,
+how far it has read (`seq`, never going back), when (`at`: at the start, every 30 s while it
+waits, and when it returns) and as whom (`me`). The orchestrator is an ordinary agent session:
+when it ends, nothing else reads the log. With `unread_alert_min` set in `config.json` (minutes;
+absent or 0: off), the runner checks once a minute every project `next` has read (not
+archived): when a record after that project's `seq` would wake `me` (the rule above) and is at
+least that old, and no `next` has read the project for as long, it posts one inbox item (§8a),
+`from` `sluice`, titled `No orchestrator has read <project>'s log for <N> min (seq <S>)`, whose
+body shows the record and how to restart from where the orchestrator stopped. It posts one
+item per such record, whatever becomes of the item; a project `next` never read is never
+checked.
 
 `sluice drain` pauses the given projects (default: every project not archived) that are not
 already paused, records which ones in `SLUICE_HOME/drain.json` (`{"paused": […], "at": …}`,
