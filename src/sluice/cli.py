@@ -1,7 +1,8 @@
 """The `sluice` command line (SPEC §9): `serve`, `loop`, `tool` to call any MCP tool
 in-process through the same server object `serve` exposes, `watch` to follow a log,
 `next` for the one record an orchestrator acts on, `drain` to pause projects for
-maintenance, `me` for a step's context, and `query` to read the database."""
+maintenance, `me` for a step's context, `query` to read the database and `backup` to copy
+it."""
 
 from __future__ import annotations
 
@@ -282,6 +283,15 @@ def cmd_query(a: argparse.Namespace, store: Store) -> int:
     return 0
 
 
+def cmd_backup(a: argparse.Namespace, store: Store) -> int:
+    """Copy the home's database to PATH while everything keeps running; print where and how
+    big."""
+    dest = Path(a.path).expanduser().absolute()
+    size = db.backup(store.home, dest, force=a.force)
+    print(f"{dest} {size} bytes")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="sluice", description="Run typed plans of fns. Everything goes through the MCP "
@@ -387,18 +397,25 @@ def build_parser() -> argparse.ArgumentParser:
                    "(default 60)")
     s.add_argument("--table", action="store_true",
                    help="print the rows as an aligned table instead, for people")
+    s = sub.add_parser("backup", help="copy the home's database to PATH, online",
+                       description="Write a consistent copy of the home's sluice.db to PATH "
+                       "with SQLite's backup API while the runner and the server keep "
+                       "running (a temp file beside PATH, renamed into place), and print its "
+                       "path and size. Run dirs and fns are files and are not included.")
+    s.add_argument("path", metavar="PATH", help="the file to write")
+    s.add_argument("--force", action="store_true", help="overwrite PATH if it exists")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     try:
-        ensure_home(quiet=a.cmd in ("tool", "watch", "next", "me", "query"))
+        ensure_home(quiet=a.cmd in ("tool", "watch", "next", "me", "query", "backup"))
         store = Store()
         db.connect(store.home)  # refuses a home from before the SQLite store, up front
         return {"serve": cmd_serve, "loop": cmd_loop, "tool": cmd_tool,
                 "watch": cmd_watch, "next": cmd_next, "drain": cmd_drain,
-                "me": cmd_me, "query": cmd_query}[a.cmd](a, store)
+                "me": cmd_me, "query": cmd_query, "backup": cmd_backup}[a.cmd](a, store)
     except SluiceError as e:
         print(json.dumps(e.payload(), indent=2), file=sys.stderr)
         return 1

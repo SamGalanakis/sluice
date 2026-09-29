@@ -474,3 +474,32 @@ def submission(home: Path | str, project: str, run: str) -> dict[str, Any] | Non
         row = one(conn, "SELECT outputs FROM submissions WHERE project = ? AND run = ?",
                   (project, run))
     return json.loads(row["outputs"]) if row else None
+
+
+def backup(home: Path | str, dest: Path, force: bool = False) -> int:
+    """An online copy of the home's database at `dest`, through SQLite's backup API in one
+    step, so it is the snapshot of one read transaction while the runner and the server go on
+    writing. It is written to a temp file beside `dest`, then renamed into place; an existing
+    `dest` is refused (SluiceError) unless `force`. Returns the copy's size in bytes."""
+    home, dest = Path(home), Path(dest)
+    if dest.is_dir():
+        raise SluiceError(f"{dest} is a directory; give the backup file's path")
+    if dest.exists() and dest.resolve() == (home / FILE).resolve():
+        raise SluiceError(f"{dest} is the home's own database")
+    if dest.exists() and not force:
+        raise SluiceError(f"{dest} exists; pass --force to overwrite it")
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    src = _open(home)
+    try:
+        out = sqlite3.connect(tmp)
+        try:
+            src.backup(out)  # pages=-1: every page in one step, one consistent snapshot
+        finally:
+            out.close()
+        os.replace(tmp, dest)
+    finally:
+        src.close()
+        for leftover in (tmp, tmp.with_name(tmp.name + "-wal"), tmp.with_name(tmp.name + "-shm")):
+            with contextlib.suppress(FileNotFoundError):
+                leftover.unlink()
+    return dest.stat().st_size

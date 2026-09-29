@@ -1192,6 +1192,7 @@ sluice drain [-p P …] [--no-wait] [--release]
 sluice me [--project P] [--step S]      where this step stands, for its agent (§10)
 sluice query [SQL [PARAM …]] [--limit N] [--table [--width N]]
                                       one read-only SELECT: its rows as JSON, or a table
+sluice backup PATH [--force]          an online copy of the home's database
 ```
 
 `sluice next` blocks until the projects' logs (the given ones, or every project not archived)
@@ -1279,6 +1280,15 @@ people instead — NULL blank, whitespace collapsed, each cell cut to `--width` 
 (default 60, 0 never) — then `(n rows)`, `, truncated` when the limit or size cap cut it.
 Without SQL it lists the tables and views with their columns. A refused or failed query exits 1
 with the error on stderr.
+
+`sluice backup PATH` writes a consistent copy of the home's `sluice.db` to PATH while the
+runner and the server keep running: SQLite's backup API copies every page in one step, so the
+copy is the snapshot of one read transaction (writers go on meanwhile; WAL readers do not block
+them). It writes a temp file beside PATH (`.<name>.<pid>.tmp`) and renames it into place, then
+prints the path and the size in bytes. It refuses (exit 1) an existing PATH unless `--force`, a
+directory, and the home's own database. The copy is the database alone: run dirs, the fns and
+each project's `.env` are files under the home and are not included. A copy opens as a home's
+`sluice.db` of the same schema version.
 
 Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
 builds the same MCP server object `serve` exposes and calls its tool (same argument validation,
