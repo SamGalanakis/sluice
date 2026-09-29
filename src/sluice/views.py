@@ -2732,6 +2732,15 @@ def log_summary(rec: dict[str, Any]) -> str:
         gone = " while nobody was waiting" if rec.get("waiting") is False else ""
         return e(f"{rec.get('item')} answered by {rec.get('by')}{gone} "
                  f"({answer.get('action')}){text}")
+    if kind in ("project.pause", "project.archive", "project.update"):
+        if kind == "project.update":
+            fields = [str(f) for f in rec.get("fields") or []] or ["nothing"]
+            what = f"{' and '.join(fields)} changed"
+        else:
+            flag = kind.removeprefix("project.")
+            what = ("" if rec.get(flag + "d") else "un") + flag + "d"
+        why = f": {_line(rec['reason'], 80)}" if rec.get("reason") else ""
+        return e(f"{what} by {rec.get('author') or '?'}{why}")
     if kind == "inbox.adopt":
         run = f" run {rec['run']}" if rec.get("run") else ""
         answer = " and its answer" if rec.get("status") == "answered" else ""

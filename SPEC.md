@@ -930,7 +930,10 @@ raw HTML escaped, unsafe link schemes refused).
   one-line summary (`s2 succeeded → stale`, `rev 7 by orch: reason (2 ops)`, `questions from
   e2e: body…`, `e2e → orchestrator: body…` on a step's own thread, `<call> <fn> <status>`,
   `logic submitted interface, branch`, `a: run r1 kept through a runner restart`,
-  `run r9 stopped: no step or call claimed it`) and expands to the full record as JSON. On a
+  `run r9 stopped: no step or call claimed it`, `i3 answered by dashboard while nobody was
+  waiting (answer)`, `i3 taken up again by ask run r2`; a project record as who changed what:
+  `paused by dashboard: deploying`, `unpaused by lash-fe`, `archived by orch`, `description and
+  icon changed by orch`) and expands to the full record as JSON. On a
   phone the kind filter folds behind its summary (`Filter: all kinds`, `Filter: 3 kinds`). A
   `thread.post` call's `call` records are hidden unless the filter selects `call` (a failed
   one still shows); the tools list everything. Unknown kinds or a

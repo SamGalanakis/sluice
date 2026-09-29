@@ -1167,6 +1167,29 @@ def test_the_log_says_what_run_records_mean():
     assert s({"kind": "message", "thread": "t", "from": "a", "body": "hi"}) == "t from a: hi"
 
 
+def test_the_log_says_what_project_records_mean(store):
+    s = views.log_summary
+    assert s({"kind": "project.pause", "paused": True, "author": "dashboard",
+              "reason": "deploying"}) == "paused by dashboard: deploying"
+    assert s({"kind": "project.pause", "paused": False, "author": "lash-fe"}) == \
+        "unpaused by lash-fe"
+    assert s({"kind": "project.archive", "archived": True, "author": "orch"}) == \
+        "archived by orch"
+    assert s({"kind": "project.archive", "archived": False, "author": "orch",
+              "reason": "back"}) == "unarchived by orch: back"
+    assert s({"kind": "project.update", "fields": ["description", "icon"],
+              "author": "orch"}) == "description and icon changed by orch"
+    assert s({"kind": "project.update", "fields": ["icon"], "author": "<b>",
+              "reason": "a & b"}) == "icon changed by &lt;b&gt;: a &amp; b"
+    # the records update_project writes read the same way
+    store.create_project("p", "old")
+    store.update_project("p", paused=True, author="dashboard", reason="deploying")
+    store.update_project("p", description="new", author="orch")
+    recs = L.read(store.home, "p", kinds=["project"])["records"]
+    assert [s(r) for r in recs] == ["paused by dashboard: deploying",
+                                    "description changed by orch"]
+
+
 def test_the_log_filter_folds_behind_a_summary_that_counts_kinds(store):
     create(store, "v", {})
     page = views.log_page(store, "v", views.LogQuery(kinds=("run", "message")))
