@@ -1305,6 +1305,7 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   `GIT_MERGE_AUTOEDIT=no`).
   A failed run's error ends with its session and how to resume it (bind the step's `session`
   input to it, then `step_retry`).
+  A Claude step's progress line leads with its context fill (`ctx 142k · `).
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.
   Codex (`agent.codex`, or
   `agent.run` with engine `codex`) uses the same supervisor with `codex app-server` JSON-RPC

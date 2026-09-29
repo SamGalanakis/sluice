@@ -11,7 +11,9 @@ Channels (see packs/README.md, "Claude", for the signals observed live):
   `busy`, `waiting` (a dialog owns the input), `idle`, or `shell` (the turn ended but a
   background shell still runs).
 - the transcript JSONL (and each subagent's under `<session>/subagents/`): progress lines,
-  API errors, and the model's own ScheduleWakeup / CronCreate results.
+  API errors, the model's own ScheduleWakeup / CronCreate results, and the context size
+  (`message.usage` of assistant entries), shown as `ctx 142k · ` before the last progress line
+  of each batch.
 - the pane: the composer the task and messages are pasted into."""
 
 import json
@@ -32,6 +34,7 @@ TERMINAL = frozenset({"completed", "failed", "stopped", "killed"})  # background
 WAKE_SLACK = 120.0  # seconds past a wakeup's time before it no longer counts as pending
 EXIT_WAIT = 10.0
 UNSTOPPED = 5.0  # seconds idle after a prompt with no Stop before the turn counts as ended
+CONTEXT = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")  # usage
 
 
 def config_dir():
@@ -256,6 +259,7 @@ class Claude(Adapter):
         self.trust_at = 0.0
         self.seen = {}  # transcript path -> its size before this run (a resumed session's)
         self.unstopped = None  # since when the status is idle with the prompt's Stop missing
+        self.context = None  # tokens in the context at the latest assistant entry
 
     # launch
     def prepare(self, run_dir, cwd, session):
@@ -341,7 +345,8 @@ class Claude(Adapter):
                     self._track(entry)
 
     def _track(self, entry):
-        """Follow the model's own wakeups and scheduled jobs, API errors and last text."""
+        """Follow the model's own wakeups and scheduled jobs, API errors, last text and
+        context size."""
         kind = entry.get("type")
         msg = entry.get("message") if isinstance(entry.get("message"), dict) else {}
         content = msg.get("content") if isinstance(msg.get("content"), list) else []
@@ -350,6 +355,10 @@ class Claude(Adapter):
                 self.api_error = _text_of(msg.get("content"))
                 return
             self.api_error = ""
+            usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else {}
+            used = sum(n for n in (usage.get(k) for k in CONTEXT) if isinstance(n, int))
+            if used and not entry.get("isSidechain"):
+                self.context = used
             for b in content:
                 if not isinstance(b, dict):
                     continue
@@ -441,7 +450,11 @@ class Claude(Adapter):
                         starts=self.starts)
 
     def progress(self):
+        """The new progress lines, the last one led by the context fill (`ctx 142k · `)."""
         out, self.lines = self.lines, []
+        if out and self.context:
+            line = out[-1].lstrip()
+            out[-1] = f"{out[-1][:-len(line)]}ctx {round(self.context / 1000)}k · {line}"
         return out
 
     def session_id(self):

@@ -514,3 +514,50 @@ def test_a_failed_agent_fn_names_its_session_last(call_fn, tmp_path):
     error = json.loads((call_fn.run_dirs[-1] / "error.json").read_text())["message"]
     assert error.endswith(f'step_set_input(project, step, "session", "{sid}"), then '
                           "step_retry.")
+
+
+# ---- the context fill --------------------------------------------------------------------------
+
+def usage(inp, read, created, out=300):
+    return {"input_tokens": inp, "cache_read_input_tokens": read,
+            "cache_creation_input_tokens": created, "output_tokens": out}
+
+
+@pytest.fixture
+def transcript(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cc"))
+    (tmp_path / "cc" / "sessions").mkdir(parents=True)
+    path = tmp_path / "cc" / "projects" / "-w" / "s-1.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    a = Claude()
+    (tmp_path / "run").mkdir()
+    a.prepare(tmp_path / "run", "/w", None)
+    with open(a.hooks_file, "a") as f:
+        f.write(json.dumps({"session_id": "s-1", "transcript_path": str(path),
+                            "hook_event_name": "SessionStart", "source": "startup"}) + "\n")
+
+    def write(*entries):
+        with open(path, "a") as f:
+            f.writelines(json.dumps(e) + "\n" for e in entries)
+        a.poll(FakePane())
+        return a.progress()
+
+    return write
+
+
+def said(text, use=None, **extra):
+    msg = {"role": "assistant", "content": [{"type": "text", "text": text}]}
+    return {"type": "assistant", "message": {**msg, **({"usage": use} if use else {})}, **extra}
+
+
+def test_the_context_fill_leads_the_last_progress_line(transcript):
+    assert transcript(said("no usage yet")) == ["no usage yet"]
+    assert transcript(said("reading", usage(5, 140_000, 2_300)),
+                      said("editing", usage(8, 141_000, 900))) == [
+        "reading", "ctx 142k · editing"]
+    # a subagent's entry in the main transcript is not the session's own context
+    assert transcript(said("aside", usage(1, 9_000, 0), isSidechain=True)) == [
+        "  ctx 142k · aside"]
+    assert transcript(said("after the compaction", usage(3, 20_000, 1_000))) == [
+        "ctx 21k · after the compaction"]

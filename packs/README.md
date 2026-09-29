@@ -152,7 +152,10 @@ A new directory's workspace-trust dialog is answered yes (its default is "No, ex
 `claude -p` never asked. The session's environment drops the markers a parent Claude Code
 session sets (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, …): inherited, they turn off the
 child's transcript and status file. `cost_usd` is the `lastCost` Claude Code records for the
-directory at exit (for a resumed session it includes the earlier turns).
+directory at exit (for a resumed session it includes the earlier turns). The context fill, the
+input, cache-read and cache-creation tokens of the latest assistant entry's `message.usage`,
+leads the last progress line of each batch (`ctx 142k · tool Bash …`), so the step's card
+shows it.
 
 ### Codex: idle is not done
 
