@@ -608,11 +608,15 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 | `run.orphan` | `run` | a live run nothing referenced, killed at startup (§6) |
 
 **Authors.** Every write tool (§8) that leaves a record names who made the change, in the
-record's `author` (`by` in the inbox's): the tool's `author` argument when given (not blank);
+record's `author` — `by` is that field in `inbox.answer` and `inbox.close` (the name they had
+first; a query over authors reads `coalesce(data->>'$.author', data->>'$.by')`), and `from` in
+`inbox.post` — by one rule: the tool's `author` argument (`inbox_post`'s `from`) when given (not blank);
 else the `SLUICE_AUTHOR` environment variable of the process running the tool; else
 `step:<id>` when `SLUICE_STEP` is set (an agent inside a step calling `sluice tool`); else the
 MCP client's name from the session's `initialize` (`clientInfo.name`); else `mcp` over MCP and
-`cli` from `sluice tool`. The dashboard writes as `dashboard`, `sluice drain` as `drain`.
+`cli` from `sluice tool`. The dashboard writes as `dashboard`, `sluice drain` as `drain`. An
+item `inbox_post` posts from inside a step, its `from` that step (`step:<id>` by the rule, or the
+id given), also records the step's run (`SLUICE_RUN_ID`), so it says when nobody waits (§8a).
 `update_project` records what it changed in the same transaction and nothing when nothing did.
 
 The log is history, not the source of truth, so each log is capped at `config.log_max`
@@ -1062,7 +1066,8 @@ its columns.
 
 Every tool refuses an argument it does not take (`bad_request`, naming it and the arguments
 the tool does take) rather than ignore it. Every tool whose write leaves a record takes
-`author?`, resolved by the rule in §6b; `inbox_post` names its asker with `from?` instead, and
+`author?`, resolved by the rule in §6b; `inbox_post` names its asker with `from?` instead,
+resolved by the same rule when not given, and
 `project_delete` and `fn_save` leave no record to carry one. A tool that changes one step's contents takes
 `step`; a tool that acts on a selection (`step_pause`, `step_retry`, `step_cancel`,
 `step_remove`, `status`) takes `steps` (ids; a single id is a list of one) and/or `tags`.
@@ -1105,7 +1110,7 @@ the tool does take) rather than ignore it. Every tool whose write leaves a recor
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
 | `plan_prune` | `project, older_than_hours? = 0, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago, in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
 | `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`) |
-| `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
+| `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); `from` defaults by the author rule (§6b); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project`; an open item a step or a call asked carries `waiting` (and `stopped` when false, §8a) |
 | `inbox_answer` | `project, id, answer, author?` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
 | `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
@@ -1117,7 +1122,7 @@ An item is `{id,
 title, body?, ui?, input?, from?, run?, status, created, answer?, answered?, closed?, reason?,
 waiting?, stopped?}`: `id` is `i<n>` (one more than the highest in the project), `body`
 markdown, `ui` an OpenUI Lang program, `input` a plan input, `from` who asked (a step id, an
-agent), `run` the run of that step that asks, `status` `open`, `answered` or `closed`, the times
+agent; `inbox_post` without one: its author, §6b), `run` the run of that step that asks, `status` `open`, `answered` or `closed`, the times
 ISO UTC. `from` and `run` share the row's `sender` column as `<from>#<run>`. Only an open item changes, once: answering or closing
 anything else is refused (`conflict` with its `status`), which is what makes a stale button or a
 second answer harmless. Every change appends one log record (§6b) in the same transaction as

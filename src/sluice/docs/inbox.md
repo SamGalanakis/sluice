@@ -7,7 +7,8 @@ nav; the person answers there (or anyone calls `inbox_answer`), and you read the
 ## Posting and waiting
 - `inbox_post(project, title, body?, ui?, input?, from?)` → `{id}` (e.g. `"i3"`). `title` is
   the question in one line, `body` any context as markdown, `ui` an OpenUI Lang program with
-  buttons or a form (below; without it the person gets a text box), `from` who is asking.
+  buttons or a form (below; without it the person gets a text box), `from` who is asking
+  (default: your author, e.g. `step:<id>` inside a step, whose run the item then records).
 - Wait with `log_wait(project, since_seq, kinds=["inbox"])`: every post, answer and close is a
   log record (`inbox.post {item, title, from?, run?, input?}`, `inbox.answer {item, answer,
   by, waiting?}`, `inbox.close {item, reason?, by}`, `inbox.adopt {item, from, run?, was?,

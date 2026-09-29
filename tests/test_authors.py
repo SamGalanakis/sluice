@@ -60,6 +60,38 @@ async def test_over_mcp_explicit_then_env_then_step_then_client(store, monkeypat
         assert last(store, "plan.edit")["author"] == "orch"
 
 
+async def test_inbox_post_names_its_asker_by_the_author_rule(store, monkeypatch):
+    create(store, "p", {"build": add(d(1), d(1))})
+    info = Implementation(name="claude-code", version="1")
+
+    def asker(item_id):
+        item = next(i for i in store.inbox("p", "all") if i["id"] == item_id)
+        return item.get("from"), item.get("run")
+
+    async with Client(build_server(store), client_info=info) as c:
+        got = await ok(c, "inbox_post", project="p", title="one")
+        assert asker(got["id"]) == ("claude-code", None)
+        assert last(store, "inbox.post")["from"] == "claude-code"
+        monkeypatch.setenv("SLUICE_STEP", "build")
+        monkeypatch.setenv("SLUICE_RUN_ID", "r-7")
+        got = await ok(c, "inbox_post", project="p", title="two")
+        assert asker(got["id"]) == ("step:build", "r-7")  # inside a step: its run too
+        assert last(store, "inbox.post")["run"] == "r-7"
+        got = await ok(c, "inbox_post", project="p", title="three", **{"from": "reviewer"})
+        assert asker(got["id"]) == ("reviewer", None)  # an explicit from wins
+        monkeypatch.setenv("SLUICE_AUTHOR", "sam")
+        got = await ok(c, "inbox_post", project="p", title="four")
+        assert asker(got["id"]) == ("sam", None)
+    r = await build_server(store, author="cli").call_tool(
+        "inbox_post", {"project": "p", "title": "five"})
+    assert not r.is_error and store.inbox("p")[-1]["from"] == "sam"
+    monkeypatch.delenv("SLUICE_AUTHOR")
+    monkeypatch.delenv("SLUICE_STEP")
+    r = await build_server(store, author="cli").call_tool(
+        "inbox_post", {"project": "p", "title": "six"})
+    assert not r.is_error and store.inbox("p")[-1]["from"] == "cli"
+
+
 async def test_without_a_client_name_it_is_mcp(store):
     create(store, "p", {"a": add(d(1), d(1))})
     r = await build_server(store).call_tool(

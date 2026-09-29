@@ -124,6 +124,9 @@ class _Server(MCPServer):
         if known is not None and "author" in known:  # every write names who made it
             arguments = {**(arguments or {}), "author": author_of(
                 (arguments or {}).get("author"), _client(context), self.author)}
+        if name == "inbox_post":  # an item names who asks by the same rule
+            arguments = {**(arguments or {}), "from": author_of(
+                (arguments or {}).get("from"), _client(context), self.author)}
         try:
             return await super().call_tool(name, arguments, context)
         except UnexpectedToolError:
@@ -800,9 +803,14 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 lists the components); without it the person gets a text box.
             input: a declared plan input the answer sets (its value: values.value, else
                 params.value, else text), type-checked like plan_set_input.
-            from: who is asking (a step id, an agent name).
+            from: who is asking (a step id, an agent name; default: SLUICE_AUTHOR,
+                step:<SLUICE_STEP>, the MCP client's name, else "mcp"; "cli" from
+                `sluice tool`).
         """
-        return {"id": store.inbox_post(project, title, body, ui, input, from_)["id"]}
+        # asked from inside a step, the item keeps its run: it says when nobody waits for it
+        step, run = os.environ.get("SLUICE_STEP", "").strip(), os.environ.get("SLUICE_RUN_ID")
+        run = run if step and from_ in (step, f"step:{step}") else None
+        return {"id": store.inbox_post(project, title, body, ui, input, from_, run)["id"]}
 
     @tool
     def inbox_list(project: str | None = None, status: str = "open") -> Any:
