@@ -22,7 +22,7 @@ from .tmux import _alive, descendants
 
 CODEX_TRANSIENT = ("rate limit", "rate_limit", "429", "capacity", "overloaded",
                    "usage limit")
-MODELS = {"sol": "gpt-6-sol", "astra": "gpt-6-astra"}
+MODELS = {"sol": "gpt-6.1-sol", "astra": "gpt-6-astra"}
 EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 
 
