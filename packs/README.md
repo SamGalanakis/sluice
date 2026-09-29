@@ -81,6 +81,12 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   orchestrator on the step's thread (`needs_reply: false`): "fix-x: busy 47 min with no change
   to the worktree (HEAD abc1234, no diff)", and another only after a further quiet period. It
   never steers, stops or restarts the session over it. Outside a git worktree it does nothing.
+- After a context compaction the session gets the step's own context again: `sluice me`
+  (the step, its inputs, upstreams, unanswered messages, the outputs still to submit and the
+  submit command), or, when that fails, the path of `<run_dir>/task.md` and one line saying
+  so. Claude gets it from its `SessionStart` hook with source `compact` as additional
+  context; Codex (an `item/completed` of type `contextCompaction`) and Devin (its
+  `PostCompaction` hook) get it typed into the session.
 - Messages addressed to the step on its thread (`thread.post` to `step-<id>`, to the step
   or to nobody) are delivered to the live session as they arrive. Messages addressed to
   another recipient are not forwarded. The step-thread note no

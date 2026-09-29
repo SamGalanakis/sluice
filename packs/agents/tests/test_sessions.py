@@ -5,6 +5,7 @@ the pane must start processes)."""
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -14,16 +15,18 @@ import pytest
 
 from sluice import log as L
 from sluice.fn import Transient
+from sluice.store import Store
 
 AGENTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENTS))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _agents.native.claude import Claude
+from _agents.native.codex import Codex
 from _agents.native.processes import cgroup, detached, engine_env
 from _agents.native.supervisor import REMIND, Limits
-from test_agents import init_repo, make_claude
-from test_native import Model, run
+from test_agents import init_repo, make_claude, make_devin
+from test_native import FakePane, Model, run
 
 
 def repo_at(tmp_path):
@@ -329,6 +332,116 @@ def test_untracked_files_alone_get_no_reminder(tmp_path):
                                       m.submit(word="w")))
     run(model, tmp_path)
     assert model.sent == ["the task"]
+
+
+# ---- the re-prime after a compaction ----------------------------------------------------------
+
+def compact_hook(settings):
+    groups = json.loads(Path(settings).read_text())["hooks"]["SessionStart"]
+    [group] = [g for g in groups if g.get("matcher") == "compact"]
+    return group["hooks"][0]["command"]
+
+
+def run_hook(command, payload, **env):
+    base = {k: v for k, v in os.environ.items() if not k.startswith("SLUICE_")}
+    p = subprocess.run(["sh", "-c", command], input=json.dumps(payload), text=True,
+                       capture_output=True, env={**base, **env},
+                       check=True, timeout=60)
+    return p.stdout
+
+
+def test_claude_is_reprimed_with_sluice_me_after_a_compaction(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cc"))
+    home = tmp_path / "home"
+    store = Store(home)
+    store.create_project("p", "", "t", "t")
+    store.patch("p", 1, [{"op": "replace", "path": "/steps", "value": {
+        "fix-x": {"run": "core.echo", "in": {"value": {"default": "v"}},
+                  "doc": "Fix the x bug."}}}], "t", "t")
+    (tmp_path / "run").mkdir()
+    a = Claude()
+    a.prepare(tmp_path / "run", str(tmp_path), None)
+    command = compact_hook(a.settings)
+    task = tmp_path / "run" / "task.md"
+    env = {"SLUICE_HOME": str(home), "SLUICE_PROJECT": "p", "SLUICE_STEP": "fix-x"}
+    out = json.loads(run_hook(command, {"hook_event_name": "SessionStart",
+                                        "source": "compact"}, **env))
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert context.startswith(f"Your context was just compacted. This is where your sluice "
+                              f"step stands (`sluice me`); your full task is in {task}.")
+    assert "step fix-x (core.echo) — pending" in context and "doc: Fix the x bug." in context
+    assert run_hook(command, {"source": "startup"}, **env) == ""
+    assert run_hook(command, {"source": "resume"}, **env) == ""
+
+
+def test_a_failing_sluice_me_reprimes_with_the_task_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cc"))
+    (tmp_path / "run").mkdir()
+    a = Claude()
+    a.prepare(tmp_path / "run", str(tmp_path), None)
+    out = json.loads(run_hook(compact_hook(a.settings), {"source": "compact"},
+                              SLUICE_HOME=str(tmp_path / "home")))
+    task = tmp_path / "run" / "task.md"
+    assert out["hookSpecificOutput"]["additionalContext"] == (
+        f"Your context was just compacted. Your full task is in {task}; read it again before "
+        "you continue (`sluice me` failed: sluice me: not inside a step (SLUICE_PROJECT and "
+        "SLUICE_STEP are not set); pass --project and --step).")
+
+
+def test_devin_is_reprimed_after_its_post_compaction_hook(call_fn, tmp_path):
+    env, rec = make_devin(tmp_path, [{"compact": True, "busy_s": 0.3, "reply": "working"},
+                                     {"reply": "back on track"}])
+    code, out, err = call_fn(AGENTS / "agent.devin", {"cwd": str(tmp_path), "spec": "s"},
+                             env=env)
+    assert code == 0, err
+    task = call_fn.run_dirs[-1] / "task.md"
+    prompts = rec.prompts()
+    assert len(prompts) == 2 and out["final"] == "back on track"
+    assert prompts[1].startswith(f"Your context was just compacted. Your full task is in "
+                                 f"{task}; read it again")
+    assert "has no step 'test-step'" in prompts[1]  # the fn's `sluice me` ran; no plan here
+    assert "context compacted" in err
+    assert task.read_text().startswith(prompts[0][:40].split("\n")[0])
+
+
+def test_codex_counts_its_context_compactions():
+    codex = Codex()
+    codex.thread, codex.resuming = "t", True
+
+    class Rpc:
+        def drain(self):
+            return [{"method": "item/completed", "params": {
+                "threadId": "t", "item": {"type": "contextCompaction", "id": "c"}}}]
+
+    class Server:
+        def poll(self):
+            return None
+
+    codex.rpc, codex.server = Rpc(), Server()
+    snap = codex.poll(FakePane())
+    assert snap.compactions == 1 and codex.lines == ["codex: context compacted"]
+
+
+def test_an_engine_reporting_a_compaction_gets_the_steps_context(tmp_path, monkeypatch):
+    from _agents.native import reprime
+    monkeypatch.setattr(reprime, "context",
+                        lambda task, env=None: f"step x — running\ntask {task}")
+
+    class Compacting(Model):
+        def poll(self, tmux):
+            snap = super().poll(tmux)
+            snap.compactions = 1 if self.turns else 0
+            return snap
+
+    model = Compacting(lambda m, n, text: m.submit(word="w") if n == 2 else None)
+    _, lines = run(model, tmp_path)
+    message = (tmp_path / "run" / "messages" / "compact-1.md").resolve()
+    assert model.sent[1] == (f"Your context was compacted; where your step stands is in "
+                             f"{message}; read it now.")
+    assert message.read_text() == f"step x — running\ntask {tmp_path / 'run' / 'task.md'}"
+    assert model.sent.count(model.sent[1]) == 1  # once per compaction
+    assert "context compacted; the step's context was typed into the session" in lines
 
 
 # ---- the git environment -----------------------------------------------------------------------

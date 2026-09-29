@@ -5,7 +5,8 @@ Channels (see packs/README.md, "Claude", for the signals observed live):
   UserPromptSubmit hooks that append their JSON payload to `<run_dir>/hooks.jsonl`; the user's
   and the repo's settings stay as they are. SessionStart names the session and its transcript;
   each Stop/StopFailure is a turn end and carries `last_assistant_message`, the live
-  `background_tasks` and the `session_crons`.
+  `background_tasks` and the `session_crons`. SessionStart with source `compact` (after a
+  compaction) also runs reprime.py, whose output re-primes the model with the step's context.
 - the status file `<config dir>/sessions/<pane pid>.json` Claude Code keeps: `status` is
   `busy`, `waiting` (a dialog owns the input), `idle`, or `shell` (the turn ended but a
   background shell still runs).
@@ -17,6 +18,7 @@ import json
 import os
 import re
 import shlex
+import sys
 import time
 from pathlib import Path
 
@@ -265,12 +267,21 @@ class Claude(Adapter):
         command = ("p=$(cat | tr -d '\\r\\n'); "
                    f"[ -n \"$p\" ] && printf '%s\\n' \"$p\" >> {append}; :")
         hook = {"hooks": [{"type": "command", "command": command}]}
+        hooks = {h: [hook] for h in HOOKS}
+        hooks["SessionStart"].append({"matcher": "compact", "hooks": [
+            {"type": "command", "command": self._reprime_command()}]})
         self.settings = self.run_dir / "claude-settings.json"
-        self.settings.write_text(json.dumps({"hooks": {h: [hook] for h in HOOKS}}, indent=2))
+        self.settings.write_text(json.dumps({"hooks": hooks}, indent=2))
         for path in (config_dir() / "projects").glob(f"*/{session}.jsonl") if session else []:
             sub = path.with_suffix("") / "subagents"
             for f in [path, *(sorted(sub.glob("agent-*.jsonl")) if sub.is_dir() else [])]:
                 self.seen[f] = f.stat().st_size  # history: not this run's progress
+
+    def _reprime_command(self):
+        """reprime.py, run by this fn's own interpreter (it needs only the standard library)."""
+        script = Path(__file__).with_name("reprime.py")
+        return " ".join(shlex.quote(str(a)) for a in (sys.executable, script,
+                                                       self.run_dir / "task.md"))
 
     def argv(self):
         argv = [os.environ.get("SLUICE_CLAUDE_BIN", "claude"), "--model", self.model,

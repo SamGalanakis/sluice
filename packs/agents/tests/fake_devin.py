@@ -66,6 +66,8 @@ def main():
                 if turn.get("tool"):
                     hook(config, "PreToolUse", sid, tool_name=turn["tool"],
                          tool_input={"command": "echo done"}, prompt_id=str(index))
+                if turn.get("compact"):
+                    hook(config, "PostCompaction", sid, prompt_id=str(index))
                 if turn.get("busy_s"):
                     time.sleep(turn["busy_s"])
                 if "submit" in turn:

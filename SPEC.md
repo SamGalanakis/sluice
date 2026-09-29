@@ -1295,6 +1295,9 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   processes it started and let go in its private cgroup), then, once per run, when tracked
   files are changed but not committed, sends the agent one reminder turn; it never commits
   for the agent.
+  After a context compaction the session gets the step's own context again (`sluice me`, or
+  the path of `task.md` when that fails): Claude through its SessionStart hook (source
+  `compact`), Codex and Devin as a message typed in when they report one.
   Git never prompts in a session (`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`,
   `GIT_MERGE_AUTOEDIT=no`).
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.

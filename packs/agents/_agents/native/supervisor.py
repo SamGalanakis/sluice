@@ -18,7 +18,8 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
    what the engine reports (`waiting`) and the processes it let go (processes.detached);
    then, once per run, when tracked files are changed but not committed, send one reminder
    turn (never commit for the agent);
-3. type messages addressed to the step on its thread into the session as they arrive;
+3. type messages addressed to the step on its thread into the session as they arrive, and,
+   after an engine reports its context compacted, the step's context (reprime.py);
 4. fail on the wall-clock cap, or after `stall` seconds without progress while busy; post one
    note to the orchestrator on the step's thread after `quiet` seconds busy with no change to
    the git worktree (and again after each further quiet period);
@@ -42,9 +43,9 @@ from sluice import db
 from sluice import log as L
 from sluice import types as T
 from sluice.errors import SluiceError
-from sluice.fn import Transient
+from sluice.fn import Transient, child_env
 
-from . import worktree
+from . import reprime, worktree
 from .paste import NotDelivered, tail
 from .processes import detached, engine_env, start_time
 from .tmux import Tmux
@@ -67,6 +68,7 @@ CONTINUE = ("Your session was interrupted by a rate limit or capacity error. Con
 REMIND = ("You have uncommitted changes: {status}. Commit or discard them (unless your task "
           "says to leave them), then finish.")
 REMIND_FILE = "A note about your uncommitted changes is in {path}; read it now."
+COMPACT_FILE = "Your context was compacted; where your step stands is in {path}; read it now."
 QUIET = "busy {min} min with no change to the worktree (HEAD {head}, {diff})"
 
 
@@ -119,7 +121,9 @@ class Snapshot:
     waiting: why an idle session is not finished: its own background work ("" when none).
     progress: anything that changes whenever the session does something (transcript sizes).
     error: the error that ended the last turn, if one did (checked for transient markers).
-    exit_status: the engine's exit status once exited."""
+    exit_status: the engine's exit status once exited.
+    compactions: the times the engine reported its context compacted (0 for an engine that
+    re-primes itself, as Claude does through its SessionStart hook)."""
     state: str
     turns: int = 0
     waiting: str = ""
@@ -127,6 +131,7 @@ class Snapshot:
     error: str = ""
     exit_status: str = ""
     starts: int = 0
+    compactions: int = 0
 
 
 class Adapter:
@@ -300,6 +305,7 @@ class _Run:
     helpers: set = field(default_factory=set)  # (pid, start) let go before the task
     reminded: bool = False
     work_since: float | None = None  # waiting for background work at a done exit since
+    compacted: int = 0
     mark: object = None  # the worktree's last sample
     sampled: float = 0.0
     changed: float | None = None  # busy with the worktree unchanged since then
@@ -336,6 +342,12 @@ class _Run:
                 or (self.adapter.name == "devin" and bool(re.search(
                     r"\b(?:http|status(?:_code)?)\s*[:=]?\s*529\b", low))))
 
+    def say(self, text, snap):
+        """Type `text` into the session, busy or not (a turn it starts is then expected)."""
+        if snap is not None and snap.state != "busy":
+            self.expect_start(text, snap.starts)
+        self.adapter.deliver(self.tmux, text)
+
     def forward(self, snap=None):
         """Type the step's new thread messages into the session; returns whether one was
         delivered."""
@@ -349,9 +361,7 @@ class _Run:
                              self.run_dir / "messages" / f"{rec.get('seq')}.md", MESSAGE_FILE,
                              frm=frm, thread=thread)
             try:
-                if snap is not None and snap.state != "busy":
-                    self.expect_start(text, snap.starts)
-                self.adapter.deliver(self.tmux, text)
+                self.say(text, snap)
             except (NotDelivered, RuntimeError, TimeoutError) as e:
                 self.log(f"thread message from {frm} not delivered yet: {e}")
                 self.feed.unread(rec)
@@ -360,6 +370,23 @@ class _Run:
             self.log(f"thread message from {frm} {verb} the session")
             sent = True
         return sent
+
+    def reprime(self, snap):
+        """After the engine reports its context compacted, give the session the step's
+        context again; returns whether it was delivered."""
+        if snap.compactions <= self.compacted:
+            return False
+        text = hand_over(reprime.context(self.run_dir / "task.md", child_env()),
+                         self.run_dir / "messages" / f"compact-{snap.compactions}.md",
+                         COMPACT_FILE)
+        try:
+            self.say(text, snap)
+        except (NotDelivered, RuntimeError, TimeoutError) as e:
+            self.log(f"step context after compaction not delivered yet: {e}")
+            return False
+        self.compacted = snap.compactions
+        self.log("context compacted; the step's context was typed into the session")
+        return True
 
     def watch(self, snap, now):
         """While the session is busy, sample the git worktree every so often; after `quiet`
@@ -480,7 +507,7 @@ class _Run:
                     self.await_at = time.monotonic()
                     self.await_base = snap.starts
             self.watch(snap, now)
-            if self.forward(snap):
+            if self.forward(snap) | self.reprime(snap):
                 base, idle_since = snap.turns, None
             if snap.state == "blocked":
                 dialog_since = dialog_since or now
@@ -590,6 +617,7 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
                 **({"head_before": head_before} if head_before else {})}, note)
     _write_json(rec_path, run.record)
     if message is task:
+        (run_dir / "task.md").write_text(task)  # re-read after a compaction
         message = hand_over(task, run_dir / "task.md", POINTER)
     handlers = _exit_on_signals()
     try:

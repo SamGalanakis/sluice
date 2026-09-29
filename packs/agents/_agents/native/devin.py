@@ -139,6 +139,7 @@ class Devin(Adapter):
         self.lines = []
         self.error = ""
         self.ended = False
+        self.compactions = 0
 
     def prepare(self, run_dir, cwd, session):
         self.run_dir = Path(run_dir).resolve()
@@ -215,6 +216,9 @@ class Devin(Adapter):
                     self.error = failure
             elif event == "SessionEnd":
                 self.ended = True
+            elif event == "PostCompaction":
+                self.compactions += 1
+                self.lines.append("context compacted")
             elif event == "PreToolUse":
                 tool = str(rec.get("tool_name") or "tool")
                 inp = rec.get("tool_input") or {}
@@ -245,7 +249,7 @@ class Devin(Adapter):
         sizes = tuple(p.stat().st_size if p.exists() else 0
                       for p in (self.hooks_file, self.export_file))
         return Snapshot(state, self.turns, progress=sizes, error=self.error, starts=self.starts,
-                        exit_status=str(dead or ""))
+                        exit_status=str(dead or ""), compactions=self.compactions)
 
     def progress(self):
         out, self.lines = self.lines, []

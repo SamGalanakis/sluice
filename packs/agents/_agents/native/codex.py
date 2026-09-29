@@ -202,6 +202,7 @@ class Codex(Adapter):
         self.app_pid = None
         self.app_start = None
         self.busy = False
+        self.compactions = 0
 
     def session_cwd(self, session):
         registry = (Path(os.environ.get("SLUICE_HOME") or Path.home() / ".sluice")
@@ -431,6 +432,9 @@ class Codex(Adapter):
                 if kind == "agentMessage":
                     self.message = item.get("text") or self.message
                     self.lines.append("codex: " + " ".join(self.message.split())[:240])
+                elif kind == "contextCompaction":
+                    self.compactions += 1
+                    self.lines.append("codex: context compacted")
                 elif kind in ("commandExecution", "fileChange", "webSearch"):
                     self.lines.append("tool " + kind + " " + str(item.get("command") or
                                                                   item.get("query") or "")[:200])
@@ -446,7 +450,7 @@ class Codex(Adapter):
                             exit_status=str(self.server.returncode or tmux.dead()))
         return Snapshot("busy" if self.busy else "idle" if self.turns else "starting",
                         self.turns, progress=self.version, error=self.error,
-                        starts=self.starts)
+                        starts=self.starts, compactions=self.compactions)
 
     def progress(self):
         lines, self.lines = self.lines, []
