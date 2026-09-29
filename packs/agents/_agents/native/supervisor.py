@@ -15,7 +15,9 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
      naming the missing outputs and the agent's last message;
    an engine with no waiting signal gets `grace` seconds of idle before the first of these;
 3. type messages addressed to the step on its thread into the session as they arrive;
-4. fail on the wall-clock cap, or after `stall` seconds without progress while busy;
+4. fail on the wall-clock cap, or after `stall` seconds without progress while busy; post one
+   note to the orchestrator on the step's thread after `quiet` seconds busy with no change to
+   the git worktree (and again after each further quiet period);
 5. on done ask the engine to exit, read `final`, `session`, `cost_usd` and the run's git
    facts; in every case end the tmux server and every process under it (SIGTERM, SIGHUP and
    SIGINT included, so a `step_cancel` leaves nothing behind)."""
@@ -58,6 +60,7 @@ MESSAGE_FILE = "A message from {frm} on your sluice thread `{thread}` is in {pat
 INLINE_MAX = 500
 CONTINUE = ("Your session was interrupted by a rate limit or capacity error. Continue your task "
             "where you left off.")
+QUIET = "busy {min} min with no change to the worktree (HEAD {head}, {diff})"
 
 
 def _env_float(name, default):
@@ -81,6 +84,7 @@ class Limits:
     turn_start: float = 60.0
     wait: float = 90 * 60.0
     dialog: float = 60.0
+    quiet: float = 45 * 60.0
 
     @classmethod
     def from_env(cls):
@@ -93,6 +97,7 @@ class Limits:
             poll=_env_float("SLUICE_AGENT_POLL_S", 0.5),
             turn_start=_env_float("SLUICE_AGENT_TURN_START_S", 60),
             wait=_env_float("SLUICE_AGENT_WAIT_MIN", 90) * 60,
+            quiet=_env_float("SLUICE_AGENT_QUIET_MIN", 45) * 60,
         )
 
 
@@ -274,10 +279,19 @@ class _Run:
     log: object
     sent: object  # () -> what the agent has submitted so far
     record: dict = field(default_factory=dict)
+    note: object = None  # (body) -> posts a note to the orchestrator on the step's thread
     pending_text: str = ""
     await_base: int = 0
     await_at: float | None = None
     redelivered: bool = False
+    mark: object = None  # the worktree's last sample
+    sampled: float = 0.0
+    changed: float | None = None  # busy with the worktree unchanged since then
+    noted: float | None = None
+
+    @property
+    def cwd(self):
+        return self.record["cwd"]
 
     def expect_start(self, text, starts):
         self.pending_text = text
@@ -331,6 +345,32 @@ class _Run:
             sent = True
         return sent
 
+    def watch(self, snap, now):
+        """While the session is busy, sample the git worktree every so often; after `quiet`
+        seconds busy with no change, post one note to the orchestrator, and again after each
+        further quiet period. Detection only."""
+        lim = self.limits
+        if not (self.note and self.record.get("head_before")) or snap.state != "busy":
+            self.changed = self.noted = None
+            return
+        if self.changed is not None and now - self.sampled < min(lim.quiet / 10, 180):
+            return
+        self.sampled = now
+        mark = worktree.sample(self.cwd)
+        if self.changed is None or mark != self.mark:
+            self.mark, self.changed, self.noted = mark, now, None
+            return
+        if mark is None or now - (self.noted or self.changed) < lim.quiet:
+            return
+        self.noted = now
+        body = QUIET.format(min=round((now - self.changed) / 60), head=mark[0][:7],
+                            diff="uncommitted diff unchanged" if mark[2] else "no diff")
+        self.log(f"quiet: {body}")
+        try:
+            self.note(body)
+        except Exception as e:  # noqa: BLE001 - a note that cannot be posted is only logged
+            self.log(f"quiet note not posted: {e}")
+
     def loop(self):
         a, lim = self.adapter, self.limits
         start = time.monotonic()
@@ -376,6 +416,7 @@ class _Run:
                     self.redelivered = True
                     self.await_at = time.monotonic()
                     self.await_base = snap.starts
+            self.watch(snap, now)
             if self.forward(snap):
                 base, idle_since = snap.turns, None
             if snap.state == "blocked":
@@ -439,14 +480,15 @@ def _log(line):
 
 
 def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=None,
-              limits=None, attempt=1, log=_log, sent=None):
+              limits=None, attempt=1, log=_log, sent=None, note=None):
     """Run `task` in a live session of the adapter's engine until the step is done. Returns
     {"final", "session", "cost_usd", "git"} (git: worktree.facts, None outside a git
     worktree; its `head_before` is read once per run and kept in native.json across retries).
     `session` resumes that session (refused when it was started in another directory); on a
     retry (`attempt` > 1) a session an earlier attempt of
     this run started is resumed and told to continue. `sent()` says what the agent has
-    submitted so far (default: `submitted`, the run's submission)."""
+    submitted so far (default: `submitted`, the run's submission); `note(body)` posts to the
+    orchestrator (the quiet-worktree note; none without it)."""
     limits = limits or Limits.from_env()
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -470,7 +512,7 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
     run = _Run(adapter, Tmux(run_dir), run_dir, list(required), feed, limits, log,
                sent or submitted,
                {"engine": adapter.name, "cwd": cwd, "resumed": session or None,
-                **({"head_before": head_before} if head_before else {})})
+                **({"head_before": head_before} if head_before else {})}, note)
     _write_json(rec_path, run.record)
     if message is task:
         message = hand_over(task, run_dir / "task.md", POINTER)

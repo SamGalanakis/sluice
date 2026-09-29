@@ -61,6 +61,12 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   fails naming the missing outputs and the agent's last message. A step that declares no
   required outputs is done once the session is idle with nothing pending, after the grace
   period for an engine that cannot report pending work.
+- While the session is busy, the supervisor samples the git worktree every few minutes (HEAD,
+  `git status`, and the size and mtime of each changed or untracked file). After
+  `SLUICE_AGENT_QUIET_MIN` (45) minutes busy with no change it posts one note to the
+  orchestrator on the step's thread (`needs_reply: false`): "fix-x: busy 47 min with no change
+  to the worktree (HEAD abc1234, no diff)", and another only after a further quiet period. It
+  never steers, stops or restarts the session over it. Outside a git worktree it does nothing.
 - Messages addressed to the step on its thread (`thread.post` to `step-<id>`, to the step
   or to nobody) are delivered to the live session as they arrive. Messages addressed to
   another recipient are not forwarded. The step-thread note no

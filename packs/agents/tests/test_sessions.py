@@ -4,10 +4,13 @@ the pane must start processes)."""
 
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from sluice import log as L
 from sluice.fn import Transient
 
 AGENTS = Path(__file__).resolve().parents[1]
@@ -16,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from _agents.native.claude import Claude
 from _agents.native.processes import engine_env
+from _agents.native.supervisor import Limits
 from test_agents import init_repo, make_claude
 from test_native import Model, run
 
@@ -88,6 +92,79 @@ def test_agent_review_counts_commits_across_a_retry(call_fn, tmp_path):
     assert code == 0, err
     assert out["commits"] == 2 and out["sha"] == repo.git("rev-parse", "HEAD")
     assert out["git"]["commits"] == 2
+
+
+# ---- the quiet-worktree note -------------------------------------------------------------------
+
+QUICK = Limits(nudges=2, wall=30, stall=30, settle=0.2, grace=0.2, poll=0.02, ready=10,
+               quiet=0.3)
+
+
+def test_the_quiet_period_reads_its_env_override(monkeypatch):
+    monkeypatch.setenv("SLUICE_AGENT_QUIET_MIN", "20")
+    assert (Limits.from_env().quiet, Limits().quiet) == (1200, 45 * 60)
+
+
+def busy_until(model, done):
+    """Let the busy model finish (idle, outputs submitted) once `done` is set."""
+    def wait():
+        done.wait(20)
+        model.submit(word="w")
+        model.state = None
+    threading.Thread(target=wait, daemon=True).start()
+
+
+def test_a_busy_session_with_a_quiet_worktree_gets_one_note_per_quiet_period(tmp_path):
+    repo = repo_at(tmp_path)
+    model, done, notes = Model(state="busy-moving"), threading.Event(), []
+
+    def note(body):
+        notes.append((time.monotonic(), body))
+        if len(notes) == 2:
+            done.set()
+
+    busy_until(model, done)
+    _, lines = run(model, tmp_path, limits=QUICK, note=note)
+    head = repo.git("rev-parse", "--short=7", "HEAD")
+    assert [b for _, b in notes] == [
+        f"busy 0 min with no change to the worktree (HEAD {head}, no diff)"] * 2
+    # again only after another full period, not at the next sample (every 0.03 s here); the
+    # times are when note() ran, which trails the loop's clock by a git sample
+    assert notes[1][0] - notes[0][0] >= QUICK.quiet - 0.1
+    assert f"quiet: {notes[0][1]}" in lines
+
+
+def test_a_worktree_that_keeps_changing_gets_no_note(tmp_path):
+    repo = repo_at(tmp_path)
+    model, done, notes = Model(state="busy-moving"), threading.Event(), []
+
+    def churn():
+        for i in range(25):  # 1.25 s of edits, far past the 0.3 s quiet period
+            (repo.path / "scratch.txt").write_text("x" * i)
+            time.sleep(0.05)
+        done.set()
+
+    threading.Thread(target=churn, daemon=True).start()
+    busy_until(model, done)
+    run(model, tmp_path, limits=QUICK, note=notes.append)
+    assert notes == []
+
+
+def test_the_quiet_note_is_posted_on_the_steps_thread(call_fn, tmp_path):
+    repo = init_repo(tmp_path / "repo")
+    env, rec = make_claude(tmp_path, [{"reply": "thinking", "busy_s": 1.5}])
+    code, _out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(repo.path), "prompt": "p"},
+                              env={**env, "SLUICE_AGENT_QUIET_MIN": "0.005"})
+    assert code == 0, err
+    got = L.read(tmp_path / "sluice-home", "test-project", threads=["step-test-step"])
+    notes = got["records"]
+    assert notes, err
+    head = repo.git("rev-parse", "--short=7", "HEAD")
+    for n in notes:
+        assert (n["from"], n["to"], n["needs_reply"]) == ("test-step", "orchestrator", False)
+        assert n["body"] == (f"test-step: busy 0 min with no change to the worktree "
+                             f"(HEAD {head}, no diff)")
+    assert len(rec.raw_prompts()) == 1  # the step's own note is not typed back in
 
 
 # ---- the git environment -----------------------------------------------------------------------

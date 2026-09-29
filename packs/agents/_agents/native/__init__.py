@@ -6,7 +6,7 @@ from sluice.fn import with_step_notes
 from .claude import Claude
 from .codex import Codex
 from .devin import GUARDRAIL, Devin
-from .supervisor import ThreadFeed, required_outputs, supervise, thread_note
+from .supervisor import ThreadFeed, required_outputs, supervise, thread_name, thread_note
 
 
 def task_text(text, inp, ctx, listen, delivery="pasted"):
@@ -16,6 +16,19 @@ def task_text(text, inp, ctx, listen, delivery="pasted"):
     if ctx.project and ctx.step and listen is not False:
         task += "\n\n" + thread_note(ctx, delivery)
     return task
+
+
+def orchestrator_note(ctx):
+    """What posts a note (needs_reply false) from the step to the orchestrator on its thread,
+    or None outside a project's step."""
+    if not (ctx.project and ctx.step):
+        return None
+
+    def note(body):
+        from sluice.fns._lib.threads import post
+        post(thread_name(ctx.step), f"{ctx.step}: {body}", ctx.step, "orchestrator",
+             needs_reply=False)
+    return note
 
 
 def git_output(out):
@@ -30,7 +43,7 @@ def run_claude(text, inp, ctx, cwd):
     feed = ThreadFeed(ctx) if ctx.project and ctx.step and listen is not False else None
     return supervise(Claude(), task_text(text, inp, ctx, listen), cwd, ctx.run_dir,
                      required=required_outputs(ctx), session=inp.get("session"), feed=feed,
-                     attempt=ctx.attempt)
+                     attempt=ctx.attempt, note=orchestrator_note(ctx))
 
 
 def run_codex(text, inp, ctx, cwd):
@@ -40,7 +53,7 @@ def run_codex(text, inp, ctx, cwd):
     return supervise(Codex(inp.get("model") or "sol", inp.get("effort")),
                      task_text(text, inp, ctx, listen, "delivered"), cwd, ctx.run_dir,
                      required=required_outputs(ctx), session=inp.get("session"), feed=feed,
-                     attempt=ctx.attempt)
+                     attempt=ctx.attempt, note=orchestrator_note(ctx))
 
 
 def run_devin(text, inp, ctx, cwd):
@@ -50,4 +63,4 @@ def run_devin(text, inp, ctx, cwd):
     task = GUARDRAIL + "\n\n" + task_text(text, inp, ctx, listen)
     return supervise(Devin(inp.get("model"), inp.get("log")), task, cwd, ctx.run_dir,
                      required=required_outputs(ctx), session=inp.get("session"), feed=feed,
-                     attempt=ctx.attempt)
+                     attempt=ctx.attempt, note=orchestrator_note(ctx))

@@ -1286,6 +1286,10 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   Transient retries), `head_after`, `commits` (in `head_before..head_after`: how far HEAD
   moved, so a lane that pulls before it pushes counts upstream commits too) and `dirty`
   (tracked changes left uncommitted); `git` is absent outside a git worktree.
+  While a session is busy the supervisor samples the worktree every few minutes; after
+  `SLUICE_AGENT_QUIET_MIN` (45) minutes busy with no change it posts one note (`needs_reply`
+  false) to the orchestrator on the step's thread, and again after each further quiet period;
+  it never steers or stops the session over it.
   Git never prompts in a session (`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`,
   `GIT_MERGE_AUTOEDIT=no`).
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.

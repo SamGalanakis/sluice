@@ -1,6 +1,7 @@
 """What a session did to its git worktree, read with a few cheap `git` calls that never take a
 lock the agent's own git commands could trip over (GIT_OPTIONAL_LOCKS=0) and never prompt."""
 
+import hashlib
 import os
 import subprocess
 
@@ -44,3 +45,27 @@ def facts(cwd, before):
             "commits": int(count) if count and count.strip().isdigit() else 0,
             "dirty": bool(status and status.strip())}
 
+
+def sample(cwd):
+    """A marker that moves whenever the worktree does: (HEAD, a hash of the status and the
+    size and mtime of every changed or untracked file, whether tracked files are changed).
+    None outside a git worktree."""
+    out = (git(cwd, "rev-parse", "--show-toplevel", "HEAD") or "").split()
+    if len(out) != 2:
+        return None
+    top, now = out
+    items = iter((git(cwd, "status", "--porcelain", "-z", "--untracked-files=all") or "")
+                 .split("\0"))
+    h, diff = hashlib.sha1(), False
+    for item in items:
+        if len(item) < 4:
+            continue
+        if item[0] in "RC":
+            next(items, None)  # a rename's or copy's source path
+        diff = diff or not item.startswith("??")
+        try:
+            st = os.stat(os.path.join(top, item[3:]))
+            h.update(f"{item}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
+        except OSError:
+            h.update(f"{item}\0-\0".encode())
+    return now, h.hexdigest(), diff
