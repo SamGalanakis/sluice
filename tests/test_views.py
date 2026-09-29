@@ -1547,3 +1547,27 @@ def test_a_board_of_one_box_offers_only_the_steps_filter(store):
         store.write_state("x", {"inputs": {}, "steps": {"a": {"status": "skipped",
                                                               "skipped": "no"}}})
     assert '<p class="empty">No step can run.</p>' in views.project_page(store, "x", ver="x")
+
+
+def test_board_edges_are_built_once_and_follow_the_rendered_blocks(store, monkeypatch):
+    import dataclasses
+
+    create(store, "v", {f"s{i}": {"run": "test.add", "in": {"a": d(1), "b": d(1)},
+                                  **({"after": [f"s{i - 1}"]} if i % 2 else {})}
+                         for i in range(300)})
+    calls = 0
+    build = views._edges
+
+    def counted(board):
+        nonlocal calls
+        calls += 1
+        return build(board)
+
+    monkeypatch.setattr(views, "_edges", counted)
+    board = views.load_board(store, "v")
+    views.board_html(store, board)
+    assert calls == 1
+    assert len(views.edges(board)) == 150
+    smaller = dataclasses.replace(board, blocks={"s0": board.blocks["s0"]})
+    assert views.edges(smaller) == []
+    assert calls == 2

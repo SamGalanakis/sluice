@@ -689,6 +689,10 @@ class Board:
     state: dict[str, Any]
     blocks: dict[str, Block]
 
+    @functools.cached_property
+    def edges(self) -> list[Edge]:
+        return _edges(self)
+
     @property
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -1299,6 +1303,10 @@ class Edge:
 
 
 def edges(board: Board) -> list[Edge]:
+    return board.edges
+
+
+def _edges(board: Board) -> list[Edge]:
     """Each endpoint pair's display labels and its value, condition or ordering relations."""
     pairs: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for sid, b in board.blocks.items():
