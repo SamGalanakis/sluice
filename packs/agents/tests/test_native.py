@@ -237,7 +237,7 @@ def run(model, tmp_path, required=("word",), **kw):
 def test_done_when_a_turn_ends_with_the_outputs_submitted(tmp_path):
     model = Model(lambda m, n, text: m.submit(word="blue"))
     out, lines = run(model, tmp_path)
-    assert out == {"final": "reply 1", "session": "s-1", "cost_usd": 0.5}
+    assert out == {"final": "reply 1", "session": "s-1", "cost_usd": 0.5, "git": None}
     assert model.sent == ["the task"] and model.exited
     assert lines[0].startswith("attach: cd ") and lines[0].endswith("&& tmux -S tmux.sock attach")
     assert not server_up(tmp_path / "run")

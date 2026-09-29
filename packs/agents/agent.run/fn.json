@@ -35,6 +35,18 @@
   "outputs": {
     "final": "string",
     "report": "string?",
-    "session": "string"
+    "session": "string",
+    "git": [
+      "null",
+      {
+        "type": "record",
+        "fields": {
+          "head_before": "string",
+          "head_after": "string",
+          "commits": "int",
+          "dirty": "boolean"
+        }
+      }
+    ]
   }
 }

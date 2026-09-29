@@ -31,17 +31,15 @@ Rules:
 
 def main(inp, ctx):
     cwd = inp["cwd"]
-    before = sh(["git", "rev-parse", "HEAD"], cwd=cwd).stdout.strip()
+    sh(["git", "rev-parse", "HEAD"], cwd=cwd)  # a git worktree with a commit, before the session
     notes = ""
     if inp.get("notes"):
         notes = "\n\nAdditional notes from the caller:\n" + inp["notes"]
     prompt = PROMPT.format(base=inp["base"], standards=inp["standards"], notes=notes)
     out = run_claude(prompt, inp, ctx, cwd)
-    sha = sh(["git", "rev-parse", "HEAD"], cwd=cwd).stdout.strip()
-    commits = int(
-        sh(["git", "rev-list", "--count", f"{before}..{sha}"], cwd=cwd).stdout.strip())
-    return {"summary": out["final"], "sha": sha, "commits": commits,
-            "session": out["session"]}
+    git = out["git"]  # from the run's first attempt, so a retry does not undercount
+    return {"summary": out["final"], "sha": git["head_after"], "commits": git["commits"],
+            "session": out["session"], "git": git}
 
 
 if __name__ == "__main__":

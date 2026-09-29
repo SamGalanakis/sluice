@@ -11,7 +11,7 @@ from sluice.fn import run
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _agents.native import run_devin
+from _agents.native import git_output, run_devin
 
 
 def main(inp, ctx):
@@ -23,7 +23,7 @@ def main(inp, ctx):
     if report_path and Path(report_path).exists():
         report = Path(report_path).read_text()
     return {"log": str(log), "final": out["final"], "report": report,
-            "session": out["session"]}
+            "session": out["session"], **git_output(out)}
 
 
 if __name__ == "__main__":

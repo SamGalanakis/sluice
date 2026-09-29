@@ -11,6 +11,18 @@
   "outputs": {
     "result": "string",
     "session": "string",
-    "cost_usd": "float?"
+    "cost_usd": "float?",
+    "git": [
+      "null",
+      {
+        "type": "record",
+        "fields": {
+          "head_before": "string",
+          "head_after": "string",
+          "commits": "int",
+          "dirty": "boolean"
+        }
+      }
+    ]
   }
 }

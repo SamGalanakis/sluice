@@ -16,9 +16,9 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
    an engine with no waiting signal gets `grace` seconds of idle before the first of these;
 3. type messages addressed to the step on its thread into the session as they arrive;
 4. fail on the wall-clock cap, or after `stall` seconds without progress while busy;
-5. on done ask the engine to exit, read `final`, `session` and `cost_usd`; in every case end
-   the tmux server and every process under it (SIGTERM, SIGHUP and SIGINT included, so a
-   `step_cancel` leaves nothing behind)."""
+5. on done ask the engine to exit, read `final`, `session`, `cost_usd` and the run's git
+   facts; in every case end the tmux server and every process under it (SIGTERM, SIGHUP and
+   SIGINT included, so a `step_cancel` leaves nothing behind)."""
 
 import contextlib
 import json
@@ -38,6 +38,7 @@ from sluice import types as T
 from sluice.errors import SluiceError
 from sluice.fn import Transient
 
+from . import worktree
 from .paste import NotDelivered, tail
 from .processes import engine_env
 from .tmux import Tmux
@@ -440,8 +441,10 @@ def _log(line):
 def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=None,
               limits=None, attempt=1, log=_log, sent=None):
     """Run `task` in a live session of the adapter's engine until the step is done. Returns
-    {"final", "session", "cost_usd"}. `session` resumes that session (refused when it was
-    started in another directory); on a retry (`attempt` > 1) a session an earlier attempt of
+    {"final", "session", "cost_usd", "git"} (git: worktree.facts, None outside a git
+    worktree; its `head_before` is read once per run and kept in native.json across retries).
+    `session` resumes that session (refused when it was started in another directory); on a
+    retry (`attempt` > 1) a session an earlier attempt of
     this run started is resumed and told to continue. `sent()` says what the agent has
     submitted so far (default: `submitted`, the run's submission)."""
     limits = limits or Limits.from_env()
@@ -449,21 +452,25 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
     run_dir.mkdir(parents=True, exist_ok=True)
     cwd = str(Path(cwd).resolve())
     rec_path = run_dir / "native.json"
-    message = task
-    if not session and attempt > 1:
+    message, before = task, {}
+    if attempt > 1:
         with contextlib.suppress(OSError, ValueError):
             before = json.loads(rec_path.read_text())
-            if before.get("session") and before.get("cwd") == cwd:
-                session, message = before["session"], CONTINUE
+        if before.get("cwd") != cwd:
+            before = {}
+    if not session and before.get("session"):
+        session, message = before["session"], CONTINUE
     if session:
         was = adapter.session_cwd(session)
         if was and str(Path(was).resolve()) != cwd:
             raise ValueError(f"session {session} was started in {was}, not {cwd}: {adapter.name} "
                              "cannot resume a session from another directory; run the "
                              "step in the session's own directory")
+    head_before = before.get("head_before") or worktree.head(cwd)
     run = _Run(adapter, Tmux(run_dir), run_dir, list(required), feed, limits, log,
                sent or submitted,
-               {"engine": adapter.name, "cwd": cwd, "resumed": session or None})
+               {"engine": adapter.name, "cwd": cwd, "resumed": session or None,
+                **({"head_before": head_before} if head_before else {})})
     _write_json(rec_path, run.record)
     if message is task:
         message = hand_over(task, run_dir / "task.md", POINTER)
@@ -480,7 +487,8 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
         final, sid = adapter.final(), adapter.session_id()
         adapter.exit(run.tmux)
         run.note_session()
-        return {"final": final, "session": sid, "cost_usd": adapter.cost_usd()}
+        return {"final": final, "session": sid, "cost_usd": adapter.cost_usd(),
+                "git": worktree.facts(cwd, head_before)}
     finally:
         for s in handlers:
             signal.signal(s, signal.SIG_IGN)  # a second signal must not cut the cleanup short

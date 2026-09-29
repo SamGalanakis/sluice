@@ -280,6 +280,12 @@ EXPECTED = {
     }
 }
 
+# Every agent fn also returns its run's git facts (absent outside a git worktree).
+GIT = ["null", {"type": "record", "fields": {"head_before": "string", "head_after": "string",
+                                             "commits": "int", "dirty": "boolean"}}]
+for _name in OPEN:
+    EXPECTED["agents"][_name][1]["git"] = GIT
+
 
 def _all_fns():
     found = []

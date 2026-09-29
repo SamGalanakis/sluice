@@ -11,7 +11,7 @@ from sluice.fn import run
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _agents.native import run_codex
+from _agents.native import git_output, run_codex
 
 
 def main(inp, ctx):
@@ -22,7 +22,7 @@ def main(inp, ctx):
     report_path = inp.get("report_path")
     report = Path(report_path).read_text() if report_path and Path(report_path).exists() else None
     return {"log": str(log), "final": out["final"], "report": report,
-            "session": out["session"]}
+            "session": out["session"], **git_output(out)}
 
 
 if __name__ == "__main__":

@@ -18,9 +18,14 @@ def task_text(text, inp, ctx, listen, delivery="pasted"):
     return task
 
 
+def git_output(out):
+    """The `git` output of an agent fn: the run's git facts, absent outside a git worktree."""
+    return {"git": out["git"]} if out.get("git") else {}
+
+
 def run_claude(text, inp, ctx, cwd):
     """Run `text` as a step's task in a supervised Claude session (Opus); `inp` may carry
-    `session` (resume) and `listen`. Returns {"final", "session", "cost_usd"}."""
+    `session` (resume) and `listen`. Returns {"final", "session", "cost_usd", "git"}."""
     listen = inp.get("listen")
     feed = ThreadFeed(ctx) if ctx.project and ctx.step and listen is not False else None
     return supervise(Claude(), task_text(text, inp, ctx, listen), cwd, ctx.run_dir,

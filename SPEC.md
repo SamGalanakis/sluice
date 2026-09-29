@@ -1281,6 +1281,11 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   must start a turn within 60 seconds or it is retried once, then fails; waiting background
   work is nudged after 90 minutes by default. Cancel and runner adoption end the tmux server
   and its process tree (`packs/README.md`, "Agent functions and live sessions").
+  In a git worktree each agent fn also returns the optional record `git`: `head_before`
+  (HEAD when the run started, read once per run and kept in `native.json` across its
+  Transient retries), `head_after`, `commits` (in `head_before..head_after`: how far HEAD
+  moved, so a lane that pulls before it pushes counts upstream commits too) and `dirty`
+  (tracked changes left uncommitted); `git` is absent outside a git worktree.
   Git never prompts in a session (`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`,
   `GIT_MERGE_AUTOEDIT=no`).
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.

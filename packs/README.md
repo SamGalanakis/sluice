@@ -30,7 +30,13 @@ model is a cost the owner opted into.
 Projects choose which engine runs each kind of work.
 
 Every agent function takes `session?: string` and returns `session: string` (the engine's
-session or thread id; empty when there is none).
+session or thread id; empty when there is none). Run in a git worktree, each also returns
+`git`: `{head_before, head_after, commits, dirty}`. `head_before` is HEAD when the run
+started, read once per run and kept in `<run_dir>/native.json`, so a Transient retry does not
+reset it; `commits` counts `head_before..head_after`, i.e. how far HEAD moved (a lane that
+pulls before it pushes counts the upstream commits it pulled); `dirty` says tracked changes
+were left uncommitted. Outside a git worktree `git` is absent. `agent.review`'s `sha` and
+`commits` are `head_after` and `commits`.
 A follow-up to a particular agent is another step with `session` bound to the earlier step's
 `session` output, or a `fn_call` with that session.
 
