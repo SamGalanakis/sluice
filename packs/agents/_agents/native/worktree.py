@@ -8,6 +8,7 @@ import subprocess
 from .processes import GIT_ENV
 
 TIMEOUT = 20.0
+STATUS_MAX = 1500  # characters of `git status --short` in a reminder
 
 
 def git(cwd, *args):
@@ -69,3 +70,8 @@ def sample(cwd):
         except OSError:
             h.update(f"{item}\0-\0".encode())
     return now, h.hexdigest(), diff
+
+
+def cut(text, n=STATUS_MAX):
+    text = text.strip()
+    return text if len(text) <= n else text[:n].rsplit("\n", 1)[0] + "\n…"

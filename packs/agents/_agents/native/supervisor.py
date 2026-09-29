@@ -14,6 +14,10 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
    - otherwise, after `settle` seconds of idle → nudge, up to `nudges` times, then fail
      naming the missing outputs and the agent's last message;
    an engine with no waiting signal gets `grace` seconds of idle before the first of these;
+   at a done exit, wait (up to `work` seconds) while the session's background work runs:
+   what the engine reports (`waiting`) and the processes it let go (processes.detached);
+   then, once per run, when tracked files are changed but not committed, send one reminder
+   turn (never commit for the agent);
 3. type messages addressed to the step on its thread into the session as they arrive;
 4. fail on the wall-clock cap, or after `stall` seconds without progress while busy; post one
    note to the orchestrator on the step's thread after `quiet` seconds busy with no change to
@@ -42,7 +46,7 @@ from sluice.fn import Transient
 
 from . import worktree
 from .paste import NotDelivered, tail
-from .processes import engine_env
+from .processes import detached, engine_env, start_time
 from .tmux import Tmux
 
 NUDGE = ("Your turn ended but these outputs are not submitted: {names}. If you are waiting on "
@@ -60,6 +64,9 @@ MESSAGE_FILE = "A message from {frm} on your sluice thread `{thread}` is in {pat
 INLINE_MAX = 500
 CONTINUE = ("Your session was interrupted by a rate limit or capacity error. Continue your task "
             "where you left off.")
+REMIND = ("You have uncommitted changes: {status}. Commit or discard them (unless your task "
+          "says to leave them), then finish.")
+REMIND_FILE = "A note about your uncommitted changes is in {path}; read it now."
 QUIET = "busy {min} min with no change to the worktree (HEAD {head}, {diff})"
 
 
@@ -85,6 +92,7 @@ class Limits:
     wait: float = 90 * 60.0
     dialog: float = 60.0
     quiet: float = 45 * 60.0
+    work: float = 10 * 60.0
 
     @classmethod
     def from_env(cls):
@@ -98,6 +106,7 @@ class Limits:
             turn_start=_env_float("SLUICE_AGENT_TURN_START_S", 60),
             wait=_env_float("SLUICE_AGENT_WAIT_MIN", 90) * 60,
             quiet=_env_float("SLUICE_AGENT_QUIET_MIN", 45) * 60,
+            work=_env_float("SLUICE_AGENT_WORK_MIN", 10) * 60,
         )
 
 
@@ -172,6 +181,10 @@ class Adapter:
 
     def session_cwd(self, session):
         """The directory `session` was started in, or None when unknown."""
+
+    def roots(self, tmux):
+        """The processes the engine runs as, whose cgroups hold the work it starts."""
+        return [tmux.pane_pid()]
 
 
 def required_outputs(ctx):
@@ -284,6 +297,9 @@ class _Run:
     await_base: int = 0
     await_at: float | None = None
     redelivered: bool = False
+    helpers: set = field(default_factory=set)  # (pid, start) let go before the task
+    reminded: bool = False
+    work_since: float | None = None  # waiting for background work at a done exit since
     mark: object = None  # the worktree's last sample
     sampled: float = 0.0
     changed: float | None = None  # busy with the worktree unchanged since then
@@ -371,6 +387,47 @@ class _Run:
         except Exception as e:  # noqa: BLE001 - a note that cannot be posted is only logged
             self.log(f"quiet note not posted: {e}")
 
+    def work(self, snap):
+        """What the session still runs: its own background work as the engine reports it
+        (`snap.waiting`), and the processes it let go (processes.detached) after the task."""
+        let_go = {p: n for p, n in detached(self.adapter.roots(self.tmux)).items()
+                  if (p, start_time(p)) not in self.helpers}
+        names = ", ".join(f"{n} (pid {p})" for p, n in sorted(let_go.items())[:5])
+        return "; ".join(w for w in (snap.waiting, names) if w)
+
+    def finish(self, snap, now):
+        """At a done exit: "wait" while the session's background work runs (up to `work`
+        seconds), then, once per run, "remind" the agent (one turn) of tracked changes it has
+        not committed; else "done"."""
+        lim, work = self.limits, self.work(snap)
+        if work:
+            if self.work_since is None:
+                self.work_since = now
+                self.log(f"waiting up to {lim.work / 60:.0f} min for background work: {work}")
+            if now - self.work_since < lim.work:
+                return "wait"
+            self.log(f"background work still running after {lim.work / 60:.0f} min "
+                     f"(SLUICE_AGENT_WORK_MIN); finishing anyway: {work}")
+        elif self.work_since is not None:
+            self.log("background work ended")
+        self.work_since = None
+        if self.reminded:
+            return "done"
+        self.reminded = True
+        status = worktree.changes(self.cwd)
+        if not (status and status.strip()):
+            return "done"
+        lines = worktree.cut(status).splitlines()
+        text = hand_over(REMIND.format(status="; ".join(ln.strip() for ln in lines)),
+                         self.run_dir / "messages" / "uncommitted.md", REMIND_FILE)
+        self.log("uncommitted changes: reminding the agent once")
+        try:
+            self.deliver(text, snap.starts)
+        except (NotDelivered, RuntimeError, TimeoutError) as e:
+            self.log(f"reminder not delivered: {e}")
+            return "done"
+        return "remind"
+
     def loop(self):
         a, lim = self.adapter, self.limits
         start = time.monotonic()
@@ -386,7 +443,13 @@ class _Run:
             now = time.monotonic()
             complete = self.required and all(n in self.sent() for n in self.required)
             if complete and snap.state == "idle" and snap.turns > base:
-                return
+                end = self.finish(snap, now)
+                if end == "done":
+                    return
+                if end == "remind":
+                    base, idle_since = snap.turns, None
+                time.sleep(lim.poll)
+                continue
             if snap.error and snap.turns > base and self.transient(snap.error):
                 raise Transient(f"{a.name} hit a rate limit or capacity error: "
                                 f"{snap.error[:300]}")
@@ -435,7 +498,13 @@ class _Run:
                 continue
             missing = [n for n in self.required if n not in self.sent()]
             if self.required and not missing:
-                return
+                end = self.finish(snap, now)
+                if end == "done":
+                    return
+                if end == "remind":
+                    base, idle_since = snap.turns, None
+                time.sleep(lim.poll)
+                continue
             if snap.waiting:
                 if snap.waiting != said:
                     self.log(f"waiting: {snap.waiting}")
@@ -462,7 +531,13 @@ class _Run:
                 time.sleep(lim.poll)
                 continue
             if not self.required:
-                return
+                end = self.finish(snap, now)
+                if end == "done":
+                    return
+                if end == "remind":
+                    base, idle_since = snap.turns, None
+                time.sleep(lim.poll)
+                continue
             if nudges >= lim.nudges:
                 last = " ".join(a.final().split())[:1500]
                 raise RuntimeError(
@@ -523,6 +598,7 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
         run.tmux.start(adapter.argv(), cwd, adapter.env())
         log(f"attach: {run.tmux.attach}")
         adapter.wait_ready(run.tmux, limits.ready)
+        run.helpers = {(p, start_time(p)) for p in detached(adapter.roots(run.tmux))}
         run.deliver(message, getattr(adapter, "starts", 0))
         log(f"task delivered ({len(message)} chars)")
         run.loop()

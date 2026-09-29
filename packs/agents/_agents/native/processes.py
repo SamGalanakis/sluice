@@ -1,4 +1,5 @@
-"""Record native session processes for cleanup when the function cannot run its finally block."""
+"""Record native session processes for cleanup when the function cannot run its finally block,
+and find the background work an agent left running."""
 
 import json
 import os
@@ -72,3 +73,54 @@ def find_argv(token):
                 and token.encode() in args and b"app-server" in args):
             return int(d.name)
     return None
+
+
+def _stat(pid):
+    """(parent pid, state) of a live process, or None."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    rest = stat[stat.rindex(")") + 2:].split()
+    return int(rest[1]), rest[0]
+
+
+def cgroup(pid):
+    """The cgroup (v2) a process is in, or None."""
+    try:
+        text = Path(f"/proc/{pid}/cgroup").read_text()
+    except OSError:
+        return None
+    return next((ln[3:] for ln in text.splitlines() if ln.startswith("0::")), None)
+
+
+def detached(roots):
+    """The background work an engine's session started and let go: processes in the private
+    cgroup of a root (tmux puts each pane in its own scope; scope_command does the same for an
+    app-server) whose parent is outside it. A tool's shell that backgrounds a job (`cmd &`,
+    `nohup`, `setsid`) exits and the job is re-parented out of the scope, but stays in it. The
+    engine's own children (its helpers, MCP servers, the shells it tracks itself) are not
+    counted, nor the roots and their ancestors. A cgroup this process shares is not private:
+    then nothing is found. Returns {pid: name}."""
+    roots = [r for r in roots if r]
+    mine = cgroup(os.getpid())
+    out = {}
+    for group in {cgroup(r) for r in roots} - {None, "/", mine}:
+        try:
+            procs = {int(p) for p in Path(f"/sys/fs/cgroup{group}/cgroup.procs")
+                     .read_text().split()}
+        except (OSError, ValueError):
+            continue
+        skip = set()
+        for pid in roots:
+            while pid in procs and pid not in skip:
+                skip.add(pid)
+                pid = (_stat(pid) or (0, ""))[0]
+        for pid in procs - skip:
+            st = _stat(pid)
+            if st and st[1] != "Z" and st[0] not in procs:
+                try:
+                    out[pid] = Path(f"/proc/{pid}/comm").read_text().strip()
+                except OSError:
+                    continue
+    return out

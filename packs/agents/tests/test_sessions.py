@@ -3,6 +3,8 @@ The supervisor is driven by test_native's scripted Model (its pane runs `sleep`,
 the pane must start processes)."""
 
 import json
+import os
+import signal
 import sys
 import threading
 import time
@@ -18,8 +20,8 @@ sys.path.insert(0, str(AGENTS))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _agents.native.claude import Claude
-from _agents.native.processes import engine_env
-from _agents.native.supervisor import Limits
+from _agents.native.processes import cgroup, detached, engine_env
+from _agents.native.supervisor import REMIND, Limits
 from test_agents import init_repo, make_claude
 from test_native import Model, run
 
@@ -165,6 +167,168 @@ def test_the_quiet_note_is_posted_on_the_steps_thread(call_fn, tmp_path):
         assert n["body"] == (f"test-step: busy 0 min with no change to the worktree "
                              f"(HEAD {head}, no diff)")
     assert len(rec.raw_prompts()) == 1  # the step's own note is not typed back in
+
+
+# ---- background work and uncommitted changes at the end ---------------------------------------
+
+def test_the_wait_for_background_work_reads_its_env_override(monkeypatch):
+    monkeypatch.setenv("SLUICE_AGENT_WORK_MIN", "2")
+    assert (Limits.from_env().work, Limits().work) == (120, 10 * 60)
+
+
+class Shell(Model):
+    """A model whose pane runs `sh`; `detach` (seconds) makes its first turn start a sleep in
+    the background the way a tool's shell does (`(sleep N &)`: re-parented out of the pane)."""
+
+    def __init__(self, detach, on_turn=None, before=None):
+        super().__init__(on_turn or (lambda m, n, text: m.submit(word="w")))
+        self.detach, self.before, self.pid = detach, before, None
+
+    def argv(self):
+        return ["sh"]
+
+    def wait_ready(self, tmux, timeout):
+        if self.before:  # work the session had let go before the task
+            tmux.keys("-l", f"(sleep {self.before} &)")
+            tmux.keys("Enter")
+            self.pid = self.found(tmux)
+
+    def found(self, tmux, known=()):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            new = set(detached([tmux.pane_pid()])) - set(known)
+            if new:
+                return new.pop()
+            time.sleep(0.02)
+        raise AssertionError("no detached process showed up")
+
+    def deliver(self, tmux, text):
+        if not self.sent and self.detach:
+            tmux.keys("-l", f"(sleep {self.detach} &)")
+            tmux.keys("Enter")
+            self.pid = self.found(tmux, [self.pid] if self.pid else ())
+        super().deliver(tmux, text)
+
+
+def private_scopes(tmp_path):
+    """Whether a tmux pane here runs in a cgroup of its own (what processes.detached needs)."""
+    from _agents.native.tmux import Tmux
+    t = Tmux(tmp_path / "probe")
+    (tmp_path / "probe").mkdir()
+    t.start(["sleep", "30"], tmp_path, dict(os.environ))
+    try:
+        group = cgroup(t.pane_pid())
+    finally:
+        t.kill()
+    return group not in (None, "/", cgroup(os.getpid()))
+
+
+@pytest.fixture
+def scopes(tmp_path):
+    if not private_scopes(tmp_path):
+        pytest.skip("tmux panes here share this process's cgroup")
+
+
+def reap(pid):
+    if pid:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_the_end_waits_for_background_work_the_session_let_go(scopes, tmp_path):
+    model = Shell(detach=1.0)
+    started = time.monotonic()
+    try:
+        _, lines = run(model, tmp_path)
+    finally:
+        reap(model.pid)
+    assert time.monotonic() - started >= 0.9
+    assert f"waiting up to 10 min for background work: sleep (pid {model.pid})" in lines
+    assert "background work ended" in lines
+
+
+def test_submitted_outputs_wait_for_the_engines_own_background_work(tmp_path):
+    """The incident (R2): the agent submits, then ends its turn with a background shell
+    running; finishing then would kill it."""
+    def on_turn(m, n, text):
+        m.submit(word="w")
+        m.waiting = "a background shell is running"
+        threading.Timer(0.8, lambda: setattr(m, "waiting", "")).start()
+
+    model = Model(on_turn)
+    started = time.monotonic()
+    _, lines = run(model, tmp_path)
+    assert time.monotonic() - started >= 0.7 and model.sent == ["the task"]
+    assert "waiting up to 10 min for background work: a background shell is running" in lines
+    assert "background work ended" in lines
+
+
+def test_the_wait_for_background_work_is_bounded(scopes, tmp_path):
+    model = Shell(detach=60)
+    limits = Limits(nudges=2, wall=30, stall=30, settle=0.2, grace=0.2, poll=0.02, ready=10,
+                    work=0.3)
+    started = time.monotonic()
+    try:
+        _, lines = run(model, tmp_path, limits=limits)
+        assert Path(f"/proc/{model.pid}").exists()  # never killed: only waited for
+    finally:
+        reap(model.pid)
+    assert time.monotonic() - started < 10
+    assert (f"background work still running after 0 min (SLUICE_AGENT_WORK_MIN); finishing "
+            f"anyway: sleep (pid {model.pid})") in lines
+
+
+def test_work_let_go_before_the_task_is_not_waited_for(scopes, tmp_path):
+    model = Shell(detach=0, before=60)
+    try:
+        _, lines = run(model, tmp_path)
+    finally:
+        reap(model.pid)
+    assert not any("background work" in ln for ln in lines)
+
+
+def test_uncommitted_changes_get_one_reminder_and_are_never_committed(tmp_path):
+    repo = repo_at(tmp_path)
+    start = repo.git("rev-parse", "HEAD")
+
+    def on_turn(m, n, text):
+        (repo.path / "seed.txt").write_text("edited\n")
+        m.submit(word="w")
+
+    model = Model(on_turn)
+    out, lines = run(model, tmp_path)
+    assert model.sent == ["the task", REMIND.format(status="M seed.txt")]
+    assert "uncommitted changes: reminding the agent once" in lines
+    assert repo.git("rev-parse", "HEAD") == start
+    assert repo.git("status", "--short") == "M seed.txt"
+    assert out["git"] == {"head_before": start, "head_after": start, "commits": 0,
+                          "dirty": True}
+
+
+def test_a_reminded_agent_that_commits_leaves_a_clean_worktree(tmp_path):
+    repo = repo_at(tmp_path)
+
+    def on_turn(m, n, text):
+        if n == 1:
+            (repo.path / "seed.txt").write_text("edited\n")
+            m.submit(word="w")
+        else:
+            repo.git("commit", "-q", "-am", "the edit")
+
+    model = Model(on_turn)
+    out, _ = run(model, tmp_path, required=())
+    assert len(model.sent) == 2 and model.sent[1].startswith("You have uncommitted changes")
+    assert out["git"]["commits"] == 1 and out["git"]["dirty"] is False
+
+
+def test_untracked_files_alone_get_no_reminder(tmp_path):
+    repo = repo_at(tmp_path)
+    model = Model(lambda m, n, text: ((repo.path / "new.txt").write_text("n"),
+                                      m.submit(word="w")))
+    run(model, tmp_path)
+    assert model.sent == ["the task"]
 
 
 # ---- the git environment -----------------------------------------------------------------------

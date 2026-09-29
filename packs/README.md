@@ -61,6 +61,20 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   fails naming the missing outputs and the agent's last message. A step that declares no
   required outputs is done once the session is idle with nothing pending, after the grace
   period for an engine that cannot report pending work.
+- Before it finishes, the supervisor waits, up to `SLUICE_AGENT_WORK_MIN` (10) minutes, while
+  the session's background work runs (then finishes anyway, and says so in stderr): what the
+  engine reports (Claude's background shells, agents and wakeups) and every process the
+  session started and let go. A tool's shell that backgrounds a job (`cmd &`, `nohup`,
+  `setsid`) exits, and the job is re-parented out of the engine's process tree but stays in
+  its cgroup: tmux puts each pane in a scope of its own, and the Codex app-server runs in one.
+  Such a process whose parent is outside the cgroup is the session's background work; the
+  engine's own children (MCP servers, hooks, the shells it tracks) are not, nor what was let
+  go before the task arrived. Without a private cgroup (no systemd user manager) only the
+  engine's own report counts.
+- Then, once per run, if tracked files are changed but not committed, the agent gets one
+  reminder turn: "You have uncommitted changes: M a.py; …. Commit or discard them (unless your
+  task says to leave them), then finish." It is sent whatever the task says; the supervisor
+  never commits for the agent.
 - While the session is busy, the supervisor samples the git worktree every few minutes (HEAD,
   `git status`, and the size and mtime of each changed or untracked file). After
   `SLUICE_AGENT_QUIET_MIN` (45) minutes busy with no change it posts one note to the

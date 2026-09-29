@@ -1290,6 +1290,11 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   `SLUICE_AGENT_QUIET_MIN` (45) minutes busy with no change it posts one note (`needs_reply`
   false) to the orchestrator on the step's thread, and again after each further quiet period;
   it never steers or stops the session over it.
+  When the step is otherwise done, the supervisor first waits, up to `SLUICE_AGENT_WORK_MIN`
+  (10) minutes, while the session's background work runs (what the engine reports, and
+  processes it started and let go in its private cgroup), then, once per run, when tracked
+  files are changed but not committed, sends the agent one reminder turn; it never commits
+  for the agent.
   Git never prompts in a session (`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`,
   `GIT_MERGE_AUTOEDIT=no`).
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.

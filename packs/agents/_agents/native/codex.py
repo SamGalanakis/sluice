@@ -458,6 +458,10 @@ class Codex(Adapter):
     def session_id(self):
         return self.thread
 
+    def roots(self, tmux):
+        """The TUI and the app-server, which runs the agent's commands."""
+        return [tmux.pane_pid(), self.app_pid]
+
     def final(self):
         return self.message
 
