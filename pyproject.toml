@@ -26,11 +26,18 @@ requires = ["uv_build>=0.8,<0.12"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.6",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packs"]
 asyncio_mode = "auto"
+# tests start real processes: run them across cores (-p no:xdist or -n0 for one process)
+addopts = "-n auto --maxprocesses 16"
 
 [tool.ruff]
 line-length = 100
