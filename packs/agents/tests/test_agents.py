@@ -234,6 +234,17 @@ def test_claude_success(call_fn, tmp_path):
     assert not (run_dir / "tmux.sock").exists()
 
 
+def test_claude_reports_its_cost_from_a_worktree(call_fn, tmp_path):
+    """Claude Code files a linked worktree's cost under the main worktree's root."""
+    repo = init_repo(tmp_path / "repo")
+    repo.git("worktree", "add", "-q", "-b", "lane", str(tmp_path / "lane"))
+    env, _ = make_claude(tmp_path, [{"reply": "did it"}], cost=0.05)
+    code, out, err = call_fn(AGENTS / "agent.claude",
+                             {"cwd": str(tmp_path / "lane"), "prompt": "do the thing"}, env=env)
+    assert code == 0, err
+    assert out["cost_usd"] == 0.05
+
+
 def test_the_prompt_goes_into_the_session_never_on_argv(call_fn, fake_bin, tmp_path):
     """stderr.log and `ps` carry no prompt: it is pasted into the session."""
     env, rec = make_claude(tmp_path)

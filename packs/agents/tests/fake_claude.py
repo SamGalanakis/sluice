@@ -4,7 +4,8 @@ It speaks the channels the Claude adapter reads: the composer (fake_composer.Com
 hooks of the `--settings` file (each run with its JSON payload on stdin), the status file
 `$CLAUDE_CONFIG_DIR/sessions/<pid>.json`, the transcript under
 `$CLAUDE_CONFIG_DIR/projects/<cwd slug>/<session>.jsonl`, and `/exit`, which records
-`lastCost` in `$CLAUDE_CONFIG_DIR/.claude.json` as Claude Code does.
+`lastCost` in `$CLAUDE_CONFIG_DIR/.claude.json` as Claude Code does (under the main worktree's
+root inside a git repo).
 
 `$FAKE_CLAUDE` names a JSON config: `argv` and `prompts` (files to record its argv and every
 message it receives), `trust` (show the workspace-trust dialog first), `cost`, `exit_at_start`
@@ -186,8 +187,12 @@ class Fake:
     def exit(self):
         cfg_file = CONFIG / ".claude.json"
         cfg = json.loads(cfg_file.read_text()) if cfg_file.exists() else {}
-        cfg.setdefault("projects", {})[self.cwd] = {"lastCost": CFG.get("cost", 0.02),
-                                                    "lastSessionId": self.sid}
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"], cwd=self.cwd, capture_output=True,
+                                text=True, check=False).stdout.strip()
+        key = str(Path(common).parent) if common.endswith("/.git") else self.cwd
+        cfg.setdefault("projects", {})[key] = {"lastCost": CFG.get("cost", 0.02),
+                                               "lastSessionId": self.sid}
         cfg_file.write_text(json.dumps(cfg))
         self.status_file.unlink(missing_ok=True)
         sys.exit(0)

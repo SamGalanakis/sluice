@@ -561,3 +561,26 @@ def test_the_context_fill_leads_the_last_progress_line(transcript):
         "  ctx 142k · aside"]
     assert transcript(said("after the compaction", usage(3, 20_000, 1_000))) == [
         "ctx 21k · after the compaction"]
+
+
+def test_claude_cost_is_read_for_a_session_in_a_worktree_or_a_subdirectory(tmp_path,
+                                                                           monkeypatch):
+    """Claude Code files a directory inside a git repo (a linked worktree's too) under the
+    main worktree's root in its config, not under the directory itself."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cc"))
+    (tmp_path / "cc").mkdir()
+    repo = repo_at(tmp_path)
+    wt = tmp_path / "lane"
+    repo.git("worktree", "add", "-q", "-b", "lane", str(wt))
+    (wt / "sub").mkdir()
+    main = str(repo.path.resolve())
+    (tmp_path / "cc" / ".claude.json").write_text(json.dumps({"projects": {
+        main: {"lastCost": 0.07, "lastSessionId": "s-1"},
+        str(wt): {"lastCost": 9.0, "lastSessionId": "an-older-session"}}}))
+    a = Claude()
+    a.sid = "s-1"
+    for cwd in (wt, wt / "sub", repo.path):
+        a.cwd = str(cwd)
+        assert a.cost_usd() == 0.07, cwd
+    a.sid = "s-2"  # another session's cost is never this one's
+    assert a.cost_usd() is None

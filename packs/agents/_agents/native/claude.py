@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from .. import engines
-from . import paste
+from . import paste, worktree
 from .processes import engine_env
 from .supervisor import Adapter, Snapshot
 
@@ -53,6 +53,15 @@ def _read_json(path):
     except (OSError, ValueError):
         return None
     return got if isinstance(got, dict) else None
+
+
+def _project_keys(cwd):
+    """Where Claude Code may file `cwd` in its config's `projects`: inside a git repo under the
+    main worktree's root (a linked worktree and a subdirectory too), else under `cwd`."""
+    out = (worktree.git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+           or "").strip() if cwd else ""
+    common = Path(out) if out else None
+    return ([str(common.parent)] if common and common.name == ".git" else []) + [cwd]
 
 
 # ---- the composer ------------------------------------------------------------------------------
@@ -477,10 +486,11 @@ class Claude(Adapter):
         its config, when `lastSessionId` is this session), else None."""
         cfg = _read_json(_config_file()) or {}
         projects = cfg.get("projects") if isinstance(cfg.get("projects"), dict) else {}
-        p = projects.get(self.cwd) or {}
-        cost = p.get("lastCost")
-        if p.get("lastSessionId") == self.sid and isinstance(cost, (int, float)):
-            return float(cost)
+        for key in _project_keys(self.cwd):
+            p = projects.get(key) or {}
+            cost = p.get("lastCost")
+            if p.get("lastSessionId") == self.sid and isinstance(cost, (int, float)):
+                return float(cost)
         return None
 
     def session_cwd(self, session):
