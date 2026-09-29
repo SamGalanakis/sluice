@@ -1198,14 +1198,18 @@ def test_a_finished_box_folds_to_one_line(store):
     assert boxes == [("", "b1"), (" done", "a1"), ("", "c1")]
     start = page.index('<li class="box done"')
     folded = page[start:page.index("</details>", start)]
-    assert '<details class="fold-box" data-preserve-attr="open" data-box="a1">' in folded
+    assert '<details class="fold-box" data-preserve-attr="open" data-box="a1"' in folded
     assert '<span class="sid">a1</span>' in folded
     # its last step, then how many and how they ended: a part of its own, which a phone
     # keeps under the first id while the last one hides
     assert ('<span class="fb-last"><span aria-hidden="true"> … </span><span class="vh"> to '
             '</span>a3<span class="fb-dot"> · </span></span>'
             '<span class="fb-n">3 steps · 2 succeeded, 1 skipped</span>') in folded
-    assert 'id="n-a2"' in folded  # its cards are inside, one click away
+    assert 'id="n-a2"' not in folded
+    loaded = views.box_content(store, "v", "a1", views.DEFAULT_VIEW)
+    assert 'id="n-a2"' in loaded
+    assert 'id="n-a3"' not in loaded
+    assert 'id="n-a3"' in views.box_content(store, "v", "a1", views.BoardView(steps="all"))
     # a plan of one piece of work never folds
     create(store, "w", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
                         "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}}})
@@ -1376,7 +1380,9 @@ def test_filtering_drops_the_edges_of_hidden_boxes(store):
     with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {"a": ok, "b": ok}})
     board = views.load_board(store, "v")
-    assert set(board_edges(views.board_html(store, board))) == {("s:a", "s:b"), ("s:c", "s:e")}
+    assert set(board_edges(views.board_html(store, board))) == {("s:c", "s:e")}
+    loaded = views.box_content(store, "v", "a", views.DEFAULT_VIEW)
+    assert 's:a' in loaded and 's:b' in loaded
     active = views.board_html(store, board, True, views.BoardView(show="active"))
     assert box_ids(active) == ["c"] and set(board_edges(active)) == {("s:c", "s:e")}
     none = views.board_html(store, board, True, views.BoardView(show="attention"))

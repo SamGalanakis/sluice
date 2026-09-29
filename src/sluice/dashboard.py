@@ -369,6 +369,19 @@ class Dashboard:
                                   lambda: views.project_parts(self.store, name, view),
                                   exists=lambda: self.store.project(name))
 
+    async def box(self, request: Request) -> Response:
+        def render() -> str:
+            params: dict[str, list[str]] = {}
+            for k, v in request.query_params.multi_items():
+                params.setdefault(k, []).append(v)
+            name, sid = request.path_params["name"], request.path_params["sid"]
+            body = views.box_content(self.store, name, sid, views.BoardView.parse(params))
+            if request.headers.get("sec-fetch-dest") == "empty":
+                return body
+            return views.layout(name, f'<sluice-board>{body}</sluice-board>', board=True,
+                                store=self.store, project=name, tab="plan")
+        return await self._page(render)
+
     def _threads(self, name: str) -> str:
         self.store.project(name)
         return views.threads_page(self.store, name, project_ver(self.store, name))
@@ -572,6 +585,7 @@ class Dashboard:
                               ("/projects/{name}", self.project),
                               ("/projects/{name}/icon", self.icon),
                               ("/projects/{name}/stream", self.project_stream),
+                              ("/projects/{name}/boxes/{sid}", self.box),
                               ("/projects/{name}/threads", self.threads),
                               ("/projects/{name}/threads/stream", self.threads_stream),
                               ("/projects/{name}/steps/{sid}", self.step),

@@ -882,3 +882,20 @@ def test_the_history_tab_shows_every_edit_past_the_log_cap(tmp_path):
     assert "History · p" in page
     plain = views.log_page(store, "p", views.LogQuery.parse({}))
     assert "rev 1 by" not in plain  # the Log tab is the capped log
+
+
+def test_box_route_preserves_filters_and_has_a_no_script_page(store, port):
+    create(store, "p", {
+        "a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
+        "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    store.write_state("p", {"inputs": {}, "steps": {
+        "a": {"status": "succeeded", "outputs": {"sum": 2}},
+        "b": {"status": "skipped"}}})
+    code, page = get(port, "/projects/p/boxes/a?steps=all")
+    assert code == 200 and '<!doctype html>' in page
+    assert 'id="n-a"' in page and 'id="n-b"' in page and 'id="n-c"' not in page
+    code, page = get(port, "/projects/p/boxes/a")
+    assert code == 200 and 'id="n-b"' not in page
+    assert get(port, "/projects/p/boxes/c?steps=invalid")[0] == 400
+    assert get(port, "/projects/p/boxes/b")[0] == 404

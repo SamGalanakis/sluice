@@ -580,7 +580,7 @@ sluice-drawer { display: contents; }
 .fold-box .chev { margin-left: auto; }
 .fold-box[open] .chev { transform: rotate(180deg); }
 .fold-box[open] > summary { margin-bottom: 0; }
-.fold-box > .rows { padding: 8px 18px 16px; }
+.fold-box > .rows, .fold-box > .box-content > .rows { padding: 8px 18px 16px; }
 .box .rows { list-style: none; margin: 0; padding: 0; display: grid; row-gap: var(--row-gap);
                 grid-template-columns: minmax(0, 1fr);  /* a long id ellipsizes, not overflows */
                 grid-template-rows: repeat(var(--rows), minmax(var(--node-h), auto)); }
@@ -1128,7 +1128,7 @@ main > .phead + * { margin-top: 0; }
   /* its main fn's icon under the glyph, beside the count, as the id takes the line */
   .fold-box > summary:has(> .ficon) .g { grid-row: 1; }
   .fold-box > summary > .ficon { grid-column: 1; grid-row: 2; justify-self: center; }
-  .fold-box > .rows { padding: 8px 12px 12px; }
+  .fold-box > .rows, .fold-box > .box-content > .rows { padding: 8px 12px 12px; }
   .row .lane-start { margin-left: 0; }
   .boxes { gap: 10px; }
   .boxes.boxed > .box { padding: 12px; }

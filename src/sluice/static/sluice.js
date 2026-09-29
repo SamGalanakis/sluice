@@ -77,7 +77,11 @@ function markOpen(sid) {
     if (n.id !== `n-${sid}`) n.classList.remove("open");
   }
   const card = sid && document.getElementById(`n-${sid}`);
-  if (!card) return;
+  if (!card) {
+    const box = $$("details[data-box-steps]").find((d) => d.dataset.boxSteps.split(" ").includes(sid));
+    if (box) box.open = true;
+    return;
+  }
   card.classList.add("open");
   const box = card.closest("details.fold-box:not([open])");  // a finished box opens to it
   if (box) box.open = true;
@@ -302,6 +306,39 @@ function announce(text) {
 
 // A folded finished box remembers, per tab, that it was opened.
 const BOXES = "sluice.boxes";
+function boardEdges(host, edges) {
+  return [...edges, ...$$("[data-box-edges]", host)
+    .flatMap((el) => JSON.parse(el.dataset.boxEdges))];
+}
+
+async function loadBox(d) {
+  const body = $(".box-content", d), version = d.dataset.boxVersion;
+  if (!d.open || !body || !d.dataset.boxUrl || body.dataset.boxVersion === version
+      || body.dataset.loading === version) return;
+  body.dataset.loading = version;
+  try {
+    const response = await fetch(d.dataset.boxUrl);
+    if (!response.ok) throw new Error(response.status);
+    const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+    const got = $(".box-content", doc);
+    if (!d.isConnected || d.dataset.boxVersion !== version) return;
+    if (!got || got.dataset.boxVersion !== version) return;
+    body.replaceChildren(...got.childNodes);
+    body.dataset.boxEdges = got.dataset.boxEdges;
+    body.dataset.boxVersion = version;
+    markOpen(currentStep());
+  } catch {
+    if (!body.querySelector("a")) {
+      const link = document.createElement("a");
+      link.href = d.dataset.boxUrl;
+      link.textContent = "Show cards";
+      body.append(link);
+    }
+  } finally {
+    delete body.dataset.loading;
+  }
+}
+
 function openBoxes() {
   try { return JSON.parse(sessionStorage.getItem(BOXES) || "{}") || {}; } catch { return {}; }
 }
@@ -309,6 +346,7 @@ function restoreBoxes(host) {
   const open = openBoxes();
   for (const d of $$("details.fold-box[data-box]", host)) {
     if (open[`${location.pathname}:${d.dataset.box}`] && !d.open) d.open = true;
+    loadBox(d);
   }
 }
 
@@ -320,7 +358,7 @@ rocket("sluice-board", {
     const redraw = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        drawEdges(host, props.edges);
+        drawEdges(host, boardEdges(host, props.edges));
         const held = $(still ? ".node:focus-visible" : ".node:hover, .node:focus-visible",
                        host);  // new paths: keep it lit
         if (held) trace(host, held);
@@ -356,7 +394,7 @@ rocket("sluice-board", {
       redraw();
     });
     changes.observe(host, { childList: true, subtree: true, characterData: true,
-                            attributes: true, attributeFilter: ["class"],
+                            attributes: true, attributeFilter: ["class", "data-box-version"],
                             attributeOldValue: true });
     const card = (evt) => evt.target.closest?.(".node[data-node]");
     const over = (evt) => { const n = card(evt); if (n && !still) trace(host, n); };
@@ -374,7 +412,7 @@ rocket("sluice-board", {
     const keys = (evt) => {
       const here = card(evt);
       if (!here || evt.altKey || evt.ctrlKey || evt.metaKey) return;
-      const next = nearestCard(here, evt, props.edges);
+      const next = nearestCard(here, evt, boardEdges(host, props.edges));
       if (next) { evt.preventDefault(); next.focus(); }
     };
     host.addEventListener("pointerover", over);
@@ -385,6 +423,8 @@ rocket("sluice-board", {
     host.addEventListener("toggle", (evt) => {
       const d = evt.target;
       if (!d.matches?.("details.fold-box[data-box]")) return;
+      loadBox(d);
+      redraw();
       const open = openBoxes(), k = `${location.pathname}:${d.dataset.box}`;
       if (d.open) open[k] = 1; else delete open[k];
       try { sessionStorage.setItem(BOXES, JSON.stringify(open)); } catch { /* no storage */ }
@@ -400,7 +440,7 @@ rocket("sluice-board", {
     });
   },
   onFirstRender({ host, props }) {
-    drawEdges(host, props.edges);
+    drawEdges(host, boardEdges(host, props.edges));
   },
 });
 

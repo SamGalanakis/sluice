@@ -940,6 +940,13 @@ raw HTML escaped, unsafe link schemes refused).
   (`a failed`). Under the board: the **Result** (the plan's outputs that have a value; a
   long text folds to its first lines, markdown rendered) and the plan's inputs (name, value,
   doc).
+- `GET /projects/<name>/boxes/<id>`: the cards and edges of one box, with the board's
+  filters. A finished box initially renders its summary alone. Opening it fetches its
+  cards; without JavaScript, "Show cards" opens this route as a styled page. The drawer
+  can open a box containing its step, and remembered open boxes load on reload. Loaded
+  contents survive graph patches while the box's plan and state entries match; a change
+  fetches fresh content before replacing them. Standalone `plan_view` HTML keeps every
+  card inline.
 - `GET /projects/<name>/icon`: the project's image icon (§2), served with its content type,
   `X-Content-Type-Options: nosniff`, its sha256 as the `ETag` (a matching `If-None-Match`
   gets 304) and,
@@ -1025,7 +1032,7 @@ raw HTML escaped, unsafe link schemes refused).
   A scope with more than three functions opens with an index of their names, each a link to
   the function (`#fn-<name>`).
 
-**Live updates.** Every page renders completely on first load and works without JavaScript
+**Live updates.** Every page renders its visible content on first load and works without JavaScript
 (the log filter is a plain GET form; a card is a link to its step's page). The index, project
 and log pages then open one Datastar SSE stream each (`GET /stream`, `/projects/<name>/stream`,
 `/projects/<name>/log/stream`, `/log/stream`), and a step's detail one of its own

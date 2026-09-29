@@ -362,6 +362,9 @@ one 44px line: the success glyph, its first step's id, then in meta "… its las
 (the glyph says they succeeded; "3 succeeded, 1 skipped" only when some were skipped; on a
 phone the first id in full, wrapping, and "n steps" under it; the last id gives way); a native `<details>` that opens to its cards (open through live updates and,
 per tab, a reload). No edge crosses between boxes, so a folded one hides only its own edges.
+On a live page the folded box loads its cards and edges when opened. Its summary and
+the opened layout keep the same appearance. Without script, a "Show cards" link opens
+the box on its own page.
 With several boxes a toolbar (below) orders them live first by default (what needs
 attention, then what runs, what is ready, what is held, what is done; the plan's order within
 each) or in the plan's order, and filters them; the cards inside a box keep the plan's

@@ -23,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import functools
+import hashlib
 import html
 import json
 import re
@@ -1581,7 +1582,7 @@ def _behind(board: Board, hidden: frozenset[str]) -> dict[str, int]:
 
 
 def board_html(store: Store, board: Board, live: bool = True,
-               view: BoardView = DEFAULT_VIEW) -> str:
+               view: BoardView = DEFAULT_VIEW, box_id: str | None = None) -> str:
     """The plan as a board (the `graph` part): each independent piece of work (the steps any
     edge joins, handoff or `after`) its own box when there are several, the boxes wrapping.
     A box is rows by dependency depth from its first step; in a row, its cards stand grouped
@@ -1621,7 +1622,11 @@ def board_html(store: Store, board: Board, live: bool = True,
     shown: list[tuple[int, int, str, list[str]]] = []  # (rank, plan place, html, ids)
     ranks, kept = [], []
     hidden = hidden_steps = 0
+    deferred: set[str] = set()
     for place, (box, whole) in enumerate(zip(boxes, members, strict=True)):
+        key = min(whole, key=order.__getitem__)
+        if box_id is not None and key != box_id:
+            continue
         r = rank(board, whole, quiet, asking)
         tag = not view.tag or any(view.tag in board.blocks[sid].tags for sid in whole)
         ranks.append(r)
@@ -1638,6 +1643,22 @@ def board_html(store: Store, board: Board, live: bool = True,
         seats = _seats(seen, groups, box, shift, at)
         top = at[0]
         ids = [sid for v in at for i in seats[v] for sid in groups[i][v - shift[i]]]
+        work = ids if len(ids) == len(whole) else \
+            sorted(whole, key=lambda sid: (rows_of[sid], order[sid]))
+        folded = several and len(work) > 1 and _done(board, work)
+        version = hashlib.sha256(repr([(board.doc["steps"][sid], board.blocks[sid].entry)
+                                      for sid in work]).encode()).hexdigest()[:16]
+        url = f"/projects/{quote(board.project)}/boxes/{quote(key)}"
+        if view.query():
+            url += "?" + view.query()
+        if live and folded and box_id is None:
+            deferred.update(ids)
+            inner = (f'<div class="box-content" data-ignore-morph><noscript>'
+                     f'<a href="{e(url)}">Show cards</a></noscript></div>')
+            item = f'<li class="box done" id="box-{e(key)}">' \
+                + _folded(board, work, inner, url, version, ids) + '</li>'
+            shown.append((r, place, item, ids))
+            continue
         rows = []
         for v in at:
             cards = []
@@ -1654,11 +1675,13 @@ def board_html(store: Store, board: Board, live: bool = True,
             rows.append(f'<li class="row" style="--r:{v - top + 1}">{"".join(cards)}</li>')
         inner = (f'<ol class="rows" style="--rows:{at[-1] - top + 1}">'
                  f'{"".join(rows)}</ol>')
+        if box_id is not None:
+            es = [edge for edge in edges(seen) if edge.source in ids and edge.target in ids]
+            return (f'<div class="box-content" data-box-version="{version}" '
+                    f'data-box-edges="{e(_edge_data(es))}">{inner}</div>')
         bid = f' id="box-{e(min(whole, key=order.__getitem__))}"'
         # a finished box folds to a line about all of its work, the skipped steps it hides too
-        work = ids if len(ids) == len(whole) else \
-            sorted(whole, key=lambda sid: (rows_of[sid], order[sid]))
-        if several and len(work) > 1 and _done(board, work):
+        if folded:
             item = f'<li class="box done"{bid}>{_folded(board, work, inner)}</li>'
         else:
             item = f'<li class="box"{bid}>{inner}</li>'
@@ -1675,8 +1698,7 @@ def board_html(store: Store, board: Board, live: bool = True,
         empty = f'<p class="empty">{empty}</p>'
     visible = {sid for x in shown for sid in x[3]}
     es = [edge for edge in edges(board) if edge.source in visible and edge.target in visible]
-    data = json.dumps([[f"s:{edge.source}", f"s:{edge.target}", edge.label, sorted(edge.kinds)]
-                       for edge in es], ensure_ascii=False)
+    data = _edge_data([edge for edge in es if edge.source not in deferred])
     legend = ""
     if es:
         after = any("ordering" in edge.kinds for edge in es)
@@ -1690,13 +1712,26 @@ def board_html(store: Store, board: Board, live: bool = True,
             f"</div>{legend}</sluice-board>")
 
 
+def _edge_data(es: list[Edge]) -> str:
+    return json.dumps([[f"s:{edge.source}", f"s:{edge.target}", edge.label, sorted(edge.kinds)]
+                       for edge in es], ensure_ascii=False)
+
+
+def box_content(store: Store, project: str, sid: str, view: BoardView) -> str:
+    board = load_board(store, project)
+    if sid not in board.blocks or not any(u[0] == sid for u in units(board.plan)):
+        raise NotFound(f"no box {sid!r}")
+    return board_html(store, board, True, view, box_id=sid)
+
+
 def _done(board: Board, ids: list[str]) -> bool:
     """Whether a box's work is finished: every step succeeded (by hand too), or was skipped
     while the rest succeeded."""
     return unit_done(ids, board.state)
 
 
-def _folded(board: Board, ids: list[str], inner: str) -> str:
+def _folded(board: Board, ids: list[str], inner: str, url: str = "", version: str = "",
+            shown: list[str] | None = None) -> str:
     """A finished box folded to one line: its first and last steps (the icon of its main fn
     after the first), how many, and how they ended; it opens to its cards (open across live updates, and per tab in sessionStorage)."""
     skipped = sum(board.blocks[sid].status == "skipped" for sid in ids)
@@ -1707,7 +1742,9 @@ def _folded(board: Board, ids: list[str], inner: str) -> str:
     # the success glyph says how they ended; only a skip is worth words
     ended = f" · {len(ids) - skipped} succeeded, {skipped} skipped" if skipped else ""
     # on a phone the first id takes the line and the count goes under it; the last id hides
-    return (f'<details class="fold-box" data-preserve-attr="open" data-box="{e(ids[0])}">'
+    attrs = (f' data-box-url="{e(url)}" data-box-version="{version}" '
+             f'data-box-steps="{e(" ".join(shown or []))}"') if url else ""
+    return (f'<details class="fold-box" data-preserve-attr="open" data-box="{e(ids[0])}"{attrs}>'
             f'<summary>{glyph("succeeded", ", ")}<span class="sid">{e(ids[0])}</span>{icon}'
             f'<span class="fb-meta"><span class="fb-last"><span aria-hidden="true"> … </span>'
             f'<span class="vh"> to </span>{e(ids[-1])}<span class="fb-dot"> · </span></span>'
