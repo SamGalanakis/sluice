@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _agents.native.claude import Claude
 from _agents.native.codex import Codex
 from _agents.native.processes import cgroup, detached, engine_env
-from _agents.native.supervisor import REMIND, Limits
+from _agents.native.supervisor import REMIND, Limits, lock_session
 from test_agents import init_repo, make_claude, make_devin
 from test_native import FakePane, Model, run
 
@@ -442,6 +442,40 @@ def test_an_engine_reporting_a_compaction_gets_the_steps_context(tmp_path, monke
     assert message.read_text() == f"step x — running\ntask {tmp_path / 'run' / 'task.md'}"
     assert model.sent.count(model.sent[1]) == 1  # once per compaction
     assert "context compacted; the step's context was typed into the session" in lines
+
+
+# ---- one writer per session --------------------------------------------------------------------
+
+def test_a_second_run_resuming_a_held_session_fails_at_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("SLUICE_PROJECT", "p")
+    monkeypatch.setenv("SLUICE_STEP", "other")
+    monkeypatch.setenv("SLUICE_RUN_ID", "r-1")
+    held = lock_session("fake", "s-old")
+    model = Model(lambda m, n, text: m.submit(word="w"))
+    with pytest.raises(RuntimeError, match=r"fake session s-old is in use by step other of "
+                                           r"project p \(run r-1\): two runs cannot resume"):
+        run(model, tmp_path, session="s-old")
+    assert model.sent == []
+    held.close()
+    run(model, tmp_path, session="s-old")
+    assert model.resumed == "s-old"
+    lock_session("fake", "s-old").close()  # released when the run ended
+
+
+def test_a_failed_run_releases_its_session_lock(tmp_path):
+    with pytest.raises(RuntimeError):
+        run(Model(), tmp_path, session="s-old")
+    lock_session("fake", "s-old").close()
+
+
+def test_the_lock_is_taken_per_engine_session(tmp_path):
+    held = lock_session("fake", "s-a")
+    try:
+        run(Model(lambda m, n, text: m.submit(word="w")), tmp_path, session="s-b")
+    finally:
+        held.close()
+    lines = (Path(os.environ["SLUICE_HOME"]) / "locks" / "fake-s-a.lock").read_text()
+    assert json.loads(lines)["pid"] == os.getpid()
 
 
 # ---- the git environment -----------------------------------------------------------------------

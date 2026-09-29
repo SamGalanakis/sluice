@@ -141,11 +141,16 @@ class Devin(Adapter):
         self.ended = False
         self.compactions = 0
 
+    def session_key(self, session):
+        """The session id `session` names: itself, or the id in `<session>.session` (a
+        run's log path)."""
+        path = Path(str(session) + ".session")
+        return path.read_text().strip() if path.exists() else session
+
     def prepare(self, run_dir, cwd, session):
         self.run_dir = Path(run_dir).resolve()
         self.cwd = cwd
-        session_file = Path(str(session) + ".session") if session else None
-        self.resume = session_file.read_text().strip() if session_file and session_file.exists() else session
+        self.resume = self.session_key(session) if session else None
         self.hooks_file = self.run_dir / "hooks.jsonl"
         self.hooks_file.write_text("")
         self.hooks = Tail(self.hooks_file)
@@ -291,8 +296,7 @@ class Devin(Adapter):
         Path(str(self.log) + ".session").write_text(self.sid + "\n")
 
     def session_cwd(self, session):
-        if Path(str(session) + ".session").exists():
-            session = Path(str(session) + ".session").read_text().strip()
+        session = self.session_key(session)
         db = Path.home() / ".local/share/devin/cli/sessions.db"
         if not db.exists():
             return None

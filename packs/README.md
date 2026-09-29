@@ -105,6 +105,9 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   a registry at `<SLUICE_HOME>/codex-native-sessions/`, with homes under
   `<SLUICE_HOME>/codex-native-homes/<thread>`. A rate limit or
   capacity error raises `Transient`; the retry resumes the session and tells it to continue.
+- A run that resumes a session holds `<SLUICE_HOME>/locks/<engine>-<session>.lock` (flock,
+  with the holder's project, step and run in it) until it ends: a second run resuming the same
+  session meanwhile fails at once, naming the holder.
 - The engine's environment has `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true` and
   `GIT_MERGE_AUTOEDIT=no`: nobody can answer a git prompt in a supervised session.
 - `step_cancel` (SIGTERM) ends the tmux server, the engine and every process it started,

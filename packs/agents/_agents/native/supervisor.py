@@ -25,9 +25,13 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
    the git worktree (and again after each further quiet period);
 5. on done ask the engine to exit, read `final`, `session`, `cost_usd` and the run's git
    facts; in every case end the tmux server and every process under it (SIGTERM, SIGHUP and
-   SIGINT included, so a `step_cancel` leaves nothing behind)."""
+   SIGINT included, so a `step_cancel` leaves nothing behind).
+
+A run that resumes a session holds `SLUICE_HOME/locks/<engine>-<session>.lock` until it ends,
+so a second run resuming the same session fails at once, naming the holder."""
 
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -186,6 +190,10 @@ class Adapter:
 
     def session_cwd(self, session):
         """The directory `session` was started in, or None when unknown."""
+
+    def session_key(self, session):
+        """The engine's own id of `session` (what its lock is named by)."""
+        return session
 
     def roots(self, tmux):
         """The processes the engine runs as, whose cgroups hold the work it starts."""
@@ -581,13 +589,45 @@ def _log(line):
     print(line, file=sys.stderr, flush=True)
 
 
+def lock_session(engine, key):
+    """Hold SLUICE_HOME/locks/<engine>-<session>.lock (flock) for this run, with the holder's
+    project, step and run written in it; released when the returned file is closed or the
+    process ends. Raises when another run holds it: two writers corrupt a session."""
+    home = Path(os.environ.get("SLUICE_HOME") or Path.home() / ".sluice")
+    (home / "locks").mkdir(parents=True, exist_ok=True)
+    path = home / "locks" / f"{engine}-{re.sub(r'[^A-Za-z0-9._-]', '_', key)}.lock"
+    f = open(path, "a+")  # noqa: SIM115 - held until the run ends
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.seek(0)
+        try:
+            holder = json.loads(f.read())
+        except ValueError:
+            holder = {}
+        f.close()
+        raise RuntimeError(
+            f"{engine} session {key} is in use by step {holder.get('step') or '?'} of project "
+            f"{holder.get('project') or '?'} (run {holder.get('run') or '?'}): two runs cannot "
+            "resume one session at once. Wait for that step to end, or start a new "
+            "session") from None
+    f.seek(0)
+    f.truncate()
+    env = os.environ
+    f.write(json.dumps({"project": env.get("SLUICE_PROJECT", ""),
+                        "step": env.get("SLUICE_STEP", ""), "run": env.get("SLUICE_RUN_ID", ""),
+                        "pid": os.getpid()}))
+    f.flush()
+    return f
+
+
 def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=None,
               limits=None, attempt=1, log=_log, sent=None, note=None):
     """Run `task` in a live session of the adapter's engine until the step is done. Returns
     {"final", "session", "cost_usd", "git"} (git: worktree.facts, None outside a git
     worktree; its `head_before` is read once per run and kept in native.json across retries).
-    `session` resumes that session (refused when it was started in another directory); on a
-    retry (`attempt` > 1) a session an earlier attempt of
+    `session` resumes that session (refused when it was started in another directory, or
+    while another run resumes it); on a retry (`attempt` > 1) a session an earlier attempt of
     this run started is resumed and told to continue. `sent()` says what the agent has
     submitted so far (default: `submitted`, the run's submission); `note(body)` posts to the
     orchestrator (the quiet-worktree note; none without it)."""
@@ -619,6 +659,7 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
     if message is task:
         (run_dir / "task.md").write_text(task)  # re-read after a compaction
         message = hand_over(task, run_dir / "task.md", POINTER)
+    lock = lock_session(adapter.name, adapter.session_key(session)) if session else None
     handlers = _exit_on_signals()
     try:
         run.tmux.kill()  # a server an earlier attempt of this run left
@@ -642,6 +683,8 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
             run.tmux.kill()
             adapter.close()
         finally:
+            if lock:
+                lock.close()
             for s, h in handlers.items():
                 signal.signal(s, h)
 

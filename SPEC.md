@@ -1298,6 +1298,9 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   After a context compaction the session gets the step's own context again (`sluice me`, or
   the path of `task.md` when that fails): Claude through its SessionStart hook (source
   `compact`), Codex and Devin as a message typed in when they report one.
+  A run that resumes a session holds `SLUICE_HOME/locks/<engine>-<session>.lock`; a second
+  run resuming the same session meanwhile fails at once, naming the holder's project, step
+  and run.
   Git never prompts in a session (`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`,
   `GIT_MERGE_AUTOEDIT=no`).
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.
