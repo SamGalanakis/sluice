@@ -108,7 +108,7 @@ def test_a_server_restart_leaves_steps_of_a_separate_runner_running(home):
             await c.call_tool("plan_patch", {"project": "slow", "rev": 1, "reason": "t",
                                              "start": True, "ops": [
                 {"op": "replace", "path": "/steps", "value": {
-                    "w": {"run": "test.window", "in": {"seconds": {"default": 3}}}}}]})
+                    "w": {"run": "test.window", "in": {"seconds": {"default": 8}}}}}]})
 
     def status() -> str:
         return store.read_state("slow")["steps"].get("w", {}).get("status", "none")
@@ -124,7 +124,7 @@ def test_a_server_restart_leaves_steps_of_a_separate_runner_running(home):
         assert server.wait(timeout=30) == 0
         server, port = serve()  # a restarted server; the step is still running meanwhile
         assert status() == "running"
-        deadline = time.time() + 20
+        deadline = time.time() + 30
         while status() == "running" and time.time() < deadline:
             time.sleep(0.1)
         assert status() == "succeeded", store.read_state("slow")
