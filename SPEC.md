@@ -801,8 +801,8 @@ raw HTML escaped, unsafe link schemes refused).
   History — the log page filtered to the history kinds, which reads the plan's whole edit
   history, every edit back to rev 1, with the manual values the log still has, in seq order —
   Log, and Functions, the functions as the project sees them), first whether the work moves: a progress bar by status and one line
-  (succeeded of total, skipped, running, stale, failed, blocked, paused, total `cost_usd`, last
-  activity; the failed, blocked and paused left to the stuck line when it leads the page; the
+  (succeeded of total, skipped, running, stale, failed, blocked, paused, last activity;
+  the failed, blocked and paused left to the stuck line when it leads the page; the
   bar's label counts them all) with the Pause
   and Archive switches; then the description (markdown, folded to its opening, then "Show
   more"; a paused or archived project says so), then the **board**. Its **lanes** are the
@@ -935,8 +935,8 @@ raw HTML escaped, unsafe link schemes refused).
   read like a run history: its id with its state as badges beside it (the status glyph and
   word, `blocked` for a blocked step; runs done of total for a scattered step; how long it
   ran, live while running, with when it started and ended as the time's tooltip; the quiet
-  badge; "ended 1h ago" once finished), its doc, one line of meta (fn, cost as money,
-  session, tags), then a row each for what a pending step waits on, what it runs after, its
+  badge; "ended 1h ago" once finished), its doc, one line of meta (fn, session, tags),
+  then a row each for what a pending step waits on, what it runs after, its
   `when`, and for a failed step the steps it blocks, each a link to that step led by its
   status glyph, the Pause switch where pausing acts (a pending, failed or stale step; Resume
   on any paused step; pausing never stops a running one) and a link to its thread on the

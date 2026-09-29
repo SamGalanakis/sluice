@@ -331,7 +331,7 @@ system monospace is for data only: stderr, fn names in the functions list, value
 log's seq, time and kind. All numerals are tabular.
 
 ### Named Rules
-**The Meta Voice Rule.** What a run says about itself (times, costs, counts, engines, labels)
+**The Meta Voice Rule.** What a run says about itself (times, counts, engines, labels)
 is 13px meta in muted ink, sentence case. Nothing is uppercase; no kickers or eyebrows. A small
 label stays in the text face even on an `h2`.
 
@@ -395,7 +395,7 @@ it), so the column's left edge and the nav's still meet, and at 2560 the board s
 the drawer instead of centred far from it.
 
 **The One Click Rule.** The board is names and states: compact bubbles you can take in at a
-glance. Everything else (outputs, prompts, costs, shas) is one click away in the drawer, or
+glance. Everything else (outputs, prompts, shas) is one click away in the drawer, or
 under the board for the plan as a whole.
 
 Below 720px the board stacks one card per line without edges (and without their legend), and
@@ -554,7 +554,7 @@ with its state beside it as badges, wrapping under a long id: the status glyph a
 ("blocked" for a blocked step), `done/total runs` when scattered, how long it ran (live while
 running; when it started and ended are its tooltip), the gold "quiet 42m" once quiet, and
 for a finished step "ended 1h ago" in meta. Then its doc, one line of meta (the fn in mono,
-the cost, "session" and its first 8 characters, its tags as badges), and, each a row that
+"session" and its first 8 characters, its tags as badges), and, each a row that
 wraps under a muted label, what a pending step waits on, what it runs after, its `when`, and
 what a failed step blocks: steps as links led by their glyphs. No grid of facts: nothing
 there is a setting. Then the Pause switch (only where pausing acts: pending, failed, stale;

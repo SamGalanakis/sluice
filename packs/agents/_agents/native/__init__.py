@@ -38,7 +38,7 @@ def git_output(out):
 
 def run_claude(text, inp, ctx, cwd):
     """Run `text` as a step's task in a supervised Claude session (Opus); `inp` may carry
-    `session` (resume) and `listen`. Returns {"final", "session", "cost_usd", "git"}."""
+    `session` (resume) and `listen`. Returns {"final", "session", "git"}."""
     listen = inp.get("listen")
     feed = ThreadFeed(ctx) if ctx.project and ctx.step and listen is not False else None
     return supervise(Claude(), task_text(text, inp, ctx, listen), cwd, ctx.run_dir,

@@ -42,11 +42,6 @@ def config_dir():
     return Path(d).expanduser() if d else Path.home() / ".claude"
 
 
-def _config_file():
-    d = os.environ.get("CLAUDE_CONFIG_DIR")
-    return (Path(d).expanduser() if d else Path.home()) / ".claude.json"
-
-
 def _read_json(path):
     try:
         got = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -255,7 +250,6 @@ class Claude(Adapter):
         self.api_error = ""
         self.last_text = ""
         self.status_path = None
-        self.cwd = None
         self.trust_at = 0.0
         self.seen = {}  # transcript path -> its size before this run (a resumed session's)
         self.unstopped = None  # since when the status is idle with the prompt's Stop missing
@@ -263,7 +257,7 @@ class Claude(Adapter):
 
     # launch
     def prepare(self, run_dir, cwd, session):
-        self.run_dir, self.cwd, self.resume = Path(run_dir).resolve(), cwd, session
+        self.run_dir, self.resume = Path(run_dir).resolve(), session
         self.hooks_file = self.run_dir / "hooks.jsonl"
         self.hooks_file.write_text("")
         self.hooks = Tail(self.hooks_file)
@@ -480,17 +474,6 @@ class Claude(Adapter):
         deadline = time.monotonic() + EXIT_WAIT
         while time.monotonic() < deadline and tmux.dead() is None:
             time.sleep(0.2)
-
-    def cost_usd(self):
-        """The session's cost as Claude Code records it at exit (`lastCost` of the project in
-        its config, when `lastSessionId` is this session), else None."""
-        cfg = _read_json(_config_file()) or {}
-        projects = cfg.get("projects") if isinstance(cfg.get("projects"), dict) else {}
-        p = projects.get(self.cwd) or {}
-        cost = p.get("lastCost")
-        if p.get("lastSessionId") == self.sid and isinstance(cost, (int, float)):
-            return float(cost)
-        return None
 
     def session_cwd(self, session):
         """Where `session` was started: its transcript sits under the project dir Claude

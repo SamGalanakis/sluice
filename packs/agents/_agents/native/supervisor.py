@@ -23,7 +23,7 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
 4. fail on the wall-clock cap, or after `stall` seconds without progress while busy; post one
    note to the orchestrator on the step's thread after `quiet` seconds busy with no change to
    the git worktree (and again after each further quiet period);
-5. on done ask the engine to exit, read `final`, `session`, `cost_usd` and the run's git
+5. on done ask the engine to exit, read `final`, `session` and the run's git
    facts; in every case end the tmux server and every process under it (SIGTERM, SIGHUP and
    SIGINT included, so a `step_cancel` leaves nothing behind). A failure's message ends with
    the session to resume.
@@ -182,9 +182,6 @@ class Adapter:
     def final(self):
         """The agent's last message."""
         return ""
-
-    def cost_usd(self):
-        return None
 
     def exit(self, tmux):
         """Ask the engine to exit cleanly; return once it has (or give up quietly)."""
@@ -625,7 +622,7 @@ def lock_session(engine, key):
 def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=None,
               limits=None, attempt=1, log=_log, sent=None, note=None):
     """Run `task` in a live session of the adapter's engine until the step is done. Returns
-    {"final", "session", "cost_usd", "git"} (git: worktree.facts, None outside a git
+    {"final", "session", "git"} (git: worktree.facts, None outside a git
     worktree; its `head_before` is read once per run and kept in native.json across retries).
     `session` resumes that session (refused when it was started in another directory, or
     while another run resumes it); on a retry (`attempt` > 1) a session an earlier attempt of
@@ -675,8 +672,7 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
         final, sid = adapter.final(), adapter.session_id()
         adapter.exit(run.tmux)
         run.note_session()
-        return {"final": final, "session": sid, "cost_usd": adapter.cost_usd(),
-                "git": worktree.facts(cwd, head_before)}
+        return {"final": final, "session": sid, "git": worktree.facts(cwd, head_before)}
     except Exception as e:
         sid = adapter.session_id() or run.record.get("session") or session
         if sid and len(e.args) == 1 and isinstance(e.args[0], str):

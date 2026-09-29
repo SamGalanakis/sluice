@@ -184,8 +184,8 @@ def test_the_board_shows_each_step_as_a_bubble(store):
     assert '<span class="vh">succeeded, </span>' in a
     assert ('<span class="sid">a<span class="sep">,</span></span><span class="dur">12m 4s'
             '</span>') in a
-    # just the name and, small, its time: outputs, engine and cost are in the drawer
-    assert "sum" not in a and "test.add" not in a and "$" not in a
+    # just the name and, small, its time: outputs and engine are in the drawer
+    assert "sum" not in a and "test.add" not in a
     assert "aria-description=" not in card(page, "b").split(">", 1)[0]  # no doc, nothing to say
     assert "is-manual" in card(page, "b")
     c = card(page, "c")  # failed: its error's last line (the exception) is the tooltip
@@ -404,8 +404,8 @@ def test_a_steps_detail(store):
             '2026-01-01T10:01:30Z">1m 30s</span>') in badges
     assert '<span class="d-ago">ended <time datetime="2026-01-01T10:01:30Z"' in badges
     assert "<dt>Status</dt>" not in head and "<dt>Duration</dt>" not in head
-    # the fn and the cost (as money) are one line of meta under the doc
-    assert '<p class="d-meta meta"><code title="function">test.open</code> · $0.12</p>' in head
+    # the fn is the line of meta under the doc
+    assert '<p class="d-meta meta"><code title="function">test.open</code></p>' in head
     sections = re.findall(r'<h3 class="label">([^<]+)</h3>', html)
     assert sections == ["Outputs", "Prompt", "Inputs", "Log output", "Attempts"]
     # a named value is a row of a field list: its name (its type after it on demand, both in
@@ -417,7 +417,9 @@ def test_a_steps_detail(store):
     assert ('<button type="button" class="types-toggle" aria-pressed="false" '
             'title="Show the types of the values">Types<span class="sw" aria-hidden="true">'
             '</span></button>') in html
-    assert "0.123457" not in html  # cost is a fact of the run, in the header, not an output
+    # a cost_usd an old run returned is just another output, in no meta line
+    assert ('<div class="f"><dt class="f-k" title="cost_usd"><span class="f-name">cost_usd'
+            '</span></dt><dd class="f-v"><span class="v num">0.123457</span></dd></div>') in html
     assert '<div class="prompt">Do &lt;b&gt;it&lt;/b&gt;\nthen stop</div>' in html
     # an input says where it comes from, a chip linking to the step; a value set in the plan
     # says nothing

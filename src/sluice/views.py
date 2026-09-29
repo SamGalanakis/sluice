@@ -298,10 +298,6 @@ def _outside(board: Board, block: Block) -> str:
     return _span(since, None, True) if since else ""
 
 
-def _money(cost: float | None) -> str:
-    return "" if cost is None else f"${cost:,.2f}"
-
-
 def _signals(values: Mapping[str, Any]) -> str:
     return e(json.dumps(values, ensure_ascii=False))
 
@@ -680,12 +676,6 @@ class Block:
         return dict(self.fn_outputs)
 
     @property
-    def cost(self) -> float | None:
-        v = (self.entry.get("outputs") or {}).get("cost_usd") \
-            if isinstance(self.entry.get("outputs"), dict) else None
-        return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
-
-    @property
     def run_ids(self) -> list[str]:
         return [r for r in self.entry.get("run_ids") or [] if isinstance(r, str)]
 
@@ -705,11 +695,6 @@ class Board:
         for b in self.blocks.values():
             out[b.status] = out.get(b.status, 0) + 1
         return out
-
-    @property
-    def cost(self) -> float | None:
-        costs = [b.cost for b in self.blocks.values() if b.cost is not None]
-        return sum(costs) if costs else None
 
     @functools.cached_property
     def held(self) -> dict[str, list[str]]:
@@ -930,7 +915,7 @@ def output_summary(block: Block) -> str:
     if not isinstance(outs, dict):
         return ""
     names = [n for n in (*TEXT_OUTPUTS, *block.outputs, *outs)
-             if n in outs and n not in ("cost_usd", "session")]
+             if n in outs and n not in RUN_FACTS]
     for n in dict.fromkeys(names):
         v = outs[n]
         if isinstance(v, str) and v.strip():
@@ -1121,7 +1106,7 @@ def threads_page(store: Store, project: str, ver: str) -> str:
 
 # ---- the board: lanes of rows by dependency depth ----------------------------------------
 
-RUN_FACTS = ("session", "cost_usd")  # what a run says about itself, not what it produced
+RUN_FACTS = ("session",)  # what a run says about itself, not what it produced
 SWEEPS = 4  # ordering passes down and up a lane
 
 
@@ -1784,7 +1769,7 @@ def first_paragraph(text: str) -> str:
 
 def _summary_line(board: Board, updated: str = "") -> str:
     """Succeeded of total, then what else there is: skipped, running, stale, failed, and of
-    the pending steps those a failure blocks and those paused; the cost, the last activity.
+    the pending steps those a failure blocks and those paused; the last activity.
     With failed steps, the stuck sentence above already counts the failed, blocked and paused
     ones, so this line leaves them out."""
     counts, total = {**board.counts, **board.stuck}, len(board.blocks)
@@ -1792,8 +1777,6 @@ def _summary_line(board: Board, updated: str = "") -> str:
     said = ("failed", "blocked", "paused") if board.failed else ()
     bits += [f"{counts[s]} {s}" for s in ("skipped", "running", "stale", "failed", "blocked",
                                           "paused") if counts.get(s) and s not in said]
-    if board.cost is not None:
-        bits.append(_money(board.cost))
     if updated:
         bits.append(f"updated {_when(updated)}")
     return " · ".join(bits)
@@ -2408,7 +2391,7 @@ def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable
     and word, `done/total runs` when scattered, how long it ran, live while it runs, and a
     `quiet 42m` badge once a running step has gone quiet; when it started and ended are the
     time's tooltip, and a finished step says how long ago it ended), then its doc and, as one
-    line of meta, its fn, cost, session and tags."""
+    line of meta, its fn, session and tags."""
     status = "blocked" if board.blocked(b.sid) else WORDS.get(b.mark, b.status)
     badges = [(f'<span class="tag"><span aria-hidden="true">{glyph(b.mark)}</span>'
                f"{e(status)}</span>")]
@@ -2440,8 +2423,6 @@ def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable
         out += f'<p class="d-doc attn-note">Paused{why}</p>'
     # the fn's icon beside its name (the line is a flex row: its gap sets them apart)
     meta = [f'{fn_icon(b.step.fn, board.project, "meta")}<code title="function">{e(b.fn)}</code>']
-    if b.cost is not None:
-        meta.append(e(_money(b.cost)))
     outs = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else {}
     if isinstance(session := outs.get("session"), str) and session:
         meta.append(f'session <code title="{e(session)}">{e(session[:8])}</code>')
@@ -2482,7 +2463,7 @@ def _relations(board: Board, b: Block, steps: Callable[[Iterable[str]], str]) ->
 
 def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     """Everything about one step, the way a run history reads: the step with its state as
-    badges (status, duration, quiet), its doc, fn, cost and session, how it stands to the
+    badges (status, duration, quiet), its doc, fn and session, how it stands to the
     other steps (what it waits on, what it blocks) and a link to its thread,
     then what matters now (error, progress), what it produced, its prompt and other inputs (where each comes
     from), its log output and, when it ran more than once, its attempts. Types show on demand
@@ -2553,7 +2534,7 @@ def step_detail(store: Store, project: str, sid: str, live: bool = True) -> str:
     if b.status == "running":  # gone quiet or not: the quiet badge by the title says which
         section("Progress" + which, f'<pre class="tail">{e(tail)}</pre>' if tail else
                 '<p class="quiet">Nothing written yet.</p>')
-    # outputs: what it produced (its declared ones first); session and cost are run facts
+    # outputs: what it produced (its declared ones first); the session is a run fact
     outs: dict[str, Any] | None = outs_all if isinstance(b.entry.get("outputs"), dict) else None
     declared = b.outputs
     title = "Outputs"

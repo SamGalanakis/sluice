@@ -220,7 +220,7 @@ def test_claude_success(call_fn, tmp_path):
                              {"cwd": str(tmp_path), "prompt": "do the thing"}, env=env)
     assert code == 0, err
     run_dir = call_fn.run_dirs[-1]
-    assert out == {"result": "did it", "session": session_of(call_fn), "cost_usd": 0.02}
+    assert out == {"result": "did it", "session": session_of(call_fn)}
     assert out["session"]
     assert rec.argv() == ["--model", "opus", "--dangerously-skip-permissions",
                           "--disallowedTools", "AskUserQuestion",
@@ -1048,7 +1048,7 @@ def run_plan(tmp_path, steps, submit):
     home.mkdir()
     (home / "config.json").write_text(json.dumps({"fn_dirs": [str(AGENTS)]}))
     turn = {"reply": "done"} | ({"submit_cli": submit} if submit is not None else {})
-    env, _ = make_claude(tmp_path, [turn] * len(steps), cost=0.0)
+    env, _ = make_claude(tmp_path, [turn] * len(steps))
     (home / ".env").write_text("".join(f"{k}={v}\n" for k, v in env.items()))
     store = Store(home)
     store.create_project("p", "", "t", "t")
@@ -1077,8 +1077,7 @@ def test_an_agent_that_submits_hands_its_outputs_downstream(tmp_path):
     }, submit="blue")
     assert st["a"]["status"] == "succeeded", st["a"].get("error")
     session = st["a"]["outputs"]["session"]
-    assert st["a"]["outputs"] == {"result": "done", "session": session, "cost_usd": 0.0,
-                                  "word": "blue"}
+    assert st["a"]["outputs"] == {"result": "done", "session": session, "word": "blue"}
     assert st["b"]["status"] == "succeeded", st["b"].get("error")
     assert st["b"]["outputs"]["echo"] == "blue"
     [run_b] = st["b"]["run_ids"]

@@ -65,8 +65,7 @@ EXPECTED = {
             },
             {
                 "result": "string",
-                "session": "string",
-                "cost_usd": "float?"
+                "session": "string"
             }
         ],
         "agent.run": [

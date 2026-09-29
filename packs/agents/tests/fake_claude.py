@@ -3,11 +3,10 @@
 It speaks the channels the Claude adapter reads: the composer (fake_composer.Composer), the
 hooks of the `--settings` file (each run with its JSON payload on stdin), the status file
 `$CLAUDE_CONFIG_DIR/sessions/<pid>.json`, the transcript under
-`$CLAUDE_CONFIG_DIR/projects/<cwd slug>/<session>.jsonl`, and `/exit`, which records
-`lastCost` in `$CLAUDE_CONFIG_DIR/.claude.json` as Claude Code does.
+`$CLAUDE_CONFIG_DIR/projects/<cwd slug>/<session>.jsonl`, and `/exit`.
 
 `$FAKE_CLAUDE` names a JSON config: `argv` and `prompts` (files to record its argv and every
-message it receives), `trust` (show the workspace-trust dialog first), `cost`, `exit_at_start`
+message it receives), `trust` (show the workspace-trust dialog first), `exit_at_start`
 (print `stderr` and exit with that code), and `turns`, played one per message (or background
 notification). A turn may hold: `busy_s`, `tool` ({name, input}), `tool_error`, `run` (a shell
 command in cwd), `submit` (outputs stored as the run's submission, as step_submit does), `submit_cli` (a value
@@ -184,11 +183,6 @@ class Fake:
         self.queue.append(("wakeup", "Reply with the single word AWAKE."))
 
     def exit(self):
-        cfg_file = CONFIG / ".claude.json"
-        cfg = json.loads(cfg_file.read_text()) if cfg_file.exists() else {}
-        cfg.setdefault("projects", {})[self.cwd] = {"lastCost": CFG.get("cost", 0.02),
-                                                    "lastSessionId": self.sid}
-        cfg_file.write_text(json.dumps(cfg))
         self.status_file.unlink(missing_ok=True)
         sys.exit(0)
 

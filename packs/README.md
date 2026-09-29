@@ -37,7 +37,7 @@ Claude always runs Opus. Codex takes `model` `sol` (default) or `astra`, and `ef
 takes `model` `swe-2-high` (default, alias `high`) or `fusion` — Fusion (Claude Opus 5.5
 High + SWE-2 Medium), whose full id `fusion-claude-opus-5-5-high-sidekick-swe-2-medium`
 is also accepted. `effort` stays codex-only. The allowlist is deliberate: each accepted
-model is a cost the owner opted into.
+model is one the owner opted into.
 Projects choose which engine runs each kind of work.
 
 Every agent function takes `session?: string` and returns `session: string` (the engine's
@@ -175,11 +175,9 @@ A new directory's workspace-trust dialog is answered yes (its default is "No, ex
 as `--mcp-config` with `--strict-mcp-config`, so the session has only those servers
 (`{"mcpServers": {}}`: none). The session's environment drops the markers a parent Claude Code
 session sets (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, …): inherited, they turn off the
-child's transcript and status file. `cost_usd` is the `lastCost` Claude Code records for the
-directory at exit (for a resumed session it includes the earlier turns). The context fill, the
-input, cache-read and cache-creation tokens of the latest assistant entry's `message.usage`,
-leads the last progress line of each batch (`ctx 142k · tool Bash …`), so the step's card
-shows it.
+child's transcript and status file. The context fill, the input, cache-read and
+cache-creation tokens of the latest assistant entry's `message.usage`, leads the last progress
+line of each batch (`ctx 142k · tool Bash …`), so the step's card shows it.
 
 ### Codex: idle is not done
 
