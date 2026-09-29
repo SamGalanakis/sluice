@@ -1,6 +1,6 @@
 """What finished work leaves behind (SPEC §2, §6): a step a plan edit removes keeps its
 outcome in `outcomes`, written in the edit's transaction and never trimmed; and the schema
-change that brought the table (version 1 → 2)."""
+change that brought the table (version 1 → 2, and on to 3)."""
 
 import json
 import sqlite3
@@ -73,6 +73,7 @@ def test_a_version_1_file_is_upgraded_in_place_keeping_its_rows(tmp_path):
                                                            ("index", "outcomes_unit")]
     assert peek(home, "SELECT name, description FROM projects") == [("p", "old")]
     assert peek(home, "SELECT author, reason FROM plan_edits") == [("orch", "grow")]
+    assert peek(home, "SELECT count(*) FROM sqlite_master WHERE name = 'readers'") == [(1,)]
     assert peek(home, "SELECT count(*) FROM records") == [(1,)]
     store = Store(home)
     assert store.status("p", all=True)["steps"][0]["status"] == "succeeded"

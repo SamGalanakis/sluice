@@ -15,18 +15,20 @@ import dataclasses
 import datetime as dt
 import json
 import re
+import sqlite3
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import IO, Any
 
+from . import db
 from . import inbox as I
 from . import log as L
 from . import plan as P
 from . import state as S
 from .errors import SluiceError
 from .store import Store
-from .util import atomic_write_json, now_iso, read_json
+from .util import now_iso
 
 
 def follow(home: Path, project: str | None, out: IO[str], kinds: Iterable[str] | None = None,
@@ -55,7 +57,6 @@ def follow(home: Path, project: str | None, out: IO[str], kinds: Iterable[str] |
 ATTENTION = ("failed", "stale", "skipped")  # a step going to one of these always wakes
 FINAL = ("succeeded", "skipped", "failed", "stale")  # a step in one of these will not run now
 CUT = 600  # the text form's cut for one output value
-READERS = "next.json"  # SLUICE_HOME/next.json: how far `next` has read each project's log
 BEAT = 30.0  # seconds between a waiting next_up's notes that it is still reading
 
 
@@ -269,26 +270,19 @@ def next_up(store: Store, projects: list[str], since_seq: int | None = None,
 
 # ---- nobody reading: a waking record no orchestrator has read -------------------------------
 
-def _readers(store: Store) -> dict[str, Any]:
-    try:
-        got = read_json(store.home / READERS)
-    except (OSError, ValueError):
-        return {}
-    return got if isinstance(got, dict) else {}
-
-
 def _reading(store: Store, projects: list[str], me: str, seq: int) -> None:
-    """Note in next.json that `me` reads `projects` now and has read their logs up to `seq`:
-    per project {seq, at, me}, the seq never going back. Best effort: next never fails
-    over it."""
-    got, at = _readers(store), now_iso()
-    for p in projects:
-        old = got.get(p) if isinstance(got.get(p), dict) else {}
-        top = old.get("seq") if isinstance(old.get("seq"), int) else 0
-        got[p] = {"seq": max(seq, top), "at": at, "me": me}
+    """Note in the `readers` table that `me` reads `projects` now and has read their logs up
+    to `seq`: one row per project, its seq never going back. Best effort: next never fails
+    over it (a project deleted meanwhile just gets no row)."""
+    at = now_iso()
     try:
-        atomic_write_json(store.home / READERS, got)
-    except OSError:
+        with store.tx() as conn:
+            for p in projects:
+                conn.execute("INSERT INTO readers (project, seq, at, me) SELECT name, ?, ?, ? "
+                             "FROM projects WHERE name = ? ON CONFLICT (project) DO UPDATE SET "
+                             "seq = max(seq, excluded.seq), at = excluded.at, me = excluded.me",
+                             (seq, at, me, p))
+    except (SluiceError, sqlite3.Error):
         pass
 
 
@@ -301,19 +295,22 @@ def _epoch(iso: Any) -> float | None:
 
 
 def unread_alerts(store: Store, minutes: float, now: float | None = None) -> list[dict]:
-    """Post one inbox item (`from` sluice) for each project `next` has read (next.json) whose
-    log holds a record that would wake it (the wake rule, as `me`), when that record is at
-    least `minutes` old and no `next` has read the project for as long: its orchestrator is
-    likely gone. One item per such record, whatever became of it. Returns the items posted."""
+    """Post one inbox item (`from` sluice) for each project `next` has read (the `readers`
+    table) whose log holds a record that would wake it (the wake rule, as `me`), when that
+    record is at least `minutes` old and no `next` has read the project for as long: its
+    orchestrator is likely gone. One item per such record, whatever became of it: the item
+    keeps the record's seq (inbox.about), so a new threshold does not post it again. Returns
+    the items posted."""
     now = time.time() if now is None else now
-    live = {p["name"] for p in store.projects() if not p["archived"]}
+    with store.rx() as conn:
+        rows = db.all_rows(conn, "SELECT r.* FROM readers r JOIN projects p ON p.name = "
+                                 "r.project WHERE NOT p.archived ORDER BY r.project")
     posted = []
-    for project, r in _readers(store).items():
-        at = _epoch(r.get("at")) if isinstance(r, dict) else None
-        if project not in live or at is None or now - at < minutes * 60:
+    for r in rows:
+        project, at, seq = r["project"], _epoch(r["at"]), r["seq"]
+        if at is None or now - at < minutes * 60:
             continue
-        me, views = str(r.get("me") or "orchestrator"), {}
-        seq = r.get("seq") if isinstance(r.get("seq"), int) else 0
+        me, views = r["me"] or "orchestrator", {}
         rec = next((x for x in L.read(store.home, project, seq)["records"]
                     if _classify(store, {**x, "project": project}, me, views) == "wake"), None)
         when = _epoch(rec["at"]) if rec else None
@@ -321,16 +318,15 @@ def unread_alerts(store: Store, minutes: float, now: float | None = None) -> lis
             continue
         title = (f"No orchestrator has read {project}'s log for {minutes:g} min "
                  f"(seq {rec['seq']})")
-        with store.rx() as conn:
-            if any(i.get("from") == "sluice" and i["title"] == title
-                   for i in I.items(conn, project)):
-                continue
         body = (f"`next` last read this project at {r['at']} (as `{me}`). Since then this "
                 f"record would have woken it, and nobody has read it:\n\n```\n"
                 f"{line({**rec, 'project': project})}\n```\n\nThe orchestrator's session "
                 f"may have ended. Restart it from where it stopped (`sluice next -p {project} "
                 f"--since-seq {seq}`), or close this item.")
-        posted.append(store.inbox_post(project, title, body, sender="sluice"))
+        with store.tx() as conn:  # the check and the post in one transaction
+            if I.about(conn, project, rec["seq"]) is None:
+                posted.append(store.inbox_post(project, title, body, sender=I.SLUICE,
+                                               seq=rec["seq"]))
     return posted
 
 

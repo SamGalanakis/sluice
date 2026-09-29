@@ -37,13 +37,12 @@ change.
 config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                              "log_max": 10000}; optional "unread_alert_min" (§9, off by default)
 sluice.db                   the home's database (SQLite, WAL): every project, plan, edit, state,
-                            call, submission, inbox item, log record and the outcome of every
-                            finished step removed from a plan (below)
+                            call, submission, inbox item, log record, the outcome of every
+                            finished step removed from a plan and how far `next` has read each
+                            project's log (below)
 runner.lock                 flock held by the one runner of this home (a second one refuses to start)
 runner.json                 the runner's heartbeat {pid, started, beat}, refreshed about once
                             a second; stale means the runner is down
-next.json                   how far `next` has read each project's log: {<project>: {seq, at,
-                            me}} (§9)
 .env                        global secrets (KEY=value lines)
 fns/                        global user functions
 recipes/<name>.json         global recipes (§5)
@@ -70,7 +69,10 @@ triggers, rolled back with them — plus `changed`, the time of its last state w
 edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; never trimmed);
 `states` (the project's state document, §6); `calls` (§8 `fn_call`); `submissions` (§5);
 `inbox` (§8a); `records` (the log, §6b); `outcomes` (what each finished step a plan edit
-removed ended with, §6; never trimmed); `drain` and `drain_projects` (maintenance metadata and pause ownership, §9); and `deletions` (a deleted project whose directory is
+removed ended with, §6; never trimmed); `drain` and `drain_projects` (maintenance metadata and pause ownership, §9); `readers` (how far
+`next` has read each project's log, §9: `project` (the key), `seq`, `at`, `me`; one upsert per
+project in a short write transaction, `seq` never going back; no trigger moves `ver` for it,
+since the dashboard does not show it); and `deletions` (a deleted project whose directory is
 not gone yet: name, token, time). Deleting a project deletes all of its rows and adds its
 `deletions` row in one transaction; once that commits (the outermost transaction, when it is
 nested in another), its `projects/<name>/` moves to `trash/<name>-<token>` (in a write
@@ -84,10 +86,11 @@ state change the state and its `step.status` records; a call's status change its
 record. A write that cannot get the database within 5 s fails with `busy` ("the store is busy,
 try again"), having written nothing. Reads that must agree (a status, a log page and its
 cursor) come from one snapshot. `user_version` is the schema's version, now 3. A new file gets
-the whole schema at 3; version-1 and version-2 files are upgraded in place on first open,
+the whole schema at 4; version-1, -2 and -3 files are upgraded in place on first open,
 in one `BEGIN IMMEDIATE` transaction that checks the version again under the lock. Version 1
 adds `outcomes` and its index (`IF NOT EXISTS`: a file may have them already); version 2 adds
-the inbox's separate `run` column and the maintenance ledger. Existing inbox sender strings
+the inbox's separate `run` column and the maintenance ledger; version 3 adds `readers`
+(`IF NOT EXISTS`). Existing inbox sender strings
 are decoded exactly as the old reader did, including ambiguous literal names that matched
 `<from>#<run>`; their original intent cannot be recovered. The version advances only when
 all migration work commits; a database of any other version is refused, and so is a home
@@ -1170,12 +1173,14 @@ resolved by the same rule when not given, and
 
 Each project has an inbox: its `inbox` rows (§2) in posting order, not trimmed with the log.
 An item is `{id,
-title, body?, ui?, input?, from?, run?, status, created, answer?, answered?, closed?, reason?,
-waiting?, stopped?}`: `id` is `i<n>` (one more than the highest in the project), `body`
+title, body?, ui?, input?, from?, run?, seq?, status, created, answer?, answered?, closed?,
+reason?, waiting?, stopped?}`: `id` is `i<n>` (one more than the highest in the project), `body`
 markdown, `ui` an OpenUI Lang program, `input` a plan input, `from` who asked (a step id, an
 agent; `inbox_post` without one: its author, §6b), `run` the run of that step that asks, `status` `open`, `answered` or `closed`, the times
 ISO UTC. `from` and `run` occupy separate `sender` and `run` columns; literal sender
-strings round-trip unchanged. Only an open item changes, once: answering or closing
+strings round-trip unchanged. An item sluice posts itself (`from` `sluice`, §9 "Nobody
+reading") keeps in `run` instead the `seq` of the record it is about, and never carries
+`waiting`. Only an open item changes, once: answering or closing
 anything else is refused (`conflict` with its `status`), which is what makes a stale button or a
 second answer harmless. Every change appends one log record (§6b) in the same transaction as
 the item's change (an answer that sets a plan input, that input's too), so `log_wait(project,
@@ -1306,17 +1311,19 @@ record, then exits 0 printing `timeout seq <N>` (and writes the cursor); `--json
 records as JSON lines, `unit` included with its outputs whole, and a final `{"seq": N,
 "timed_out": …}`. Exit 0 on a wake or a timeout.
 
-**Nobody reading.** `next` (the CLI and the tool) notes in `SLUICE_HOME/next.json`, per project,
+**Nobody reading.** `next` (the CLI and the tool) notes in the `readers` table (§2), per project,
 how far it has read (`seq`, never going back), when (`at`: at the start, every 30 s while it
-waits, and when it returns) and as whom (`me`). The orchestrator is an ordinary agent session:
+waits, and when it returns) and as whom (`me`); best effort: a busy database never fails
+`next`. The orchestrator is an ordinary agent session:
 when it ends, nothing else reads the log. With `unread_alert_min` set in `config.json` (minutes;
 absent or 0: off), the runner checks once a minute every project `next` has read (not
 archived): when a record after that project's `seq` would wake `me` (the rule above) and is at
 least that old, and no `next` has read the project for as long, it posts one inbox item (§8a),
-`from` `sluice`, titled `No orchestrator has read <project>'s log for <N> min (seq <S>)`, whose
-body shows the record and how to restart from where the orchestrator stopped. It posts one
-item per such record, whatever becomes of the item; a project `next` never read is never
-checked.
+`from` `sluice` with `seq` the record's seq (§8a), titled `No orchestrator has read <project>'s
+log for <N> min (seq <S>)`, whose body shows the record and how to restart from where the
+orchestrator stopped. It posts one item per such record, whatever becomes of the item: an item
+from `sluice` with that `seq` is looked for first, so changing `unread_alert_min` does not post
+a record again; a project `next` never read is never checked.
 
 `sluice drain` pauses the given projects (default: every project not archived) that are not
 already paused. In one SQLite transaction it records ownership in `drain_projects` and

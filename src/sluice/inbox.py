@@ -9,8 +9,10 @@ items themselves live here, not in the capped log. The Store checks answers and 
 module only reads and writes.
 
 `run` is the run that asks, when a step's run posted the item (or took it up again, `adopt`):
-the `sender` and `run` columns hold these identities separately. An open item that came from a step or a call also
-carries `waiting`, derived from the state as it is read (`attend`).
+the `sender` and `run` columns hold these identities separately. An item sluice posts itself
+(`from` sluice: a waking record nobody has read, watch.unread_alerts) keeps in its `run`
+column instead the `seq` of the record it is about. An open item that came from a step or a
+call also carries `waiting`, derived from the state as it is read (`attend`).
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ FIELDS = ("title", "body", "ui", "input", "sender", "run", "status", "created", 
 RUN = r"[0-9A-Za-z][0-9A-Za-z_.-]*"  # log.RUN_ID_RE's
 STEP_RE = re.compile(r"^(?:step:)?([a-z0-9][a-z0-9_-]*)$")  # a step id, or `step:<id>`
 CALL_RE = re.compile(rf"^call ({RUN})$")  # inbox.ask run as a call
+SLUICE = "sluice"  # the `from` of the items sluice posts itself
 
 
 def _item(row: sqlite3.Row) -> dict[str, Any]:
@@ -39,6 +42,8 @@ def _item(row: sqlite3.Row) -> dict[str, Any]:
         v = row[k]
         if v is not None:
             item["from" if k == "sender" else k] = json.loads(v) if k == "answer" else v
+    if item.get("from") == SLUICE and str(item.get("run", "")).isdigit():
+        item["seq"] = int(item.pop("run"))  # sluice's own: the record it is about
     return item
 
 
@@ -48,6 +53,8 @@ def _asker(conn: sqlite3.Connection, project: str, item: dict[str, Any]) -> str 
     asks from `from` = its id (or `step:<id>`); without a recorded `run` (an item posted
     before runs were recorded), any run of the step counts."""
     sender, run = str(item.get("from", "")), item.get("run")
+    if "seq" in item:  # sluice's own
+        return None
     if m := CALL_RE.match(sender):
         row = db.one(conn, "SELECT status FROM calls WHERE call = ?", (m[1],))
         status = row["status"] if row else "gone"
@@ -123,18 +130,28 @@ def open_count(conn: sqlite3.Connection) -> int:
 
 def post(conn: sqlite3.Connection, project: str, cap: int, title: str, body: str | None = None,
          ui: str | None = None, input: str | None = None, sender: str | None = None,
-         run: str | None = None) -> dict[str, Any]:
+         run: str | None = None, seq: int | None = None) -> dict[str, Any]:
     """Add an open item (id `i<n>`, one more than the highest so far) and log `inbox.post`,
-    inside the caller's write transaction. `run`: the run of the step `sender` that asks."""
+    inside the caller's write transaction. `run`: the run of the step `sender` that asks.
+    `seq`: the record an item from sluice is about (then `sender` is sluice and no `run`)."""
     n = db.one(conn, "SELECT coalesce(max(n), 0) + 1 FROM inbox WHERE project = ?",
                (project,))[0]
+    if seq is not None:  # sluice's own item about a record: its seq in the run column
+        sender, run = SLUICE, str(int(seq))
     L.append(conn, project, [{"kind": "inbox.post", "item": f"i{n}", "title": title,
-                              **{k: v for k, v in (("from", sender), ("run", run),
+                              **{k: v for k, v in (("from", sender), ("run", run if seq is None else None),
                                                    ("input", input)) if v is not None}}], cap)
     conn.execute("INSERT INTO inbox (project, n, title, body, ui, input, sender, run, status, created) "
                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
                  (project, n, title, body, ui, input, sender, run, now_iso()))
     return find(conn, project, f"i{n}")
+
+
+def about(conn: sqlite3.Connection, project: str, seq: int) -> dict[str, Any] | None:
+    """The item sluice posted about the record `seq` of the project's log, or None."""
+    row = db.one(conn, "SELECT * FROM inbox WHERE project = ? AND sender = ? AND run = ?",
+                 (project, SLUICE, str(int(seq))))
+    return _item(row) if row else None
 
 
 def orphaned(conn: sqlite3.Connection, project: str, item_id: str) -> bool:

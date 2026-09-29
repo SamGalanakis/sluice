@@ -1,7 +1,6 @@
 """The database (SPEC §2): a home's projects, plans, plan edits, state, calls, submissions,
-inbox, log and the outcomes of steps removed from plans in one SQLite file,
-SLUICE_HOME/sluice.db. Standard library only: fn processes
-import it.
+inbox, log, the outcomes of steps removed from plans and how far `next` has read each log in
+one SQLite file, SLUICE_HOME/sluice.db. Standard library only: fn processes import it.
 
 Connections open lazily, one per (home, thread, process); a connection cached before a fork is
 never used in the child. Writes happen only inside `write()`: BEGIN IMMEDIATE … COMMIT, rolled
@@ -26,7 +25,7 @@ from typing import Any
 from .errors import SluiceError
 
 FILE = "sluice.db"
-VERSION = 3
+VERSION = 4
 TIMEOUT = 5.0  # seconds a write waits for the lock before Busy
 CACHED = 8  # connections kept per thread (one per home)
 MIN_SQLITE = (3, 37)  # STRICT tables
@@ -168,6 +167,18 @@ CREATE TABLE drain_projects (
 ) STRICT;
 """
 
+# how far `next` has read each project's log, when and as whom (SPEC §9): no trigger moves
+# `projects.ver` for it, since the dashboard does not show it and `next` writes it every 30 s.
+# IF NOT EXISTS, like OUTCOMES: it is also version 3's migration
+READERS = """
+CREATE TABLE IF NOT EXISTS readers (
+  project TEXT PRIMARY KEY NOT NULL REFERENCES projects ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  me TEXT NOT NULL
+) STRICT;
+"""
+
 VIEWS = """
 CREATE VIEW steps AS
 SELECT p.project, s.key AS step, s.value ->> '$.run' AS fn,
@@ -219,9 +230,9 @@ def _triggers() -> str:
     return "\n".join(out) + "\n"
 
 
-SCHEMA = TABLES + OUTCOMES + DRAIN + VIEWS + _triggers()
+SCHEMA = TABLES + OUTCOMES + DRAIN + READERS + VIEWS + _triggers()
 # version -> the script that takes a database of that version to the next
-MIGRATIONS = {1: OUTCOMES, 2: "ALTER TABLE inbox ADD COLUMN run TEXT;" + DRAIN}
+MIGRATIONS = {1: OUTCOMES, 2: "ALTER TABLE inbox ADD COLUMN run TEXT;" + DRAIN, 3: READERS}
 
 
 def _split_senders(conn: sqlite3.Connection) -> None:

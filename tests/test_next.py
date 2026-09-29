@@ -4,6 +4,7 @@ writer must run alongside) against a real home; waits are bounded by --timeout."
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -11,11 +12,15 @@ import time
 
 from mcp import Client
 
+from sluice import db, query
 from sluice import log as L
+from sluice.db import Busy
 from sluice.mcp_server import build_server
 from sluice.runner import Runner
+from sluice.store import Store
 from sluice.watch import next_up, unread_alerts
-from tests.conftest import add, create, d, src
+from tests.conftest import add, create, d, src, write_config
+from tests.schema_v2 import SCHEMA_V2
 
 
 def next_run(home, *args, timeout=30):
@@ -469,7 +474,15 @@ async def test_the_mcp_tool_returns_a_batch(store):
 # ---- nobody reading ----------------------------------------------------------------------
 
 def readers(store):
-    return json.loads((store.home / "next.json").read_text())
+    with store.rx() as conn:
+        rows = db.all_rows(conn, "SELECT * FROM readers")
+    return {r["project"]: {"seq": r["seq"], "at": r["at"], "me": r["me"]} for r in rows}
+
+
+def read_at(store, project, at):
+    """Set when `next` last read the project (as if it had been then)."""
+    with store.tx() as conn:
+        conn.execute("UPDATE readers SET at = ? WHERE project = ?", (at, project))
 
 
 def test_next_notes_how_far_it_has_read_each_project(store):
@@ -483,6 +496,44 @@ def test_next_notes_how_far_it_has_read_each_project(store):
     seq = status_rec(store, "p", "x", "failed", error="boom")
     next_up(store, ["p"], since, me="lead", timeout=5, settle=0)
     assert readers(store)["p"]["seq"] == seq and readers(store)["q"]["seq"] == since
+    next_up(store, ["p"], since, me="other", timeout=0)  # an older since_seq never goes back
+    assert readers(store)["p"]["seq"] == seq and readers(store)["p"]["me"] == "other"
+    assert not (store.home / "next.json").exists()
+
+
+def test_two_nexts_on_different_projects_keep_both_positions(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    create(store, "q", {"x": add(d(1), d(2))})
+    outs = {}
+    threads = [threading.Thread(target=lambda p=p: outs.setdefault(
+        p, next_run(store.home, "-p", p, "--me", f"lead-{p}", "--timeout", "0")))
+        for p in ("p", "q")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert {p: r["me"] for p, r in readers(store).items()} == {"p": "lead-p", "q": "lead-q"}
+
+
+def test_noting_what_next_read_is_best_effort(store, monkeypatch):
+    create(store, "p", {"x": add(d(1), d(2))})
+
+    def busy():
+        raise Busy()
+
+    monkeypatch.setattr(store, "tx", busy)
+    assert next_up(store, ["p", "gone"], 0, timeout=0)["timed_out"]
+    monkeypatch.undo()
+    next_up(store, ["p", "gone"], 0, timeout=0)  # a project that is not there gets no row
+    assert list(readers(store)) == ["p"]
+
+
+def test_a_deleted_projects_position_goes_with_it(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    next_up(store, ["p"], 0, timeout=0)
+    with store.tx() as conn:
+        conn.execute("DELETE FROM projects WHERE name = 'p'")
+    assert readers(store) == {}
 
 
 def test_a_waking_record_nobody_reads_is_posted_to_the_inbox_once(store):
@@ -497,7 +548,8 @@ def test_a_waking_record_nobody_reads_is_posted_to_the_inbox_once(store):
     later = time.time() + 3600
     [item] = unread_alerts(store, 30, now=later)
     assert item["title"] == f"No orchestrator has read p's log for 30 min (seq {seq})"
-    assert item["from"] == "sluice"
+    assert (item["from"], item["seq"]) == ("sluice", seq)
+    assert "run" not in item and "waiting" not in store.inbox("p")[0]
     assert "STEP fix-x running -> failed: boom" in item["body"]
     assert f"sluice next -p p --since-seq {since}" in item["body"]
     # its own inbox.post wakes too, but the first unread record is the same: no second item
@@ -510,23 +562,35 @@ def test_a_waking_record_nobody_reads_is_posted_to_the_inbox_once(store):
     assert [i["title"] for i in store.inbox("quiet", "all")] == []
 
 
+def test_a_new_threshold_does_not_alert_a_record_again(store):
+    create(store, "p", {"x": add(d(1), d(2))})
+    next_up(store, ["p"], L.last_seq(store.home, "p"), timeout=0)
+    seq = status_rec(store, "p", "x", "failed", error="boom")
+    later = time.time() + 3600
+    [item] = unread_alerts(store, 30, now=later)
+    assert unread_alerts(store, 45, now=later) == []
+    assert unread_alerts(store, 5, now=later) == []
+    store.inbox_close("p", item["id"], "seen", "test")
+    assert unread_alerts(store, 10, now=later) == []
+    assert [(i["from"], i["seq"]) for i in store.inbox("p", "all")] == [("sluice", seq)]
+
+
 def test_no_alert_while_next_has_read_the_project_lately(store):
     create(store, "p", {"x": add(d(1), d(2))})
     next_up(store, ["p"], L.last_seq(store.home, "p"), timeout=0)
     status_rec(store, "p", "x", "failed", error="boom")
-    rec = readers(store)
     assert unread_alerts(store, 30, now=time.time() + 60) == []  # read a minute ago
-    rec["p"]["at"] = "2020-01-01T00:00:00Z"
-    (store.home / "next.json").write_text(json.dumps(rec))
+    read_at(store, "p", "2020-01-01T00:00:00Z")
+    store.update_project("p", archived=True)
+    assert unread_alerts(store, 30, now=time.time() + 3600) == []  # archived: not checked
+    store.update_project("p", archived=False)
     assert len(unread_alerts(store, 30, now=time.time() + 3600)) == 1
 
 
 def test_the_runner_alerts_only_with_unread_alert_min(store):
     create(store, "p", {"x": add(d(1), d(2))})
     next_up(store, ["p"], L.last_seq(store.home, "p"), timeout=0)
-    rec = readers(store)
-    rec["p"]["at"] = "2020-01-01T00:00:00Z"
-    (store.home / "next.json").write_text(json.dumps(rec))
+    read_at(store, "p", "2020-01-01T00:00:00Z")
     status_rec(store, "p", "y", "failed", error="boom")
     time.sleep(1.1)  # the record's `at` has whole seconds
     Runner(store).tick()
@@ -534,3 +598,32 @@ def test_the_runner_alerts_only_with_unread_alert_min(store):
     store.config["unread_alert_min"] = 0.001
     Runner(store).tick()
     assert [i["from"] for i in store.inbox("p", "all")] == ["sluice"]
+
+
+def test_a_version_2_file_gets_the_readers_table(tmp_path):
+    """A real version-2 file (the SCHEMA before the inbox's `run` column, the drain tables and
+    `readers`) is upgraded in place through 3 to 4, keeping its rows; `next` then notes where it
+    has read."""
+    home = tmp_path / "h"
+    write_config(home)
+    conn = sqlite3.connect(home / db.FILE, autocommit=True)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.executescript(SCHEMA_V2)
+    conn.execute("PRAGMA user_version = 2")
+    conn.execute("INSERT INTO projects (name, description, created) VALUES "
+                 "('p', 'old', '2026-09-01T00:00:00Z')")
+    conn.execute("INSERT INTO records (project, at, kind, data) VALUES "
+                 "('p', '2026-09-01T00:00:00Z', 'project.create', '{}')")
+    conn.close()
+    store = Store(home)
+    with store.rx() as c:
+        assert c.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 4
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert {"readers", "drain", "drain_projects"} <= tables
+        assert "run" in {r[1] for r in c.execute("PRAGMA table_info(inbox)")}
+        assert tuple(db.one(c, "SELECT name, description FROM projects")) == ("p", "old")
+        assert db.one(c, "SELECT count(*) FROM records")[0] == 1
+    next_up(store, ["p"], 0, me="lead", timeout=0)
+    assert {p: (r["seq"], r["me"]) for p, r in readers(store).items()} == {"p": (1, "lead")}
+    assert "readers" in query.run(home, "SELECT name FROM sqlite_master WHERE type = "
+                                        "'table' AND name = 'readers'")["rows"][0]
