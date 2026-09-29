@@ -33,14 +33,15 @@ def _recorded(store: Store) -> dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
-def pause(store: Store, projects: list[str]) -> list[str]:
+def pause(store: Store, projects: list[str], author: str = "drain") -> list[str]:
     """Pause each of `projects` that is not paused already, and merge the ones it paused
     into drain.json's `paused` (an earlier drain's stay listed). Returns the newly paused
     names."""
     paused = []
     for name in projects:
         if not store.paused(name):
-            store.update_project(name, paused=True)
+            store.update_project(name, paused=True, author=author,
+                                 reason="drain: paused for maintenance")
             paused.append(name)
     doc = _recorded(store)
     doc["paused"] = sorted({*doc.get("paused", []), *paused})
@@ -49,13 +50,14 @@ def pause(store: Store, projects: list[str]) -> list[str]:
     return paused
 
 
-def release(store: Store) -> list[str]:
+def release(store: Store, author: str = "drain") -> list[str]:
     """Unpause exactly the projects drain.json lists (not ones paused otherwise), delete it,
     and return them."""
     names = [p for p in _recorded(store).get("paused", []) if isinstance(p, str)]
     for name in names:
         with contextlib.suppress(NotFound):  # a deleted project needs no release
-            store.update_project(name, paused=False)
+            store.update_project(name, paused=False, author=author,
+                                 reason="drain released")
     (store.home / "drain.json").unlink(missing_ok=True)
     return names
 

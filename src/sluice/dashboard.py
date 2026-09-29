@@ -455,14 +455,16 @@ class Dashboard:
         """Archive a project, or bring it back, like the project_update tool."""
         name = request.path_params["name"]
         return await self._switch(request, "archived",
-                                  lambda on: self.store.update_project(name, None, on),
+                                  lambda on: self.store.update_project(name, None, on,
+                                                                       author=AUTHOR),
                                   f"/projects/{views.quote(name)}")
 
     async def pause(self, request: Request) -> Response:
         """Pause a project, or resume it, like the project_update tool."""
         name = request.path_params["name"]
         return await self._switch(request, "paused",
-                                  lambda on: self.store.update_project(name, paused=on),
+                                  lambda on: self.store.update_project(name, paused=on,
+                                                                       author=AUTHOR),
                                   f"/projects/{views.quote(name)}")
 
     async def pause_step(self, request: Request) -> Response:

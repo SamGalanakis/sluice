@@ -593,15 +593,26 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 | `step.output` | `rev, author, reason, step, outputs, force?` | `step_set_output` |
 | `step.retry` | `rev, author, reason, step` | `step_retry` |
 | `step.cancel` | `step, author, reason` | `step_cancel`: the runner then kills the step and fails it with `cancelled: <reason>` (a pending `core.external` step fails at once) |
-| `step.submit` | `step, run, outputs` | every accepted `step_submit` (§5) |
+| `step.submit` | `step, run, outputs, author?` | every accepted `step_submit` (§5) |
 | `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
-| `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs`; a direct call's running record also its `pid` and `pid_start` |
+| `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?, author?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` and the `author`; a direct call's running record also its `pid` and `pid_start` |
 | `message` | `thread, from, to?, body, data?` | `thread.post` (§10) |
 | `inbox.post` | `item, title, from?, input?` | `inbox_post`, `inbox.ask` (§8a) |
 | `inbox.answer` | `item, answer, by` | `inbox_answer` and the dashboard's answer route |
-| `inbox.close` | `item, reason?, by` | `inbox_close` |
+| `inbox.close` | `item, reason?, by` | `inbox_close` (`by`, like `inbox.answer`'s, is the author) |
+| `project.pause` | `paused, reason?, author` | `project_update` (or `drain`, `release`, the dashboard's Pause) that changes `paused` |
+| `project.archive` | `archived, reason?, author` | `project_update` (or the dashboard's Archive) that changes `archived` |
+| `project.update` | `fields, reason?, author` | `project_update` that changes the description and/or the icon: `fields` names them |
 | `run.adopt` | `step or call, run, outcome` | the runner, once per leftover run: what its dir showed (`watching`, `finished`, `unknown`, `restarted`, `not started`, §6) |
 | `run.orphan` | `run` | a live run nothing referenced, killed at startup (§6) |
+
+**Authors.** Every write tool (§8) that leaves a record names who made the change, in the
+record's `author` (`by` in the inbox's): the tool's `author` argument when given (not blank);
+else the `SLUICE_AUTHOR` environment variable of the process running the tool; else
+`step:<id>` when `SLUICE_STEP` is set (an agent inside a step calling `sluice tool`); else the
+MCP client's name from the session's `initialize` (`clientInfo.name`); else `mcp` over MCP and
+`cli` from `sluice tool`. The dashboard writes as `dashboard`, `sluice drain` as `drain`.
+`update_project` records what it changed in the same transaction and nothing when nothing did.
 
 The log is history, not the source of truth, so each log is capped at `config.log_max`
 records (default 10000, counted per log): when an append takes one past the cap, its oldest
@@ -617,7 +628,7 @@ does.
 `last_seq` is a log's high-water mark (its greatest seq, from the same snapshot as the records),
 never moved back past a `since_seq` given. `log_read` and `log_wait`
 (§8), `thread.wait` and `sluice watch` share one filter: `kinds` (exact kinds, or a group name,
-`step`, `plan`, `inbox` or `run`, for every kind under it) and `threads` (messages only on these threads; given
+`step`, `plan`, `inbox`, `run` or `project`, for every kind under it) and `threads` (messages only on these threads; given
 without `kinds`, only messages at all).
 
 ## 7. Helper library `sluice.fn` (stdlib only)
@@ -981,11 +992,11 @@ Streams end when the server shuts down; the client reconnects with backoff.
   closed) and 400 (`invalid`, `bad_request`); JSON gets the error payload, a form an HTML page. A
   request whose `Origin` is not this host is refused (403).
 - `POST /projects/<name>/archive`: the other write. A form `archived` ("1" or "0") calls the
-  store's `update_project`, the `project_update` tool's own code path, then redirects (303) to
-  the project. An archived project keeps running; it is listed apart. Same refusals as the answer route (404, 403 for another `Origin`).
+  store's `update_project`, the `project_update` tool's own code path (author `dashboard`),
+  then redirects (303) to the project. An archived project keeps running; it is listed apart. Same refusals as the answer route (404, 403 for another `Origin`).
 - `POST /projects/<name>/pause` and `POST /projects/<name>/steps/<id>/pause`: a form `paused`
   ("1" or "0") calls `update_project` or `pause_steps` (the `project_update` and `step_pause`
-  tools' code paths), then redirects (303) to the project, with the step's drawer open
+  tools' code paths, author `dashboard`), then redirects (303) to the project, with the step's drawer open
   (`#step:<id>`) for a step. Same refusals. A paused step that has not started shows a pause
   glyph (its reason in its tooltip and the drawer's Status); a paused project says so under
   its name with a Resume switch next to Archive. An `after` edge is drawn dashed; the drawer
@@ -1043,7 +1054,9 @@ raw tables into readable shapes, and the tool's description names every table an
 its columns.
 
 Every tool refuses an argument it does not take (`bad_request`, naming it and the arguments
-the tool does take) rather than ignore it. A tool that changes one step's contents takes
+the tool does take) rather than ignore it. Every tool whose write leaves a record takes
+`author?`, resolved by the rule in §6b; `inbox_post` names its asker with `from?` instead, and
+`project_delete` and `fn_save` leave no record to carry one. A tool that changes one step's contents takes
 `step`; a tool that acts on a selection (`step_pause`, `step_retry`, `step_cancel`,
 `step_remove`, `status`) takes `steps` (ids; a single id is a list of one) and/or `tags`.
 
@@ -1051,34 +1064,34 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
 | `projects_list` | – | `[{name, description, rev, counts, archived, paused, icon?}]`; `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
-| `project_create` | `name, description?, icon?` | `{name}` (with an empty plan); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
-| `project_update` | `name, description?, archived?, paused?, icon?` | `{name}`; `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
+| `project_create` | `name, description?, icon?, author?` | `{name}` (with an empty plan); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
+| `project_update` | `name, description?, archived?, paused?, icon?, reason?, author?` | `{name}`; each change is a `project.pause`, `project.archive` or `project.update` record with the reason and author (§6b); `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
 | `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls, submissions and outcomes in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name can be created once the old directory is gone, and starts clean |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
-| `fn_call` | `name, inputs, project?, wait?, direct?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed); refused (`bad_request`) for `core.external`, which never runs |
+| `fn_call` | `name, inputs, project?, wait?, direct?, author?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed); refused (`bad_request`) for `core.external`, which never runs |
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's row (a finished call's row goes with its last record, §6b) |
 | `plan_get` | `project` | `{rev, plan}` |
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
-| `step_add` | `project, step, spec, reason?, start? = false` | `{rev}`: `plan_patch` adding one step at the current rev |
+| `step_add` | `project, step, spec, reason?, start? = false, author?` | `{rev}`: `plan_patch` adding one step at the current rev |
 | `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
 | `unit_add` | `project, recipe, params, start? = false, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>`, added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param or expansion problem, `bad_request` names the ids the plan already has |
-| `step_update` | `project, step, changes, reason?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
-| `step_remove` | `project, steps?, tags?, reason?` | `{rev, steps, outcomes}`: removes the selected steps in one edit; refused while one runs or something left reads it; `outcomes` is how many of them finished and kept their outcome (§6) |
-| `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
-| `step_cancel` | `project, steps?, tags?, reason?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); a selected pending `core.external` step fails so at once (§6); refused, changing nothing, unless every one is running or a pending `core.external` step |
+| `step_update` | `project, step, changes, reason?, author?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
+| `step_remove` | `project, steps?, tags?, reason?, author?` | `{rev, steps, outcomes}`: removes the selected steps in one edit; refused while one runs or something left reads it; `outcomes` is how many of them finished and kept their outcome (§6) |
+| `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?, author?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
+| `step_cancel` | `project, steps?, tags?, reason?, author?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); a selected pending `core.external` step fails so at once (§6); refused, changing nothing, unless every one is running or a pending `core.external` step |
 | `plan_history` | `project, since_rev?` | every edit (`plan.edit` records from `plan_edits`, back to rev 1) and the `plan.input`, `step.output` and `step.retry` records still in the log, in seq order, each with its `seq` (with `rev` > `since_rev`) |
-| `plan_set_input` | `project, name, value, reason?` | `{ok}` |
-| `step_set_input` | `project, step, input, value, reason?, rev?` | `{rev}` |
-| `step_set_output` | `project, step, outputs, reason?, force?` | `{ok}` (§6: refused while what it reads is not ready, unless `force`) |
-| `step_retry` | `project, steps?, tags?, reason?` | `{steps}` (each failed, stale or manual); a failed scattered step re-runs only its failed items when its inputs are unchanged (§6) |
-| `step_submit` | `project, step, outputs, run?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
+| `plan_set_input` | `project, name, value, reason?, author?` | `{ok}` |
+| `step_set_input` | `project, step, input, value, reason?, rev?, author?` | `{rev}` |
+| `step_set_output` | `project, step, outputs, reason?, force?, author?` | `{ok}` (§6: refused while what it reads is not ready, unless `force`) |
+| `step_retry` | `project, steps?, tags?, reason?, author?` | `{steps}` (each failed, stale or manual); a failed scattered step re-runs only its failed items when its inputs are unchanged (§6) |
+| `step_submit` | `project, step, outputs, run?, author?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
 | `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs}]}`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all. `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
-| `drain` | `projects?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in `drain.json` so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
-| `release` | – | unpauses exactly the projects `drain.json` lists and deletes it; `{released}`. Projects paused otherwise stay paused |
+| `drain` | `projects?, author?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in `drain.json` so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
+| `release` | `author?` | unpauses exactly the projects `drain.json` lists and deletes it; `{released}`. Projects paused otherwise stay paused |
 | `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` |
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
@@ -1087,8 +1100,8 @@ the tool does take) rather than ignore it. A tool that changes one step's conten
 | `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project` |
-| `inbox_answer` | `project, id, answer` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
-| `inbox_close` | `project, id, reason?` | the closed item; `conflict` unless it is open |
+| `inbox_answer` | `project, id, answer, author?` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
+| `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
 
 ## 8a. The inbox
 
@@ -1214,7 +1227,9 @@ written atomically, merged with an existing file), then waits — one line whene
 changes (`running: lash 1 (fix-x), sluice 0; calls 0`) — until none of them has a running
 step or a pending or running non-direct call, and exits 0 printing `drained`. `--no-wait`
 pauses and exits. `--release` unpauses exactly the projects `drain.json` lists — not ones
-paused otherwise — deletes the file and prints what it released.
+paused otherwise — deletes the file and prints what it released. Both write their
+`project.pause` records (§6b) with author `drain` and reason `drain: paused for maintenance`
+or `drain released`.
 
 `sluice me` reads `SLUICE_PROJECT`, `SLUICE_STEP` and `SLUICE_RUN_ID` from the environment
 (the runner sets them for every run, and the native agent packs pass them through to the

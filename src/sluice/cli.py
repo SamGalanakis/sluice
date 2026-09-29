@@ -109,7 +109,7 @@ def cmd_tool(a: argparse.Namespace, store: Store) -> int:
 
     from .mcp_server import build_server
 
-    server = build_server(store)
+    server = build_server(store, author="cli")
     if a.name is None:
         for t in anyio.run(server.list_tools):
             first = (t.description or "").strip().splitlines()[0]

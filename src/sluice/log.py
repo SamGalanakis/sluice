@@ -26,8 +26,8 @@ from .util import now_iso
 
 KINDS = ("plan.edit", "plan.input", "step.output", "step.retry", "step.status", "step.submit",
          "step.cancel", "call", "message", "inbox.post", "inbox.answer", "inbox.close",
-         "run.adopt", "run.orphan")
-GROUPS = ("plan", "step", "inbox", "run")  # a group name matches every kind under it
+         "run.adopt", "run.orphan", "project.pause", "project.archive", "project.update")
+GROUPS = ("plan", "step", "inbox", "run", "project")  # a group name matches every kind under it
 HISTORY_KINDS = ("plan.edit", "plan.input", "step.output", "step.retry")
 DEFAULT_MAX = 10000
 RUN_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z_.-]*$")

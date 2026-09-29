@@ -42,9 +42,9 @@ def check_inputs(fn: Fn, inputs: Any) -> None:
 
 
 def create(store: Store, name: str, inputs: Any, project: str | None,
-           direct: bool = False) -> str:
+           direct: bool = False, author: str | None = None) -> str:
     """Check the fn and its inputs, then add the call: pending (for the runner) or, when
-    `direct`, running in this process."""
+    `direct`, running in this process. Its first record names the `author`, when given."""
     reg = store.usable_registry(project)
     fn = reg.get(name)
     if fn is None:
@@ -63,8 +63,9 @@ def create(store: Store, name: str, inputs: Any, project: str | None,
         rec.update(direct=True, pid=os.getpid())
         if (start := pid_start(os.getpid())) is not None:
             rec["pid_start"] = start
+    by = {"author": author} if author else {}
     with store.tx() as conn:
-        L.append(conn, project, [{"kind": "call", **rec}], store.log_cap())
+        L.append(conn, project, [{"kind": "call", **rec, **by}], store.log_cap())
         conn.execute("INSERT INTO calls (call, project, fn, status, inputs, direct, pid, "
                      "pid_start, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (call, project, name, rec["status"], json.dumps(full, ensure_ascii=False),

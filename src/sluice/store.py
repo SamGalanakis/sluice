@@ -302,13 +302,16 @@ class Store:
 
     def update_project(self, name: str, description: str | None = None,
                        archived: bool | None = None, paused: bool | None = None,
-                       icon: str | None = None) -> dict[str, str]:
+                       icon: str | None = None, author: str = "",
+                       reason: str = "") -> dict[str, str]:
         """Replace the description and/or set `archived` (an archived project stays whole and
         keeps running; the dashboard lists it apart) and/or
         `paused` (no step of it starts until unpaused; running ones finish) and/or the icon:
         an absolute path to an image (SVG, PNG, WebP, JPEG or GIF, at most 256 KB, copied in)
         or a short text icon (at most 16 characters, no control characters); "" removes the
-        icon. A project has at most one of the two."""
+        icon. A project has at most one of the two. What changed is logged in the same
+        transaction: `project.pause`, `project.archive`, and one `project.update` naming the
+        other fields; nothing when nothing changed."""
         if description is not None and not isinstance(description, str):
             raise BadRequest("description: expected a string")
         for key, value in (("archived", archived), ("paused", paused)):
@@ -322,8 +325,18 @@ class Store:
             if new:
                 conn.execute(f"UPDATE projects SET {', '.join(f'{k} = ?' for k in new)} "
                              "WHERE name = ?", (*new.values(), name))
-            if icon is not None:
-                self._set_icon(conn, name, resolved)
+            fields = [k for k in ("description",) if k in new]
+            if icon is not None and self._set_icon(conn, name, resolved):
+                fields.append("icon")
+            why = {"reason": reason} if reason else {}
+            recs = [{"kind": f"project.{kind}", key: new[key], **why, "author": author}
+                    for kind, key in (("pause", "paused"), ("archive", "archived"))
+                    if key in new]
+            if fields:
+                recs.append({"kind": "project.update", "fields": fields, **why,
+                             "author": author})
+            if recs:
+                L.append(conn, name, recs, self.log_cap())
             self.notify()
         return {"name": name}
 
@@ -344,9 +357,10 @@ class Store:
             raise BadRequest("icon: a text icon may not contain control characters")
         return "text", icon
 
-    def _set_icon(self, conn: Connection, name: str, resolved: tuple[str, Any] | None) -> None:
+    def _set_icon(self, conn: Connection, name: str, resolved: tuple[str, Any] | None) -> bool:
         """Store a resolved icon: an image's bytes, type and sha256, or a text; setting either
-        clears the other, None clears both. Nothing is written when nothing changes."""
+        clears the other, None clears both. Nothing is written when nothing changes; returns
+        whether it changed."""
         text = kind = data = digest = None
         if resolved is not None and resolved[0] == "image":
             ext, data = resolved[1]
@@ -354,9 +368,11 @@ class Store:
         elif resolved is not None:
             text = resolved[1]
         row = db.one(conn, "SELECT icon_text, icon_hash FROM projects WHERE name = ?", (name,))
-        if (row["icon_text"], row["icon_hash"]) != (text, digest):
-            conn.execute("UPDATE projects SET icon_text = ?, icon_type = ?, icon = ?, "
-                         "icon_hash = ? WHERE name = ?", (text, kind, data, digest, name))
+        if (row["icon_text"], row["icon_hash"]) == (text, digest):
+            return False
+        conn.execute("UPDATE projects SET icon_text = ?, icon_type = ?, icon = ?, "
+                     "icon_hash = ? WHERE name = ?", (text, kind, data, digest, name))
+        return True
 
     def icon(self, name: str) -> dict[str, Any] | None:
         """The project's icon, as projects_list reports it: {"kind": "image", "type":
@@ -990,8 +1006,8 @@ class Store:
             self.notify()
         return chosen
 
-    def submit(self, project: str, step: str, outputs: Any,
-               run: str | None = None) -> dict[str, Any]:
+    def submit(self, project: str, step: str, outputs: Any, run: str | None = None,
+               author: str | None = None) -> dict[str, Any]:
         """step_submit: the agent of a running step hands over the outputs the step declares
         (SPEC §5). Checked against them: every required one, fitting types, no others. Kept as
         the run's submission (a resubmit replaces it) with its `step.submit` record, in one
@@ -1025,8 +1041,9 @@ class Store:
             conn.execute("INSERT OR REPLACE INTO submissions (project, run, step, outputs, at) "
                          "VALUES (?, ?, ?, ?, ?)", (project, run, step, _dumps(outputs),
                                                     now_iso()))
+            by = {"author": author} if author else {}
             self.append(project, {"kind": "step.submit", "step": step, "run": run,
-                                  "outputs": outputs})
+                                  "outputs": outputs, **by})
         return {"ok": True, "run": run}
 
     def submission(self, project: str, run: str) -> dict[str, Any] | None:
