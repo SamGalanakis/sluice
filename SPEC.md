@@ -308,7 +308,7 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   ```json
   [{"op": "replace", "path": "/steps/w/run", "value": "core.external"},
    {"op": "add", "path": "/steps/w/outputs/final", "value": "string"},
-   {"op": "replace", "path": "/steps/w/doc", "value": "Fanned out to five lash workers; the orchestrator sets final when they land"}]
+   {"op": "replace", "path": "/steps/w/doc", "value": "Fanned out to five workers; the orchestrator sets final when they land"}]
   ```
 
   then `step_retry(project, ["w"])`: `w` is pending again and waits, and
@@ -936,7 +936,7 @@ raw HTML escaped, unsafe link schemes refused).
   `logic submitted interface, branch`, `a: run r1 kept through a runner restart`,
   `run r9 stopped: no step or call claimed it`, `i3 answered by dashboard while nobody was
   waiting (answer)`, `i3 taken up again by ask run r2`; a project record as who changed what:
-  `paused by dashboard: deploying`, `unpaused by lash-fe`, `archived by orch`, `description and
+  `paused by dashboard: deploying`, `unpaused by orch-2`, `archived by orch`, `description and
   icon changed by orch`) and expands to the full record as JSON. On a
   phone the kind filter folds behind its summary (`Filter: all kinds`, `Filter: 3 kinds`). A
   `thread.post` call's `call` records are hidden unless the filter selects `call` (a failed
@@ -1216,7 +1216,7 @@ outside the unit counts by the same rule). **Wakes:**
 - a `step.status` to `failed`, `stale` or `skipped`, inside a unit too; a `message` needing a
   reply, not from `--me` (default `orchestrator`), addressed to `--me` or to nobody; an
   `inbox.post` or `inbox.answer`; a `project.pause` or `project.archive` not by `--me`
-  (`PROJECT lash paused by dashboard: <reason>`);
+  (`PROJECT web paused by dashboard: <reason>`);
 - a unit **once, when it settles**: the `step.status` record (any `to`) of one of its steps at
   which it is settled while it was not at its previous `step.status` record. A step inside a
   unit never wakes on its own success. When that record is itself a failure (or stale or
@@ -1256,7 +1256,7 @@ records as JSON lines, `unit` included with its outputs whole, and a final `{"se
 `sluice drain` pauses the given projects (default: every project not archived) that are not
 already paused, records which ones in `SLUICE_HOME/drain.json` (`{"paused": […], "at": …}`,
 written atomically, merged with an existing file), then waits — one line whenever the count
-changes (`running: lash 1 (fix-x), sluice 0; calls 0`) — until none of them has a running
+changes (`running: web 1 (fix-x), api 0; calls 0`) — until none of them has a running
 step or a pending or running non-direct call, and exits 0 printing `drained`. `--no-wait`
 pauses and exits. `--release` unpauses exactly the projects `drain.json` lists — not ones
 paused otherwise — deletes the file and prints what it released. Both write their

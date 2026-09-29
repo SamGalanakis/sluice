@@ -395,8 +395,7 @@ def test_close_ends_the_app_server_process_tree(tmp_path):
 @pytest.mark.skipif(os.environ.get("SLUICE_LIVE") != "1", reason="set SLUICE_LIVE=1")
 @pytest.mark.live
 def test_codex_live_declared_output_and_resume():
-    scratch = Path("/workspace/tmp/claude-1000/-workspace-code-lash/"
-                   "8dfa931c-0520-4166-a225-16dc65dc37d8/scratchpad/native")
+    scratch = Path(os.environ.get("SLUICE_LIVE_DIR", tempfile.gettempdir())) / "sluice-live"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="codex-live-", dir=scratch) as root:
         root = Path(root)

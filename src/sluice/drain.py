@@ -76,7 +76,7 @@ def pending(store: Store, projects: list[str]) -> dict[str, Any]:
 
 
 def line(left: dict[str, Any]) -> str:
-    """The drain's progress line: `running: lash 1 (fix-x), sluice 0; calls 0`."""
+    """The drain's progress line: `running: web 1 (fix-x), api 0; calls 0`."""
     running = ", ".join(f"{p} {len(ids)}" + (f" ({', '.join(ids)})" if ids else "")
                         for p, ids in left["running"].items())
     return f"running: {running}; calls {left['calls']}"

@@ -226,7 +226,7 @@ for it. It does not scatter.
 
 ```json
 {"inputs": {"spec": "string"}, "outputs": {},
- "steps": {"work":  {"run": "core.external", "doc": "Five lash workers in wt-a..wt-e; the orchestrator sets final when they land",
+ "steps": {"work":  {"run": "core.external", "doc": "Five workers in wt-a..wt-e; the orchestrator sets final when they land",
                      "in": {"spec": {"source": "spec"}}, "outputs": {"final": "string"}},
            "notes": {"run": "core.format", "in": {"template": {"default": "Landed: {0}"},
                                                   "values": {"source": ["work/final"]}}}}}

@@ -2,8 +2,7 @@
 
 External tools are faked with small sh scripts put on PATH (or pointed to via
 the SLUICE_*_BIN overrides). Each fake records its argv NUL-separated so tests
-can assert the exact invocation. decide.jev is exercised against a throwaway
-HTTP server on 127.0.0.1 since its only seam is SLUICE_JEV_URL.
+can assert the exact invocation.
 """
 
 import json

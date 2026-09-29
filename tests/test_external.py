@@ -18,7 +18,7 @@ REG = load({"builtin": [BUILTIN_DIR], "global": [TESTPACK]})
 
 
 def external(outputs=None, **ins):
-    step = {"run": "core.external", "doc": "Five workers of the lash orchestrator", "in": ins}
+    step = {"run": "core.external", "doc": "Five workers of another orchestrator", "in": ins}
     return {**step, "outputs": outputs} if outputs is not None else step
 
 
@@ -213,7 +213,7 @@ def test_an_external_step_without_waits_says_just_outside(store):
 
 def test_its_drawer_shows_its_doc_outputs_and_how_to_settle_it(store):
     create(store, "v", {"x": {**external({"url": {"type": "string", "doc": "The PR"}}),
-                              "doc": "Done by **five workers** of lash, in `wt-a`..`wt-e`"}})
+                              "doc": "Done by **five workers** elsewhere, in `wt-a`..`wt-e`"}})
     html_ = views.step_detail(store, "v", "x")
     assert "Outside sluice" in html_
     assert '<div class="outside md"><p>Done by <strong>five workers</strong>' in html_

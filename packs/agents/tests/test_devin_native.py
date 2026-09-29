@@ -163,8 +163,7 @@ def test_resume_cwd_comes_from_devin_session_store(tmp_path, monkeypatch):
 @pytest.mark.skipif(os.environ.get("SLUICE_LIVE") != "1", reason="set SLUICE_LIVE=1")
 @pytest.mark.live
 def test_devin_live_declared_output_and_resume():
-    scratch = Path("/workspace/tmp/claude-1000/-workspace-code-lash/"
-                   "8dfa931c-0520-4166-a225-16dc65dc37d8/scratchpad/native")
+    scratch = Path(os.environ.get("SLUICE_LIVE_DIR", tempfile.gettempdir())) / "sluice-live"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="devin-live-", dir=scratch) as root:
         root = Path(root)
@@ -215,8 +214,7 @@ def test_devin_live_declared_output_and_resume():
 def test_devin_live_fusion_model():
     """model "fusion" launches the Fusion pairing: the session Devin records for the step
     carries the fusion model id."""
-    scratch = Path("/workspace/tmp/claude-1000/-workspace-code-lash/"
-                   "8dfa931c-0520-4166-a225-16dc65dc37d8/scratchpad/native")
+    scratch = Path(os.environ.get("SLUICE_LIVE_DIR", tempfile.gettempdir())) / "sluice-live"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="devin-live-", dir=scratch) as root:
         root = Path(root)

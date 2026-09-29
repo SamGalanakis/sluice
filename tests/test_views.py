@@ -378,12 +378,12 @@ def fields_of(html_):
 
 
 def test_values_read_by_kind_in_a_compact_field_list(store):
-    path = "/workspace/kiln/lash/forks/fork-for-queued-runs-removal"
+    path = "/srv/forks/fork-for-queued-runs-removal"
     create(store, "v", {
         "fork": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
         "agent": {"run": "test.open", "in": {
             "spec": src("fork/sum"), "cwd": src("fork/sum"), "lands": d(True),
-            "dry": d(False), "engine": d("opus"), "ticket": d("FIG-3945"), "n": d(3),
+            "dry": d(False), "engine": d("opus"), "ticket": d("ABC-3945"), "n": d(3),
             "gone": d(None), "tags": d(["a", "b<c>"]), "note": d("line one\nline two"),
             "blob": d({"k": list(range(40))})}}})
     run = store.runs_dir("v") / "r1"
@@ -405,10 +405,10 @@ def test_values_read_by_kind_in_a_compact_field_list(store):
     assert '<ul class="v list"><li>a</li><li>b&lt;c&gt;</li></ul>' in f["tags"][0]
     # an identifier (a ticket, a path) is in the data face, whole in its title, giving way in
     # the middle (its last segment stays), with a copy button named for the field
-    assert ('<span class="v id"><code class="mid" title="FIG-3945"><span class="t">FIG-3945'
+    assert ('<span class="v id"><code class="mid" title="ABC-3945"><span class="t">ABC-3945'
             '</span></code><button type="button" class="copy" aria-label="Copy ticket" '
             'title="Copy">') in f["ticket"][0]
-    assert (f'<code class="mid" title="{path}"><span class="h">/workspace/kiln/lash/forks'
+    assert (f'<code class="mid" title="{path}"><span class="h">/srv/forks'
             '</span><span class="t">/fork-for-queued-runs-removal</span></code>') in f["cwd"][0]
     # where it comes from: a quiet chip on the name's row, after the value, linking the step
     assert re.search(r'</button></span><span class="f-from"><a class="src" '
@@ -1035,11 +1035,11 @@ def test_a_failed_steps_drawer_leads_with_its_cause_and_what_it_blocks(store):
 
 
 def test_a_failure_headline_is_in_sluices_words(store, monkeypatch):
-    monkeypatch.setenv("HOME", "/home/sam")
+    monkeypatch.setenv("HOME", "/home/ada")
     h = views.error_headline
     # the exception's class goes, the home directory reads ~, a signal's exit code says so
     raised = ("exit code 1\nTraceback (most recent call last):\n  File x\n"
-              "sluice.fn.ShError: /home/sam/.codex/bin/run exited 143: run: stopped at /work/a")
+              "sluice.fn.ShError: /home/ada/.codex/bin/run exited 143: run: stopped at /work/a")
     assert h(raised) == "~/.codex/bin/run exited 143 (terminated: SIGTERM): run: stopped at /work/a"
     assert h("RuntimeError: boom") == "boom" and h("ValueError: 3 lint errors") == "3 lint errors"
     assert h("exit code 137") == "exit code 137 (killed: SIGKILL)"
@@ -1049,18 +1049,18 @@ def test_a_failure_headline_is_in_sluices_words(store, monkeypatch):
         "returned non-zero exit status -15 (terminated: SIGTERM)."
     # what is not a class, a home or a signal stays as it was
     assert h("exit code 1") == "exit code 1" and h("exited 300") == "exited 300"
-    assert h("Note: /home/samuel/x") == "Note: /home/samuel/x"
+    assert h("Note: /home/adauel/x") == "Note: /home/adauel/x"
     assert h("KeyboardInterrupt") == "KeyboardInterrupt"
     # the card's tooltip and the drawer say it; the drawer keeps the error as raised under it
     create(store, "v", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
     with store.tx():
         store.write_state("v", {"inputs": {}, "steps": {"a": {
-            "status": "failed", "error": "RuntimeError: /home/sam/w exited 143"}}})
+            "status": "failed", "error": "RuntimeError: /home/ada/w exited 143"}}})
     said = "~/w exited 143 (terminated: SIGTERM)"
     assert f'aria-description="{said}"' in card(views.project_page(store, "v", ver="x"), "a")
     detail = views.step_detail(store, "v", "a")
     assert (f'<p class="err-line">{said}</p><div class="err-box"><pre class="err">'
-            "RuntimeError: /home/sam/w exited 143</pre>") in detail
+            "RuntimeError: /home/ada/w exited 143</pre>") in detail
 
 
 def test_pause_shows_only_where_it_acts(store):
@@ -1171,8 +1171,8 @@ def test_the_log_says_what_project_records_mean(store):
     s = views.log_summary
     assert s({"kind": "project.pause", "paused": True, "author": "dashboard",
               "reason": "deploying"}) == "paused by dashboard: deploying"
-    assert s({"kind": "project.pause", "paused": False, "author": "lash-fe"}) == \
-        "unpaused by lash-fe"
+    assert s({"kind": "project.pause", "paused": False, "author": "orch-2"}) == \
+        "unpaused by orch-2"
     assert s({"kind": "project.archive", "archived": True, "author": "orch"}) == \
         "archived by orch"
     assert s({"kind": "project.archive", "archived": False, "author": "orch",
