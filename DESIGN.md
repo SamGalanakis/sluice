@@ -417,8 +417,8 @@ badge, the Types switch's track, a boolean value and the "n new" pill: a bubble 
 ## Components
 
 ### Cards / Containers
-- **Step bubble**: a pill with the status glyph, the step id (14.5px, 550) and, in 12px meta,
-  its time (and `done/total` when scattered), and once a running step has gone quiet the
+- **Step bubble**: a pill with the status glyph, the step id (14.5px, 550), its fn's icon
+  when the fn has one, and, in 12px meta, its time (and `done/total` when scattered), and once a running step has gone quiet the
   "quiet 42m" badge after it. Nothing else: the doc and what it says now (for a quiet one
   too, its last line) are its tooltip (a failed step's is its error's last line, the exception), and everything it
   took and produced is in the drawer. A failed step's line is said in sluice's words: no
@@ -438,6 +438,18 @@ badge, the Types switch's track, a boolean value and the "n new" pill: a bubble 
   outputs as fields, "not set yet". The step in the drawer
   wears the ring 2px outside its border (canvas, then the blue ring: it is the selection), so
   it never reads as the card's own border.
+- **Fn icon** (a fn's own mark, SPEC §4): it says what kind of work a step is (an agent, a
+  git step, a question to the inbox, work outside sluice) without reading ids, and always
+  second to the status. On a card it follows the id, 8px after it: 14px against the
+  glyph's 16, in muted ink against the glyph's status colour, so the glyph stays the first and
+  loudest mark and the icon reads as a caption; a PNG, WebP or text icon (an emoji keeps its
+  own colours) sits at 70% opacity for the same reason. Tracing dims it with the glyph. A card
+  of a fn without one is unchanged. A box folded to one line wears its main fn's icon (its
+  first open fn: the agent in a lane) after its first id, as a card would. In the drawer the
+  icon leads the fn's name in the meta line, 16px in muted ink; on the Functions page it
+  leads each name at 20px in ink. An SVG icon is a mask over `currentColor`, so it takes
+  every theme's ink as the glyphs do; the shipped ones are drawn like the glyphs (16×16, 1.5
+  strokes, round caps and joins, no fill).
   A bubble's accessible name is "failed, id, 1h 14m" (visually hidden commas; ", quiet
   42m" after it when quiet).
 - **Badge** (`.tag`): a small fact set apart, never a sentence: 20px tall (24 by the drawer's
@@ -602,6 +614,7 @@ the Types switch and a value's copy button keep their size on a 44px target.
 - Don't restyle or redraw the mark; it is the owner's SVG, served as is.
 - Don't repeat on the page what another part of it already says (no inputs table next to input
   nodes, no history table next to the log).
-- Don't use uppercase labels, kickers, emoji icons or decorative motion; motion is the drawer's
+- Don't use uppercase labels, kickers, emoji icons or decorative motion (a fn's own text icon
+  is its author's content, shown as a muted caption, never an icon of the dashboard's own); motion is the drawer's
   180ms slide in (the page makes room at once), the running
   spinner, the 220ms flip of a changed glyph and 150ms fades.

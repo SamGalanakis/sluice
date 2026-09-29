@@ -468,6 +468,21 @@ img.picon, span.picon { width: 20px; height: 20px; flex: none; vertical-align: -
 img.picon { object-fit: contain; }
 span.picon { display: inline-flex; align-items: center; justify-content: center; }
 
+/* a fn's icon (SPEC §4): an SVG is a mask over currentColor, so it takes the theme's ink as
+   the status glyphs do; a PNG, WebP or text icon keeps its own colours. On a card it comes
+   after the id, smaller than the glyph and muted: the glyph stays the first and loudest mark */
+.ficon { flex: none; display: inline-flex; align-items: center; justify-content: center;
+         width: 1em; height: 1em; line-height: 1; white-space: nowrap; }
+.fi-mask { background: currentColor; -webkit-mask: var(--fi) center / contain no-repeat;
+           mask: var(--fi) center / contain no-repeat; }
+img.ficon { object-fit: contain; }
+.fi-text { width: auto; min-width: 1em; }
+.fi-card { font-size: 14px; color: var(--muted-foreground); }
+.fi-card:is(.fi-img, .fi-text) { opacity: .7; }
+.fi-card.fi-text { font-size: 12px; height: 14px; }
+.fi-meta { font-size: 16px; color: var(--muted-foreground); }
+.fi-full { font-size: 20px; color: var(--foreground); }
+
 /* ---- the status glyph ---------------------------------------------------------------- */
 .g { display: inline-flex; flex: none; width: 16px; height: 16px; margin-top: 2px; }
 .g svg { display: block; }
@@ -619,7 +634,7 @@ sluice-drawer { display: contents; }
 .plane.tracing .node:not(.near) { border-color: transparent; background: transparent;
                                   box-shadow: none; }
 .plane.tracing .node:not(.near) :is(.sid, .dur) { color: var(--muted-foreground); }
-.plane.tracing .node:not(.near) .g { opacity: .5; }
+.plane.tracing .node:not(.near) :is(.g, .ficon) { opacity: .5; }
 .node { position: relative; z-index: 2;  /* over the edges, which are over the boxes */
         display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
         padding: 7px 14px 7px 10px; border-radius: 999px; color: inherit;
@@ -1026,6 +1041,7 @@ table.log .s-stale { color: var(--status-attention); }
 .fn { padding: 12px 0; border-top: 1px solid var(--border); }
 .fn-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
 .fn-head b { font: 600 12.5px var(--font-mono); }
+.fn-head .ficon { align-self: center; }
 .fn .ports p { overflow-wrap: anywhere; }
 .fn-index { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 0 0 10px;
             font: 12.5px/20px var(--font-mono); }
@@ -1109,6 +1125,9 @@ main > .phead + * { margin-top: 0; }
   .fold-box .fb-meta { grid-column: 2; white-space: normal; }
   .fold-box .fb-last { display: none; }
   .fold-box .chev { grid-column: 3; grid-row: 1 / span 2; }
+  /* its main fn's icon under the glyph, beside the count, as the id takes the line */
+  .fold-box > summary:has(> .ficon) .g { grid-row: 1; }
+  .fold-box > summary > .ficon { grid-column: 1; grid-row: 2; justify-self: center; }
   .fold-box > .rows { padding: 8px 12px 12px; }
   .row .lane-start { margin-left: 0; }
   .boxes { gap: 10px; }

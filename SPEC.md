@@ -118,8 +118,8 @@ collision, or a fn.json that fails the §6a checks), that project refuses plan e
 in the global or built-in scope never block anything: the broken or colliding function is left
 out of lookup and reported by `verify` and `fn_list`, and a plan step that uses it fails
 validation like any unknown function. Reads (`status`, `plan_get`, `plan_history`, views,
-`fn_list`, `verify`) always work. Functions are rescanned when a `fn.json` or `main.py` changes,
-so a fix (or `fn_save`) needs no restart.
+`fn_list`, `verify`) always work. Functions are rescanned when a `fn.json`, `main.py` or
+icon file changes, so a fix (or `fn_save`) needs no restart.
 
 Files outside the database (`config.json`, `runner.json`, a fn's files, a run's files) are
 written atomically (`<file>.tmp` then `os.replace`).
@@ -171,6 +171,20 @@ submits on every step: `"submits": {name: type or {"type", "doc"}}`, names apart
 `outputs`. Every step running it declares those outputs as if it listed them itself (a step
 may not declare one again): they are typed for refs, required unless optional, told to the
 agent in `SLUICE_STEP_OUTPUTS`, and submitted with `step_submit`.
+
+**Icon.** A fn may have an icon, so the dashboard can tell kinds of work apart at a glance
+(§8): a file `icon.svg`, `icon.png` or `icon.webp` in its own dir (at most 256 KB, its
+content the type its name says), picked up with no key; or `"icon": "<text>"` in fn.json, a
+short text icon (at most 16 characters once stripped, no control characters, typically one
+emoji). When both are there the file wins. More than one icon file, a file too big or not
+of its type, or a bad text is a problem of the fn.json like any other (§6a): the fn is left
+out, or, for a project's own fn, blocks the project (§2). The icon belongs to the fn, never
+to a step, and follows the scope rule: the fn lookup finds brings its own icon or none. It
+is read from the fn dir with the rest of the fn (nothing is stored in the database). An SVG
+icon is drawn in `currentColor` on a 16×16 grid, single colour: the dashboard paints it in
+the theme's ink (§8), so colours of its own are lost; a PNG or WebP keeps its colours.
+`fn_list` reports it as `{"kind": "image", "type": <content type>}` or `{"kind": "text",
+"text": ...}`.
 
 **Process contract.** The runner runs each fn under a shim,
 `python -m sluice.exec <run_dir> -- uv run --quiet --script <fn_dir>/main.py` — every run
@@ -558,9 +572,11 @@ it, e.g. `projects/p/fns/x.y/fn.json`, followed by `#<path in the document>` for
 (`project p: plan#steps.a.run`, `project p: state#inputs.n`). Without a project it checks the
 built-in and global scopes and every project; with one, the built-in and global scopes and
 that project. It covers:
-- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, boolean `open` and,
-  for an open fn, `submits`; nothing else), the name
-  matching its directory, every type parsing, `main.py` present for non-built-ins;
+- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, boolean `open`,
+  for an open fn `submits`, and a text `icon`; nothing else), the name
+  matching its directory, every type parsing, `main.py` present for non-built-ins, and its
+  icon (§4: one icon file at most, within 256 KB and of its type; a text icon's length and
+  characters), reported at its `fn.json`;
 - name collisions across scopes (see §2);
 - `.env` files parsing as `KEY=value` lines (blank lines, `#` comments and `export `
   allowed);
@@ -889,6 +905,22 @@ raw HTML escaped, unsafe link schemes refused).
   `?v=`: a new image busts a stale cache, an unchanged one stays cached whatever else changes)
   and a text icon is escaped text in the same box. The
   page's favicon stays sluice's mark.
+- `GET /fns/<name>/icon?project=<p>`: a fn's image icon (§4), the fn as that project sees it
+  (without `project`, the built-in and global fns), with the same headers as a project's icon
+  (content type, `nosniff`, its sha256 as the `ETag`, 304 on a match, and the SVG
+  `Content-Security-Policy`: a pack's SVG is third-party content); 404 when the fn is unknown
+  or has no image icon. The dashboard shows a fn's icon in three places, each after the name
+  it belongs to and hidden from assistive technology (the name says it): on the Functions page
+  at 20px before each fn's name; in a step's drawer at 16px, in muted ink, before the fn's
+  name in its line of meta; and on a board card at 14px, in muted ink, after the step id, so
+  the status glyph (16px, in its status colour) stays the card's first and loudest mark (a
+  card of a fn with none is unchanged; the layout counts the icon in a card's width). A box
+  folded to one line shows its main fn's icon after its first id: the fn of its first step
+  running an open fn (the agent in a lane), none without one; an open box has no header. An
+  SVG is drawn as a CSS mask over a `currentColor` box, so it takes the theme's ink like the
+  status glyphs and none of its markup enters the page; a PNG or WebP is an `<img>` and a text
+  icon escaped text, each at 70% opacity on a card. Each URL carries the image's sha256 as
+  `?v=`, so a changed file busts a stale cache.
 - `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
   read like a run history: its id with its state as badges beside it (the status glyph and
   word, `blocked` for a blocked step; runs done of total for a scattered step; how long it
@@ -943,8 +975,8 @@ raw HTML escaped, unsafe link schemes refused).
   one still shows); the tools list everything. Unknown kinds or a
   bad seq are a 400 page.
 - `GET /fns?project=<name>` (project optional): every function that context sees, grouped by
-  scope, with doc and typed inputs and outputs (`string[]`, `enum(a|b)`, `{field: type}`,
-  `T?`); a function with a problem (e.g. a collision) is shown in red with the verify message.
+  scope, each name led by its icon (§4) when it has one, with doc and typed inputs and
+  outputs (`string[]`, `enum(a|b)`, `{field: type}`, `T?`); a function with a problem (e.g. a collision) is shown in red with the verify message.
   A scope with more than three functions opens with an index of their names, each a link to
   the function (`#fn-<name>`).
 
@@ -1079,7 +1111,7 @@ resolved by the same rule when not given, and
 | `project_create` | `name, description?, icon?, author?` | `{name}` (with an empty plan); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
 | `project_update` | `name, description?, archived?, paused?, icon?, reason?, author?` | `{name}`; each change is a `project.pause`, `project.archive` or `project.update` record with the reason and author (§6b); `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
 | `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls, submissions and outcomes in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name can be created once the old directory is gone, and starts clean |
-| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step; `error` marks a function with a problem |
+| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, icon?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step, `icon` its icon (§4); `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
 | `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
 | `fn_call` | `name, inputs, project?, wait?, direct?, author?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed); refused (`bad_request`) for `core.external`, which never runs |
@@ -1301,6 +1333,14 @@ also exits 1.
 `src/sluice/fns/` holds only what sluice itself needs: `core.*` (§6), `thread.*`, `inbox.ask`
 and `inline.*` (below), plus shared helper code for built-in fns in `src/sluice/fns/_lib/`. Their `fn.json` files are
 the reference for their types.
+
+Icons (§4), all single-colour SVGs in the status glyphs' style (a 16×16 grid, 1.5 strokes,
+round caps and joins, `currentColor`): `inbox.ask` a speech bubble, `thread.post` and
+`thread.wait` an envelope, `core.external` the board's external glyph (an arrow leaving a
+box); `core.echo`, `core.collect`, `core.format` and `inline.*` have none. In the packs:
+`agent.run`, `agent.claude`, `agent.codex` and `agent.devin` share a spark, `agent.review` a
+magnifier with a check, `decide.llm` a path forking to two choices, `git.*` a branch and `gh.*` a
+pull request; `packs/jev` has none.
 
 Every other fn in this repo is a **first-party pack** under `packs/`, not loaded by default:
 

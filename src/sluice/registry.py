@@ -7,6 +7,7 @@ its directory, or a name that collides with one in an earlier scope (or the same
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Callable, Iterable
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import types as T
+from .util import ICON_MAX, ICON_TYPES, sniff_image, text_icon_problem
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "fns"
 
@@ -36,10 +38,27 @@ NATIVE = {"core.echo": lambda inp: {"value": inp["value"]},
           "core.format": _format}  # built-ins run inline; no main.py
 EXTERNAL = "core.external"  # a built-in the runner never starts (SPEC §5); no main.py
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
-KEYS = {"name", "doc", "inputs", "outputs", "open", "submits"}
+KEYS = {"name", "doc", "inputs", "outputs", "open", "submits", "icon"}
+# a fn's image icon: a file in its dir, which wins over a text `icon` in fn.json (SPEC §4)
+ICON_FILES = {"icon.svg": "svg", "icon.png": "png", "icon.webp": "webp"}
 SCOPES = ("builtin", "global", "project")
 
 Show = Callable[[Path], str]
+
+
+@dataclass(frozen=True)
+class Icon:
+    """A fn's icon (SPEC §4): an image read from its dir (content type, bytes and their
+    sha256, the cache identity), or a short text from fn.json."""
+
+    type: str = ""
+    data: bytes = b""
+    hash: str = ""
+    text: str = ""
+
+    def summary(self) -> dict[str, str]:
+        return {"kind": "image", "type": self.type} if self.data else \
+            {"kind": "text", "text": self.text}
 
 
 @dataclass
@@ -55,6 +74,7 @@ class Fn:
     # an open fn's outputs its agent submits (step_submit): every step running it declares them
     submits: dict[str, T.Type] = field(default_factory=dict)
     submit_docs: dict[str, str] = field(default_factory=dict)
+    icon: Icon | None = None
 
     @property
     def native(self) -> bool:
@@ -70,6 +90,8 @@ class Fn:
                "outputs": self.raw["outputs"], "scope": self.scope}
         if self.submits:
             out["submits"] = self.raw["submits"]
+        if self.icon is not None:
+            out["icon"] = self.icon.summary()
         return {**out, "open": True} if self.open else out
 
 
@@ -96,7 +118,8 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
              check_dir: bool = True) -> tuple[Fn | None, list[str]]:
     """Validate one fn.json (SPEC §4, §6a). Returns (fn or None, every problem found)."""
     if not isinstance(raw, dict):
-        return None, ["expected an object {name, doc?, inputs, outputs, open?, submits?}"]
+        return None, [("expected an object {name, doc?, inputs, outputs, open?, submits?, "
+                       "icon?}")]
     errs = [f"unknown key {k!r}" for k in raw if k not in KEYS]
     name = raw.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
@@ -120,13 +143,14 @@ def parse_fn(raw: Any, fn_dir: Path, scope: str = "global",
             except T.TypeSyntaxError as e:
                 errs.append(str(e))
     submits, submit_docs = _submits(raw, ports.get("outputs", {}), errs)
+    icon = _icon(raw, fn_dir if check_dir else None, errs)
     if check_dir and not (scope == "builtin" and (name in NATIVE or name == EXTERNAL)) \
             and not (fn_dir / "main.py").is_file():
         errs.append("main.py is missing")
     if errs:
         return None, errs
     return Fn(name, raw.get("doc", ""), ports["inputs"], ports["outputs"], raw, fn_dir,
-              scope, raw.get("open", False), submits, submit_docs), []
+              scope, raw.get("open", False), submits, submit_docs, icon), []
 
 
 def _submits(raw: dict[str, Any], outputs: dict[str, T.Type],
@@ -154,12 +178,49 @@ def _submits(raw: dict[str, Any], outputs: dict[str, T.Type],
     return types, docs
 
 
+def _icon(raw: dict[str, Any], fn_dir: Path | None, errs: list[str]) -> Icon | None:
+    """A fn's icon: `icon.svg`, `icon.png` or `icon.webp` in its dir (at most 256 KB, its
+    content of the type its name says), else a text `icon` in fn.json (at most 16
+    characters, no control characters). Both may be there; the file wins. None without
+    `fn_dir` (a fn.json not in its dir yet) for the file."""
+    text = raw.get("icon")
+    if text is not None:
+        if not isinstance(text, str) or not text.strip():
+            errs.append("icon must be a short text, e.g. an emoji")
+            text = None
+        elif problem := text_icon_problem(text.strip()):
+            errs.append(f"icon: {problem}")
+            text = None
+    files = [fn_dir / n for n in ICON_FILES if (fn_dir / n).is_file()] if fn_dir else []
+    if len(files) > 1:
+        errs.append(f"icon: {' and '.join(f.name for f in files)} are both there; keep one")
+        return None
+    if not files:
+        return Icon(text=text.strip()) if text else None
+    path, ext = files[0], ICON_FILES[files[0].name]
+    try:
+        size = path.stat().st_size
+        data = path.read_bytes() if size <= ICON_MAX else b""
+    except OSError as e:
+        errs.append(f"icon: {path.name} is not readable: {e.strerror}")
+        return None
+    if size > ICON_MAX:
+        errs.append(f"icon: {path.name} is over {ICON_MAX // 1024} KB")
+    elif sniff_image(data) != ext:
+        kind = {"svg": "an SVG", "png": "a PNG", "webp": "a WebP"}[ext]
+        errs.append(f"icon: {path.name} is not {kind} image")
+    else:
+        return Icon(ICON_TYPES[ext], data, hashlib.sha256(data).hexdigest())
+    return None
+
+
 def fingerprint(dirs: Iterable[Path]) -> tuple:
-    """What a scan depends on: every fn.json and main.py with its mtime and size."""
+    """What a scan depends on: every fn.json, main.py and icon file with its mtime and
+    size."""
     out = []
     for d in dirs:
         out.append((str(d), d.is_dir()))
-        for f in sorted([*d.glob("*/fn.json"), *d.glob("*/main.py")]):
+        for f in sorted([*d.glob("*/fn.json"), *d.glob("*/main.py"), *d.glob("*/icon.*")]):
             try:
                 st = f.stat()
             except OSError:

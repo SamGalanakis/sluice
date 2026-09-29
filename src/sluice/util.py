@@ -5,8 +5,17 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import unicodedata
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+
+# an icon, a project's (§2) or a fn's (§4): an image of one of these types, sniffed from its
+# content (never its name), or a short text (typically an emoji)
+ICON_TYPES = {"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp",
+              "jpg": "image/jpeg", "gif": "image/gif"}
+ICON_MAX = 256 * 1024  # the largest image icon (bytes)
+ICON_TEXT_MAX = 16  # characters of a text icon, stripped
 
 
 def now_iso() -> str:
@@ -91,3 +100,30 @@ def read_dotenv(path: Path) -> dict[str, str]:
         return parse_dotenv(path.read_text(encoding="utf-8"))[0]
     except (OSError, UnicodeDecodeError):
         return {}
+
+
+def sniff_image(data: bytes) -> str | None:
+    """Which icon type (a key of ICON_TYPES) `data` is: an SVG parses as XML with an <svg>
+    root, the others match magic bytes; None for anything else."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return None
+    return "svg" if root.tag.rpartition("}")[2] == "svg" else None
+
+
+def text_icon_problem(text: str) -> str | None:
+    """Why a (stripped) text is no text icon, or None when it is one."""
+    if len(text) > ICON_TEXT_MAX:
+        return f"a text icon is at most {ICON_TEXT_MAX} characters"
+    if any(unicodedata.category(c) == "Cc" for c in text):
+        return "a text icon may not contain control characters"
+    return None

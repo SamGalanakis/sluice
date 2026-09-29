@@ -60,6 +60,19 @@ THEME_COOKIE, TYPES_COOKIE = "sluice_theme", "sluice_types"
 COOKIE_AGE = 400 * 24 * 3600
 
 
+def _image(request: Request, kind: str, data: bytes, digest: str) -> Response:
+    """An icon's image: its content type, nosniff and its sha256 as the ETag (a matching
+    If-None-Match gets 304); for SVG a CSP keeps any script inside from running even when
+    the URL is opened directly."""
+    headers = {"X-Content-Type-Options": "nosniff", "ETag": f'"{digest}"'}
+    if kind == "image/svg+xml":
+        headers["Content-Security-Policy"] = \
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(data, media_type=kind, headers=headers)
+
+
 def _local_host(request: Request) -> bool:
     """The dashboard's DNS-rebinding guard (/mcp has the SDK's own): a request that arrived
     on a loopback socket must be addressed to this machine. A deliberate non-loopback bind
@@ -476,9 +489,7 @@ class Dashboard:
             f"/projects/{views.quote(name)}#step:{views.quote(sid)}")
 
     async def icon(self, request: Request) -> Response:
-        """The project's image icon: its content type, nosniff and its sha256 as the ETag (a
-        matching If-None-Match gets 304); for SVG a CSP keeps any script inside from running
-        even when the URL is opened directly. 404 when it has no image icon."""
+        """The project's image icon (`_image`); 404 when it has none."""
         try:
             got = await anyio.to_thread.run_sync(self.store.icon_image,
                                                  request.path_params["name"])
@@ -486,14 +497,19 @@ class Dashboard:
             return Response(err.message, status_code=404)
         if got is None:
             return Response("not found", status_code=404)
-        kind, data, digest = got
-        headers = {"X-Content-Type-Options": "nosniff", "ETag": f'"{digest}"'}
-        if kind == "image/svg+xml":
-            headers["Content-Security-Policy"] = \
-                "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
-        if request.headers.get("if-none-match") == headers["ETag"]:
-            return Response(status_code=304, headers=headers)
-        return Response(data, media_type=kind, headers=headers)
+        return _image(request, *got)
+
+    async def fn_icon(self, request: Request) -> Response:
+        """A fn's image icon (`_image`), the fn as `?project=` sees it (none: the built-in and
+        global ones); 404 when it has none (a text icon is shown as text)."""
+        try:
+            fn = await anyio.to_thread.run_sync(self.store.fn, request.path_params["name"],
+                                                request.query_params.get("project") or None)
+        except SluiceError as err:
+            return Response(err.message, status_code=404)
+        if fn.icon is None or not fn.icon.data:
+            return Response("not found", status_code=404)
+        return _image(request, fn.icon.type, fn.icon.data, fn.icon.hash)
 
     async def settings(self, request: Request) -> Response:
         """The settings menu's form: `theme` (an id of `views.THEMES`) and `types` ("0" or "1";
@@ -551,7 +567,8 @@ class Dashboard:
                               ("/projects/{name}/log", self.log),
                               ("/projects/{name}/log/stream", self.log_stream),
                               ("/log", self.log), ("/log/stream", self.log_stream),
-                              ("/fns", self.fns), ("/inbox", self.inbox),
+                              ("/fns", self.fns), ("/fns/{name}/icon", self.fn_icon),
+                              ("/inbox", self.inbox),
                               ("/inbox/stream", self.inbox_stream),
                               ("/projects/{name}/inbox", self.inbox),
                               ("/projects/{name}/inbox/stream", self.inbox_stream),

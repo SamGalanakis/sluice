@@ -231,8 +231,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
     @tool
     def fn_list(project: str | None = None) -> Any:
         """List the functions a project sees (built-in, global, then the project's own; without
-        a project: built-in and global): [{name, doc, inputs, outputs, scope}]. A function with a
-        problem (bad fn.json, name collision) carries `error`; see verify.
+        a project: built-in and global): [{name, doc, inputs, outputs, scope, icon?}]. A function
+        with a problem (bad fn.json, name collision) carries `error`; see verify.
 
         Args:
             project: the project whose functions to list.

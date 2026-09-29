@@ -81,6 +81,11 @@ if __name__ == "__main__":
   {"type": "string", "doc": "What it did"}}` in fn.json. Each step running it declares them
   as if it listed them under its `outputs` (so `step/summary` is a typed ref, and a required
   one never submitted fails the step); they arrive in `SLUICE_STEP_OUTPUTS` like the rest.
+- An icon tells its steps apart on the dashboard: an `icon.svg` (or `icon.png` /
+  `icon.webp`, at most 256 KB) next to `fn.json`, or `"icon": "🧪"` in fn.json (at most 16
+  characters); the file wins. Draw an SVG single-colour in `currentColor` on a 16×16
+  `viewBox`: the dashboard paints it in the theme's ink. A bad icon is a fn.json problem
+  (`verify`). `fn_save` writes the fn.json key; add a file to the fn's dir yourself.
 - `inp` holds the inputs by name (missing optional inputs are `None`). Return every output.
 - `sh(argv, cwd=...)` runs a command and raises on a non-zero exit.
 - Raise `Transient` for failures worth retrying (rate limits, capacity); `run(main, retries=N)`

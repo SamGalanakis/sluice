@@ -11,6 +11,17 @@ home or project actually needs.
 
 Each `fn.json` is the reference for that function's typed inputs and outputs.
 
+## Icons
+
+A pack fn may carry an icon, which the dashboard shows on the Functions page, in a step's
+drawer and, small and muted after the step id, on its board card: an `icon.svg` (or
+`icon.png` / `icon.webp`, at most 256 KB) in the fn's own dir, or `"icon": "<text>"` in its
+`fn.json` (at most 16 characters, e.g. an emoji); the file wins when both are there. It
+installs with the fn (copy the whole dir). An SVG is painted in the theme's ink, so draw it
+single-colour in the status glyphs' style: a 16×16 `viewBox`, 1.5 strokes in `currentColor`,
+round caps and joins, no fill. The agent fns share a spark (`agent.review` a magnifier with a
+check, `decide.llm` a path forking to two choices), `git.*` a branch and `gh.*` a pull request; `jev/` has none.
+
 ## Agent functions and live sessions
 
 The agent functions (`agent.claude`, `agent.codex`, `agent.devin`, `agent.run`,

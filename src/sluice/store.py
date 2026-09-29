@@ -12,8 +12,6 @@ import os
 import secrets
 import shutil
 import threading
-import unicodedata
-import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -33,16 +31,19 @@ from . import registry as R
 from . import state as S
 from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound, NotOpen
-from .util import atomic_write_json, atomic_write_text, now_iso, read_json
+from .util import (
+    ICON_MAX,
+    ICON_TYPES,
+    atomic_write_json,
+    atomic_write_text,
+    now_iso,
+    read_json,
+    sniff_image,
+    text_icon_problem,
+)
 
 DEFAULT_CONFIG: dict[str, Any] = {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
                                   "log_max": L.DEFAULT_MAX}
-# the image types an icon may be, sniffed from the file's content (never its name): an SVG
-# parses as XML with an <svg> root, the rest by magic bytes
-ICON_TYPES = {"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp",
-              "jpg": "image/jpeg", "gif": "image/gif"}
-ICON_MAX = 256 * 1024  # the largest image icon (bytes)
-ICON_TEXT_MAX = 16  # characters of a text icon, stripped
 ANSWER_KEYS = {"action": str, "params": dict, "values": dict, "text": str}
 # what a projects/<name>/ dir may already hold when a project of that name is created
 PREPARED = {"fns", ".env"}
@@ -71,8 +72,8 @@ def _brief(value: Any) -> Any:
 
 
 def _sniff_icon(path: Path) -> tuple[str, bytes]:
-    """(extension, content) of the image at `path`: an SVG parses as XML with an <svg> root,
-    the others match magic bytes; BadRequest says what was wrong."""
+    """(extension, content) of the image at `path` (util.sniff_image); BadRequest says what
+    was wrong."""
     try:
         too_big = path.stat().st_size > ICON_MAX
         data = b"" if too_big else path.read_bytes()
@@ -80,22 +81,9 @@ def _sniff_icon(path: Path) -> tuple[str, bytes]:
         raise BadRequest(f"icon: no readable file at {path}") from None
     if too_big:
         raise BadRequest(f"icon: {path} is over {ICON_MAX // 1024} KB")
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "png", data
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return "gif", data
-    if data.startswith(b"\xff\xd8\xff"):
-        return "jpg", data
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "webp", data
-    try:
-        root = ET.fromstring(data)
-        ok = root.tag.rpartition("}")[2] == "svg"
-    except ET.ParseError:
-        ok = False
-    if ok:
-        return "svg", data
-    raise BadRequest(f"icon: {path} is not an SVG, PNG, WebP, JPEG or GIF image")
+    if (ext := sniff_image(data)) is None:
+        raise BadRequest(f"icon: {path} is not an SVG, PNG, WebP, JPEG or GIF image")
+    return ext, data
 
 
 def _dumps(value: Any) -> str:
@@ -351,10 +339,8 @@ class Store:
             return None
         if icon.startswith(("/", "~")):
             return "image", _sniff_icon(Path(icon).expanduser())
-        if len(icon) > ICON_TEXT_MAX:
-            raise BadRequest(f"icon: a text icon is at most {ICON_TEXT_MAX} characters")
-        if any(unicodedata.category(c) == "Cc" for c in icon):
-            raise BadRequest("icon: a text icon may not contain control characters")
+        if problem := text_icon_problem(icon):
+            raise BadRequest(f"icon: {problem}")
         return "text", icon
 
     def _set_icon(self, conn: Connection, name: str, resolved: tuple[str, Any] | None) -> bool:

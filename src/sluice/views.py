@@ -52,6 +52,7 @@ from .plan import (
     units,
     value_of,
 )
+from .registry import Fn
 from .store import Store
 from .util import read_json, tail_text
 
@@ -391,6 +392,25 @@ def project_icon(store: Store, name: str, icon: dict[str, Any] | None = None) ->
         return (f'<img class="picon" src="/projects/{e(quote(name))}/icon?v={v}" '
                 'alt="" width="20" height="20">')
     return f'<span class="picon" aria-hidden="true">{e(icon["text"])}</span>'
+
+
+def fn_icon(fn: Fn, project: str | None, size: str) -> str:
+    """A fn's icon (SPEC §4), decorative (its name or step id is beside it): an SVG as a mask
+    over `currentColor`, so it takes the theme's ink like the status glyphs and none of its
+    markup reaches the page; a PNG or WebP as an <img>; a text icon as escaped text. The URL
+    carries the image's hash (`?v=`). `size` is its place: `card` (a board card, small and
+    muted), `meta` (the drawer's head) or `full` (the Functions page). "" when it has none."""
+    icon = fn.icon
+    if icon is None:
+        return ""
+    if icon.text:
+        return f'<span class="ficon fi-{size} fi-text" aria-hidden="true">{e(icon.text)}</span>'
+    query = urlencode({"project": project, "v": icon.hash} if project else {"v": icon.hash})
+    src = f"/fns/{quote(fn.name)}/icon?{query}"
+    if icon.type == "image/svg+xml":
+        style = e(f'--fi:url("{src}")')
+        return f'<span class="ficon fi-{size} fi-mask" style="{style}" aria-hidden="true"></span>'
+    return f'<img class="ficon fi-{size} fi-img" src="{e(src)}" alt="">'
 
 
 def project_head(store: Store, project: str, tab: str | None) -> str:
@@ -1172,15 +1192,17 @@ CARD_GAP, LANE_GAP = 14, 36  # px between cards in a row, and before the next la
 
 
 def _card_width(board: Board, b: Block, quiet: bool = False, behind: int = 0) -> float:
-    """About how wide a step's card is drawn (px): its id in 14.5px Archivo, in 12px what it
-    says small (blocked, runs done, its time, the steps hidden behind it), and a `quiet 42m`
-    badge."""
+    """About how wide a step's card is drawn (px): its id in 14.5px Archivo, its fn's 14px
+    icon, in 12px what it says small (blocked, runs done, its time, the steps hidden behind
+    it), and a `quiet 42m` badge."""
     small = " · ".join(t for t in (
         "blocked" if board.blocked(b.sid) else "",
         f"{b.entry.get('done') or 0}/{b.entry['total']}" if "total" in b.entry else "",
         "outside" if b.outside else "", re.sub(r"<[^>]+>", "", _outside(board, b)),
         re.sub(r"<[^>]+>", "", _elapsed(b)), f"+{behind} behind" if behind else "") if t)
+    icon = None if b.outside else b.step.fn.icon  # 14px and its gap; a text icon in 12px
     return (50 + 7.7 * len(b.sid) + (8 + 6.7 * len(small) if small else 0)
+            + (0 if icon is None else 8 + 10 * len(icon.text) if icon.text else 22)
             + (84 if quiet else 0))
 
 
@@ -1322,8 +1344,8 @@ def _waits_text(waits: list[tuple[str, str]]) -> str:
 
 def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = False,
           order: int | None = None, lane_top: bool = False, behind: int = 0) -> str:
-    """A step on the board: a compact bubble with its status glyph, its id and, small, how long
-    it ran (and `done of total` for a scattered step), then a `quiet 42m` badge once a running
+    """A step on the board: a compact bubble with its status glyph, its id (then its fn's
+    icon, small and muted; not on a ready core.external step, whose glyph is that mark), and, small, how long it ran (and `done of total` for a scattered step), then a `quiet 42m` badge once a running
     step has gone quiet. Everything else is one click away in the
     drawer; the doc and what it says now (progress, error, what it waits on) are its accessible
     description (no hover tooltip).
@@ -1362,7 +1384,7 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
     # read "a , 1h")
     sep = '<span class="sep">,</span>' if inner else ""
     return (f'<{tag} {attrs}>{glyph(b.mark, ", ")}<span class="sid">{e(b.sid)}{sep}</span>'
-            f"{tail}</{tag}>")
+            f"{'' if b.outside else fn_icon(b.step.fn, board.project, 'card')}{tail}</{tag}>")
 
 
 LEGEND_DATA = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20" '
@@ -1658,14 +1680,18 @@ def _done(board: Board, ids: list[str]) -> bool:
 
 
 def _folded(board: Board, ids: list[str], inner: str) -> str:
-    """A finished box folded to one line: its first and last steps, how many, and how they
-    ended; it opens to its cards (open across live updates, and per tab in sessionStorage)."""
+    """A finished box folded to one line: its first and last steps (the icon of its main fn
+    after the first), how many, and how they ended; it opens to its cards (open across live updates, and per tab in sessionStorage)."""
     skipped = sum(board.blocks[sid].status == "skipped" for sid in ids)
+    # the box's main fn: its first open fn's (the agent in a lane), after the first id
+    main = next((board.blocks[sid].step.fn for sid in ids if board.blocks[sid].step.fn.open),
+                None)
+    icon = fn_icon(main, board.project, "card") if main else ""
     # the success glyph says how they ended; only a skip is worth words
     ended = f" · {len(ids) - skipped} succeeded, {skipped} skipped" if skipped else ""
     # on a phone the first id takes the line and the count goes under it; the last id hides
     return (f'<details class="fold-box" data-preserve-attr="open" data-box="{e(ids[0])}">'
-            f'<summary>{glyph("succeeded", ", ")}<span class="sid">{e(ids[0])}</span>'
+            f'<summary>{glyph("succeeded", ", ")}<span class="sid">{e(ids[0])}</span>{icon}'
             f'<span class="fb-meta"><span class="fb-last"><span aria-hidden="true"> … </span>'
             f'<span class="vh"> to </span>{e(ids[-1])}<span class="fb-dot"> · </span></span>'
             f'<span class="fb-n">{len(ids)} steps{ended}</span></span>{CHEVRON}</summary>'
@@ -2388,7 +2414,8 @@ def _detail_head(store: Store, board: Board, b: Block, steps: Callable[[Iterable
     if b.paused and b.status != "running" and (b.pause_reason or b.mark != "paused"):
         why = f": {e(b.pause_reason)}" if b.pause_reason else ""
         out += f'<p class="d-doc attn-note">Paused{why}</p>'
-    meta = [f'<code title="function">{e(b.fn)}</code>']
+    # the fn's icon beside its name (the line is a flex row: its gap sets them apart)
+    meta = [f'{fn_icon(b.step.fn, board.project, "meta")}<code title="function">{e(b.fn)}</code>']
     if b.cost is not None:
         meta.append(e(_money(b.cost)))
     outs = b.entry.get("outputs") if isinstance(b.entry.get("outputs"), dict) else {}
@@ -2899,12 +2926,14 @@ def fns_page(store: Store, project: str | None = None) -> str:
     reg = store.registry(project)
     groups: dict[str, list[str]] = {}
     names: dict[str, list[str]] = {}
-    for x in reg.listing():
+    for entry in reg.entries:
+        x = entry.summary()
         names.setdefault(x["scope"], []).append(x["name"])
+        icon = fn_icon(entry.fn, project, "full") if entry.fn and not entry.errors else ""
         cls = "fn problem" if x.get("error") else "fn"
         err = f'<p class="err">{e(x["error"])}</p>' if x.get("error") else ""
         groups.setdefault(x["scope"], []).append(
-            f'<div class="{cls}" id="fn-{e(x["name"])}"><div class="fn-head"><b>{e(x["name"])}</b> '
+            f'<div class="{cls}" id="fn-{e(x["name"])}"><div class="fn-head">{icon}<b>{e(x["name"])}</b> '
             f'<span class="quiet">{e(x.get("doc") or "")}</span></div>{err}'
             f'<div class="ports"><div><span class="label">Inputs</span>'
             f"<p>{_ports(x.get('inputs'))}</p></div><div><span class=\"label\">Outputs</span>"
