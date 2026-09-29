@@ -1055,6 +1055,11 @@ every part. Each version/render baseline is gathered in one short SQLite read sn
 with the version checked before and after rendering. External stderr/liveness changes that
 alter that observation defer delivery until the next poll; the server does not retry in a
 loop or advance an unsent baseline. SQLite snapshots do not make external files atomic.
+The project stream reuses its parts when only the log changes. Its cache belongs to that
+connection and is keyed by the plan and state documents, project description, pause,
+archive, icon and last state-write time, open inbox senders and count, runner liveness and
+running stderr stats. A log-only change sends the new version signal alone; the browser
+keeps elapsed and relative times current. Nothing is cached between connections.
 Parts are morphed, so an expanded disclosure stays open. The page loads Datastar
 from its Rocket bundle (`datastar-rocket.js`, which adds web components) and
 `/static/sluice.js`, which keeps relative and running times current and defines three

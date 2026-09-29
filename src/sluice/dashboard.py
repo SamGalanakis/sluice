@@ -182,6 +182,22 @@ def project_ver(store: Store, project: str) -> str:
                     _running_stderr(store, runs)])
 
 
+def project_stamp(store: Store, project: str) -> str:
+    """What the board shows, excluding log records that only move the project counter."""
+    with store.rx() as conn:
+        row = db.one(conn, "SELECT p.description, p.archived, p.paused, p.icon_text, "
+                     "p.icon_hash, p.changed, l.doc, l.rev, s.doc FROM projects p "
+                     "JOIN plans l ON l.project = p.name JOIN states s ON s.project = p.name "
+                     "WHERE p.name = ?", (project,))
+        inbox = [tuple(r) for r in db.all_rows(conn,
+                 "SELECT n, sender, run FROM inbox WHERE project = ? AND status = 'open'",
+                 (project,))]
+        badge = I.open_count(conn)
+        runs = db.all_rows(conn, RUNNING + " AND s.project = ?", (project,))
+    return _digest([tuple(row) if row else None, inbox, badge, views.runner_state(store.home),
+                    _running_stderr(store, runs)])
+
+
 def step_ver(store: Store, project: str, sid: str) -> str:
     """The version of a step's detail: the step, the project's version, and the stderr of the
     step's runs (the step is part of it: the drawer's `sver` moves on when it shows another)."""
@@ -366,8 +382,21 @@ class Dashboard:
         name = request.path_params["name"]
         view = views.BoardView.from_signals(await _signals(request))
         return await self._stream(request, lambda: project_ver(self.store, name),
-                                  lambda: views.project_parts(self.store, name, view),
+                                  self._project_parts(name, view),
                                   exists=lambda: self.store.project(name))
+
+    def _project_parts(self, name: str, view: views.BoardView) -> Callable[[], dict[str, str]]:
+        stamp, last = None, {}
+
+        def parts() -> dict[str, str]:
+            nonlocal stamp, last
+            key = project_stamp(self.store, name)
+            if key != stamp:
+                last = views.project_parts(self.store, name, view)
+                stamp = key
+            return last
+
+        return parts
 
     async def box(self, request: Request) -> Response:
         def render() -> str:

@@ -466,3 +466,26 @@ def test_pause_switches_hold_a_project_or_a_step(store, port):
     code, _, _ = post(port, "/projects/p/pause", {"paused": "1"}, json_body=False,
                       headers={"Origin": "http://evil.example"})
     assert code == 403 and not store.paused("p")
+
+
+def test_finished_box_loads_cards_and_edges_then_refreshes_after_a_write(store, port, chrome):
+    from tests.conftest import d, src
+
+    create(store, "p", {
+        "a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}},
+        "b": {"run": "test.add", "in": {"a": src("a/sum"), "b": d(1)}},
+        "c": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    store.set_output("p", "a", {"sum": 2}, "test", "finished")
+    store.set_output("p", "b", {"sum": 3}, "test", "finished")
+    chrome.open(f"http://127.0.0.1:{port}/projects/p")
+    chrome.wait("!!window.sluiceStream")
+    assert chrome.eval("document.getElementById('n-a') === null")
+    chrome.eval("document.querySelector('details.fold-box').open = true")
+    chrome.wait("!!document.getElementById('n-a') && document.querySelectorAll('.wires path').length > 0")
+    store.update_step("p", "b", {"doc": "fresh card"}, "test", "edit")
+    chrome.wait("document.getElementById('n-b')?.getAttribute('aria-description') === 'fresh card'")
+    assert chrome.eval("document.querySelector('details.fold-box').open")
+    chrome.send("Page.reload")
+    chrome.wait("document.querySelector('details.fold-box')?.open && !!document.getElementById('n-b')")
+    chrome.eval("document.getElementById('n-b').click()")
+    chrome.wait("document.querySelector('#d-title')?.textContent === 'b'")

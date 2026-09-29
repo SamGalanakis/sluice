@@ -201,7 +201,7 @@ def test_the_icons_url_changes_with_its_file(store, home, port):
     other = SVG.replace(b"M2 2h12", b"M2 8h12 ")
     (fn_dir / "icon.svg").write_bytes(other)
     page = views.project_page(store, "p", ver="x")
-    assert url not in page and f"/fns/t.tool/icon?project=p&amp;v={sha(other)}" in page
+    assert url not in page and f"/fns/t.tool/icon?project=p&v={sha(other)}" in page
     assert get(port, f"/fns/t.tool/icon?project=p&v={sha(other)}")[2] == other
 
 

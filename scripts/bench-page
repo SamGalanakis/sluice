@@ -1,0 +1,59 @@
+#!/usr/bin/env -S uv run python
+"""Measure dashboard renders on a scratch SLUICE_HOME, without starting a server."""
+
+import argparse
+import cProfile
+import json
+import os
+import statistics
+import time
+
+from sluice import db, views
+from sluice.dashboard import Dashboard
+from sluice.store import Store
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("projects", nargs="*")
+parser.add_argument("--repeat", type=int, default=5)
+parser.add_argument("--profile", help="write a cProfile file for the first project")
+args = parser.parse_args()
+if not os.environ.get("SLUICE_HOME"):
+    parser.error("set SLUICE_HOME to a scratch copy first")
+if args.repeat < 1:
+    parser.error("repeat must be positive")
+store = Store()
+dashboard = Dashboard(store)
+queries = []
+
+
+def timed(fn):
+    def query(*a, **kw):
+        start = time.perf_counter()
+        result = fn(*a, **kw)
+        queries.append(time.perf_counter() - start)
+        return result
+    return query
+
+
+db.one, db.all_rows = timed(db.one), timed(db.all_rows)
+pages = [("/", dashboard._index)]
+for name in args.projects or store.project_names():
+    for view in (views.DEFAULT_VIEW, views.BoardView(steps="all")):
+        path = f"/projects/{name}" + ("?" + view.query() if view.query() else "")
+        pages.append((path, lambda n=name, v=view: dashboard._project(n, v)))
+for path, render in pages:
+    runs = []
+    for _ in range(args.repeat):
+        queries.clear()
+        start, cpu = time.perf_counter(), time.process_time()
+        body = render()
+        runs.append({"ms": (time.perf_counter() - start) * 1000,
+                     "cpu_ms": (time.process_time() - cpu) * 1000,
+                     "sql_ms": sum(queries) * 1000, "queries": len(queries),
+                     "bytes": len(body.encode())})
+    print(json.dumps({"path": path, **{k: statistics.median(r[k] for r in runs)
+                                      for k in runs[0]}}))
+if args.profile and len(pages) > 1:
+    profile = cProfile.Profile()
+    profile.runcall(pages[1][1])
+    profile.dump_stats(args.profile)

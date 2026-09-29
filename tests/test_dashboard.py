@@ -899,3 +899,56 @@ def test_box_route_preserves_filters_and_has_a_no_script_page(store, port):
     assert code == 200 and 'id="n-b"' not in page
     assert get(port, "/projects/p/boxes/c?steps=invalid")[0] == 400
     assert get(port, "/projects/p/boxes/b")[0] == 404
+
+
+def test_project_stream_reuses_parts_on_log_append_and_invalidates_on_visible_writes(store,
+                                                                                    monkeypatch):
+    from sluice.dashboard import Dashboard
+
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    renders = 0
+    render = views.project_parts
+
+    def counted(*args):
+        nonlocal renders
+        renders += 1
+        return render(*args)
+
+    monkeypatch.setattr(views, "project_parts", counted)
+    parts = Dashboard(store)._project_parts("p", views.DEFAULT_VIEW)
+    first = parts()
+    store.append("p", message("work", "a progress note"))
+    assert parts() is first and renders == 1
+    store.set_output("p", "a", {"sum": 2}, "test", "finished")
+    assert parts() != first and renders == 2
+    store.update_step("p", "a", {"doc": "edited"}, "test", "edit")
+    assert 'aria-description="edited"' in parts()["graph"] and renders == 3
+    store.inbox_post("p", "Question", sender="a")
+    parts()
+    assert renders == 4
+    store.update_project("p", description="new description")
+    assert "new description" in parts()["summary"] and renders == 5
+
+
+def test_project_queries_are_bounded_as_the_plan_grows(store):
+    from sluice import db
+    from sluice.dashboard import Dashboard
+
+    create(store, "p", {})
+    counts = []
+    dashboard = Dashboard(store)
+    for size in (3, 300):
+        doc = store.get("p")
+        store.patch("p", doc["rev"], [{"op": "replace", "path": "/steps", "value": {
+            f"s{i}": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}
+            for i in range(size)}}], "test", "grow")
+        queries = []
+        conn = db.connect(store.home)
+        conn.set_trace_callback(queries.append)
+        try:
+            dashboard._project("p", views.DEFAULT_VIEW)
+        finally:
+            conn.set_trace_callback(None)
+        counts.append(sum(q.startswith("SELECT") for q in queries))
+    assert counts[0] == counts[1]
+    assert counts[1] <= 25

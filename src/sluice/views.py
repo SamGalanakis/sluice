@@ -579,7 +579,7 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
             f"<title>{e(title)} · sluice</title>"
             + '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
             + "".join(f'<link rel="stylesheet" href="{u}">' for u in FONT_CSS)
-            + (f'<link rel="stylesheet" href="/static/dashboard.css">' if nav else
+            + ('<link rel="stylesheet" href="/static/dashboard.css">' if nav else
                f"<style>{CSS}</style>") + f"{head}</head>\n"
             f"<body{body_attrs}>{GLYPH_DEFS}{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"
             "</body></html>\n")
@@ -1235,6 +1235,8 @@ def _shifts(board: Board, groups: list[dict[int, list[str]]], box: list[int],
     lanes placed before it instead of wrapping in among their rows. Lanes are placed in the
     box's order, and none ever sits above a step it runs after. All lanes stay put when that
     cannot hold (an `after` cycle between lanes)."""
+    if len(box) == 1:
+        return {box[0]: 0}
     lane, ups = _ups(board, groups, box)
     shift: dict[int, int] = {}
 
@@ -1269,6 +1271,8 @@ def _seats(board: Board, groups: list[dict[int, list[str]]], box: list[int],
     row it stood on in the rows above (it takes the free place nearest its last one, before
     the lanes starting there do); a lane starting takes the free place nearest the steps it
     hangs from. So a lane does not jump across the box when another ends beside it."""
+    if len(box) == 1:
+        return {v: box for v in at}
     _, ups = _ups(board, groups, box)
     place: dict[str, float] = {}  # each step's place across its row, 0 to 1
     seat: dict[int, float] = {}  # each lane's place in the last row it stood in
@@ -2078,10 +2082,10 @@ def _pause_form(project: str, paused: bool, sid: str | None = None) -> str:
 
 def _project(store: Store, project: str, live: bool,
              view: BoardView = DEFAULT_VIEW,
-             done: list[list[str]] | None = None) -> dict[str, str]:
+             done: list[list[str]] | None = None, board: Board | None = None) -> dict[str, str]:
     """The page's parts; the board without the steps of the `done` units (plan_view's
     default), said in one line under the summary, which counts every step."""
-    board = load_board(store, project)
+    board = board if board is not None else load_board(store, project)
     hide = {sid for u in done or [] for sid in u}
     shown = dataclasses.replace(board, blocks={sid: b for sid, b in board.blocks.items()
                                                if sid not in hide}) if hide else board
@@ -2150,11 +2154,11 @@ def project_page(store: Store, project: str, ver: str | None = None,
     orders and filters the board's boxes; the page's `board` signal carries it to the
     stream, so live updates keep it."""
     live = ver is not None
-    p = _project(store, project, live, view, done)
+    board = load_board(store, project)
+    p = _project(store, project, live, view, done, board)
     hide = {sid for u in done or [] for sid in u}
     body = (f'{project_head(store, project, "plan" if live else None)}{p["summary"]}'
             f'{p["graph"]}{p["result"]}')
-    board = load_board(store, project)
     if not live:
         body += "".join(
             f'<details class="std" id="step-{e(sid)}"><summary>{glyph(b.mark)}'
