@@ -119,6 +119,10 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
   and `fix-login-cleanup` in one edit at the current rev (no rev to fetch), each tagged
   `unit:fix-login`, paused unless `start=true`. It returns `{rev, steps}` and refuses an id the
   plan already has.
+- `unit_add` takes `tags` too, for every step of the unit next to `unit:<unit>`: group units
+  into an **arc** (`arc:auth`) and act on it with `status`, `step_pause`, `step_cancel`,
+  `step_retry`, `step_remove` or `plan_prune` by `tags=["arc:auth"]`. `unit_tag(project, unit,
+  add=[...], remove=[...])` retags a unit later. `unit:` tags are reserved.
 - Substitution is tiny on purpose: `{param}` in step ids and in every string is replaced by the
   param's value; a string that is exactly `{param}` becomes the value with its type. `{{` and
   `}}` are literal braces; an unknown `{x}` is an error. `unit` (a valid step id) is always a
@@ -174,10 +178,11 @@ removing one that is not, changes nothing.
 Tools that change one step's contents take `step` (`step_add`, `step_update`, `step_set_input`,
 `step_set_output`, `step_submit`); tools that act on a selection take `steps` (ids; one id is
 fine too) and/or `tags`: `step_pause`, `step_retry`, `step_cancel`, `step_remove` and the
-`status` filter. A tool refuses an argument it does not take, naming the ones it does.
+`status` filter (`plan_prune` takes `tags` too). A tool refuses an argument it does not take,
+naming the ones it does.
 
-You cannot remove or change a running step (only pause it). Every edit needs a short `reason`;
-it goes into the plan's history (`plan_history`).
+You cannot remove or change a running step (only pause or tag it). Every edit needs a short
+`reason`; it goes into the plan's history (`plan_history`).
 
 ## Pausing
 Steps you add come in **paused**, so a drafted plan starts nothing until you let it:

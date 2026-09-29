@@ -135,7 +135,7 @@ def test_running_steps_cannot_be_removed_or_changed(store):
     with pytest.raises(InvalidPlan) as e:
         store.patch("p", 2, [{"op": "replace", "path": "/steps/a/in/b/default", "value": 3}],
                     "me", "change")
-    assert e.value.errors == ["steps.a: cannot change a running step (only pause it)"]
+    assert e.value.errors == ["steps.a: cannot change a running step (only pause or tag it)"]
     assert store.patch("p", 2, [{"op": "remove", "path": "/steps/b"}], "me", "ok") == 3
 
 

@@ -369,7 +369,16 @@ and `scatter` already exist in steps). `unit_add(project, recipe, params, start?
 params against their types (every required one, no others), expands the recipe, tags every new
 step `unit:<unit>` before its own tags, refuses ids the plan already has, and adds the steps in
 one edit at the current rev (no rev argument: it is an add, like `step_add`); unless `start`,
-they come in paused. `recipe_list(project)` lists the recipes the project sees; a broken recipe
+they come in paused.
+
+- `tags: [..]` go on every step of the unit after `unit:<unit>` and the recipe's own tags
+  (deduplicated): an **arc** of units (`arc:auth`) that `status`, `step_pause`, `step_cancel`,
+  `step_retry`, `step_remove` and `plan_prune` select by tag. `unit:` tags are reserved:
+  given one, it is refused. `unit_tag(project, unit, add?, remove?)` adds and removes tags on
+  every step tagged `unit:<unit>` later, in one edit at the current rev (refusing `unit:`
+  tags and an unknown unit; nothing to change is no edit).
+
+`recipe_list(project)` lists the recipes the project sees; a broken recipe
 file (bad JSON or shape, a name that is not the file's, a bad param type, an unknown `{x}`) is
 listed with its `error` and never stops the others. For example, `recipes/lane.json`:
 
@@ -411,7 +420,8 @@ without `rev`. A stale `rev` fails with `conflict` (and the current rev). A vali
 `rev`, replaces the plan, and appends a `plan.edit` record `{"rev", "author", "reason",
 "ops"}` to the project's log, also kept (with the record's seq) in the edit history,
 `plan_edits` (creation is rev 1, one `add` of the whole plan). Removing or changing a running
-step is refused. An edit that removes steps (`plan_patch`, `step_remove`, `plan_prune`: any
+step is refused, except its `paused` and `tags` (labels: they change nothing it does). An
+edit that removes steps (`plan_patch`, `step_remove`, `plan_prune`: any
 edit whose plan no longer has them) keeps the outcome of each one that finished in `outcomes`
 (§6), in its own transaction.
 
@@ -1133,7 +1143,8 @@ the tool does take) rather than ignore it. Every tool whose write leaves a recor
 resolved by the same rule when not given, and
 `project_delete` and `fn_save` leave no record to carry one. A tool that changes one step's contents takes
 `step`; a tool that acts on a selection (`step_pause`, `step_retry`, `step_cancel`,
-`step_remove`, `status`) takes `steps` (ids; a single id is a list of one) and/or `tags`.
+`step_remove`, `status`) takes `steps` (ids; a single id is a list of one) and/or `tags`;
+`plan_prune` takes `tags` too.
 
 | Tool | Args | Returns |
 |---|---|---|
@@ -1151,10 +1162,11 @@ resolved by the same rule when not given, and
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
 | `step_add` | `project, step, spec, reason?, start? = false, author?` | `{rev}`: `plan_patch` adding one step at the current rev |
 | `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
-| `unit_add` | `project, recipe, params, start? = false, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>`, added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param or expansion problem, `bad_request` names the ids the plan already has |
+| `unit_add` | `project, recipe, params, start? = false, tags?, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>` (then the recipe's tags, then `tags`), added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param or expansion problem or a `unit:` tag, `bad_request` names the ids the plan already has |
+| `unit_tag` | `project, unit, add?, remove?, reason?, author?` | `{rev, steps}`: adds and removes tags on every step tagged `unit:<unit>` (`steps`), in one edit at the current rev (§5); `unit:` tags refused (`invalid`), an unknown unit `not_found`; nothing to change: no edit, the current rev |
 | `edge_add` | `project, step, after, reason?, author?` | `{rev, after}`: appends `after` (an id or a list) to the step's `after`, deduplicated, in one edit at the current rev (§5); an unknown step or a cycle is `invalid`; edges already there: no edit, the current rev. Only `after`: a step's one `when` is set with `step_update` |
 | `edge_remove` | `project, step, after, reason?, author?` | `{rev, after}`: removes those ids from the step's `after` in one edit at the current rev (removing the key when none is left); an unknown step is `invalid`; edges not there: no edit, the current rev |
-| `step_update` | `project, step, changes, reason?, author?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
+| `step_update` | `project, step, changes, reason?, author?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` and `tags` |
 | `step_remove` | `project, steps?, tags?, reason?, author?` | `{rev, steps, outcomes}`: removes the selected steps in one edit; refused while one runs or something left reads it; `outcomes` is how many of them finished and kept their outcome (§6) |
 | `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?, author?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
 | `step_cancel` | `project, steps?, tags?, reason?, author?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); a selected pending `core.external` step fails so at once (§6); refused, changing nothing, unless every one is running or a pending `core.external` step |
@@ -1173,7 +1185,7 @@ resolved by the same rule when not given, and
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
-| `plan_prune` | `project, older_than_hours? = 0, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago, in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
+| `plan_prune` | `project, older_than_hours? = 0, tags?, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago (with `tags`, only the done units with a step carrying one of them), in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
 | `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); `from` defaults by the author rule (§6b); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project`; an open item a step or a call asked carries `waiting` (and `stopped` when false, §8a) |

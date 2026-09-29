@@ -367,11 +367,13 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def unit_add(project: str, recipe: str, params: dict[str, Any], start: bool = False,
-                 author: str | None = None, reason: str = "") -> Any:
+                 tags: list[str] | None = None, author: str | None = None,
+                 reason: str = "") -> Any:
         """Add one unit of work from a recipe: its steps with `{param}` filled in, each tagged
-        `unit:<unit>`, in one plan edit at the current rev. They come in paused unless start
-        is true. Refused (`bad_request`) when an id it would add is already in the plan;
-        `invalid` lists every param or expansion problem. Returns {rev, steps}.
+        `unit:<unit>` (and `tags`), in one plan edit at the current rev. They come in paused
+        unless start is true. Refused (`bad_request`) when an id it would add is already in
+        the plan; `invalid` lists every param or expansion problem, or a `unit:` tag. Returns
+        {rev, steps}.
 
         Args:
             project: the project.
@@ -379,12 +381,34 @@ def build_server(store: Store, stop: threading.Event | None = None,
             params: {unit: "<name of the unit, a valid step id>", <param>: value, ...}, each
                 checked against the recipe's param types.
             start: let the new steps start as soon as they are ready.
+            tags: more tags for every step of the unit, e.g. ["arc:tsvm"] (select by them in
+                status, step_pause, step_cancel, plan_prune, ...); `unit:` ones are reserved.
             author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
                 client's name, else "mcp"; "cli" from `sluice tool`).
             reason: why, recorded in the plan's history (default "add unit <unit> (recipe
                 <recipe>)").
         """
-        return store.unit_add(project, recipe, params, start, author, reason)
+        return store.unit_add(project, recipe, params, start, author, reason, tags)
+
+    @tool
+    def unit_tag(project: str, unit: str, add: list[str] | None = None,
+                 remove: list[str] | None = None, reason: str = "",
+                 author: str | None = None) -> Any:
+        """Add and/or remove tags on every step of a unit (those tagged `unit:<unit>`), in one
+        plan edit at the current rev, e.g. to put units into an arc after the fact. `unit:`
+        tags are reserved; an unknown unit is `not_found`. Nothing to change: no edit, the
+        current rev. Returns {rev, steps}: the unit's steps.
+
+        Args:
+            project: the project.
+            unit: the unit's name.
+            add: tags to add, e.g. ["arc:tsvm"].
+            remove: tags to remove.
+            reason: why, recorded in the plan's history.
+            author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
+                client's name, else "mcp"; "cli" from `sluice tool`).
+        """
+        return store.unit_tag(project, unit, add, remove, author, reason)
 
     @tool
     def edge_add(project: str, step: str, after: list[str] | str, reason: str = "",
@@ -426,7 +450,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
     def step_update(project: str, step: str, changes: dict[str, Any], reason: str = "",
                     author: str | None = None) -> Any:
         """Change fields of one step: each key of `changes` replaces that field (`in` is
-        replaced whole), null removes it. A running step only takes `paused`. Returns {rev}.
+        replaced whole), null removes it. A running step only takes `paused` and `tags`.
+        Returns {rev}.
 
         Args:
             project: the project.
@@ -804,7 +829,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return store.status(project, steps, tags, brief, all)
 
     @tool
-    def plan_prune(project: str, older_than_hours: float = 0, author: str | None = None,
+    def plan_prune(project: str, older_than_hours: float = 0,
+                   tags: list[str] | str | None = None, author: str | None = None,
                    reason: str = "") -> Any:
         """Remove every step of every done unit (an independent piece of work whose every
         step succeeded or was skipped) whose last step finished at least older_than_hours
@@ -817,11 +843,13 @@ def build_server(store: Store, stop: threading.Event | None = None,
             project: the project.
             older_than_hours: only units finished at least this many hours ago (default 0:
                 every done unit).
+            tags: only the done units with a step carrying any of these tags (e.g. an arc,
+                ["arc:tsvm"]).
             author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
                 client's name, else "mcp"; "cli" from `sluice tool`).
             reason: why, recorded in the plan's history (default "prune <n> done units").
         """
-        return store.prune(project, older_than_hours, author, reason)
+        return store.prune(project, older_than_hours, author, reason, tags)
 
     @tool
     def inbox_post(project: str, title: str, body: str | None = None, ui: str | None = None,

@@ -531,7 +531,8 @@ class Store:
                 if sid not in new_steps:
                     errs.append(f"steps.{sid}: cannot remove a running step")
                 elif _unpaused(new_steps[sid]) != _unpaused(old["steps"].get(sid)):
-                    errs.append(f"steps.{sid}: cannot change a running step (only pause it)")
+                    errs.append(f"steps.{sid}: cannot change a running step (only pause or "
+                                "tag it)")
             if errs:
                 raise InvalidPlan(errs)
             gone = [sid for sid in old["steps"] if sid not in new_steps]
@@ -652,6 +653,39 @@ class Store:
                              reason or f"{step} runs {word} {', '.join(ids)}")
         return {"rev": rev, "after": new}
 
+    def unit_tag(self, project: str, unit: Any, add: Any = None, remove: Any = None,
+                 author: str = "", reason: str = "") -> dict[str, Any]:
+        """Add and/or remove tags on every step tagged `unit:<unit>`, in one edit at the
+        current rev; `unit:` tags are reserved. Nothing to change: no edit. Returns {rev,
+        steps}: the unit's steps."""
+        add, remove = _ids_arg(add or [], "add"), _ids_arg(remove or [], "remove")
+        errs = _reserved(add, "add") + _reserved(remove, "remove")
+        errs += [f"add: {t} is removed too" for t in add if t in remove]
+        if errs:
+            raise InvalidPlan(errs, "these tags cannot be changed")
+        if not isinstance(unit, str):
+            raise BadRequest("unit: expected a unit's name")
+        with self.tx():
+            cur = self.get(project)
+            mine = {sid: s for sid, s in cur["steps"].items()
+                    if isinstance(s, dict) and isinstance(s.get("tags"), list)
+                    and f"unit:{unit}" in s["tags"]}
+            if not mine:
+                raise NotFound(f"the plan of project {project} has no unit {unit!r} (no step "
+                               f"tagged unit:{unit})")
+            ops = []
+            for sid, s in mine.items():
+                new = [t for t in s["tags"] if t not in remove]
+                new += [t for t in add if t not in new]
+                if new != s["tags"]:
+                    ops.append({"op": "replace", "path": f"/steps/{sid}/tags", "value": new})
+            if not ops:
+                return {"rev": cur["rev"], "steps": list(mine)}
+            what = [*(f"+{t}" for t in add), *(f"-{t}" for t in remove)]
+            rev = self.patch(project, cur["rev"], ops, author,
+                             reason or f"tag unit {unit} {' '.join(what)}")
+        return {"rev": rev, "steps": list(mine)}
+
     def remove_steps(self, project: str, steps: Any = None, tags: Any = None,
                      author: str = "", reason: str = "") -> dict[str, Any]:
         """Remove the selected steps in one edit. Returns {rev, steps, outcomes}: how many
@@ -697,15 +731,17 @@ class Store:
         return [sid for sid in plan.steps if sid in chosen]
 
     def prune(self, project: str, older_than_hours: Any = 0, author: str = "",
-              reason: str = "") -> dict[str, Any]:
+              reason: str = "", tags: Any = None) -> dict[str, Any]:
         """plan_prune: remove every step of every done unit whose last step finished at least
-        `older_than_hours` ago, in one edit (the history keeps them). A unit a plan output
-        reads stays (removing it would break the plan). Returns {rev, units, steps, outcomes}:
-        the number of units, the ids removed and how many outcomes they kept; no edit when
-        there is nothing to remove."""
+        `older_than_hours` ago (with `tags`, only the units with a step carrying one of them),
+        in one edit (the history keeps them). A unit a plan output reads stays (removing it
+        would break the plan). Returns {rev, units, steps, outcomes}: the number of units, the
+        ids removed and how many outcomes they kept; no edit when there is nothing to
+        remove."""
         if isinstance(older_than_hours, bool) or not isinstance(older_than_hours, int | float) \
                 or older_than_hours < 0:
             raise BadRequest("older_than_hours: expected a number of hours, 0 or more")
+        only = set(_ids_arg(tags, "tags")) if tags is not None else None
         cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(hours=older_than_hours)
         with self.tx() as conn:
             doc, plan = self.plan(project)
@@ -713,6 +749,8 @@ class Store:
             kept = {r.step for r in plan.outputs.values() if r.step}
             gone: list[list[str]] = []
             for unit in P.done_units(plan, state):
+                if only is not None and not any(only & set(plan.steps[s].tags) for s in unit):
+                    continue
                 ends = [_parse_time(S.entry_of(state, sid).get("finished")) for sid in unit]
                 last = max((t for t in ends if t is not None), default=None)
                 if kept.isdisjoint(unit) and last is not None and last <= cutoff:
@@ -826,10 +864,11 @@ class Store:
         return [r.summary() for _, r in sorted(self._recipes(project).items())]
 
     def unit_add(self, project: str, recipe: Any, params: Any, start: bool = False,
-                 author: str = "", reason: str = "") -> dict[str, Any]:
+                 author: str = "", reason: str = "", tags: Any = None) -> dict[str, Any]:
         """Expand a recipe with `params` (`unit` among them) and add its steps in one edit at
-        the current rev, each tagged `unit:<unit>` before its own tags; unless `start`, they
-        come in paused. Refuses ids the plan already has. Returns {rev, steps}."""
+        the current rev, each tagged `unit:<unit>`, then its own tags, then `tags`; unless
+        `start`, they come in paused. Refuses ids the plan already has. Returns {rev,
+        steps}."""
         if not isinstance(recipe, str):
             raise BadRequest("recipe: expected a recipe's name")
         found = self._recipes(project).get(recipe)
@@ -842,9 +881,14 @@ class Store:
         if errs:
             raise InvalidPlan(errs, f"recipe {recipe} does not expand with these params")
         unit = params[RC.UNIT]
+        extra = _ids_arg(tags or [], "tags")
+        errs = _reserved(extra, "tags")
         for step in steps.values():
             if isinstance(step, dict) and isinstance(step.get("tags", []), list):
-                step["tags"] = list(dict.fromkeys([f"unit:{unit}", *step.get("tags", [])]))
+                step["tags"] = list(dict.fromkeys([f"unit:{unit}", *step.get("tags", []),
+                                                   *extra]))
+        if errs:
+            raise InvalidPlan(errs, f"unit {unit} cannot be tagged so")
         with self.tx():
             cur = self.get(project)
             taken = [sid for sid in steps if sid in cur["steps"]]
@@ -1207,8 +1251,9 @@ def _body(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unpaused(step: Any) -> Any:
-    """A step without its `paused` flag: the one change a running step takes."""
-    return {k: v for k, v in step.items() if k != "paused"} if isinstance(step, dict) else step
+    """A step without its `paused` flag and `tags`: the changes a running step takes."""
+    return {k: v for k, v in step.items() if k not in ("paused", "tags")} \
+        if isinstance(step, dict) else step
 
 
 def _ids_arg(value: Any, name: str) -> list[str]:
@@ -1217,6 +1262,11 @@ def _ids_arg(value: Any, name: str) -> list[str]:
     if not (isinstance(value, list) and all(isinstance(x, str) for x in value)):
         raise BadRequest(f"{name}: expected a string or an array of strings")
     return list(dict.fromkeys(value))
+
+
+def _reserved(tags: list[str], where: str) -> list[str]:
+    return [f"{where}: {t} is reserved (a unit's steps carry unit:<unit>)"
+            for t in tags if t.startswith("unit:")]
 
 
 def apply_ops(doc: dict[str, Any], ops: Any) -> dict[str, Any]:

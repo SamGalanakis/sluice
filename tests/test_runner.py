@@ -309,7 +309,7 @@ def test_a_paused_project_starts_nothing_and_a_running_step_can_be_paused(store,
     assert store.pause_steps("p", ["w"], author="test") == {"rev": 3, "steps": ["w"]}
     with pytest.raises(InvalidPlan) as e:
         store.update_step("p", "w", {"doc": "no"}, "test", "")
-    assert e.value.errors == ["steps.w: cannot change a running step (only pause it)"]
+    assert e.value.errors == ["steps.w: cannot change a running step (only pause or tag it)"]
     settle(runner, store, "p")
     for _ in range(3):
         runner.tick()
