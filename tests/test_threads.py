@@ -7,8 +7,12 @@ import sys
 import time
 from pathlib import Path
 
+from mcp import Client
+from mcp.types import Implementation
+
 from sluice import calls
 from sluice import log as L
+from sluice.mcp_server import build_server
 from sluice.registry import BUILTIN_DIR
 from sluice.runner import run_call_direct
 
@@ -154,3 +158,48 @@ def test_threads_need_a_project(store):
     code, _, err = run_fn(store, "thread.post", {"thread": "Bad Name", "body": "x",
                                                  "from": "me"}, project="p")
     assert code == 1 and "thread names match" in err
+
+
+# ---- the thread_post tool: the same record, posted here and now ------------------------------
+
+async def test_thread_post_returns_the_seq_of_the_record_thread_post_writes(store):
+    store.create_project("p")
+    by_fn = post(store, "p", thread="step-a", body="which db?", to="a", data={"n": 1},
+                 needs_reply=False, **{"from": "lead"})
+    info = Implementation(name="claude-code", version="1")
+    async with Client(build_server(store), client_info=info) as c:
+        r = await c.call_tool("thread_post", {"project": "p", "thread": "step-a",
+                                              "body": "which db?", "to": "a",
+                                              "data": {"n": 1}, "needs_reply": False,
+                                              "from": "lead"})
+        seq = json.loads(r.content[0].text)["seq"]
+        r = await c.call_tool("thread_post", {"project": "p", "thread": "step-a",
+                                              "body": "still there?"})
+        second = json.loads(r.content[0].text)["seq"]
+        r = await c.call_tool("thread_post", {"project": "p", "thread": "Bad Name",
+                                              "body": "x"})
+        assert r.is_error and "thread names match" in json.loads(r.content[0].text)["message"]
+        r = await c.call_tool("thread_post", {"project": "nope", "thread": "t", "body": "x"})
+        assert r.is_error and json.loads(r.content[0].text)["error"] == "not_found"
+    recs = {m["seq"]: m for m in L.read(store.home, "p", threads=["step-a"])["records"]}
+    strip = lambda m: {k: v for k, v in m.items() if k not in ("seq", "at")}
+    assert strip(recs[seq]) == strip(recs[by_fn])  # the fn's record, field for field
+    # from by the author rule: here the MCP client's name; a question by default
+    assert recs[second]["from"] == "claude-code" and recs[second]["needs_reply"] is True
+    assert "to" not in recs[second]
+
+
+def test_thread_post_from_sluice_tool_is_cli_or_the_step(store):
+    store.create_project("p")
+    env = {**os.environ, "SLUICE_HOME": str(store.home)}
+    env.pop("SLUICE_STEP", None), env.pop("SLUICE_AUTHOR", None)
+
+    def tool(**extra):
+        p = subprocess.run([sys.executable, "-m", "sluice.cli", "tool", "thread_post",
+                            json.dumps({"project": "p", "thread": "t", "body": "hi"})],
+                           env={**env, **extra}, capture_output=True, text=True, check=True)
+        return json.loads(p.stdout)["seq"]
+
+    one, two = tool(), tool(SLUICE_STEP="work")
+    msgs = {m["seq"]: m for m in L.read(store.home, "p", threads=["t"])["records"]}
+    assert (msgs[one]["from"], msgs[two]["from"]) == ("cli", "step:work")

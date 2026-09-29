@@ -160,7 +160,7 @@ def cmd_watch(a: argparse.Namespace, store: Store) -> int:
 def cmd_next(a: argparse.Namespace, store: Store) -> int:
     """Print the next records an orchestrator acts on once they arrive and settle, then
     exit."""
-    from .watch import line, next_up
+    from .watch import line, messages_first, next_up
 
     if a.project:
         projects = [store.project(p)["name"] for p in a.project]
@@ -168,6 +168,8 @@ def cmd_next(a: argparse.Namespace, store: Store) -> int:
         projects = [p["name"] for p in store.projects() if not p["archived"]]
         if not projects:
             raise BadRequest("no projects (none not archived); pass -p to name them")
+    if a.cut < 1:
+        raise BadRequest("--cut: expected a positive number of characters")
     if a.cursor is not None:
         try:
             since = int(Path(a.cursor).read_text().strip())
@@ -181,14 +183,14 @@ def cmd_next(a: argparse.Namespace, store: Store) -> int:
                   settle=a.settle, settle_max=a.settle_max)
     if a.cursor is not None:
         atomic_write_text(Path(a.cursor), f"{res['last_seq']}\n")
-    shown = [*res["notes"], *res["records"]]
+    shown = messages_first(sorted([*res["notes"], *res["records"]], key=lambda r: r["seq"]))
     if a.json:
         for r in shown:
             print(json.dumps(r, ensure_ascii=False))
         print(json.dumps({"seq": res["last_seq"], "timed_out": res["timed_out"]}))
     else:
         for r in shown:
-            print(line(r))
+            print(line(r, a.settles, a.cut))
         print(f"{'timeout ' if res['timed_out'] else ''}seq {res['last_seq']}")
     sys.stdout.flush()
     return 0
@@ -332,8 +334,9 @@ def build_parser() -> argparse.ArgumentParser:
                        "wake an orchestrator (a failed/stale/skipped step, a unit that "
                        "settled, a standalone open-fn success, a question for you, an inbox "
                        "post or answer), collect what follows within the settle window, "
-                       "print each compactly and exit. Held notes print first; the last "
-                       "line is `seq <N>` to pass to --since-seq.")
+                       "print each compactly and exit. Messages (questions and held "
+                       "notes) print first and whole; a settled unit prints as --settles "
+                       "says; the last line is `seq <N>` to pass to --since-seq.")
     s.add_argument("-p", "--project", action="append",
                    help="a project to watch (repeatable; default: every project not "
                    "archived)")
@@ -356,8 +359,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="return at most S seconds after the first waking record "
                    "(default 120)")
     s.add_argument("--all", action="store_true", help="every record wakes it")
+    s.add_argument("--settles", choices=("short", "full", "none"), default="short",
+                   help="a settled unit's outputs: short (default) its booleans, numbers, "
+                   "strings of at most 80 characters and a summary's first line, naming "
+                   "the rest; full every output, each cut at --cut; none the UNIT line only")
+    s.add_argument("--cut", type=int, default=600, metavar="N",
+                   help="with --settles full, cut each output to N characters (default 600)")
     s.add_argument("--json", action="store_true",
-                   help="print each record as one JSON line, then {\"seq\": N, ...}")
+                   help="print each record as one JSON line, outputs whole whatever "
+                   "--settles says, then {\"seq\": N, ...}")
     s = sub.add_parser("drain",
                        help="pause projects for maintenance; wait for running work",
                        description="Pause the given projects (default: every project not "

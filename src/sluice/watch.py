@@ -55,7 +55,9 @@ def follow(home: Path, project: str | None, out: IO[str], kinds: Iterable[str] |
 
 ATTENTION = ("failed", "stale", "skipped")  # a step going to one of these always wakes
 FINAL = ("succeeded", "skipped", "failed", "stale")  # a step in one of these will not run now
-CUT = 600  # the text form's cut for one output value
+CUT = 600  # the text form's cut for one output value (--settles full)
+SHORT = 80  # the most characters of a string output --settles short prints
+SUMMARY = 200  # the most characters of a summary's first line it prints
 BEAT = 30.0  # seconds between a waiting next_up's notes that it is still reading
 
 
@@ -322,47 +324,90 @@ def _one(value: Any, cut: int = 400) -> str:
     return re.sub(r"\s+", " ", text).strip()[:cut]
 
 
-def _value(value: Any) -> str:
+def _value(value: Any, cut: int = CUT) -> str:
     """An output value on one line: a string as itself, anything else as compact JSON,
-    whitespace collapsed, cut to CUT characters with "…" when cut."""
+    whitespace collapsed, cut to `cut` characters with "…" when cut."""
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False,
                                                            separators=(",", ":"))
     text = re.sub(r"\s+", " ", text).strip()
-    return text if len(text) <= CUT else text[:CUT] + "…"
+    return text if len(text) <= cut else text[:cut] + "…"
 
 
-def _block(unit: dict[str, Any], head: str) -> list[str]:
-    """`head` and the unit's step statuses (names without the `<unit>-` prefix), then one
-    indented line per output of its succeeded steps."""
+def _short(name: str, value: Any) -> Any:
+    """The output as --settles short shows it, or None when it is long: a boolean or a
+    number as itself, a string of at most SHORT characters on one line, and a `summary`'s
+    first line cut to SUMMARY characters and "…"."""
+    if isinstance(value, bool | int | float):
+        return value
+    if not isinstance(value, str):
+        return None
+    if name == "summary":
+        first = next((ln.strip() for ln in value.splitlines() if ln.strip()), "")
+        return first if len(first) <= SUMMARY else first[:SUMMARY] + "…"
+    return value if len(value) <= SHORT and "\n" not in value else None
+
+
+def trim(unit: dict[str, Any], settles: str) -> dict[str, Any]:
+    """The unit a record carries, as `settles` shows it: "full" as it is, "none" without
+    outputs, "short" with only its short outputs (_short) and each step's long ones named in
+    `omitted`."""
+    if settles == "full":
+        return unit
+    steps = []
+    for s in unit["steps"]:
+        step = {k: v for k, v in s.items() if k != "outputs"}
+        if settles == "short":
+            short = {k: _short(k, v) for k, v in s["outputs"].items()}
+            step["outputs"] = {k: v for k, v in short.items() if v is not None}
+            if omitted := [k for k, v in short.items() if v is None]:
+                step["omitted"] = omitted
+        steps.append(step)
+    return {**unit, "steps": steps}
+
+
+def messages_first(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The records with the messages (questions and notes) first, each group in its order."""
+    return sorted(records, key=lambda r: r.get("kind") != "message")
+
+
+def _block(unit: dict[str, Any], head: str, settles: str = "short",
+           cut: int = CUT) -> list[str]:
+    """`head` and the unit's step statuses (names without the `<unit>-` prefix), then, unless
+    `settles` is "none", one indented line per output of its succeeded steps: every output
+    cut at `cut` ("full"), or only the short ones and a line naming the rest ("short")."""
     pre = unit["name"] + "-"
-    short = [(s, s["id"].removeprefix(pre)) for s in unit["steps"]]
+    short = [(s, s["id"].removeprefix(pre)) for s in trim(unit, settles)["steps"]]
     marks = " · ".join(f"{n} {s['status']}{' (held)' if s.get('held') else ''}"
                        for s, n in short)
-    return [head + marks, *(f"  {n}.{k}: {_value(v)}" for s, n in short
-                            for k, v in s["outputs"].items())]
+    lines = [head + marks, *(f"  {n}.{k}: {_value(v, cut)}" for s, n in short
+                             for k, v in s.get("outputs", {}).items())]
+    if more := [f"{n}.{k}" for s, n in short for k in s.get("omitted", ())]:
+        lines.append(f"  (+ {', '.join(more)}: sluice query or --settles full)")
+    return lines
 
 
-def line(rec: dict[str, Any]) -> str:
+def line(rec: dict[str, Any], settles: str = "short", cut: int = CUT) -> str:
     """The record as one compact block (SPEC §9): `STEP fix-x running -> failed: <error>`,
-    `MSG step-x x -> orchestrator: <body>`, `NOTE …` for a held note, `INBOX post i3
-    <title>`; a success that settled its unit as `UNIT <name> settled: fork succeeded · …`
-    and its outputs, one indented line each; an attention record that settled its unit as
-    its STEP line, then `  unit <name>: …` and the outputs."""
+    `MSG step-x x -> orchestrator: <body>` (the body whole, further lines indented), `NOTE …`
+    for a held note, `INBOX post i3 <title>`; a success that settled its unit as `UNIT <name>
+    settled: fork succeeded · …` and its outputs as `settles` says (_block); an attention
+    record that settled its unit as its STEP line, then `  unit <name>: …` and the outputs."""
     kind = rec.get("kind")
     if kind == "step.status":
         unit = rec.get("unit")
         if unit and rec.get("to") not in ATTENTION:
-            return "\n".join(_block(unit, f"UNIT {unit['name']} settled: "))
+            return "\n".join(_block(unit, f"UNIT {unit['name']} settled: ", settles, cut))
         tail = ""
         if rec.get("error"):
             errs = str(rec["error"]).strip().splitlines()
             tail = f": {errs[-1][:200]}" if errs else ""
         head = f"STEP {rec.get('step')} {rec.get('from') or 'pending'} -> {rec.get('to')}{tail}"
-        return "\n".join([head, *(_block(unit, f"  unit {unit['name']}: ") if unit else [])])
+        return "\n".join([head, *(_block(unit, f"  unit {unit['name']}: ", settles, cut)
+                                  if unit else [])])
     if kind == "message":
         tag = "NOTE" if rec.get("needs_reply") is False else "MSG"
-        return (f"{tag} {rec.get('thread')} {rec.get('from')} -> {rec.get('to') or '-'}: "
-                f"{_one(rec.get('body'))}")
+        body = str(rec.get("body") or "").strip().replace("\n", "\n  ")
+        return f"{tag} {rec.get('thread')} {rec.get('from')} -> {rec.get('to') or '-'}: {body}"
     if kind in ("project.pause", "project.archive"):
         what = ("paused" if rec.get("paused") else "unpaused") if kind == "project.pause" \
             else ("archived" if rec.get("archived") else "unarchived")

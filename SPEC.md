@@ -653,7 +653,7 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 | `step.submit` | `step, run, outputs, author?` | every accepted `step_submit` (§5) |
 | `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
 | `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?, author?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` and the `author`; a direct call's running record also its `pid` and `pid_start` |
-| `message` | `thread, from, to?, body, data?` | `thread.post` (§10) |
+| `message` | `thread, from, to?, body, needs_reply, data?` | `thread.post` and `thread_post` (§10) |
 | `inbox.post` | `item, title, from?, run?, input?` | `inbox_post`, `inbox.ask` (§8a); `run` when a step's run asks |
 | `inbox.answer` | `item, answer, by, waiting?` | `inbox_answer` and the dashboard's answer route; `waiting: false` when the item's asker had stopped (§8a) |
 | `inbox.close` | `item, reason?, by` | `inbox_close` (`by`, like `inbox.answer`'s, is the author) |
@@ -667,7 +667,8 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 **Authors.** Every write tool (§8) that leaves a record names who made the change, in the
 record's `author` — `by` is that field in `inbox.answer` and `inbox.close` (the name they had
 first; a query over authors reads `coalesce(data->>'$.author', data->>'$.by')`), and `from` in
-`inbox.post` — by one rule: the tool's `author` argument (`inbox_post`'s `from`) when given (not blank);
+`inbox.post` and `message` — by one rule: the tool's `author` argument (`inbox_post`'s and
+`thread_post`'s `from`) when given (not blank);
 else the `SLUICE_AUTHOR` environment variable of the process running the tool; else
 `step:<id>` when `SLUICE_STEP` is set (an agent inside a step calling `sluice tool`); else the
 MCP client's name from the session's `initialize` (`clientInfo.name`); else `mcp` over MCP and
@@ -1149,7 +1150,8 @@ its columns.
 Every tool refuses an argument it does not take (`bad_request`, naming it and the arguments
 the tool does take) rather than ignore it. Every tool whose write leaves a record takes
 `author?`, resolved by the rule in §6b; `inbox_post` names its asker with `from?` instead,
-resolved by the same rule when not given, and
+resolved by the same rule when not given (`thread_post` takes both: its `from` defaults to the
+resolved author), and
 `project_delete` and `fn_save` leave no record to carry one. A tool that changes one step's contents takes
 `step`; a tool that acts on a selection (`step_pause`, `step_retry`, `step_cancel`,
 `step_remove`, `status`) takes `steps` (ids; a single id is a list of one) and/or `tags`;
@@ -1187,7 +1189,7 @@ resolved by the same rule when not given, and
 | `step_submit` | `project, step, outputs, run?, author?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
-| `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs}]}`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all. `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
+| `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120, settles? = "short"` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs?, omitted?}]}`, the outputs as `settles` says: `short` only the booleans, numbers, strings of at most 80 characters on one line and a `summary`'s first line cut to 200 characters and "…", the others' names in `omitted`; `full` every output whole; `none` no `outputs`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all, the messages first in `records` (each group in seq order). `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
 | `drain` | `projects?, author?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in SQLite so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
 | `release` | `author?` | unpauses exactly the projects the maintenance ledger lists and clears it; `{released}`. Projects paused otherwise stay paused |
 | `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` |
@@ -1196,6 +1198,7 @@ resolved by the same rule when not given, and
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
 | `plan_prune` | `project, older_than_hours? = 0, tags?, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago (with `tags`, only the done units with a step carrying one of them), in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
 | `status` | `project, steps?, tags?, brief? = false, all? = false, view? = "steps", state?` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`). `view: "units"` returns one compact row per unit instead (below); `state` (only with it) keeps the units in these states, and `brief` is refused with it |
+| `thread_post` | `project, thread, body, needs_reply? = true, to?, from?, data?, author?` | `{seq}`: appends the `message` record the `thread.post` fn appends (§10; the same validation), here and now; `seq` is its seq in the log, so it is delivered. `from` defaults to the author (§6b) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); `from` defaults by the author rule (§6b); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project`; an open item a step or a call asked carries `waiting` (and `stopped` when false, §8a) |
 | `inbox_answer` | `project, id, answer, author?` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
@@ -1307,7 +1310,8 @@ sluice tool <name> '<json args>'      call that tool in-process and print its re
 sluice watch [-p P] [--kinds k1,k2] [--threads a,b] [--since-seq N]
                                       print new log records as JSON lines (§10)
 sluice next [-p P …] [--since-seq N | --cursor FILE] [--me NAME] [--timeout S]
-            [--settle S] [--settle-max S] [--all] [--json]
+            [--settle S] [--settle-max S] [--all] [--settles short|full|none]
+            [--cut N] [--json]
                                       print the next records an orchestrator acts on, exit
 sluice drain [-p P …] [--no-wait] [--release]
                                       pause projects for maintenance and wait out their
@@ -1348,33 +1352,47 @@ outside the unit counts by the same rule). **Wakes:**
 - a standalone step's success when its fn is open;
 - with `--all`, every record.
 
-Notes (`needs_reply: false`) not from `--me` are held and printed first, like `sluice watch
---wake questions`. A record that settles its unit carries `unit: {name, settled: true, steps:
-[{id, status, held?, outputs}]}` (steps in plan order, status as of the record, `held: true`
-on a held pending step, `outputs` a step's outputs now if it succeeded as of the record — the
-ones the step declares when it declares any (its contract, e.g. `landed`, `summary`), else its
-fn's — leaving out null and empty values; else `{}`). Each record prints as one block: `STEP fix-x running -> failed: <last line
-of the error>`, `MSG step-fix-x fix-x -> orchestrator: <body>`, `NOTE …` for a held note,
-`INBOX post i3 <title>`; a unit settled by a success as
+Notes (`needs_reply: false`) not from `--me` are held, like `sluice watch --wake questions`. In
+every batch the messages — the questions and the held notes, in seq order — print **first and
+whole** (never cut; a body's further lines indented two spaces), then the other waking records
+in seq order, so a waiter that cuts the output's tail never loses a question. A record that
+settles its unit carries `unit: {name, settled: true, steps: [{id, status, held?, outputs}]}`
+(steps in plan order, status as of the record, `held: true` on a held pending step, `outputs` a
+step's outputs now if it succeeded as of the record — the ones the step declares when it
+declares any (its contract, e.g. `landed`, `summary`), else its fn's — leaving out null and
+empty values; else `{}`). Each record prints as one block: `STEP fix-x running -> failed: <last
+line of the error>`, `MSG step-fix-x fix-x -> orchestrator: <body>`, `NOTE …` for a held note,
+`INBOX post i3 <title>`; a unit settled by a success as its statuses line, `UNIT fig-3984
+settled: fork succeeded · work succeeded · close succeeded · rm succeeded` (step names without
+the `<unit>-` prefix), then its outputs as `--settles` says:
 
-```
-UNIT fig-3984 settled: fork succeeded · work succeeded · close succeeded · rm succeeded
-  work.landed: true
-  work.summary: <whitespace collapsed, cut to 600 characters and "…">
-```
+- `short` (the default): only its short outputs, one indented line each — booleans, numbers,
+  strings of at most 80 characters on one line, and the first line of a `summary` cut to 200
+  characters and "…" — then one line naming the rest:
 
-(step names without the `<unit>-` prefix; one line per output: strings as they are, anything
-else as compact JSON, cut to 600); a unit settled by a failure as its `STEP` line, then `  unit
-fig-3984: fork succeeded · work failed · close pending (held) · rm pending (held)` and the
-outputs. The last line is `seq <N>`. After the first waking record it keeps reading until
+  ```
+  UNIT fig-4188 settled: fork succeeded · work succeeded · landed succeeded · close succeeded
+    work.landed: true
+    work.summary: Split the parser out of core
+    landed.sha: 127c2443a5
+    (+ work.evidence, work.unresolved: sluice query or --settles full)
+  ```
+
+- `full`: every output, one indented line each (strings as they are, anything else as compact
+  JSON, whitespace collapsed, cut to `--cut N` characters, default 600, and "…");
+- `none`: the statuses line only.
+
+A unit settled by a failure prints as its `STEP` line, then `  unit fig-3984: fork succeeded ·
+work failed · close pending (held) · rm pending (held)` and the outputs as `--settles` says.
+The last line is `seq <N>`. After the first waking record it keeps reading until
 `--settle S` seconds (default 20) pass with no new waking record, or `--settle-max S` (default
 120) after the first; `--settle 0` returns at the first waking record. Without `--since-seq` or
 `--cursor` it starts from now; `--cursor FILE` reads the start seq from it (missing: from now)
 and writes back, once and atomically, the seq of the last record consumed — read, waking or not
 — so a relaunch never misses or repeats one. `--timeout S` bounds the wait for the first waking
 record, then exits 0 printing `timeout seq <N>` (and writes the cursor); `--json` prints the
-records as JSON lines, `unit` included with its outputs whole, and a final `{"seq": N,
-"timed_out": …}`. Exit 0 on a wake or a timeout.
+records as JSON lines (messages first, as above), `unit` included with its outputs whole
+whatever `--settles` and `--cut` say, and a final `{"seq": N, "timed_out": …}`. Exit 0 on a wake or a timeout.
 
 **Nobody reading.** `next` (the CLI and the tool) notes in the `readers` table (§2), per project,
 how far it has read (`seq`, never going back), when (`at`: at the start, every 30 s while it
@@ -1527,7 +1545,8 @@ so a copy anywhere works (see `packs/README.md`).
 filtered to `message` records with that `thread` name (the project comes from `SLUICE_PROJECT`;
 without one they fail with a clear error; thread names use the id pattern). A message is
 `{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "data"?}`; its `seq` is the
-log's. Agents post through `fn_call`. Direct callers can read with `log_read`/`log_wait`
+log's. Agents post with the `thread_post` tool (§8: the same record, returning its seq),
+or `fn_call` of `thread.post`; a plan step posts as a step with `thread.post`. Direct callers can read with `log_read`/`log_wait`
 (`threads: [name]`); the agent functions above deliver addressed messages into their live
 sessions. Plans use thread functions as ordinary steps.
 - `thread.post`: inputs `{thread: string, body: string, from: string, to: string?, data: Any?}`,

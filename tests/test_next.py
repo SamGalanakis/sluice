@@ -378,12 +378,13 @@ def test_the_cursor_moves_once_per_batch_without_misses_or_repeats(store, tmp_pa
     assert int(cursor.read_text()) == s3 and s1 < s2 < tail < s3
 
 
-def test_json_keeps_outputs_whole_and_text_cuts_them_at_600(store):
+def test_json_keeps_outputs_whole_and_full_text_cuts_them_at_600(store):
     create(store, "p", lane())
     since = L.last_seq(store.home, "p")
     long = "word " * 300
     land(store, "p", summary=long)
-    text = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    text = next_run(store.home, "-p", "p", "--since-seq", str(since), "--settles",
+                    "full").splitlines()
     cut = next(x for x in text if x.startswith("  work.summary: "))
     assert cut == "  work.summary: " + ("word " * 120)[:600] + "…"
     recs = [json.loads(x) for x in next_run(store.home, "-p", "p", "--since-seq", str(since),
@@ -627,3 +628,133 @@ def test_a_version_2_file_gets_the_readers_table(tmp_path):
     assert {p: (r["seq"], r["me"]) for p, r in readers(store).items()} == {"p": (1, "lead")}
     assert "readers" in query.run(home, "SELECT name FROM sqlite_master WHERE type = "
                                         "'table' AND name = 'readers'")["rows"][0]
+
+
+# ---- how much of a settled unit a batch shows: --settles, and messages first -----------------
+
+SUMMARY = "Landed the parser split.\n" + "Details " * 60
+BIG_OUT = {**WORK_OUT, "summary": SUMMARY, "sha": "127c2443a5", "evidence": "log " * 400,
+           "unresolved": ["flaky test", "docs"]}
+
+
+def big_lane():
+    """lane() whose work step declares long outputs too (evidence, unresolved)."""
+    plan = lane()
+    plan["u-work"]["outputs"] = {"landed": "boolean", "summary": "string", "sha": "string",
+                                 "evidence": "string", "unresolved": "string[]"}
+    return plan
+
+
+def land_big(store):
+    run_step(store, "p", "u-fork", {"sum": 3})
+    run_step(store, "p", "u-work", BIG_OUT)
+    run_step(store, "p", "u-close", {"sum": 2})
+    return run_step(store, "p", "u-rm", {"sum": 0})
+
+
+HEAD = "UNIT u settled: fork succeeded · work succeeded · close succeeded · rm succeeded"
+
+
+def test_settles_short_prints_only_short_outputs_and_names_the_rest(store):
+    create(store, "p", big_lane())
+    since = L.last_seq(store.home, "p")
+    rm = land_big(store)
+    lines = next_run(store.home, "-p", "p", "--since-seq", str(since)).splitlines()
+    assert lines == [HEAD, "  fork.sum: 3", "  work.landed: true",
+                     "  work.summary: Landed the parser split.", "  work.sha: 127c2443a5",
+                     "  close.sum: 2", "  rm.sum: 0",
+                     "  (+ work.evidence, work.unresolved: sluice query or --settles full)",
+                     f"seq {rm}"]
+    long_first = "word " * 100  # a summary's first line is cut to 200
+    assert next_run(store.home, "-p", "p", "--since-seq", str(since), "--settles",
+                    "short") == "\n".join(lines) + "\n"
+    create(store, "q", lane())
+    s = L.last_seq(store.home, "q")
+    run_step(store, "q", "u-fork", {"sum": 3})
+    run_step(store, "q", "u-work", {**WORK_OUT, "summary": long_first})
+    run_step(store, "q", "u-close", {"sum": 2})
+    run_step(store, "q", "u-rm", {"sum": 0})
+    got = next_run(store.home, "-p", "q", "--since-seq", str(s)).splitlines()
+    assert "  work.summary: " + long_first.strip()[:200] + "…" in got
+
+
+def test_settles_none_prints_the_unit_line_only_and_full_every_output_cut(store):
+    create(store, "p", big_lane())
+    since = L.last_seq(store.home, "p")
+    rm = land_big(store)
+    assert next_run(store.home, "-p", "p", "--since-seq", str(since), "--settles",
+                    "none").splitlines() == [HEAD, f"seq {rm}"]
+    full = next_run(store.home, "-p", "p", "--since-seq", str(since), "--settles", "full",
+                    "--cut", "20").splitlines()
+    assert full[0] == HEAD and full[-1] == f"seq {rm}"
+    assert "  work.evidence: " + ("log " * 5)[:20] + "…" in full
+    assert '  work.unresolved: ["flaky test","docs"…' in full  # JSON is cut too
+    assert "  work.sha: 127c2443a5" in full and not any(x.startswith("  (+") for x in full)
+    default = next_run(store.home, "-p", "p", "--since-seq", str(since), "--settles", "full")
+    assert "  work.evidence: " + ("log " * 150)[:600] + "…" in default.splitlines()
+
+
+def test_json_is_whole_under_every_settles(store):
+    create(store, "p", big_lane())
+    since = L.last_seq(store.home, "p")
+    land_big(store)
+    for mode in ("short", "full", "none"):
+        out = next_run(store.home, "-p", "p", "--since-seq", str(since), "--json",
+                       "--settles", mode, "--cut", "5")
+        rec = json.loads(out.splitlines()[0])
+        assert rec["unit"]["steps"][1]["outputs"] == {
+            k: BIG_OUT[k] for k in ("landed", "summary", "sha", "evidence", "unresolved")}
+
+
+def test_messages_print_first_and_whole_ahead_of_a_big_settle(store):
+    create(store, "p", big_lane())
+    since = L.last_seq(store.home, "p")
+    msg(store, "p", "moved the helpers", needs_reply=False)
+    rm = land_big(store)
+    question = "Which crate owns the parser?\n" + "Context: " + "because " * 120
+    q = msg(store, "p", question, thread="step-u-work")
+    for mode in ("short", "full"):
+        out = next_run(store.home, "-p", "p", "--since-seq", str(since), "--settle", "0.3",
+                       "--settles", mode)
+        lines = out.splitlines()
+        assert lines[0] == "NOTE t worker -> orchestrator: moved the helpers"
+        assert lines[1] == "MSG step-u-work worker -> orchestrator: Which crate owns the parser?"
+        assert lines[2] == "  " + question.splitlines()[1].strip()  # whole, never cut
+        assert lines[3] == HEAD and lines[-1] == f"seq {q}" and rm < q
+    recs = [json.loads(x) for x in next_run(store.home, "-p", "p", "--since-seq", str(since),
+                                            "--settle", "0.3", "--json").splitlines()[:-1]]
+    assert [r["kind"] for r in recs] == ["message", "message", "step.status"]
+    assert recs[1]["body"] == question
+
+
+def test_a_bad_cut_is_refused(store):
+    create(store, "p", lane())
+    p = subprocess.run([sys.executable, "-m", "sluice.cli", "next", "-p", "p", "--cut", "0",
+                        "--timeout", "0"], env={**os.environ, "SLUICE_HOME": str(store.home)},
+                       capture_output=True, text=True, timeout=30, check=False)
+    assert p.returncode == 1 and "--cut" in p.stderr
+
+
+async def test_the_mcp_tool_takes_settles_and_puts_messages_first(store):
+    create(store, "p", big_lane())
+    since = L.last_seq(store.home, "p")
+    land_big(store)
+    msg(store, "p", "which crate? " * 60, thread="step-u-work")
+    args = {"projects": ["p"], "since_seq": since, "timeout": 5, "settle": 0.3}
+    async with Client(build_server(store)) as c:
+        got = {}
+        for mode in (None, "short", "full", "none"):
+            r = await c.call_tool("next", {**args, **({"settles": mode} if mode else {})})
+            assert not r.is_error, r.content[0].text
+            got[mode] = json.loads(r.content[0].text)
+    assert got[None] == got["short"]  # short is the default
+    first, settled = got["short"]["records"]
+    assert first["kind"] == "message" and first["body"] == "which crate? " * 60
+    work = settled["unit"]["steps"][1]
+    assert work["outputs"] == {"landed": True, "summary": "Landed the parser split.",
+                               "sha": "127c2443a5"}
+    assert work["omitted"] == ["evidence", "unresolved"]
+    assert got["full"]["records"][1]["unit"]["steps"][1]["outputs"]["evidence"] == \
+        BIG_OUT["evidence"]
+    assert "omitted" not in got["full"]["records"][1]["unit"]["steps"][1]
+    assert all("outputs" not in s for s in got["none"]["records"][1]["unit"]["steps"])

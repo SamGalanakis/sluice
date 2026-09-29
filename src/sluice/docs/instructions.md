@@ -32,7 +32,7 @@ Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.
 inside). Every edit is type-checked; errors name the exact path to fix.
 
 `plan_view(project, "mermaid")` shows the graph with each step's status. Agents working on the
-same project talk through threads (`thread.post`, then `log_wait`); see `docs("threads")`.
+same project talk through threads (`thread_post`, then `log_wait`); see `docs("threads")`.
 
 When you need a person (a decision, an approval, a missing value), post to the inbox
 (`inbox_post`, or an `inbox.ask` step in a plan) and wait with `log_wait(project, since_seq,

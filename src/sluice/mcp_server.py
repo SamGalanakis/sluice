@@ -28,6 +28,7 @@ from . import verify as verify_mod
 from . import watch as watch_mod
 from .dashboard import Dashboard
 from .errors import BadRequest, NotFound, SluiceError
+from .fns._lib import threads
 from .store import Store
 
 AUTHOR = "mcp"  # who a tool call acts for when nothing names anyone (`sluice tool`: "cli")
@@ -703,7 +704,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
     @tool
     async def next(projects: list[str] | str, since_seq: int, me: str = "orchestrator",
                    timeout: float = 300, all: bool = False, settle: float = 20,
-                   settle_max: float = 120) -> Any:
+                   settle_max: float = 120,
+                   settles: Literal["short", "full", "none"] = "short") -> Any:
         """Wait for the records an orchestrator should act on across the projects, then
         return {records, notes, last_seq, timed_out}. Wakes at once on a step that failed,
         went stale or was skipped (inside a unit too); a message needing a reply, not from
@@ -711,10 +713,11 @@ def build_server(store: Store, stop: threading.Event | None = None,
         tagged `unit:<name>`, else steps joined by handoffs or `after`) wakes once, when it
         settles — none of its steps running or pending and startable — never on its steps'
         own successes; its record carries `unit: {name, settled, steps: [{id, status,
-        held?, outputs}]}` with the succeeded steps' outputs, on the failure itself when a
-        failure settled it. A standalone step wakes on a success when its fn is open. After
-        the first waking record it keeps collecting until `settle` seconds pass with no new
-        one, or `settle_max` seconds after the first. `notes` are the notes (messages with
+        held?, outputs, omitted?}]}` with the succeeded steps' outputs as `settles` says, on
+        the failure itself when a failure settled it. A standalone step wakes on a success
+        when its fn is open. After the first waking record it keeps collecting until
+        `settle` seconds pass with no new one, or `settle_max` seconds after the first.
+        Messages come first in `records`, whole. `notes` are the notes (messages with
         needs_reply false) held on the way — read them before the records. Pass `last_seq`
         back as `since_seq` to continue; nothing is missed or repeated. The command-line
         form is `sluice next`.
@@ -730,16 +733,54 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 returns at the first).
             settle_max: seconds after the first waking record that end the batch at the
                 latest (default 120; capped at 3600).
+            settles: how much of a settled unit's outputs each step carries: "short"
+                (default) only booleans, numbers, strings of at most 80 characters and a
+                `summary`'s first line (cut to 200), the rest named in `omitted` (read them
+                with status or query); "full" every output whole; "none" no outputs.
         """
         names = [projects] if isinstance(projects, str) else list(projects)
         if not names:
             raise BadRequest("projects: expected at least one project")
         for p in names:
             store.project(p)
-        return await anyio.to_thread.run_sync(functools.partial(
+        res = await anyio.to_thread.run_sync(functools.partial(
             watch_mod.next_up, store, names, since_seq, me,
             min(max(0, timeout), WAIT_CAP), all, settle=max(0, settle),
             settle_max=min(max(0, settle_max), WAIT_CAP)))
+        records = [{**r, "unit": watch_mod.trim(r["unit"], settles)} if "unit" in r else r
+                   for r in watch_mod.messages_first(res["records"])]
+        return {**res, "records": records}
+
+    @tool
+    def thread_post(project: str, thread: str, body: str, needs_reply: bool = True,
+                    to: str | None = None,
+                    from_: Annotated[str | None, Field(alias="from")] = None,
+                    data: Any = None, author: str | None = None) -> Any:
+        """Post a message to a thread of the project: the `message` record the thread.post
+        fn appends, written here and now. Returns {seq}, the record's seq in the log, so it
+        is delivered. To steer a running agent step, post on its thread `step-<id>` with
+        `to` the step id; a note that needs no answer takes needs_reply false.
+
+        Args:
+            project: the project.
+            thread: the thread's name (lowercase letters, digits, - and _), e.g. step-work.
+            body: the message.
+            needs_reply: whether it asks something (default true); false marks a note, a
+                heads-up or a decision already made.
+            to: who it is for (a step id, "orchestrator"); leave out for anyone.
+            from: who is posting (default: the author rule below).
+            data: any JSON to carry with it.
+            author: who is acting (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
+                client's name, else "mcp"; "cli" from `sluice tool`).
+        """
+        store.project(project)
+        try:
+            seq = threads.post_to(store.home, project, thread, body, from_ or author, to,
+                                  data, needs_reply)
+        except ValueError as e:
+            raise BadRequest(str(e)) from None
+        store.notify()
+        return {"seq": seq}
 
     @tool
     def drain(projects: list[str] | str | None = None, author: str | None = None) -> Any:

@@ -23,11 +23,13 @@ or turns stale.
 ## Threads
 A thread is a named conversation in the project's log: its `message` records. Names use
 lowercase letters, digits, `-` and `_`.
-- Post: `fn_call("thread.post", {"thread": "questions", "from": "worker-1", "body": "Which DB?",
-  "to": "lead"}, project="myproj", wait=10)` → `{"seq": 42}`. `to` and `data` (any JSON) are
+- Post: `thread_post(project="myproj", thread="questions", body="Which DB?", to="lead")` →
+  `{"seq": 42}`, the message's seq in the log, so it is delivered. `from` defaults to who you
+  are (your MCP client's name, or `step:<id>` inside a step); `to` and `data` (any JSON) are
   optional. `needs_reply` (default true) says whether it asks something: set it false for a
   note, a heads-up or a decision already made. The dashboard marks an unanswered question
-  "Awaiting reply".
+  "Awaiting reply". A plan step posts with the `thread.post` fn, which writes the same
+  record.
 - Read or wait: `log_wait("myproj", since_seq=42, threads=["questions"])`. A message is
   `{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "needs_reply", "data"?}`.
 - Wake only on questions: `log_wait(..., wake="questions")` (and `thread.wait`'s `wake`
@@ -61,10 +63,13 @@ asked through a thread: when the orchestrator needs one, it posts to the inbox
 (`docs("inbox")`).
 
 - To steer a running step, post on its thread with `to` set to the step id:
-  `fn_call("thread.post", {"thread": "step-work", "from": "orchestrator", "to": "work",
-  "body": "skip the Windows build"}, project="myproj", direct=True)`.
+  `thread_post(project="myproj", thread="step-work", to="work", from="orchestrator",
+  body="skip the Windows build")`.
 - To read what the step asks back, watch the same thread:
-  `log_wait(project="myproj", since_seq=<last>, threads=["step-work"], wake="questions")`.
+  `log_wait(project="myproj", since_seq=<last>, threads=["step-work"], wake="questions")`,
+  or wait on everything you act on with `next(projects, since_seq)`: questions and notes come
+  first and whole in every batch, and a settled unit's long outputs are named, not printed
+  (`settles="full"` for all of them).
 - For every unit at a glance — state, age, engine, each step's mark, what a blocked unit
   waits on, its last message — `status(project, view="units")`: one row per unit with a
   `line` of at most 80 characters (`state="blocked"` or `tags=[...]` to narrow it).

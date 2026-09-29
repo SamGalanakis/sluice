@@ -40,10 +40,17 @@ def check_thread(name: Any) -> str:
 
 def post(thread: str, body: str, sender: str, to: str | None = None,
          data: Any = None, needs_reply: bool = True) -> int:
-    """Append one message; returns its seq (distinct and increasing across processes).
-    `needs_reply` false marks a note (a heads-up, a decision already made) rather than a
-    question; the record always says which."""
+    """Append one message to the project's log (project_log); returns its seq."""
     home, project = project_log()
+    return post_to(home, project, thread, body, sender, to, data, needs_reply)
+
+
+def post_to(home: Path, project: str, thread: str, body: str, sender: str,
+            to: str | None = None, data: Any = None, needs_reply: bool = True) -> int:
+    """Append one message to `project`'s log (thread.post and the thread_post tool); returns
+    its seq (distinct and increasing across processes). `needs_reply` false marks a note (a
+    heads-up, a decision already made) rather than a question; the record always says
+    which."""
     rec: dict[str, Any] = {"kind": "message", "thread": check_thread(thread), "from": sender}
     if to is not None:
         rec["to"] = to
