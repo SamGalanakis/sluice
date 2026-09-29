@@ -367,13 +367,17 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def unit_add(project: str, recipe: str, params: dict[str, Any], start: bool = False,
-                 tags: list[str] | None = None, author: str | None = None,
-                 reason: str = "") -> Any:
+                 tags: list[str] | None = None,
+                 after: dict[str, list[str] | str] | None = None,
+                 when: dict[str, str] | None = None,
+                 inputs: dict[str, dict[str, Any]] | None = None,
+                 author: str | None = None, reason: str = "") -> Any:
         """Add one unit of work from a recipe: its steps with `{param}` filled in, each tagged
-        `unit:<unit>` (and `tags`), in one plan edit at the current rev. They come in paused
-        unless start is true. Refused (`bad_request`) when an id it would add is already in
-        the plan; `invalid` lists every param or expansion problem, or a `unit:` tag. Returns
-        {rev, steps}.
+        `unit:<unit>` (and `tags`), with the edges and input overrides given, in one plan
+        edit at the current rev: one call stages a whole lane. They come in paused unless
+        start is true. Refused (`bad_request`) when an id it would add is already in the plan;
+        `invalid` lists every param, expansion or staging problem (nothing is written).
+        Returns {rev, steps}.
 
         Args:
             project: the project.
@@ -383,12 +387,21 @@ def build_server(store: Store, stop: threading.Event | None = None,
             start: let the new steps start as soon as they are ready.
             tags: more tags for every step of the unit, e.g. ["arc:tsvm"] (select by them in
                 status, step_pause, step_cancel, plan_prune, ...); `unit:` ones are reserved.
+            after: {suffix: [step ids]}: ids appended to that recipe step's `after` (its own
+                kept). A suffix is the recipe step's id without the leading "<unit>-", e.g.
+                {"fork": ["fig-4200-landed"]}.
+            when: {suffix: "<ref>"}: that step's `when` (replacing the recipe's).
+            inputs: {suffix: {input: value}}: literals bound to that step's inputs
+                ({"default": value}, replacing the recipe's binding), e.g.
+                {"work": {"effort": "xhigh"}}; an input its fn does not declare and the recipe
+                does not bind is refused.
             author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
                 client's name, else "mcp"; "cli" from `sluice tool`).
             reason: why, recorded in the plan's history (default "add unit <unit> (recipe
                 <recipe>)").
         """
-        return store.unit_add(project, recipe, params, start, author, reason, tags)
+        return store.unit_add(project, recipe, params, start, author, reason, tags, after,
+                              when, inputs)
 
     @tool
     def unit_tag(project: str, unit: str, add: list[str] | None = None,

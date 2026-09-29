@@ -119,6 +119,18 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
   and `fix-login-cleanup` in one edit at the current rev (no rev to fetch), each tagged
   `unit:fix-login`, paused unless `start=true`. It returns `{rev, steps}` and refuses an id the
   plan already has.
+- The same call stages the whole lane, in that one edit. `after`, `when` and `inputs` are
+  keyed by the recipe step's suffix (its id without `<unit>-`: `fork`, `work`, `cleanup`):
+
+  ```
+  unit_add(project, "lane", {"unit": "fix-login", ...},
+           after={"fork": ["fix-signup-cleanup"]}, when={"fork": "fix-signup-work/landed"},
+           inputs={"work": {"effort": "xhigh"}}, tags=["arc:auth"], start=true)
+  ```
+
+  `after` ids are added to the step's own, `when` replaces the recipe's, and each input is
+  bound to `{"default": value}`. An unknown suffix, or an input the step's fn does not declare
+  and the recipe does not bind, is refused before anything is written.
 - `unit_add` takes `tags` too, for every step of the unit next to `unit:<unit>`: group units
   into an **arc** (`arc:auth`) and act on it with `status`, `step_pause`, `step_cancel`,
   `step_retry`, `step_remove` or `plan_prune` by `tags=["arc:auth"]`. `unit_tag(project, unit,

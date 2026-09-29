@@ -1,6 +1,8 @@
-"""Rewiring and arcs in one call (SPEC §5, §8): edge_add/edge_remove edit a step's `after`
-at the current rev, and units carry extra tags (unit_add `tags`, unit_tag)."""
+"""Staging and rewiring in one call (SPEC §5, §8): edge_add/edge_remove edit a step's `after`
+at the current rev, units carry extra tags (unit_add `tags`, unit_tag), and unit_add stages a
+whole lane (edges, `when`, input overrides) in the edit that adds it."""
 
+import json
 import threading
 
 import pytest
@@ -144,3 +146,92 @@ def test_plan_prune_by_tag_takes_only_that_arcs_done_units(store):
     out = store.prune("p", tags=["arc:tsvm"])
     assert (out["units"], out["steps"]) == (1, ["one-a", "one-b"])
     assert list(store.get("p")["steps"]) == ["two-a", "two-b"]
+
+
+# a lane: fork (a closed fn), work (an open fn whose recipe binds `effort`), cleanup after
+# work, and one step whose id does not start with the unit
+LANE = {"{unit}-fork": {"run": "test.add", "in": {"a": {"default": 1}, "b": {"default": 1}}},
+        "{unit}-work": {"run": "test.open", "in": {"effort": {"default": "high"},
+                                                   "cwd": {"source": "{unit}-fork/sum"}}},
+        "{unit}-cleanup": {"run": "test.add", "after": ["{unit}-work"],
+                           "in": {"a": {"default": 1}, "b": {"default": 1}}},
+        "note-{unit}": {"run": "core.echo", "in": {"value": {"default": "{unit}"}}}}
+BEFORE = {"prior": add(d(1), d(1)), "prior2": add(d(1), d(1)),
+          "gate": {"run": "test.boom", "in": {}}}
+
+
+def test_unit_add_stages_a_lane_like_the_four_calls(store):
+    write_recipe(store.home / "recipes", "lane", LANE)
+    create(store, "p", BEFORE)
+    create(store, "q", BEFORE)
+    out = store.unit_add("p", "lane", {"unit": "u"}, author="orch",
+                         after={"fork": ["prior", "prior2"], "cleanup": "prior"},
+                         when={"fork": "gate/done"},
+                         inputs={"work": {"effort": "xhigh", "attempts": [1]},
+                                 "note-u": {"value": "hi"}})
+    assert out == {"rev": 3, "steps": ["u-fork", "u-work", "u-cleanup", "note-u"]}
+
+    store.unit_add("q", "lane", {"unit": "u"}, author="orch")
+    rev = store.get("q")["rev"]
+    rev = store.patch("q", rev, [
+        {"op": "add", "path": "/steps/u-fork/after", "value": ["prior", "prior2"]},
+        {"op": "add", "path": "/steps/u-fork/when", "value": "gate/done"},
+        {"op": "replace", "path": "/steps/u-cleanup/after", "value": ["u-work", "prior"]}],
+        "orch", "edges")
+    rev = store.set_step_input("q", "u-work", "effort", "xhigh", "orch", "", rev)
+    rev = store.set_step_input("q", "u-work", "attempts", [1], "orch", "", rev)
+    store.set_step_input("q", "note-u", "value", "hi", "orch", "", rev)
+    assert json.dumps(store.get("p")["steps"], sort_keys=True) == \
+        json.dumps(store.get("q")["steps"], sort_keys=True)
+    assert store.get("p")["steps"]["u-work"]["in"]["effort"] == {"default": "xhigh"}
+
+
+def test_unit_add_refuses_what_it_cannot_stage_writing_nothing(store):
+    write_recipe(store.home / "recipes", "lane", LANE)
+    create(store, "p", BEFORE)
+    with pytest.raises(InvalidPlan) as e:
+        store.unit_add("p", "lane", {"unit": "u"}, after={"nope": ["prior"], "fork": 3},
+                       when={"cleanupp": "gate/done"},
+                       inputs={"fork": {"zzz": 1, "b": 2}, "work": {"brand_new": 1},
+                               "cleanup": "x"})
+    its = "(its steps: fork, work, cleanup, note-u)"
+    assert e.value.errors == [
+        f"after.nope: recipe lane has no step nope {its}",
+        "after.fork: expected a step id or an array of them",
+        f"when.cleanupp: recipe lane has no step cleanupp {its}",
+        "inputs.fork.zzz: step u-fork (fn test.add) has no input zzz",
+        "inputs.work.brand_new: step u-work (fn test.open) has no input brand_new",
+        "inputs.cleanup: expected an object of input -> value"]
+    with pytest.raises(InvalidPlan) as e:  # the whole result validates as any edit
+        store.unit_add("p", "lane", {"unit": "u"}, after={"fork": ["missing"]},
+                       when={"work": "gate/nope"}, inputs={"fork": {"a": "one"}})
+    assert e.value.errors == ['steps.u-fork.in.a: expected int, got "one"',
+                              "steps.u-fork.after: no step missing",
+                              "steps.u-work.when: step gate (fn test.boom) has no output nope"]
+    assert store.get("p")["rev"] == 2 and "u-fork" not in store.get("p")["steps"]
+
+
+def test_the_tools_through_sluice_tool(store, monkeypatch, capsys):
+    from sluice import cli
+
+    monkeypatch.setenv("SLUICE_HOME", str(store.home))
+    write_recipe(store.home / "recipes", "lane", LANE)
+    create(store, "p", BEFORE)
+
+    def tool(name, **args):
+        assert cli.main(["tool", name, json.dumps({"project": "p", **args})]) == 0
+        return json.loads(capsys.readouterr().out)
+
+    assert tool("unit_add", recipe="lane", params={"unit": "u"}, tags=["arc:x"],
+                after={"fork": ["prior"]}, when={"fork": "gate/done"},
+                inputs={"work": {"effort": "xhigh"}}) == \
+        {"rev": 3, "steps": ["u-fork", "u-work", "u-cleanup", "note-u"]}
+    assert tool("edge_add", step="u-fork", after=["prior2", "prior"], reason="both") == \
+        {"rev": 4, "after": ["prior", "prior2"]}
+    assert tool("edge_remove", step="u-fork", after="prior") == {"rev": 5, "after": ["prior2"]}
+    assert tool("unit_tag", unit="u", add=["arc:y"], remove=["arc:x"])["rev"] == 6
+    assert [s["id"] for s in tool("status", tags=["arc:y"])["steps"]] == \
+        ["u-fork", "u-work", "u-cleanup", "note-u"]
+    assert tool("plan_prune", tags="arc:y")["units"] == 0
+    edit = last_edit(store, "p")
+    assert (edit["author"], edit["reason"]) == ("cli", "tag unit u +arc:y -arc:x")

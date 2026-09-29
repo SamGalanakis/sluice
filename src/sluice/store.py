@@ -864,11 +864,14 @@ class Store:
         return [r.summary() for _, r in sorted(self._recipes(project).items())]
 
     def unit_add(self, project: str, recipe: Any, params: Any, start: bool = False,
-                 author: str = "", reason: str = "", tags: Any = None) -> dict[str, Any]:
+                 author: str = "", reason: str = "", tags: Any = None, after: Any = None,
+                 when: Any = None, inputs: Any = None) -> dict[str, Any]:
         """Expand a recipe with `params` (`unit` among them) and add its steps in one edit at
         the current rev, each tagged `unit:<unit>`, then its own tags, then `tags`; unless
-        `start`, they come in paused. Refuses ids the plan already has. Returns {rev,
-        steps}."""
+        `start`, they come in paused. `after`, `when` and `inputs` are keyed by a recipe
+        step's suffix (its id without the leading `<unit>-`): ids appended to its `after`, its
+        `when`, and literals bound to its inputs (`{"default": value}`), all in the same edit.
+        Refuses ids the plan already has. Returns {rev, steps}."""
         if not isinstance(recipe, str):
             raise BadRequest("recipe: expected a recipe's name")
         found = self._recipes(project).get(recipe)
@@ -887,8 +890,9 @@ class Store:
             if isinstance(step, dict) and isinstance(step.get("tags", []), list):
                 step["tags"] = list(dict.fromkeys([f"unit:{unit}", *step.get("tags", []),
                                                    *extra]))
+        errs += self._stage(project, unit, recipe, steps, after, when, inputs)
         if errs:
-            raise InvalidPlan(errs, f"unit {unit} cannot be tagged so")
+            raise InvalidPlan(errs, f"unit {unit} cannot be staged so")
         with self.tx():
             cur = self.get(project)
             taken = [sid for sid in steps if sid in cur["steps"]]
@@ -900,6 +904,53 @@ class Store:
                               for sid, step in steps.items()],
                              author, reason or f"add unit {unit} (recipe {recipe})", start)
         return {"rev": rev, "steps": list(steps)}
+
+    def _stage(self, project: str, unit: str, recipe: str, steps: dict[str, Any], after: Any,
+               when: Any, inputs: Any) -> list[str]:
+        """Apply unit_add's `after`, `when` and `inputs` maps to the expanded steps in place;
+        returns every problem (an unknown suffix, an input the step can take no literal for).
+        The plan edit validates the rest."""
+        by = {(sid[len(unit) + 1:] if sid.startswith(f"{unit}-") else sid): sid for sid in steps}
+        errs: list[str] = []
+
+        def each(name: str, arg: Any):
+            if arg is None:
+                return
+            if not isinstance(arg, dict):
+                errs.append(f"{name}: expected an object of recipe step -> value")
+                return
+            for key, value in arg.items():
+                step = steps.get(by.get(key, ""))
+                if not isinstance(step, dict):
+                    errs.append(f"{name}.{key}: recipe {recipe} has no step {key} (its steps: "
+                                f"{', '.join(by)})")
+                else:
+                    yield key, step, value
+
+        for key, step, ids in each("after", after):
+            ids = [ids] if isinstance(ids, str) else ids
+            if not (isinstance(ids, list) and all(isinstance(a, str) for a in ids)):
+                errs.append(f"after.{key}: expected a step id or an array of them")
+            elif isinstance(step.get("after", []), list):
+                step["after"] = list(dict.fromkeys([*step.get("after", []), *ids]))
+        for _, step, ref in each("when", when):
+            step["when"] = ref
+        reg = self.registry(project)
+        for key, step, values in each("inputs", inputs):
+            if not isinstance(values, dict):
+                errs.append(f"inputs.{key}: expected an object of input -> value")
+                continue
+            fn = reg.get(step["run"]) if isinstance(step.get("run"), str) else None
+            bound = step.get("in") if isinstance(step.get("in"), dict) else None
+            for name, value in values.items():
+                if fn is not None and name not in fn.inputs and name not in (bound or {}):
+                    errs.append(f"inputs.{key}.{name}: step {by[key]} (fn {fn.name}) has no "
+                                f"input {name}")
+                elif bound is not None:
+                    bound[name] = {"default": value}
+                elif "in" not in step:
+                    step["in"] = bound = {name: {"default": value}}
+        return errs
 
     # ---- state ----
 

@@ -369,7 +369,8 @@ and `scatter` already exist in steps). `unit_add(project, recipe, params, start?
 params against their types (every required one, no others), expands the recipe, tags every new
 step `unit:<unit>` before its own tags, refuses ids the plan already has, and adds the steps in
 one edit at the current rev (no rev argument: it is an add, like `step_add`); unless `start`,
-they come in paused.
+they come in paused. It also stages the unit in that same edit, so one call does what would
+otherwise take `unit_add`, `plan_get`, `plan_patch` and `step_set_input`:
 
 - `tags: [..]` go on every step of the unit after `unit:<unit>` and the recipe's own tags
   (deduplicated): an **arc** of units (`arc:auth`) that `status`, `step_pause`, `step_cancel`,
@@ -377,6 +378,14 @@ they come in paused.
   given one, it is refused. `unit_tag(project, unit, add?, remove?)` adds and removes tags on
   every step tagged `unit:<unit>` later, in one edit at the current rev (refusing `unit:`
   tags and an unknown unit; nothing to change is no edit).
+- `after: {<suffix>: [<step id>, ...]}` appends to that step's `after` (the recipe's kept,
+  deduplicated); `when: {<suffix>: "<ref>"}` sets its `when` (replacing the recipe's);
+  `inputs: {<suffix>: {<input>: <value>}}` binds each input to `{"default": <value>}`
+  (replacing the recipe's binding). A **suffix** is a recipe step's expanded id without the
+  leading `<unit>-` (`fork` for `{unit}-fork`); a step whose id does not start so is keyed by
+  its whole id. An unknown suffix, or an input the step's fn does not declare and the recipe
+  does not bind (an open fn's extra input only when the recipe binds it already), is refused
+  (`invalid`, naming each) before anything is written; the result is validated like any edit.
 
 `recipe_list(project)` lists the recipes the project sees; a broken recipe
 file (bad JSON or shape, a name that is not the file's, a bad param type, an unknown `{x}`) is
@@ -1162,7 +1171,7 @@ resolved by the same rule when not given, and
 | `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
 | `step_add` | `project, step, spec, reason?, start? = false, author?` | `{rev}`: `plan_patch` adding one step at the current rev |
 | `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
-| `unit_add` | `project, recipe, params, start? = false, tags?, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>` (then the recipe's tags, then `tags`), added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param or expansion problem or a `unit:` tag, `bad_request` names the ids the plan already has |
+| `unit_add` | `project, recipe, params, start? = false, tags?, after?, when?, inputs?, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>` (then the recipe's tags, then `tags`), with `after` ids appended, `when` set and `inputs` bound as literals on the steps named by suffix, added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param, expansion or staging problem (an unknown suffix, an input the step cannot take, a `unit:` tag), `bad_request` names the ids the plan already has |
 | `unit_tag` | `project, unit, add?, remove?, reason?, author?` | `{rev, steps}`: adds and removes tags on every step tagged `unit:<unit>` (`steps`), in one edit at the current rev (§5); `unit:` tags refused (`invalid`), an unknown unit `not_found`; nothing to change: no edit, the current rev |
 | `edge_add` | `project, step, after, reason?, author?` | `{rev, after}`: appends `after` (an id or a list) to the step's `after`, deduplicated, in one edit at the current rev (§5); an unknown step or a cycle is `invalid`; edges already there: no edit, the current rev. Only `after`: a step's one `when` is set with `step_update` |
 | `edge_remove` | `project, step, after, reason?, author?` | `{rev, after}`: removes those ids from the step's `after` in one edit at the current rev (removing the key when none is left); an unknown step is `invalid`; edges not there: no edit, the current rev |
