@@ -15,10 +15,14 @@ SCRUB = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT",
          "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
          "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SSE_PORT",
          "CLAUDE_PID", "CLAUDE_EFFORT", "AI_AGENT")
+# Nobody can answer a git prompt in a supervised session: fail instead of waiting on one.
+GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_EDITOR": "true", "GIT_MERGE_AUTOEDIT": "no"}
 
 
 def engine_env():
-    return {k: v for k, v in child_env().items() if k not in SCRUB}
+    """The environment an engine runs in: the fn's tools' own (child_env) without a parent
+    Claude Code's session markers, and with git never prompting."""
+    return {**{k: v for k, v in child_env().items() if k not in SCRUB}, **GIT_ENV}
 
 
 def scope_command(argv):

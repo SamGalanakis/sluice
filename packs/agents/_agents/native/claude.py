@@ -22,14 +22,9 @@ from pathlib import Path
 
 from .. import engines
 from . import paste
+from .processes import engine_env
 from .supervisor import Adapter, Snapshot
 
-# Session markers a parent Claude Code puts in the environment. Inherited, they make the child
-# a "child session": no transcript, no status file.
-SCRUB = ("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT",
-         "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
-         "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SSE_PORT",
-         "CLAUDE_PID", "CLAUDE_EFFORT", "AI_AGENT")
 HOOKS = ("SessionStart", "Stop", "StopFailure", "UserPromptSubmit")
 TERMINAL = frozenset({"completed", "failed", "stopped", "killed"})  # background task statuses
 WAKE_SLACK = 120.0  # seconds past a wakeup's time before it no longer counts as pending
@@ -284,8 +279,7 @@ class Claude(Adapter):
         return argv + (["--resume", self.resume] if self.resume else [])
 
     def env(self):
-        from sluice.fn import child_env
-        return {k: v for k, v in child_env().items() if k not in SCRUB}
+        return engine_env()
 
     def wait_ready(self, tmux, timeout):
         paste.wait_ready(tmux, Composer, timeout, on_pane=lambda pane: self._trust(tmux, pane))
