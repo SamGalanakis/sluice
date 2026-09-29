@@ -1387,6 +1387,8 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   input to it, then `step_retry`).
   A Claude step's progress line leads with its context fill (`ctx 142k · `).
   Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.
+  It has the owner's MCP servers unless `SLUICE_CLAUDE_MCP_CONFIG` names others (only those:
+  `--strict-mcp-config`; `{"mcpServers": {}}` for none).
   Codex (`agent.codex`, or
   `agent.run` with engine `codex`) uses the same supervisor with `codex app-server` JSON-RPC
   and a TUI attached to it in tmux. It takes `model` `sol` (the default) or `astra` and

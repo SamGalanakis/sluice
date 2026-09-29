@@ -234,6 +234,15 @@ def test_claude_success(call_fn, tmp_path):
     assert not (run_dir / "tmux.sock").exists()
 
 
+def test_claude_takes_only_the_mcp_servers_of_sluice_claude_mcp_config(call_fn, tmp_path):
+    env, rec = make_claude(tmp_path, [{"reply": "did it"}])
+    env["SLUICE_CLAUDE_MCP_CONFIG"] = '{"mcpServers": {}}'
+    code, _, err = call_fn(AGENTS / "agent.claude",
+                             {"cwd": str(tmp_path), "prompt": "do the thing"}, env=env)
+    assert code == 0, err
+    assert rec.argv()[-3:] == ["--strict-mcp-config", "--mcp-config", '{"mcpServers": {}}']
+
+
 def test_the_prompt_goes_into_the_session_never_on_argv(call_fn, fake_bin, tmp_path):
     """stderr.log and `ps` carry no prompt: it is pasted into the session."""
     env, rec = make_claude(tmp_path)

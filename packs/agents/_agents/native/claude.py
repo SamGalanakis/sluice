@@ -291,6 +291,10 @@ class Claude(Adapter):
         argv = [os.environ.get("SLUICE_CLAUDE_BIN", "claude"), "--model", self.model,
                 "--dangerously-skip-permissions", "--disallowedTools", "AskUserQuestion",
                 "--settings", str(self.settings)]
+        # SLUICE_CLAUDE_MCP_CONFIG (a file or a JSON string): only these MCP servers, none of
+        # the owner's (`{"mcpServers": {}}`: none at all)
+        if mcp := os.environ.get("SLUICE_CLAUDE_MCP_CONFIG", "").strip():
+            argv += ["--strict-mcp-config", "--mcp-config", mcp]
         return argv + (["--resume", self.resume] if self.resume else [])
 
     def env(self):
