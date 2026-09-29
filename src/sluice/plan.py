@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -600,3 +600,24 @@ def unit_done(ids: list[str], state: dict[str, Any]) -> bool:
 
 def done_units(plan: Plan, state: dict[str, Any]) -> list[list[str]]:
     return [u for u in units(plan) if unit_done(u, state)]
+
+
+def unit_tag(step: Step) -> str | None:
+    """The step's `unit:<name>` tag (what unit_add tags a recipe unit with), or None."""
+    return next((t for t in step.tags if t.startswith("unit:")), None)
+
+
+def named_units(plan: Plan) -> list[tuple[str, list[str], bool]]:
+    """Every step in one unit as `sluice next` and status's units view see them (SPEC §9):
+    (name, step ids in plan order, tagged), in plan order by first step. A tagged step's unit
+    is the steps sharing its `unit:<name>` tag, named `<name>`; an untagged step's is its
+    `units` component among the untagged steps (so one after a recipe unit never joins it),
+    named by its first step, a standalone step a unit of one."""
+    loose = replace(plan, steps={s: x for s, x in plan.steps.items() if unit_tag(x) is None})
+    comp = {sid: ids for ids in units(loose) for sid in ids}
+    out: dict[tuple[str, bool], list[str]] = {}
+    for sid, step in plan.steps.items():
+        tag = unit_tag(step)
+        key = (tag.removeprefix("unit:"), True) if tag else (comp[sid][0], False)
+        out.setdefault(key, []).append(sid)
+    return [(name, ids, tagged) for (name, tagged), ids in out.items()]

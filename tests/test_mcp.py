@@ -356,7 +356,7 @@ async def test_every_tool_refuses_an_argument_it_does_not_take(store):
         err = await fail(c, "status", project="p", step="a")
         assert err["error"] == "bad_request"
         assert err["message"] == ("status takes no argument 'step'; its arguments are "
-                                  "project, steps, tags, brief, all")
+                                  "project, steps, tags, brief, all, view, state")
         err = await fail(c, "projects_list", verbose=True)
         assert "its arguments are none" in err["message"]
         assert [s["id"] for s in (await ok(c, "status", project="p", steps=["a"]))["steps"]] \

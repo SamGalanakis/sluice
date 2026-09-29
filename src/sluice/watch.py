@@ -11,7 +11,6 @@ and print each compactly (line).
 
 from __future__ import annotations
 
-import dataclasses
 import datetime as dt
 import json
 import re
@@ -26,7 +25,7 @@ from . import inbox as I
 from . import log as L
 from . import plan as P
 from . import state as S
-from .errors import SluiceError
+from .errors import BadRequest, SluiceError
 from .store import Store
 from .util import now_iso
 
@@ -87,25 +86,12 @@ def _view(store: Store, project: str, views: dict[str, View | None]) -> View | N
 
 
 def _unit(plan: P.Plan, sid: str) -> tuple[str, list[str]] | None:
-    """The step's unit as (name, its step ids in plan order): the steps sharing its
-    `unit:<name>` tag, else its plan.units component, named by its first step, when that has
-    more than one step. None for a standalone step or one the plan no longer has."""
-    step = plan.steps.get(sid)
-    if step is None:
+    """The step's unit (P.named_units) as (name, its step ids in plan order); None for a
+    standalone step or one the plan no longer has."""
+    if sid not in plan.steps:
         return None
-    tag = _tag(step)
-    if tag is not None:
-        return tag.removeprefix("unit:"), [s for s, x in plan.steps.items() if tag in x.tags]
-    # an untagged step's component among the untagged steps: a recipe unit it follows stays
-    # a unit of its own
-    loose = dataclasses.replace(plan, steps={s: x for s, x in plan.steps.items()
-                                             if _tag(x) is None})
-    ids = next(u for u in P.units(loose) if sid in u)
-    return (ids[0], ids) if len(ids) > 1 else None
-
-
-def _tag(step: P.Step) -> str | None:
-    return next((t for t in step.tags if t.startswith("unit:")), None)
+    name, ids, tagged = next(u for u in P.named_units(plan) if sid in u[1])
+    return (name, ids) if tagged or len(ids) > 1 else None
 
 
 def _upstream(plan: P.Plan, ids: list[str]) -> list[str]:
@@ -391,3 +377,151 @@ def line(rec: dict[str, Any]) -> str:
         return f"INBOX {kind.split('.')[1]} {rec.get('item')} {_one(what)}"
     rest = {k: v for k, v in rec.items() if k not in ("seq", "at", "kind")}
     return f"{str(kind).upper().replace('.', ' ')} {_one(rest, 300)}"
+
+
+# ---- status's units view: one compact row per unit ------------------------------------------
+
+UNIT_STATES = ("running", "failed", "blocked", "settled", "pending")
+MARK = {"succeeded": "✓", "running": "▶", "pending": "·", "failed": "✗", "stale": "~",
+        "skipped": "–", "paused": "‖"}  # a step's mark; a unit's state marks as its step's
+STATE_MARK = {"running": "▶", "failed": "✗", "blocked": "‖", "settled": "✓", "pending": "·"}
+WIDTH = 80  # the most characters of a row's line
+
+
+def _age(seconds: int | None) -> str:
+    """42s, 42m, 5h, 3d; – when unknown."""
+    if seconds is None:
+        return "–"
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def _cut(text: str, width: int) -> str:
+    return text if len(text) <= width else text[:max(0, width - 1)] + "…"
+
+
+def _since(at: str | None, now: dt.datetime) -> int | None:
+    try:
+        return max(0, int((now - dt.datetime.fromisoformat(at)).total_seconds())) if at else None
+    except ValueError:
+        return None
+
+
+def _engine(plan: P.Plan, state: dict[str, Any], ids: list[str]) -> str:
+    """engine·model·effort from the unit's agent step (its first step whose fn is open): the
+    values it binds now, each cut to 12 characters; empty when none."""
+    step = next((plan.steps[s] for s in ids if plan.steps[s].fn.open), None)
+    if step is None:
+        return ""
+    got = [P.source_value(step.sources[k], plan, state) for k in ("engine", "model", "effort")
+           if k in step.sources]
+    return "·".join(_cut(v, 12) for v in got if isinstance(v, str) and v)
+
+
+def _blocked(view: View, marks: dict[str, tuple[str, bool]], ids: list[str]) -> str:
+    """Why a blocked unit's first held step is held: `paused`, `project paused`,
+    `external`, `input <n> (no value)`, or the first edge it waits on (`after <step>
+    (<status>)`, `reads <step> (<status>)`)."""
+    plan, state, paused = view
+    step = plan.steps[next(s for s in ids if marks[s][1])]
+    if step.paused:
+        return f"paused: {step.pause_reason}" if step.pause_reason else "paused"
+    if paused:
+        return "project paused"
+    if step.fn.external:
+        return "external"
+    for r in step.reads:
+        if r.step is None and not P.value_of(r, plan, state)[0]:
+            return f"input {r.name} (no value)"
+    for w in step.waits:
+        status, held = marks[w]
+        if status in ("failed", "stale") or held:
+            what = "paused" if held and plan.steps[w].paused else status
+            return f"{'reads' if w in step.deps else 'after'} {w} ({what})"
+    return ""
+
+
+def _line(row: dict[str, Any], age: str) -> str:
+    """The row in at most WIDTH characters: name, state and age, engine, step marks, then
+    what it is blocked on and its last message. Room is kept for the whole blocked reason
+    and the start of the message: step names are cut to 4, then 2 characters (the marks
+    stay) to make it, and what still does not fit is cut with "…"."""
+    head = f"{_cut(row['unit'], 18):<10}  {STATE_MARK[row['state']]} {age:>3}"
+    head += f"  {_cut(row['engine'], 20)}" if row["engine"] else ""
+    last = f'"{row["last"]}"' if row["last"] else ""
+    tail = "  ".join(x for x in (row["blocked"], last) if x)
+    keep = len(row["blocked"]) + 2 if row["blocked"] else min(len(last) + 2, 16) if last else 0
+    room, steps = WIDTH - len(head) - 2, row["steps"]
+    for n in (4, 2):
+        if len(steps) <= room - keep:
+            break
+        steps = " ".join(t[:-1][:n] + t[-1] for t in row["steps"].split(" "))
+    text = f"{head}  {_cut(steps, room)}"
+    rest = WIDTH - len(text) - 2
+    return f"{text}  {_cut(tail, rest)}" if tail and rest >= 6 else text
+
+
+def units(store: Store, project: str, steps: Any = None, tags: Any = None, state: Any = None,
+          every: bool = False) -> dict[str, Any]:
+    """status(view="units"): {rev, paused, units: [{unit, state, age, engine, steps,
+    blocked, last, line}], done_units?}, one row per unit (P.named_units), oldest first.
+    `state` keeps the units in these states; `steps`/`tags` the units with a step they
+    select; without them, unless `every`, the done units are left out and counted."""
+    wanted = [state] if isinstance(state, str) else state
+    if wanted is not None and (not isinstance(wanted, list) or
+                               any(s not in UNIT_STATES for s in wanted)):
+        raise BadRequest(f"state: expected one or a list of {', '.join(UNIT_STATES)}")
+    with store.rx():
+        only = set(store.select_steps(project, steps, tags)) if steps or tags else None
+        doc, plan = store.plan(project)
+        st, paused = store.read_state(project), store.paused(project)
+    changed, last = L.latest(store.home, project)
+    view: View = (plan, st, paused)
+    marks = _marks(view, list(plan.steps), {}, 0)
+    now, rows, done = dt.datetime.now(dt.UTC), [], []
+    for name, ids, _ in P.named_units(plan):
+        if only is not None and not only & set(ids):
+            continue
+        if only is None and not every and P.unit_done(ids, st):
+            done.append(ids)
+            continue
+        status = [marks[s][0] for s in ids]
+        held = [marks[s][1] for s in ids]
+        unit_state = (
+            "running" if "running" in status
+            else "failed" if {"failed", "stale"} & set(status)
+            else "settled" if set(status) <= {"succeeded", "skipped"}
+            else "blocked" if any(held) and all(x in FINAL or h for x, h in zip(status, held))
+            else "pending")
+        if wanted is not None and unit_state not in wanted:
+            continue
+        entries = [S.entry_of(st, s) for s in ids]
+        if unit_state == "running":
+            age = max(_since(e.get("started"), now) or 0 for e in entries
+                      if e["status"] == "running")
+        else:
+            ats = [a for s, e in zip(ids, entries)
+                   for a in (changed.get(s), e.get("started"), e.get("finished")) if a]
+            age = _since(max(ats), now) if ats else None
+        pre = name + "-"
+        msg = max((last[f"step-{s}"] for s in ids if f"step-{s}" in last),
+                  key=lambda r: r["seq"], default=None)
+        text = ""
+        if msg is not None:
+            q = "Q: " if msg.get("needs_reply") is not False else ""
+            text = _cut(q + _one(msg.get("body")), 200)
+        row = {"unit": name, "state": unit_state, "age": age,
+               "engine": _engine(plan, st, ids),
+               "steps": " ".join(s.removeprefix(pre) + MARK[
+                   "paused" if x == "pending" and plan.steps[s].paused else x]
+                   for s, x in zip(ids, status)),
+               "blocked": _blocked(view, marks, ids) if unit_state == "blocked" else "",
+               "last": text}
+        rows.append({**row, "line": _line(row, _age(age))})
+    rows.sort(key=lambda r: -1 if r["age"] is None else r["age"], reverse=True)
+    out = {"rev": doc["rev"], "paused": paused, "units": rows}
+    if done:
+        out["done_units"] = {"units": len(done), "steps": sum(map(len, done))}
+    return out

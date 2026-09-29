@@ -818,7 +818,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
     @tool
     def status(project: str, steps: list[str] | str | None = None,
                tags: list[str] | str | None = None, brief: bool = False,
-               all: bool = False) -> Any:
+               all: bool = False, view: Literal["steps", "units"] = "steps",
+               state: list[str] | str | None = None) -> Any:
         """Return {rev, paused, inputs, outputs, steps: [{id, run, status, started, finished,
         outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}],
         done_units?}. Without steps or tags, the done units (independent pieces of work,
@@ -838,7 +839,25 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 agent's `final`, a report) to its start and how much more there is; step_get
                 or a status without brief has them whole.
             all: include the done units too (steps or tags always return what they select).
+            view: "steps" (default) as above, or "units": one compact row per unit (the
+                steps sharing a `unit:<name>` tag, else steps joined by handoffs or `after`;
+                a standalone step is its own) instead of the steps: {rev, paused, units:
+                [{unit, state, age, engine, steps, blocked, last, line}], done_units?},
+                oldest first. state is running, failed (a step failed or stale), blocked
+                (nothing running or startable, something held), settled or pending; age
+                the seconds its running step has run, else since its last change; engine
+                engine·model·effort of its agent step; steps each step's mark (✓ succeeded,
+                ▶ running, · pending, ✗ failed, ~ stale, – skipped, ‖ paused); blocked the
+                first edge a blocked unit waits on; last its steps' threads' last message
+                ("Q: " for a question); line all of it in at most 80 characters.
+            state: with view "units", only units in this state (one or a list).
         """
+        if view == "units":
+            if brief:
+                raise BadRequest("brief: the units view has no values to cut")
+            return watch_mod.units(store, project, steps, tags, state, all)
+        if state is not None:
+            raise BadRequest('state: only the units view (view: "units") filters by state')
         return store.status(project, steps, tags, brief, all)
 
     @tool

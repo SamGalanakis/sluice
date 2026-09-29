@@ -65,6 +65,9 @@ asked through a thread: when the orchestrator needs one, it posts to the inbox
   "body": "skip the Windows build"}, project="myproj", direct=True)`.
 - To read what the step asks back, watch the same thread:
   `log_wait(project="myproj", since_seq=<last>, threads=["step-work"], wake="questions")`.
+- For every unit at a glance — state, age, engine, each step's mark, what a blocked unit
+  waits on, its last message — `status(project, view="units")`: one row per unit with a
+  `line` of at most 80 characters (`state="blocked"` or `tags=[...]` to narrow it).
 
 ## Watching from a shell
 `sluice watch -p myproj [--kinds k1,k2] [--threads a,b] [--since-seq N]` follows the log from now

@@ -1195,11 +1195,44 @@ resolved by the same rule when not given, and
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
 | `plan_prune` | `project, older_than_hours? = 0, tags?, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago (with `tags`, only the done units with a step carrying one of them), in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
-| `status` | `project, steps?, tags?, brief? = false, all? = false` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`) |
+| `status` | `project, steps?, tags?, brief? = false, all? = false, view? = "steps", state?` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`). `view: "units"` returns one compact row per unit instead (below); `state` (only with it) keeps the units in these states, and `brief` is refused with it |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); `from` defaults by the author rule (§6b); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project`; an open item a step or a call asked carries `waiting` (and `stopped` when false, §8a) |
 | `inbox_answer` | `project, id, answer, author?` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
 | `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
+
+**The units view.** `status(project, view="units")` answers "what is running, blocked or
+failed, and for how long" in one call: `{rev, paused, units: [{unit, state, age, engine, steps,
+blocked, last, line}], done_units?}`, one row per unit as `sluice next` sees units (§9: the
+steps sharing a `unit:<name>` tag, else an untagged step's component among the untagged steps,
+named by its first step; a standalone step is a unit of one), sorted by `age`, oldest first
+(unknown last). `state` is `running` (a step running), else `failed` (a step failed or stale),
+else `settled` (every step succeeded or skipped), else `blocked` (nothing running or startable
+and something pending and held, by `sluice next`'s held rule), else `pending`. `age` is the
+seconds its running step has run (the longest, when several), else since its last change (its
+steps' last `step.status` record, start or finish), null when nothing is known. `engine` is
+`engine·model·effort` from the unit's agent step (its first step whose fn is open): the values
+its `engine`, `model` and `effort` inputs are bound to now, each cut to 12 characters, empty
+when none. `steps` is each step's mark in plan order, the `<unit>-` prefix dropped: `✓`
+succeeded, `▶` running, `·` pending, `✗` failed, `~` stale, `–` skipped, `‖` paused
+(`fork✓ work▶ landed· close·`). `blocked`, on a blocked unit, says why its first held step is
+held: `paused` (or `paused: <reason>`), `project paused`, `external`, `input <n> (no value)`, or
+the first edge it waits on, `after <step> (<status>)` for an `after` edge and `reads <step>
+(<status>)` for a handoff. `last` is the last message on any of its steps' threads
+(`step-<id>`), whitespace collapsed, cut to 200 characters, `Q: ` before a question
+(`needs_reply` true). `line` is the row in at most 80 characters, for an agent to read:
+
+```
+fig-4201    ▶ 42m  opus·xhigh  fork✓ work▶ landed· close· rm·  "Q: Which crate …
+fig-4202    ‖   –  devin  fo· wo· la· cl· rm·  after fig-4200-work (failed)
+```
+
+(name, the state's mark — `▶` running, `✗` failed, `‖` blocked, `✓` settled, `·` pending — and
+age, engine, step marks with names cut to 4 characters when they do not fit, then what it is
+blocked on and its last message, cut with "…"). `state` filters (one state or a list); `steps`
+and `tags` select steps, and a unit is shown when any of its steps is selected. Done units
+follow the steps view: left out and counted in `done_units` unless `all` or a selection.
+`sluice tool status` prints the result as JSON like every tool.
 
 ## 8a. The inbox
 

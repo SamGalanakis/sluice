@@ -150,6 +150,18 @@ def statuses(home: Path, project: str, steps: Iterable[str]) -> list[dict[str, A
                      + ", ".join("?" * len(steps)) + ")", steps, "ORDER BY seq")
 
 
+def latest(home: Path, project: str) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """In one read: each step's last `step.status` record's `at` ({step: at}), and each
+    thread's last message ({thread: record})."""
+    with db.read(home) as conn:
+        changed = {r["step"]: r["at"] for r in db.all_rows(
+            conn, "SELECT step, max(seq), at FROM records WHERE project = ? AND "
+                  "kind = 'step.status' GROUP BY step", (project,))}
+        last = _rows(conn, "records", project, "seq IN (SELECT max(seq) FROM records WHERE "
+                     "project = ? AND kind = 'message' GROUP BY thread)", [project], "")
+    return changed, {r["thread"]: r for r in last}
+
+
 def page(home: Path, project: str | None, kinds: Iterable[str] | None = None,
          threads: Iterable[str] | None = None, before: int | None = None,
          after: int | None = None, size: int = 50, history: bool = False) -> dict[str, Any]:
