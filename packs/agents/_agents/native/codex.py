@@ -2,8 +2,10 @@
 
 import base64
 import contextlib
+import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import select
@@ -29,8 +31,6 @@ EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 
 def _private_config(source, model, effort, search):
     """Keep the owner's settings, but disable every configured MCP server for this run."""
-    import tomli_w
-
     try:
         config = tomllib.loads(source)
     except tomllib.TOMLDecodeError as exc:
@@ -50,7 +50,35 @@ def _private_config(source, model, effort, search):
         config["web_search"] = "live"
     else:
         config.pop("web_search", None)
-    return tomli_w.dumps(config)
+    return "".join(f"{_key(k)} = {_value(v)}\n" for k, v in config.items())
+
+
+def _key(key):
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _string(key)
+
+
+def _string(text):
+    return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+def _value(value):
+    """A value tomllib parsed, back as TOML; tables and arrays inline, so no dependency (a
+    wrapper fn importing agent.run runs in its own environment)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        return ("-inf" if value < 0 else "inf") if math.isinf(value) else repr(value)
+    if isinstance(value, str):
+        return _string(value)
+    if isinstance(value, (datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return "[" + ", ".join(map(_value, value)) + "]"
+    return "{" + ", ".join(f"{_key(k)} = {_value(v)}" for k, v in value.items()) + "}"
 
 
 class Rpc:

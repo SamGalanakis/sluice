@@ -71,6 +71,32 @@ def test_private_config_handles_equivalent_server_forms_and_keeps_other_values(s
     assert tomllib.loads(_private_config(source, "gpt-6-astra", "max", False)) == expected
 
 
+def test_private_config_keeps_values_toml_finds_hard_to_write():
+    source = ('"key with space" = 1\n"é" = "ünï \\u007f \\u001b \\\\ end"\n'
+              'big = 1e300\nneg = -inf\nodd = nan\nlocal = 2026-09-29T12:34:56.5\n'
+              'off = 2026-09-29T12:34:56+02:00\nempty = {}\nnone = []\n'
+              'deep = [[{ a = { "b.c" = [1.5, "x"] } }]]\n')
+    got = tomllib.loads(_private_config(source, "sol", "max", True))
+    want = tomllib.loads(source)
+    assert got.pop("odd") != got.pop("odd", 0)  # nan
+    want.pop("odd")
+    assert got == {**want, "model": "sol", "model_reasoning_effort": "max",
+                   "web_search": "live"}
+
+
+def test_the_adapter_imports_without_any_installed_package(tmp_path):
+    """A wrapper fn importing agent.run runs in its own environment: nothing to install
+    beyond sluice itself."""
+    pack = Path(__file__).resolve().parents[1]
+    src = Path(__import__("sluice").__file__).parents[1]
+    code = ("import sys; sys.path[:0] = sys.argv[1:]; "
+            "from _agents.native.codex import _private_config; "
+            "print(_private_config('a = { b = 1 }', 'sol', 'max', False), end='')")
+    out = subprocess.run([sys.executable, "-I", "-S", "-c", code, str(pack), str(src)],
+                         capture_output=True, text=True, check=True).stdout
+    assert tomllib.loads(out) == {"a": {"b": 1}, "model": "sol", "model_reasoning_effort": "max"}
+
+
 @pytest.mark.parametrize("source", ['model = [', 'model = "a"\nmodel = "b"'])
 def test_private_config_reports_malformed_toml(source):
     with pytest.raises(ValueError, match="invalid Codex config TOML"):
@@ -102,7 +128,7 @@ def test_malformed_owner_config_leaves_existing_private_config_intact(tmp_path, 
 
 
 @pytest.mark.parametrize("fn_name", ["agent.codex", "agent.run"])
-def test_copied_codex_script_resolves_its_writer_dependency(
+def test_copied_codex_script_writes_the_private_config(
         fn_name, tmp_path, call_fn, fake_bin):
     installed = tmp_path / "installed" / "fns"
     pack = Path(__file__).resolve().parents[1]
