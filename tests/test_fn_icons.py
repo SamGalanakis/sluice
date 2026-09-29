@@ -196,7 +196,7 @@ def test_the_route_404s_without_an_image_icon(store, home, port):
 def test_the_icons_url_changes_with_its_file(store, home, port):
     fn_dir = fn_with(home / "fns", "t.tool", "icon.svg", SVG)
     create(store, "p", {"s": {"run": "t.tool", "in": {}}})
-    url = f"/fns/t.tool/icon?project=p&amp;v={sha(SVG)}"
+    url = f"/fns/t.tool/icon?project=p&v={sha(SVG)}"
     assert url in views.project_page(store, "p", ver="x")
     other = SVG.replace(b"M2 2h12", b"M2 8h12 ")
     (fn_dir / "icon.svg").write_bytes(other)
@@ -216,6 +216,9 @@ def card(page, sid):
 
 
 def mask(name, data, size, project="p"):
+    if size == "card":
+        return (f'<span class="ficon fi-{size} fi-mask" data-fn="{name}" '
+                'aria-hidden="true"></span>')
     q = f"project={project}&amp;" if project else ""
     return (f'<span class="ficon fi-{size} fi-mask" style="--fi:url(&quot;/fns/{name}/icon?'
             f'{q}v={sha(data)}&quot;)" aria-hidden="true"></span>')

@@ -1125,6 +1125,9 @@ Streams end when the server shuts down; the client reconnects with backoff.
   nothing on the server; like the writes it is refused under a foreign `Host` and from a
   foreign `Origin` (403).
 - `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
+  `GET /static/dashboard.css`: the dashboard stylesheet, shared by live pages; standalone
+  HTML keeps it inline. Status glyphs and chevrons use one set of SVG symbols per page,
+  and each board defines its fn icon URLs once.
   `GET /static/sluice.js`: the dashboard's script and components; `GET /static/nav.js`: the
 nav's menus and settings; `GET /static/logo.svg`,
   `GET /static/favicon.svg`: the mark (`image/svg+xml`).

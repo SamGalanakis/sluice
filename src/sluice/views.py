@@ -341,7 +341,8 @@ def glyph(status: str, sep: str = "") -> str:
     link that starts with it reads "failed, a" rather than "failed a")."""
     word = WORDS.get(status, status)
     return (f'<span class="g g-{e(status)}" title="{e(word)}"><svg viewBox="0 0 16 16" '
-            f'width="16" height="16" aria-hidden="true">{GLYPHS.get(status, GLYPHS["pending"])}'
+            f'width="16" height="16" aria-hidden="true"><use href="#g-'
+            f'{e(status if status in GLYPHS else "pending")}"/>'
             f'</svg><span class="vh">{e(word + sep)}</span></span>')
 
 
@@ -370,9 +371,13 @@ NAV = (("/log", "Log"), ("/fns", "Functions"))  # with no project chosen; "/" is
 # The brand: the owner's mark (static/logo.svg) and the wordmark as live text beside it.
 BRAND_MARK = ('<img class="mark" src="/static/logo.svg" width="27" height="26" alt="">'
               '<span class="wordmark" aria-hidden="true">sluice</span>')
+_CHEVRON = ('<path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" '
+            'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>')
 CHEVRON = ('<svg class="chev" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">'
-           '<path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" '
-           'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+           '<use href="#g-chevron"/></svg>')
+GLYPH_DEFS = ('<svg width="0" height="0" aria-hidden="true" style="position:absolute">'
+              + ''.join(f'<symbol id="g-{k}" viewBox="0 0 16 16">{v}</symbol>'
+                        for k, v in {**GLYPHS, "chevron": _CHEVRON}.items()) + '</svg>')
 PROJECT_TABS = ("plan", "threads", "log", "history", "fns")  # a project's sections, in the nav
 
 
@@ -391,7 +396,7 @@ def project_icon(store: Store, name: str, icon: dict[str, Any] | None = None) ->
     return f'<span class="picon" aria-hidden="true">{e(icon["text"])}</span>'
 
 
-def fn_icon(fn: Fn, project: str | None, size: str) -> str:
+def fn_icon(fn: Fn, project: str | None, size: str, shared: bool = False) -> str:
     """A fn's icon (SPEC §4), decorative (its name or step id is beside it): an SVG as a mask
     over `currentColor`, so it takes the theme's ink like the status glyphs and none of its
     markup reaches the page; a PNG or WebP as an <img>; a text icon as escaped text. The URL
@@ -405,6 +410,9 @@ def fn_icon(fn: Fn, project: str | None, size: str) -> str:
     query = urlencode({"project": project, "v": icon.hash} if project else {"v": icon.hash})
     src = f"/fns/{quote(fn.name)}/icon?{query}"
     if icon.type == "image/svg+xml":
+        if shared:
+            return (f'<span class="ficon fi-{size} fi-mask" data-fn="{e(fn.name)}" '
+                    'aria-hidden="true"></span>')
         style = e(f'--fi:url("{src}")')
         return f'<span class="ficon fi-{size} fi-mask" style="{style}" aria-hidden="true"></span>'
     return f'<img class="ficon fi-{size} fi-img" src="{e(src)}" alt="">'
@@ -571,8 +579,9 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
             f"<title>{e(title)} · sluice</title>"
             + '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
             + "".join(f'<link rel="stylesheet" href="{u}">' for u in FONT_CSS)
-            + f"<style>{CSS}</style>{head}</head>\n"
-            f"<body{body_attrs}>{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"
+            + (f'<link rel="stylesheet" href="/static/dashboard.css">' if nav else
+               f"<style>{CSS}</style>") + f"{head}</head>\n"
+            f"<body{body_attrs}>{GLYPH_DEFS}{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"
             "</body></html>\n")
 
 
@@ -1401,7 +1410,8 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
     # read "a , 1h")
     sep = '<span class="sep">,</span>' if inner else ""
     return (f'<{tag} {attrs}>{glyph(b.mark, ", ")}<span class="sid">{e(b.sid)}{sep}</span>'
-            f"{'' if b.outside else fn_icon(b.step.fn, board.project, 'card')}{tail}</{tag}>")
+            f"{'' if b.outside else fn_icon(b.step.fn, board.project, 'card', shared=live)}"
+            f"{tail}</{tag}>")
 
 
 LEGEND_DATA = ('<svg width="22" height="8" aria-hidden="true"><path d="M1 4h20" '
@@ -1678,7 +1688,7 @@ def board_html(store: Store, board: Board, live: bool = True,
         if box_id is not None:
             es = [edge for edge in edges(seen) if edge.source in ids and edge.target in ids]
             return (f'<div class="box-content" data-box-version="{version}" '
-                    f'data-box-edges="{e(_edge_data(es))}">{inner}</div>')
+                    f'data-box-edges="{e(_edge_data(es))}">{_icon_css(seen)}{inner}</div>')
         bid = f' id="box-{e(min(whole, key=order.__getitem__))}"'
         # a finished box folds to a line about all of its work, the skipped steps it hides too
         if folded:
@@ -1705,7 +1715,8 @@ def board_html(store: Store, board: Board, live: bool = True,
         legend = (f'<p class="legend">{LEGEND_DATA}hands on a value'
                   + (f"{LEGEND_AFTER}runs after" if after else "") + "</p>")
     return (f'{tools}<sluice-board class="board" role="region" aria-label="Plan" '
-            f'edges="{e(data)}" data-preserve-attr="data-rocket-host"><div class="plane">'
+            f'edges="{e(data)}" data-preserve-attr="data-rocket-host">'
+            f'{_icon_css(seen) if live else ""}<div class="plane">'
             f'<svg class="edges" aria-hidden="true" data-ignore-morph></svg>'
             f'<ol class="boxes{" boxed" if len(boxes) > 1 else ""}">'
             f'{"".join(x[2] for x in shown)}</ol>{empty}'
@@ -1715,6 +1726,17 @@ def board_html(store: Store, board: Board, live: bool = True,
 def _edge_data(es: list[Edge]) -> str:
     return json.dumps([[f"s:{edge.source}", f"s:{edge.target}", edge.label, sorted(edge.kinds)]
                        for edge in es], ensure_ascii=False)
+
+
+def _icon_css(board: Board) -> str:
+    fns = {b.fn: b.step.fn for b in board.blocks.values()}
+    rules = []
+    for name, fn in fns.items():
+        if fn.icon and fn.icon.type == "image/svg+xml":
+            query = urlencode({"project": board.project, "v": fn.icon.hash})
+            url = f"/fns/{quote(name)}/icon?{query}"
+            rules.append(f'.ficon[data-fn="{name}"] {{ --fi:url("{url}"); }}')
+    return '<style>' + ''.join(rules) + '</style>'
 
 
 def box_content(store: Store, project: str, sid: str, view: BoardView) -> str:
@@ -1738,7 +1760,7 @@ def _folded(board: Board, ids: list[str], inner: str, url: str = "", version: st
     # the box's main fn: its first open fn's (the agent in a lane), after the first id
     main = next((board.blocks[sid].step.fn for sid in ids if board.blocks[sid].step.fn.open),
                 None)
-    icon = fn_icon(main, board.project, "card") if main else ""
+    icon = fn_icon(main, board.project, "card", shared=bool(url)) if main else ""
     # the success glyph says how they ended; only a skip is worth words
     ended = f" · {len(ids) - skipped} succeeded, {skipped} skipped" if skipped else ""
     # on a phone the first id takes the line and the count goes under it; the last id hides

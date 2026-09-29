@@ -44,7 +44,7 @@ from .store import Store
 STATIC = Path(__file__).resolve().parent / "static"
 # the dashboard's own scripts, then the vendored ones (from jsDelivr, the versions in their
 # names; lang-core's imports rewritten to these files), so no third-party script runs here
-STATIC_TYPES = {"inbox.js": "text/javascript", "openui.json": "application/json",
+STATIC_TYPES = {"dashboard.css": "text/css", "inbox.js": "text/javascript", "openui.json": "application/json",
                 "sluice.js": "text/javascript", "nav.js": "text/javascript",
                 "logo.svg": "image/svg+xml", "favicon.svg": "image/svg+xml",
                 **dict.fromkeys(["datastar-rocket-1.0.4.js", "lang-core-0.3.0.js",

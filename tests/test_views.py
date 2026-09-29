@@ -358,7 +358,7 @@ def test_the_standalone_page_is_the_board_and_every_step_in_a_disclosure(store):
     board_project(store)
     page = views.render(store, "v", "html")
     assert "<nav" not in page and "datastar" not in page and 'id="drawer"' not in page
-    assert '<div class="node card is-succeeded" id="n-a"' in page and "href=" not in card(page, "a")
+    assert '<div class="node card is-succeeded" id="n-a"' in page and " href=" not in card(page, "a").split(">", 1)[0]
     assert page.count('<details class="std"') == 6
     assert "traceback &lt;here&gt;" in page  # the full error, in c's detail
 
