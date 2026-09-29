@@ -67,7 +67,7 @@ def run(home: Path | str, sql: str, params: list | None = None, limit: int = 200
         timeout: float = TIMEOUT) -> dict[str, Any]:
     """Run `sql` read-only against a home's database: {columns, rows, truncated}. `limit`
     caps the rows (at most `limit + 1` are fetched; one more means `truncated`), and the
-    rows' JSON may not pass ~1 MB. Aborts a statement still running after `timeout` s.
+    rows are consumed incrementally until their JSON crosses ~1 MB. Aborts a statement still running after `timeout` s.
     Raises BadRequest for anything refused or failed."""
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_LIMIT:
         raise BadRequest(f"limit: expected an int in 1..{MAX_LIMIT}")
@@ -93,16 +93,20 @@ def run(home: Path | str, sql: str, params: list | None = None, limit: int = 200
         conn.set_progress_handler(lambda: time.monotonic() > deadline, PROGRESS_OPS)
         cur = conn.execute(sql, tuple(params or ()))
         try:
-            fetched = cur.fetchmany(limit + 1)
-            truncated = len(fetched) > limit
+            truncated = False
             rows, size = [], 0
-            for row in fetched[:limit]:
+            for _ in range(limit):
+                row = cur.fetchone()
+                if row is None:
+                    break
                 cells = [_cell(v, cur.description[i][0]) for i, v in enumerate(row)]
                 rows.append(cells)
                 size += len(json.dumps(cells, ensure_ascii=False)) + 1
                 if size > RESPONSE:
                     truncated = True
                     break
+            else:
+                truncated = cur.fetchone() is not None
             columns = [d[0] for d in cur.description]
         finally:
             cur.close()

@@ -203,7 +203,7 @@ function drawEdges(host, data) {
   const used = new Map();
   const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
   const f = (n) => n.toFixed(1);
-  for (const [a, b, label] of ends) {
+  for (const [a, b, label, kinds] of ends) {
     const x1 = outX.get(a).get(b), y1 = rect.get(a).bottom;
     const x2 = inX.get(b).get(a), tip = rect.get(b).top - 1;
     const y2 = tip - HEAD_H;  // the line ends straight down, into the head's base
@@ -227,7 +227,7 @@ function drawEdges(host, data) {
       }
     }
     const attrs = { "data-from": a, "data-to": b, d };
-    if (label === "after") attrs.class = "order";  // an ordering edge carries no value
+    if (kinds.length === 1 && kinds[0] === "ordering") attrs.class = "order";
     wires.append(svgEl("path", attrs));
     wires.append(svgEl("path", { "data-from": a, "data-to": b, class: "head",
                                  d: `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(tip)}`

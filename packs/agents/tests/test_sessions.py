@@ -24,9 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _agents.native.claude import Claude
 from _agents.native.codex import Codex
 from _agents.native.processes import cgroup, detached, engine_env
-from _agents.native.supervisor import REMIND, Limits, lock_session
+from _agents.native.supervisor import REMIND, Limits, Snapshot, lock_session
 from test_agents import init_repo, make_claude, make_devin, session_of
-from test_native import FakePane, Model, run
+from test_native import FakePane, Feed, Model, run
 
 
 def repo_at(tmp_path):
@@ -266,6 +266,77 @@ def test_submitted_outputs_wait_for_the_engines_own_background_work(tmp_path):
     assert time.monotonic() - started >= 0.7 and model.sent == ["the task"]
     assert "waiting up to 10 min for background work: a background shell is running" in lines
     assert "background work ended" in lines
+
+
+def test_submitted_outputs_with_background_work_still_obey_the_wall_cap(tmp_path):
+    def on_turn(m, n, text):
+        m.submit(word="w")
+        m.waiting = "a background shell is running"
+        m.error = "rate limit exceeded"
+
+    limits = Limits(wall=0.1, stall=3, work=0.3, poll=0.01, ready=10)
+    with pytest.raises(RuntimeError, match="wall-clock cap"):
+        run(Model(on_turn), tmp_path, limits=limits)
+
+
+def test_thread_messages_interrupt_finalization_and_wait_for_the_new_turn(tmp_path):
+    class Receiving(Model):
+        busy_polls = 0
+
+        def poll(self, tmux):
+            if self.turns == 2 and self.busy_polls < 3:
+                self.busy_polls += 1
+                return Snapshot("busy", 1, starts=self.starts, progress=self.busy_polls)
+            return super().poll(tmux)
+
+    def on_turn(m, n, text):
+        m.submit(word="w")
+        m.waiting = "a background shell is running" if n == 1 else ""
+
+    feed = Feed({"seq": 1, "from": "o", "body": "finish this too"})
+    model = Receiving(on_turn)
+    out, _ = run(model, tmp_path, feed=feed,
+                 limits=Limits(wall=3, work=0.1, poll=0.01, ready=10))
+    assert len(model.sent) == 2 and model.sent[1].endswith("finish this too")
+    assert model.busy_polls == 3 and out["final"] == "reply 2"
+
+
+def test_finalization_retries_an_unacknowledged_thread_message(tmp_path):
+    class Flaky(Model):
+        failed = False
+
+        def deliver(self, tmux, text):
+            if text.startswith("Message from") and not self.failed:
+                self.failed = True
+                raise RuntimeError("turn already ended")
+            super().deliver(tmux, text)
+
+    model = Flaky(lambda m, n, text: m.submit(word="w"))
+    feed = Feed({"seq": 1, "from": "o", "body": "finish this too"})
+    out, _ = run(model, tmp_path, feed=feed)
+    assert model.failed and feed.items == []
+    assert len(model.sent) == 2 and out["final"] == "reply 2"
+
+
+def test_context_compaction_is_reprimed_while_finalization_waits(tmp_path, monkeypatch):
+    from _agents.native import reprime
+    monkeypatch.setattr(reprime, "context", lambda *_: "restored context")
+
+    class Compacted(Model):
+        def poll(self, tmux):
+            snap = super().poll(tmux)
+            snap.compactions = 1
+            return snap
+
+    def on_turn(m, n, text):
+        m.submit(word="w")
+        m.waiting = "a background shell is running" if n == 1 else ""
+
+    model = Compacted(on_turn)
+    _, lines = run(model, tmp_path,
+                   limits=Limits(wall=3, work=0.1, poll=0.01, ready=10))
+    assert model.sent == ["the task", "restored context"]
+    assert "context compacted; the step's context was typed into the session" in lines
 
 
 def test_the_wait_for_background_work_is_bounded(scopes, tmp_path):

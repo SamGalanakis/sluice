@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -41,6 +42,91 @@ def test_private_config_disables_every_mcp_and_pins_model():
     assert "http_headers" not in got["mcp_servers"]["b"]
     assert "env" not in got["mcp_servers"]["c"]
     assert got["profiles"]["work"]["model"] == "profile"
+
+
+@pytest.mark.parametrize("servers", [
+    ('mcp_servers = { "a.b" = { command = "x", enabled = true, '
+     'env = { TOKEN = "secret" }, http_headers = { Authorization = "secret" } } }'),
+    ('mcp_servers."a.b".command = "x"\nmcp_servers."a.b".enabled = true\n'
+     'mcp_servers."a.b".env.TOKEN = "secret"\n'
+     'mcp_servers."a.b".http_headers.Authorization = "secret"'),
+    ('[mcp_servers."a.b"]\ncommand = "x"\nenabled = true\n'
+     '[mcp_servers."a.b".env]\nTOKEN = "secret"\n'
+     '[mcp_servers."a.b".http_headers]\nAuthorization = "secret"'),
+])
+def test_private_config_handles_equivalent_server_forms_and_keeps_other_values(servers):
+    source = ('model = "old"\nmodel_reasoning_effort = "low"\nweb_search = "disabled"\n'
+              'count = 23\nratio = 1.25\nflag = true\nwhen = 2026-09-29T12:34:56Z\n'
+              'day = 2026-09-29\nclock = 12:34:56.123\n'
+              'text = "quotes \\\" and newlines\\n and tabs\\t"\n'
+              'items = [1, "two", { nested = [true, false] }]\n' + servers + '\n'
+              '[profiles.work]\nmodel = "profile"\nweb_search = "cached"\n'
+              '[[profiles.work.tools]]\nname = "first"\n'
+              '[[profiles.work.tools]]\nname = "second"\n')
+    expected = tomllib.loads(source)
+    expected["model"] = "gpt-6-astra"
+    expected["model_reasoning_effort"] = "max"
+    expected.pop("web_search")
+    expected["mcp_servers"]["a.b"] = {"command": "x", "enabled": False}
+    assert tomllib.loads(_private_config(source, "gpt-6-astra", "max", False)) == expected
+
+
+@pytest.mark.parametrize("source", ['model = [', 'model = "a"\nmodel = "b"'])
+def test_private_config_reports_malformed_toml(source):
+    with pytest.raises(ValueError, match="invalid Codex config TOML"):
+        _private_config(source, "sol", "max", False)
+
+
+@pytest.mark.parametrize("source", ['mcp_servers = 1', 'mcp_servers.x = "server"'])
+def test_private_config_reports_invalid_server_tables(source):
+    with pytest.raises(TypeError, match="MCP server.*table"):
+        _private_config(source, "sol", "max", False)
+
+
+def test_malformed_owner_config_leaves_existing_private_config_intact(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SLUICE_HOME", str(tmp_path / "sluice"))
+    source = tmp_path / ".codex"
+    source.mkdir()
+    (source / "config.toml").write_text("model = [")
+    private = tmp_path / "sluice" / "codex-native-homes" / "t"
+    private.mkdir(parents=True)
+    config = private / "config.toml"
+    config.write_text('model = "saved"\n')
+    registry = tmp_path / "sluice" / "codex-native-sessions"
+    registry.mkdir()
+    (registry / "t.json").write_text(json.dumps({"home": str(private), "cwd": str(tmp_path)}))
+    with pytest.raises(ValueError, match="invalid Codex config TOML"):
+        Codex().prepare(tmp_path, str(tmp_path), "t")
+    assert config.read_text() == 'model = "saved"\n'
+
+
+@pytest.mark.parametrize("fn_name", ["agent.codex", "agent.run"])
+def test_copied_codex_script_resolves_its_writer_dependency(
+        fn_name, tmp_path, call_fn, fake_bin):
+    installed = tmp_path / "installed" / "fns"
+    pack = Path(__file__).resolve().parents[1]
+    shutil.copytree(pack / fn_name, installed / fn_name)
+    shutil.copytree(pack / "_agents", installed / "_agents")
+    source_dir = tmp_path / ".codex"
+    source_dir.mkdir()
+    source = 'mcp_servers = { "a.b" = { command = "x", env = { TOKEN = "secret" } } }\n'
+    (source_dir / "config.toml").write_text(source)
+    captured = tmp_path / "private.toml"
+    tools = fake_bin("codex", '#!/bin/sh\ncat "$CODEX_HOME/config.toml" > "$CAPTURE_CONFIG"\n'
+                     'echo "config captured" >&2\nexit 77\n')
+    fake_bin("tmux", "#!/bin/sh\nexit 0\n")
+    fake_bin("systemd-run", "#!/bin/sh\nexit 1\n")
+    inp = {"cwd": str(tmp_path), "spec": "test config"}
+    if fn_name == "agent.run":
+        inp["engine"] = "codex"
+    code, _out, err = call_fn(installed / fn_name, inp, path=tools, env={
+        "HOME": tmp_path, "CAPTURE_CONFIG": captured, "SLUICE_CODEX_CLI": tools / "codex",
+    })
+    assert code != 0 and "Codex app-server exited: config captured" in err, err
+    assert tomllib.loads(captured.read_text())["mcp_servers"]["a.b"] == {
+        "command": "x", "enabled": False}
+    assert (source_dir / "config.toml").read_text() == source
 
 
 class FakeRpc:

@@ -163,6 +163,42 @@ def test_a_mismatched_answer_is_refused_and_the_item_stays_open(store):
     assert store.read_state("p")["inputs"] == {"count": 3}
 
 
+@pytest.mark.parametrize("typ", ["Any", "int?"])
+def test_null_answers_set_nullable_inputs_and_preserve_precedence(store, typ):
+    create(store, "p", {}, inputs={"n": typ})
+    for field in ("values", "params"):
+        item = store.inbox_post("p", "n?", input="n")["id"]
+        answer = {"action": "a", field: {"value": None}, "text": "fallback"}
+        if field == "values":
+            answer["params"] = {"value": 7}
+        result = store.inbox_answer("p", item, answer, "me")
+        assert result["status"] == "answered"
+        assert store.read_state("p")["inputs"] == {"n": None}
+
+
+def test_null_answer_to_required_input_is_atomic(store):
+    create(store, "p", {}, inputs={"n": "int"})
+    item = store.inbox_post("p", "n?", input="n")["id"]
+    before = L.read(store.home, "p")["records"]
+    with pytest.raises(InvalidPlan, match="does not fit"):
+        store.inbox_answer("p", item, {"action": "a", "values": {"value": None}}, "me")
+    assert store.inbox("p")[0]["status"] == "open"
+    assert store.read_state("p")["inputs"] == {}
+    assert L.read(store.home, "p")["records"] == before
+
+
+def test_literal_inbox_sender_with_delimiter_round_trips(store):
+    store.create_project("p")
+    for sender, run in [("reviewer#r-7", None), ("display name", "r-8")]:
+        item = store.inbox_post("p", "q", sender=sender, run=run)
+        assert item["from"] == sender and item.get("run") == run
+        read = store.inbox("p")[-1]
+        assert read["from"] == sender and read.get("run") == run
+        assert "waiting" not in read
+        record = L.read(store.home, "p")["records"][-1]
+        assert record["from"] == sender and record.get("run") == run
+
+
 def test_an_undeclared_input_is_refused_at_post(store):
     create(store, "p", {}, inputs={"approved": "boolean"})
     with pytest.raises(NotFound, match="no input 'aproved'"):

@@ -970,6 +970,14 @@ def block_line(store: Store, board: Board, block: Block) -> tuple[str, str]:
 # ---- messages -------------------------------------------------------------------------
 
 
+def _message_key(value: Any) -> Any:
+    if isinstance(value, list):
+        return list, tuple(_message_key(v) for v in value)
+    if isinstance(value, dict):
+        return dict, frozenset((k, _message_key(v)) for k, v in value.items())
+    return value
+
+
 def _awaiting(msgs: list[dict[str, Any]], blocks: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The questions still open: messages that ask for a reply (`needs_reply`, true unless
     the sender marked a note), addressed to someone other than a step of the plan (the
@@ -977,18 +985,18 @@ def _awaiting(msgs: list[dict[str, Any]], blocks: Mapping[str, Any]) -> list[dic
     On a step's thread, only while that step is in the plan and not finished: once it has
     succeeded, failed or been skipped (or left the plan), nobody is waiting on the answer."""
     out = []
-    for i, m in enumerate(msgs):
+    later = set()
+    for m in reversed(msgs):
         to = m.get("to")
-        if not to or to in blocks or m.get("needs_reply") is False:
-            continue
+        thread = _message_key(m.get("thread"))
         t = str(m.get("thread") or "")
-        if t.startswith("step-") and (t[5:] not in blocks or blocks[t[5:]].status
-                                      in ("succeeded", "failed", "skipped")):
-            continue
-        if not any(x.get("thread") == m.get("thread") and x.get("from") == to
-                   for x in msgs[i + 1:]):
+        finished = t.startswith("step-") and (t[5:] not in blocks or blocks[t[5:]].status
+                                             in ("succeeded", "failed", "skipped"))
+        if (to and to not in blocks and m.get("needs_reply") is not False and not finished
+                and (thread, to) not in later):
             out.append(m)
-    return out
+        later.add((thread, _message_key(m.get("from"))))
+    return list(reversed(out))
 
 
 def step_href(project: str, sid: str) -> str:
@@ -1152,10 +1160,11 @@ def lanes(board: Board) -> tuple[list[dict[int, list[str]]], dict[str, int]]:
 
     up: dict[str, list[str]] = {sid: [] for sid in ids}
     down: dict[str, list[str]] = {sid: [] for sid in ids}
-    for a, b, label in edges(board):
+    for edge in edges(board):
+        a, b = edge.source, edge.target
         up[b].append(a)
         down[a].append(b)
-        if label != "after":
+        if edge.kinds != frozenset({"ordering"}):
             parent[root(a)] = root(b)
     groups: dict[str, list[str]] = {}
     for sid in ids:
@@ -1211,7 +1220,8 @@ def _ups(board: Board, groups: list[dict[int, list[str]]],
     """Each step's lane in a box, and the edges into each lane from the box's other lanes."""
     lane = {sid: i for i in box for r in groups[i].values() for sid in r}
     ups: dict[int, list[tuple[str, str]]] = {i: [] for i in box}
-    for a, b, _ in edges(board):
+    for edge in edges(board):
+        a, b = edge.source, edge.target
         if a in lane and b in lane and lane[a] != lane[b]:
             ups[lane[b]].append((a, b))
     return lane, ups
@@ -1291,22 +1301,35 @@ def _by_neighbours(row: list[str], near: dict[str, list[str]], pos: dict[str, fl
         pos[sid] = (i + .5) / len(row)
 
 
-def edges(board: Board) -> list[tuple[str, str, str]]:
-    """(from step, to step, "output → input" names) for every handoff between steps, and
-    "after" for an ordering edge (`after`), which carries nothing."""
-    pairs: dict[tuple[str, str], list[str]] = {}
+@dataclasses.dataclass(frozen=True)
+class Edge:
+    source: str
+    target: str
+    labels: tuple[str, ...]
+    kinds: frozenset[str]
+
+    @property
+    def label(self) -> str:
+        return ", ".join(self.labels)
+
+
+def edges(board: Board) -> list[Edge]:
+    """Each endpoint pair's display labels and its value, condition or ordering relations."""
+    pairs: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for sid, b in board.blocks.items():
         for name in b.bindings:
             for r in b.refs(name):
                 if r.step and r.step in board.blocks:
                     label = r.name if r.name == name else f"{r.name} → {name}"
-                    pairs.setdefault((r.step, sid), []).append(label)
+                    pairs.setdefault((r.step, sid), []).append((label, "value"))
         if b.when is not None and b.when.step in board.blocks:
-            pairs.setdefault((b.when.step, sid), []).append(f"when {b.when.name}")
+            pairs.setdefault((b.when.step, sid), []).append((f"when {b.when.name}", "condition"))
         for a in b.after:
             if a in board.blocks:
-                pairs.setdefault((a, sid), []).append("after")
-    return [(a, b, ", ".join(dict.fromkeys(ls))) for (a, b), ls in pairs.items()]
+                pairs.setdefault((a, sid), []).append(("after", "ordering"))
+    return [Edge(a, b, tuple(dict.fromkeys(label for label, _ in relations)),
+                 frozenset(kind for _, kind in relations))
+            for (a, b), relations in pairs.items()]
 
 
 def answer_text(value: Any) -> str | None:
@@ -1658,11 +1681,12 @@ def board_html(store: Store, board: Board, live: bool = True,
              "done": "No box has finished yet."}.get(view.show, "No box matches.")
         empty = f'<p class="empty">{empty}</p>'
     visible = {sid for x in shown for sid in x[3]}
-    es = [(a, b, label) for a, b, label in edges(board) if a in visible and b in visible]
-    data = json.dumps([[f"s:{a}", f"s:{b}", label] for a, b, label in es], ensure_ascii=False)
+    es = [edge for edge in edges(board) if edge.source in visible and edge.target in visible]
+    data = json.dumps([[f"s:{edge.source}", f"s:{edge.target}", edge.label, sorted(edge.kinds)]
+                       for edge in es], ensure_ascii=False)
     legend = ""
     if es:
-        after = any("after" in label.split(", ") for _, _, label in es)
+        after = any("ordering" in edge.kinds for edge in es)
         legend = (f'<p class="legend">{LEGEND_DATA}hands on a value'
                   + (f"{LEGEND_AFTER}runs after" if after else "") + "</p>")
     return (f'{tools}<sluice-board class="board" role="region" aria-label="Plan" '

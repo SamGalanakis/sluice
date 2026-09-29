@@ -75,7 +75,77 @@ def lanes(page):
 def board_edges(page):
     """The edges the board draws: {(from, to): names}."""
     data = json.loads(html.unescape(re.search(r'<sluice-board [^>]*edges="([^"]*)"', page)[1]))
-    return {(f, t): n for f, t, n in data}
+    return {(f, t): n for f, t, n, _ in data}
+
+
+def edge_project(store):
+    write_fn(store.project_dir("v") / "fns", "v.pipe",
+             inputs={"after": "boolean", "other": "boolean"}, outputs={"after": "boolean"})
+    create(store, "v", {
+        "a": {"run": "v.pipe", "in": {"after": d(True), "other": d(False)}},
+        "b": {"run": "v.pipe", "in": {"after": src("a/after"), "other": d(False)}},
+        "c": {"run": "v.pipe", "in": {"after": d(True), "other": d(False)},
+              "after": ["a"]},
+        "mixed": {"run": "v.pipe",
+                  "in": {"after": src("a/after"), "other": src("a/after")},
+                  "when": "a/after", "after": ["a"]},
+    })
+
+
+def test_edge_relations_do_not_depend_on_port_names(store):
+    edge_project(store)
+    board = views.load_board(store, "v")
+    relations = {(edge.source, edge.target): edge for edge in views.edges(board)}
+    assert relations["a", "b"].label == "after"
+    assert relations["a", "b"].kinds == {"value"}
+    assert relations["a", "c"].kinds == {"ordering"}
+    mixed = relations["a", "mixed"]
+    assert mixed.labels == ("after", "after → other", "when after")
+    assert mixed.kinds == {"value", "condition", "ordering"}
+    groups, _ = views.lanes(board)
+    assert [{sid for row in lane.values() for sid in row} for lane in groups] == [
+        {"a", "b", "mixed"}, {"c"}]
+    page = views.board_html(store, board)
+    data = json.loads(html.unescape(re.search(r'<sluice-board [^>]*edges="([^"]*)"', page)[1]))
+    assert data[0] == ["s:a", "s:b", "after", ["value"]]
+    assert "runs after" in page
+    create(store, "handoff", {
+        "a": {"run": "core.format", "in": {"template": d("ok"), "values": d([])}},
+        "b": {"run": "core.format", "in": {"template": src("a/text"), "values": d([])}},
+    })
+    assert "runs after" not in views.board_html(store, views.load_board(store, "handoff"))
+
+
+def test_awaiting_preserves_raw_threads_reply_order_and_notes():
+    from types import SimpleNamespace
+
+    def msg(thread, sender="worker", to="person", **extra):
+        return {"thread": thread, "from": sender, "to": to, **extra}
+
+    msgs = [msg("old", "person", needs_reply=False), msg("old"),
+            msg(None), msg(""), msg("", "person", needs_reply=False),
+            msg("repeat"), msg("repeat"), msg("repeat", "person", needs_reply=False),
+            msg("repeat"), msg("step-live"), msg("step-done"), msg("step-gone"),
+            msg({"a": [1, True], "b": 2}),
+            msg({"b": 2, "a": [True, 1]}, "person", needs_reply=False),
+            msg("ineligible", "person", to="live", needs_reply=False)]
+    blocks = {"live": SimpleNamespace(status="running"),
+              "done": SimpleNamespace(status="succeeded")}
+    assert views._awaiting(msgs, blocks) == [msgs[i] for i in (1, 2, 8, 9)]
+
+
+def test_awaiting_visits_each_message_once():
+    class Message(dict):
+        reads = 0
+
+        def get(self, *args):
+            Message.reads += 1
+            return super().get(*args)
+
+    msgs = [Message(thread=f"thread-{i}", to="person", **{"from": "worker"})
+            for i in range(1000)]
+    assert views._awaiting(msgs, {}) == msgs
+    assert Message.reads <= 6 * len(msgs)
 
 
 def board_project(store):

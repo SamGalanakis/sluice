@@ -230,24 +230,36 @@ class Dashboard:
         the client's version is not the current one), then set the `signal` to it."""
         run = anyio.to_thread.run_sync
         try:
-            cur = await run(ver)
-            last = await run(parts)
-            if client_ver != cur:
-                for html in last.values():
-                    yield _patch(html)
-                yield SSE.patch_signals({signal: cur})
-            while await self._tick():
-                new_ver = await run(ver)
-                if new_ver == cur:
-                    continue
-                cur, new = new_ver, await run(parts)
-                for pid, html in new.items():
-                    if last.get(pid) != html:
-                        yield _patch(html)
-                last = new
-                yield SSE.patch_signals({signal: cur})
+            cur, last = None, {}
+            while not self.stop.is_set():
+                observed = await run(self._parts_snapshot, ver, parts, cur)
+                if observed is not None:
+                    new_ver, new = observed
+                    if new is not None:
+                        if cur is not None or client_ver != new_ver:
+                            for pid, html in new.items():
+                                if cur is None or last.get(pid) != html:
+                                    yield _patch(html)
+                            yield SSE.patch_signals({signal: new_ver})
+                        cur, last = new_ver, new
+                if not await self._tick():
+                    break
         except (SluiceError, OSError, ValueError):  # e.g. the project is gone: end the stream
             return
+
+    def _parts_snapshot(self, ver: Callable[[], str],
+                        parts: Callable[[], dict[str, str]],
+                        known: str | None) -> tuple[str, dict[str, str] | None] | None:
+        with self.store.rx():
+            before = ver()
+            if before == known:
+                return before, None
+            rendered = parts()
+            # SQLite stays in one snapshot; files can move independently. A changed
+            # observation gets another attempt at the next poll, without holding a reader.
+            if ver() != before:
+                return None
+            return before, rendered
 
     async def _log_stream(self, project: str | None,
                           signals: dict[str, Any]) -> AsyncIterator[str]:
@@ -583,4 +595,3 @@ class Dashboard:
         server.custom_route("/projects/{name}/steps/{sid}/pause",
                             methods=["POST"])(_local(self.pause_step))
         server.custom_route("/settings", methods=["POST"])(_local(self.settings))
-

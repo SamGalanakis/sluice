@@ -329,6 +329,7 @@ class Claude(Adapter):
                 self.turn_end = rec
             if event == "UserPromptSubmit":
                 self.starts += 1
+                self.unstopped = None
             if event in HOOKS:
                 self.last_event = event
 
@@ -442,11 +443,15 @@ class Claude(Adapter):
         if state == "idle" and self.last_event == "UserPromptSubmit":
             # Idle, but the prompt's turn end is not in yet. An interrupted turn (Escape in
             # an attached terminal) ends without a Stop: past UNSTOPPED seconds it counts.
-            self.unstopped = self.unstopped or time.monotonic()
-            if time.monotonic() - self.unstopped < UNSTOPPED:
+            now = time.monotonic()
+            if self.unstopped is None:
+                self.unstopped = now
+            if now - self.unstopped < UNSTOPPED:
                 state = "busy"
             else:
                 self.turns, self.turn_end, self.last_event = self.turns + 1, None, "Stop"
+        else:
+            self.unstopped = None
         if self.last_event != "UserPromptSubmit":
             self.unstopped = None
         waiting = self._waiting(status) if state == "idle" else ""

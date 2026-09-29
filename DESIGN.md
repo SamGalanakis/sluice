@@ -353,7 +353,9 @@ not jump across when another ends beside it. On a phone a box stacks its lanes o
 each reading straight down, a lane after the first 14px apart. The server lays the board out;
 the `<sluice-board>` component draws the edges between measured cards (bottom to top, spread
 when several share a side, an arrowhead at the end; dashed for an `after` edge, which orders
-two steps without passing data), threading an edge that passes rows through their gaps so it
+two steps without passing data). Relation kinds determine lanes, dashed lines and the legend;
+port names are labels, so a handoff named `after` stays a solid line, and a pair with both a
+handoff and ordering stays solid. The component threads an edge that passes rows through gaps so it
 never hides behind a card. A quiet legend under the board names the two lines. A box of
 several steps that have all succeeded (or been skipped, beside at least one success) folds to
 one 44px line: the success glyph, its first step's id, then in meta "… its last step · n steps"

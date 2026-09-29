@@ -670,7 +670,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
     @tool
     def drain(projects: list[str] | str | None = None, author: str | None = None) -> Any:
         """Pause the projects (default: every project not archived) that are not already
-        paused, recording which ones in drain.json so `release` lets exactly those go
+        paused, recording which ones in SQLite so `release` lets exactly those go
         again. Returns {paused, pending}: `pending` is the running steps and live
         non-direct calls still to finish — the CLI's `sluice drain` waits for them.
 
@@ -686,8 +686,8 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def release(author: str | None = None) -> Any:
-        """Unpause exactly the projects drain.json lists — what `sluice drain --release`
-        does — and delete it. Projects paused otherwise stay paused. Returns {released}.
+        """Unpause exactly the projects the maintenance ledger lists — what `sluice drain --release`
+        does — and clear ownership. Projects paused otherwise stay paused. Returns {released}.
 
         Args:
             author: who is acting (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP

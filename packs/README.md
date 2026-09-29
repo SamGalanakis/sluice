@@ -102,6 +102,9 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   or to nobody) are delivered to the live session as they arrive. Messages addressed to
   another recipient are not forwarded. The step-thread note no
   longer asks the agent to poll `log_read`. `listen: false` turns this off.
+  Messages stay in a FIFO queue until delivery succeeds. A failed delivery retains both
+  that message and the unattempted suffix for the next poll; pending delivery prevents
+  finalization. This queue is in memory and does not provide restart durability.
 - Caps: `SLUICE_AGENT_MAX_MIN` (600) minutes of wall clock; `SLUICE_AGENT_STALL_MIN` (30)
   minutes in any non-idle state with no transcript growth. A delivered message must start
   a turn within `SLUICE_AGENT_TURN_START_S` (60) seconds; it is delivered once more, then
@@ -111,11 +114,17 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   a nudge. `SLUICE_AGENT_GRACE_MIN` (10) minutes of idle before the first nudge, for an engine
   with no waiting signal (Codex and Devin have none; Claude has one).
   `SLUICE_AGENT_POLL_S` (0.5) sets the state-check interval.
+  Wall caps, message delivery and compaction handling continue while submitted outputs
+  are complete and finalization waits for background work. A new turn restarts that work
+  grace. Successful completion still takes precedence over a transient final error.
 - `session` resumes the session, and only from the directory it was started in; another cwd
   fails the step before anything starts. Codex keeps its private `CODEX_HOME` per thread and
   a registry at `<SLUICE_HOME>/codex-native-sessions/`, with homes under
   `<SLUICE_HOME>/codex-native-homes/<thread>`. A rate limit or
   capacity error raises `Transient`; the retry resumes the session and tells it to continue.
+  Codex's private configuration is parsed as TOML, preserves unrelated values, disables
+  inherited MCP servers and removes their environment/header credentials. Comments and
+  formatting can change in the generated copy; the owner's configuration is untouched.
 - A run that resumes a session holds `<SLUICE_HOME>/locks/<engine>-<session>.lock` (flock,
   with the holder's project, step and run in it) until it ends: a second run resuming the same
   session meanwhile fails at once, naming the holder.
@@ -157,7 +166,8 @@ shells are trusted to the status file), or the model's own latest ScheduleWakeup
 and its time is less than 2 minutes past, or a one-shot job the model made with CronCreate is
 still in `session_crons`. The loop's re-armed wakeup and recurring jobs do not count. The
 status is read before the hooks, and an idle status only counts once the prompt's `Stop` is
-in (an interrupted turn, which has no `Stop`, counts after 5 s).
+in (an interrupted turn, which has no `Stop`, counts after 5 s of continuous observed idle
+in the current prompt). A busy or blocked observation and each new prompt reset that timer.
 
 A new directory's workspace-trust dialog is answered yes (its default is "No, exit"), as
 `claude -p` never asked. The session has the owner's MCP servers unless

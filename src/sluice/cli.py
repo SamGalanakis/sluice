@@ -196,13 +196,13 @@ def cmd_next(a: argparse.Namespace, store: Store) -> int:
 
 def cmd_drain(a: argparse.Namespace, store: Store) -> int:
     """Pause the projects for maintenance and wait for their running work to finish, or
-    (--release) unpause exactly the projects drain.json lists."""
+    (--release) unpause exactly the projects the maintenance ledger lists."""
     from . import drain as D
 
     if a.release:
         names = D.release(store)
         print(f"released {', '.join(names)}" if names else "released nothing "
-              "(no drain.json)")
+              "(no drain ownership)")
         return 0
     projects = D.targets(store, a.project)
     paused = D.pause(store, projects)
@@ -361,17 +361,17 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("drain",
                        help="pause projects for maintenance; wait for running work",
                        description="Pause the given projects (default: every project not "
-                       "archived) that are not already paused — drain.json records which "
+                       "archived) that are not already paused — SQLite records which "
                        "ones — then wait until no step of theirs runs and no non-direct "
                        "call is live, printing `drained`. --release unpauses exactly what "
-                       "drain.json lists and removes it.")
+                       "the maintenance ledger lists and clears it.")
     s.add_argument("-p", "--project", action="append",
                    help="a project to drain (repeatable; default: every project not "
                    "archived)")
     s.add_argument("--no-wait", action="store_true",
                    help="pause and exit without waiting")
     s.add_argument("--release", action="store_true",
-                   help="unpause the projects drain.json lists, delete it")
+                   help="unpause the projects the maintenance ledger lists, clear it")
     s = sub.add_parser("me", help="where this step stands (run inside a step)",
                        description="Print the step's context for its agent: fn, doc, "
                        "status and running time, inputs, upstream outputs, unanswered "

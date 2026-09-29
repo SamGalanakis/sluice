@@ -41,6 +41,7 @@ import sqlite3
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -273,22 +274,22 @@ class ThreadFeed:
         self.thread = thread_name(ctx.step)
         self.me = ctx.step
         self.since = L.last_seq(self.home, self.project)
-        self.pending = []
+        self.pending = deque()
 
     def poll(self):
         try:
             got = L.read(self.home, self.project, self.since, threads=[self.thread])
         except (OSError, sqlite3.Error, SluiceError):
-            return []
+            return
         self.since = got["last_seq"]
-        self.pending += [rec for rec in got["records"] if rec.get("from") != self.me
-                         and rec.get("to") in (None, "", self.me)]
-        out, self.pending = self.pending, []
-        return out
+        self.pending.extend(rec for rec in got["records"] if rec.get("from") != self.me
+                            and rec.get("to") in (None, "", self.me))
 
-    def unread(self, item):
-        """Put a message back (its delivery failed) to try again on the next poll."""
-        self.pending.insert(0, item)
+    def peek(self):
+        return self.pending[0] if self.pending else None
+
+    def ack(self):
+        self.pending.popleft()
 
 
 def _write_json(path, obj):
@@ -355,15 +356,18 @@ class _Run:
 
     def say(self, text, snap):
         """Type `text` into the session, busy or not (a turn it starts is then expected)."""
+        self.adapter.deliver(self.tmux, text)
         if snap is not None and snap.state != "busy":
             self.expect_start(text, snap.starts)
-        self.adapter.deliver(self.tmux, text)
 
     def forward(self, snap=None):
         """Type the step's new thread messages into the session; returns whether one was
         delivered."""
         sent = False
-        for rec in self.feed.poll() if self.feed else []:
+        if not self.feed:
+            return sent
+        self.feed.poll()
+        while (rec := self.feed.peek()) is not None:
             frm, thread = rec.get("from"), self.feed.thread
             body = str(rec.get("body", ""))
             if rec.get("data") is not None:
@@ -375,8 +379,8 @@ class _Run:
                 self.say(text, snap)
             except (NotDelivered, RuntimeError, TimeoutError) as e:
                 self.log(f"thread message from {frm} not delivered yet: {e}")
-                self.feed.unread(rec)
                 break
+            self.feed.ack()
             verb = "delivered to" if self.adapter.name == "codex" else "typed into"
             self.log(f"thread message from {frm} {verb} the session")
             sent = True
@@ -479,16 +483,11 @@ class _Run:
                 self.log(line)
             self.note_session()
             now = time.monotonic()
-            complete = self.required and all(n in self.sent() for n in self.required)
-            if complete and snap.state == "idle" and snap.turns > base:
-                end = self.finish(snap, now)
-                if end == "done":
-                    return
-                if end == "remind":
-                    base, idle_since = snap.turns, None
-                time.sleep(lim.poll)
-                continue
-            if snap.error and snap.turns > base and self.transient(snap.error):
+            submitted = self.sent()
+            missing = [n for n in self.required if n not in submitted]
+            complete = self.required and not missing and snap.state == "idle" \
+                and snap.turns > base
+            if not complete and snap.error and snap.turns > base and self.transient(snap.error):
                 raise Transient(f"{a.name} hit a rate limit or capacity error: "
                                 f"{snap.error[:300]}")
             if snap.state == "exited":
@@ -520,7 +519,9 @@ class _Run:
             self.watch(snap, now)
             if self.forward(snap) | self.reprime(snap):
                 base, idle_since = snap.turns, None
+                self.work_since = None
             if snap.state == "blocked":
+                self.work_since = None
                 dialog_since = dialog_since or now
                 if now - dialog_since > lim.dialog:
                     self.tmux.keys("Escape")
@@ -532,18 +533,14 @@ class _Run:
             dialog_since = None
             if not (snap.state == "idle" and snap.turns > base):
                 idle_since = None
+                self.work_since = None
                 time.sleep(lim.poll)
                 continue
-            missing = [n for n in self.required if n not in self.sent()]
-            if self.required and not missing:
-                end = self.finish(snap, now)
-                if end == "done":
-                    return
-                if end == "remind":
-                    base, idle_since = snap.turns, None
+            if self.feed and self.feed.peek() is not None:
+                idle_since = self.work_since = None
                 time.sleep(lim.poll)
                 continue
-            if snap.waiting:
+            if not complete and snap.waiting:
                 if snap.waiting != said:
                     self.log(f"waiting: {snap.waiting}")
                     said = snap.waiting
@@ -563,12 +560,13 @@ class _Run:
                 continue
             said = ""
             wait_since = None
-            idle_since = idle_since or now
-            pause = lim.grace if not a.wait_signal and nudges == 0 else lim.settle
-            if now - idle_since < pause:
-                time.sleep(lim.poll)
-                continue
-            if not self.required:
+            if not complete:
+                idle_since = idle_since or now
+                pause = lim.grace if not a.wait_signal and nudges == 0 else lim.settle
+                if now - idle_since < pause:
+                    time.sleep(lim.poll)
+                    continue
+            if complete or not self.required:
                 end = self.finish(snap, now)
                 if end == "done":
                     return

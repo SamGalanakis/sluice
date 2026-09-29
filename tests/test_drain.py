@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-from sluice import calls
+from sluice import calls, drain
 from tests.conftest import add, create, d, settle
 
 
@@ -29,7 +29,7 @@ def test_drain_pauses_only_the_projects_that_were_not(store):
     out, err = drain_run(store.home, "--no-wait")
     assert err == ""
     assert out.splitlines() == ["paused b"]
-    doc = json.loads((store.home / "drain.json").read_text())
+    doc = drain._recorded(store)
     assert doc["paused"] == ["b"] and "at" in doc
     assert store.project("a")["paused"] and store.project("b")["paused"]
 
@@ -79,19 +79,19 @@ def test_release_unpauses_only_the_projects_drain_paused(store):
         create(store, name, {"x": add(d(1), d(2))})
     store.update_project("a", paused=True)  # paused on its own, not by drain
     out, _ = drain_run(store.home, "-p", "a", "-p", "b", "--no-wait")
-    assert json.loads((store.home / "drain.json").read_text())["paused"] == ["b"]
+    assert drain._recorded(store)["paused"] == ["b"]
     out, _ = drain_run(store.home, "--release")
     assert out.splitlines() == ["released b"]
     assert not store.project("b")["paused"] and store.project("a")["paused"]
     assert not (store.home / "drain.json").exists()
 
 
-def test_drain_merges_with_an_existing_drain_json(store):
+def test_drain_imports_an_existing_drain_json(store):
     create(store, "a", {"x": add(d(1), d(2))})
     create(store, "b", {"x": add(d(1), d(2))})
     (store.home / "drain.json").write_text(json.dumps({"paused": ["a"], "note": "keep me"}))
     drain_run(store.home, "-p", "b", "--no-wait")
-    doc = json.loads((store.home / "drain.json").read_text())
+    doc = drain._recorded(store)
     assert doc["paused"] == ["a", "b"] and doc["note"] == "keep me"
     drain_run(store.home, "--release")
     assert not store.project("a")["paused"] and not store.project("b")["paused"]

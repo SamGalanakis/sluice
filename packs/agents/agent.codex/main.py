@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = []
+# dependencies = ["tomli-w>=1.2,<2"]
 # ///
 """agent.codex: run a supervised Codex app-server thread in a working directory."""
 

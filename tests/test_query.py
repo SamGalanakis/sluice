@@ -112,6 +112,21 @@ def test_the_response_budget_truncates_many_wide_rows(store):
     assert len(json.dumps(res["rows"])) > q.RESPONSE
 
 
+def test_byte_budget_stops_before_evaluating_later_invalid_rows(store, monkeypatch):
+    db.connect(store.home)
+    monkeypatch.setattr(q, "RESPONSE", 10)
+    result = q.run(store.home, "SELECT 'the crossing row' AS value UNION ALL SELECT 'next' "
+                              "UNION ALL SELECT json('invalid json')")
+    assert result == {"columns": ["value"], "rows": [["the crossing row"]], "truncated": True}
+    conn = db.connect(store.home)
+    assert conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+
+
+def test_exact_row_limit_is_not_truncated(store):
+    db.connect(store.home)
+    assert q.run(store.home, "SELECT 1 UNION ALL SELECT 2", limit=2)["truncated"] is False
+
+
 @pytest.mark.parametrize("limit", [0, 1001, "10", None])
 def test_a_bad_limit_is_refused(store, limit):
     db.connect(store.home)

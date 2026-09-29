@@ -249,6 +249,19 @@ def click(c, item, label):
            f".find(b => b.textContent === {json.dumps(label)}).click()")
 
 
+def test_board_draws_ordering_from_relations_instead_of_labels(store, port, chrome):
+    from tests.test_views import edge_project
+
+    edge_project(store)
+    chrome.open(f"http://127.0.0.1:{port}/projects/v")
+    chrome.send("Emulation.setDeviceMetricsOverride",
+                {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+    chrome.wait("document.querySelectorAll('.wires path:not(.head)').length === 3")
+    assert chrome.eval("[...document.querySelectorAll('.wires path:not(.head)')].map(p => "
+                       "[p.dataset.to, p.classList.contains('order')])") == [
+        ["s:b", False], ["s:c", True], ["s:mixed", False]]
+
+
 def test_the_doc_examples_render_and_their_buttons_answer(store, port, chrome):
     create(store, "p", {}, inputs={"approved": "boolean"})
     approve, pick, form = examples()

@@ -67,7 +67,7 @@ def v1_home(tmp_path):
 def test_a_version_1_file_is_upgraded_in_place_keeping_its_rows(tmp_path):
     home = v1_home(tmp_path)
     conn = db.connect(home)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
     assert peek(home, "SELECT type, name FROM sqlite_master WHERE tbl_name = 'outcomes' AND "
                       "sql IS NOT NULL ORDER BY name") == [("table", "outcomes"),
                                                            ("index", "outcomes_unit")]
@@ -79,7 +79,7 @@ def test_a_version_1_file_is_upgraded_in_place_keeping_its_rows(tmp_path):
     store.remove_steps("p", ["a"], author="orch", reason="done")  # the new table takes rows
     assert outcomes(store)["a"]["outputs"] == '{"sum": 2}'
     db.connect(home)  # a second open needs nothing
-    assert peek(home, "PRAGMA user_version") == [(2,)]
+    assert peek(home, "PRAGMA user_version") == [(db.VERSION,)]
 
 
 def test_a_version_1_file_that_has_the_table_already_is_upgraded(tmp_path):
@@ -91,7 +91,7 @@ def test_a_version_1_file_that_has_the_table_already_is_upgraded(tmp_path):
                  "('p', 'old', 2, 'test.add', 'succeeded', '2026-09-01T00:00:00Z')")
     conn.close()
     db.connect(home)
-    assert peek(home, "PRAGMA user_version") == [(2,)]
+    assert peek(home, "PRAGMA user_version") == [(db.VERSION,)]
     assert peek(home, "SELECT step FROM outcomes") == [("old",)]
     assert peek(home, "SELECT count(*) FROM sqlite_master WHERE name = 'outcomes_unit'") == \
         [(1,)]
@@ -106,10 +106,10 @@ def test_a_failed_upgrade_leaves_the_file_at_version_1(tmp_path, monkeypatch):
     assert peek(home, "SELECT count(*) FROM sqlite_master WHERE name = 'outcomes'") == [(0,)]
 
 
-def test_a_new_home_starts_at_version_2_with_the_table(tmp_path):
+def test_a_new_home_starts_at_current_version_with_the_table(tmp_path):
     home = tmp_path / "h"
     db.connect(home)
-    assert peek(home, "PRAGMA user_version") == [(2,)]
+    assert peek(home, "PRAGMA user_version") == [(db.VERSION,)]
     assert peek(home, "SELECT count(*) FROM sqlite_master WHERE name = 'outcomes'") == [(1,)]
 
 
@@ -117,11 +117,12 @@ def test_a_version_newer_than_this_sluice_is_refused(tmp_path):
     home = tmp_path / "h"
     home.mkdir()
     conn = sqlite3.connect(home / db.FILE)
-    conn.execute("PRAGMA user_version = 3")
+    conn.execute(f"PRAGMA user_version = {db.VERSION + 1}")
     conn.close()
-    with pytest.raises(SluiceError, match="schema version 3; this sluice knows version 2"):
+    with pytest.raises(SluiceError, match=f"schema version {db.VERSION + 1}; "
+                                        f"this sluice knows version {db.VERSION}"):
         db.connect(home)
-    assert peek(home, "PRAGMA user_version") == [(3,)]
+    assert peek(home, "PRAGMA user_version") == [(db.VERSION + 1,)]
 
 
 # ---- writing outcomes -------------------------------------------------------------------

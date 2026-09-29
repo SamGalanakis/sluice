@@ -14,6 +14,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 
 from .processes import engine_env, find_argv, record, scope_command, start_time
@@ -28,47 +29,28 @@ EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 
 def _private_config(source, model, effort, search):
     """Keep the owner's settings, but disable every configured MCP server for this run."""
-    lines = source.splitlines()
-    names = set()
-    out = []
-    parent = False
-    skip_table = False
-    for line in lines:
-        header = re.match(r"^\s*\[mcp_servers\.([^].]+)(?:\.([^]]+))?\]\s*(?:#.*)?$", line)
-        if header:
-            name = header.group(1)
-            skip_table = header.group(2) in ("env", "http_headers")
-            if skip_table:
-                parent = False
-                continue
-            if name not in names:
-                names.add(name)
-                if "." not in line.split("]", 1)[0][13:]:
-                    parent = True
-                    out.extend((line, "enabled = false"))
-                    continue
-            parent = line.strip() == f"[mcp_servers.{name}]"
-        elif line.lstrip().startswith("["):
-            parent = False
-            skip_table = False
-        if skip_table:
-            continue
-        if parent and re.match(r"^\s*(?:enabled|env|http_headers)(?:\.[^=]+)?\s*=", line):
-            continue
-        out.append(line)
-    prefix = [f'model = "{model}"', f'model_reasoning_effort = "{effort}"']
+    import tomli_w
+
+    try:
+        config = tomllib.loads(source)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"invalid Codex config TOML: {exc}") from exc
+    servers = config.get("mcp_servers", {})
+    if not isinstance(servers, dict):
+        raise TypeError("Codex MCP servers must be a table")
+    for name, server in servers.items():
+        if not isinstance(server, dict):
+            raise TypeError(f"Codex MCP server {name!r} must be a table")
+        server["enabled"] = False
+        server.pop("env", None)
+        server.pop("http_headers", None)
+    config["model"] = model
+    config["model_reasoning_effort"] = effort
     if search:
-        prefix.append('web_search = "live"')
-    # Top-level keys must precede the first table. Existing keys are removed first.
-    top = True
-    kept = []
-    for line in out:
-        if line.lstrip().startswith("["):
-            top = False
-        if not (top and re.match(r"^\s*(model|model_reasoning_effort|web_search)\s*=", line)):
-            kept.append(line)
-    out = kept
-    return "\n".join([*prefix, *out]) + "\n"
+        config["web_search"] = "live"
+    else:
+        config.pop("web_search", None)
+    return tomli_w.dumps(config)
 
 
 class Rpc:
@@ -264,10 +246,11 @@ class Codex(Adapter):
                 dest.symlink_to(src, target_is_directory=src.is_dir())
         search = os.environ.get("SLUICE_CODEX_SEARCH") == "1"
         config = (source / "config.toml").read_text() if (source / "config.toml").exists() else ""
+        config = _private_config(config, self.model, self.effort, search)
         fd = os.open(private / "config.toml", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as f:
-            f.write(_private_config(config, self.model, self.effort, search))
+            f.write(config)
         self._env = {**engine_env(), "CODEX_HOME": str(private)}
         env_file = Path(cwd) / "env.sh"
         if not env_file.exists() and Path(cwd).name == "merged":

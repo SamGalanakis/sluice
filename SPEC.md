@@ -68,7 +68,7 @@ triggers, rolled back with them — plus `changed`, the time of its last state w
 edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; never trimmed);
 `states` (the project's state document, §6); `calls` (§8 `fn_call`); `submissions` (§5);
 `inbox` (§8a); `records` (the log, §6b); `outcomes` (what each finished step a plan edit
-removed ended with, §6; never trimmed); and `deletions` (a deleted project whose directory is
+removed ended with, §6; never trimmed); `drain` and `drain_projects` (maintenance metadata and pause ownership, §9); and `deletions` (a deleted project whose directory is
 not gone yet: name, token, time). Deleting a project deletes all of its rows and adds its
 `deletions` row in one transaction; once that commits (the outermost transaction, when it is
 nested in another), its `projects/<name>/` moves to `trash/<name>-<token>` (in a write
@@ -81,11 +81,15 @@ sets a plan input both of those and the item; a submission its row and its recor
 state change the state and its `step.status` records; a call's status change its row and its
 record. A write that cannot get the database within 5 s fails with `busy` ("the store is busy,
 try again"), having written nothing. Reads that must agree (a status, a log page and its
-cursor) come from one snapshot. `user_version` is the schema's version, now 2. A new file gets
-the whole schema at 2; a version-1 file (before `outcomes`) is upgraded in place on first open,
-in one `BEGIN IMMEDIATE` transaction that checks the version again under the lock and creates
-the table and its index (`IF NOT EXISTS`: a file may have them already) before setting 2; a
-database of any other version is refused, and so is a home from before this database — one with a `log.jsonl` or a
+cursor) come from one snapshot. `user_version` is the schema's version, now 3. A new file gets
+the whole schema at 3; version-1 and version-2 files are upgraded in place on first open,
+in one `BEGIN IMMEDIATE` transaction that checks the version again under the lock. Version 1
+adds `outcomes` and its index (`IF NOT EXISTS`: a file may have them already); version 2 adds
+the inbox's separate `run` column and the maintenance ledger. Existing inbox sender strings
+are decoded exactly as the old reader did, including ambiguous literal names that matched
+`<from>#<run>`; their original intent cannot be recovered. The version advances only when
+all migration work commits; a database of any other version is refused, and so is a home
+from before this database — one with a `log.jsonl` or a
 `projects/<name>/project.json` and no `sluice.db` — which is never read or treated as empty: it
 must be imported into a new home first. The database also defines views for agents'
 queries: `steps` (one row per plan step with its state, absent meaning `pending`), `messages`,
@@ -413,7 +417,11 @@ holding each item's outputs where it succeeded and null where it failed — so a
 re-run only what failed.
 
 **Outcomes.** A step's entry leaves the state once the step leaves the plan (the runner drops
-it at its next tick), and its run dirs go once nothing refers to them (§6b). So the plan edit
+it at its next tick). If a later committed edit reintroduces that step ID before the tick,
+the edit clears its retained state so the new step starts pending. Newly reintroduced plan
+inputs likewise lose retained values. IDs present both before and after a single patch retain
+their state, including a remove/add within that patch. Run dirs go once nothing refers to
+them (§6b). So the plan edit
 that removes a step whose status is `succeeded`, `failed`, `skipped` or `stale` writes, in the
 same transaction, one `outcomes` row: `project, step, rev` (the rev that edit made; the key),
 `unit`, `fn` (its `run`), `status`, `outputs` (JSON), `error` (a failure's error, or why it was
@@ -787,6 +795,8 @@ raw HTML escaped, unsafe link schemes refused).
   index and each project page's summary line say so in the attention voice ("Runner stopped ·
   last seen …"); no heartbeat file says nothing (a runner from before it writes none). The
   streams carry the liveness, not the beat.
+- Board edge relation kinds are separate from their display labels. A port named `after`
+  still forms a handoff edge; a pair with both handoff and ordering relations remains solid.
 - `GET /projects/<name>`: under the nav naming the project (its sections: Plan, Threads,
   History — the log page filtered to the history kinds, which reads the plan's whole edit
   history, every edit back to rev 1, with the manual values the log still has, in seq order —
@@ -999,7 +1009,11 @@ they change it re-renders the page's parts
 Threads tab's threads and nav badge) and sends
 a `datastar-patch-elements` event for each part that differs, then the new version. An idle
 page receives nothing; a client whose version is not current (e.g. reconnecting) first gets
-every part. Parts are morphed, so an expanded disclosure stays open. The page loads Datastar
+every part. Each version/render baseline is gathered in one short SQLite read snapshot,
+with the version checked before and after rendering. External stderr/liveness changes that
+alter that observation defer delivery until the next poll; the server does not retry in a
+loop or advance an unsent baseline. SQLite snapshots do not make external files atomic.
+Parts are morphed, so an expanded disclosure stays open. The page loads Datastar
 from its Rocket bundle (`datastar-rocket.js`, which adds web components) and
 `/static/sluice.js`, which keeps relative and running times current and defines three
 components in the light DOM around what the server rendered (their hosts keep Rocket's
@@ -1088,8 +1102,10 @@ no writes, ATTACH, PRAGMA or load_extension — and turns SQLite's limits down (
 200 columns and expression depth, 50 compound selects, 1 MB values, 250,000 VM operations); a
 statement still running after 2 s is interrupted (a cooperative check between VM instructions,
 so one huge scalar can run past it, bounded by the value limit). It returns {columns, rows,
-truncated}: at most `limit` rows (an int in 1–1000, default 200), fetched as `limit + 1` so a
-full page is marked `truncated`, and stopping early once the rows' JSON passes ~1 MB. A BLOB
+truncated}: at most `limit` rows (an int in 1–1000, default 200), consumed incrementally,
+with one extra row determining whether the row limit truncated the result. Reading stops
+once the rows' JSON passes ~1 MB; the crossing row is retained. SQLite may evaluate ahead
+or materialize sorting and aggregation internally. A BLOB
 cell is refused with the hint to select `hex(col)` or `length(col)`; `params` binds `?`
 placeholders. The `outcomes` table (§6) holds what finished steps removed from plans ended
 with. The `steps`, `messages`, `step_changes`, `edits` and `log` views (§2) join the
@@ -1134,8 +1150,8 @@ resolved by the same rule when not given, and
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
 | `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
 | `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs}]}`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all. `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
-| `drain` | `projects?, author?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in `drain.json` so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
-| `release` | `author?` | unpauses exactly the projects `drain.json` lists and deletes it; `{released}`. Projects paused otherwise stay paused |
+| `drain` | `projects?, author?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in SQLite so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
+| `release` | `author?` | unpauses exactly the projects the maintenance ledger lists and clears it; `{released}`. Projects paused otherwise stay paused |
 | `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` |
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
@@ -1155,7 +1171,8 @@ title, body?, ui?, input?, from?, run?, status, created, answer?, answered?, clo
 waiting?, stopped?}`: `id` is `i<n>` (one more than the highest in the project), `body`
 markdown, `ui` an OpenUI Lang program, `input` a plan input, `from` who asked (a step id, an
 agent; `inbox_post` without one: its author, §6b), `run` the run of that step that asks, `status` `open`, `answered` or `closed`, the times
-ISO UTC. `from` and `run` share the row's `sender` column as `<from>#<run>`. Only an open item changes, once: answering or closing
+ISO UTC. `from` and `run` occupy separate `sender` and `run` columns; literal sender
+strings round-trip unchanged. Only an open item changes, once: answering or closing
 anything else is refused (`conflict` with its `status`), which is what makes a stale button or a
 second answer harmless. Every change appends one log record (§6b) in the same transaction as
 the item's change (an answer that sets a plan input, that input's too), so `log_wait(project,
@@ -1165,7 +1182,8 @@ An **answer** is `{action: string, params?: object, values?: object, text?: stri
 else). With `input`, answering sets that plan input through `plan_set_input`'s own path (type
 check, `plan.input` record by the answering author, reason `inbox item <id>: <title>`) before
 the item is marked answered; the value is the first present of `values.value`, `params.value`
-and `text`. None present, or a value that does not fit, refuses the answer (`invalid`) and the
+and `text`, including explicit null when the input type permits it. None present, or a
+value that does not fit, refuses the answer (`invalid`) and the
 item stays open. `inbox_post` refuses an `input` the plan does not declare; without a `body`,
 the item's body is that input's doc (§5), if it has one.
 
@@ -1286,14 +1304,22 @@ records as JSON lines, `unit` included with its outputs whole, and a final `{"se
 "timed_out": …}`. Exit 0 on a wake or a timeout.
 
 `sluice drain` pauses the given projects (default: every project not archived) that are not
-already paused, records which ones in `SLUICE_HOME/drain.json` (`{"paused": […], "at": …}`,
-written atomically, merged with an existing file), then waits — one line whenever the count
-changes (`running: web 1 (fix-x), api 0; calls 0`) — until none of them has a running
-step or a pending or running non-direct call, and exits 0 printing `drained`. `--no-wait`
-pauses and exits. `--release` unpauses exactly the projects `drain.json` lists — not ones
-paused otherwise — deletes the file and prints what it released. Both write their
-`project.pause` records (§6b) with author `drain` and reason `drain: paused for maintenance`
-or `drain released`.
+already paused. In one SQLite transaction it records ownership in `drain_projects` and
+maintenance metadata in the singleton `drain` row, together with the pauses and their log
+records. Repeated or concurrent drains retain the union of owned projects. It then waits,
+printing a line whenever the count changes (`running: web 1 (fix-x), api 0; calls 0`), until
+none of them has a running step or a pending or running non-direct call, and exits 0 printing
+`drained`. `--no-wait` pauses and exits. `--release` unpauses exactly the owned projects,
+clears ownership in the same transaction, and prints what it released. Projects paused
+otherwise stay paused. Deleting a project deletes its ownership, so a later project with
+the same name is unaffected. Both operations write `project.pause` records (§6b) with author
+`drain` and reason `drain: paused for maintenance` or `drain released`.
+
+The first drain or release imports a legacy `SLUICE_HOME/drain.json` in its transaction,
+retaining unknown metadata and ownership of projects that still exist. It removes the file
+only after commit. The retained singleton marks the import complete even after release;
+a leftover file from interrupted or failed cleanup is never imported again. Ownership is
+included in database backups (§9).
 
 `sluice me` reads `SLUICE_PROJECT`, `SLUICE_STEP` and `SLUICE_RUN_ID` from the environment
 (the runner sets them for every run, and the native agent packs pass them through to the

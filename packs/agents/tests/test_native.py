@@ -29,6 +29,7 @@ from _agents.native.supervisor import (
     Limits,
     Snapshot,
     ThreadFeed,
+    _Run,
     required_outputs,
     supervise,
 )
@@ -382,7 +383,7 @@ def test_interactive_dialog_is_dismissed_and_nudged(tmp_path):
 def test_submitted_outputs_win_over_a_transient_final_message(tmp_path):
     def on_turn(m, n, text):
         m.submit(word="done")
-        m.error = "HTTP status 529"
+        m.error = "rate limit exceeded"
 
     run(Model(on_turn), tmp_path)
 
@@ -444,11 +445,13 @@ class Feed:
         self.items = list(items)
 
     def poll(self):
-        out, self.items = self.items, []
-        return out
+        pass
 
-    def unread(self, item):
-        self.items.insert(0, item)
+    def peek(self):
+        return self.items[0] if self.items else None
+
+    def ack(self):
+        self.items.pop(0)
 
 
 def test_thread_messages_are_typed_into_the_session(tmp_path):
@@ -487,6 +490,30 @@ def test_thread_delivery_rpc_error_is_requeued(tmp_path):
     assert model.failed and len(model.sent) == 2
 
 
+@pytest.mark.parametrize("failed_body", ["first", "second"])
+def test_failed_thread_delivery_retains_the_batch_suffix_and_new_arrivals(tmp_path, failed_body):
+    class Flaky(Model):
+        failures = 2
+
+        def deliver(self, tmux, text):
+            if text.endswith(failed_body) and self.failures:
+                self.failures -= 1
+                raise RuntimeError("turn already ended")
+            super().deliver(tmux, text)
+
+    model = Flaky()
+    feed = Feed(*({"seq": seq, "from": "o", "body": body}
+                  for seq, body in enumerate(("first", "second", "third"), 1)))
+    runner = _Run(model, None, tmp_path, [], feed, FAST, lambda _: None, dict)
+    runner.forward()
+    runner.forward()
+    feed.items.append({"seq": 4, "from": "o", "body": "fourth"})
+    runner.forward()
+    assert [text.rsplit(": ", 1)[1] for text in model.sent] == [
+        "first", "second", "third", "fourth"]
+    assert feed.items == []
+
+
 def test_the_thread_feed_reads_messages_for_the_step(tmp_path):
     store = Store(tmp_path)
     store.create_project("p")
@@ -500,8 +527,15 @@ def test_the_thread_feed_reads_messages_for_the_step(tmp_path):
         {"kind": "message", "thread": "step-build", "from": "o", "body": "d",
          "data": {"k": 1}},
     ])
-    assert [r["body"] for r in feed.poll()] == ["a", "d"]
-    assert feed.poll() == []
+    feed.poll()
+    assert feed.peek()["body"] == "a"
+    feed.poll()
+    assert feed.peek()["body"] == "a"
+    feed.ack()
+    assert feed.peek()["body"] == "d"
+    feed.ack()
+    feed.poll()
+    assert feed.peek() is None
 
 
 def test_required_outputs_are_the_non_optional_declared_ones():
@@ -650,6 +684,30 @@ def test_idle_before_the_turn_end_arrives_reads_busy(claude, monkeypatch):
     monkeypatch.setattr(claude.C, "UNSTOPPED", 0.0)  # an interrupted turn never gets a Stop
     snap = claude.a.poll(FakePane())
     assert (snap.state, snap.turns) == ("idle", 1)
+
+
+@pytest.mark.parametrize("interruption", ["busy", "waiting", "new-prompt"])
+def test_missing_stop_requires_continuous_idle_in_the_current_prompt(
+        claude, monkeypatch, interruption):
+    clock = [10.0]
+    monkeypatch.setattr(claude.C.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(claude.C, "UNSTOPPED", 5.0)
+    claude.hook("UserPromptSubmit", prompt="first")
+    claude.status("idle")
+    assert claude.a.poll(FakePane()).state == "busy"
+    clock[0] = 12.0
+    if interruption == "new-prompt":
+        claude.hook("UserPromptSubmit", prompt="second")
+    else:
+        claude.status(interruption)
+    assert claude.a.poll(FakePane()).turns == 0
+    clock[0] = 16.0
+    claude.status("idle")
+    assert claude.a.poll(FakePane()).turns == 0
+    clock[0] = 22.0
+    snap = claude.a.poll(FakePane())
+    assert (snap.state, snap.turns) == ("idle", 1)
+    assert claude.a.poll(FakePane()).turns == 1
 
 
 def test_a_turn_ending_in_an_api_error_reports_it(claude):

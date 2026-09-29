@@ -537,6 +537,14 @@ class Store:
             gone = [sid for sid in old["steps"] if sid not in new_steps]
             if gone:
                 self._keep_outcomes(conn, project, rev + 1, cur, gone, state, author, reason)
+            introduced_steps = new_steps.keys() - old["steps"].keys()
+            introduced_inputs = new.get("inputs", {}).keys() - old.get("inputs", {}).keys()
+            for sid in introduced_steps:
+                state["steps"].pop(sid, None)
+            for name in introduced_inputs:
+                state["inputs"].pop(name, None)
+            if introduced_steps or introduced_inputs:
+                self.write_state(project, state)
             conn.execute("UPDATE plans SET rev = ?, doc = ? WHERE project = ?",
                          (rev + 1, _dumps(new), project))
             self._log(conn, project, rev + 1, author, reason, ops)
@@ -1091,8 +1099,8 @@ class Store:
             item = self._open_item(conn, project, item_id)
             if item.get("input"):
                 name = item["input"]
-                value = answer_value(answer)
-                if value is None:
+                present, value = answer_value(answer)
+                if not present:
                     need = "give values.value, params.value or text"
                     raise InvalidPlan([f"answer: inbox item {item_id} sets plan input {name}; "
                                        + need])
@@ -1144,13 +1152,13 @@ def check_answer(answer: Any) -> list[str]:
     return errs
 
 
-def answer_value(answer: dict[str, Any]) -> Any:
+def answer_value(answer: dict[str, Any]) -> tuple[bool, Any]:
     """The value an answer gives a plan input: the first of `values.value` (a form field named
-    value), `params.value` (a button's value) and `text` that is there; None when none is."""
+    value), `params.value` (a button's value) and `text` that is there, with its presence."""
     for where in (answer.get("values") or {}, answer.get("params") or {}):
         if "value" in where:
-            return where["value"]
-    return answer.get("text")
+            return True, where["value"]
+    return "text" in answer, answer.get("text")
 
 
 def _parse_time(text: Any) -> dt.datetime | None:

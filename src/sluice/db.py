@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -25,7 +26,7 @@ from typing import Any
 from .errors import SluiceError
 
 FILE = "sluice.db"
-VERSION = 2
+VERSION = 3
 TIMEOUT = 5.0  # seconds a write waits for the lock before Busy
 CACHED = 8  # connections kept per thread (one per home)
 MIN_SQLITE = (3, 37)  # STRICT tables
@@ -99,6 +100,7 @@ CREATE TABLE inbox (
   ui TEXT,
   input TEXT,
   sender TEXT,
+  run TEXT,
   status TEXT NOT NULL CHECK (status IN ({", ".join(f"'{s}'" for s in INBOX_STATUSES)})),
   created TEXT NOT NULL,
   answer TEXT,
@@ -156,6 +158,16 @@ CREATE TABLE IF NOT EXISTS outcomes (
 CREATE INDEX IF NOT EXISTS outcomes_unit ON outcomes (project, unit);
 """
 
+DRAIN = """
+CREATE TABLE drain (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  metadata TEXT NOT NULL CHECK (json_type(metadata) = 'object')
+) STRICT;
+CREATE TABLE drain_projects (
+  project TEXT PRIMARY KEY NOT NULL REFERENCES projects ON DELETE CASCADE
+) STRICT;
+"""
+
 VIEWS = """
 CREATE VIEW steps AS
 SELECT p.project, s.key AS step, s.value ->> '$.run' AS fn,
@@ -207,9 +219,19 @@ def _triggers() -> str:
     return "\n".join(out) + "\n"
 
 
-SCHEMA = TABLES + OUTCOMES + VIEWS + _triggers()
+SCHEMA = TABLES + OUTCOMES + DRAIN + VIEWS + _triggers()
 # version -> the script that takes a database of that version to the next
-MIGRATIONS = {1: OUTCOMES}
+MIGRATIONS = {1: OUTCOMES, 2: "ALTER TABLE inbox ADD COLUMN run TEXT;" + DRAIN}
+
+
+def _split_senders(conn: sqlite3.Connection) -> None:
+    """Decode version-2 senders exactly as its inbox reader did, including ambiguous names."""
+    pattern = re.compile(r"^((?:step:)?[a-z0-9][a-z0-9_-]*)#([0-9A-Za-z][0-9A-Za-z_.-]*)$")
+    rows = conn.execute("SELECT project, n, sender FROM inbox WHERE sender IS NOT NULL").fetchall()
+    for row in rows:
+        if match := pattern.match(row["sender"]):
+            conn.execute("UPDATE inbox SET sender = ?, run = ? WHERE project = ? AND n = ?",
+                         (*match.groups(), row["project"], row["n"]))
 
 
 class Busy(SluiceError):
@@ -295,6 +317,8 @@ def _bootstrap(conn: sqlite3.Connection, path: Path) -> None:
                 version = VERSION
             while version in MIGRATIONS:
                 conn.executescript(MIGRATIONS[version])
+                if version == 2:
+                    _split_senders(conn)
                 version += 1
             if version != was:
                 conn.execute(f"PRAGMA user_version = {version}")

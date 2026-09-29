@@ -9,7 +9,7 @@ items themselves live here, not in the capped log. The Store checks answers and 
 module only reads and writes.
 
 `run` is the run that asks, when a step's run posted the item (or took it up again, `adopt`):
-the `sender` column holds `<from>#<run>`. An open item that came from a step or a call also
+the `sender` and `run` columns hold these identities separately. An open item that came from a step or a call also
 carries `waiting`, derived from the state as it is read (`attend`).
 """
 
@@ -26,17 +26,11 @@ from .util import now_iso
 
 STATUSES = db.INBOX_STATUSES
 ID_RE = re.compile(r"^i(\d+)$")
-FIELDS = ("title", "body", "ui", "input", "sender", "status", "created", "answer", "answered",
+FIELDS = ("title", "body", "ui", "input", "sender", "run", "status", "created", "answer", "answered",
           "closed", "reason")
 RUN = r"[0-9A-Za-z][0-9A-Za-z_.-]*"  # log.RUN_ID_RE's
-SENDER_RE = re.compile(rf"^((?:step:)?[a-z0-9][a-z0-9_-]*)#({RUN})$")  # `<from>#<run>`
 STEP_RE = re.compile(r"^(?:step:)?([a-z0-9][a-z0-9_-]*)$")  # a step id, or `step:<id>`
 CALL_RE = re.compile(rf"^call ({RUN})$")  # inbox.ask run as a call
-
-
-def sender_of(sender: str | None, run: str | None) -> str | None:
-    """The `sender` column for an item from `sender`, asked by `run` (when known)."""
-    return f"{sender}#{run}" if sender and run and SENDER_RE.match(f"{sender}#{run}") else sender
 
 
 def _item(row: sqlite3.Row) -> dict[str, Any]:
@@ -45,8 +39,6 @@ def _item(row: sqlite3.Row) -> dict[str, Any]:
         v = row[k]
         if v is not None:
             item["from" if k == "sender" else k] = json.loads(v) if k == "answer" else v
-    if m := SENDER_RE.match(item.get("from", "")):
-        item["from"], item["run"] = m[1], m[2]
     return item
 
 
@@ -136,14 +128,12 @@ def post(conn: sqlite3.Connection, project: str, cap: int, title: str, body: str
     inside the caller's write transaction. `run`: the run of the step `sender` that asks."""
     n = db.one(conn, "SELECT coalesce(max(n), 0) + 1 FROM inbox WHERE project = ?",
                (project,))[0]
-    stored = sender_of(sender, run)
-    run = run if stored != sender else None
     L.append(conn, project, [{"kind": "inbox.post", "item": f"i{n}", "title": title,
                               **{k: v for k, v in (("from", sender), ("run", run),
                                                    ("input", input)) if v is not None}}], cap)
-    conn.execute("INSERT INTO inbox (project, n, title, body, ui, input, sender, status, created) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)",
-                 (project, n, title, body, ui, input, stored, now_iso()))
+    conn.execute("INSERT INTO inbox (project, n, title, body, ui, input, sender, run, status, created) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                 (project, n, title, body, ui, input, sender, run, now_iso()))
     return find(conn, project, f"i{n}")
 
 
@@ -163,14 +153,11 @@ def ask(conn: sqlite3.Connection, project: str, cap: int, title: str, body: str 
     with the same title when nobody else waits for it (open, its run gone: a failed,
     cancelled or restarted run; or answered while nobody waited), else a new one. Taking up
     an earlier run's item records the new run on it (an open one) and logs `inbox.adopt`."""
-    stored = sender_of(sender, run)
     rows = db.all_rows(conn, "SELECT * FROM inbox WHERE project = ? AND title = ? AND "
-                             "status IN ('open', 'answered') AND (sender = ? OR sender GLOB ?) "
-                             "ORDER BY n DESC", (project, title, sender, sender + "#*"))
+                             "status IN ('open', 'answered') AND sender = ? "
+                             "ORDER BY n DESC", (project, title, sender))
     for row in rows:
         item = _item(row)
-        if item.get("from") != sender:
-            continue
         if item.get("run") == run and item["status"] == "open":
             return item  # this run asked it already
         if item["status"] == "open" and item.get("run") and waiting(conn, project, item):
@@ -178,8 +165,8 @@ def ask(conn: sqlite3.Connection, project: str, cap: int, title: str, body: str 
         if item["status"] == "answered" and not orphaned(conn, project, item["id"]):
             continue
         if item["status"] == "open":
-            conn.execute("UPDATE inbox SET sender = ? WHERE project = ? AND n = ?",
-                         (stored, project, row["n"]))
+            conn.execute("UPDATE inbox SET run = ? WHERE project = ? AND n = ?",
+                         (run, project, row["n"]))
         L.append(conn, project, [{"kind": "inbox.adopt", "item": item["id"], "from": sender,
                                   **({"run": run} if run else {}),
                                   **({"was": item["run"]} if item.get("run") else {}),

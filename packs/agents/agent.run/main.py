@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.12"
-# dependencies = []
+# dependencies = ["tomli-w>=1.2,<2"]
 # ///
 """agent.run: dispatch a spec to the engine named in the input (devin/codex/claude)."""
 

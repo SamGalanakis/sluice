@@ -30,6 +30,80 @@ def signals_of(page):
     return json.loads(html.unescape(re.search(r'<body data-signals="([^"]*)"', page)[1]))
 
 
+def test_parts_stream_keeps_initial_version_and_baseline_in_one_snapshot(store):
+    import anyio
+
+    from sluice.dashboard import Dashboard
+
+    store.create_project("p", description="before")
+    dashboard = Dashboard(store)
+    first = True
+
+    def version():
+        nonlocal first
+        description = store.project("p")["description"]
+        if first:
+            first = False
+            writer = threading.Thread(target=lambda: store.update_project("p", description="after"))
+            writer.start()
+            writer.join(10)
+            assert not writer.is_alive()
+        return description
+
+    def parts():
+        return {"description": f'<p id="description">{store.project("p")["description"]}</p>'}
+
+    polls = 0
+
+    async def tick():
+        nonlocal polls
+        polls += 1
+        return polls == 1
+
+    dashboard._tick = tick
+
+    async def collect():
+        return [event async for event in dashboard._parts_stream("before", version, parts)]
+
+    events = anyio.run(collect)
+    assert len(events) == 2
+    assert '<p id="description">after</p>' in events[0]
+    assert '"ver":"after"' in events[1]
+
+
+def test_parts_stream_defers_unstable_files_without_retrying_inside_poll(store):
+    import anyio
+
+    from sluice.dashboard import Dashboard
+
+    dashboard = Dashboard(store)
+    stamp, renders, polls = 0, 0, 0
+
+    def version():
+        return str(stamp)
+
+    def parts():
+        nonlocal stamp, renders
+        renders += 1
+        stamp += 1
+        return {"part": '<p id="part">unstable</p>'}
+
+    async def tick():
+        nonlocal polls
+        polls += 1
+        return polls < 3
+
+    dashboard._tick = tick
+
+    async def collect():
+        return [event async for event in dashboard._parts_stream(None, version, parts)]
+
+    assert anyio.run(collect) == []
+    assert polls == renders == 3
+    assert dashboard._parts_snapshot(lambda: "settled", lambda: {"part": "settled"}, None) \
+        == ("settled", {"part": "settled"})
+
+
 def stream(port, path, signals=None, seconds=1.5, action=None):
     """Read an SSE stream for `seconds` (calling `action` once connected) and return its
     events as {"event": type, "data": [lines]}."""
