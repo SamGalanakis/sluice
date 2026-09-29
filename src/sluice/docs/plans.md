@@ -165,7 +165,11 @@ JSON Patch ops against the plan without `rev`:
 
 Without a `rev`: `step_add(project, step, spec)`, `step_update(project, step, changes)` (each
 key replaces that field, null removes it) and `step_remove(project, steps=[...])`. They are the
-same edit, validated the same way.
+same edit, validated the same way. `edge_add(project, step, after=[...])` and
+`edge_remove(project, step, after=[...])` add ids to a step's `after` or take them out, at
+the current rev: no rev to read, and edges someone else added are never dropped (a `plan_patch`
+of `/steps/<id>/after` replaces the whole list). Adding an edge that is there already, or
+removing one that is not, changes nothing.
 
 Tools that change one step's contents take `step` (`step_add`, `step_update`, `step_set_input`,
 `step_set_output`, `step_submit`); tools that act on a selection take `steps` (ids; one id is
@@ -200,7 +204,8 @@ retry `check` and it passes), skipped steps go back to pending and run. `status`
 `"after": ["a"]` makes a step wait for `a` to succeed (or be skipped) without reading anything from it: for
 two steps that must not overlap (both edit one file) or must happen in order. It is not a
 data edge, so `a` turning stale does not make it stale. `"tags": ["e2e", "heavy"]` label
-steps so you can pause or release them together.
+steps so you can pause or release them together. To add an ordering edge to a step that is
+already in the plan, use `edge_add`.
 
 ## Manual values
 - `plan_set_input(project, name, value)`: provide a plan input the plan is waiting on. Changing

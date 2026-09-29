@@ -621,6 +621,37 @@ class Store:
                               [{"op": "replace", "path": f"/steps/{sid}", "value": new}],
                               author, reason or f"update step {sid}")
 
+    def edges(self, project: str, step: Any, after: Any, add: bool = True, author: str = "",
+              reason: str = "") -> dict[str, Any]:
+        """edge_add (or, not `add`, edge_remove): append the ids to the step's `after`
+        (deduplicated, in order) or remove them from it, in one edit at the current rev whose
+        one op sets, adds or removes `/steps/<step>/after`. Nothing to change: no edit.
+        Returns {rev, after}: the step's `after` now."""
+        ids = _ids_arg(after, "after")
+        if not ids:
+            raise BadRequest("after: name at least one step")
+        with self.tx():
+            cur = self.get(project)
+            unknown = [s for s in [step, *ids] if not isinstance(s, str) or s not in cur["steps"]]
+            if unknown:
+                raise InvalidPlan([f"steps.{s}: no such step" for s in unknown],
+                                  f"the plan of project {project} has no step "
+                                  f"{', '.join(map(str, unknown))}")
+            raw = cur["steps"][step]
+            old = raw.get("after", [])
+            old = old if isinstance(old, list) else []
+            new = [*old, *(a for a in ids if a not in old)] if add else \
+                [a for a in old if a not in ids]
+            if new == old:
+                return {"rev": cur["rev"], "after": old}
+            path = f"/steps/{step}/after"
+            op = {"op": "remove", "path": path} if not new else \
+                {"op": "replace" if "after" in raw else "add", "path": path, "value": new}
+            word = "after" if add else "no longer after"
+            rev = self.patch(project, cur["rev"], [op], author,
+                             reason or f"{step} runs {word} {', '.join(ids)}")
+        return {"rev": rev, "after": new}
+
     def remove_steps(self, project: str, steps: Any = None, tags: Any = None,
                      author: str = "", reason: str = "") -> dict[str, Any]:
         """Remove the selected steps in one edit. Returns {rev, steps, outcomes}: how many
@@ -1178,6 +1209,14 @@ def _body(doc: dict[str, Any]) -> dict[str, Any]:
 def _unpaused(step: Any) -> Any:
     """A step without its `paused` flag: the one change a running step takes."""
     return {k: v for k, v in step.items() if k != "paused"} if isinstance(step, dict) else step
+
+
+def _ids_arg(value: Any, name: str) -> list[str]:
+    """An argument of step ids or tags: one string counts as a list of one."""
+    value = [value] if isinstance(value, str) else value
+    if not (isinstance(value, list) and all(isinstance(x, str) for x in value)):
+        raise BadRequest(f"{name}: expected a string or an array of strings")
+    return list(dict.fromkeys(value))
 
 
 def apply_ops(doc: dict[str, Any], ops: Any) -> dict[str, Any]:

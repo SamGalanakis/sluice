@@ -387,6 +387,42 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return store.unit_add(project, recipe, params, start, author, reason)
 
     @tool
+    def edge_add(project: str, step: str, after: list[str] | str, reason: str = "",
+                 author: str | None = None) -> Any:
+        """Make a step run after other steps: append them to its `after` (deduplicated, its
+        existing edges kept) in one plan edit at the current rev, with no rev to read and no
+        way to drop an edge someone else added. Edges already there: no edit, the current rev.
+        An unknown step is `invalid`, and so is a cycle. Returns {rev, after}: its `after`
+        now. (A step's one `when` is set with step_update.)
+
+        Args:
+            project: the project.
+            step: the step that waits.
+            after: the step id(s) it waits for.
+            reason: why, recorded in the plan's history.
+            author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
+                client's name, else "mcp"; "cli" from `sluice tool`).
+        """
+        return store.edges(project, step, after, True, author, reason)
+
+    @tool
+    def edge_remove(project: str, step: str, after: list[str] | str, reason: str = "",
+                    author: str | None = None) -> Any:
+        """Remove ids from a step's `after` in one plan edit at the current rev (the others
+        kept). Edges not there: no edit, the current rev. An unknown step is `invalid`.
+        Returns {rev, after}: its `after` now.
+
+        Args:
+            project: the project.
+            step: the step that waits.
+            after: the step id(s) it should no longer wait for.
+            reason: why, recorded in the plan's history.
+            author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
+                client's name, else "mcp"; "cli" from `sluice tool`).
+        """
+        return store.edges(project, step, after, False, author, reason)
+
+    @tool
     def step_update(project: str, step: str, changes: dict[str, Any], reason: str = "",
                     author: str | None = None) -> Any:
         """Change fields of one step: each key of `changes` replaces that field (`in` is

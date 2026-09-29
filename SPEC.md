@@ -260,6 +260,15 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   ordering edge: it is ready only once they have succeeded or been skipped, it is never stale
   because of them, and it counts for cycles); `"tags": ["<tag>", ...]` (tags match the id
   pattern, optionally after one `<prefix>:`, as in `unit:lane-1`) to select steps by; and `"when": "<ref>"` to run it only if that value is true.
+  `edge_add(project, step, after)` and `edge_remove(project, step, after)` (`after` a step id
+  or a list of them) change one step's `after` without a rev: inside one write transaction
+  they read the current plan, append the ids (deduplicated, in order, the existing ones kept)
+  or remove them, and make one edit whose one op adds, replaces or removes
+  `/steps/<step>/after`, validated like any edit (a cycle is refused). An unknown step, the
+  one that waits or one it names, is refused (`invalid`, naming them). Both are idempotent:
+  nothing to change is no edit, and the current rev comes back. Two callers adding edges to
+  one step at once both keep theirs. There is no such verb for `when`: a step has one, and
+  `step_update` sets it.
 - **Conditions.** `when` names a step output or plan input of type `boolean` (or `boolean?`;
   `Any` is checked when it runs), read like an input: the step waits for it. Once it is known,
   `true` lets the step run; `false` or null makes it `skipped` (state `skipped: "<ref> is
@@ -1143,6 +1152,8 @@ resolved by the same rule when not given, and
 | `step_add` | `project, step, spec, reason?, start? = false, author?` | `{rev}`: `plan_patch` adding one step at the current rev |
 | `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
 | `unit_add` | `project, recipe, params, start? = false, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>`, added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param or expansion problem, `bad_request` names the ids the plan already has |
+| `edge_add` | `project, step, after, reason?, author?` | `{rev, after}`: appends `after` (an id or a list) to the step's `after`, deduplicated, in one edit at the current rev (§5); an unknown step or a cycle is `invalid`; edges already there: no edit, the current rev. Only `after`: a step's one `when` is set with `step_update` |
+| `edge_remove` | `project, step, after, reason?, author?` | `{rev, after}`: removes those ids from the step's `after` in one edit at the current rev (removing the key when none is left); an unknown step is `invalid`; edges not there: no edit, the current rev |
 | `step_update` | `project, step, changes, reason?, author?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` |
 | `step_remove` | `project, steps?, tags?, reason?, author?` | `{rev, steps, outcomes}`: removes the selected steps in one edit; refused while one runs or something left reads it; `outcomes` is how many of them finished and kept their outcome (§6) |
 | `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?, author?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
