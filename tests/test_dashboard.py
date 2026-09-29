@@ -904,8 +904,13 @@ def test_box_route_preserves_filters_and_has_a_no_script_page(store, port):
 def test_project_stream_reuses_parts_on_log_append_and_invalidates_on_visible_writes(store,
                                                                                     monkeypatch):
     from sluice.dashboard import Dashboard
+    from tests.conftest import write_fn
 
-    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(1)}}})
+    store.create_project("p", "the p project", "test", "test")
+    root = store.project_dir("p") / "fns"
+    write_fn(root, "local.add", inputs={"a": "int", "b": "int"}, outputs={"sum": "int"})
+    spec = {"run": "local.add", "in": {"a": d(1), "b": d(1)}}
+    store.patch("p", 1, [{"op": "add", "path": "/steps/a", "value": spec}], "test", "test")
     renders = 0
     render = views.project_parts
 
@@ -928,6 +933,11 @@ def test_project_stream_reuses_parts_on_log_append_and_invalidates_on_visible_wr
     assert renders == 4
     store.update_project("p", description="new description")
     assert "new description" in parts()["summary"] and renders == 5
+
+    write_fn(root, "local.add", inputs={"a": "int", "b": "int"},
+             outputs={"sum": "int"}, spec={"icon": "NEW"})
+    store.append("p", message("work", "function edited"))
+    assert "NEW" in parts()["graph"] and renders == 6
 
 
 def test_project_queries_are_bounded_as_the_plan_grows(store):

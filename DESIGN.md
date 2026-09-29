@@ -363,7 +363,8 @@ one 44px line: the success glyph, its first step's id, then in meta "… its las
 phone the first id in full, wrapping, and "n steps" under it; the last id gives way); a native `<details>` that opens to its cards (open through live updates and,
 per tab, a reload). No edge crosses between boxes, so a folded one hides only its own edges.
 On a live page the folded box loads its cards and edges when opened. Its summary and
-the opened layout keep the same appearance. Without script, a "Show cards" link opens
+the opened layout keep the same appearance. Hidden text spans retain the folded box's
+natural width, so deferring its cards does not rearrange the boxes. Without script, a "Show cards" link opens
 the box on its own page.
 With several boxes a toolbar (below) orders them live first by default (what needs
 attention, then what runs, what is ready, what is held, what is done; the plan's order within

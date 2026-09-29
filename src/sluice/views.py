@@ -1372,6 +1372,19 @@ def _waits_text(waits: list[tuple[str, str]]) -> str:
     return "waits on " + ", ".join(f"{d} ({WORDS.get(m, m)})" for d, m in waits)
 
 
+def _card_small(board: Board, b: Block, behind: int = 0) -> str:
+    small = ["blocked"] if board.blocked(b.sid) else []
+    if "total" in b.entry:
+        small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
+    if b.outside:  # its work goes on outside sluice, since it became ready
+        small += [x for x in ("outside", _outside(board, b)) if x]
+    if took := _elapsed(b):
+        small.append(took)
+    if behind:
+        small.append(f"+{behind} behind")
+    return " · ".join(small)
+
+
 def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = False,
           order: int | None = None, lane_top: bool = False, behind: int = 0) -> str:
     """A step on the board: a compact bubble with its status glyph, its id (then its fn's
@@ -1398,16 +1411,7 @@ def _card(store: Store, board: Board, b: Block, live: bool, lane_start: bool = F
              f'{" lane-start" if lane_start else ""}{" lane-top" if lane_top else ""}"'
              f'{"" if order is None else f' style="--o:{order}"'} '
              f'id="n-{e(b.sid)}" data-node="s:{e(b.sid)}"{href}{title}')
-    small = ["blocked"] if board.blocked(b.sid) else []
-    if "total" in b.entry:
-        small.append(f"{int(b.entry.get('done') or 0)}/{int(b.entry['total'])}")
-    if b.outside:  # its work goes on outside sluice, since it became ready
-        small += [x for x in ("outside", _outside(board, b)) if x]
-    if _elapsed(b):
-        small.append(_elapsed(b))
-    if behind:
-        small.append(f"+{behind} behind")
-    inner = " · ".join(small)
+    inner = _card_small(board, b, behind)
     tail = (f'<span class="dur">{inner}</span>' if inner else "") \
         + quiet_badge(store, board.project, b)
     # a comma for the accessible name, inline in the id's box (a hidden box of its own would
@@ -1660,14 +1664,34 @@ def board_html(store: Store, board: Board, live: bool = True,
         work = ids if len(ids) == len(whole) else \
             sorted(whole, key=lambda sid: (rows_of[sid], order[sid]))
         folded = several and len(work) > 1 and _done(board, work)
-        version = hashlib.sha256(repr([(board.doc["steps"][sid], board.blocks[sid].entry)
-                                      for sid in work]).encode()).hexdigest()[:16]
+        version = hashlib.sha256(repr([
+            (board.doc["steps"][sid], board.blocks[sid].entry, board.blocks[sid].step.fn.icon)
+            for sid in work]).encode()).hexdigest()[:16]
         url = f"/projects/{quote(board.project)}/boxes/{quote(key)}"
         if view.query():
             url += "?" + view.query()
         if live and folded and box_id is None:
             deferred.update(ids)
-            inner = (f'<div class="box-content" data-ignore-morph><noscript>'
+            probes = []
+            for v in at:
+                cards = []
+                for i in seats[v]:
+                    for k, sid in enumerate(groups[i][v - shift[i]]):
+                        b = seen.blocks[sid]
+                        small = _card_small(seen, b, behind.get(sid, 0))
+                        tail = f'<span class="dur">{small}</span>' if small else ""
+                        icon = None if b.outside else b.step.fn.icon
+                        mark = (f'<span class="ficon fi-card fi-text">{e(icon.text)}</span>'
+                                if icon and icon.text else
+                                '<span class="ficon fi-card"></span>' if icon else "")
+                        cards.append(f'<span class="node{" chip" if b.glue else ""}'
+                                     f'{" lane-start" if k == 0 and cards else ""}">'
+                                     f'<span class="g"></span><span class="sid">{e(sid)}</span>'
+                                     f'{mark}{tail}</span>')
+                probes.append(f'<li class="row">{"".join(cards)}</li>')
+            probe = ('<ol class="rows width-probe" aria-hidden="true" inert>'
+                     + ''.join(probes) + '</ol>')
+            inner = (f'{probe}<div class="box-content" data-ignore-morph><noscript>'
                      f'<a href="{e(url)}">Show cards</a></noscript></div>')
             item = f'<li class="box done" id="box-{e(key)}">' \
                 + _folded(board, work, inner, url, version, ids) + '</li>'

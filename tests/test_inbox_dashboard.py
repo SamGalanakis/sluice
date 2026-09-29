@@ -489,3 +489,48 @@ def test_finished_box_loads_cards_and_edges_then_refreshes_after_a_write(store, 
     chrome.wait("document.querySelector('details.fold-box')?.open && !!document.getElementById('n-b')")
     chrome.eval("document.getElementById('n-b').click()")
     chrome.wait("document.querySelector('#d-title')?.textContent === 'b'")
+
+
+def test_deferred_boxes_keep_the_widths_of_their_hidden_cards(store, port, chrome):
+    from sluice import views
+    from tests.conftest import d, src
+
+    steps = {}
+    for n in range(4):
+        first, last = f"branch-{n}", f"a-long-final-step-{n}"
+        steps[first] = {"run": "test.add", "in": {"a": d(1), "b": d(1)}}
+        steps[last] = {"run": "test.add", "in": {"a": src(first + "/sum"), "b": d(1)}}
+    create(store, "p", steps)
+    for sid in list(steps)[4:]:
+        store.set_output("p", sid, {"sum": 2}, "test", "finished")
+    eager = views.board_html(store, views.load_board(store, "p"), live=False)
+    chrome.open("about:blank")
+    for width in (390, 1440, 2560):
+        chrome.send("Emulation.setDeviceMetricsOverride", {
+            "width": width, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+        chrome.open(f"http://127.0.0.1:{port}/projects/p")
+        chrome.wait("!!window.sluiceStream && !!document.querySelector('.width-probe')")
+        measure = """[...document.querySelectorAll('.boxes > .box')].map(b => {
+            const r=b.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })"""
+        before = chrome.eval(measure)
+        chrome.eval(f"""(() => {{
+            const t=document.createElement('template'); t.innerHTML={json.dumps(eager)};
+            for (const p of document.querySelectorAll('.width-probe')) {{
+                const box=p.closest('.box');
+                const rows=t.content.querySelector('#'+box.id+' .rows');
+                box.querySelector('.box-content').replaceWith(rows);
+                p.remove();
+            }}
+        }})()""")
+        after = chrome.eval(measure)
+        assert len(before) == len(after) == 4
+        for a, b in zip(before, after, strict=True):
+            assert a == pytest.approx(b, abs=0.5)
+        chrome.eval("document.querySelector('details.fold-box').open = true")
+        eager_open = chrome.eval(measure)
+        chrome.send("Page.reload")
+        chrome.wait("!!window.sluiceStream && !!document.querySelector('.width-probe')")
+        chrome.eval("document.querySelector('details.fold-box').open = true")
+        chrome.wait("!!document.getElementById('n-branch-2')")
+        for a, b in zip(eager_open, chrome.eval(measure), strict=True):
+            assert a == pytest.approx(b, abs=0.5)

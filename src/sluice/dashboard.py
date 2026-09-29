@@ -1,6 +1,6 @@
 """The dashboard's HTTP routes (SPEC §8 Views): pages, and one Datastar SSE stream per page.
 
-A page renders completely on first load (usable without JavaScript) and carries the version of
+A page renders its visible content on first load (usable without JavaScript) and carries the version of
 what it shows (`ver`, from the projects' change counters in the database — `projects.ver`,
 which every write to a project's rows moves — and the stats of the stderr.log of every running
 step's current run, so a progress line moves while an agent works). Its stream polls that
@@ -194,7 +194,8 @@ def project_stamp(store: Store, project: str) -> str:
                  (project,))]
         badge = I.open_count(conn)
         runs = db.all_rows(conn, RUNNING + " AND s.project = ?", (project,))
-    return _digest([tuple(row) if row else None, inbox, badge, views.runner_state(store.home),
+    return _digest([tuple(row) if row else None, inbox, badge, store.registry(project).key,
+                    views.runner_state(store.home),
                     _running_stderr(store, runs)])
 
 
