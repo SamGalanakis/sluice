@@ -25,7 +25,8 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
    the git worktree (and again after each further quiet period);
 5. on done ask the engine to exit, read `final`, `session`, `cost_usd` and the run's git
    facts; in every case end the tmux server and every process under it (SIGTERM, SIGHUP and
-   SIGINT included, so a `step_cancel` leaves nothing behind).
+   SIGINT included, so a `step_cancel` leaves nothing behind). A failure's message ends with
+   the session to resume.
 
 A run that resumes a session holds `SLUICE_HOME/locks/<engine>-<session>.lock` until it ends,
 so a second run resuming the same session fails at once, naming the holder."""
@@ -74,6 +75,8 @@ REMIND = ("You have uncommitted changes: {status}. Commit or discard them (unles
 REMIND_FILE = "A note about your uncommitted changes is in {path}; read it now."
 COMPACT_FILE = "Your context was compacted; where your step stands is in {path}; read it now."
 QUIET = "busy {min} min with no change to the worktree (HEAD {head}, {diff})"
+RESUME = ("\nsession: {sid}. To resume it, bind the step's session input to it and retry: "
+          'step_set_input(project, step, "session", "{sid}"), then step_retry.')
 
 
 def _env_float(name, default):
@@ -676,6 +679,11 @@ def supervise(adapter, task, cwd, run_dir, *, required=(), session=None, feed=No
         run.note_session()
         return {"final": final, "session": sid, "cost_usd": adapter.cost_usd(),
                 "git": worktree.facts(cwd, head_before)}
+    except Exception as e:
+        sid = adapter.session_id() or run.record.get("session") or session
+        if sid and len(e.args) == 1 and isinstance(e.args[0], str):
+            e.args = (e.args[0] + RESUME.format(sid=sid),)
+        raise
     finally:
         for s in handlers:
             signal.signal(s, signal.SIG_IGN)  # a second signal must not cut the cleanup short

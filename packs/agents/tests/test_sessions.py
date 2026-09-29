@@ -25,7 +25,7 @@ from _agents.native.claude import Claude
 from _agents.native.codex import Codex
 from _agents.native.processes import cgroup, detached, engine_env
 from _agents.native.supervisor import REMIND, Limits, lock_session
-from test_agents import init_repo, make_claude, make_devin
+from test_agents import init_repo, make_claude, make_devin, session_of
 from test_native import FakePane, Model, run
 
 
@@ -491,3 +491,26 @@ def test_git_never_prompts_in_either_env_builder(monkeypatch):
 
 def test_claude_env_is_the_engine_env():
     assert Claude().env() == engine_env()
+
+
+# ---- the session of a failed run ---------------------------------------------------------------
+
+def test_a_failed_run_ends_its_error_with_its_session(tmp_path):
+    with pytest.raises(RuntimeError) as e:
+        run(Model(), tmp_path)
+    assert str(e.value).splitlines()[-1] == (
+        "session: s-1. To resume it, bind the step's session input to it and retry: "
+        'step_set_input(project, step, "session", "s-1"), then step_retry.')
+
+
+def test_a_failed_agent_fn_names_its_session_last(call_fn, tmp_path):
+    env, _ = make_claude(tmp_path, [{"reply": "not done"}] * 3)
+    code, _out, err = call_fn(AGENTS / "agent.claude", {"cwd": str(tmp_path), "prompt": "p"},
+                              env={**env, "SLUICE_STEP_OUTPUTS": json.dumps(
+                                  {"word": {"type": "string"}})})
+    assert code == 1
+    sid = session_of(call_fn)
+    assert err.strip().splitlines()[-1].startswith(f"session: {sid}. To resume it")
+    error = json.loads((call_fn.run_dirs[-1] / "error.json").read_text())["message"]
+    assert error.endswith(f'step_set_input(project, step, "session", "{sid}"), then '
+                          "step_retry.")
