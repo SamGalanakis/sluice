@@ -1152,6 +1152,8 @@ main > .phead + * { margin-top: 0; }
   dl.kv dd { margin-bottom: 10px; }
   .fn .ports { grid-template-columns: 1fr; gap: 6px; }
   table.log .at { display: none; }
+  /* the longest kind (project.archive) and the summary share a phone's width */
+  table.log td:last-child { min-width: 12rem; }
   .bar { width: 120px; }
 }
 @media (prefers-reduced-motion: reduce) {
