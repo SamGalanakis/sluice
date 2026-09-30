@@ -232,7 +232,8 @@ EXPECTED = {
                     ]
                 },
                 "interval": "int?",
-                "timeout": "int?"
+                "timeout": "int?",
+                "no_checks_s": "int?"
             },
             {
                 "state": {

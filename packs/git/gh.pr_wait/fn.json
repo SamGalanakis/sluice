@@ -1,6 +1,6 @@
 {
   "name": "gh.pr_wait",
-  "doc": "Poll a GitHub PR until its checks settle, it merges/closes/conflicts, or a timeout passes.",
+  "doc": "Poll a GitHub PR until its checks settle, it merges/closes/conflicts, or a timeout passes. A PR with no checks at all is green only after no_checks_s (default 120) seconds, since checks register a few seconds after a push.",
   "inputs": {
     "path": "string",
     "pr": "string",
@@ -12,7 +12,8 @@
       ]
     },
     "interval": "int?",
-    "timeout": "int?"
+    "timeout": "int?",
+    "no_checks_s": "int?"
   },
   "outputs": {
     "state": {
