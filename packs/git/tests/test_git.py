@@ -483,9 +483,23 @@ def test_pr_wait_failure_while_pending_keeps_polling(call_fn, fake_bin, tmp_path
 
 def test_pr_wait_no_checks_is_green(call_fn, fake_bin, tmp_path):
     bin_dir, _ = make_gh_seq(tmp_path, fake_bin, [pr_json()])
-    code, out, err = pr_wait(call_fn, bin_dir, tmp_path, "checks")
+    code, out, err = pr_wait(call_fn, bin_dir, tmp_path, "checks", no_checks_s=0)
     assert code == 0, err
     assert out["state"] == "green"
+
+
+def test_pr_wait_checks_not_registered_yet_are_not_green(call_fn, fake_bin, tmp_path):
+    """Right after a push the rollup is empty; the checks that then appear decide."""
+    bin_dir, argv_file = make_gh_seq(tmp_path, fake_bin, [
+        pr_json(),
+        pr_json(rollup=[check("build", "QUEUED", None)]),
+        pr_json(rollup=[check("build", conclusion="FAILURE")]),
+    ])
+    code, out, err = pr_wait(call_fn, bin_dir, tmp_path, "checks", no_checks_s=60)
+    assert code == 0, err
+    assert out["state"] == "red"
+    assert out["failed"] == ["build"]
+    assert len(read_calls(argv_file)) == 3
 
 
 @pytest.mark.parametrize("gh_state,mergeable,state", [

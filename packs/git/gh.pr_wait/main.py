@@ -51,7 +51,11 @@ def checks(rollup):
 def main(inp, ctx):
     interval = 60 if inp.get("interval") is None else inp["interval"]
     timeout = 21600 if inp.get("timeout") is None else inp["timeout"]
-    deadline = time.monotonic() + timeout
+    # A PR's checks register a few seconds after it is opened or pushed: until then the rollup
+    # is empty, which is not "no CI". Only an empty rollup this long counts as green.
+    no_checks = 120 if inp.get("no_checks_s") is None else inp["no_checks_s"]
+    start = time.monotonic()
+    deadline = start + timeout
     state, failed, sha, url = "timeout", [], "", ""
     while True:
         data = pr_data(inp)
@@ -66,7 +70,10 @@ def main(inp, ctx):
         if data.get("mergeable") == "CONFLICTING":
             state, failed = "conflicting", []
             break
-        pending, failed = checks(data.get("statusCheckRollup"))
+        rollup = data.get("statusCheckRollup") or []
+        pending, failed = checks(rollup)
+        if not rollup and time.monotonic() - start < no_checks:
+            pending = True
         if failed and not pending:
             state = "red"
             break
