@@ -78,6 +78,8 @@ Claude, Codex and Devin run as real interactive sessions on your own logins thro
   session started and let go. A tool's shell that backgrounds a job (`cmd &`, `nohup`,
   `setsid`) exits, and the job is re-parented out of the engine's process tree but stays in
   its cgroup: tmux puts each pane in a scope of its own, and the Codex app-server runs in one.
+  `SLUICE_AGENT_SLICE` (e.g. in the home's `.env`) puts these scopes in that systemd slice, so
+  a slice with a memory limit holds every session and what it starts.
   Such a process whose parent is outside the cgroup is the session's background work; the
   engine's own children (MCP servers, hooks, the shells it tracks) are not, nor what was let
   go before the task arrived. Without a private cgroup (no systemd user manager) only the

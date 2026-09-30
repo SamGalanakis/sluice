@@ -1499,6 +1499,9 @@ Every other fn in this repo is a **first-party pack** under `packs/`, not loaded
   later step's `session` to an earlier step's `session` output continues that agent.
   All five agent fns use `packs/agents/_agents/native/` to supervise a live session on the
   owner's engine login. Each run has a private tmux server (`attach:` in the step's stderr).
+  It, and Codex's app-server, run in a transient systemd user scope when the user manager
+  can make one; `SLUICE_AGENT_SLICE` puts those scopes in that slice (one with a memory
+  limit, say), and tmux keeps each pane in the server's slice.
   Long tasks go through `<run_dir>/task.md`. A step with required declared outputs completes
   after the engine submits all of them; an idle turn with missing outputs gets a bounded
   series of nudges, then a clear failure. Claude's background shell and scheduled-wakeup
