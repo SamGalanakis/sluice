@@ -384,7 +384,17 @@ def test_corrupt_codex_rollout_line_does_not_hide_cwd(tmp_path, monkeypatch):
 def test_systemd_scope_uses_lane_weights(monkeypatch):
     import _agents.native.processes as mod
     monkeypatch.setattr(mod, "_scope_ok", True)
+    monkeypatch.delenv("SLUICE_AGENT_SLICE", raising=False)
     assert scope_command(["tmux", "new-session"]) == [*SCOPE, "tmux", "new-session"]
+
+
+def test_systemd_scope_goes_in_the_slice_sluice_agent_slice_names(monkeypatch):
+    import _agents.native.processes as mod
+    monkeypatch.setattr(mod, "_scope_ok", True)
+    monkeypatch.setenv("SLUICE_AGENT_SLICE", "agents.slice")
+    argv = scope_command(["tmux", "new-session"])
+    assert argv[:argv.index("--")] == [*SCOPE[:-1], "--slice=agents.slice"]
+    assert argv[argv.index("--") + 1:] == ["tmux", "new-session"]
 
 
 def test_rpc_handshake_request_and_notification(tmp_path):

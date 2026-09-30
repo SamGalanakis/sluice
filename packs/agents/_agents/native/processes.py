@@ -27,6 +27,8 @@ def engine_env():
 
 
 def scope_command(argv):
+    """argv in a transient systemd scope of its own when the user manager can make one, in the
+    slice SLUICE_AGENT_SLICE names (e.g. one with a memory limit) when it is set."""
     global _scope_ok
     if _scope_ok is None:
         try:
@@ -35,7 +37,11 @@ def scope_command(argv):
                                        timeout=3, check=False).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             _scope_ok = False
-    return [*SCOPE, *argv] if _scope_ok else argv
+    if not _scope_ok:
+        return argv
+    if slice_ := os.environ.get("SLUICE_AGENT_SLICE", "").strip():
+        return [*SCOPE[:-1], f"--slice={slice_}", "--", *argv]
+    return [*SCOPE, *argv]
 
 
 def start_time(pid):
