@@ -1,0 +1,4 @@
+{"name": "test.lease",
+ "doc": "Hold `amount` of `resource` (ctx.acquire) and, holding it, wait for `go` in the run dir (with `fail` there too: raise inside the block), noting `held` in the run dir while it holds.",
+ "inputs": {"resource": "string", "amount": "int?", "tag": "Any?"},
+ "outputs": {"start": "float", "end": "float", "tag": "Any"}}

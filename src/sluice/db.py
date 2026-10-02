@@ -1,6 +1,7 @@
 """The database (SPEC §2): a home's projects, plans, plan edits, state, calls, submissions,
-inbox, log, the outcomes of steps removed from plans and how far `next` has read each log in
-one SQLite file, SLUICE_HOME/sluice.db. Standard library only: fn processes import it.
+inbox, log, the outcomes of steps removed from plans, how far `next` has read each log and the
+section leases in one SQLite file, SLUICE_HOME/sluice.db. Standard library only: fn processes
+import it.
 
 Connections open lazily, one per (home, thread, process); a connection cached before a fork is
 never used in the child. Writes happen only inside `write()`: BEGIN IMMEDIATE … COMMIT, rolled
@@ -25,7 +26,7 @@ from typing import Any
 from .errors import SluiceError
 
 FILE = "sluice.db"
-VERSION = 4
+VERSION = 5
 TIMEOUT = 5.0  # seconds a write waits for the lock before Busy
 CACHED = 8  # connections kept per thread (one per home)
 MIN_SQLITE = (3, 37)  # STRICT tables
@@ -40,6 +41,7 @@ CREATE TABLE projects (
   description TEXT NOT NULL DEFAULT '',
   archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
   paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
+  resources TEXT NOT NULL DEFAULT '{{}}' CHECK (json_type(resources) = 'object'),
   icon_text TEXT,
   icon_type TEXT,
   icon BLOB,
@@ -179,6 +181,24 @@ CREATE TABLE IF NOT EXISTS readers (
 ) STRICT;
 """
 
+# section leases (SPEC §6 "Resources", §7 ctx.acquire): a running step's run holding (granted
+# set) or waiting for an amount of a project resource. No trigger moves `ver` for them (like
+# `readers`): the dashboard does not show them. IF NOT EXISTS, like OUTCOMES: it is also part of
+# version 4's migration
+LEASES = """
+CREATE TABLE IF NOT EXISTS leases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL REFERENCES projects ON DELETE CASCADE,
+  resource TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount >= 0),
+  step TEXT NOT NULL,
+  run TEXT NOT NULL,
+  granted TEXT,
+  created TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS leases_project ON leases (project, id);
+"""
+
 VIEWS = """
 CREATE VIEW steps AS
 SELECT p.project, s.key AS step, s.value ->> '$.run' AS fn,
@@ -230,9 +250,13 @@ def _triggers() -> str:
     return "\n".join(out) + "\n"
 
 
-SCHEMA = TABLES + OUTCOMES + DRAIN + READERS + VIEWS + _triggers()
+SCHEMA = TABLES + OUTCOMES + DRAIN + READERS + LEASES + VIEWS + _triggers()
 # version -> the script that takes a database of that version to the next
-MIGRATIONS = {1: OUTCOMES, 2: "ALTER TABLE inbox ADD COLUMN run TEXT;" + DRAIN, 3: READERS}
+# a project's resources (SPEC §6 "Resources"): {name: {capacity} or {capacity_fn}}
+RESOURCES = ("ALTER TABLE projects ADD COLUMN resources TEXT NOT NULL DEFAULT '{}' "
+             "CHECK (json_type(resources) = 'object');")
+MIGRATIONS = {1: OUTCOMES, 2: "ALTER TABLE inbox ADD COLUMN run TEXT;" + DRAIN, 3: READERS,
+              4: RESOURCES + LEASES}
 
 
 def _split_senders(conn: sqlite3.Connection) -> None:

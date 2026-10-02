@@ -2831,6 +2831,16 @@ def log_summary(rec: dict[str, Any]) -> str:
         return e(f"{rec.get('step')} submitted {names}")
     if kind == "step.retry":
         return e(f"{rec.get('step')} retried · {by}")
+    if kind == "step.queued":
+        return e(f"{rec.get('step')} queued: {rec.get('reason')}")
+    if kind == "step.lease":
+        why = f" ({_line(rec['reason'], 80)})" if rec.get("reason") else ""
+        return e(f"{rec.get('step')} {rec.get('state')} {rec.get('resource')} "
+                 f"{rec.get('amount')}{why}")
+    if kind == "project.capacity":
+        err = f" (last call failed: {_line(rec['error'], 80)})" if rec.get("error") else ""
+        cap = "unknown" if rec.get("capacity") is None else rec.get("capacity")
+        return e(f"{rec.get('resource')} capacity {cap} from {rec.get('fn')}{err}")
     if kind == "step.cancel":
         who = f" by {rec['author']}" if rec.get("author") else ""
         why = f": {_line(rec['reason'], 80)}" if rec.get("reason") else ""

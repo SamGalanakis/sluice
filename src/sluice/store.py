@@ -24,10 +24,12 @@ import jsonpointer
 
 from . import db
 from . import inbox as I
+from . import leases as LS
 from . import log as L
 from . import plan as P
 from . import recipe as RC
 from . import registry as R
+from . import resources as RS
 from . import state as S
 from . import types as T
 from .errors import BadRequest, Conflict, InvalidPlan, NotFound, NotOpen
@@ -245,24 +247,33 @@ class Store:
             return [r[0] for r in db.all_rows(conn, "SELECT name FROM projects ORDER BY name")]
 
     def project(self, name: str) -> dict[str, Any]:
-        """{name, description, archived, paused, icon?} (icon: a text icon's text)."""
+        """{name, description, archived, paused, resources?, icon?} (resources: when it
+        declares any; icon: a text icon's text)."""
         with self.rx() as conn:
             row = self._row(conn, name)
         info = {"name": row["name"], "description": row["description"],
                 "archived": bool(row["archived"]), "paused": bool(row["paused"])}
+        if (res := json.loads(row["resources"])):
+            info["resources"] = res
         if row["icon_text"] is not None:
             info["icon"] = row["icon_text"]
         return info
 
     def create_project(self, name: str, description: str = "", author: str = "",
-                       reason: str = "", icon: str | None = None) -> dict[str, str]:
-        """A project with the empty plan at rev 1 and an empty state (SPEC §5); `icon` as in
-        update_project. Its directory comes when something needs it (runs/, fns/); one that is
-        already there may hold only fns/ and .env."""
+                       reason: str = "", icon: str | None = None,
+                       resources: Any = None) -> dict[str, str]:
+        """A project with the empty plan at rev 1 and an empty state (SPEC §5); `icon` and
+        `resources` as in update_project. Its directory comes when something needs it (runs/,
+        fns/); one that is already there may hold only fns/ and .env."""
         if not isinstance(name, str) or not P.ID_RE.match(name):
             raise BadRequest(f"project names match {P.ID_RE.pattern}, got {name!r}")
         if not isinstance(description, str):
             raise BadRequest("description: expected a string")
+        res: dict[str, Any] = {}
+        if resources is not None:
+            res, errs = RS.parse(resources)
+            if errs:
+                raise BadRequest("; ".join(errs))
         resolved = self._read_icon(icon) if icon is not None else None
         d = self.project_dir(name)
         with self.tx() as conn:
@@ -275,8 +286,10 @@ class Store:
             if left:
                 raise BadRequest(f"{self.show(d)} is left over from an earlier project (it holds "
                                  f"{', '.join(left)}); remove it first")
-            conn.execute("INSERT INTO projects (name, description, created) VALUES (?, ?, ?)",
-                         (name, description, now_iso()))
+            conn.execute("INSERT INTO projects (name, description, resources, created) "
+                         "VALUES (?, ?, ?, ?)", (name, description, _dumps(res), now_iso()))
+            if errs := RS.check_fns(res, self.registry(name)):  # it sees its own fns now
+                raise BadRequest("; ".join(errs))
             self._set_icon(conn, name, resolved)
             doc = copy.deepcopy(P.EMPTY)
             conn.execute("INSERT INTO plans (project, rev, doc) VALUES (?, 1, ?)",
@@ -291,29 +304,40 @@ class Store:
     def update_project(self, name: str, description: str | None = None,
                        archived: bool | None = None, paused: bool | None = None,
                        icon: str | None = None, author: str = "",
-                       reason: str = "") -> dict[str, str]:
+                       reason: str = "", resources: Any = None) -> dict[str, str]:
         """Replace the description and/or set `archived` (an archived project stays whole and
         keeps running; the dashboard lists it apart) and/or
         `paused` (no step of it starts until unpaused; running ones finish) and/or the icon:
         an absolute path to an image (SVG, PNG, WebP, JPEG or GIF, at most 256 KB, copied in)
         or a short text icon (at most 16 characters, no control characters); "" removes the
-        icon. A project has at most one of the two. What changed is logged in the same
-        transaction: `project.pause`, `project.archive`, and one `project.update` naming the
-        other fields; nothing when nothing changed."""
+        icon. A project has at most one of the two. `resources` sets each resource it names
+        (SPEC §6 "Resources": an integer or {"capacity": n}, {"capacity_fn": fn}) and removes
+        each one it maps to null; one a step of the plan needs cannot be removed. What changed
+        is logged in the same transaction: `project.pause`, `project.archive`, and one
+        `project.update` naming the other fields; nothing when nothing changed."""
         if description is not None and not isinstance(description, str):
             raise BadRequest("description: expected a string")
         for key, value in (("archived", archived), ("paused", paused)):
             if value is not None and not isinstance(value, bool):
                 raise BadRequest(f"{key}: expected true or false")
+        changes: dict[str, Any] = {}
+        if resources is not None:
+            changes, errs = RS.parse(resources, removing=True)
+            if errs:
+                raise BadRequest("; ".join(errs))
         resolved = self._read_icon(icon) if icon is not None else None
         with self.tx() as conn:
             row = self._row(conn, name)
             new = {k: v for k, v in (("description", description), ("archived", archived),
                                      ("paused", paused)) if v is not None and row[k] != v}
+            if changes:
+                res = self._new_resources(name, json.loads(row["resources"]), changes)
+                if res != json.loads(row["resources"]):
+                    new["resources"] = _dumps(res)
             if new:
                 conn.execute(f"UPDATE projects SET {', '.join(f'{k} = ?' for k in new)} "
                              "WHERE name = ?", (*new.values(), name))
-            fields = [k for k in ("description",) if k in new]
+            fields = [k for k in ("description", "resources") if k in new]
             if icon is not None and self._set_icon(conn, name, resolved):
                 fields.append("icon")
             why = {"reason": reason} if reason else {}
@@ -327,6 +351,34 @@ class Store:
                 L.append(conn, name, recs, self.log_cap())
             self.notify()
         return {"name": name}
+
+    def _new_resources(self, name: str, cur: dict[str, Any],
+                       changes: dict[str, Any]) -> dict[str, Any]:
+        """The project's resources with `changes` (null: remove) applied, checked: a capacity
+        fn must be one the project sees, and no step of the plan may need a removed one."""
+        res = {k: v for k, v in {**cur, **changes}.items() if v is not None}
+        errs = RS.check_fns({k: v for k, v in changes.items() if v is not None},
+                            self.registry(name))
+        steps = self.get(name)["steps"]
+        with self.rx() as conn:
+            leased = {x["resource"]: x["step"] for x in LS.rows(conn, name)}
+        for r in [k for k, v in changes.items() if v is None and k in cur]:
+            users = [sid for sid, s in steps.items() if isinstance(s, dict)
+                     and isinstance(s.get("needs"), dict) and r in s["needs"]]
+            if r in leased:
+                errs.append(f"resources.{r}: step {leased[r]} holds or waits for a lease on "
+                            "it")
+            if users:
+                errs.append(f"resources.{r}: steps {', '.join(users)} need it; take it out of "
+                            "their needs first")
+        if errs:
+            raise BadRequest("; ".join(errs))
+        return res
+
+    def resources(self, name: str) -> dict[str, dict[str, Any]]:
+        """The project's resources: {name: {"capacity": n} or {"capacity_fn": fn}}."""
+        with self.rx() as conn:
+            return json.loads(self._row(conn, name)["resources"])
 
     def _read_icon(self, icon: Any) -> tuple[str, Any] | None:
         """Resolve an `icon` argument: ("image", (ext, content)) or ("text", text) to set,
@@ -465,7 +517,8 @@ class Store:
         out = []
         with self.rx() as conn:
             rows = db.all_rows(conn, "SELECT p.name, p.description, p.archived, p.paused, "
-                                     "p.icon_text, p.icon_type, l.rev, l.doc, s.doc AS state "
+                                     "p.resources, p.icon_text, p.icon_type, l.rev, l.doc, "
+                                     "s.doc AS state "
                                      "FROM projects p JOIN plans l ON l.project = p.name "
                                      "JOIN states s ON s.project = p.name ORDER BY p.name")
         for row in rows:
@@ -474,6 +527,8 @@ class Store:
             entry = {"name": row["name"], "description": row["description"],
                      "rev": row["rev"], "counts": dict(counts),
                      "archived": bool(row["archived"]), "paused": bool(row["paused"])}
+            if (res := json.loads(row["resources"])):
+                entry["resources"] = res
             if (icon := _icon(row)) is not None:
                 entry["icon"] = icon
             out.append(entry)
@@ -522,8 +577,13 @@ class Store:
                 if held:
                     ops = [*ops, *held]
                     new = apply_ops(new, held)
-            errs, _ = P.validate(new, reg)
+            errs, parsed = P.validate(new, reg)
             new_steps = new.get("steps") if isinstance(new.get("steps"), dict) else {}
+            asking = [sid for sid, s in new_steps.items() if isinstance(s, dict)
+                      and s.get("needs") != (old["steps"].get(sid) or {}).get("needs")]
+            if asking:
+                errs += RS.needs_errors(parsed, json.loads(self._row(conn, project)
+                                                           ["resources"]), asking)
             state = self.read_state(project)
             for sid, e in state["steps"].items():
                 if e["status"] != "running":
@@ -975,11 +1035,18 @@ class Store:
         """The plan's inputs, outputs and steps (with `steps` and/or `tags`, only those; else,
         unless `all`, without the done units, counted in `done_units`); with `brief`, their
         long strings cut (`_brief`). One snapshot of plan, state and project."""
-        with self.rx():
+        with self.rx() as conn:
             only = set(self.select_steps(project, steps, tags)) if steps or tags else None
             doc, plan = self.plan(project)
             state = self.read_state(project)
             project_paused = self.paused(project)
+            resources, leases = self.resources(project), LS.rows(conn, project)
+        caps, held_now = RS.capacities(resources, state), RS.held(plan, state, leases)
+        by_step: dict[str, list[dict[str, Any]]] = {}
+        for x in leases:
+            by_step.setdefault(x["step"], []).append(
+                {"resource": x["resource"], "amount": x["amount"],
+                 "held": x["granted"] is not None})
         done = P.done_units(plan, state) if only is None and not all else []
         if done:
             only = set(plan.steps) - {sid for u in done for sid in u}
@@ -1000,17 +1067,24 @@ class Store:
             row.update({"tags": step.tags} if step.tags else {})
             row.update({"after": step.after} if step.after else {})
             row.update({"when": str(step.when)} if step.when else {})
+            row.update({"needs": step.needs} if step.needs else {})
+            row.update({"priority": step.priority} if step.priority else {})
+            row.update({"leases": by_step[sid]} if sid in by_step else {})
             row.update({"skipped": e.get("skipped")} if e["status"] == "skipped" else {})
             if e["status"] == "pending":  # why it has not started
                 held = ([f"paused: {step.pause_reason}" if step.pause_reason else "paused"]
                         if step.paused else [])
                 held += ["the project is paused"] if project_paused else []
                 row["waiting"] = held + P.not_ready(step, plan, state)
+                if (why := RS.queued_reason(step, state, caps, held_now)) is not None:
+                    row["waiting"].append(why)
                 if step.fn.external and not row["waiting"]:
                     row["waiting"] = [EXTERNAL_WAIT]
             rows.append({**row, "manual": bool(e.get("manual"))})
         out = {"rev": doc["rev"], "paused": project_paused,
                "inputs": {n: state["inputs"].get(n) for n in plan.inputs}}
+        if resources:
+            out["resources"] = RS.summary(resources, plan, state, leases)
         if plan.input_docs:
             out["input_docs"] = dict(plan.input_docs)
         if brief:

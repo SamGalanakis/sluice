@@ -170,14 +170,17 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def projects_list() -> Any:
-        """List projects: [{name, description, rev, counts, archived, paused, icon?}]; counts
-        maps step status -> number of steps in the project's plan; icon, when the project has
-        one, is {"kind": "image", "type": <content type>} or {"kind": "text", "text": <text>}.
+        """List projects: [{name, description, rev, counts, archived, paused, resources?,
+        icon?}]; counts maps step status -> number of steps in the project's plan; resources,
+        when it declares any, maps each to {"capacity": n} or {"capacity_fn": fn}; icon, when
+        the project has one, is {"kind": "image", "type": <content type>} or {"kind": "text",
+        "text": <text>}.
         """
         return store.projects()
 
     @tool
     def project_create(name: str, description: str = "", icon: str | None = None,
+                       resources: dict[str, Any] | None = None,
                        author: str | None = None) -> Any:
         """Create a project with an empty plan (rev 1). Returns {name}.
 
@@ -187,19 +190,24 @@ def build_server(store: Store, stop: threading.Event | None = None,
             icon: the project's icon: an absolute path to an image file (SVG, PNG, WebP, JPEG
                 or GIF, at most 256 KB, copied into the project's row), or a short
                 text icon (an emoji; at most 16 characters).
+            resources: named capacities its steps' `needs` draw on (docs("plans")):
+                {name: n} or {name: {"capacity": n}} for a fixed capacity (an integer >= 0),
+                {name: {"capacity_fn": "<fn>"}} for one a fn the project sees returns as
+                {capacity}, called about every 10 s, e.g. {"lane": 56, "cpu":
+                {"capacity_fn": "cpu-free"}}.
             author: who is acting (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
                 client's name, else "mcp"; "cli" from `sluice tool`).
         """
-        return store.create_project(name, description, author, icon=icon)
+        return store.create_project(name, description, author, icon=icon, resources=resources)
 
     @tool
     def project_update(name: str, description: str | None = None,
                        archived: bool | None = None, paused: bool | None = None,
-                       icon: str | None = None, reason: str = "",
-                       author: str | None = None) -> Any:
-        """Replace a project's description, archive it, pause it and/or set its icon; each
-        change is a record in the project's log (project.pause, project.archive,
-        project.update) with the author and reason. Returns {name}.
+                       icon: str | None = None, resources: dict[str, Any] | None = None,
+                       reason: str = "", author: str | None = None) -> Any:
+        """Replace a project's description, archive it, pause it and/or set its icon or
+        resources; each change is a record in the project's log (project.pause,
+        project.archive, project.update) with the author and reason. Returns {name}.
 
         Args:
             name: the project.
@@ -210,12 +218,15 @@ def build_server(store: Store, stop: threading.Event | None = None,
                 until false again; running steps finish.
             icon: an image path or a short text icon, as in project_create; "" removes the
                 icon (leave out to keep it). A project has at most one of the two kinds.
+            resources: resources to set, as in project_create, each replacing the one of its
+                name; null removes one (refused while a step's needs names it). Resources
+                left out stay. A lower capacity never stops running steps; it admits less.
             reason: why, in the records (say why a project is paused).
             author: who is acting (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
                 client's name, else "mcp"; "cli" from `sluice tool`).
         """
         return store.update_project(name, description, archived, paused, icon=icon,
-                                    author=author, reason=reason)
+                                    author=author, reason=reason, resources=resources)
 
     @tool
     def project_delete(name: str) -> Any:
@@ -861,16 +872,22 @@ def build_server(store: Store, stop: threading.Event | None = None,
                tags: list[str] | str | None = None, brief: bool = False,
                all: bool = False, view: Literal["steps", "units"] = "steps",
                state: list[str] | str | None = None) -> Any:
-        """Return {rev, paused, inputs, outputs, steps: [{id, run, status, started, finished,
-        outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}],
-        done_units?}. Without steps or tags, the done units (independent pieces of work,
+        """Return {rev, paused, inputs, resources?, outputs, steps: [{id, run, status, started,
+        finished, outputs?, error?, doc?, paused?, tags?, after?, when?, needs?, priority?,
+        leases?, skipped?, waiting?, manual}], done_units?}. Without steps or tags, the done units (independent pieces of work,
         steps joined by any edge, whose every step succeeded or was skipped) are left out and
         counted in done_units {units, steps}, unless all is true.
         inputs and outputs map names to values (null if unset). A step's status is pending,
         running, succeeded, failed, stale (its result was computed from inputs that have
         changed since; it waits for step_retry or step_set_output, and so do the steps reading
         it) or skipped (its `when` was false, or it reads a skipped step; `skipped` says
-        which). `waiting`, on a pending step, says why it has not started.
+        which). `waiting`, on a pending step, says why it has not started (`queued: needs
+        lane 1 (56/56 held)` for one waiting on resources); `leases` the leases its fn holds
+        or waits for ([{resource, amount, held}], ctx.acquire). resources, when the project
+        declares any: {name: {capacity, held, queued, capacity_fn?, error?, holders?,
+        waiting?}}: held is what its running steps and leases hold, queued how many steps wait
+        on it, holders and waiting its granted and waiting leases ({step, run, amount, since,
+        priority?}, waiting in the order they will be granted).
 
         Args:
             project: the project.
@@ -882,14 +899,16 @@ def build_server(store: Store, stop: threading.Event | None = None,
             all: include the done units too (steps or tags always return what they select).
             view: "steps" (default) as above, or "units": one compact row per unit (the
                 steps sharing a `unit:<name>` tag, else steps joined by handoffs or `after`;
-                a standalone step is its own) instead of the steps: {rev, paused, units:
-                [{unit, state, age, engine, steps, blocked, last, line}], done_units?},
-                oldest first. state is running, failed (a step failed or stale), blocked
-                (nothing running or startable, something held), settled or pending; age
+                a standalone step is its own) instead of the steps: {rev, paused, resources?,
+                units: [{unit, state, age, engine, steps, blocked, last, line}],
+                done_units?}, oldest first. state is running, failed (a step failed or
+                stale), blocked (nothing running or startable, something held), queued (a
+                step waits for resources), settled or pending; age
                 the seconds its running step has run, else since its last change; engine
                 engine·model·effort of its agent step; steps each step's mark (✓ succeeded,
-                ▶ running, · pending, ✗ failed, ~ stale, – skipped, ‖ paused); blocked the
-                first edge a blocked unit waits on; last its steps' threads' last message
+                ▶ running, · pending, ✗ failed, ~ stale, – skipped, ‖ paused, ≡ queued);
+                blocked the first edge a blocked unit waits on, or a queued unit's first
+                queued step's reason; last its steps' threads' last message
                 ("Q: " for a question); line all of it in at most 80 characters.
             state: with view "units", only units in this state (one or a list).
         """

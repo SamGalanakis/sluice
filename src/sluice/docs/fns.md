@@ -93,6 +93,15 @@ if __name__ == "__main__":
 - `ctx` has `project`, `step`, `run_id`, `run_dir` (scratch space), `attempt`, and, for a
   step of an open function, `extra_inputs` (`{name: {"type"}}`; the values are in `inp`) and
   `outputs` (`{name: {"type", "doc"}}`, the outputs the step declares).
+- `with ctx.acquire("land", 1):` holds an amount of one of the project's resources
+  (`docs("plans")`, Resources) for just that section of a step's work, e.g. a rebase and push
+  that must not overlap another step's: it waits until the runner grants it (waiters in their
+  step's `priority` order, ties first come), then holds it until the block exits, however it
+  exits; a run that ends (crash, kill, cancel) lets go of it too. It counts against the same
+  capacity as steps' `needs`. An undeclared resource or an amount over a fixed capacity raises
+  `ValueError` at once; `timeout=` seconds raises `TimeoutError` instead of waiting on. It works
+  only inside a plan step's run (not a `fn_call`). The grant comes on the runner's next tick
+  (about a second).
 - Secrets come from the environment: `$SLUICE_HOME/.env`, then the project's `.env` (project
   values win). Never put them in plans.
 - Output types are checked after the function exits; a mismatch fails the step.

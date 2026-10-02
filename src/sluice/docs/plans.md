@@ -209,6 +209,40 @@ step, why it is `waiting`. `project_update(name, paused=true)` holds the whole p
 `step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with
 `cancelled: <reason>` and `step_retry` runs it again.
 
+## Resources: limiting what runs at once
+Every ready step starts at once, unless it asks for a project's **resources**. Declare them on
+the project, each with a fixed capacity or a function that reports one:
+
+```json
+{"lane": 56, "codex": {"capacity": 12}, "cpu": {"capacity_fn": "ops.cpu-free"}}
+```
+
+`project_create(name, description, resources={...})` or `project_update(name,
+resources={...})` (each key set, null removes one; one a step needs cannot be removed). A
+`capacity_fn` is a fn the project sees that takes no required input and returns
+`{"capacity": <int>}`; the runner calls it about every 10 s, keeps the last good value when a
+call fails or times out, and admits nothing on it until the first value comes.
+
+A step asks with `needs` and, among the queued steps, `priority` (default 0, higher first; ties
+in plan order):
+
+```json
+{"run": "agent.run", "needs": {"lane": 1, "codex": 1}, "priority": 5,
+ "in": {"engine": {"default": "codex"}, "cwd": {"default": "/src/app"},
+        "spec": {"default": "Fix the flaky login test"}}}
+```
+
+It starts only when every resource it names has room (`capacity - held >= need`); while it
+runs it holds those amounts (a scattered step once, whatever its item count), and they free
+when it succeeds, fails or is cancelled. Until then it stays `pending`, queued — not paused —
+and `status` says why in its `waiting`: `queued: needs lane 1 (56/56 held)`. `status` (and
+`view="units"`, where such a unit is `queued`) also returns `resources`: each one's
+`capacity`, `held` and how many steps are `queued` on it. Pausing is still the hold you put on
+by hand; a step without `needs` is never held back. An edit naming a resource the project
+does not declare, or asking for more than a fixed capacity, is refused. In a recipe, a
+whole-string `{param}` keeps its type: `"needs": {"lane": "{lanes}"}`, `"priority":
+"{prio}"`.
+
 ## Conditions
 `"when": "check/ok"` runs a step only if that value is true: a gate without a gate step. The
 ref is read like an input (the step waits for it) and must be a `boolean`. False (or null)

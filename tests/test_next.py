@@ -603,8 +603,8 @@ def test_the_runner_alerts_only_with_unread_alert_min(store):
 
 def test_a_version_2_file_gets_the_readers_table(tmp_path):
     """A real version-2 file (the SCHEMA before the inbox's `run` column, the drain tables and
-    `readers`) is upgraded in place through 3 to 4, keeping its rows; `next` then notes where it
-    has read."""
+    `readers`) is upgraded in place through 3 and 4 to 5, keeping its rows; `next` then notes
+    where it has read."""
     home = tmp_path / "h"
     write_config(home)
     conn = sqlite3.connect(home / db.FILE, autocommit=True)
@@ -618,11 +618,12 @@ def test_a_version_2_file_gets_the_readers_table(tmp_path):
     conn.close()
     store = Store(home)
     with store.rx() as c:
-        assert c.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 4
+        assert c.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 5
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"readers", "drain", "drain_projects"} <= tables
         assert "run" in {r[1] for r in c.execute("PRAGMA table_info(inbox)")}
-        assert tuple(db.one(c, "SELECT name, description FROM projects")) == ("p", "old")
+        assert tuple(db.one(c, "SELECT name, description, resources FROM projects")) == (
+            "p", "old", "{}")
         assert db.one(c, "SELECT count(*) FROM records")[0] == 1
     next_up(store, ["p"], 0, me="lead", timeout=0)
     assert {p: (r["seq"], r["me"]) for p, r in readers(store).items()} == {"p": (1, "lead")}

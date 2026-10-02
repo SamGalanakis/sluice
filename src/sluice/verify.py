@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import plan as P
+from . import resources as RS
 from . import state as S
 from . import types as T
 from .store import Store
@@ -81,9 +82,17 @@ def _check_project(store: Store, r: Report, name: str) -> None:
             r.add(p["where"], p["message"])
     with store.rx():
         doc, state = store.get(name), store.read_state(name)
+        resources = store.resources(name)
     body = {k: v for k, v in doc.items() if k != "rev"}
     errs, plan = P.validate(body, reg)
     r.add_path_errors(f"project {name}: plan", errs)
+    r.add_path_errors(f"project {name}: project", RS.check_fns(resources, reg))
+    for e in RS.needs_errors(plan, resources, list(plan.steps)):  # §6 Resources
+        path, _, msg = e.partition(": ")
+        if "more than" in msg:  # a capacity lowered since: the step waits, nothing is wrong
+            r.warn(f"project {name}: plan#{path}", f"{msg}; it waits until that changes")
+        else:
+            r.add(f"project {name}: plan#{path}", msg)
     for sid, step in plan.steps.items():  # a file binding is read when its step starts
         for k, src in step.sources.items():
             if src.file is not None and not (os.path.isfile(src.file)

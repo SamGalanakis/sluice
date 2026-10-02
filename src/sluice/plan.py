@@ -19,7 +19,8 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 TAG_RE = re.compile(r"^([a-z0-9][a-z0-9_-]*:)?[a-z0-9][a-z0-9_-]*$")
 DOC_KEYS = {"inputs", "outputs", "steps"}
 EMPTY: dict[str, Any] = {"inputs": {}, "outputs": {}, "steps": {}}
-STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "when"}
+STEP_KEYS = {"run", "in", "scatter", "doc", "outputs", "paused", "after", "tags", "when", "needs",
+             "priority"}
 STRING = T.Prim("string")
 
 
@@ -65,6 +66,8 @@ class Step:
     after: list[str] = field(default_factory=list)  # steps it waits for without reading them
     tags: list[str] = field(default_factory=list)  # free-form labels to select steps by
     when: Ref | None = None  # a boolean it runs on: false (or null) skips it
+    needs: dict[str, int] = field(default_factory=dict)  # resource -> amount it holds running
+    priority: int = 0  # among queued steps, higher is admitted first
 
     @property
     def inputs(self) -> dict[str, T.Type]:
@@ -263,7 +266,7 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
         p = f"steps.{sid}"
         if not isinstance(raw, dict):
             errs.append(f"{p}: a step is {{run, in, scatter?, doc?, outputs?, paused?, after?, "
-                        "tags?}")
+                        "tags?, when?, needs?, priority?}")
             continue
         errs.extend(f"{p}.{k}: unknown key" for k in raw if k not in STEP_KEYS)
         text = raw.get("doc", "")
@@ -316,10 +319,21 @@ def validate(doc: Any, registry: Registry) -> tuple[list[str], Plan]:
                 None, "expected a ref such as \"check/ok\"")
             if err:
                 errs.append(f"{p}.when: {err}")
+        needs = raw.get("needs", {})
+        if not (isinstance(needs, dict) and all(
+                ID_RE.match(r) and isinstance(n, int) and not isinstance(n, bool) and n >= 0
+                for r, n in needs.items())):
+            errs.append(f"{p}.needs: expected an object of resource -> amount (an integer >= 0)")
+            needs = {}
+        priority = raw.get("priority", 0)
+        if not isinstance(priority, int) or isinstance(priority, bool):
+            errs.append(f"{p}.priority: expected an integer (higher is admitted first)")
+            priority = 0
         step = plan.steps[sid] = Step(
             sid, fn, sources, scatter, text, paused=paused is True or isinstance(paused, str),
             pause_reason=paused if isinstance(paused, str) else "",
-            after=list(dict.fromkeys(after)), tags=list(dict.fromkeys(tags)), when=when)
+            after=list(dict.fromkeys(after)), tags=list(dict.fromkeys(tags)), when=when,
+            needs=dict(needs), priority=priority)
         step.declared.update(fn.submits)  # what the fn's agent submits on every step (§5)
         step.output_docs.update(fn.submit_docs)
         if "outputs" in raw:

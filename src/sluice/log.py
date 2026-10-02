@@ -25,8 +25,9 @@ from .errors import NotFound
 from .util import now_iso
 
 KINDS = ("plan.edit", "plan.input", "step.output", "step.retry", "step.status", "step.submit",
-         "step.cancel", "call", "message", "inbox.post", "inbox.answer", "inbox.close",
-         "inbox.adopt", "run.adopt", "run.orphan", "project.pause", "project.archive", "project.update")
+         "step.cancel", "step.queued", "step.lease", "call", "message", "inbox.post", "inbox.answer",
+         "inbox.close", "inbox.adopt", "run.adopt", "run.orphan", "project.pause",
+         "project.archive", "project.update", "project.capacity")
 GROUPS = ("plan", "step", "inbox", "run", "project")  # a group name matches every kind under it
 HISTORY_KINDS = ("plan.edit", "plan.input", "step.output", "step.retry")
 DEFAULT_MAX = 10000

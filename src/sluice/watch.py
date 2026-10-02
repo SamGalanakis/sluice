@@ -22,8 +22,10 @@ from typing import IO, Any
 
 from . import db
 from . import inbox as I
+from . import leases as LS
 from . import log as L
 from . import plan as P
+from . import resources as RS
 from . import state as S
 from .errors import BadRequest, SluiceError
 from .store import Store
@@ -426,10 +428,11 @@ def line(rec: dict[str, Any], settles: str = "short", cut: int = CUT) -> str:
 
 # ---- status's units view: one compact row per unit ------------------------------------------
 
-UNIT_STATES = ("running", "failed", "blocked", "settled", "pending")
+UNIT_STATES = ("running", "failed", "blocked", "queued", "settled", "pending")
 MARK = {"succeeded": "✓", "running": "▶", "pending": "·", "failed": "✗", "stale": "~",
-        "skipped": "–", "paused": "‖"}  # a step's mark; a unit's state marks as its step's
-STATE_MARK = {"running": "▶", "failed": "✗", "blocked": "‖", "settled": "✓", "pending": "·"}
+        "skipped": "–", "paused": "‖", "queued": "≡"}  # a step's; a unit's state marks alike
+STATE_MARK = {"running": "▶", "failed": "✗", "blocked": "‖", "queued": "≡", "settled": "✓",
+              "pending": "·"}
 WIDTH = 80  # the most characters of a row's line
 
 
@@ -510,8 +513,10 @@ def _line(row: dict[str, Any], age: str) -> str:
 
 def units(store: Store, project: str, steps: Any = None, tags: Any = None, state: Any = None,
           every: bool = False) -> dict[str, Any]:
-    """status(view="units"): {rev, paused, units: [{unit, state, age, engine, steps,
-    blocked, last, line}], done_units?}, one row per unit (P.named_units), oldest first.
+    """status(view="units"): {rev, paused, resources?, units: [{unit, state, age, engine,
+    steps, blocked, last, line}], done_units?}, one row per unit (P.named_units), oldest
+    first. A unit with a step queued on resources (and none running or failed) is `queued`,
+    its `blocked` the first queued step's reason.
     `state` keeps the units in these states; `steps`/`tags` the units with a step they
     select; without them, unless `every`, the done units are left out and counted."""
     wanted = [state] if isinstance(state, str) else state
@@ -522,6 +527,10 @@ def units(store: Store, project: str, steps: Any = None, tags: Any = None, state
         only = set(store.select_steps(project, steps, tags)) if steps or tags else None
         doc, plan = store.plan(project)
         st, paused = store.read_state(project), store.paused(project)
+        resources = store.resources(project)
+        with store.rx() as conn:
+            leases = LS.rows(conn, project)
+    caps, holds = RS.capacities(resources, st), RS.held(plan, st, leases)
     changed, last = L.latest(store.home, project)
     view: View = (plan, st, paused)
     marks = _marks(view, list(plan.steps), {}, 0)
@@ -534,11 +543,14 @@ def units(store: Store, project: str, steps: Any = None, tags: Any = None, state
             continue
         status = [marks[s][0] for s in ids]
         held = [marks[s][1] for s in ids]
+        waits = [why for s in ids
+                 if (why := RS.queued_reason(plan.steps[s], st, caps, holds)) is not None]
         unit_state = (
             "running" if "running" in status
             else "failed" if {"failed", "stale"} & set(status)
             else "settled" if set(status) <= {"succeeded", "skipped"}
             else "blocked" if any(held) and all(x in FINAL or h for x, h in zip(status, held))
+            else "queued" if waits
             else "pending")
         if wanted is not None and unit_state not in wanted:
             continue
@@ -560,13 +572,18 @@ def units(store: Store, project: str, steps: Any = None, tags: Any = None, state
         row = {"unit": name, "state": unit_state, "age": age,
                "engine": _engine(plan, st, ids),
                "steps": " ".join(s.removeprefix(pre) + MARK[
-                   "paused" if x == "pending" and plan.steps[s].paused else x]
+                   "paused" if x == "pending" and plan.steps[s].paused
+                   else "queued" if x == "pending" and RS.queued(S.entry_of(st, s)) else x]
                    for s, x in zip(ids, status)),
-               "blocked": _blocked(view, marks, ids) if unit_state == "blocked" else "",
+               "blocked": _blocked(view, marks, ids) if unit_state == "blocked"
+               else waits[0] if unit_state == "queued" else "",
                "last": text}
         rows.append({**row, "line": _line(row, _age(age))})
     rows.sort(key=lambda r: -1 if r["age"] is None else r["age"], reverse=True)
     out = {"rev": doc["rev"], "paused": paused, "units": rows}
+    if resources:
+        out = {"rev": doc["rev"], "paused": paused,
+               "resources": RS.summary(resources, plan, st, leases), "units": rows}
     if done:
         out["done_units"] = {"units": len(done), "steps": sum(map(len, done))}
     return out

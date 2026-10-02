@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -62,6 +62,25 @@ class Context:
 
     def log(self, msg: str) -> None:
         print(msg, file=sys.stderr, flush=True)
+
+    @contextlib.contextmanager
+    def acquire(self, resource: str, amount: int = 1,
+                timeout: float | None = None) -> Iterator[None]:
+        """Hold `amount` of the project resource `resource` for the `with` block (SPEC §6
+        "Resources"): wait until the runner grants it — waiters in their step's priority
+        order, ties first come — then hold it until the block exits, however it exits. A run
+        that ends (a crash, a kill, a cancel) lets go of it too. Raises ValueError at once
+        for a resource the project does not declare or an amount over its fixed capacity,
+        TimeoutError after `timeout` seconds without the grant (nothing is held then)."""
+        from . import leases
+
+        lease = leases.request(self.home, self.project, self.step, self.run_id, resource,
+                               amount)
+        try:
+            leases.wait(self.home, self.project, lease, timeout)
+            yield
+        finally:
+            leases.release(self.home, self.project, lease)
 
 
 def _ports(name: str) -> dict[str, dict[str, Any]]:

@@ -62,9 +62,10 @@ projects/<name>/            made when something needs it (runs/, fns/); may be p
 ```
 
 **The database** (`src/sluice/db.py`, standard library only; SQLite 3.37 or later, on a local
-filesystem) holds, in STRICT tables: `projects` (name, description, `archived`, `paused`, the
-icon, `created`, and `ver`, a counter every change to the project's rows moves — kept by
-triggers, rolled back with them — plus `changed`, the time of its last state write); `plans`
+filesystem) holds, in STRICT tables: `projects` (name, description, `archived`, `paused`,
+`resources` (a JSON object, §6 "Resources"), the icon, `created`, and `ver`, a counter every
+change to the project's rows moves — kept by triggers, rolled back with them — plus `changed`,
+the time of its last state write); `plans`
 (the project's plan document and its `rev`, the one authoritative rev); `plan_edits` (every
 edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; never trimmed);
 `states` (the project's state document, §6); `calls` (§8 `fn_call`); `submissions` (§5);
@@ -72,8 +73,10 @@ edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; nev
 removed ended with, §6; never trimmed); `drain` and `drain_projects` (maintenance metadata and pause ownership, §9); `readers` (how far
 `next` has read each project's log, §9: `project` (the key), `seq`, `at`, `me`; one upsert per
 project in a short write transaction, `seq` never going back; no trigger moves `ver` for it,
-since the dashboard does not show it); and `deletions` (a deleted project whose directory is
-not gone yet: name, token, time). Deleting a project deletes all of its rows and adds its
+since the dashboard does not show it); `leases` (section leases, §6 "Resources": `id`,
+`project`, `resource`, `amount`, `step`, `run`, `granted` — the time, null while waiting —
+and `created`; no trigger moves `ver` for them either); and `deletions` (a deleted project
+whose directory is not gone yet: name, token, time). Deleting a project deletes all of its rows and adds its
 `deletions` row in one transaction; once that commits (the outermost transaction, when it is
 nested in another), its `projects/<name>/` moves to `trash/<name>-<token>` (in a write
 transaction that still finds the row) and is removed, and then the row goes. Until then a
@@ -279,6 +282,18 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   held, not skipped. A step that `plan_patch` or `step_add` adds comes in with
   `"paused": true` unless the call passes `start: true` or the step sets `paused` itself;
   that pause is one more op in the edit's history.
+- **Resources.** A step may carry `"needs": {"<resource>": <n>, ...}` (each amount an integer
+  >= 0) and `"priority": <integer>` (default 0). `needs` names resources its project declares
+  (§6 "Resources"); while it runs the step holds those amounts, and it starts only when every
+  one has room. `priority` orders the queued steps: higher is admitted first, ties in plan
+  order. An edit that adds a step with `needs`, or changes a step's `needs`, is refused
+  (`invalid`) when a need names a resource the project does not declare
+  (`steps.a.needs.gpu: the project declares no resource gpu (its resources: lane; project_update
+  sets them)`) or asks for more than a fixed capacity (`steps.a.needs.lane: asks for 3, more
+  than lane's capacity 2`); steps whose `needs` the edit leaves alone are not checked again, so
+  a capacity lowered later never blocks unrelated edits (that step just waits). A recipe sets
+  both like any other field (`"needs": {"{pool}": "{n}"}`, `"priority": "{prio}"`: a whole-string
+  `{param}` keeps its type).
 - **Docs.** A plan input is declared by its type, or, as in CWL, by `{"type": <type>, "doc":
   "..."}` (both keys only; no type form has just these keys, so the two never clash). A step
   may carry `"doc": "..."` next to `run`, `in` and `scatter`. Docs are optional strings that say
@@ -438,16 +453,84 @@ edit whose plan no longer has them) keeps the outcome of each one that finished 
 
 A project's state (its `states` row):
 `{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
-"outputs", "error", "manual", "inputs_hash", "skipped", "results", "kept"}}}` with status `pending`, `running`,
-`succeeded`, `failed`, `stale`, `skipped` (`skipped` holds why). A
-scattered step also records `done` (the runs that have ended) and `total` runs. There is no limit on how many run at
-once: every ready step starts, and a scattered step starts all its runs; a scattered run that
+"outputs", "error", "manual", "inputs_hash", "skipped", "results", "kept", "queued"}}, "resources"?:
+{"<name>": {"fn", "capacity", "error"?}}}` with status `pending`, `running`,
+`succeeded`, `failed`, `stale`, `skipped` (`skipped` holds why; `queued`, on a pending step,
+the resources it waits for; `resources` the capacity fns' last values, below). A
+scattered step also records `done` (the runs that have ended) and `total` runs. Only resources
+limit how many run at once (below): every other ready step starts, and a scattered step
+starts all its runs; a scattered run that
 fails does not stop the others — the step ends once every run has ended: `succeeded` if all
 did, else `failed` with `run <i>: <err>` for one failed run, `<n> of <total> runs failed:
 run <i>: <err>; ...` for several (each `<err>` cut to one line of at most 200 characters),
 and keeps `run_ids` (index-aligned: `run_ids[i]` is item i's run) plus `results` — a list
 holding each item's outputs where it succeeded and null where it failed — so a retry can
 re-run only what failed.
+
+**Resources.** A project declares named resources (`project_create` / `project_update`, §8;
+the `projects.resources` column): `{"<name>": {"capacity": <n>}}` (a fixed integer >= 0; a bare
+integer stands for it) or `{"<name>": {"capacity_fn": "<fn>"}}`, a fn the project sees that
+takes no required input and returns `{"capacity": <int>}` (its `capacity` output declared `int`
+or `Any`). The runner calls a capacity fn with no inputs (unbound optional ones null) in a
+thread of its own, never inside a tick: a process fn runs in `projects/<p>/capacity/<resource>/`
+(outside `runs/`: no GC or orphan sweep touches it), killed after 20 s; the next call is due
+10 s after the last one ended. A good value (an integer >= 0) replaces the cached one; a
+failure (an error, a time-out, a value that is no such integer) keeps the last good value and
+records why. The cache lives in the state's `resources` (`{"fn", "capacity", "error"?}` per
+capacity-fn resource, written only when it changes, with a `project.capacity` record, §6b), so a
+restarted runner starts from the last value; with none yet, `capacity` is null and the resource
+admits nothing that asks for more than 0. One failing or slow capacity fn holds up nothing but
+its own resource. `update_project` sets the resources it names and removes those it maps to
+null; removing one that a step's `needs` names (or a lease holds or waits for) is refused,
+while any capacity may be lowered
+(running steps keep what they hold; less is admitted). A capacity fn must be visible to the
+project when it is set.
+
+A step's `needs` (§5) is held while the step is `running` — a scattered step holds it once,
+however many runs it starts; an adopted run (a restart) holds like any other, since `held` is
+the sum of the `needs` of the steps whose state is `running` (plus the granted section leases,
+below). Each tick, after the steps without `needs` start as before, the ready, unpaused steps
+with `needs` are taken in priority
+order (higher first, ties in the plan's dependency order); each starts if, for every resource
+it names, `capacity - held >= need` (a need of 0 always fits), and its needs then count as held
+for the steps after it in the same tick. One that does not fit stays `pending` — queued, not
+paused — and its entry gets `queued: ["<resource>", ...]`, the resources it is short of (it
+waits behind nothing: a smaller request later in the order that fits starts). A queued step's
+`waiting` (in `status`) and `queued` (in `step_context` and `sluice me`) read `queued: needs
+lane 1 (56/56 held)` — each resource it is short of with its need and `held/capacity` now,
+`(capacity unknown)` for a capacity fn with no value yet. Pausing (the step's or the project's)
+is a separate hold: a paused or not-ready step is never queued, and a queued step that is paused
+loses `queued`. What a step holds is free once it leaves `running` (succeeded, failed,
+cancelled, killed); the next tick admits the waiters, as many as fit. A `step.queued` record
+(§6b) is written when a step's `queued` resources change, not on every tick, and the
+`step.status` record of a step with `needs` going `running` carries them (its admission).
+`status` returns `resources: {"<name>": {capacity, held, queued, capacity_fn?, error?, holders?,
+waiting?}}` when the project declares any (`queued`: how many steps are queued on it; `error`:
+the capacity fn's last failure, its last good value still standing; `holders` and `waiting`:
+its section leases, below). Steps without `needs` are never held back.
+
+**Section leases.** A running step's fn can hold an amount of a resource for part of its work:
+`with ctx.acquire("land", 1):` (§7). It inserts a `leases` row (waiting) for its run and polls
+it; the runner grants it — sets `granted` — and the fn holds it until the block exits, however
+it exits (its `finally` deletes the row). Granted leases count in the same `held` totals as the
+steps' `needs`, so admission and leases share one accounting. Each tick, inside its
+transaction and before any step is admitted, the runner deletes every lease whose run is no
+longer running (the step left `running`, or a scattered item ended) — so a crash, a kill or a
+cancel never leaks a hold — then grants the waiting leases that fit, their step's `priority`
+first, ties first come (the row's `id`), each counting as held for the ones after it; then the
+steps' admission sees what the leases hold. Leases go before queued steps: a running step
+waiting for a section is further along than a step not started. A lease on a resource the
+project does not declare, or for more than a fixed capacity, raises `ValueError` at once (a
+capacity fn's resource may grow: it waits), and `acquire` outside a running step's run raises
+`RuntimeError`; `timeout=` seconds without the grant raises `TimeoutError` (the row goes). A
+grant comes on the runner's next tick (about a second). Every grant and every release of a
+granted lease is a `step.lease` record (§6b). `status` lists, per resource, `holders` (the
+granted leases: `{step, run, amount, since}`) and `waiting` (the waiting leases in grant order:
+`{step, run, amount, priority, since}`), each only when there are some, and on each step the
+leases its fn holds or waits for (`leases: [{resource, amount, held}]`, also in `step_context`).
+A resource some lease holds or waits for cannot be removed. Leases are an advisory section
+lock for steps of one project; nested acquires by one run each take their own amount, so a
+run can deadlock itself on a capacity it already holds.
 
 **Outcomes.** A step's entry leaves the state once the step leaves the plan (the runner drops
 it at its next tick). If a later committed edit reintroduces that step ID before the tick,
@@ -496,7 +579,9 @@ Loop (every ~1 s, and right after an in-process edit), over all projects:
    start every ready `pending` step (what it reads is there, what it runs `after` has
    succeeded or been skipped) that is not paused (a step's `paused`, or its project's
    `paused`: it stays `pending`, whatever it would read held, until
-   unpaused; pausing never stops a running step). A ready `core.external` step is never
+   unpaused; pausing never stops a running step) — a step with `needs` only as its resources
+   allow, in priority order, else it stays `pending` and queued ("Resources" above). A ready
+   `core.external` step is never
    started (§5): it stays `pending`, with no process, run dir or record, and counts as no
    work to start. Built-in fns run inline;
    staleness is re-checked after each round of inline results, so nothing starts from a result
@@ -624,6 +709,10 @@ that project. It covers:
 - the plan: full validation (§5) against the project's functions (a plan can stop validating
   when a function it uses changes), and a warning for each `file` binding whose file is not
   there (or not readable) now;
+- the project's resources (§6): each capacity fn visible to the project with an `int` (or
+  `Any`) output `capacity` and no required input (`project p: project#resources.cpu.capacity_fn`);
+  a step whose `needs` names a resource the project does not declare is a problem, one asking
+  for more than a fixed capacity (lowered since) a warning;
 - the state agreeing with the plan (no state for unknown steps or undeclared plan inputs,
   valid statuses, outputs of succeeded steps passing their output types, plan input values
   passing their types).
@@ -651,7 +740,9 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 | `step.retry` | `rev, author, reason, step` | `step_retry` |
 | `step.cancel` | `step, author, reason` | `step_cancel`: the runner then kills the step and fails it with `cancelled: <reason>` (a pending `core.external` step fails at once) |
 | `step.submit` | `step, run, outputs, author?` | every accepted `step_submit` (§5) |
-| `step.status` | `step, from, to, error?, run_ids?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished |
+| `step.status` | `step, from, to, error?, run_ids?, needs?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished, `needs` when a step with `needs` is admitted (goes `running`, §6) |
+| `step.lease` | `step, run, resource, amount, state, reason?` | a section lease (§6 "Resources"): the runner granting it (`state` `held`), the fn letting it go (`released`), or the runner dropping a granted one whose run ended (`released`, `reason` `its run ended`) |
+| `step.queued` | `step, needs, resources, reason` | the runner, when a ready step's `queued` resources change (§6 "Resources"): `resources` those it is short of, `reason` as `status` words it then (`needs lane 1 (56/56 held)`); once per change, never every tick |
 | `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?, author?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` and the `author`; a direct call's running record also its `pid` and `pid_start` |
 | `message` | `thread, from, to?, body, needs_reply, data?` | `thread.post` and `thread_post` (§10) |
 | `inbox.post` | `item, title, from?, run?, input?` | `inbox_post`, `inbox.ask` (§8a); `run` when a step's run asks |
@@ -660,7 +751,8 @@ runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
 | `inbox.adopt` | `item, from, run?, was?, status` | `inbox.ask` taking up its step's own earlier item (`status` open, or answered while nobody waited); `was` the run that asked before (§8a) |
 | `project.pause` | `paused, reason?, author` | `project_update` (or `drain`, `release`, the dashboard's Pause) that changes `paused` |
 | `project.archive` | `archived, reason?, author` | `project_update` (or the dashboard's Archive) that changes `archived` |
-| `project.update` | `fields, reason?, author` | `project_update` that changes the description and/or the icon: `fields` names them |
+| `project.update` | `fields, reason?, author` | `project_update` that changes the description, the icon and/or the resources: `fields` names them |
+| `project.capacity` | `resource, fn, capacity, error?` | the runner, when a capacity fn's cached value or error changes (§6 "Resources"; `capacity` null before its first good value) |
 | `run.adopt` | `step or call, run, outcome` | the runner, once per leftover run: what its dir showed (`watching`, `finished`, `unknown`, `restarted`, `not started`, §6) |
 | `run.orphan` | `run` | a live run nothing referenced, killed at startup (§6) |
 
@@ -711,7 +803,9 @@ if __name__ == "__main__":
 ```
 
 `run(main, retries=0, backoff=30)` reads stdin, calls `main(inp, ctx)` (`ctx`: `project`, `step`,
-`run_id`, `run_dir`, `home`, `fn_dir`, `attempt`, `log(msg)`, and for an open fn's step
+`run_id`, `run_dir`, `home`, `fn_dir`, `attempt`, `log(msg)`, `acquire(resource, amount=1,
+timeout=None)` — a context manager holding a section lease, §6 "Resources" — and for an open
+fn's step
 `extra_inputs` `{name: {type}}` and `outputs` `{name: {type, doc}}` from the env of §4, else
 empty) with stdout redirected to stderr,
 prints the result as JSON. On `Transient` it sleeps `backoff` s (env `SLUICE_BACKOFF` overrides)
@@ -1175,9 +1269,9 @@ resolved author), and
 | Tool | Args | Returns |
 |---|---|---|
 | `docs` | `topic?` | the index, or one page as markdown |
-| `projects_list` | – | `[{name, description, rev, counts, archived, paused, icon?}]`; `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
-| `project_create` | `name, description?, icon?, author?` | `{name}` (with an empty plan); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
-| `project_update` | `name, description?, archived?, paused?, icon?, reason?, author?` | `{name}`; each change is a `project.pause`, `project.archive` or `project.update` record with the reason and author (§6b); `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2) |
+| `projects_list` | – | `[{name, description, rev, counts, archived, paused, resources?, icon?}]`; `resources` when it declares any (§6); `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
+| `project_create` | `name, description?, icon?, resources?, author?` | `{name}` (with an empty plan and `resources`, §6 "Resources": `{"lane": 56, "cpu": {"capacity_fn": "p.cpu"}}`; a bad shape or a capacity fn the project does not see is `bad_request`); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
+| `project_update` | `name, description?, archived?, paused?, icon?, resources?, reason?, author?` | `{name}`; each change is a `project.pause`, `project.archive` or `project.update` record with the reason and author (§6b); `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2); `resources` sets each resource it names and removes each it maps to null (refused, `bad_request`, for one a step's `needs` names or a lease holds or waits for), the others kept (§6 "Resources") |
 | `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls, submissions and outcomes in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name can be created once the old directory is gone, and starts clean |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, icon?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step, `icon` its icon (§4); `error` marks a function with a problem |
 | `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
@@ -1207,12 +1301,12 @@ resolved author), and
 | `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120, settles? = "short"` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs?, omitted?}]}`, the outputs as `settles` says: `short` only the booleans, numbers, strings of at most 80 characters on one line and a `summary`'s first line cut to 200 characters and "…", the others' names in `omitted`; `full` every output whole; `none` no `outputs`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all, the messages first in `records` (each group in seq order). `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
 | `drain` | `projects?, author?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in SQLite so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
 | `release` | `author?` | unpauses exactly the projects the maintenance ledger lists and clears it; `{released}`. Projects paused otherwise stay paused |
-| `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` |
+| `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, queued?, needs?, leases?, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` (`queued`: why a step queued on resources waits; `leases`: the section leases its fn holds or waits for, §6) |
 | `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
 | `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
 | `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
 | `plan_prune` | `project, older_than_hours? = 0, tags?, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago (with `tags`, only the done units with a step carrying one of them), in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
-| `status` | `project, steps?, tags?, brief? = false, all? = false, view? = "steps", state?` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`; a ready `core.external` step, §5: `external: set its outputs with step_set_output`). `view: "units"` returns one compact row per unit instead (below); `state` (only with it) keeps the units in these states, and `brief` is refused with it |
+| `status` | `project, steps?, tags?, brief? = false, all? = false, view? = "steps", state?` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, resources?: {name: {capacity, held, queued, capacity_fn?, error?, holders?, waiting?}}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, needs?, priority?, leases?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`, `queued: needs lane 1 (56/56 held)` for a step queued on resources (§6); a ready `core.external` step, §5: `external: set its outputs with step_set_output`; `resources` when the project declares any, §6 "Resources"). `view: "units"` returns one compact row per unit instead (below); `state` (only with it) keeps the units in these states, and `brief` is refused with it |
 | `thread_post` | `project, thread, body, needs_reply? = true, to?, from?, data?, author?` | `{seq}`: appends the `message` record the `thread.post` fn appends (§10; the same validation), here and now; `seq` is its seq in the log, so it is delivered. `from` defaults to the author (§6b) |
 | `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); `from` defaults by the author rule (§6b); refused (`not_found`) when `input` is not a declared plan input |
 | `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project`; an open item a step or a call asked carries `waiting` (and `stopped` when false, §8a) |
@@ -1220,20 +1314,22 @@ resolved author), and
 | `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
 
 **The units view.** `status(project, view="units")` answers "what is running, blocked or
-failed, and for how long" in one call: `{rev, paused, units: [{unit, state, age, engine, steps,
-blocked, last, line}], done_units?}`, one row per unit as `sluice next` sees units (§9: the
+failed, and for how long" in one call: `{rev, paused, resources?, units: [{unit, state, age,
+engine, steps, blocked, last, line}], done_units?}` (`resources` as in the steps view), one row per unit as `sluice next` sees units (§9: the
 steps sharing a `unit:<name>` tag, else an untagged step's component among the untagged steps,
 named by its first step; a standalone step is a unit of one), sorted by `age`, oldest first
 (unknown last). `state` is `running` (a step running), else `failed` (a step failed or stale),
 else `settled` (every step succeeded or skipped), else `blocked` (nothing running or startable
-and something pending and held, by `sluice next`'s held rule), else `pending`. `age` is the
+and something pending and held, by `sluice next`'s held rule), else `queued` (a step queued on
+resources, §6), else `pending`. `age` is the
 seconds its running step has run (the longest, when several), else since its last change (its
 steps' last `step.status` record, start or finish), null when nothing is known. `engine` is
 `engine·model·effort` from the unit's agent step (its first step whose fn is open): the values
 its `engine`, `model` and `effort` inputs are bound to now, each cut to 12 characters, empty
 when none. `steps` is each step's mark in plan order, the `<unit>-` prefix dropped: `✓`
-succeeded, `▶` running, `·` pending, `✗` failed, `~` stale, `–` skipped, `‖` paused
-(`fork✓ work▶ landed· close·`). `blocked`, on a blocked unit, says why its first held step is
+succeeded, `▶` running, `·` pending, `✗` failed, `~` stale, `–` skipped, `‖` paused, `≡`
+queued (`fork✓ work▶ landed· close·`). On a queued unit, `blocked` is its first queued step's
+reason (`queued: needs lane 1 (56/56 held)`). `blocked`, on a blocked unit, says why its first held step is
 held: `paused` (or `paused: <reason>`), `project paused`, `external`, `input <n> (no value)`, or
 the first edge it waits on, `after <step> (<status>)` for an `after` edge and `reads <step>
 (<status>)` for a handoff. `last` is the last message on any of its steps' threads
@@ -1245,7 +1341,8 @@ fig-4201    ▶ 42m  opus·xhigh  fork✓ work▶ landed· close· rm·  "Q: Whi
 fig-4202    ‖   –  devin  fo· wo· la· cl· rm·  after fig-4200-work (failed)
 ```
 
-(name, the state's mark — `▶` running, `✗` failed, `‖` blocked, `✓` settled, `·` pending — and
+(name, the state's mark — `▶` running, `✗` failed, `‖` blocked, `≡` queued, `✓` settled, `·`
+pending — and
 age, engine, step marks with names cut to 4 characters when they do not fit, then what it is
 blocked on and its last message, cut with "…"). `state` filters (one state or a list); `steps`
 and `tags` select steps, and a unit is shown when any of its steps is selected. Done units
@@ -1444,7 +1541,8 @@ included in database backups (§9).
 `sluice me` reads `SLUICE_PROJECT`, `SLUICE_STEP` and `SLUICE_RUN_ID` from the environment
 (the runner sets them for every run, and the native agent packs pass them through to the
 engine); outside a step it says so and exits 1, and `--project`/`--step` work anywhere. It
-prints, compactly: the step, its fn, doc, status and running time; its inputs (cut like
+prints, compactly: the step, its fn, doc, status and running time (and, for a step queued on
+resources, its `queued: needs …` line, §6); its inputs (cut like
 `status`'s `brief`); each step it reads or runs after, with its status and short outputs
 (an output named `summary` whole, else `final` cut to ~300 characters, plus any output whose
 name ends in `report` or `path`); the messages on its `step-<id>` thread still unanswered,

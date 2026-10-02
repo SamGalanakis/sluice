@@ -9,8 +9,10 @@ import json
 import re
 from typing import Any
 
+from . import leases as LS
 from . import log as L
 from . import plan as P
+from . import resources as RS
 from . import state as S
 from . import types as T
 from .errors import NotFound
@@ -74,15 +76,22 @@ def _unanswered(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def context(store: Store, project: str, step: str, run: str | None = None) -> dict[str, Any]:
-    """The step's context: {project, step, fn, doc, status, started, finished, elapsed (s),
-    run, inputs (cut like status(brief)), upstream, messages (unanswered, newest last),
-    submit {outputs, command}, thread, ask}."""
+    """The step's context: {project, step, fn, doc, status, queued?, needs?, leases?, started,
+    finished, elapsed (s), run, inputs (cut like status(brief)), upstream, messages
+    (unanswered, newest last), submit {outputs, command}, thread, ask}; `queued` says why a
+    step waiting on resources has not started (`queued: needs lane 1 (56/56 held)`)."""
     _, plan = store.plan(project)
     if step not in plan.steps:
         raise NotFound(f"the plan of project {project} has no step {step!r}")
     s = plan.steps[step]
-    state = store.read_state(project)
+    with store.rx() as conn:
+        state, resources = store.read_state(project), store.resources(project)
+        leases = LS.rows(conn, project)
     e = S.entry_of(state, step)
+    queued = RS.queued_reason(s, state, RS.capacities(resources, state),
+                              RS.held(plan, state, leases))
+    mine = [{"resource": x["resource"], "amount": x["amount"], "held": x["granted"] is not None}
+            for x in leases if x["step"] == step]
     runs = e.get("run_ids") or []
     run = run or (runs[-1] if len(runs) == 1 else None)
     started, finished = _iso(e.get("started")), _iso(e.get("finished"))
@@ -119,7 +128,11 @@ def context(store: Store, project: str, step: str, run: str | None = None) -> di
     ask = {"name": "thread.post", "project": project, "direct": True,
            "inputs": {"thread": thread, "from": step, "to": "orchestrator", "body": "..."}}
     return {"project": project, "step": step, "fn": s.fn.name, "doc": s.doc,
-            "status": e.get("status", "pending"), "started": e.get("started"),
+            "status": e.get("status", "pending"),
+            **({"queued": queued} if queued else {}),
+            **({"needs": s.needs} if s.needs else {}),
+            **({"leases": mine} if mine else {}),
+            "started": e.get("started"),
             "finished": e.get("finished"), "elapsed": elapsed, "run": run,
             "inputs": _brief(inp), "upstream": upstream,
             "messages": _unanswered(msgs),
@@ -137,6 +150,11 @@ def render(ctx: dict[str, Any]) -> str:
     if ctx.get("run"):
         head += f" · run {ctx['run']}"
     lines = [head]
+    if ctx.get("queued"):
+        lines.append(ctx["queued"])
+    for x in ctx.get("leases") or []:
+        lines.append(f"lease: {x['resource']} {x['amount']} "
+                     f"({'held' if x['held'] else 'waiting'})")
     if ctx.get("doc"):
         lines.append(f"doc: {ctx['doc']}")
     if ctx.get("inputs"):

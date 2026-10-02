@@ -22,7 +22,9 @@ import sluice
 
 from . import calls as C
 from . import db
+from . import leases as LS
 from . import log as L
+from . import resources as RS
 from . import state as S
 from . import types as T
 from .db import Busy
@@ -51,6 +53,8 @@ NOT_STARTED = "not started (the runner stopped before it started the run)"
 GC_EVERY = 60.0  # seconds between the runner's passes removing unreferenced run dirs
 KILL_GRACE = 5.0  # seconds between SIGTERM and SIGKILL when stopping a fn
 NATIVE_PROCESSES = "native-processes.json"
+CAPACITY_EVERY = 10.0  # seconds from a capacity fn's call ending to the next call
+CAPACITY_TIMEOUT = 20.0  # seconds a capacity fn may run before it is killed (a failure)
 
 
 # ---- one fn execution (SPEC §4 process contract) ----------------------------------------
@@ -481,11 +485,53 @@ class Active:
         kill(*self.runs)
 
 
+@dataclass
+class Capacity:
+    """A capacity fn's resource as the runner knows it: its last good value (None before
+    the first), its last call's failure, and when it may be called next. `busy` while a call
+    runs, in a thread of its own."""
+
+    fn: str
+    value: int | None = None
+    error: str | None = None
+    due: float = 0.0  # time.monotonic() from which the next call may start
+    busy: bool = False
+
+
+def call_capacity(store: Store, project: str, resource: str, fn: Fn,
+                  timeout: float) -> tuple[int | None, str | None]:
+    """Call a resource's capacity fn with no inputs: (capacity, None), or (None, why it
+    failed). A process fn runs in projects/<p>/capacity/<resource>/ (outside runs/: no GC or
+    orphan sweep sees it) and is killed after `timeout` seconds."""
+    inp: dict[str, Any] = {k: None for k in fn.inputs}
+    if fn.native:
+        out, err = run_native(fn, inp)
+    else:
+        d = store.project_dir(project) / "capacity" / resource
+        proc = spawn(fn, inp, d, fn_env(store, project, fn, "", f"capacity-{resource}", d))
+        try:
+            code = proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            kill(Run(inp, run_dir=d, proc=proc), grace=1.0)
+            return None, f"timed out after {timeout:g}s"
+        _reap_native(d)
+        out, err = read_run(fn, d, code)
+    if err:
+        lines = err.strip().splitlines() or [err]
+        return None, (lines[0] + (f": {lines[-1]}" if len(lines) > 1 else ""))[:300]
+    value = out.get("capacity")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None, f"capacity is {canonical(value)}, not an integer >= 0"
+    return value, None
+
+
 class Runner:
     def __init__(self, store: Store, kill_runs: bool = False):
         self.store = store
         self.kill_runs = kill_runs
         self.active: dict[tuple[str, ...], Active] = {}
+        self._caps: dict[tuple[str, str], Capacity] = {}  # (project, resource) -> its fn's
+        self._caps_lock = threading.Lock()
         self._reported: dict[str, str] = {}
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -745,9 +791,11 @@ class Runner:
     # ---- one project's steps ----
 
     def _persist(self, project: str, state: dict[str, Any], was: dict[str, Any],
-                 before: str) -> bool:
-        """Write the state and a step.status record for every status that changed since `was`,
-        in the caller's transaction. Returns whether anything changed."""
+                 before: str, plan: Plan | None = None,
+                 extra: list[dict[str, Any]] | None = None) -> bool:
+        """Write the state and a step.status record for every status that changed since `was`
+        (a step admitted on resources, §6, carrying its `needs`), then the `extra` records, in
+        the caller's transaction. Returns whether anything changed."""
         if canonical(state) == before:
             return False
         records = []
@@ -762,7 +810,11 @@ class Runner:
                 rec["reason"] = e.get("skipped")
             if e["status"] in ("succeeded", "failed") and e.get("run_ids"):
                 rec["run_ids"] = e["run_ids"]
+            if e["status"] == "running" and plan is not None and sid in plan.steps \
+                    and plan.steps[sid].needs:
+                rec["needs"] = plan.steps[sid].needs
             records.append(rec)
+        records += extra or []
         self.store.write_state(project, state)
         if records:
             self.store.append(project, *records)
@@ -839,7 +891,7 @@ class Runner:
         reserved launches and whether the state changed."""
         done, stop, launch = [], {}, {}
         drop: list[Run] = []  # runs of steps that left the plan, killed after the commit
-        with self.store.tx():
+        with self.store.tx() as conn:
             state = self.store.read_state(project)
             before = canonical(state)
             was = {sid: e.get("status") for sid, e in state["steps"].items()}
@@ -879,6 +931,10 @@ class Runner:
                     done.append(key)
             held = self.store.paused(project)  # a paused project starts nothing
             holding = set(plan.steps) if held else {s for s, x in plan.steps.items() if x.paused}
+            caps, records = self._capacities(project, self.store.resources(project), state)
+            # what the running steps hold (adopted ones too) and the leases, granted first
+            holds, leased = self._leases(conn, project, plan, state, caps)
+            queued: dict[str, list[str]] = {}  # step -> the resources it is short of
             order = topo_order(plan)
             progress = True
             while progress:  # built-ins finish inline and can make more steps ready
@@ -887,6 +943,7 @@ class Runner:
                 progress = False
                 if problems:
                     break
+                asking = []  # ready steps with needs: admitted below, as they fit
                 for sid in order:
                     step = plan.steps[sid]
                     if st[sid]["status"] != "pending" or not is_ready(step, plan, state):
@@ -898,16 +955,122 @@ class Runner:
                         continue
                     if step.fn.external:
                         continue  # done outside sluice: it waits to be settled by hand
+                    if step.needs:
+                        asking.append(sid)
+                        continue
                     if (a := self._begin(project, step, plan, state)) is not None:
                         launch[sid] = a
                     progress = True
-            changed = self._persist(project, state, was, before)
+                # higher priority first; the sort is stable, so ties keep the plan's order
+                for sid in sorted(asking, key=lambda s: -plan.steps[s].priority):
+                    step = plan.steps[sid]
+                    if short := RS.short(step.needs, caps, holds):
+                        queued[sid] = short  # stays pending, queued, until it fits
+                        continue
+                    queued.pop(sid, None)
+                    if (a := self._begin(project, step, plan, state)) is not None:
+                        launch[sid] = a
+                    if st[sid]["status"] == "running":
+                        RS.take(holds, step.needs)
+                    progress = True
+            records += _queue_marks(state, plan, queued, caps, holds)
+            changed = self._persist(project, state, was, before, plan, records) or leased
         for key in done:
             self.active.pop(key, None)
         for sid, a in launch.items():
             self.active[("step", project, sid)] = a
         kill(*drop)
         return stop, launch, changed
+
+    def _capacities(self, project: str, resources: dict[str, dict[str, Any]],
+                    state: dict[str, Any]) -> tuple[dict[str, int | None],
+                                                    list[dict[str, Any]]]:
+        """Each resource's capacity for this tick (RS.capacities), inside the tick's
+        transaction: what the capacity fns' calls have learned goes into the state's
+        `resources` ({name: {fn, capacity, error?}}; a `project.capacity` record per change)
+        and the calls that are due start, each in a thread of its own. Never waits on a call:
+        a failed one leaves the last good value standing, and none yet means no capacity."""
+        dynamic = {n: spec["capacity_fn"] for n, spec in resources.items()
+                   if "capacity_fn" in spec}
+        seen = state.get("resources") if isinstance(state.get("resources"), dict) else {}
+        kept, records = {}, []
+        with self._caps_lock:
+            for key in [k for k in self._caps if k[0] == project and k[1] not in dynamic]:
+                del self._caps[key]
+        for name, fn_name in dynamic.items():
+            with self._caps_lock:
+                c = self._caps.get((project, name))
+                if c is None or c.fn != fn_name:  # a restart: the state's value stands
+                    old = seen.get(name) if isinstance(seen.get(name), dict) else {}
+                    mine = old.get("fn") == fn_name
+                    value = old.get("capacity") if mine else None
+                    c = self._caps[(project, name)] = Capacity(
+                        fn_name, value if isinstance(value, int) else None,
+                        old.get("error") if mine and isinstance(old.get("error"), str) else None)
+                start = not c.busy and time.monotonic() >= c.due
+                c.busy = c.busy or start
+                row = {"fn": fn_name, "capacity": c.value,
+                       **({"error": c.error} if c.error else {})}
+            if start:
+                threading.Thread(target=self._refresh, args=(project, name, c), daemon=True,
+                                 name=f"sluice-capacity-{project}-{name}").start()
+            kept[name] = row
+            if seen.get(name) != row:
+                records.append({"kind": "project.capacity", "resource": name, **row})
+        if kept:
+            state["resources"] = kept
+        else:
+            state.pop("resources", None)
+        return RS.capacities(resources, state), records
+
+    def _leases(self, conn: Any, project: str, plan: Plan, state: dict[str, Any],
+                caps: dict[str, int | None]) -> tuple[dict[str, int], bool]:
+        """Inside the tick's transaction, before any step is admitted: drop the leases of
+        runs that are no longer running (a crash, a kill, a cancel: a dead step keeps no
+        hold), then grant the waiting ones that fit, their step's priority first, then first
+        come. Returns what the project holds then (RS.held) and whether a lease changed; a
+        `step.lease` record for each granted or dropped hold."""
+        live = {rid for e in state["steps"].values() if e.get("status") == "running"
+                for rid in e.get("run_ids") or [] if isinstance(rid, str)}
+        live -= {run.rid for key, a in self.active.items() if key[:2] == ("step", project)
+                 for run in a.runs if _ended(run)}  # a scattered step's finished items
+        leases, records = LS.rows(conn, project), []
+        gone = [x for x in leases if x["run"] not in live]
+        for x in gone:
+            conn.execute("DELETE FROM leases WHERE id = ?", (x["id"],))
+            if x["granted"] is not None:
+                records.append(LS.record(x, "released", "its run ended"))
+        leases = [x for x in leases if x["run"] in live]
+        holds = RS.held(plan, state, leases)
+        prio = {sid: step.priority for sid, step in plan.steps.items()}
+        for x in LS.grant_order([x for x in leases if x["granted"] is None],
+                                lambda sid: prio.get(sid, 0)):
+            if RS.short({x["resource"]: x["amount"]}, caps, holds):
+                continue
+            x["granted"] = now_iso()
+            conn.execute("UPDATE leases SET granted = ? WHERE id = ?", (x["granted"], x["id"]))
+            RS.take(holds, {x["resource"]: x["amount"]})
+            records.append(LS.record(x, "held"))
+        if records:
+            self.store.append(project, *records)
+        return holds, bool(gone or records)
+
+    def _refresh(self, project: str, name: str, c: Capacity) -> None:
+        """One call of a resource's capacity fn (its own thread): a good value replaces the
+        last one, a failure is kept as its error; either way the next call is due
+        CAPACITY_EVERY seconds on, and the runner wakes to carry it into the state."""
+        try:
+            fn = self.store.registry(project).get(c.fn)
+            value, err = (None, f"the project sees no fn {c.fn!r}") if fn is None else \
+                call_capacity(self.store, project, name, fn, CAPACITY_TIMEOUT)
+        except Exception as ex:  # noqa: BLE001 - a failed call is the resource's error
+            value, err = None, f"{type(ex).__name__}: {ex}"
+        with self._caps_lock:
+            if value is not None:
+                c.value = value
+            c.error = err
+            c.due, c.busy = time.monotonic() + CAPACITY_EVERY, False
+        self.wake()
 
     def _launch(self, project: str, launch: dict[str, Active]) -> None:
         """Start the reserved runs, outside any transaction: make each run's dir and spawn its
@@ -1074,6 +1237,26 @@ class Runner:
             _finish(rec, error=a.runs[0].error)
             if C.record(self.store, project, rec, ("running",)):
                 self.active.pop(key, None)
+
+
+def _queue_marks(state: dict[str, Any], plan: Plan, queued: dict[str, list[str]],
+                 caps: dict[str, int | None], holds: dict[str, int]) -> list[dict[str, Any]]:
+    """Set `queued` (the resources it is short of) on each pending step this tick left
+    queued, and take it off every other entry; a `step.queued` record for each step whose
+    resources changed — once per change, not every tick."""
+    records = []
+    for sid, e in state["steps"].items():
+        want = queued.get(sid) if e.get("status") == "pending" else None
+        if e.get("queued") == want:
+            continue
+        if want is None:
+            e.pop("queued", None)
+            continue
+        e["queued"] = want
+        needs = plan.steps[sid].needs
+        records.append({"kind": "step.queued", "step": sid, "needs": needs, "resources": want,
+                        "reason": RS.reason(needs, want, caps, holds)})
+    return records
 
 
 def _finish(e: dict[str, Any], outputs: Any = None, error: str | None = None) -> None:

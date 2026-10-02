@@ -17,6 +17,8 @@ Workflow:
    then `plan_patch(project, rev, ops, reason)` to add steps. Many units of one shape: write
    a recipe once and add each unit with `unit_add(project, recipe, params)`; the same call takes
    its edges, input overrides and tags (`docs("plans")`). `edge_add` adds an edge at any time.
+   To cap how many steps run at once, declare resources on the project (`project_update(name,
+   resources={"lane": 4})`) and give steps `needs` (`docs("plans")`, Resources).
 4. Watch with `status(project)` (`view="units"`: one short line per unit), or wait for
    changes with `log_wait(project, since_seq)` (every step status change, call and message
    is a log record). A failed step stays failed until you
