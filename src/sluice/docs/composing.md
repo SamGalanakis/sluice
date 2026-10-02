@@ -15,9 +15,11 @@ it stays easy to read and to change.
 - **Gate with `when`, not a gate step.** `"when": "tests/ok"` on `land` runs it only if the
   tests passed; otherwise it and what reads from it are skipped, and cleanup ordered `after`
   it still runs.
-- **Draft, then release.** Steps you add come in paused; add the next handoffs, read them
-  over, then `step_pause(steps=[...], subtree=true, paused=false)` to start them. Pause by
-  tag to back off when the machine is busy.
+- **Steps start when ready.** A step you add starts as soon as its inputs are there. To draft
+  a stretch first, add it with `start=false` (it comes in paused), read it over, then
+  `step_pause(steps=[...], subtree=true, paused=false)` to let it go. To keep everything from
+  starting at once, declare resources on the project and give steps `needs` (`docs("plans")`,
+  Resources); pause by tag to back off when the machine is busy.
 - **Agents do their own mechanics.** Worktrees, branches, merges, rebases, commit messages,
   formatting a prompt, reading a sha: all of it happens inside the agent that needs it. Tell an
   agent that works next to others to use a worktree and branch of its own.

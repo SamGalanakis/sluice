@@ -149,7 +149,7 @@ def test_leases_and_needs_share_one_total(store, runner):
     assert running(store, "p") == ["x", "y"]
     assert store.status("p")["resources"]["lane"]["held"] == 2
     # a lease counts against a step's needs ...
-    store.add_step("p", "z", gate(needs={"lane": 1}), "test", "", start=True)
+    store.add_step("p", "z", gate(needs={"lane": 1}), "test", "")
     runner.tick()
     assert store.read_state("p")["steps"]["z"]["queued"] == ["lane"]
     z = next(r for r in store.status("p")["steps"] if r["id"] == "z")
@@ -157,7 +157,7 @@ def test_leases_and_needs_share_one_total(store, runner):
     release(runner, store, "p", "x")  # x's needs free: z is admitted
     tick_until(runner, store, "p", lambda s: s["steps"]["z"]["status"] == "running")
     # ... and a step's needs against a lease
-    store.add_step("p", "w", lease("lane"), "test", "", start=True)
+    store.add_step("p", "w", lease("lane"), "test", "")
     waiting_for(runner, store, "p", 1, "lane")
     for _ in range(3):
         runner.tick()

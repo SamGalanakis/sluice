@@ -1,4 +1,4 @@
-"""Pausing by default, by id, tag and subtree with a reason; ordering edges (`after`); tags;
+"""Starting when ready unless drafted, pausing by id, tag and subtree with a reason; ordering edges (`after`); tags;
 cancelling a running step."""
 
 import json
@@ -15,20 +15,29 @@ def status_of(store, project):
     return {s["id"]: s for s in store.status(project, all=True)["steps"]}
 
 
-def test_steps_added_through_the_tools_come_in_paused_unless_started(store, runner):
+def test_steps_added_through_the_tools_start_when_ready_unless_drafted(store, runner):
     store.create_project("p", "", "t", "t")
     store.patch("p", 1, [{"op": "add", "path": "/steps/a", "value": add(d(1), d(2))},
                          {"op": "add", "path": "/steps/b",
                           "value": add(d(1), d(1), paused=False)}], "t", "draft", start=False)
-    store.add_step("p", "c", add(d(2), d(2)), "t", "")
-    store.add_step("p", "e", add(d(3), d(3)), "t", "", start=True)
+    store.add_step("p", "c", add(d(2), d(2)), "t", "", start=False)
+    store.add_step("p", "e", add(d(3), d(3)), "t", "")
+    store.patch("p", 4, [{"op": "add", "path": "/steps/f", "value": add(d(4), d(4))}], "t",
+                "go")
     steps = store.get("p")["steps"]
     assert steps["a"]["paused"] is True and steps["c"]["paused"] is True
-    assert steps["b"]["paused"] is False and "paused" not in steps["e"]
+    assert steps["b"]["paused"] is False
+    assert "paused" not in steps["e"] and "paused" not in steps["f"]
     [edit] = [h for h in store.history("p") if h["reason"] == "draft"]
     assert {"op": "add", "path": "/steps/a/paused", "value": True} in edit["ops"]
-    settle(runner, store, "p", until=lambda s: s["e"]["status"] == "succeeded"
-           and s["b"]["status"] == "succeeded")
+    [go] = [h for h in store.history("p") if h["reason"] == "go"]
+    assert go["ops"] == [{"op": "add", "path": "/steps/f", "value": add(d(4), d(4))}]
+    runner.tick()  # the plain adds start on the next tick; the drafts stay held
+    st = statuses(store, "p")
+    assert st["e"] != "pending" and st["f"] != "pending" and st["b"] != "pending"
+    assert st["a"] == "pending" and st["c"] == "pending"
+    settle(runner, store, "p", until=lambda s: all(
+        s[x]["status"] == "succeeded" for x in ("b", "e", "f")))
     assert statuses(store, "p")["a"] == "pending"
     assert status_of(store, "p")["a"]["waiting"] == ["paused"]
 

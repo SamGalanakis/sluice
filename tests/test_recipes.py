@@ -136,7 +136,7 @@ def test_broken_recipes_are_reported_never_fatal(store):
         store.unit_add("p", "missing", {"unit": "u"}, author="t")
 
 
-def test_unit_add_is_one_edit_tagged_and_paused_by_default(store, runner):
+def test_unit_add_is_one_edit_tagged_and_starts_when_ready(store, runner):
     create(store, "p", {"old": {"run": "core.echo", "in": {"value": {"default": 0}}}})
     write_recipe(store.home / "recipes", "pair", {
         "{unit}-a": {"run": "test.add", "in": {"a": {"default": "{n}"}, "b": {"default": 1}},
@@ -150,22 +150,25 @@ def test_unit_add_is_one_edit_tagged_and_paused_by_default(store, runner):
     plan = store.get("p")
     assert plan["steps"]["one-a"]["tags"] == ["unit:one", "heavy"]
     assert plan["steps"]["one-b"]["tags"] == ["unit:one"]
-    assert plan["steps"]["one-a"]["paused"] is True and plan["steps"]["one-b"]["paused"] is True
+    assert "paused" not in plan["steps"]["one-a"] and "paused" not in plan["steps"]["one-b"]
     edits = [h for h in store.history("p") if h["kind"] == "plan.edit"]
     assert edits[-1]["rev"] == rev + 1 and edits[-1]["author"] == "orch" and \
         edits[-1]["reason"] == "go"
     assert store.select_steps("p", tags=["unit:one"]) == ["one-a", "one-b"]
     runner.tick()
-    assert statuses(store, "p")["one-a"] == "pending"  # paused
+    assert statuses(store, "p")["one-a"] != "pending"  # ready, so started on the next tick
 
-    started = store.unit_add("p", "pair", {"unit": "two", "n": 1}, start=True, author="orch")
-    assert "paused" not in store.get("p")["steps"]["two-a"]
+    drafted = store.unit_add("p", "pair", {"unit": "two", "n": 1}, start=False, author="orch")
+    two = store.get("p")["steps"]
+    assert two["two-a"]["paused"] is True and two["two-b"]["paused"] is True
     rec = L.read(store.home, "p", kinds=["plan.edit"])["records"][-1]
-    assert rec["rev"] == started["rev"] and rec["reason"] == "add unit two (recipe pair)"
+    assert rec["rev"] == drafted["rev"] and rec["reason"] == "add unit two (recipe pair)"
+    runner.tick()
+    assert statuses(store, "p")["two-a"] == "pending"  # drafted: held
     with pytest.raises(BadRequest) as e:  # the unit exists already: nothing is added
         store.unit_add("p", "pair", {"unit": "one", "n": 2}, author="orch")
     assert str(e.value) == "steps one-a, one-b already exist in the plan of project p"
-    assert store.get("p")["rev"] == started["rev"]
+    assert store.get("p")["rev"] == drafted["rev"]
     with pytest.raises(InvalidPlan) as e:  # expansion errors change nothing either
         store.unit_add("p", "pair", {"unit": "three", "n": "x"}, author="orch")
     assert e.value.errors == ['params.n: expected int, got "x"']
@@ -225,7 +228,7 @@ def test_the_tools_through_sluice_tool(store, monkeypatch, capsys):
         {"name": "one", "doc": "one echo", "params": {"unit": "string", "v": "Any"},
          "scope": "global"}]
     args = {"project": "p", "recipe": "one", "params": {"unit": "u", "v": [1]},
-            "start": True, "reason": "try it"}
+            "reason": "try it"}
     assert cli.main(["tool", "unit_add", json.dumps(args)]) == 0
     assert json.loads(capsys.readouterr().out) == {"rev": 3, "steps": ["u-x"]}
     assert store.get("p")["steps"]["u-x"] == {

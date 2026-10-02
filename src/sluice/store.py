@@ -559,7 +559,7 @@ class Store:
 
     def patch(self, project: str, rev: int, ops: Any, author: str, reason: str,
               start: bool = True) -> int:
-        """Apply an RFC 6902 patch at `rev`. Unless `start`, a step it adds comes in paused
+        """Apply an RFC 6902 patch at `rev`. With `start` false, a step it adds comes in paused
         (unless the step itself says `paused`); that pause is one more op in the history.
         Every finished step it removes keeps its outcome (`outcomes`). Raises Conflict,
         InvalidPlan or NotFound."""
@@ -652,7 +652,7 @@ class Store:
     # ---- one step of the plan: plan_patch for a single step, at the current rev ----
 
     def add_step(self, project: str, sid: str, step: Any, author: str, reason: str,
-                 start: bool = False) -> int:
+                 start: bool = True) -> int:
         if not isinstance(sid, str) or not P.ID_RE.match(sid):
             raise BadRequest(f"step ids match {P.ID_RE.pattern}, got {sid!r}")
         with self.tx():
@@ -923,12 +923,12 @@ class Store:
         {name, scope, error} for a broken one."""
         return [r.summary() for _, r in sorted(self._recipes(project).items())]
 
-    def unit_add(self, project: str, recipe: Any, params: Any, start: bool = False,
+    def unit_add(self, project: str, recipe: Any, params: Any, start: bool = True,
                  author: str = "", reason: str = "", tags: Any = None, after: Any = None,
                  when: Any = None, inputs: Any = None) -> dict[str, Any]:
         """Expand a recipe with `params` (`unit` among them) and add its steps in one edit at
-        the current rev, each tagged `unit:<unit>`, then its own tags, then `tags`; unless
-        `start`, they come in paused. `after`, `when` and `inputs` are keyed by a recipe
+        the current rev, each tagged `unit:<unit>`, then its own tags, then `tags`; with
+        `start` false, they come in paused. `after`, `when` and `inputs` are keyed by a recipe
         step's suffix (its id without the leading `<unit>-`): ids appended to its `after`, its
         `when`, and literals bound to its inputs (`{"default": value}`), all in the same edit.
         Refuses ids the plan already has. Returns {rev, steps}."""

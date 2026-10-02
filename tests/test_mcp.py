@@ -11,6 +11,7 @@ from sluice import log as L
 from sluice.mcp_server import build_server
 from sluice.runner import Runner
 from tests.conftest import add, create, d
+from tests.test_recipes import write_recipe
 
 TOOLS = {"docs", "projects_list", "project_create", "project_update", "fn_list", "fn_get",
          "fn_save", "fn_call", "call_status", "plan_get", "plan_patch", "plan_history",
@@ -158,10 +159,9 @@ async def test_waits_are_capped_at_3600(store, monkeypatch):
 async def test_step_tools_edit_one_step_at_the_current_rev(store):
     async with Client(build_server(store)) as c:
         await ok(c, "project_create", name="p")
-        assert await ok(c, "step_add", project="p", step="a", spec=add(d(1), d(2)),
-                        start=True) == {"rev": 2}
-        await ok(c, "step_add", project="p", step="b", spec=add({"source": "a/sum"}, d(3)),
-                 start=True)
+        assert await ok(c, "step_add", project="p", step="a", spec=add(d(1), d(2))) == {
+            "rev": 2}
+        await ok(c, "step_add", project="p", step="b", spec=add({"source": "a/sum"}, d(3)))
         assert (await fail(c, "step_add", project="p", step="a", spec=add(d(1), d(2))))[
             "error"] == "bad_request"
         await ok(c, "step_update", project="p", step="a",
@@ -178,6 +178,29 @@ async def test_step_tools_edit_one_step_at_the_current_rev(store):
         assert (await ok(c, "plan_get", project="p"))["plan"]["steps"] == {}
         history = await ok(c, "plan_history", project="p")
         assert history[-1]["reason"] == "remove a, b"
+
+
+async def test_added_steps_start_when_ready_unless_start_is_false(store, runner):
+    write_recipe(store.home / "recipes", "one", {"{unit}-x": add(d(1), d(1))})
+    async with Client(build_server(store)) as c:
+        await ok(c, "project_create", name="p")
+        await ok(c, "plan_patch", project="p", rev=1, reason="go", ops=[
+            {"op": "add", "path": "/steps/patched", "value": add(d(1), d(2))}])
+        await ok(c, "step_add", project="p", step="added", spec=add(d(2), d(3)))
+        await ok(c, "unit_add", project="p", recipe="one", params={"unit": "u"})
+        await ok(c, "plan_patch", project="p", rev=4, reason="draft", start=False, ops=[
+            {"op": "add", "path": "/steps/patched-draft", "value": add(d(1), d(2))}])
+        await ok(c, "step_add", project="p", step="added-draft", spec=add(d(2), d(3)),
+                 start=False)
+        await ok(c, "unit_add", project="p", recipe="one", params={"unit": "v"}, start=False)
+        steps = (await ok(c, "plan_get", project="p"))["plan"]["steps"]
+    started, drafted = ["patched", "added", "u-x"], ["patched-draft", "added-draft", "v-x"]
+    assert not any("paused" in steps[s] for s in started)
+    assert all(steps[s]["paused"] is True for s in drafted)
+    runner.tick()
+    st = store.read_state("p")["steps"]
+    assert all(st[s]["status"] != "pending" for s in started)
+    assert all(st[s]["status"] == "pending" for s in drafted)
 
 
 async def test_fn_tools(store):
@@ -239,7 +262,7 @@ async def test_plan_editing_and_error_payloads(store):
         assert (await fail(c, "plan_get", project="nope"))["error"] == "not_found"
         plan = {"inputs": {"n": "int"}, "outputs": {},
                 "steps": {"a": add({"source": "n"}, d(1))}}
-        assert await ok(c, "plan_patch", project="p", rev=1, reason="start", start=True, ops=[
+        assert await ok(c, "plan_patch", project="p", rev=1, reason="start", ops=[
             {"op": "replace", "path": "/inputs", "value": plan["inputs"]},
             {"op": "replace", "path": "/steps", "value": plan["steps"]}]) == {"rev": 2}
         assert await ok(c, "plan_get", project="p") == {"rev": 2, "plan": plan}

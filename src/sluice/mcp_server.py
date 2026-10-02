@@ -329,10 +329,10 @@ def build_server(store: Store, stop: threading.Event | None = None,
 
     @tool
     def plan_patch(project: str, rev: int, ops: list[dict[str, Any]], reason: str,
-                   author: str | None = None, start: bool = False) -> Any:
-        """Edit a project's plan with RFC 6902 JSON Patch ops. A step it adds comes in
-        paused (so a drafted plan starts nothing) unless start is true or the step sets
-        `paused` itself; unpause with step_pause. Returns {rev}.
+                   author: str | None = None, start: bool = True) -> Any:
+        """Edit a project's plan with RFC 6902 JSON Patch ops. A step it adds starts as soon
+        as it is ready; pass start=false to add it paused (a draft), and unpause it with
+        step_pause. Cap how many run at once with resources and `needs`. Returns {rev}.
 
         Args:
             project: the project.
@@ -344,22 +344,23 @@ def build_server(store: Store, stop: threading.Event | None = None,
             reason: why, recorded in the plan's history.
             author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
                 client's name, else "mcp"; "cli" from `sluice tool`).
-            start: let the steps it adds start as soon as they are ready.
+            start: false adds the new steps paused (unless a step sets `paused` itself).
         """
         return {"rev": store.patch(project, rev, ops, author, reason, start)}
 
     @tool
     def step_add(project: str, step: str, spec: dict[str, Any], reason: str = "",
-                 start: bool = False, author: str | None = None) -> Any:
+                 start: bool = True, author: str | None = None) -> Any:
         """Add one step to a plan: plan_patch for a single step, at the current rev. It
-        comes in paused unless start is true (or the spec sets `paused`). Returns {rev}.
+        starts as soon as it is ready; start=false (or `paused` in the spec) adds it paused.
+        Returns {rev}.
 
         Args:
             project: the project.
             step: the new step's id.
             spec: the step, {run, in, scatter?, doc?, outputs?, paused?, after?, tags?}.
             reason: why, recorded in the plan's history.
-            start: let it start as soon as it is ready.
+            start: false adds it paused.
             author: who is editing (default: SLUICE_AUTHOR, step:<SLUICE_STEP>, the MCP
                 client's name, else "mcp"; "cli" from `sluice tool`).
         """
@@ -378,7 +379,7 @@ def build_server(store: Store, stop: threading.Event | None = None,
         return store.recipes(project)
 
     @tool
-    def unit_add(project: str, recipe: str, params: dict[str, Any], start: bool = False,
+    def unit_add(project: str, recipe: str, params: dict[str, Any], start: bool = True,
                  tags: list[str] | None = None,
                  after: dict[str, list[str] | str] | None = None,
                  when: dict[str, str] | None = None,
@@ -386,17 +387,17 @@ def build_server(store: Store, stop: threading.Event | None = None,
                  author: str | None = None, reason: str = "") -> Any:
         """Add one unit of work from a recipe: its steps with `{param}` filled in, each tagged
         `unit:<unit>` (and `tags`), with the edges and input overrides given, in one plan
-        edit at the current rev: one call stages a whole lane. They come in paused unless
-        start is true. Refused (`bad_request`) when an id it would add is already in the plan;
-        `invalid` lists every param, expansion or staging problem (nothing is written).
-        Returns {rev, steps}.
+        edit at the current rev: one call stages a whole lane. They start as soon as they are
+        ready; start=false adds them paused. Refused (`bad_request`) when an id it would add
+        is already in the plan; `invalid` lists every param, expansion or staging problem
+        (nothing is written). Returns {rev, steps}.
 
         Args:
             project: the project.
             recipe: the recipe's name (recipe_list).
             params: {unit: "<name of the unit, a valid step id>", <param>: value, ...}, each
                 checked against the recipe's param types.
-            start: let the new steps start as soon as they are ready.
+            start: false adds the new steps paused.
             tags: more tags for every step of the unit, e.g. ["arc:tsvm"] (select by them in
                 status, step_pause, step_cancel, plan_prune, ...); `unit:` ones are reserved.
             after: {suffix: [step ids]}: ids appended to that recipe step's `after` (its own

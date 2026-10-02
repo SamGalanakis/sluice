@@ -117,15 +117,15 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 - `unit_add(project, "lane", {"unit": "fix-login", "repo": "/src/app", "base": "origin/main",
   "spec": "/specs/fix-login.md", "engine": "devin"})` adds `fix-login-fork`, `fix-login-work`
   and `fix-login-cleanup` in one edit at the current rev (no rev to fetch), each tagged
-  `unit:fix-login`, paused unless `start=true`. It returns `{rev, steps}` and refuses an id the
-  plan already has.
+  `unit:fix-login`; they start when ready (`start=false` adds them paused). It returns
+  `{rev, steps}` and refuses an id the plan already has.
 - The same call stages the whole lane, in that one edit. `after`, `when` and `inputs` are
   keyed by the recipe step's suffix (its id without `<unit>-`: `fork`, `work`, `cleanup`):
 
   ```
   unit_add(project, "lane", {"unit": "fix-login", ...},
            after={"fork": ["fix-signup-cleanup"]}, when={"fork": "fix-signup-work/landed"},
-           inputs={"work": {"effort": "xhigh"}}, tags=["arc:auth"], start=true)
+           inputs={"work": {"effort": "xhigh"}}, tags=["arc:auth"])
   ```
 
   `after` ids are added to the step's own, `when` replaces the recipe's, and each input is
@@ -197,8 +197,10 @@ You cannot remove or change a running step (only pause or tag it). Every edit ne
 `reason`; it goes into the plan's history (`plan_history`).
 
 ## Pausing
-Steps you add come in **paused**, so a drafted plan starts nothing until you let it:
-`plan_patch(..., start=true)` or `step_add(..., start=true)` lets them start at once.
+Steps you add start as soon as they are ready. To draft first, pass `start=false` to
+`plan_patch`, `step_add` or `unit_add`: the steps it adds come in **paused** (unless a step sets
+`paused` itself) and start nothing until you release them. To cap how many run at once, use
+resources and `needs` (Resources, below), not pauses.
 
 `step_pause(project, steps=[...], tags=[...], subtree=false, paused=true, reason="")` holds
 or releases steps in one edit, by id and/or tag; `subtree=true` takes everything downstream

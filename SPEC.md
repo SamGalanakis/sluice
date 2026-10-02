@@ -279,9 +279,11 @@ A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps":
   A step that reads from a skipped step is skipped too (`step a was skipped`); an `after` edge
   counts a skipped step as settled. A skipped step never ran, so it is decided afresh whenever
   its reason changes: if the value turns true, it goes back to `pending`. A paused step is
-  held, not skipped. A step that `plan_patch` or `step_add` adds comes in with
-  `"paused": true` unless the call passes `start: true` or the step sets `paused` itself;
-  that pause is one more op in the edit's history.
+  held, not skipped. A step that `plan_patch`, `step_add` or `unit_add` adds starts as soon
+  as it is ready (`start` defaults to true); when the call passes `start: false`, each step
+  it adds that does not set `paused` itself comes in with `"paused": true` (a draft), and
+  that pause is one more op in the edit's history. Resources (`needs`, below), not pauses,
+  are what cap how many steps run at once.
 - **Resources.** A step may carry `"needs": {"<resource>": <n>, ...}` (each amount an integer
   >= 0) and `"priority": <integer>` (default 0). `needs` names resources its project declares
   (§6 "Resources"); while it runs the step holds those amounts, and it starts only when every
@@ -383,8 +385,8 @@ lone brace is an error naming where it is. Nothing else: no loops and no conditi
 and `scatter` already exist in steps). `unit_add(project, recipe, params, start?)` checks the
 params against their types (every required one, no others), expands the recipe, tags every new
 step `unit:<unit>` before its own tags, refuses ids the plan already has, and adds the steps in
-one edit at the current rev (no rev argument: it is an add, like `step_add`); unless `start`,
-they come in paused. It also stages the unit in that same edit, so one call does what would
+one edit at the current rev (no rev argument: it is an add, like `step_add`); they start when
+ready, or come in paused when `start` is false. It also stages the unit in that same edit, so one call does what would
 otherwise take `unit_add`, `plan_get`, `plan_patch` and `step_set_input`:
 
 - `tags: [..]` go on every step of the unit after `unit:<unit>` and the recipe's own tags
@@ -426,7 +428,7 @@ listed with its `error` and never stops the others. For example, `recipes/lane.j
 
 `unit_add("p", "lane", {"unit": "fix-login", "repo": "/src/app", "base": "origin/main", "spec":
 "/specs/fix-login.md", "engine": "devin"})` adds `fix-login-fork`, `fix-login-work` and
-`fix-login-cleanup`, tagged `unit:fix-login` and paused.
+`fix-login-cleanup`, tagged `unit:fix-login`, each starting once it is ready.
 
 **Validation** (every edit must pass; all errors returned with paths): ids valid; docs are
 strings and an input's object form has a `type`; every `run`
@@ -1279,10 +1281,10 @@ resolved author), and
 | `fn_call` | `name, inputs, project?, wait?, direct?, author?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed); refused (`bad_request`) for `core.external`, which never runs |
 | `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's row (a finished call's row goes with its last record, §6b) |
 | `plan_get` | `project` | `{rev, plan}` |
-| `plan_patch` | `project, rev, ops, reason, author?, start? = false` | `{rev}`; a step it adds comes in paused unless `start` (§5) |
-| `step_add` | `project, step, spec, reason?, start? = false, author?` | `{rev}`: `plan_patch` adding one step at the current rev |
+| `plan_patch` | `project, rev, ops, reason, author?, start? = true` | `{rev}`; a step it adds starts when ready, or comes in paused when `start` is false (§5) |
+| `step_add` | `project, step, spec, reason?, start? = true, author?` | `{rev}`: `plan_patch` adding one step at the current rev |
 | `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
-| `unit_add` | `project, recipe, params, start? = false, tags?, after?, when?, inputs?, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>` (then the recipe's tags, then `tags`), with `after` ids appended, `when` set and `inputs` bound as literals on the steps named by suffix, added in one edit at the current rev, paused unless `start` (§5); `invalid` lists every param, expansion or staging problem (an unknown suffix, an input the step cannot take, a `unit:` tag), `bad_request` names the ids the plan already has |
+| `unit_add` | `project, recipe, params, start? = true, tags?, after?, when?, inputs?, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>` (then the recipe's tags, then `tags`), with `after` ids appended, `when` set and `inputs` bound as literals on the steps named by suffix, added in one edit at the current rev, paused only when `start` is false (§5); `invalid` lists every param, expansion or staging problem (an unknown suffix, an input the step cannot take, a `unit:` tag), `bad_request` names the ids the plan already has |
 | `unit_tag` | `project, unit, add?, remove?, reason?, author?` | `{rev, steps}`: adds and removes tags on every step tagged `unit:<unit>` (`steps`), in one edit at the current rev (§5); `unit:` tags refused (`invalid`), an unknown unit `not_found`; nothing to change: no edit, the current rev |
 | `edge_add` | `project, step, after, reason?, author?` | `{rev, after}`: appends `after` (an id or a list) to the step's `after`, deduplicated, in one edit at the current rev (§5); an unknown step or a cycle is `invalid`; edges already there: no edit, the current rev. Only `after`: a step's one `when` is set with `step_update` |
 | `edge_remove` | `project, step, after, reason?, author?` | `{rev, after}`: removes those ids from the step's `after` in one edit at the current rev (removing the key when none is left); an unknown step is `invalid`; edges not there: no edit, the current rev |

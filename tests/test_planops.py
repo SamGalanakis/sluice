@@ -81,9 +81,9 @@ PAIR = {"{unit}-a": {"run": "test.add", "in": {"a": {"default": 1}, "b": {"defau
 def test_unit_tags_select_an_arc_everywhere(store):
     create(store, "p", {})
     write_recipe(store.home / "recipes", "pair", PAIR)
-    store.unit_add("p", "pair", {"unit": "one"}, tags=["arc:tsvm", "heavy"])
-    store.unit_add("p", "pair", {"unit": "two"}, tags="arc:tsvm")
-    store.unit_add("p", "pair", {"unit": "three"})
+    store.unit_add("p", "pair", {"unit": "one"}, tags=["arc:tsvm", "heavy"], start=False)
+    store.unit_add("p", "pair", {"unit": "two"}, tags="arc:tsvm", start=False)
+    store.unit_add("p", "pair", {"unit": "three"}, start=False)
     steps = store.get("p")["steps"]
     assert steps["one-a"]["tags"] == ["unit:one", "heavy", "arc:tsvm"]
     assert steps["one-b"]["tags"] == ["unit:one", "arc:tsvm", "heavy"]

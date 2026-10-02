@@ -139,7 +139,7 @@ def test_a_project_through_the_tools_and_the_loop(sluice):
     sluice.tool("project_create", name="demo", description="cli")
     ops = [{"op": "replace", "path": f"/{k}", "value": v} for k, v in PLAN.items()]
     assert json_out(sluice.tool("plan_patch", project="demo", rev=1, reason="plan",
-                                ops=ops, start=True)) == {"rev": 2}
+                                ops=ops)) == {"rev": 2}
     assert json_out(sluice.tool("plan_get", project="demo"))["plan"] == PLAN
     stale = sluice.tool("plan_patch", project="demo", rev=1, reason="x", ops=[], check=False)
     assert stale.returncode == 1 and json.loads(stale.stderr)["current_rev"] == 2
