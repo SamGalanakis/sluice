@@ -85,6 +85,56 @@ def _stat(pid):
     return int(rest[1]), rest[0]
 
 
+def tree_cpu(roots):
+    """CPU ticks of descendants, keyed by (pid, start time). Ignore the engines and their
+    servers' own CPU, but still follow their children to find tool commands. Include waited
+    children's CPU so a shell's short-lived commands count between samples."""
+    roots = {r for r in roots if r}
+    if not roots:
+        return {}
+    children, stats = {}, {}
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            stat = (d / "stat").read_text()
+            rest = stat[stat.rindex(")") + 2:].split()
+            pid, parent = int(d.name), int(rest[1])
+            stats[pid] = (d, rest[0], int(rest[19]), sum(map(int, rest[11:15])))
+        except (OSError, IndexError, ValueError):
+            continue
+        children.setdefault(parent, []).append(pid)
+    out, seen, todo = {}, set(roots), list(roots)
+    while todo:
+        for pid in children.get(todo.pop(), []):
+            if pid in seen:
+                continue
+            seen.add(pid)
+            todo.append(pid)
+            d, state, started, ticks = stats[pid]
+            if state == "Z":
+                continue
+            try:
+                args = [os.fsdecode(a) for a in (d / "cmdline").read_bytes().split(b"\0") if a]
+            except OSError:
+                continue
+            if not args:
+                continue
+            names = [Path(a).name.lower() for a in args[:2]]
+            if args[1:2] == ["-m"]:
+                names.extend(args[2:3])
+            mcp = any(n == "mcp" or n.startswith(("mcp-", "mcp_", "mcp."))
+                      or n.endswith("-mcp") for n in names)
+            if len(args) > 1:
+                mcp |= any(p.lower() == "mcp" or p.lower().endswith("-mcp")
+                           for p in Path(args[1]).parts[:-1])
+            if (names[0] in ("tmux", "codex-code-mode-host")
+                    or (names[0] == "codex" and "app-server" in args[1:]) or mcp):
+                continue
+            out[pid, started] = ticks
+    return out
+
+
 def cgroup(pid):
     """The cgroup (v2) a process is in, or None."""
     try:

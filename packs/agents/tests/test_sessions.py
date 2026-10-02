@@ -23,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from _agents.native.claude import Claude
 from _agents.native.codex import Codex
-from _agents.native.processes import cgroup, detached, engine_env
-from _agents.native.supervisor import REMIND, Limits, Snapshot, lock_session
+from _agents.native.processes import cgroup, detached, engine_env, tree_cpu
+from _agents.native.supervisor import REMIND, Limits, Snapshot, _Run, lock_session
 from test_agents import init_repo, make_claude, make_devin, session_of
 from test_native import FakePane, Feed, Model, run
 
@@ -108,6 +108,82 @@ QUICK = Limits(nudges=2, wall=30, stall=30, settle=0.2, grace=0.2, poll=0.02, re
 def test_the_quiet_period_reads_its_env_override(monkeypatch):
     monkeypatch.setenv("SLUICE_AGENT_QUIET_MIN", "20")
     assert (Limits.from_env().quiet, Limits().quiet) == (1200, 45 * 60)
+
+
+def test_active_descendants_restart_the_quiet_timer_then_idle_gets_notes(tmp_path, monkeypatch):
+    import _agents.native.supervisor as mod
+
+    notes, cpu = [], {(20, 100): 1}
+    monkeypatch.setattr(mod.worktree, "sample", lambda cwd: ("abcdefg", "", ""))
+    monkeypatch.setattr(mod, "tree_cpu", lambda roots: dict(cpu))
+    model = Model()
+    monkeypatch.setattr(model, "roots", lambda tmux: [10, 11])
+    watcher = _Run(model, FakePane(), tmp_path, [], None, Limits(quiet=300),
+                   lambda line: None, dict, record={"cwd": str(tmp_path),
+                   "head_before": "abcdefg"}, note=notes.append)
+    busy = Snapshot("busy")
+    for now in range(30, 631, 30):
+        cpu[20, 100] += 1
+        watcher.watch(busy, now)
+    assert notes == []  # CPU work past two quiet periods, without a worktree change
+    watcher.watch(busy, 900)
+    assert notes == []
+    watcher.watch(busy, 930)
+    assert len(notes) == 1
+    watcher.watch(busy, 960)
+    assert len(notes) == 1
+    cpu.clear()
+    cpu[20, 200] = 1  # the same pid now belongs to a new command
+    watcher.watch(busy, 990)
+    watcher.watch(busy, 1260)
+    assert len(notes) == 1
+    watcher.watch(busy, 1290)
+    assert len(notes) == 2
+    watcher.watch(Snapshot("idle"), 1320)
+    watcher.watch(busy, 1500)
+    watcher.watch(busy, 1770)
+    assert len(notes) == 2
+    watcher.watch(busy, 1800)
+    assert len(notes) == 3
+
+
+def test_tree_cpu_follows_commands_but_ignores_server_cpu(tmp_path, monkeypatch):
+    import _agents.native.processes as mod
+
+    proc = tmp_path / "proc"
+    proc.mkdir()
+
+    def process(pid, parent, argv, ticks=10, child_ticks=0, state="S"):
+        d = proc / str(pid)
+        d.mkdir()
+        rest = [state, str(parent), *(["0"] * 18)]
+        rest[11:15] = [str(ticks), "1", str(child_ticks), "2"]
+        rest[19] = str(pid * 100)
+        (d / "stat").write_text(f"{pid} (name with ) parentheses) " + " ".join(rest))
+        (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+
+    process(10, 1, ["codex"])
+    process(11, 1, ["codex", "app-server"])
+    process(20, 10, ["python", "/tools/mcp_server.py"])
+    process(21, 11, ["codex", "app-server"])
+    process(22, 10, ["tmux", "new-session"])
+    process(23, 11, ["codex-code-mode-host"])
+    process(24, 10, ["node", "/tools/figments-mcp/src/index.js"])
+    process(25, 10, ["python", "-m", "mcp.server"])
+    process(30, 23, ["bash", "-c", "cargo test"], child_ticks=40)
+    process(31, 30, ["cargo", "test"], ticks=50)
+    process(32, 21, ["python", "driver.py"], ticks=60)
+    process(33, 11, ["python", "/work/mcp-refactor/tests/test_mcp.py"], ticks=70)
+    process(40, 1, ["pytest"])
+    process(41, 10, ["cargo"], state="Z")
+    (proc / "42").mkdir()  # exited between listing /proc and reading stat
+    (proc / "43").mkdir()
+    (proc / "43/stat").write_text("malformed")
+    (proc / "self").mkdir()
+    monkeypatch.setattr(mod, "Path", lambda p: proc if p == "/proc" else Path(p))
+    assert tree_cpu([10, 11, None]) == {
+        (30, 3000): 53, (31, 3100): 53, (32, 3200): 63, (33, 3300): 73}
+    assert tree_cpu([None]) == {}
 
 
 def busy_until(model, done):

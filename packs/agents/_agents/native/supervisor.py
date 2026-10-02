@@ -22,7 +22,8 @@ An engine plugs in through an adapter (see `Adapter`). Per run:
    after an engine reports its context compacted, the step's context (reprime.py);
 4. fail on the wall-clock cap, or after `stall` seconds without progress while busy; post one
    note to the orchestrator on the step's thread after `quiet` seconds busy with no change to
-   the git worktree (and again after each further quiet period);
+   the git worktree or CPU work in the agent's descendants (and again after each further
+   quiet period);
 5. on done ask the engine to exit, read `final`, `session` and the run's git
    facts; in every case end the tmux server and every process under it (SIGTERM, SIGHUP and
    SIGINT included, so a `step_cancel` leaves nothing behind). A failure's message ends with
@@ -53,7 +54,7 @@ from sluice.fn import Transient, child_env
 
 from . import reprime, worktree
 from .paste import NotDelivered, tail
-from .processes import detached, engine_env, start_time
+from .processes import detached, engine_env, start_time, tree_cpu
 from .tmux import Tmux
 
 NUDGE = ("Your turn ended but these outputs are not submitted: {names}. If you are waiting on "
@@ -317,8 +318,9 @@ class _Run:
     compacted: int = 0
     mark: object = None  # the worktree's last sample
     sampled: float = 0.0
-    changed: float | None = None  # busy with the worktree unchanged since then
+    changed: float | None = None  # busy without worktree changes or descendant CPU since then
     noted: float | None = None
+    cpu: dict = field(default_factory=dict)  # (pid, start time) -> descendant CPU ticks
 
     @property
     def cwd(self):
@@ -401,18 +403,21 @@ class _Run:
         return True
 
     def watch(self, snap, now):
-        """While the session is busy, sample the git worktree every so often; after `quiet`
-        seconds busy with no change, post one note to the orchestrator, and again after each
-        further quiet period. Detection only."""
+        """Sample the worktree and descendant CPU; after `quiet` seconds busy with neither
+        changing, post one note, and again after each further quiet period. Detection only."""
         lim = self.limits
         if not (self.note and self.record.get("head_before")) or snap.state != "busy":
             self.changed = self.noted = None
+            self.cpu = {}
             return
         if self.changed is not None and now - self.sampled < min(lim.quiet / 10, 180):
             return
         self.sampled = now
         mark = worktree.sample(self.cwd)
-        if self.changed is None or mark != self.mark:
+        cpu = tree_cpu(self.adapter.roots(self.tmux))
+        active = any(ticks > self.cpu.get(pid, 0) for pid, ticks in cpu.items())
+        self.cpu = cpu
+        if self.changed is None or mark != self.mark or active:
             self.mark, self.changed, self.noted = mark, now, None
             return
         if mark is None or now - (self.noted or self.changed) < lim.quiet:

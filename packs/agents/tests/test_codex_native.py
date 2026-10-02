@@ -27,6 +27,21 @@ from _agents.native.processes import SCOPE, scope_command
 from _agents.native.tmux import _alive, descendants
 
 
+@pytest.mark.parametrize("resuming", [False, True])
+def test_codex_tui_disables_startup_update_checks(resuming, monkeypatch):
+    monkeypatch.setenv("SLUICE_CODEX_CLI", "/tools/codex")
+    codex = Codex()
+    codex.resuming, codex.thread = resuming, "thread-1"
+    codex.socket_path = Path("/tmp/app.sock")
+    argv = codex.argv()
+    assert argv[:3] == ["/tools/codex", "-c", "check_for_update_on_startup=false"]
+    if resuming:
+        assert argv[3:] == ["resume", "--remote", "unix:///tmp/app.sock", "thread-1"]
+    else:
+        assert argv[3:] == ["--dangerously-bypass-approvals-and-sandbox", "--remote",
+                           "unix:///tmp/app.sock"]
+
+
 def test_private_config_disables_every_mcp_and_pins_model():
     source = ('model = "old"\n[mcp_servers.a]\ncommand = "a"\nenabled = true\n'
               '[mcp_servers.a.env]\nTOKEN = "x"\n[mcp_servers.b]\ncommand = "b"\n'

@@ -339,7 +339,8 @@ class Codex(Adapter):
             {"home": str(self.private), "cwd": self.cwd}))
 
     def argv(self):
-        cmd = [os.environ.get("SLUICE_CODEX_CLI", "codex")]
+        cmd = [os.environ.get("SLUICE_CODEX_CLI", "codex"),
+               "-c", "check_for_update_on_startup=false"]
         if self.resuming:
             return [*cmd, "resume", "--remote", f"unix://{self.socket_path}", self.thread]
         return [*cmd, "--dangerously-bypass-approvals-and-sandbox", "--remote",
