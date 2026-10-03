@@ -1,0 +1,4 @@
+{"hook_event_name":"SessionStart","session_id":"redacted-session","cwd":"/scratch/repo","transcript_path":"/scratch/claude/projects/repo/redacted-session.jsonl","source":"startup"}
+{"hook_event_name":"UserPromptSubmit","session_id":"redacted-session","cwd":"/scratch/repo","transcript_path":"/scratch/claude/projects/repo/redacted-session.jsonl","prompt":"the task"}
+{"hook_event_name":"Stop","session_id":"redacted-session","cwd":"/scratch/repo","transcript_path":"/scratch/claude/projects/repo/redacted-session.jsonl","last_assistant_message":"Started.","background_tasks":[{"id":"b1","type":"shell","status":"running","description":"build"}],"session_crons":[]}
+{"hook_event_name":"StopFailure","session_id":"redacted-session","cwd":"/scratch/repo","transcript_path":"/scratch/claude/projects/repo/redacted-session.jsonl","error":"rate_limit","error_details":"429 Too Many Requests","last_assistant_message":"API Error: Rate limit reached"}

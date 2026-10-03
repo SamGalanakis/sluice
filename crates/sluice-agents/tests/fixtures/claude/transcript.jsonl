@@ -1,0 +1,6 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"w1","name":"ScheduleWakeup","input":{"delaySeconds":90}}],"usage":{"input_tokens":10000,"cache_read_input_tokens":130000,"cache_creation_input_tokens":2000}}}
+{"type":"user","toolUseResult":{"scheduledFor":2000000000000},"message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"ok"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"c1","name":"CronCreate","input":{"schedule":"* * * * *"}}]}}
+{"type":"user","toolUseResult":{"id":"cron-redacted","recurring":false},"message":{"content":[{"type":"tool_result","tool_use_id":"c1","content":"ok"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Main final text"}]}}
+{"type":"system","subtype":"scheduled_task_fire","content":"Claude resuming /loop wakeup"}

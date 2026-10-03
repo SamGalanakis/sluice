@@ -93,6 +93,43 @@ fn main() -> ExitCode {
             }
         };
     }
+    if std::env::args().nth(1).as_deref() == Some("agent-hook")
+        && std::env::args().nth(2).as_deref() == Some("claude")
+    {
+        return match std::env::args()
+            .nth(3)
+            .ok_or_else(|| std::io::Error::other("missing Claude fixture event"))
+            .and_then(|event| sluice_agents::engines::claude::fixture::hook_proxy(&event))
+        {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if std::env::args().nth(1).as_deref() == Some("claude-submit") {
+        return match sluice_agents::engines::claude::fixture::submit(
+            std::env::args().skip(2).collect(),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if std::env::args().nth(1).as_deref() == Some("claude") {
+        return match sluice_agents::engines::claude::fixture::main(
+            std::env::args().skip(2).collect(),
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let fixture = Fixture::parse();
     if matches!(fixture.kind, Kind::Engine) {
         let result = fixture
