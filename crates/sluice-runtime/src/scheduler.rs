@@ -63,6 +63,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
             .write(RetrySafety::Idempotent, move |tx| {
                 lease(tx, &lease_owner)?;
                 plans::reconcile(tx, &copy)?;
+                crate::watch::record_settlements(tx, project, &copy.plan)?;
                 resources::grant_leases(tx, project)?;
                 Ok(())
             })
@@ -449,7 +450,20 @@ pub async fn run<H: ExecutionHost>(
         tokio::select! {
             _=stop.cancelled()=>return Ok(()),
             result=notify.changed()=>{if result.is_err(){return Ok(());}},
-            _=full.tick()=>{dirty.extend(broker.projects().await?);broker.adopt().await?;},
+            _=full.tick()=>{
+                let projects = broker.projects().await?;
+                dirty.extend(projects.iter().copied());
+                broker.adopt().await?;
+                crate::watch::unread_alerts(broker.writer()).await?;
+                broker.writer().write(RetrySafety::Idempotent, move |tx| {
+                    sluice_store::records::trim_records(tx, None)?;
+                    for project in &projects {
+                        sluice_store::records::trim_records(tx, Some(*project))?;
+                    }
+                    Ok(())
+                }).await?;
+                crate::calls::retain_calls(broker.writer()).await?;
+            },
             _=capacity.tick()=>{
                 if broker.scheduler_owner().await?.is_some(){for project in broker.projects().await?{for resource in broker.capacity_resources(project).await?{if let Err(e)=broker.calls().capacity_call(project,resource).await{tracing::warn!(%project,error=%e,"capacity observation deferred");}}}}
 
