@@ -86,8 +86,8 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
     }
     if ctx.listen && !ctx.project.is_empty() && !ctx.step.is_empty() {
         let thread = thread_name(&ctx.step);
-        let post = json!({"name":"thread.post","project":ctx.project,"direct":true,"inputs":{"thread":thread,"from":ctx.step,"to":"orchestrator","body":"..."}});
-        text.push_str(&format!("\n\nMessages for you on sluice thread `{thread}` of project `{}` are delivered into this session as they arrive when addressed to this step (or to nobody); you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, post it with `sluice tool fn_call {}` and continue with anything not blocked by it. For a note that needs no answer, add `\"needs_reply\": false` to the inputs. Post questions and changes of scope, not progress.", ctx.project, shell_quote(&post.to_string())));
+        let post = json!({"project":ctx.project,"thread":thread,"from":ctx.step,"run":ctx.run,"to":"orchestrator","body":"...","needs_reply":false});
+        text.push_str(&format!("\n\nMessages for you on sluice thread `{thread}` of project `{}` are delivered into this session as they arrive when addressed to this step (or to nobody); you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, post it with `sluice tool message_post {}` and continue with anything not blocked by it. Use `needs_reply: true` for a question that needs an answer. Post questions and changes of scope, not progress.", ctx.project, shell_quote(&post.to_string())));
     }
     text
 }

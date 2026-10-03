@@ -38,6 +38,11 @@ pub enum PythonError {
     Exit(String),
     Failure(String),
     Transient(String),
+    AgentFailure {
+        kind: String,
+        message: String,
+        session: Option<String>,
+    },
     Rejected(String),
     Cancelled(String),
     InvalidOutputs(Vec<String>),
@@ -53,6 +58,7 @@ impl std::fmt::Display for PythonError {
             | Self::Rejected(s)
             | Self::Cancelled(s)
             | Self::Io(s) => f.write_str(s),
+            Self::AgentFailure { message, .. } => f.write_str(message),
             Self::InvalidOutputs(errors) => f.write_str(&errors.join("; ")),
         }
     }
@@ -71,6 +77,17 @@ impl From<PublicError> for PythonError {
 impl PythonError {
     pub fn into_public(self) -> PublicError {
         match self {
+            Self::AgentFailure {
+                kind,
+                message,
+                session,
+            } => PublicError::AgentFailure {
+                kind,
+                message,
+                session,
+            },
+            Self::Rejected(message) => PublicError::Rejected { message },
+            Self::Transient(message) => PublicError::Transient { message },
             Self::Cancelled(message) => PublicError::Cancelled { message },
             Self::InvalidOutputs(errors) => PublicError::Invalid {
                 message: "invalid Python fn outputs".into(),
@@ -476,7 +493,13 @@ struct SuccessEnvelope {
 #[serde(deny_unknown_fields)]
 struct FailureEnvelope {
     ok: bool,
-    error: ErrorEnvelope,
+    error: FunctionError,
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FunctionError {
+    Helper(ErrorEnvelope),
+    Public(PublicError),
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -499,8 +522,27 @@ pub fn decode_result(
     match result {
         ResultEnvelope::Success(result) if result.ok && status.success() => Ok(result.outputs),
         ResultEnvelope::Failure(result) if !result.ok && !status.success() => {
-            let message = tail(&result.error.message);
-            Err(match result.error.kind.as_str() {
+            let error = match result.error {
+                FunctionError::Helper(error) => error,
+                FunctionError::Public(PublicError::AgentFailure {
+                    kind,
+                    message,
+                    session,
+                }) => {
+                    return Err(PythonError::AgentFailure {
+                        kind,
+                        message: tail(&message),
+                        session,
+                    });
+                }
+                FunctionError::Public(_) => {
+                    return Err(PythonError::Protocol(
+                        "unsupported public function error".into(),
+                    ));
+                }
+            };
+            let message = tail(&error.message);
+            Err(match error.kind.as_str() {
                 "rejected" => PythonError::Rejected(message),
                 "transient" => PythonError::Transient(message),
                 "cancelled" => PythonError::Cancelled(message),

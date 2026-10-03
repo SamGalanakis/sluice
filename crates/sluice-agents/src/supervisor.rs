@@ -1410,6 +1410,7 @@ pub fn process_hooks<E: EngineAdapter>(
                     payload: request.payload.into_value(),
                 })
                 .map_err(|error| PublicError::AgentFailure {
+                    kind: format!("{:?}", error.kind),
                     message: error.to_string(),
                     session: None,
                 })

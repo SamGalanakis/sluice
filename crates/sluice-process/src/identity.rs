@@ -3,7 +3,7 @@ use crate::proc::{boot_id, proc_error, process};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     fd::{AsFd, BorrowedFd, OwnedFd},
-    process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal},
+    process::{Pid, PidfdFlags, pidfd_open, pidfd_send_signal},
 };
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -120,3 +120,5 @@ impl OwnedProcess {
 fn stale() -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, "stale process identity")
 }
+
+pub use rustix::process::Signal;

@@ -9,7 +9,10 @@ use sluice_model::{
 use sluice_process::{
     guardian::{self, FnHost, GuardianArgs, OsFnHost},
     journal::{AttemptKey, PayloadResult},
-    socket::{AssignedRange, GuardianIdentity, UnixCoordinatorLink},
+    socket::{
+        AssignedRange, CoordinatorCommand, CoordinatorLink, CoordinatorReply, GuardianIdentity,
+        UnixCoordinatorLink,
+    },
     systemd::{ServiceCommand, StartOutcome, TransientService},
 };
 use std::{
@@ -28,6 +31,8 @@ pub struct Launch {
     pub prev_run: Option<RunId>,
     pub capability: RunCapability,
     pub timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub context: Option<crate::compose::ReservationContext>,
 }
 #[derive(Debug)]
 pub enum LaunchOutcome {
@@ -37,6 +42,9 @@ pub enum LaunchOutcome {
     Uncertain(String),
 }
 pub trait ExecutionHost: FnHost + guardian::AdoptionHost + Send + Sync + 'static {
+    fn composition_enabled(&self) -> bool {
+        false
+    }
     fn launch(
         &self,
         launch: Launch,
@@ -64,6 +72,9 @@ impl guardian::AdoptionHost for OsHost {
     }
 }
 impl ExecutionHost for OsHost {
+    fn composition_enabled(&self) -> bool {
+        true
+    }
     async fn cleanup_valid(
         &self,
         journal: &sluice_process::journal::CompletionJournal,
@@ -108,6 +119,9 @@ impl ExecutionHost for OsHost {
             "--socket".into(),
             self.home.join("coordinator.sock").into_os_string(),
         ];
+        // A run inherits its launch snapshot, including provider configuration
+        // and secrets. systemd otherwise replaces it with the manager's environment.
+        command.env = std::env::vars_os().collect();
         command
             .env
             .insert("SLUICE_HOME".into(), self.home.clone().into_os_string());
@@ -163,6 +177,11 @@ pub struct CallLauncher<H> {
     pub home: HomeId,
     pub writer: sluice_store::Writer,
 }
+impl<H> CallLauncher<H> {
+    fn host_home(&self) -> PathBuf {
+        self.writer.home().to_path_buf()
+    }
+}
 impl<H: ExecutionHost> CallGuardian for CallLauncher<H> {
     async fn launch(&self, call: AdmittedCall) -> Result<(), PublicError> {
         let launch = Launch {
@@ -183,8 +202,8 @@ impl<H: ExecutionHost> CallGuardian for CallLauncher<H> {
                 run: call.call,
                 attempt: call.attempt,
                 invocation: InvocationId::new(),
-                name: call.function.name,
-                inputs: call.inputs,
+                name: call.function.name.clone(),
+                inputs: call.inputs.clone(),
             },
             assigned: AssignedRange {
                 after: MessageId(0),
@@ -196,6 +215,12 @@ impl<H: ExecutionHost> CallGuardian for CallLauncher<H> {
             )
             .map_err(storage)?,
             timeout_seconds: call.function.timeout_seconds,
+            context: crate::compose::ReservationContext::from_call(
+                &self.writer,
+                &self.host_home(),
+                &call,
+            )
+            .await?,
         };
         let identity = launch.identity.clone();
         match self.host.launch(launch).await? {
@@ -222,7 +247,11 @@ impl<H: ExecutionHost> CallGuardian for CallLauncher<H> {
 }
 impl FnHost for OsHost {
     async fn invoke(&self, invocation: FnInvocation) -> Result<JsonMap, PublicError> {
-        fixture_dispatch(&self.home, invocation).await
+        if invocation.name.starts_with("core.") || invocation.name.starts_with("fixture.") {
+            fixture_dispatch(&self.home, invocation).await
+        } else {
+            Err(PublicError::not_implemented("unreserved fn execution"))
+        }
     }
 }
 pub async fn fixture_dispatch(
@@ -355,20 +384,57 @@ pub async fn payload_entry(home: PathBuf) -> io::Result<i32> {
     let invocation: FnInvocation =
         decode_json(&std::fs::read(dir.join("invocation.json"))?).map_err(io::Error::other)?;
     let launch = read_launch(&home, invocation.run).map_err(io::Error::other)?;
-    let result = if let Some(seconds) = launch.timeout_seconds {
-        match tokio::time::timeout(
-            Duration::from_secs(seconds),
-            fixture_dispatch(&home, invocation),
-        )
-        .await
+    if std::env::var_os("SLUICE_AGENT_SIDECAR").is_some() {
+        return crate::sidecar::serve(home, launch)
+            .await
+            .map(|()| 0)
+            .map_err(io::Error::other);
+    }
+    if launch.context.is_some() {
+        // The barrier has persisted executor identity. Commit start before any
+        // function callback can request a lease or submit its outputs.
+        let link = UnixCoordinatorLink {
+            path: home.join("coordinator.sock"),
+            capability: launch.capability.clone(),
+        };
+        match link
+            .request(CoordinatorCommand::Started {
+                identity: launch.identity.clone(),
+                invocation: invocation.invocation,
+                executor: sluice_process::identity::ProcessIdentity::read(std::process::id())?,
+            })
+            .await
+            .map_err(io::Error::other)?
         {
+            CoordinatorReply::Started => {}
+            _ => return Err(io::Error::other("executor start was not acknowledged")),
+        }
+    }
+    let dispatcher = launch.context.clone().map(|context| {
+        Arc::new(crate::compose::Dispatcher::new(
+            home.clone(),
+            launch.clone(),
+            context,
+        ))
+    });
+    let dispatch = async {
+        if invocation.name.starts_with("fixture.") {
+            return fixture_dispatch(&home, invocation).await;
+        }
+        match dispatcher {
+            Some(d) => d.execute(invocation).await,
+            None => fixture_dispatch(&home, invocation).await,
+        }
+    };
+    let result = if let Some(seconds) = launch.timeout_seconds {
+        match tokio::time::timeout(Duration::from_secs(seconds), dispatch).await {
             Ok(r) => r,
             Err(_) => Err(PublicError::FnFailure {
                 message: "fn timed out".into(),
             }),
         }
     } else {
-        fixture_dispatch(&home, invocation).await
+        dispatch.await
     };
     let result = match result {
         Ok(outputs) => PayloadResult::Succeeded(outputs),

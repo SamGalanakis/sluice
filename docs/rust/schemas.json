@@ -6646,6 +6646,44 @@
               "message": {
                 "type": "string"
               },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
+              "message": {
+                "type": "string"
+              },
               "session": {
                 "type": [
                   "string",
@@ -8223,6 +8261,44 @@
           {
             "type": "object",
             "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
               "message": {
                 "type": "string"
               },
@@ -13884,6 +13960,44 @@
               "message": {
                 "type": "string"
               },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
+              "message": {
+                "type": "string"
+              },
               "session": {
                 "type": [
                   "string",
@@ -15488,6 +15602,44 @@
           {
             "type": "object",
             "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
               "message": {
                 "type": "string"
               },
@@ -17183,6 +17335,44 @@
           {
             "type": "object",
             "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
               "message": {
                 "type": "string"
               },
@@ -22483,6 +22673,44 @@
               "message": {
                 "type": "string"
               },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
+              "message": {
+                "type": "string"
+              },
               "session": {
                 "type": [
                   "string",
@@ -24726,6 +24954,44 @@
               "message": {
                 "type": "string"
               },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
+              "message": {
+                "type": "string"
+              },
               "session": {
                 "type": [
                   "string",
@@ -26542,6 +26808,44 @@
               "message": {
                 "type": "string"
               },
+              "error": {
+                "type": "string",
+                "const": "transient"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "default": "AgentFailure"
+              },
+              "message": {
+                "type": "string"
+              },
               "session": {
                 "type": [
                   "string",
@@ -27142,6 +27446,44 @@
       {
         "type": "object",
         "properties": {
+          "message": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string",
+            "const": "transient"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "error",
+          "message"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string",
+            "const": "rejected"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "error",
+          "message"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "default": "AgentFailure"
+          },
           "message": {
             "type": "string"
           },

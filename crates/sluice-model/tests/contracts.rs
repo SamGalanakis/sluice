@@ -706,6 +706,12 @@ fn contract_stream_event() {
 #[test]
 fn contract_public_error() {
     contract::<PublicError>("PublicError");
+    // Older pinned releases omitted kind. New replies always carry it.
+    let error: PublicError =
+        decode_json(br#"{"error":"agent_failure","message":"old release"}"#).unwrap();
+    assert!(
+        matches!(error, PublicError::AgentFailure { kind, session: None, .. } if kind == "AgentFailure")
+    );
 }
 
 #[test]

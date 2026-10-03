@@ -826,6 +826,15 @@ Both run the command in `child_env(env)`: the fn's environment with `PATH`, `PYT
 (the runner passes the originals as `SLUICE_HOST_*`; without them the fn's environment is
 stripped out), so a tool the fn starts runs the host's `python3`, not the fn's isolated one.
 
+The Rust release's stdlib helper is `sluice_fn`. Reservations freeze the function's
+signature, declared ports, bundle generation and release executable. Python and inline
+functions use those paths through completion. `ctx.tool(name, args)` calls the coordinator's
+project command service; `ctx.builtin(name, request)` composes a native agent in the same run
+and guardian, retaining its session lock across an outer `Transient` retry. Terminal agent
+errors retain `{error: "agent_failure", kind, message, session}`. `ctx.retry_on_failure(step,
+message)` captures and registers the target atomically; only typed `Rejected` completion
+applies the action.
+
 ## 8. MCP server
 
 `sluice serve` runs the runner and an MCP server (official `mcp` SDK, streamable HTTP) at

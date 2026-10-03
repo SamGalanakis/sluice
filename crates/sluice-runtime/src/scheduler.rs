@@ -250,6 +250,23 @@ pub async fn reconcile_project<H: ExecutionHost>(
                 admitted += 1;
                 break;
             }
+            let execution = broker
+                .catalog()
+                .1
+                .as_ref()
+                .map(|p| p.resolved(Some(project), &step.run))
+                .transpose()?;
+            let project_name = broker
+                .reads()
+                .snapshot(move |sql| {
+                    Ok(
+                        sluice_store::projects::resolve(sql, &ProjectSelector::Id(project))?
+                            .name
+                            .to_string(),
+                    )
+                })
+                .await
+                .map_err(|e| e.into_public(true))?;
             let copy = context.clone();
             let step = step.clone();
             let owner = owner.to_string();
@@ -283,11 +300,12 @@ pub async fn reconcile_project<H: ExecutionHost>(
                     if count.is_some() && keep && instances.get(index.to_string()).is_some_and(|v|v["status"]=="succeeded"){continue;}
                     let mut inputs=inputs.clone();if let Some(name)=&step.scatter {inputs.0.insert(name.clone(),inputs.0[name].as_value().as_array().expect("checked scatter")[index].clone().try_into()?);}
                     let capability=new_capability();let attempt=AttemptId::new();let run=RunId::new();
-                    let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability},"files":fingerprints}))?;
+                    let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution},"files":fingerprints}))?;
                     let reservation=attempts::reserve(tx,&copy,Reserve{step:step.id.clone(),attempt,run,item_index:if count.is_some(){index as i64}else{-1},item_count:count.map(|n|n as u64),inputs:inputs.clone(),inputs_hash:hash,provenance,release_id:"runtime-v1".into(),protocol_major:1},&mut Hooks)?;
+                    if let Some(job) = execution.as_ref().and_then(|e| e.job) { crate::registry::pin_run(tx,job,run)?; }
                     let id=&reservation.identity;
                     if attempts::spawn_attempted(tx,id)? {
-                        launches.push(Launch{identity:AttemptKey{home,project:Some(project),step:Some(id.step.clone()),generation:id.generation,work:id.work,run,attempt},invocation:FnInvocation{project,step:Some(id.step.clone()),run,attempt,invocation:InvocationId::new(),name:step.run.clone(),inputs},assigned:AssignedRange{after:MessageId(reservation.messages.after),through:MessageId(reservation.messages.through)},prev_run:reservation.prev_run,capability,timeout_seconds:None});
+                        launches.push(Launch{identity:AttemptKey{home,project:Some(project),step:Some(id.step.clone()),generation:id.generation,work:id.work,run,attempt},invocation:FnInvocation{project,step:Some(id.step.clone()),run,attempt,invocation:InvocationId::new(),name:step.run.clone(),inputs},assigned:AssignedRange{after:MessageId(reservation.messages.after),through:MessageId(reservation.messages.through)},prev_run:reservation.prev_run,capability,timeout_seconds:None,context:execution.clone().map(|execution| crate::compose::ReservationContext { execution, project_name:project_name.clone(), extra_inputs:JsonMap(step.extra_inputs.iter().map(|(n,t)| (n.clone(),json!({"type":t.form()}).try_into().expect("input declaration"))).collect()), outputs:JsonMap(step.declared_outputs.iter().map(|(n,d)| (n.clone(),json!({"type":d.ty.form(),"doc":d.doc}).try_into().expect("output declaration"))).collect()) })});
                     }
                 }
                 Ok(launches)
@@ -420,6 +438,13 @@ pub async fn run<H: ExecutionHost>(
     stop: CancellationToken,
 ) -> Result<(), PublicError> {
     let mut notify = broker.writer().subscribe();
+    let mut watcher = broker
+        .catalog()
+        .1
+        .as_ref()
+        .map(|p| p.registry.watch())
+        .transpose()?;
+    let mut registry_tick = tokio::time::interval(Duration::from_secs(2));
     let mut versions = std::collections::BTreeMap::new();
     let mut full = tokio::time::interval(FULL_INTERVAL);
     let mut capacity = tokio::time::interval(CAPACITY_INTERVAL);
@@ -450,6 +475,8 @@ pub async fn run<H: ExecutionHost>(
         tokio::select! {
             _=stop.cancelled()=>return Ok(()),
             result=notify.changed()=>{if result.is_err(){return Ok(());}},
+            _=async { match watcher.as_mut() { Some(w) => { let _ = w.changed().await; }, None => std::future::pending::<()>().await } }=>{ if let Err(error) = broker.refresh_registry().await { tracing::warn!(%error, "registry refresh deferred"); } dirty.extend(broker.projects().await?); },
+            _=registry_tick.tick()=>{ if watcher.is_some() { if let Err(error) = broker.refresh_registry().await { tracing::warn!(%error, "registry refresh deferred"); } dirty.extend(broker.projects().await?); } },
             _=full.tick()=>{
                 let projects = broker.projects().await?;
                 dirty.extend(projects.iter().copied());

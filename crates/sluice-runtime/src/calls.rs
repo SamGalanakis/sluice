@@ -393,6 +393,15 @@ fn admit_tx(
     let frozen = serde_json::json!({"function":function,"inputs":inputs});
     tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'reserved',?3,?4,?5)", (attempt.to_string(), project.map(|p|p.to_string()), frozen.to_string(), hash.to_string(), &at))?;
     tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,release_id,created_at) VALUES (?1,?2,?3,?4,?5)", (call.to_string(), project.map(|p|p.to_string()), attempt.to_string(), &function.release_id, &at))?;
+    if let Some(job) = function
+        .bundle
+        .0
+        .get("execution")
+        .and_then(|v| v.as_value().get("job"))
+        .and_then(serde_json::Value::as_str)
+    {
+        sluice_store::artifacts::pin_generation(tx, parse_id(job.into())?, call)?;
+    }
     if let Some(project) = project {
         for (name, amount) in &function.needs {
             let amount = i64::try_from(*amount).map_err(|_| PublicError::BadRequest {

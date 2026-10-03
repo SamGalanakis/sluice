@@ -23,8 +23,17 @@ use sluice_store::{
 /// A registry certificate supplied by the composition root. Later registry owners
 /// can construct this from their visible, validated descriptors.
 #[derive(Clone, Default)]
-pub struct Catalog(pub IndexMap<String, FnSignature>);
+pub struct Catalog(
+    pub IndexMap<String, FnSignature>,
+    pub Option<std::sync::Arc<crate::publication::Publication>>,
+);
 impl Catalog {
+    pub fn for_project(&self, project: Option<ProjectId>) -> Self {
+        self.1
+            .as_ref()
+            .map(|p| p.catalog(project))
+            .unwrap_or_else(|| Self(self.0.clone(), None))
+    }
     pub fn core() -> Self {
         let mut entries = IndexMap::new();
         for descriptor in crate::builtins::core::descriptors() {
@@ -46,7 +55,7 @@ impl Catalog {
                 },
             );
         }
-        Self(entries)
+        Self(entries, None)
     }
     pub fn fixtures() -> Self {
         let mut catalog = Self::core();
@@ -78,19 +87,38 @@ impl Catalog {
 }
 impl SignatureProvider for Catalog {
     fn signature(&self, name: &str) -> Option<FnSignature> {
-        self.0.get(name).cloned()
+        self.for_project(None).0.get(name).cloned()
     }
 }
 impl VerificationRegistry for Catalog {
-    fn inspect(&self, _: Option<ProjectId>) -> RegistryInspection {
+    fn inspect(&self, project: Option<ProjectId>) -> RegistryInspection {
         RegistryInspection {
-            signatures: self.0.clone(),
-            problems: vec![],
+            signatures: self.for_project(project).0,
+            problems: self
+                .1
+                .as_ref()
+                .map(|p| {
+                    p.problems(project)
+                        .into_iter()
+                        .map(|message| crate::verify::Problem {
+                            r#where: "project fns".into(),
+                            message,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
 impl CallRegistry for Catalog {
-    fn freeze(&self, _: Option<ProjectId>, name: &str) -> Result<FrozenFunction, PublicError> {
+    fn freeze(
+        &self,
+        project: Option<ProjectId>,
+        name: &str,
+    ) -> Result<FrozenFunction, PublicError> {
+        if let Some(publication) = &self.1 {
+            return publication.freeze(project, name);
+        }
         let signature = self.signature(name).ok_or_else(|| PublicError::NotFound {
             message: format!("unknown fn {name}"),
         })?;
@@ -245,6 +273,6 @@ impl projects::ResourceSettings for ResourceSettings {
         project: ProjectId,
         patch: &serde_json::Value,
     ) -> sluice_store::Result<bool> {
-        resources::patch_resources(tx, project, patch, &self.0)
+        resources::patch_resources(tx, project, patch, &self.0.for_project(Some(project)))
     }
 }

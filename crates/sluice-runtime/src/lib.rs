@@ -14,3 +14,9 @@ pub mod watch;
 pub mod client;
 pub mod dispatch;
 pub mod execution;
+
+pub mod agent_factory;
+pub mod compose;
+pub mod publication;
+
+mod sidecar;

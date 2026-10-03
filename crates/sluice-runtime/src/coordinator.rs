@@ -113,6 +113,15 @@ impl<H: ExecutionHost> Coordinator<H> {
             .map_err(|e| e.into_public(true))?;
         // The flock proves every earlier coordinator connection and lease is gone.
         writer.write(RetrySafety::Idempotent,|tx|{if tx.sql().execute("UPDATE maintenance SET scheduler_owner=NULL,scheduler_lease_until=NULL WHERE scheduler_owner IS NOT NULL",[])?>0{tx.changed(None,"scheduler");}Ok(())}).await?;
+        let catalog = if host.composition_enabled() {
+            let publication = crate::publication::Publication::new(
+                crate::registry::FnRegistry::configured(home.clone())?,
+                catalog,
+            );
+            Catalog(Default::default(), Some(publication))
+        } else {
+            catalog
+        };
         let catalog = Arc::new(catalog);
         let host = Arc::new(host);
         let calls = Calls::new(
@@ -139,7 +148,16 @@ impl<H: ExecutionHost> Coordinator<H> {
         artifacts::recover(broker.writer(), broker.home())
             .await
             .map_err(|e| e.into_public(false))?;
+        broker.refresh_registry().await?;
         Ok(broker)
+    }
+    pub async fn refresh_registry(&self) -> Result<(), PublicError> {
+        if let Some(publication) = &self.inner.catalog.1 {
+            publication
+                .refresh(self.writer(), self.projects().await?)
+                .await?;
+        }
+        Ok(())
     }
     pub fn writer(&self) -> &Writer {
         &self.inner.writer
@@ -163,6 +181,16 @@ impl<H: ExecutionHost> Coordinator<H> {
         &self.inner.calls
     }
     pub async fn context(&self, project: ProjectId) -> Result<PlanContext, PublicError> {
+        self.refresh_registry().await?;
+        if let Some(publication) = &self.inner.catalog.1 {
+            let errors = publication.problems(Some(project));
+            if !errors.is_empty() {
+                return Err(PublicError::Invalid {
+                    message: "project registry blocked".into(),
+                    errors,
+                });
+            }
+        }
         let catalog = self.inner.catalog.clone();
         self.reads()
             .snapshot(move |sql| context(sql, project, &catalog))
@@ -208,6 +236,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         self.writer().write(RetrySafety::Idempotent,move|tx|{if tx.sql().execute("UPDATE maintenance SET scheduler_owner=NULL,scheduler_lease_until=NULL WHERE singleton=1 AND scheduler_owner=?1",[owner])?>0{tx.changed(None,"scheduler");}Ok(())}).await
     }
     pub async fn command(&self, request: CommandRequest) -> Result<CommandReply, PublicError> {
+        self.refresh_registry().await?;
         crate::drain::check_command(self.reads(), &request).await?;
         if let Some(reply) = calls::dispatch_p3_04(
             self.calls(),
@@ -222,6 +251,21 @@ impl<H: ExecutionHost> Coordinator<H> {
         }
         let catalog = self.inner.catalog.clone();
         match request {
+            CommandRequest::FnList { project } => {
+                let id = crate::calls::resolve(self.reads(), project).await?;
+                data(self.inner.catalog.1.as_ref().ok_or_else(|| conflict("registry unavailable"))?.listing(id))
+            }
+            CommandRequest::FnGet { name, project } => {
+                let id = crate::calls::resolve(self.reads(), project).await?;
+                data(self.inner.catalog.1.as_ref().ok_or_else(|| conflict("registry unavailable"))?.detail(id, &name)?)
+            }
+            CommandRequest::FnSave { manifest, main_py, project } => {
+                let publication = self.inner.catalog.1.as_ref().ok_or_else(|| conflict("registry unavailable"))?;
+                let saved = crate::registry::save(&publication.registry, self.writer(),
+                    &serde_json::to_value(manifest).map_err(storage)?, &main_py, project).await?;
+                self.refresh_registry().await?;
+                data(json!({"name":saved.name,"scope":saved.scope.label(),"path":saved.path,"generation":saved.generation}))
+            }
             CommandRequest::ProjectsList=>{let values=self.reads().snapshot(|sql|{let mut q=sql.prepare("SELECT project_id,name FROM projects WHERE deleted_at IS NULL ORDER BY name")?;let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(|(id,name)|Ok(ProjectIdentity{project_id:calls::parse_id(id)?,name:calls::parse_id(name)?})).collect::<sluice_store::Result<Vec<_>>>()}).await.map_err(|e|e.into_public(true))?;Ok(CommandReply::Projects(values))},
             CommandRequest::ProjectCreate{name,description,icon,resources,author}=>{
                 let project=self.writer().write(RetrySafety::NonIdempotent,move|tx|projects::project_create(tx,projects::CreateProject{name,description,icon:icon.map(|s|projects::Icon::text(&s)).transpose()?,resources:Some(serde_json::to_value(resources)?),author:author.unwrap_or_else(||"cli".into())},&projects::EmptyPlanInitializer,&ResourceSettings((*catalog).clone()))).await?;
@@ -246,8 +290,8 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let outputs=JsonMap(ctx.plan.outputs().iter().filter_map(|(n,r)|match sluice_model::gates::resolve_reference(&ctx.plan,&state,r){sluice_model::types::BoundValue::Ready(v)=>Some((n.clone(),v)),_=>None}).collect::<indexmap::IndexMap<_,_>>());
                 Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"inputs":state.inputs,"steps":steps,"outputs":outputs,"resources":resources::status(sql,id,&ctx.plan)?.into_iter().map(|(n,r)|(n,json!({"capacity":r.resource.capacity,"held":r.held,"queued":r.queued,"error":r.resource.error}))).collect::<BTreeMap<_,_>>()}))
             }).await.map_err(|e|e.into_public(true)).and_then(data),
-            CommandRequest::StepRetry(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{crate::drain::ensure_admission(tx,&crate::drain::Admission::Plan)?;let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;Ok(CommandReply::Retry(plans::step_retry(tx,&ctx,request,&mut Hooks)?))}).await,
-            CommandRequest::StepCancel(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;plans::step_cancel(tx,&ctx,request)?;Ok(CommandReply::Ack)}).await,
+            CommandRequest::StepRetry(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{crate::drain::ensure_admission(tx,&crate::drain::Admission::Plan)?;let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;check_expected_revision(&request,ctx.revision)?;Ok(CommandReply::Retry(plans::step_retry(tx,&ctx,request,&mut Hooks)?))}).await,
+            CommandRequest::StepCancel(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;check_expected_revision(&request,ctx.revision)?;plans::step_cancel(tx,&ctx,request)?;Ok(CommandReply::Ack)}).await,
             CommandRequest::StepSubmit(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let version=attempts::step_submit(tx,request)?;if version.is_none(){return Err(conflict("stale submission").into());}Ok(CommandReply::Ack)}).await,
             CommandRequest::Submission{run}=>data(self.submissions(run).await?),
             CommandRequest::StepSetOutput(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;plans::step_set_output(tx,&ctx,request)?;Ok(CommandReply::Ack)}).await,
@@ -275,7 +319,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let edit=PlanEdit::try_from(other)?;
                 let (id,prepared)=self.reads().snapshot(move|sql|{
                     let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;let state=plans::read_state(sql,id)?;let snapshot=Snapshot{revision:ctx.revision,document:ctx.plan.document().clone()};
-                    let prepared=edit::prepare_edit(&EditSnapshot{snapshot:&snapshot,state:&state,signatures:catalog.as_ref(),recipes:&Default::default(),resources:&CachedResources::default(),limits:&resource_limits(sql,id)?,prune_eligible:None},edit)?;Ok((id,prepared))
+                    let prepared=edit::prepare_edit(&EditSnapshot{snapshot:&snapshot,state:&state,signatures:&catalog.for_project(Some(id)),recipes:&Default::default(),resources:&CachedResources::default(),limits:&resource_limits(sql,id)?,prune_eligible:None},edit)?;Ok((id,prepared))
                 }).await.map_err(|e|e.into_public(true))?;
                 self.writer().write(RetrySafety::NonIdempotent,move|tx|{crate::drain::ensure_admission(tx,&crate::drain::Admission::Plan)?;if prepared.dry_run{return Ok(CommandReply::Preview(prepared.preview));}Ok(CommandReply::Edit(plans::apply_edit(tx,id,prepared)?))}).await
             }
@@ -449,7 +493,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             tx.sql().execute("UPDATE attempts SET request=?2 WHERE attempt_id=?1",(id.attempt.to_string(),request.to_string()))?;tx.changed(id.project,"status");Ok(())
         }).await
     }
-    async fn callback(
+    pub(crate) async fn callback(
         &self,
         id: AttemptKey,
         request: RpcRequest,
@@ -500,7 +544,9 @@ impl<H: ExecutionHost> Coordinator<H> {
                     if saved["command"] != serde_json::to_value(&command)? {
                         return Err(conflict("callback request ID reused").into());
                     }
-                    return Ok(serde_json::from_value(saved["reply"].clone())?);
+                    if !matches!(command, CommandRequest::AcquireLease(_)) {
+                        return Ok(serde_json::from_value(saved["reply"].clone())?);
+                    }
                 }
                 if cache.len() >= 16384 {
                     return Err(conflict("callback cache limit").into());
@@ -536,8 +582,9 @@ impl<H: ExecutionHost> Coordinator<H> {
                             id.run,
                             &l.resource,
                             l.amount,
-                            &format!("callback/{}/{key}", id.run),
+                            &format!("callback/{}/{}", id.run, l.request_id),
                         )?;
+                        resources::grant_leases(tx, run_project(tx.sql(), l.run)?)?;
                         let state = resources::leases(tx.sql(), run_project(tx.sql(), l.run)?)?
                             .into_iter()
                             .find(|l| l.id == lease)
@@ -567,6 +614,157 @@ impl<H: ExecutionHost> Coordinator<H> {
             })
             .await
     }
+    async fn helper(
+        &self,
+        forwarded: crate::compose::ForwardHelper,
+        capability: Option<&RunCapability>,
+    ) -> Result<CommandReply, PublicError> {
+        use crate::python::{HelperCommand, HelperExtension};
+        let id = forwarded.identity;
+        self.authenticate(&id, capability).await?;
+        let request = forwarded.request;
+        if request.protocol != rpc::PROTOCOL_VERSION
+            || request.run_capability.as_ref() != capability
+        {
+            return Err(conflict("helper capability mismatch"));
+        }
+        match request.command {
+            HelperCommand::Runtime(command) => {
+                self.callback(
+                    id,
+                    RpcRequest {
+                        protocol: request.protocol,
+                        request_id: request.request_id,
+                        run_capability: request.run_capability,
+                        command,
+                    },
+                )
+                .await
+            }
+            HelperCommand::Extension(HelperExtension::RetryOnFailure(action)) => {
+                if Some(action.project) != id.project
+                    || action.run != id.run
+                    || action.message.len() > 8192
+                    || action.message.trim().is_empty()
+                {
+                    return Err(conflict("retry action outside run authority"));
+                }
+                self.writer()
+                    .write(RetrySafety::Idempotent, move |tx| {
+                        let saved: Option<String> = tx.sql().query_row(
+                            "SELECT completion_action FROM runs WHERE run_id=?1",
+                            [id.run.to_string()],
+                            |r| r.get(0),
+                        )?;
+                        let target = if let Some(saved) = saved {
+                            let saved: Value = serde_json::from_str(&saved)?;
+                            if saved["target"]["step"] != json!(action.step)
+                                || saved["message"] != json!(action.message)
+                            {
+                                return Err(conflict("completion action changed").into());
+                            }
+                            serde_json::from_value(saved["target"].clone())?
+                        } else {
+                            attempts::completion_target(tx, action.project, &action.step)?
+                                .ok_or_else(|| conflict("target has no completed result"))?
+                        };
+                        if !attempts::register_completion_action(
+                            tx,
+                            RegisterCompletionAction {
+                                project: action.project,
+                                run: action.run,
+                                target,
+                                message: action.message,
+                                author: action.author,
+                            },
+                            &Hooks,
+                        )? {
+                            return Err(conflict("stale completion registration").into());
+                        }
+                        Ok(CommandReply::Ack)
+                    })
+                    .await
+            }
+            HelperCommand::Extension(HelperExtension::Tool(tool)) => {
+                if tool.name.starts_with("message.") {
+                    let project = id
+                        .project
+                        .ok_or_else(|| conflict("message fn needs a project"))?;
+                    let context = self.context(project).await?;
+                    let ctx = crate::builtins::messages::MessageCtx {
+                        project,
+                        step: id.step.clone(),
+                        run: Some(id.run),
+                        writer: self.writer().clone(),
+                        reads: self.reads().clone(),
+                        plan_inputs: Arc::new(InputSetter(context)),
+                        cancel: CancellationToken::new(),
+                    };
+                    let operation =
+                        crate::builtins::messages::dispatch(&tool.name, &tool.args, &ctx);
+                    tokio::pin!(operation);
+                    let mut poll = tokio::time::interval(std::time::Duration::from_millis(100));
+                    loop {
+                        tokio::select! {
+                            result = &mut operation => return result.map_err(storage).and_then(data),
+                            _ = poll.tick() => {
+                                if matches!(self.guardian(CoordinatorCommand::CancelIntent(id.clone()), capability).await?, CoordinatorReply::CancelIntent(true)) {
+                                    ctx.cancel.cancel();
+                                    return Err(PublicError::Cancelled { message: "message wait cancelled".into() });
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut command = crate::compose::decode_tool(tool)?;
+                // Named callbacks use the same command adapters with the run's
+                // immutable project and submission identity.
+                if let CommandRequest::MessagePost(m) = &mut command {
+                    m.run = Some(id.run);
+                    m.from = id.step.as_ref().map(ToString::to_string);
+                }
+                let reply = if matches!(
+                    &command,
+                    CommandRequest::StepSubmit(_)
+                        | CommandRequest::Submission { .. }
+                        | CommandRequest::MessagePost(_)
+                        | CommandRequest::AcquireLease(_)
+                        | CommandRequest::ReleaseLease(_)
+                        | CommandRequest::RegisterCompletionAction(_)
+                ) {
+                    self.callback(
+                        id,
+                        RpcRequest {
+                            protocol: request.protocol,
+                            request_id: request.request_id,
+                            run_capability: request.run_capability,
+                            command,
+                        },
+                    )
+                    .await?
+                } else {
+                    // Public project tools use the public command service. The
+                    // helper bearer remains confined to its admitted project.
+                    let encoded = serde_json::to_value(&command).map_err(storage)?;
+                    let selector = encoded["args"]
+                        .get("project")
+                        .filter(|p| !p.is_null())
+                        .ok_or_else(|| conflict("tool requires the run's project"))?;
+                    let selector: ProjectSelector =
+                        serde_json::from_value(selector.clone()).map_err(storage)?;
+                    let project = crate::calls::resolve(self.reads(), Some(selector)).await?;
+                    if project != id.project {
+                        return Err(conflict("tool project differs from run"));
+                    }
+                    self.command(command).await?
+                };
+                match reply {
+                    CommandReply::Data(v) => Ok(CommandReply::Data(v)),
+                    other => data(other),
+                }
+            }
+        }
+    }
     pub async fn complete(&self, journal: CompletionJournal) -> Result<DurableAck, PublicError> {
         journal.validate(&journal.identity).map_err(storage)?;
         if journal.identity.home != self.home_id() {
@@ -593,6 +791,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             self.writer()
                 .write(RetrySafety::Idempotent, move |tx| {
                     let id = step_identity(&journal.identity)?;
+                    let catalog = frozen_catalog(tx.sql(), &journal.identity, &catalog)?;
                     let ctx = context(tx.sql(), id.project, &catalog)?;
                     for ack in &journal.delivery_acks {
                         require_invocation(tx.sql(), &journal.identity, ack.invocation)?;
@@ -724,6 +923,27 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .map_err(storage)?;
         if request.protocol != rpc::PROTOCOL_VERSION {
             return Err(conflict("unsupported protocol"));
+        }
+        if request.command.get("helper").is_some() {
+            let forwarded: crate::compose::HelperWire =
+                rpc::decode_json(&serde_json::to_vec(&request.command).map_err(storage)?)?;
+            let result = self
+                .helper(forwarded.helper, request.run_capability.as_ref())
+                .await;
+            write_reply(
+                &mut stream,
+                &RpcReply {
+                    protocol: 1,
+                    request_id: request.request_id,
+                    result: match result {
+                        Ok(v) => RpcResult::Ok(Box::new(v)),
+                        Err(e) => RpcResult::Error(e),
+                    },
+                },
+            )
+            .await
+            .map_err(storage)?;
+            return Ok(());
         }
         if request.command.get("runtime").is_some() {
             let command: RuntimeCommand =
@@ -881,7 +1101,8 @@ pub(crate) fn context(
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let doc: JsonMap = serde_json::from_str(&doc)?;
-    let plan = Plan::parse(&doc, catalog).map_err(|errors| PublicError::Invalid {
+    let catalog = catalog.for_project(Some(project));
+    let plan = Plan::parse(&doc, &catalog).map_err(|errors| PublicError::Invalid {
         message: "invalid stored plan".into(),
         errors: errors.into_iter().map(|e| e.to_string()).collect(),
     })?;
@@ -1041,4 +1262,61 @@ fn run_project(sql: &Connection, run: RunId) -> sluice_store::Result<ProjectId> 
         |r| r.get(0),
     )?;
     calls::parse_id(id)
+}
+
+fn check_expected_revision(
+    request: &impl Serialize,
+    current: Revision,
+) -> sluice_store::Result<()> {
+    if serde_json::to_value(request)?["expected_rev"]
+        .as_u64()
+        .is_some_and(|rev| rev != current.0)
+    {
+        return Err(PublicError::Conflict {
+            message: "plan revision changed".into(),
+            current_rev: Some(current),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn frozen_catalog(
+    sql: &Connection,
+    id: &AttemptKey,
+    catalog: &Catalog,
+) -> sluice_store::Result<Catalog> {
+    let mut catalog = catalog.for_project(id.project);
+    let raw: String = sql.query_row(
+        "SELECT request FROM attempts WHERE attempt_id=?1",
+        [id.attempt.to_string()],
+        |r| r.get(0),
+    )?;
+    let frozen: Value = serde_json::from_str(&raw)?;
+    if !frozen["provenance"]["runtime"]["execution"].is_null() {
+        let execution: crate::publication::FrozenExecution =
+            serde_json::from_value(frozen["provenance"]["runtime"]["execution"].clone())?;
+        catalog.0.insert(
+            execution.name,
+            sluice_model::plan::FnSignature {
+                inputs: execution.inputs,
+                outputs: execution.outputs,
+                open: execution.open,
+                submits: execution
+                    .submits
+                    .into_iter()
+                    .map(|(n, p)| {
+                        (
+                            n,
+                            sluice_model::plan::Declaration {
+                                ty: p.r#type,
+                                doc: Some(p.doc),
+                            },
+                        )
+                    })
+                    .collect(),
+            },
+        );
+    }
+    Ok(catalog)
 }

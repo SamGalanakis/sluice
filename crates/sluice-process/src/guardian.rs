@@ -904,6 +904,8 @@ fn bounded_error(mut error: PublicError) -> PublicError {
         | PublicError::CursorExpired { message }
         | PublicError::ProcessLost { message }
         | PublicError::Cancelled { message }
+        | PublicError::Transient { message }
+        | PublicError::Rejected { message }
         | PublicError::FnFailure { message }
         | PublicError::AgentFailure { message, .. } => Some(message),
         _ => None,
@@ -919,6 +921,12 @@ pub fn decode_result(bytes: &[u8], code: Option<i32>) -> io::Result<PayloadResul
             Ok(PayloadResult::Succeeded(outputs))
         }
         FnEnvelope::Failure { ok: false, error } if code == Some(1) => Ok(match error {
+            FnEnvelopeError::Public(PublicError::Rejected { message }) => {
+                PayloadResult::Rejected(error_tail(&message))
+            }
+            FnEnvelopeError::Public(PublicError::Cancelled { message }) => {
+                PayloadResult::Cancelled(error_tail(&message))
+            }
             FnEnvelopeError::Public(error) => PayloadResult::Failed(bounded_error(error)),
             FnEnvelopeError::Helper(error) => match error.kind {
                 HelperErrorKind::Rejected => PayloadResult::Rejected(error_tail(&error.message)),

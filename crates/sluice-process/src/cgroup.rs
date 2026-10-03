@@ -49,12 +49,19 @@ impl RunCgroups {
         Ok(!self.payload.populated()?)
     }
     pub fn invocation(&self, id: InvocationId) -> io::Result<Cgroup> {
-        let name = id.to_string();
-        mkdirat(&self.payload.dir, &name, Mode::RWXU)?;
-        self.payload.open_child(&name)
+        self.service.payload_invocation(id, true)
     }
 }
 impl Cgroup {
+    /// Open or create a leaf in the already admitted service payload subtree.
+    pub fn payload_invocation(&self, id: InvocationId, create: bool) -> io::Result<Self> {
+        let payload = self.open_child("payload")?;
+        let name = id.to_string();
+        if create {
+            mkdirat(&payload.dir, &name, Mode::RWXU)?;
+        }
+        payload.open_child(&name)
+    }
     /// Only Sluice service roots are accepted. The caller must reconcile and own
     /// this unit; a path alone is not an admission or cancellation capability.
     pub fn open_service(path: &str) -> io::Result<Self> {

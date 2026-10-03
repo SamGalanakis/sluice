@@ -180,9 +180,15 @@ impl<F: AgentFactory> FnHost for AgentFnHost<F> {
     async fn invoke(&self, invocation: FnInvocation) -> Result<JsonMap, PublicError> {
         self.execute(invocation, RetryOwner::Standalone)
             .await
-            .map_err(|error| PublicError::AgentFailure {
-                message: error.to_string(),
-                session: error.session,
+            .map_err(|error| match error.kind {
+                FailureKind::Transient => PublicError::Transient {
+                    message: error.message,
+                },
+                _ => PublicError::AgentFailure {
+                    kind: format!("{:?}", error.kind),
+                    message: error.message,
+                    session: error.session,
+                },
             })
     }
 }
@@ -302,6 +308,20 @@ impl AgentBuiltinRequest {
             .iter()
             .map(|(k, v)| (k.clone(), v.as_value().clone()))
             .collect();
+        let mut retry = if name == "decide.llm" {
+            RetryPolicy::decision()
+        } else {
+            RetryPolicy::agent()
+        };
+        if let Some(raw) = std::env::var_os("SLUICE_BACKOFF") {
+            let seconds = raw
+                .to_str()
+                .ok_or_else(|| bad("SLUICE_BACKOFF is not UTF-8"))?
+                .parse::<f64>()
+                .map_err(|_| bad("invalid SLUICE_BACKOFF"))?;
+            retry.backoff = std::time::Duration::try_from_secs_f64(seconds)
+                .map_err(|_| bad("invalid SLUICE_BACKOFF"))?;
+        }
         Ok(Self {
             name: name.into(),
             engine,
@@ -316,11 +336,7 @@ impl AgentBuiltinRequest {
             effort,
             required: prompt::required_outputs(&ctx),
             report_path: string("report_path")?.map(PathBuf::from),
-            retry: if name == "decide.llm" {
-                RetryPolicy::decision()
-            } else {
-                RetryPolicy::agent()
-            },
+            retry,
             decision_options: options,
             threshold,
         })

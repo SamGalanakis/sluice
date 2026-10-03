@@ -82,6 +82,9 @@ fn full_prompt_contains_header_inputs_outputs_exact_submit_identity_and_live_thr
     assert!(text.contains("\"ready\": <boolean>"));
     assert!(text.contains("step-work"));
     assert!(text.contains("needs_reply"));
+    assert!(text.contains("sluice tool message_post"));
+    assert!(!text.contains("thread.post"));
+    assert!(!text.contains("inbox_"));
     assert!(!text.contains("log_read"));
     assert_eq!(required_outputs(&ports()), vec!["ready"]);
 }

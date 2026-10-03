@@ -135,6 +135,7 @@ async fn bash(host: &PythonHost, invocation: &FnInvocation) -> Result<JsonMap, P
         ("SLUICE_HOME", host.context.home.as_os_str()),
         ("SLUICE_BIN", host.config.bin.as_os_str()),
         ("SLUICE_RUN_DIR", host.context.run_dir.as_os_str()),
+        ("SLUICE_PROJECT_DIR", host.context.project_dir.as_os_str()),
         ("SLUICE_FN_DIR", host.bundle.bundle_dir.as_os_str()),
     ] {
         command.env(key, value);

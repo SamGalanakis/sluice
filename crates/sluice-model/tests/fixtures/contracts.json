@@ -3485,6 +3485,16 @@
     },
     {
       "error": "agent_failure",
+      "kind": "EngineExited",
+      "message": "fixture",
+      "session": "fixture-session"
+    },
+    {
+      "error": "transient",
+      "message": "fixture"
+    },
+    {
+      "error": "rejected",
       "message": "fixture"
     }
   ],

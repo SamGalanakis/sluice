@@ -348,7 +348,10 @@ def run(main, retries=0, backoff=30.0):
         kind = ("rejected" if isinstance(error, Rejected) else
                 "transient" if isinstance(error, Transient) else
                 "cancelled" if isinstance(error, (Cancelled, KeyboardInterrupt)) else "fn_failure")
-        answer = _dumps({"ok": False, "error": {"kind": kind, "message": _tail(error)}})
+        detail = ({"error": "agent_failure", "kind": error.kind, "message": _tail(error.message),
+                   "session": error.session} if isinstance(error, AgentFailure) else
+                  {"kind": kind, "message": _tail(error)})
+        answer = _dumps({"ok": False, "error": detail})
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)

@@ -34,7 +34,13 @@ pub enum PublicError {
     #[error("{message}")]
     FnFailure { message: String },
     #[error("{message}")]
+    Transient { message: String },
+    #[error("{message}")]
+    Rejected { message: String },
+    #[error("{message}")]
     AgentFailure {
+        #[serde(default = "agent_failure_kind")]
+        kind: String,
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
@@ -46,4 +52,8 @@ impl PublicError {
             message: format!("{mode} is not implemented in this build"),
         }
     }
+}
+
+fn agent_failure_kind() -> String {
+    "AgentFailure".into()
 }
