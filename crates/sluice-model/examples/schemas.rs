@@ -1,3 +1,4 @@
+use sluice_model::edit::PreparedEdit;
 use sluice_model::{commands::*, error::*, events::*, gates::*, ids::*, plan::*, rpc::*, types::*};
 include!("../tests/registry.rs.inc");
 fn main() {

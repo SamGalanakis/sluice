@@ -1553,11 +1553,35 @@ fn equal_priority_resource_admission_uses_dependency_order() {
 
 #[test]
 fn prepared_edits_check_revision_running_protection_and_preserve_reused_ids() {
-    use sluice_model::{
-        error::PublicError,
-        ids::Revision,
-        plan::{PlanEdit, Snapshot, prepare_plan_edit},
-    };
+    use sluice_model::{error::PublicError, ids::Revision, plan::Snapshot};
+    let prepare_patch_request =
+        |snapshot: &Snapshot,
+         state: &StateSnapshot,
+         patch: sluice_model::plan::PlanPatchData,
+         signatures: &IndexMap<String, FnSignature>,
+         resources: &CachedResources,
+         limits: &IndexMap<String, sluice_model::plan::ResourceLimit>| {
+            sluice_model::edit::prepare_edit(
+                &sluice_model::edit::EditSnapshot {
+                    snapshot,
+                    state,
+                    signatures,
+                    resources,
+                    limits,
+                    recipes: &IndexMap::new(),
+                    prune_eligible: None,
+                },
+                sluice_model::edit::PlanEdit::Patch(sluice_model::commands::PlanPatch {
+                    project: "test".parse().unwrap(),
+                    rev: patch.expected,
+                    ops: patch.ops,
+                    start: true,
+                    dry_run: false,
+                    author: None,
+                    reason: "test".into(),
+                }),
+            )
+        };
     let plan = chain();
     let snapshot = Snapshot {
         revision: Revision(3),
@@ -1577,10 +1601,10 @@ fn prepared_edits_check_revision_running_protection_and_preserve_reused_ids() {
     let resources = CachedResources::default();
     let limits = IndexMap::new();
     assert!(matches!(
-        prepare_plan_edit(
+        prepare_patch_request(
             &snapshot,
             &state,
-            PlanEdit {
+            sluice_model::plan::PlanPatchData {
                 expected: Revision(2),
                 ops: vec![]
             },
@@ -1596,10 +1620,10 @@ fn prepared_edits_check_revision_running_protection_and_preserve_reused_ids() {
     let bad: Vec<PatchOperation> =
         decode_json(br#"[{"op":"replace","path":"/steps/b/run","value":"test.open"}]"#).unwrap();
     assert!(matches!(
-        prepare_plan_edit(
+        prepare_patch_request(
             &snapshot,
             &state,
-            PlanEdit {
+            sluice_model::plan::PlanPatchData {
                 expected: Revision(3),
                 ops: bad
             },
@@ -1610,10 +1634,10 @@ fn prepared_edits_check_revision_running_protection_and_preserve_reused_ids() {
         Err(PublicError::Invalid { .. })
     ));
     let labels:Vec<PatchOperation>=decode_json(br#"[{"op":"add","path":"/steps/b/paused","value":true},{"op":"add","path":"/steps/b/tags","value":["unit:lane"]}]"#).unwrap();
-    let prepared = prepare_plan_edit(
+    let prepared = prepare_patch_request(
         &snapshot,
         &state,
-        PlanEdit {
+        sluice_model::plan::PlanPatchData {
             expected: Revision(3),
             ops: labels.clone(),
         },
@@ -1626,10 +1650,10 @@ fn prepared_edits_check_revision_running_protection_and_preserve_reused_ids() {
     assert!(prepared.preview.would_start.is_empty());
     assert!(prepared.preview.would_stale.is_empty());
     let reused:Vec<PatchOperation>=decode_json(br#"[{"op":"remove","path":"/steps/a"},{"op":"add","path":"/steps/a","value":{"run":"test.add","in":{"a":{"default":1},"b":{"default":1}},"after":[]}}]"#).unwrap();
-    let prepared = prepare_plan_edit(
+    let prepared = prepare_patch_request(
         &snapshot,
         &state,
-        PlanEdit {
+        sluice_model::plan::PlanPatchData {
             expected: Revision(3),
             ops: reused,
         },

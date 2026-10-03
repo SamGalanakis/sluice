@@ -5,13 +5,8 @@ use crate::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    content = "of",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
+/// SPEC type expression. Serialization and declarations share the same parser.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     String,
     Int,
@@ -21,10 +16,38 @@ pub enum Type {
     Optional(Box<Type>),
     List(Box<Type>),
     Enum(Vec<String>),
-    Record(
-        #[schemars(with = "std::collections::BTreeMap<String, Type>")]
-        indexmap::IndexMap<String, Type>,
-    ),
+    Record(indexmap::IndexMap<String, Type>),
+}
+impl Serialize for Type {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.form().serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for Type {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = JsonValue::deserialize(deserializer)?;
+        Self::parse(value.as_value()).map_err(serde::de::Error::custom)
+    }
+}
+impl JsonSchema for Type {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Type".into()
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let child = g.subschema_for::<Self>();
+        schemars::json_schema!({"anyOf": [
+            {"type":"string", "pattern": "^(string|int|float|boolean|Any)(\\?|\\[\\])*$"},
+            {"type":"array", "minItems":2, "maxItems":2, "prefixItems":[{"const":"null"},child]},
+            {"type":"array", "minItems":2, "maxItems":2, "prefixItems":[child,{"const":"null"}]},
+            {"type":"object", "required":["type","items"], "additionalProperties":false,
+                "properties":{"type":{"const":"array"}, "items":child}},
+            {"type":"object", "required":["type","symbols"], "additionalProperties":false,
+                "properties":{"type":{"const":"enum"}, "symbols":{"type":"array", "minItems":1,
+                    "uniqueItems":true,"items":{"type":"string"}}}},
+            {"type":"object", "required":["type","fields"], "additionalProperties":false,
+                "properties":{"type":{"const":"record"}, "fields":{"type":"object", "additionalProperties":child}}}
+        ]})
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(
@@ -92,8 +115,6 @@ pub use crate::rpc::decode_json;
 
 impl Type {
     /// Parse a SPEC §3 type expression from strict JSON bytes.
-    /// Serde's tagged representation remains the shared RPC contract; use this
-    /// method and `form` for type expressions in fn and plan declarations.
     pub fn parse_json(bytes: &[u8]) -> Result<Self, PathError> {
         let value: JsonValue = decode_json(bytes).map_err(|e| error("type", e.to_string()))?;
         Self::parse(value.as_value())

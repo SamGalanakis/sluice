@@ -205,15 +205,19 @@
     "title": "string",
     "type": "string"
   },
-  "ValidatedPlan": {
+  "PlanDocument": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "JsonMap",
-    "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
-    "type": "object",
-    "additionalProperties": {
-      "$ref": "#/$defs/JsonValue"
-    },
+    "title": "PlanDocument",
+    "description": "Unvalidated wire document. Compile with a signature provider before use.",
+    "$ref": "#/$defs/JsonMap",
     "$defs": {
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
       "JsonValue": {
         "x-sluice-integer-lexemes": "i64",
         "x-sluice-floats": "finite",
@@ -254,134 +258,81 @@
   "Type": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Type",
-    "oneOf": [
+    "anyOf": [
       {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "string"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "additionalProperties": false
+        "type": "string",
+        "pattern": "^(string|int|float|boolean|Any)(\\?|\\[\\])*$"
       },
       {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "int"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "float"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "boolean"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "any"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "optional"
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "prefixItems": [
+          {
+            "const": "null"
           },
-          "of": {
+          {
+            "$ref": "#"
+          }
+        ]
+      },
+      {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "prefixItems": [
+          {
+            "$ref": "#"
+          },
+          {
+            "const": "null"
+          }
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "array"
+          },
+          "items": {
             "$ref": "#"
           }
         },
         "required": [
-          "kind",
-          "of"
+          "type",
+          "items"
         ],
         "additionalProperties": false
       },
       {
         "type": "object",
         "properties": {
-          "kind": {
-            "type": "string",
-            "const": "list"
-          },
-          "of": {
-            "$ref": "#"
-          }
-        },
-        "required": [
-          "kind",
-          "of"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
+          "type": {
             "const": "enum"
           },
-          "of": {
+          "symbols": {
             "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
             "items": {
               "type": "string"
             }
           }
         },
         "required": [
-          "kind",
-          "of"
+          "type",
+          "symbols"
         ],
         "additionalProperties": false
       },
       {
         "type": "object",
         "properties": {
-          "kind": {
-            "type": "string",
+          "type": {
             "const": "record"
           },
-          "of": {
+          "fields": {
             "type": "object",
             "additionalProperties": {
               "$ref": "#"
@@ -389,8 +340,8 @@
           }
         },
         "required": [
-          "kind",
-          "of"
+          "type",
+          "fields"
         ],
         "additionalProperties": false
       }
@@ -756,6 +707,10 @@
           "$ref": "#/$defs/PatchOperation"
         }
       },
+      "start": {
+        "type": "boolean",
+        "default": true
+      },
       "dry_run": {
         "type": "boolean"
       },
@@ -1002,6 +957,10 @@
       "spec": {
         "$ref": "#/$defs/JsonMap"
       },
+      "start": {
+        "type": "boolean",
+        "default": true
+      },
       "edit": {
         "$ref": "#/$defs/EditOptions"
       }
@@ -1157,7 +1116,8 @@
         "$ref": "#/$defs/JsonMap"
       },
       "start": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "after": {
         "type": "object",
@@ -1167,6 +1127,20 @@
             "type": "string"
           }
         }
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "inputs": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonMap"
+        },
+        "default": {}
       },
       "edit": {
         "$ref": "#/$defs/EditOptions"
@@ -1178,7 +1152,6 @@
       "recipe",
       "unit",
       "params",
-      "start",
       "after",
       "edit"
     ],
@@ -1963,6 +1936,15 @@
         ],
         "items": {
           "$ref": "#/$defs/UnitName"
+        }
+      },
+      "tags": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
         }
       },
       "older_than_seconds": {
@@ -4010,6 +3992,7 @@
         }
       },
       "would_start": {
+        "description": "Ready executable candidates, including those also listed in `would_queue`.",
         "type": "array",
         "items": {
           "$ref": "#/$defs/StepId"
@@ -4276,6 +4259,7 @@
             }
           },
           "would_start": {
+            "description": "Ready executable candidates, including those also listed in `would_queue`.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
@@ -4641,6 +4625,7 @@
             }
           },
           "would_start": {
+            "description": "Ready executable candidates, including those also listed in `would_queue`.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
@@ -8623,9 +8608,9 @@
       }
     }
   },
-  "PlanEdit": {
+  "PlanPatchData": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "PlanEdit",
+    "title": "PlanPatchData",
     "type": "object",
     "properties": {
       "expected": {
@@ -8812,6 +8797,7 @@
   "PreparedEdit": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "PreparedEdit",
+    "description": "Prepared result for dispatch. Its candidate is already validated; the store\nstill rechecks transactional revision and running-state preconditions.\nIt is serialized for inspection, never deserialized as a certificate.",
     "type": "object",
     "properties": {
       "expected": {
@@ -8826,18 +8812,51 @@
         }
       },
       "plan": {
-        "$ref": "#/$defs/JsonMap"
+        "$ref": "#/$defs/Plan"
       },
       "preview": {
         "$ref": "#/$defs/EditPreview"
+      },
+      "dry_run": {
+        "type": "boolean"
+      },
+      "author": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "reason": {
+        "type": "string"
+      },
+      "inputs": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InputChanges"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "prune": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PruneSet"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
-    "additionalProperties": false,
     "required": [
       "expected",
       "ops",
       "plan",
-      "preview"
+      "preview",
+      "dry_run",
+      "reason"
     ],
     "$defs": {
       "PatchOperation": {
@@ -9001,6 +9020,10 @@
           }
         ]
       },
+      "Plan": {
+        "description": "Unvalidated wire document. Compile with a signature provider before use.",
+        "$ref": "#/$defs/JsonMap"
+      },
       "JsonMap": {
         "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
         "type": "object",
@@ -9018,6 +9041,7 @@
             }
           },
           "would_start": {
+            "description": "Ready executable candidates, including those also listed in `would_queue`.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
@@ -9061,6 +9085,124 @@
       "StepId": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "InputChanges": {
+        "type": "object",
+        "properties": {
+          "changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "running": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "unsupported": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/UnsupportedInput"
+            }
+          }
+        },
+        "required": [
+          "changed",
+          "running",
+          "unsupported"
+        ]
+      },
+      "UnsupportedInput": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "inputs"
+        ]
+      },
+      "PruneSet": {
+        "type": "object",
+        "properties": {
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/UnitName"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "kept": {
+            "type": "object",
+            "additionalProperties": false,
+            "patternProperties": {
+              "^[a-z0-9][a-z0-9_-]*$": {
+                "$ref": "#/$defs/PruneHolder"
+              }
+            }
+          }
+        },
+        "required": [
+          "units",
+          "steps",
+          "kept"
+        ]
+      },
+      "UnitName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "PruneHolder": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "step"
+              },
+              "value": {
+                "$ref": "#/$defs/StepId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "plan_output"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ]
+          }
+        ]
       }
     }
   },
@@ -10382,6 +10524,10 @@
               "$ref": "#/$defs/PatchOperation"
             }
           },
+          "start": {
+            "type": "boolean",
+            "default": true
+          },
           "dry_run": {
             "type": "boolean"
           },
@@ -10542,6 +10688,10 @@
           "spec": {
             "$ref": "#/$defs/JsonMap"
           },
+          "start": {
+            "type": "boolean",
+            "default": true
+          },
           "edit": {
             "$ref": "#/$defs/EditOptions"
           }
@@ -10604,7 +10754,8 @@
             "$ref": "#/$defs/JsonMap"
           },
           "start": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": true
           },
           "after": {
             "type": "object",
@@ -10614,6 +10765,20 @@
                 "type": "string"
               }
             }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonMap"
+            },
+            "default": {}
           },
           "edit": {
             "$ref": "#/$defs/EditOptions"
@@ -10625,7 +10790,6 @@
           "recipe",
           "unit",
           "params",
-          "start",
           "after",
           "edit"
         ]
@@ -10773,6 +10937,15 @@
             ],
             "items": {
               "$ref": "#/$defs/UnitName"
+            }
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
             }
           },
           "older_than_seconds": {
@@ -11988,6 +12161,7 @@
             }
           },
           "would_start": {
+            "description": "Ready executable candidates, including those also listed in `would_queue`.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
@@ -18873,6 +19047,10 @@
               "$ref": "#/$defs/PatchOperation"
             }
           },
+          "start": {
+            "type": "boolean",
+            "default": true
+          },
           "dry_run": {
             "type": "boolean"
           },
@@ -19033,6 +19211,10 @@
           "spec": {
             "$ref": "#/$defs/JsonMap"
           },
+          "start": {
+            "type": "boolean",
+            "default": true
+          },
           "edit": {
             "$ref": "#/$defs/EditOptions"
           }
@@ -19095,7 +19277,8 @@
             "$ref": "#/$defs/JsonMap"
           },
           "start": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": true
           },
           "after": {
             "type": "object",
@@ -19105,6 +19288,20 @@
                 "type": "string"
               }
             }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonMap"
+            },
+            "default": {}
           },
           "edit": {
             "$ref": "#/$defs/EditOptions"
@@ -19116,7 +19313,6 @@
           "recipe",
           "unit",
           "params",
-          "start",
           "after",
           "edit"
         ]
@@ -19264,6 +19460,15 @@
             ],
             "items": {
               "$ref": "#/$defs/UnitName"
+            }
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
             }
           },
           "older_than_seconds": {
@@ -20427,6 +20632,7 @@
             }
           },
           "would_start": {
+            "description": "Ready executable candidates, including those also listed in `would_queue`.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
@@ -22641,6 +22847,7 @@
             }
           },
           "would_start": {
+            "description": "Ready executable candidates, including those also listed in `would_queue`.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"

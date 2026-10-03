@@ -2,7 +2,7 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::{CommandRequest, StepStatus},
-    edit::{EditSnapshot, PlanEdit, PreparedEdit, UnitAdd, prepare_edit},
+    edit::{EditSnapshot, PlanEdit, PreparedEdit, prepare_edit},
     error::PublicError,
     gates::{CachedResources, StateSnapshot, StepState, reconcile},
     ids::{Revision, StepId, UnitName},
@@ -416,15 +416,10 @@ fn unit_add_is_one_prepared_edit_with_exit_and_staging() {
     let f = Fixture::new(json!({"steps":{"prior":ext()}}));
     let request = command(
         "unit_add",
-        json!({"recipe":"pair","unit":"u","params":{},"start":false,"after":{"*":["prior?"]}}),
+        json!({"recipe":"pair","unit":"u","params":{},"start":false,"after":{"*":["prior?"]},"tags":["arc:x","heavy"],"inputs":{"a":{"a":9,"b":2}}}),
         false,
     );
-    let PlanEdit::UnitAdd(mut request) = request else {
-        panic!()
-    };
-    request.tags = vec!["arc:x".into(), "heavy".into()];
-    request.inputs.insert("a".into(), map(json!({"a":9,"b":2})));
-    let prepared = f.prepare(PlanEdit::UnitAdd(request)).unwrap();
+    let prepared = f.prepare(request).unwrap();
     assert_eq!(prepared.ops.len(), 2);
     let doc = doc(&prepared);
     assert_eq!(
@@ -928,21 +923,16 @@ fn shared_preview_uses_cached_resources_and_skip_and_stale_deltas() {
 #[test]
 fn command_conversion_rejects_nonplan_mutations_and_preserves_unit_transport() {
     assert!(PlanEdit::try_from(CommandRequest::ProjectsList).is_err());
-    let PlanEdit::UnitAdd(UnitAdd {
-        request,
-        tags,
-        inputs,
-    }) = command(
+    let PlanEdit::UnitAdd(request) = command(
         "unit_add",
         json!({"recipe":"pair","unit":"u","params":{},"start":true,"after":{}}),
         false,
-    )
-    else {
+    ) else {
         panic!()
     };
     assert_eq!(request.unit, unit("u"));
-    assert!(tags.is_empty());
-    assert!(inputs.is_empty());
+    assert!(request.tags.is_empty());
+    assert!(request.inputs.is_empty());
     let f = Fixture::new(json!({"steps":{}}));
     let prepared = f
         .prepare(command(
@@ -951,8 +941,13 @@ fn command_conversion_rejects_nonplan_mutations_and_preserves_unit_transport() {
             false,
         ))
         .unwrap();
-    let operations = prepared.ops.clone();
-    assert_eq!(prepared.into_plan_edit().ops, operations);
+    assert_eq!(
+        ops(&prepared),
+        json!([{"op":"add","path":"/steps/a","value":worker(1)}])
+    );
+    assert_eq!(prepared.plan.steps()[&id("a")].run, "worker");
+    assert_eq!(prepared.reason, "test");
+    assert!(!prepared.dry_run);
 }
 
 #[test]
@@ -988,5 +983,121 @@ fn duplicate_expanded_ids_are_bad_requests_and_broken_recipe_errors_keep_scope()
         errors.iter().any(
             |error| error.contains("recipe old (project)") && error.contains("when is removed")
         )
+    );
+}
+
+#[test]
+fn step_add_stages_only_unspecified_pauses_and_retains_authored_metadata() {
+    let f = Fixture::new(json!({"steps":{}}));
+    for pause in [
+        None,
+        Some(json!(false)),
+        Some(json!(true)),
+        Some(json!("hold")),
+    ] {
+        let mut spec = worker(1);
+        if let Some(pause) = &pause {
+            spec["paused"] = pause.clone();
+        }
+        let mut request = command(
+            "step_add",
+            json!({"step":"a","spec":spec,"start":false}),
+            true,
+        );
+        if let PlanEdit::StepAdd(request) = &mut request {
+            request.edit.author = Some("sam".into());
+        }
+        let prepared = f.prepare(request).unwrap();
+        assert_eq!(
+            doc(&prepared)["steps"]["a"]["paused"],
+            pause.unwrap_or(json!(true))
+        );
+        assert_eq!(prepared.author.as_deref(), Some("sam"));
+        assert_eq!(prepared.reason, "test");
+        assert!(prepared.dry_run);
+        assert_eq!(prepared.expected, Revision(7));
+        assert_eq!(prepared.ops, prepared.preview.ops);
+    }
+}
+
+#[test]
+fn patch_stages_new_ids_in_final_graph_and_preserves_reused_ids_and_explicit_pauses() {
+    let mut f = Fixture::new(json!({"steps":{"existing":worker(1)}}));
+    f.status("existing", StepStatus::Succeeded);
+    let prepared = f.prepare(command("plan_patch", json!({"rev":7,"start":false,"ops":[
+        {"op":"replace","path":"/steps","value":{
+            "existing":worker(1),"new":worker(1),
+            "active":{"run":"worker","in":{"a":{"default":1},"b":{"default":1}},"paused":false},
+            "held":{"run":"worker","in":{"a":{"default":1},"b":{"default":1}},"paused":"review"}
+        }}
+    ]}), false)).unwrap();
+    let document = doc(&prepared);
+    assert!(document["steps"]["existing"].get("paused").is_none());
+    assert_eq!(document["steps"]["new"]["paused"], true);
+    assert_eq!(document["steps"]["active"]["paused"], false);
+    assert_eq!(document["steps"]["held"]["paused"], "review");
+    assert_eq!(prepared.ops.len(), 2);
+    assert_eq!(prepared.preview.would_start, [id("active")]);
+    assert_eq!(prepared.preview.ops, prepared.ops);
+    assert_eq!(prepared.reason, "test");
+    assert!(prepared.preview.would_stale.is_empty());
+    assert!(
+        serde_json::to_value(&f.snapshot.document).unwrap()["steps"]
+            .get("new")
+            .is_none()
+    );
+}
+
+#[test]
+fn prune_resolves_unit_and_tag_union_then_age_and_reference_closure() {
+    let mut f = Fixture::new(json!({"steps":{
+        "a":{"run":"core.external","tags":["unit:u","arc:review"]},
+        "b":{"run":"core.external","tags":["unit:v"]},
+        "c":{"run":"core.external","tags":["unit:w","arc:review"]},
+        "live":{"run":"core.external","tags":["arc:review"]},
+        "holder":{"run":"core.external","after":["unit:u"]}
+    }}));
+    for name in ["a", "b", "c"] {
+        f.status(name, StepStatus::Succeeded);
+    }
+    let request = || {
+        command(
+            "plan_prune",
+            json!({"units":["v","v"],"tags":["arc:review"],"older_than_seconds":1}),
+            true,
+        )
+    };
+    let eligible = [unit("u"), unit("v")];
+    let prepared = prepare_edit(&f.context(Some(&eligible)), request()).unwrap();
+    let report = prepared.prune.as_ref().unwrap();
+    assert_eq!(report.units, [unit("v")]);
+    assert_eq!(report.steps, [id("b")]);
+    assert_eq!(report.kept[&unit("u")], PruneHolder::Step(id("holder")));
+    assert_eq!(prepared.reason, "test");
+    assert!(prepared.dry_run);
+    let serialized = serde_json::to_value(&prepared).unwrap();
+    assert_eq!(
+        serialized["prune"]["kept"]["u"],
+        json!({"kind":"step","value":"holder"})
+    );
+    assert!(prepare_edit(&f.context(None), request()).is_err());
+    let empty = f
+        .prepare(command(
+            "plan_prune",
+            json!({"units":null,"tags":[],"older_than_seconds":0}),
+            false,
+        ))
+        .unwrap();
+    assert!(empty.ops.is_empty());
+}
+
+#[test]
+fn wire_document_requires_whole_plan_validation_before_use() {
+    let document: sluice_model::plan::PlanDocument =
+        decode_json(br#"{"steps":{"a":{"run":"missing"}}}"#).unwrap();
+    assert!(
+        document
+            .compile(&IndexMap::<String, FnSignature>::new())
+            .is_err()
     );
 }

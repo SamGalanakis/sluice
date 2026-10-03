@@ -8,37 +8,22 @@ use crate::{
     error::PublicError,
     gates::{CachedResources, StateSnapshot},
     ids::{Revision, StepId, UnitName},
-    plan::{self, Plan, ResourceLimit, SignatureProvider, Snapshot, ValidatedPlan, diagnostic},
+    plan::{self, Plan, ResourceLimit, SignatureProvider, Snapshot, diagnostic},
     recipe::{ExpansionOptions, RecipeEntry, reserved_tags},
-    rpc::{JsonMap, JsonValue},
+    rpc::JsonValue,
     types::PathError,
     units::{PruneSet, prune_closed},
 };
 use indexmap::{IndexMap, IndexSet};
+use schemars::JsonSchema;
+use serde::Serialize;
 use serde_json::{Value, json};
-
-/// Additional unit staging fields absent from P0's frozen transport.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UnitAdd {
-    pub request: commands::UnitAdd,
-    pub tags: Vec<String>,
-    pub inputs: IndexMap<String, JsonMap>,
-}
-impl From<commands::UnitAdd> for UnitAdd {
-    fn from(request: commands::UnitAdd) -> Self {
-        Self {
-            request,
-            tags: vec![],
-            inputs: IndexMap::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanEdit {
     Patch(commands::PlanPatch),
     StepAdd(commands::StepAdd),
-    UnitAdd(UnitAdd),
+    UnitAdd(commands::UnitAdd),
     StepUpdate(commands::StepUpdate),
     StepRemove(commands::StepRemove),
     EdgeAdd(commands::EdgeEdit),
@@ -54,7 +39,7 @@ impl TryFrom<CommandRequest> for PlanEdit {
         Ok(match command {
             CommandRequest::PlanPatch(edit) => Self::Patch(edit),
             CommandRequest::StepAdd(edit) => Self::StepAdd(edit),
-            CommandRequest::UnitAdd(edit) => Self::UnitAdd(edit.into()),
+            CommandRequest::UnitAdd(edit) => Self::UnitAdd(edit),
             CommandRequest::StepUpdate(edit) => Self::StepUpdate(edit),
             CommandRequest::StepRemove(edit) => Self::StepRemove(edit),
             CommandRequest::EdgeAdd(edit) => Self::EdgeAdd(edit),
@@ -72,7 +57,7 @@ impl PlanEdit {
         Some(match self {
             Self::Patch(_) => return None,
             Self::StepAdd(e) => &e.edit,
-            Self::UnitAdd(e) => &e.request.edit,
+            Self::UnitAdd(e) => &e.edit,
             Self::StepUpdate(e) => &e.edit,
             Self::StepRemove(e) => &e.edit,
             Self::EdgeAdd(e) | Self::EdgeRemove(e) => &e.edit,
@@ -95,47 +80,47 @@ pub struct EditSnapshot<'a, P> {
     pub limits: &'a IndexMap<String, ResourceLimit>,
     pub prune_eligible: Option<&'a [UnitName]>,
 }
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
 pub struct InputChanges {
     pub changed: Vec<StepId>,
     pub running: Vec<StepId>,
     pub unsupported: Vec<UnsupportedInput>,
 }
-#[derive(Debug, Clone, PartialEq)]
+/// Prepared result for dispatch. Its candidate is already validated; the store
+/// still rechecks transactional revision and running-state preconditions.
+/// It is serialized for inspection, never deserialized as a certificate.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct PreparedEdit {
     pub expected: Revision,
     pub ops: Vec<PatchOperation>,
-    pub plan: ValidatedPlan,
+    pub plan: Plan,
     pub preview: EditPreview,
     pub dry_run: bool,
+    pub author: Option<String>,
+    pub reason: String,
     pub inputs: Option<InputChanges>,
     pub prune: Option<PruneSet>,
 }
-impl PreparedEdit {
-    /// The store still owns the revision recheck and atomic commit.
-    pub fn into_plan_edit(self) -> plan::PreparedEdit {
-        plan::PreparedEdit {
-            expected: self.expected,
-            ops: self.ops,
-            plan: self.plan,
-            preview: self.preview,
-        }
-    }
-}
-
-/// Real provider-taking entry point. The provider-free P0 stub stays unchanged.
-/// Preparation is pure for both dry runs and commits; dry runs return `preview`.
+/// Prepare one complete candidate with immutable provider context. The store must
+/// recheck revision and running state before committing; dry runs return the preview.
 pub fn prepare_edit(
     context: &EditSnapshot<'_, impl SignatureProvider>,
     edit: PlanEdit,
 ) -> Result<PreparedEdit, PublicError> {
-    let (expected, dry_run) = match &edit {
-        PlanEdit::Patch(request) => (request.rev, request.dry_run),
+    let (expected, dry_run, author, reason) = match &edit {
+        PlanEdit::Patch(request) => (
+            request.rev,
+            request.dry_run,
+            request.author.clone(),
+            request.reason.clone(),
+        ),
         _ => {
             let options = edit.options().expect("convenience edit options");
             (
                 options.expected.unwrap_or(context.snapshot.revision),
                 options.dry_run,
+                options.author.clone(),
+                options.reason.clone(),
             )
         }
     };
@@ -152,18 +137,41 @@ pub fn prepare_edit(
     let mut inputs_report = None;
     let mut prune_report = None;
     match edit {
-        PlanEdit::Patch(request) => ops = request.ops,
+        PlanEdit::Patch(request) => {
+            ops = request.ops;
+            if !request.start {
+                // Apply the supplied patch first so root replacements and explicit
+                // pause fields are visible before staging newly introduced ids.
+                let candidate = plan.patch(&ops, context.signatures).map_err(invalid)?;
+                let candidate_raw =
+                    serde_json::to_value(candidate.document()).expect("JSON serializes");
+                for id in candidate
+                    .steps()
+                    .keys()
+                    .filter(|id| !plan.steps().contains_key(*id))
+                {
+                    if candidate_raw["steps"][id.as_str()].get("paused").is_none() {
+                        ops.push(add(&format!("{}/paused", step_path(id)), json!(true))?);
+                    }
+                }
+            }
+        }
         PlanEdit::StepAdd(request) => {
             if plan.steps().contains_key(&request.step) {
                 return Err(bad(format!("step {} already exists", request.step)));
             }
+            let mut spec = request.spec;
+            if !request.start && !spec.0.contains_key("paused") {
+                spec.0
+                    .insert("paused".into(), JsonValue::try_from(json!(true))?);
+            }
             ops.push(add(
                 &step_path(&request.step),
-                serde_json::to_value(request.spec).expect("JSON serializes"),
+                serde_json::to_value(spec).expect("JSON serializes"),
             )?);
         }
-        PlanEdit::UnitAdd(unit) => {
-            let request = unit.request;
+        PlanEdit::UnitAdd(request) => {
+            let options = ExpansionOptions::from(&request);
             let entry = context
                 .recipes
                 .get(&request.recipe)
@@ -198,12 +206,7 @@ pub fn prepare_edit(
             let expanded = recipe
                 .expand(
                     &params,
-                    &ExpansionOptions {
-                        start: request.start,
-                        tags: unit.tags,
-                        after: request.after,
-                        inputs: unit.inputs,
-                    },
+                    &options,
                     &context.snapshot.document,
                     context.signatures,
                 )
@@ -366,14 +369,9 @@ pub fn prepare_edit(
                     "age-filtered pruning requires store-supplied eligible units",
                 ));
             }
-            let selected = request.units.unwrap_or_else(|| {
-                plan.units()
-                    .iter()
-                    .filter(|(_, unit)| unit.done(context.state))
-                    .map(|(name, _)| name.clone())
-                    .collect()
-            });
-            let unknown: Vec<_> = selected
+            let has_selection = request.units.is_some() || request.tags.is_some();
+            let explicit = request.units.unwrap_or_default();
+            let unknown: Vec<_> = explicit
                 .iter()
                 .filter(|name| !plan.units().contains_key(*name))
                 .map(|name| diagnostic(&format!("units.{name}"), "no such unit"))
@@ -381,6 +379,27 @@ pub fn prepare_edit(
             if !unknown.is_empty() {
                 return Err(invalid(unknown));
             }
+            let selected: Vec<UnitName> = if has_selection {
+                plan.units()
+                    .iter()
+                    .filter(|(name, unit)| {
+                        explicit.contains(name)
+                            || (unit.done(context.state)
+                                && request.tags.as_ref().is_some_and(|tags| {
+                                    unit.steps.iter().any(|id| {
+                                        plan.steps()[id].tags.iter().any(|tag| tags.contains(tag))
+                                    })
+                                }))
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            } else {
+                plan.units()
+                    .iter()
+                    .filter(|(_, unit)| unit.done(context.state))
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            };
             let selected: Vec<_> = selected
                 .into_iter()
                 .filter(|name| {
@@ -396,20 +415,22 @@ pub fn prepare_edit(
             prune_report = Some(closure);
         }
     }
-    let prepared = plan::prepare_plan_edit(
+    let (plan, preview) = plan::prepare_patch(
         context.snapshot,
         context.state,
-        plan::PlanEdit { expected, ops },
+        plan::PlanPatchData { expected, ops },
         context.signatures,
         context.resources,
         context.limits,
     )?;
     Ok(PreparedEdit {
-        expected: prepared.expected,
-        ops: prepared.ops,
-        plan: prepared.plan,
-        preview: prepared.preview,
+        expected,
+        ops: preview.ops.clone(),
+        plan,
+        preview,
         dry_run,
+        author,
+        reason,
         inputs: inputs_report,
         prune: prune_report,
     })

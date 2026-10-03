@@ -80,57 +80,24 @@
   "ValueRef": [
     "check/ok"
   ],
-  "ValidatedPlan": [
-    {
-      "steps": {}
-    }
-  ],
   "Type": [
+    "string",
+    "int",
+    "float",
+    "boolean",
+    "Any",
+    "string??",
+    "string?[]",
     {
-      "kind": "string"
-    },
-    {
-      "kind": "int"
-    },
-    {
-      "kind": "float"
-    },
-    {
-      "kind": "boolean"
-    },
-    {
-      "kind": "any"
-    },
-    {
-      "kind": "optional",
-      "of": {
-        "kind": "optional",
-        "of": {
-          "kind": "string"
-        }
-      }
-    },
-    {
-      "kind": "list",
-      "of": {
-        "kind": "optional",
-        "of": {
-          "kind": "string"
-        }
-      }
-    },
-    {
-      "kind": "enum",
-      "of": [
+      "type": "enum",
+      "symbols": [
         "fixture"
       ]
     },
     {
-      "kind": "record",
-      "of": {
-        "field": {
-          "kind": "string"
-        }
+      "type": "record",
+      "fields": {
+        "field": "string"
       }
     }
   ],
@@ -245,7 +212,8 @@
       ],
       "dry_run": false,
       "reason": "fixture",
-      "author": null
+      "author": null,
+      "start": true
     },
     {
       "project": {
@@ -264,7 +232,8 @@
       ],
       "dry_run": false,
       "reason": "fixture",
-      "author": "fixture"
+      "author": "fixture",
+      "start": true
     }
   ],
   "StepAdd": [
@@ -283,7 +252,8 @@
         "dry_run": false,
         "reason": "fixture",
         "author": null
-      }
+      },
+      "start": true
     },
     {
       "project": {
@@ -300,7 +270,8 @@
         "dry_run": false,
         "reason": "fixture",
         "author": "fixture"
-      }
+      },
+      "start": true
     }
   ],
   "UnitAdd": [
@@ -330,7 +301,9 @@
         "dry_run": false,
         "reason": "fixture",
         "author": null
-      }
+      },
+      "tags": [],
+      "inputs": {}
     },
     {
       "project": {
@@ -358,7 +331,9 @@
         "dry_run": false,
         "reason": "fixture",
         "author": "fixture"
-      }
+      },
+      "tags": [],
+      "inputs": {}
     }
   ],
   "EdgeEdit": [
@@ -562,7 +537,8 @@
         "dry_run": false,
         "reason": "fixture",
         "author": null
-      }
+      },
+      "tags": null
     },
     {
       "project": {
@@ -578,7 +554,8 @@
         "dry_run": false,
         "reason": "fixture",
         "author": "fixture"
-      }
+      },
+      "tags": null
     }
   ],
   "PlanSetInput": [
@@ -1648,32 +1625,6 @@
       }
     }
   ],
-  "PlanEdit": [
-    {
-      "expected": 1,
-      "ops": [
-        {
-          "op": "add",
-          "path": "fixture",
-          "value": {
-            "file": "/tmp/brief.md"
-          }
-        }
-      ]
-    },
-    {
-      "expected": 1,
-      "ops": [
-        {
-          "op": "add",
-          "path": "fixture",
-          "value": {
-            "file": "/tmp/brief.md"
-          }
-        }
-      ]
-    }
-  ],
   "PreparedEdit": [
     {
       "expected": 1,
@@ -1714,7 +1665,12 @@
         "errors": [
           "fixture"
         ]
-      }
+      },
+      "dry_run": false,
+      "author": null,
+      "reason": "fixture",
+      "inputs": null,
+      "prune": null
     },
     {
       "expected": 1,
@@ -1755,7 +1711,12 @@
         "errors": [
           "fixture"
         ]
-      }
+      },
+      "dry_run": false,
+      "author": null,
+      "reason": "fixture",
+      "inputs": null,
+      "prune": null
     }
   ],
   "RpcRequest": [
@@ -2200,7 +2161,8 @@
         ],
         "dry_run": false,
         "reason": "fixture",
-        "author": null
+        "author": null,
+        "start": true
       }
     },
     {
@@ -2220,7 +2182,8 @@
           "dry_run": false,
           "reason": "fixture",
           "author": null
-        }
+        },
+        "start": true
       }
     },
     {
@@ -2251,7 +2214,9 @@
           "dry_run": false,
           "reason": "fixture",
           "author": null
-        }
+        },
+        "tags": [],
+        "inputs": {}
       }
     },
     {
@@ -2349,7 +2314,8 @@
           "dry_run": false,
           "reason": "fixture",
           "author": null
-        }
+        },
+        "tags": null
       }
     },
     {
@@ -3493,6 +3459,37 @@
     {
       "error": "agent_failure",
       "message": "fixture"
+    }
+  ],
+  "PlanDocument": [
+    {
+      "steps": {}
+    }
+  ],
+  "PlanPatchData": [
+    {
+      "expected": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ]
+    },
+    {
+      "expected": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ]
     }
   ]
 }

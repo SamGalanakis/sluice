@@ -6,7 +6,7 @@ use sluice_model::{
     edit::{self, EditSnapshot, PlanEdit},
     gates::{CachedResources, evaluate_step, reconcile},
     ids::{Revision, StepId},
-    plan::{self, Snapshot, inputs_hash},
+    plan::{Snapshot, inputs_hash},
     rpc::{JsonMap, decode_json},
 };
 
@@ -126,7 +126,7 @@ fn adding_boolean_gate_does_not_stale_completed_work() {
     )
     .unwrap();
     assert!(e.preview.would_stale.is_empty());
-    let after = e.plan.compile(&signatures()).unwrap();
+    let after = e.plan;
     assert_eq!(
         reconcile(&after, &state).status(&id("a")),
         StepStatus::Succeeded
@@ -169,26 +169,25 @@ fn running_step_cannot_change_signed_zero_input() {
         )]),
         ..Default::default()
     };
-    let result = plan::prepare_plan_edit(
-        &Snapshot {
-            revision: Revision(1),
-            document: p.document().clone(),
-        },
+    let result = prepare(
+        &p,
         &state,
-        plan::PlanEdit {
-            expected: Revision(1),
+        PlanEdit::Patch(sluice_model::commands::PlanPatch {
+            project: "review".parse().unwrap(),
+            rev: Revision(1),
+            start: true,
+            dry_run: false,
+            author: None,
+            reason: "review".into(),
             ops: decode_json(br#"[{"op":"replace","path":"/steps/a/in/x/default","value":0.0}]"#)
                 .unwrap(),
-        },
-        &signatures(),
-        &CachedResources::default(),
-        &IndexMap::new(),
+        }),
     );
     if let Ok(prepared) = &result {
-        let after = prepared.plan.compile(&signatures()).unwrap();
+        let after = &prepared.plan;
         assert_ne!(
             inputs_hash(&p, &state, &p.steps()[&id("a")]),
-            inputs_hash(&after, &state, &after.steps()[&id("a")])
+            inputs_hash(after, &state, &after.steps()[&id("a")])
         );
     }
     assert!(
@@ -241,4 +240,56 @@ fn step_update_signed_zero_change_is_preserved_and_stales_success() {
     .unwrap();
     assert!(!result.ops.is_empty());
     assert_eq!(result.preview.would_stale, [id("a")]);
+}
+
+#[test]
+fn unit_add_wire_accepts_staging_tags_and_inputs() {
+    let result = decode_json::<CommandRequest>(
+        br#"{"command":"unit_add","args":{
+        "project":{"kind":"name","value":"review"},"recipe":"pair","unit":"u","params":{},
+        "start":true,"after":{},"tags":["arc:review"],"inputs":{"work":{"model":"chosen"}},
+        "edit":{"expected":null,"dry_run":false,"reason":"review","author":null}}}"#,
+    );
+    assert!(
+        result.is_ok(),
+        "documented staging fields cannot enter the model: {result:?}"
+    );
+}
+
+#[test]
+fn step_add_wire_accepts_start_false() {
+    let result = decode_json::<CommandRequest>(
+        br#"{"command":"step_add","args":{
+        "project":{"kind":"name","value":"review"},"step":"a","spec":{"run":"work"},"start":false,
+        "edit":{"expected":null,"dry_run":false,"reason":"review","author":null}}}"#,
+    );
+    assert!(
+        result.is_ok(),
+        "start=false cannot enter the step-add path: {result:?}"
+    );
+}
+
+#[test]
+fn plan_patch_wire_accepts_start_false() {
+    let result = decode_json::<CommandRequest>(
+        br#"{"command":"plan_patch","args":{
+        "project":{"kind":"name","value":"review"},"rev":1,
+        "ops":[{"op":"add","path":"/steps/a","value":{"run":"work"}}],"start":false,
+        "dry_run":false,"reason":"review","author":null}}"#,
+    );
+    assert!(
+        result.is_ok(),
+        "start=false cannot enter the patch path: {result:?}"
+    );
+}
+
+#[test]
+fn prune_wire_accepts_tag_selection() {
+    let result = decode_json::<CommandRequest>(br#"{"command":"plan_prune","args":{
+        "project":{"kind":"name","value":"review"},"units":null,"tags":["arc:review"],"older_than_seconds":0,
+        "edit":{"expected":null,"dry_run":false,"reason":"review","author":null}}}"#);
+    assert!(
+        result.is_ok(),
+        "tag selection cannot enter the prune path: {result:?}"
+    );
 }

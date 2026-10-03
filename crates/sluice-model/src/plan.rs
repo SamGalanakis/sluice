@@ -2,6 +2,7 @@
 
 use crate::{
     commands::{EditPreview, EditResult, PatchOperation, RuntimeApi},
+    edit::PreparedEdit,
     error::PublicError,
     gates::{Gate, Reference, ValueRef},
     hash::{EffectiveInput, InputsHash},
@@ -23,27 +24,14 @@ pub struct Snapshot {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct PlanEdit {
+pub struct PlanPatchData {
     pub expected: Revision,
     pub ops: Vec<PatchOperation>,
 }
-// Transport document. Compile with a signature provider before using its semantics.
+/// Unvalidated wire document. Compile with a signature provider before use.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
-pub struct ValidatedPlan(JsonMap);
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PreparedEdit {
-    pub expected: Revision,
-    pub ops: Vec<PatchOperation>,
-    pub plan: ValidatedPlan,
-    pub preview: EditPreview,
-}
-
-// These coordinator-facing entry points require the later registry/edit integration.
-pub fn prepare_edit(_snapshot: &Snapshot, _edit: PlanEdit) -> Result<PreparedEdit, PublicError> {
-    Err(PublicError::not_implemented("prepare_edit"))
-}
+pub struct PlanDocument(JsonMap);
 pub async fn apply_edit(
     _api: &impl RuntimeApi,
     _edit: PreparedEdit,
@@ -177,7 +165,13 @@ impl Step {
     }
 }
 
-/// Only the parser can construct this compiled, acyclic plan. Queries retain plan order.
+/// Only whole-plan validation can construct this compiled, acyclic certificate.
+/// Queries retain plan order. Deserialize wire data as `PlanDocument` first.
+///
+/// ```compile_fail
+/// let plan: sluice_model::Plan =
+///     sluice_model::rpc::decode_json(br#"{"steps":{}}"#).unwrap();
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plan {
     document: JsonMap,
@@ -188,7 +182,20 @@ pub struct Plan {
     dependencies: IndexMap<StepId, Vec<StepId>>,
     order: Vec<StepId>,
 }
-impl ValidatedPlan {
+impl Serialize for Plan {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.document.serialize(serializer)
+    }
+}
+impl JsonSchema for Plan {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Plan".into()
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        PlanDocument::json_schema(g)
+    }
+}
+impl PlanDocument {
     pub fn compile(&self, signatures: &impl SignatureProvider) -> Result<Plan, Vec<PathError>> {
         Plan::parse(&self.0, signatures)
     }
@@ -232,8 +239,8 @@ impl Plan {
     pub fn document(&self) -> &JsonMap {
         &self.document
     }
-    pub fn transport(&self) -> ValidatedPlan {
-        ValidatedPlan(self.document.clone())
+    pub fn transport(&self) -> PlanDocument {
+        PlanDocument(self.document.clone())
     }
     pub fn reference_type(&self, reference: &ValueRef) -> Result<Type, String> {
         let Reference { step, name, fields } = reference.parts()?;
@@ -1172,14 +1179,14 @@ pub fn validate_changed_needs(
 
 /// Prepare an atomic plan patch and its shared dry-run preview. The coordinator
 /// must recheck expected revision when committing this result. No state is written.
-pub fn prepare_plan_edit(
+pub(crate) fn prepare_patch(
     snapshot: &Snapshot,
     state: &crate::gates::StateSnapshot,
-    edit: PlanEdit,
+    edit: PlanPatchData,
     signatures: &impl SignatureProvider,
     resources: &crate::gates::CachedResources,
     limits: &IndexMap<String, ResourceLimit>,
-) -> Result<PreparedEdit, PublicError> {
+) -> Result<(Plan, EditPreview), PublicError> {
     if edit.expected != snapshot.revision {
         return Err(PublicError::Conflict {
             message: "plan revision changed".into(),
@@ -1232,11 +1239,9 @@ pub fn prepare_plan_edit(
         return Err(invalid(errors));
     }
     let preview = crate::gates::simulate_edit(&before, state, &after, &projected, resources);
-    Ok(PreparedEdit {
-        expected: edit.expected,
-        ops: edit.ops.clone(),
-        plan: after.transport(),
-        preview: EditPreview {
+    Ok((
+        after,
+        EditPreview {
             ops: edit.ops,
             would_start: preview.would_start,
             would_queue: preview.would_queue.into_keys().collect(),
@@ -1244,5 +1249,5 @@ pub fn prepare_plan_edit(
             would_stale: preview.would_stale,
             errors: preview.errors.iter().map(ToString::to_string).collect(),
         },
-    })
+    ))
 }

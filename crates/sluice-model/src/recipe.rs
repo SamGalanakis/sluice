@@ -50,6 +50,16 @@ pub struct ExpansionOptions {
     pub after: IndexMap<String, Vec<String>>,
     pub inputs: IndexMap<String, JsonMap>,
 }
+impl From<&crate::commands::UnitAdd> for ExpansionOptions {
+    fn from(request: &crate::commands::UnitAdd) -> Self {
+        Self {
+            start: request.start,
+            tags: request.tags.clone(),
+            after: request.after.clone(),
+            inputs: request.inputs.clone(),
+        }
+    }
+}
 impl Default for ExpansionOptions {
     fn default() -> Self {
         Self {

@@ -54,12 +54,18 @@ pub struct EditOptions {
     pub author: Option<String>,
 }
 
+fn default_start() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanPatch {
     pub project: ProjectSelector,
     pub rev: Revision,
     pub ops: Vec<PatchOperation>,
+    #[serde(default = "default_start")]
+    pub start: bool,
     pub dry_run: bool,
     pub reason: String,
     pub author: Option<String>,
@@ -71,6 +77,8 @@ pub struct StepAdd {
     pub project: ProjectSelector,
     pub step: StepId,
     pub spec: JsonMap,
+    #[serde(default = "default_start")]
+    pub start: bool,
     pub edit: EditOptions,
 }
 
@@ -81,9 +89,15 @@ pub struct UnitAdd {
     pub recipe: String,
     pub unit: UnitName,
     pub params: JsonMap,
+    #[serde(default = "default_start")]
     pub start: bool,
     #[schemars(with = "std::collections::BTreeMap<String, Vec<String>>")]
     pub after: indexmap::IndexMap<String, Vec<String>>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    #[schemars(with = "std::collections::BTreeMap<String, JsonMap>")]
+    pub inputs: indexmap::IndexMap<String, JsonMap>,
     pub edit: EditOptions,
 }
 
@@ -137,6 +151,7 @@ pub struct UnitTag {
 pub struct PlanPrune {
     pub project: ProjectSelector,
     pub units: Option<Vec<UnitName>>,
+    pub tags: Option<Vec<String>>,
     pub older_than_seconds: u64,
     pub edit: EditOptions,
 }
@@ -335,6 +350,7 @@ pub struct RegisterCompletionAction {
 #[serde(deny_unknown_fields)]
 pub struct EditPreview {
     pub ops: Vec<PatchOperation>,
+    /// Ready executable candidates, including those also listed in `would_queue`.
     pub would_start: Vec<StepId>,
     pub would_queue: Vec<StepId>,
     pub would_skip: Vec<StepId>,

@@ -202,7 +202,7 @@ fn corrected_retry_binding_lease_stream_and_action_fixtures() {
     assert!(matches!(&outcomes[2], CompletionActionOutcome::Discarded));
 }
 #[test]
-fn runtime_trait_requires_send_futures_and_stubs_fail_typed() {
+fn runtime_trait_requires_send_futures() {
     struct Api;
     impl RuntimeApi for Api {
         async fn command(&self, _: CommandRequest) -> Result<CommandReply, PublicError> {
@@ -218,19 +218,6 @@ fn runtime_trait_requires_send_futures_and_stubs_fail_typed() {
         after: RecordSeq(0),
         projects: vec![],
     }));
-    let snapshot = sluice_model::plan::Snapshot {
-        revision: Revision(0),
-        document: JsonMap::default(),
-    };
-    let error = sluice_model::plan::prepare_edit(
-        &snapshot,
-        sluice_model::plan::PlanEdit {
-            expected: Revision(0),
-            ops: vec![],
-        },
-    )
-    .unwrap_err();
-    assert!(error.to_string().contains("not implemented in this build"));
 }
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(64))]

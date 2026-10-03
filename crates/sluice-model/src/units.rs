@@ -8,6 +8,8 @@ use crate::{
     types::PathError,
 };
 use indexmap::{IndexMap, IndexSet};
+use schemars::JsonSchema;
+use serde::Serialize;
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,15 +210,17 @@ pub fn retry_walk(
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PruneHolder {
     Step(StepId),
     PlanOutput(String),
 }
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct PruneSet {
     pub units: Vec<UnitName>,
     pub steps: Vec<StepId>,
+    #[schemars(with = "std::collections::BTreeMap<UnitName, PruneHolder>")]
     pub kept: IndexMap<UnitName, PruneHolder>,
 }
 fn referenced_units(plan: &Plan, id: &StepId) -> IndexSet<UnitName> {

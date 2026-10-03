@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+use sluice_model::edit::PreparedEdit;
 use sluice_model::{commands::*, error::*, events::*, gates::*, ids::*, plan::*, rpc::*, types::*};
 
 // This checks the vocabulary emitted by this workspace, rather than adding another schema SDK.
@@ -72,6 +73,15 @@ fn matches_schema(root: &Value, schema: &Value, value: &Value) -> bool {
     {
         let good = if pattern == "^[a-z0-9][a-z0-9_-]*$" {
             StepId::new(s).is_ok()
+        } else if pattern == "^(string|int|float|boolean|Any)(\\?|\\[\\])*$" {
+            let mut primitive = s;
+            while let Some(inner) = primitive
+                .strip_suffix('?')
+                .or_else(|| primitive.strip_suffix("[]"))
+            {
+                primitive = inner;
+            }
+            matches!(primitive, "string" | "int" | "float" | "boolean" | "Any")
         } else {
             ProjectId::try_from(uuid::Uuid::parse_str(s).unwrap_or(uuid::Uuid::nil())).is_ok()
         };
@@ -79,12 +89,41 @@ fn matches_schema(root: &Value, schema: &Value, value: &Value) -> bool {
             return false;
         }
     }
-    if let Some(values) = value.as_array()
-        && let Some(items) = schema.get("items")
-        && !values.iter().all(|v| matches_schema(root, items, v))
-    {
-        return false;
+    if let Some(values) = value.as_array() {
+        if schema
+            .get("minItems")
+            .and_then(Value::as_u64)
+            .is_some_and(|min| values.len() < min as usize)
+            || schema
+                .get("maxItems")
+                .and_then(Value::as_u64)
+                .is_some_and(|max| values.len() > max as usize)
+        {
+            return false;
+        }
+        if schema.get("uniqueItems").and_then(Value::as_bool) == Some(true)
+            && values
+                .iter()
+                .enumerate()
+                .any(|(i, v)| values[..i].contains(v))
+        {
+            return false;
+        }
+        if let Some(prefix) = schema.get("prefixItems").and_then(Value::as_array)
+            && !values
+                .iter()
+                .zip(prefix)
+                .all(|(v, s)| matches_schema(root, s, v))
+        {
+            return false;
+        }
+        if let Some(items) = schema.get("items")
+            && !values.iter().all(|v| matches_schema(root, items, v))
+        {
+            return false;
+        }
     }
+
     if let Some(values) = value.as_object() {
         if let Some(required) = schema.get("required").and_then(Value::as_array)
             && !required
@@ -250,8 +289,8 @@ fn contract_value_ref() {
 }
 
 #[test]
-fn contract_validated_plan() {
-    contract::<ValidatedPlan>("ValidatedPlan");
+fn contract_plan_document() {
+    contract::<PlanDocument>("PlanDocument");
 }
 
 #[test]
@@ -490,13 +529,33 @@ fn contract_snapshot() {
 }
 
 #[test]
-fn contract_plan_edit() {
-    contract::<PlanEdit>("PlanEdit");
+fn contract_plan_patch_data() {
+    contract::<PlanPatchData>("PlanPatchData");
 }
 
 #[test]
 fn contract_prepared_edit() {
-    contract::<PreparedEdit>("PreparedEdit");
+    let schema = serde_json::to_value(schemars::schema_for!(PreparedEdit)).unwrap();
+    assert_eq!(SCHEMAS["PreparedEdit"], schema);
+    for value in FIXTURES["PreparedEdit"].as_array().unwrap() {
+        let prepared = PreparedEdit {
+            expected: decode_json(&serde_json::to_vec(&value["expected"]).unwrap()).unwrap(),
+            ops: decode_json(&serde_json::to_vec(&value["ops"]).unwrap()).unwrap(),
+            plan: Plan::parse_json(
+                &serde_json::to_vec(&value["plan"]).unwrap(),
+                &indexmap::IndexMap::<String, FnSignature>::new(),
+            )
+            .unwrap(),
+            preview: decode_json(&serde_json::to_vec(&value["preview"]).unwrap()).unwrap(),
+            dry_run: value["dry_run"].as_bool().unwrap(),
+            author: value["author"].as_str().map(str::to_owned),
+            reason: value["reason"].as_str().unwrap().into(),
+            inputs: None,
+            prune: None,
+        };
+        assert_eq!(serde_json::to_value(&prepared).unwrap(), *value);
+        assert!(matches_schema(&schema, &schema, value));
+    }
 }
 
 #[test]
@@ -647,4 +706,44 @@ fn contract_stream_event() {
 #[test]
 fn contract_public_error() {
     contract::<PublicError>("PublicError");
+}
+
+#[test]
+fn type_expression_schema_matches_shared_parser_at_ingress() {
+    let schema = serde_json::to_value(schemars::schema_for!(Type)).unwrap();
+    for value in [
+        json!("boolean?[]?"),
+        json!(["null", "string"]),
+        json!(["string", "null"]),
+        json!({"type":"array","items":{"type":"enum","symbols":["red","blue"]}}),
+        json!({"type":"record","fields":{"nested":{"type":"array","items":"Any?"}}}),
+    ] {
+        let typed: Type = decode_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches_schema(&schema, &schema, &value), "{value}");
+        assert_eq!(typed, Type::parse(&value).unwrap());
+        assert_eq!(
+            Type::parse(&serde_json::to_value(&typed).unwrap()).unwrap(),
+            typed
+        );
+    }
+    for value in [
+        json!("null"),
+        json!("int[0]"),
+        json!({"kind":"string"}),
+        json!(["string", "int"]),
+        json!(["null", "int", "string"]),
+        json!({"type":"enum","symbols":[]}),
+        json!({"type":"enum","symbols":["red","red"]}),
+        json!({"type":"array","items":"int","unexpected":true}),
+        json!({"type":"record","fields":{"nested":{"kind":"int"}}}),
+    ] {
+        assert!(
+            !matches_schema(&schema, &schema, &value),
+            "schema accepted {value}"
+        );
+        assert!(
+            decode_json::<Type>(&serde_json::to_vec(&value).unwrap()).is_err(),
+            "decoder accepted {value}"
+        );
+    }
 }

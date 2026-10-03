@@ -404,7 +404,10 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
     #[test]
     fn parse_display_roundtrip(t in type_strategy()) {
-        prop_assert_eq!(t.to_string().parse::<Type>().unwrap(),t);
+        let wire = serde_json::to_vec(&t).unwrap();
+        prop_assert_eq!(Type::parse_json(&wire).unwrap(), t.clone());
+        prop_assert_eq!(decode_json::<Type>(&wire).unwrap(), t.clone());
+        prop_assert_eq!(t.to_string().parse::<Type>().unwrap(), t);
     }
     #[test]
     fn fits_is_reflexive(t in type_strategy()) { prop_assert!(fits(&t,&t)); }
