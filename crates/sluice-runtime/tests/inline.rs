@@ -50,6 +50,15 @@ impl Scratch {
         config
             .environment
             .remove(std::ffi::OsStr::new("VIRTUAL_ENV"));
+        let invocation = FnInvocation {
+            project: ProjectId::new(),
+            step: Some("inline".parse().unwrap()),
+            run: RunId::new(),
+            attempt: AttemptId::new(),
+            invocation: InvocationId::new(),
+            name: name.into(),
+            inputs: map(inputs),
+        };
         let host = PythonHost {
             config,
             bundle: PinnedPythonFn {
@@ -59,6 +68,7 @@ impl Scratch {
             context: PythonContext {
                 home: self.0.clone(),
                 run_dir: self.0.clone(),
+                project_dir: self.0.join("projects").join(invocation.project.to_string()),
                 project: "p".into(),
                 prev_run: None,
                 extra_inputs: map(extra),
@@ -68,15 +78,6 @@ impl Scratch {
                 run_capability: None,
             },
             cancellation: CancellationToken::new(),
-        };
-        let invocation = FnInvocation {
-            project: ProjectId::new(),
-            step: Some("inline".parse().unwrap()),
-            run: RunId::new(),
-            attempt: AttemptId::new(),
-            invocation: InvocationId::new(),
-            name: name.into(),
-            inputs: map(inputs),
         };
         (host, invocation)
     }

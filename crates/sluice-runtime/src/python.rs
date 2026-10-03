@@ -121,6 +121,8 @@ pub struct PinnedPythonFn {
 pub struct PythonContext {
     pub home: PathBuf,
     pub run_dir: PathBuf,
+    /// The run's project metadata directory: <home>/projects/<ProjectId>.
+    pub project_dir: PathBuf,
     pub project: String,
     pub prev_run: Option<RunId>,
     pub extra_inputs: JsonMap,
@@ -277,6 +279,7 @@ impl PythonHost {
             )
             .env("SLUICE_RUN_ID", invocation.run.to_string())
             .env("SLUICE_RUN_DIR", &self.context.run_dir)
+            .env("SLUICE_PROJECT_DIR", &self.context.project_dir)
             .env("SLUICE_FN_DIR", &self.bundle.bundle_dir)
             .env(
                 "SLUICE_PREV_RUN",

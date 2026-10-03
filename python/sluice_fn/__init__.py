@@ -114,6 +114,7 @@ class Context:
         self.run_dir = Path(data["run_dir"])
         self.home = Path(data["home"])
         self.fn_dir = Path(data["fn_dir"])
+        self.project_dir = Path(data["project_dir"])
         self.prev_run = data.get("prev_run")
         self.extra_inputs = data.get("extra_inputs", {})
         self.outputs = data.get("outputs", {})

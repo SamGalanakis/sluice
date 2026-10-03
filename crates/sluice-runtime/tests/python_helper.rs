@@ -49,6 +49,15 @@ impl Scratch {
                 .unwrap(),
             self.0.join("pinned-sluice"),
         );
+        let invocation = FnInvocation {
+            project: ProjectId::new(),
+            step: Some("work".parse().unwrap()),
+            run: RunId::new(),
+            attempt: AttemptId::new(),
+            invocation: InvocationId::new(),
+            name: "test".into(),
+            inputs: JsonMap::default(),
+        };
         let host = PythonHost {
             config,
             bundle: PinnedPythonFn {
@@ -58,6 +67,7 @@ impl Scratch {
             context: PythonContext {
                 home: self.0.clone(),
                 run_dir,
+                project_dir: self.0.join("projects").join(invocation.project.to_string()),
                 project: "p".into(),
                 prev_run: None,
                 extra_inputs: JsonMap::default(),
@@ -67,15 +77,6 @@ impl Scratch {
                 run_capability: Some(RunCapability::new("scratch-capability")),
             },
             cancellation: CancellationToken::new(),
-        };
-        let invocation = FnInvocation {
-            project: ProjectId::new(),
-            step: Some("work".parse().unwrap()),
-            run: RunId::new(),
-            attempt: AttemptId::new(),
-            invocation: InvocationId::new(),
-            name: "test".into(),
-            inputs: JsonMap::default(),
         };
         (host, invocation)
     }
@@ -308,6 +309,27 @@ async fn child_environment_restores_host_tools_and_keeps_callbacks() {
     assert_eq!(out["clean"], true);
     assert_eq!(out["run"], invocation.run.to_string());
     assert!(!out["host"].as_str().unwrap().contains("environments-v2"));
+}
+
+#[tokio::test]
+async fn envelope_carries_project_dir_and_the_fn_sees_ctx_project_dir() {
+    let scratch = Scratch::new();
+    let (host, invocation) = scratch.host(
+        "from sluice_fn import run\nimport os\ndef main(inp,ctx):\n    return {'ctx':str(ctx.project_dir),'env':os.environ['SLUICE_PROJECT_DIR']}\nrun(main)\n",
+        json!({"ctx":"string","env":"string"}),
+    );
+    let expected = scratch
+        .0
+        .join("projects")
+        .join(invocation.project.to_string());
+    let envelope: Value = decode_json(&host.envelope(&invocation).unwrap()).unwrap();
+    assert_eq!(
+        envelope["context"]["project_dir"].as_str().unwrap(),
+        expected.to_str().unwrap()
+    );
+    let out = value(&execute(&host, &invocation).await.unwrap());
+    assert_eq!(out["ctx"], expected.to_str().unwrap());
+    assert_eq!(out["env"], expected.to_str().unwrap());
 }
 
 #[tokio::test]
