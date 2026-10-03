@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Digest independently computed from the official release tarball on 2026-10-03.
+# It also matches the asset digest at:
+# https://api.github.com/repos/tmux/tmux/releases/tags/3.7c
+version=3.7c
+source_url=https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz
+source_sha256=7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf
+libevent_version=2.1.12-stable
+libevent_url=https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz
+# Computed from the official release asset on 2026-10-03; GitHub's older asset
+# has no digest metadata. Source: the URL above, not a third-party mirror.
+libevent_sha256=92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb
+if ! command -v python3 >/dev/null; then
+    echo 'Missing build package (Debian/Ubuntu): python3. Install it outside this script and retry.' >&2
+    exit 1
+fi
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+prefix=$(realpath -m -- "${1:-$repo/target/private-tmux}")
+if (($# > 1)); then
+    echo 'Usage: scripts/build-private-tmux [output-prefix]' >&2
+    exit 2
+fi
+# A release artifact must never replace installed tools or touch the live home.
+python3 - "$prefix" <<'PY'
+import os, pathlib, sys
+p = pathlib.Path(sys.argv[1]).resolve()
+protected = [pathlib.Path(x) for x in ('/', '/usr', '/bin', '/sbin', '/etc', '/lib', '/lib64', '/boot', '/sys', '/proc', '/dev', '/home/sam/.sluice')]
+protected += [pathlib.Path.home() / '.sluice']
+path_dirs = [pathlib.Path(x).resolve() for x in os.get_exec_path() if x]
+if p == pathlib.Path('/') or (p / 'bin').resolve() in path_dirs or any(p == x or x in p.parents for x in protected[1:] + path_dirs):
+    sys.exit('Refusing a system, live-home or PATH output prefix: ' + str(p))
+for entry in ('bin', 'share', 'libevent', 'tmux-manifest.json', 'tmux-manifest.json.tmp'):
+    q = p / entry
+    if q.is_symlink() or any(child.is_symlink() for child in q.rglob('*')):
+        sys.exit('Refusing symlink in output prefix: ' + str(q))
+PY
+missing=()
+for tool in cc make curl tar sha256sum python3 pkg-config; do
+    if ! command -v "$tool" >/dev/null; then
+        case "$tool" in
+            cc|make) missing+=(build-essential) ;;
+            sha256sum) missing+=(coreutils) ;;
+            *) missing+=("$tool") ;;
+        esac
+    fi
+done
+if ((${#missing[@]})); then
+    printf 'Missing build packages (Debian/Ubuntu): %s. Install them outside this script and retry.\n' "${missing[*]}" >&2
+    exit 1
+fi
+mkdir -p -- "$prefix"
+work=$(mktemp -d "$prefix/.build.XXXXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+if ! pkg-config --exists ncursesw tinfo; then
+    echo 'Missing build package (Debian/Ubuntu): libncurses-dev. Install it outside this script and retry.' >&2
+    exit 1
+fi
+# libevent is built privately and statically; no libevent-dev host package.
+curl --fail --location --retry 2 --proto '=https' --tlsv1.2 "$libevent_url" -o "$work/libevent.tar.gz"
+printf '%s  %s\n' "$libevent_sha256" "$work/libevent.tar.gz" | sha256sum --check --status
+mkdir "$work/libevent-source" "$work/libevent-build"
+tar -xzf "$work/libevent.tar.gz" --strip-components=1 -C "$work/libevent-source"
+libevent_prefix="$prefix/libevent"
+libevent_flags=(--disable-shared --enable-static --disable-openssl "--prefix=$libevent_prefix")
+cd "$work/libevent-build"
+"$work/libevent-source/configure" "${libevent_flags[@]}"
+make
+make install
+mkdir -p "$libevent_prefix/share/libevent"
+cp "$work/libevent-source/LICENSE" "$libevent_prefix/share/libevent/LICENSE"
+curl --fail --location --retry 2 --proto '=https' --tlsv1.2 "$source_url" -o "$work/tmux.tar.gz"
+printf '%s  %s\n' "$source_sha256" "$work/tmux.tar.gz" | sha256sum --check --status
+mkdir "$work/source" "$work/build"
+tar -xzf "$work/tmux.tar.gz" --strip-components=1 -C "$work/source"
+# The official tarball ships the generated parser. Do not invoke yacc/bison.
+test -s "$work/source/cmd-parse.c" || { echo 'Official tarball lacks cmd-parse.c; a private parser generator is required.' >&2; exit 1; }
+touch "$work/source/cmd-parse.c"
+export PKG_CONFIG_PATH="$libevent_prefix/lib/pkgconfig"
+export LIBEVENT_CORE_CFLAGS="-I$libevent_prefix/include"
+export LIBEVENT_CORE_LIBS="$libevent_prefix/lib/libevent_core.a"
+export LIBEVENT_CFLAGS="-I$libevent_prefix/include"
+export LIBEVENT_LIBS="$libevent_prefix/lib/libevent.a"
+flags=(--disable-systemd --disable-cgroups "--prefix=$prefix" "--sysconfdir=$prefix/etc")
+cd "$work/build"
+YACC=true "$work/source/configure" "${flags[@]}"
+# This release has no config.h: generated preprocessor definitions are DEFS
+# in Makefile. Require the line and reject either integration macro anywhere.
+grep '^DEFS = ' Makefile > config.defs
+if grep -Eq 'HAVE_SYSTEMD|ENABLE_CGROUPS' config.defs; then
+    echo 'Refusing tmux: generated DEFS enables systemd or cgroups.' >&2
+    exit 1
+fi
+make YACC=false
+# Every installed file is under the explicit prefix, never a global install.
+make install
+mkdir -p "$prefix/share/tmux"
+cp config.defs "$prefix/share/tmux/config.defs"
+cp "$work/source/COPYING" "$prefix/share/tmux/COPYING"
+if ldd "$prefix/bin/tmux" | grep -qi libevent; then
+    echo 'Refusing tmux: libevent was linked dynamically.' >&2
+    exit 1
+fi
+"$prefix/bin/tmux" -V | grep -Fxq "tmux $version"
+python3 - "$prefix" "$version" "$source_url" "$source_sha256" "${flags[@]}" "$libevent_version" "$libevent_url" "$libevent_sha256" "$libevent_prefix" <<'PY'
+import datetime, hashlib, json, pathlib, platform, sys, subprocess
+p = pathlib.Path(sys.argv[1])
+config = (p / 'share/tmux/config.defs').read_text()
+manifest = dict(schema_version=1, version=sys.argv[2], source_url=sys.argv[3],
+                source_sha256=sys.argv[4], configure_flags=sys.argv[5:9],
+                generated_config_lines=config.splitlines(),
+                binary_path='bin/tmux',
+                binary_sha256=hashlib.sha256((p / 'bin/tmux').read_bytes()).hexdigest(),
+                libevent=dict(version=sys.argv[9], source_url=sys.argv[10], source_sha256=sys.argv[11],
+                    configure_flags=['--disable-shared', '--enable-static', '--disable-openssl', '--prefix=' + sys.argv[12]], linkage='static'),
+                ncurses=dict(linkage='dynamic', packages=['ncursesw', 'tinfo'],
+                    version=subprocess.check_output(['pkg-config', '--modversion', 'ncursesw'], text=True).strip()),
+                parser='release cmd-parse.c',
+                build_host=platform.node() + ' ' + platform.platform(),
+                built_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+tmp = p / 'tmux-manifest.json.tmp'
+tmp.write_text(json.dumps(manifest, indent=2) + '\n')
+tmp.replace(p / 'tmux-manifest.json')
+print(p / 'tmux-manifest.json')
+PY

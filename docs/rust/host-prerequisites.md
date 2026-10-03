@@ -1,0 +1,103 @@
+# Rust execution host prerequisites
+
+Execution requires Linux, cgroup v2 at `/sys/fs/cgroup`, a reachable systemd
+user manager, delegated user services, `pidfd_open` and a readable
+`/proc/sys/kernel/random/boot_id`. `HostCheck::run` returns a serializable
+report with one actionable result for each prerequisite. Any failed result
+blocks execution. The CLI doctor wiring belongs to the later interface unit.
+
+The delegation check creates a unique `sluice-test-doctor-*.service` through
+argument-safe `systemd-run --user` argv with `Delegate=yes` and
+`KillMode=control-group`. It opens `cgroup.subtree_control` for writing,
+creates a control child, moves its own probe process there, enables `pids`,
+creates a payload child and checks inherited controllers and writable child
+control. It stops its service even on failure or cancellation. A degraded
+manager can still pass if it supports these operations. No live services are
+changed.
+
+## Build the private artifact
+
+Run from the worktree:
+
+```sh
+scripts/build-private-tmux
+# Or choose a release-local output prefix:
+scripts/build-private-tmux /path/to/release/private-tmux
+```
+
+The default prefix is `target/private-tmux`, outside PATH. The build refuses
+system directories, PATH directories and the owner's live home. It downloads
+[tmux 3.7c](https://github.com/tmux/tmux/releases/tag/3.7c) and
+[libevent 2.1.12-stable](https://github.com/libevent/libevent/releases/tag/release-2.1.12-stable)
+from their official release assets and verifies committed SHA-256 digests.
+The tmux digest was independently computed on 2026-10-03 and matches GitHub's
+release asset metadata. The libevent digest was computed from its official
+asset on the same date; the older GitHub asset has no digest metadata.
+
+Libevent builds out of tree into `<prefix>/libevent` with
+`--disable-shared --enable-static --disable-openssl`. Tmux links its static
+`libevent_core.a`, with `--disable-systemd --disable-cgroups`. These switch
+names match the release's `configure.ac`. The shipped generated `cmd-parse.c`
+avoids a yacc/bison dependency. Configure receives `YACC=true` for its tool
+presence check; make receives `YACC=false` so an attempted regeneration fails.
+Ncurses/tinfo remain dynamic system dependencies.
+
+Build tools are a C compiler, make, curl, tar, pkg-config, Python 3 and
+coreutils. Debian/Ubuntu package names are `build-essential`, `curl`, `tar`,
+`pkg-config`, `python3`, `coreutils` and `libncurses-dev`. The script reports
+missing packages and exits without installing anything or prompting. It never
+sets Cargo environment variables. Both native builds and their temporary
+sources stay under the output prefix. Installed tmux and libevent licenses
+remain in that prefix; generated config is `share/tmux/config.defs`.
+
+`tmux-manifest.json` records both releases, source URLs/digests, configure
+flags, generated preprocessor definitions, binary SHA-256, dynamic ncurses version, parser
+provenance, build host and UTC date. This release generates no config.h.
+Its configuration is the Makefile's `DEFS` line, which must contain neither
+`HAVE_SYSTEMD` nor `ENABLE_CGROUPS`. The script and loader check that line,
+the binary digest, exact `tmux -V` result, static libevent, absence of
+libsystemd and resolved dynamic tinfo/ncurses libraries.
+It requires `/usr/bin/sha256sum` and `/usr/bin/ldd` for these bounded probes.
+The manifest is release provenance, not a signature against a malicious
+user who can rewrite both the binary and manifest.
+
+`ApprovedTmux` invokes a canonical absolute binary path. Server argv always
+includes `-D -S tmux.sock -f /dev/null`, or an explicit config file inside the private run directory. Clients use the
+same private socket, and control clients add `-C attach-session`. Commands
+run in a caller-owned mode-0700 directory, clear `TMUX` and `TMUX_PANE`, and
+never address the default server. Load an immutable release prefix; replacing
+its binary after approval is outside the supported release lifecycle.
+
+## Delayed containment gate
+
+After building the artifact:
+
+```sh
+cargo --config 'build.target-dir="target"' test -p sluice-process -- --ignored containment --nocapture
+```
+
+The tests require `/usr/bin/systemctl`, `/usr/bin/systemd-run`,
+`/usr/bin/timeout`, `/usr/bin/sleep` and `/usr/bin/setsid`. All unit names begin
+`sluice-test-`. Every service has a cleanup guard and a runtime limit.
+`SLUICE_PRIVATE_TMUX_PREFIX` can select another private release prefix;
+`SLUICE_CONTAINMENT_EVIDENCE` can select a report directory. Neither affects
+the installed live home.
+
+Each service runs a private foreground tmux with a pane shell, an ordinary
+sleep and a sleep detached through setsid. The fixture records all five
+persistent processes, including the service worker and server, with PID,
+/proc start time, session ID and v2 cgroup path immediately after readiness
+and again after at least 3.2 seconds. It verifies the detached child has a
+separate session. The private gate requires all identities inside the service
+subtree at both observations and no live identities after unit stop.
+
+The host gate deliberately invokes only `/usr/bin/tmux 3.4` with the same
+private socket fixture, expects the delayed pane to escape and records any
+identities that survive stopping the service. It then kills only its own
+recorded processes through pidfds. A host tmux that no longer migrates fails
+this red-side gate, requiring fresh evidence. No existing sessions receive
+keys or signals. JSON evidence goes under `target/p3-00-evidence` by default.
+
+This proves host prerequisites and the pinned tmux's containment. Guardian
+crash/reconciliation and engine admission belong to the subsequent P3 units
+and G4. They must pass before live engines connect.
