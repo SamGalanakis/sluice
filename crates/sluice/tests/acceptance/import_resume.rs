@@ -131,7 +131,7 @@ async fn imported_claude_and_devin_predecessors_resolve_and_prepare_resume_comma
     assert_eq!(devin.session(sid).await.unwrap().unwrap().cwd, cwd);
     let launch = devin.prepare(&context, Some(sid)).await.unwrap().unwrap();
     assert!(launch.argv.windows(2).any(|a| a == ["--resume", sid]));
-    assert_eq!(row["metadata"]["engine"], json!("devin"));
+    assert_eq!(row["engine"], json!("devin"));
     devin.close().await.unwrap();
     // Preparing commands starts no engine, no tmux and no coordinator.
     assert!(!context.run_dir.join("tmux.sock").exists());
@@ -308,20 +308,27 @@ async fn g7_codex_import_resume() {
     );
     let reads = sluice_store::ReadPool::open(&gate.home, 1).unwrap();
     let owned_run = new_run.to_string();
-    let owned_session = session.clone();
-    let (submissions,messages,private_home)=reads.snapshot(move |sql|{
+    let (submissions,messages)=reads.snapshot(move |sql|{
         let submitted:String=sql.query_row("SELECT outputs FROM submissions WHERE run_id=?1",[&owned_run],|r|r.get(0))?;
         let messages:i64=sql.query_row("SELECT count(*) FROM messages WHERE run_id=?1 AND body='G7_UPGRADED' AND \"to\"='orchestrator'",[&owned_run],|r|r.get(0))?;
-        let private_home:String=sql.query_row("SELECT json_extract(metadata,'$.private_home') FROM sessions WHERE session_id=?1 AND json_type(metadata,'$.private_home')='text' LIMIT 1",[&owned_session],|r|r.get(0))?;
-        Ok((submitted,messages,private_home))
+        Ok((submitted,messages))
     }).await.unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&submissions).unwrap()["word"],
         "upgraded"
     );
     assert_eq!(messages, 1, "new-run message_post callback absent");
+    let mapping: Value = serde_json::from_slice(
+        &fs::read(
+            gate.home
+                .join("codex-native-sessions")
+                .join(format!("{session}.json")),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert!(
-        rollout_contains_task(Path::new(&private_home), &task),
+        rollout_contains_task(Path::new(mapping["home"].as_str().unwrap()), &task),
         "resumed transcript lacks current task path and Rust RunId"
     );
     assert_eq!(
