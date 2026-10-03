@@ -202,7 +202,7 @@ CREATE TABLE leases (
   run_id TEXT NOT NULL REFERENCES runs(run_id), request_id TEXT NOT NULL UNIQUE,
   kind TEXT NOT NULL DEFAULT 'section' CHECK (kind IN ('section','needs')),
   group_id TEXT,
-  scope TEXT NOT NULL, resource TEXT NOT NULL, amount INTEGER NOT NULL CHECK (amount > 0),
+  scope TEXT NOT NULL, resource TEXT NOT NULL, amount INTEGER NOT NULL CHECK (amount >= 0),
   priority INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL CHECK (state IN ('waiting','held','released','cancelled')),
   grant_id TEXT UNIQUE, release_id TEXT UNIQUE,
