@@ -23,23 +23,25 @@ fn run(home: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 #[test]
-fn every_dispatch_mode_fails_without_touching_a_scratch_home() {
+fn registered_modes_cover_cli_and_pending_modes_leave_home_untouched() {
     let home = ScratchHome::new().unwrap();
-    let id = "019a2b3c-4d5e-7f01-8234-56789abcdef0";
-    for args in [
-        vec![
-            "payload-exec",
-            "--run",
-            id,
-            "--attempt",
-            id,
-            "--socket",
-            "control.sock",
-        ],
-        vec!["me", "--json"],
-        vec!["doctor", "--json"],
-    ] {
-        let output = run(home.path(), &args);
+    use clap::CommandFactory;
+    use sluice::modes::{MODES, PENDING_MODES};
+    let mut registered = MODES
+        .iter()
+        .map(|m| m.name.split_whitespace().next().unwrap())
+        .chain(PENDING_MODES.iter().map(|m| m.name))
+        .collect::<Vec<_>>();
+    registered.sort_unstable();
+    let mut cli_modes = sluice::cli::Cli::command()
+        .get_subcommands()
+        .map(|m| m.get_name().to_owned())
+        .collect::<Vec<_>>();
+    cli_modes.sort_unstable();
+    assert_eq!(registered, cli_modes);
+    for pending in PENDING_MODES {
+        let args = pending.args;
+        let output = run(home.path(), args);
         assert_eq!(output.status.code(), Some(1), "{args:?}");
         let error: PublicError = serde_json::from_slice(&output.stderr).unwrap();
         assert!(

@@ -1,5 +1,10 @@
 use super::*;
 use crate::streams::{PatchRegion, RenderedBatch};
+use axum::{
+    extract::{Query, State},
+    response::Html,
+    routing::get,
+};
 #[derive(Clone, Debug)]
 pub struct HomeView {
     pub active: Vec<ProjectView>,
@@ -217,4 +222,85 @@ pub fn batch(
             ),
         ],
     })
+}
+
+async fn home_handler(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
+    match state.snapshot(None).await {
+        Ok(Some(snapshot)) => match home::HomeView::new(&snapshot)
+            .render(&snapshot, &Viewer::from_headers(&headers))
+        {
+            Ok(html) => Html(html.0).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
+        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+async fn functions_handler(
+    State(state): State<DashboardState>,
+    Query(query): Query<PageQuery>,
+    headers: HeaderMap,
+) -> Response {
+    match state.snapshot(query.project).await {
+        Ok(Some(snapshot)) => {
+            match home::render_functions(&snapshot, query.project, &Viewer::from_headers(&headers))
+            {
+                Ok(html) => Html(html.0).into_response(),
+                Err(PublicError::NotFound { .. }) => StatusCode::NOT_FOUND.into_response(),
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+pub fn registration() -> PageRegistration {
+    PageRegistration {
+        routes: |state| {
+            Router::new()
+                .route("/", get(home_handler))
+                .route("/fns", get(functions_handler))
+                .route("/stream", get(crate::streams::home_stream))
+                .route("/fns/stream", get(crate::streams::functions_stream))
+                .with_state(state.dashboard.clone())
+        },
+        nav: |project| {
+            vec![NavEntry::new(
+                "functions",
+                project
+                    .map(|id| format!("/fns?project={id}"))
+                    .unwrap_or_else(|| "/fns".into()),
+                "Functions",
+                60,
+            )]
+        },
+        assets: &[
+            Asset {
+                names: &["style.css", "dashboard.css"],
+                media_type: "text/css",
+                bytes: include_bytes!("../../assets/style.css"),
+            },
+            Asset {
+                names: &["nav.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/nav.js"),
+            },
+            Asset {
+                names: &["datastar-rocket-1.0.4.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/datastar-rocket-1.0.4.js"),
+            },
+            Asset {
+                names: &["logo.svg"],
+                media_type: "image/svg+xml",
+                bytes: include_bytes!("../../assets/logo.svg"),
+            },
+            Asset {
+                names: &["favicon.svg"],
+                media_type: "image/svg+xml",
+                bytes: include_bytes!("../../assets/favicon.svg"),
+            },
+        ],
+    }
 }

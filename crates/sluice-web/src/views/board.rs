@@ -830,3 +830,55 @@ pub async fn unit_stream(
     .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
     .into_response()
 }
+
+pub fn registration() -> super::PageRegistration {
+    use super::{Asset, NavEntry, PageRegistration};
+    use axum::routing::get;
+    PageRegistration {
+        routes: |state| {
+            axum::Router::new()
+                .route("/projects/{name}", get(project_redirect))
+                .route("/projects/id/{project}", get(project_page))
+                .route("/projects/id/{project}/stream", get(project_stream))
+                .route("/projects/id/{project}/units/{unit}", get(unit_page))
+                .route(
+                    "/projects/id/{project}/units/{unit}/stream",
+                    get(unit_stream),
+                )
+                .route(
+                    "/projects/id/{project}/steps/{step}",
+                    get(super::step::step_page),
+                )
+                .route(
+                    "/projects/id/{project}/steps/{step}/stream",
+                    get(super::step::step_stream),
+                )
+                .route(
+                    "/projects/id/{project}/steps/{step}/actions",
+                    axum::routing::post(super::step::action),
+                )
+                .route(
+                    "/projects/id/{project}/actions",
+                    axum::routing::post(super::step::project_action),
+                )
+                .with_state(state.dashboard.clone())
+        },
+        nav: |project| {
+            project
+                .map(|id| {
+                    vec![NavEntry::new(
+                        "plan",
+                        format!("/projects/id/{id}"),
+                        "Plan",
+                        10,
+                    )]
+                })
+                .unwrap_or_default()
+        },
+        assets: &[Asset {
+            names: &["sluice.js"],
+            media_type: "text/javascript",
+            bytes: include_bytes!("../../assets/sluice.js"),
+        }],
+    }
+}

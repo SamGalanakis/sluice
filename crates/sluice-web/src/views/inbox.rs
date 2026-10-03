@@ -333,3 +333,58 @@ async fn mark_read(
         Err(error) => error_response(error),
     }
 }
+
+pub fn registration() -> super::PageRegistration {
+    use super::{Asset, NavEntry, PageRegistration};
+    PageRegistration {
+        routes: |state| state.messages.clone().map(router).unwrap_or_default(),
+        nav: |project| {
+            project
+                .map(|id| {
+                    vec![
+                        NavEntry::new("inbox", format!("/projects/id/{id}/inbox"), "Inbox", 20),
+                        NavEntry::new(
+                            "questions",
+                            format!("/projects/id/{id}/questions"),
+                            "Questions",
+                            30,
+                        ),
+                        NavEntry::new(
+                            "history",
+                            format!("/projects/id/{id}/history"),
+                            "History",
+                            50,
+                        ),
+                    ]
+                })
+                .unwrap_or_default()
+        },
+        assets: &[
+            Asset {
+                names: &["inbox.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/inbox.js"),
+            },
+            Asset {
+                names: &["openui.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/openui.js"),
+            },
+            Asset {
+                names: &["lang-core-0.3.0.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/lang-core-0.3.0.js"),
+            },
+            Asset {
+                names: &["zod-4.6.5-v4-core.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/zod-4.6.5-v4-core.js"),
+            },
+            Asset {
+                names: &["zod-4.6.5-v4.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/zod-4.6.5-v4.js"),
+            },
+        ],
+    }
+}

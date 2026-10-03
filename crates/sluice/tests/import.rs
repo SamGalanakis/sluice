@@ -597,7 +597,8 @@ fn feedback_retry_selects_imported_prev_run_and_never_reserves_a_good_scatter_it
                 )?);
                 // Simulate the owner's release (cutover step 8): leave the import's cutover
                 // maintenance, which fences new reservations.
-                tx.sql().execute("UPDATE maintenance SET mode='normal' WHERE singleton=1", [])?;
+                tx.sql()
+                    .execute("UPDATE maintenance SET mode='normal' WHERE singleton=1", [])?;
                 // Release only the scratch project's pause for reservation checks.
                 tx.sql().execute(
                     "UPDATE projects SET paused=0 WHERE project_id=?1",

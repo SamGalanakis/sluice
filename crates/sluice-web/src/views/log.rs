@@ -389,3 +389,27 @@ fn stream(
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
         .into_response()
 }
+
+pub fn registration() -> super::PageRegistration {
+    use super::{NavEntry, PageRegistration};
+    PageRegistration {
+        routes: |state| {
+            if state.log {
+                router(state.dashboard.clone())
+            } else {
+                Router::new()
+            }
+        },
+        nav: |project| {
+            vec![NavEntry::new(
+                "log",
+                project
+                    .map(|id| format!("/projects/id/{id}/log"))
+                    .unwrap_or_else(|| "/log".into()),
+                "Log",
+                40,
+            )]
+        },
+        assets: &[],
+    }
+}

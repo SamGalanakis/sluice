@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod doctor;
 pub mod me;
+pub mod modes;
 
 pub fn error_json(error: &sluice_model::error::PublicError) -> String {
     serde_json::to_string(error)

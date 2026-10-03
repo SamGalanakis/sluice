@@ -1,19 +1,23 @@
 //! Shared dashboard facade. Load once per page or SSE batch, then render owned
 //! models. URLs use immutable project IDs; labels may change independently.
-pub mod board;
-pub mod home;
-pub mod inbox;
-pub mod log;
-pub mod threads;
+mod registration;
+pub use registration::{Asset, NavEntry, PageRegistration, PageState, page_router};
+macro_rules! register_pages {
+    ($($module:ident),* $(,)?) => {
+        $(pub mod $module;)*
+        const PAGES: &[fn() -> PageRegistration] = &[$($module::registration),*];
+    };
+}
+register_pages! { home, board, inbox, log, project_settings }
 pub mod step;
+pub mod threads;
 
 use askama::Template;
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::Path,
     http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Response},
-    routing::get,
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use sluice_model::{error::PublicError, ids::ProjectId};
@@ -308,26 +312,11 @@ impl NavView {
                     })
             })
             .transpose()?;
-        let base = chosen.map(ProjectView::href).unwrap_or_default();
-        let sections: Vec<(&str, String, &str)> = if chosen.is_some() {
-            vec![
-                ("plan", base.clone(), "Plan"),
-                ("inbox", format!("{base}/inbox"), "Inbox"),
-                ("questions", format!("{base}/questions"), "Questions"),
-                ("log", format!("{base}/log"), "Log"),
-                ("history", format!("{base}/history"), "History"),
-                (
-                    "functions",
-                    format!("/fns?project={}", project.expect("chosen project")),
-                    "Functions",
-                ),
-            ]
-        } else {
-            vec![
-                ("log", "/log".into(), "Log"),
-                ("functions", "/fns".into(), "Functions"),
-            ]
-        };
+        let mut sections = PAGES
+            .iter()
+            .flat_map(|page| ((page)().nav)(project))
+            .collect::<Vec<_>>();
+        sections.sort_by_key(|entry| entry.order);
         Ok(Self {
             projects: snapshot.projects.clone(),
             label: chosen
@@ -335,10 +324,10 @@ impl NavView {
                 .unwrap_or_else(|| "All projects".into()),
             links: sections
                 .into_iter()
-                .map(|(key, href, label)| NavLink {
-                    href,
-                    label: label.into(),
-                    current: key == tab,
+                .map(|entry| NavLink {
+                    href: entry.href,
+                    label: entry.label.into(),
+                    current: entry.key == tab,
                 })
                 .collect(),
             inbox: snapshot.inbox,
@@ -422,33 +411,11 @@ pub fn asset_url(name: &str) -> String {
     )
 }
 fn asset(name: &str) -> Option<(&'static str, &'static [u8])> {
-    Some(match name {
-        "style.css" | "dashboard.css" => ("text/css", include_bytes!("../assets/style.css")),
-        "settings.css" => ("text/css", include_bytes!("../assets/settings.css")),
-        "inbox.js" => ("text/javascript", include_bytes!("../assets/inbox.js")),
-        "openui.js" => ("text/javascript", include_bytes!("../assets/openui.js")),
-        "lang-core-0.3.0.js" => (
-            "text/javascript",
-            include_bytes!("../assets/lang-core-0.3.0.js"),
-        ),
-        "zod-4.6.5-v4-core.js" => (
-            "text/javascript",
-            include_bytes!("../assets/zod-4.6.5-v4-core.js"),
-        ),
-        "zod-4.6.5-v4.js" => (
-            "text/javascript",
-            include_bytes!("../assets/zod-4.6.5-v4.js"),
-        ),
-        "sluice.js" => ("text/javascript", include_bytes!("../assets/sluice.js")),
-        "nav.js" => ("text/javascript", include_bytes!("../assets/nav.js")),
-        "datastar-rocket-1.0.4.js" => (
-            "text/javascript",
-            include_bytes!("../assets/datastar-rocket-1.0.4.js"),
-        ),
-        "logo.svg" => ("image/svg+xml", include_bytes!("../assets/logo.svg")),
-        "favicon.svg" => ("image/svg+xml", include_bytes!("../assets/favicon.svg")),
-        _ => return None,
-    })
+    PAGES
+        .iter()
+        .flat_map(|page| (page)().assets)
+        .find(|asset| asset.names.contains(&name))
+        .map(|asset| (asset.media_type, asset.bytes))
 }
 async fn static_asset(Path(name): Path<String>) -> Response {
     match asset(&name) {
@@ -468,67 +435,9 @@ pub struct PageQuery {
     #[serde(default, deserialize_with = "optional_project")]
     pub project: Option<ProjectId>,
 }
-async fn home_handler(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
-    match state.snapshot(None).await {
-        Ok(Some(snapshot)) => match home::HomeView::new(&snapshot)
-            .render(&snapshot, &Viewer::from_headers(&headers))
-        {
-            Ok(html) => Html(html.0).into_response(),
-            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        },
-        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-async fn functions_handler(
-    State(state): State<DashboardState>,
-    Query(query): Query<PageQuery>,
-    headers: HeaderMap,
-) -> Response {
-    match state.snapshot(query.project).await {
-        Ok(Some(snapshot)) => {
-            match home::render_functions(&snapshot, query.project, &Viewer::from_headers(&headers))
-            {
-                Ok(html) => Html(html.0).into_response(),
-                Err(PublicError::NotFound { .. }) => StatusCode::NOT_FOUND.into_response(),
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
 /// Merge this router under p6-02's host/origin guard and shutdown ownership.
 pub fn dashboard_router(state: DashboardState) -> Router {
-    Router::new()
-        .route("/", get(home_handler))
-        .route("/projects/{name}", get(board::project_redirect))
-        .route("/projects/id/{project}", get(board::project_page))
-        .route("/projects/id/{project}/stream", get(board::project_stream))
-        .route("/projects/id/{project}/units/{unit}", get(board::unit_page))
-        .route(
-            "/projects/id/{project}/units/{unit}/stream",
-            get(board::unit_stream),
-        )
-        .route("/projects/id/{project}/steps/{step}", get(step::step_page))
-        .route(
-            "/projects/id/{project}/steps/{step}/stream",
-            get(step::step_stream),
-        )
-        .route(
-            "/projects/id/{project}/steps/{step}/actions",
-            axum::routing::post(step::action),
-        )
-        .route(
-            "/projects/id/{project}/actions",
-            axum::routing::post(step::project_action),
-        )
-        .route("/fns", get(functions_handler))
-        .route("/stream", get(crate::streams::home_stream))
-        .route("/fns/stream", get(crate::streams::functions_stream))
-        .route("/static/{name}", get(static_asset))
-        .route("/settings", axum::routing::post(display_preferences))
-        .with_state(state)
+    page_router(PageState::new(state))
 }
 impl NavView {
     pub fn has_archived(&self) -> bool {
