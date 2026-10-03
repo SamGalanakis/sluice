@@ -136,3 +136,180 @@ async fn imported_claude_and_devin_predecessors_resolve_and_prepare_resume_comma
     // Preparing commands starts no engine, no tmux and no coordinator.
     assert!(!context.run_dir.join("tmux.sock").exists());
 }
+
+struct PythonRunner(std::process::Child);
+impl PythonRunner {
+    fn stop(&mut self) {
+        if self.0.try_wait().unwrap().is_some() {
+            return;
+        }
+        Command::new("/usr/bin/kill")
+            .args(["-TERM", &self.0.id().to_string()])
+            .status()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while self.0.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        if self.0.try_wait().unwrap().is_none() {
+            self.0.kill().unwrap();
+        }
+        self.0.wait().unwrap();
+    }
+}
+impl Drop for PythonRunner {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+#[tokio::test]
+#[ignore = "Real Codex old Python runner -> imported predecessor -> public Rust agent.run"]
+async fn g7_codex_import_resume() {
+    use crate::{
+        engines::{Gate, absolute_tool, credentials, private_write, step_finished},
+        support::{git, repo as git_repo},
+    };
+    use sluice_model::commands::CommandReply;
+    use std::time::{Duration, Instant};
+    let scratch = Scratch::new();
+    let mut env = match credentials(&scratch.0, "codex") {
+        Ok(e) => e,
+        Err(reason) => {
+            println!("g7_codex_import_resume PENDING: {reason}");
+            return;
+        }
+    };
+    let ws = repo();
+    let cwd = scratch.0.join("work");
+    fs::create_dir(&cwd).unwrap();
+    git_repo(&cwd);
+    let baseline = git(&cwd, &["rev-parse", "HEAD"]);
+    let source = scratch.0.join("python-home");
+    let destination = scratch.0.join("rust-home");
+    let bin = scratch.0.join("python-bin");
+    fs::create_dir(&bin).unwrap();
+    std::os::unix::fs::symlink(ws.join("target/private-tmux/bin/tmux"), bin.join("tmux")).unwrap();
+    std::os::unix::fs::symlink(absolute_tool("codex"), bin.join("codex")).unwrap();
+    // The old runner's unnamed scopes are forbidden here; its process ledger owns cleanup.
+    private_write(&bin.join("systemd-run"), b"#!/bin/sh\nexit 1\n");
+    fs::set_permissions(bin.join("systemd-run"), fs::Permissions::from_mode(0o700)).unwrap();
+    let wrapper = format!(
+        "#!/bin/sh\nexec '{}' run --project '{}' --no-sync python -m sluice.cli \"$@\"\n",
+        absolute_tool("uv").display(),
+        ws.display()
+    );
+    private_write(&bin.join("sluice"), wrapper.as_bytes());
+    fs::set_permissions(bin.join("sluice"), fs::Permissions::from_mode(0o700)).unwrap();
+    env.insert(
+        "PATH".into(),
+        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+    );
+    env.insert("SLUICE_HOME".into(), source.to_string_lossy().into());
+    env.insert("PYTHONPATH".into(), ws.join("src").to_string_lossy().into());
+    let logs = fs::File::create(scratch.0.join("python-runner.log")).unwrap();
+    let mut runner = PythonRunner(
+        Command::new(absolute_tool("uv"))
+            .args(["run", "--project"])
+            .arg(&ws)
+            .args(["--no-sync", "python"])
+            .arg(ws.join("crates/sluice/tests/acceptance/fixtures/python_runner.py"))
+            .arg(&scratch.0)
+            .envs(&env)
+            .env_remove("CLAUDECODE")
+            .env_remove("AI_AGENT")
+            .env_remove("SLUICE_FIXTURE")
+            .current_dir(&ws)
+            .stdout(logs.try_clone().unwrap())
+            .stderr(logs)
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(250);
+    while !scratch.0.join("python-ready.json").exists() {
+        assert!(
+            runner.0.try_wait().unwrap().is_none(),
+            "Python fixture exited: {}",
+            fs::read_to_string(scratch.0.join("python-runner.log")).unwrap()
+        );
+        assert!(Instant::now() < deadline, "Python waiting turn timed out");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let ready: Value =
+        serde_json::from_slice(&fs::read(scratch.0.join("python-ready.json")).unwrap()).unwrap();
+    let session = ready["checkpoint"]["session"].as_str().unwrap().to_string();
+    let old_run = ready["old_run"].as_str().unwrap().to_string();
+    let first_commit = git(&cwd, &["rev-parse", "HEAD"]);
+    assert_ne!(first_commit, baseline);
+    assert_eq!(
+        git(&cwd, &["rev-list", "--count", &format!("{baseline}..HEAD")]),
+        "1"
+    );
+    runner.stop();
+    let snapshot = fs::read(source.join("sluice.db")).unwrap();
+    private_write(
+        &scratch.0.join("staging/config.json"),
+        b"{\"fn_dirs\": []}\n",
+    );
+    let out = Command::new(ws.join("target/debug/sluice"))
+        .arg("import-python-home")
+        .arg(&source)
+        .arg(&destination)
+        .arg("--staging")
+        .arg(scratch.0.join("staging"))
+        .envs(&env)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // p7-02 owns owner-facing cutover release/select. v2 release explicitly refuses cutover.
+    // This scratch-only writer transition substitutes for that owner step before activation.
+    let writer = sluice_store::Writer::open(&destination).unwrap();
+    writer.write(sluice_store::RetrySafety::NonIdempotent,|tx|{
+        assert_eq!(tx.sql().query_row("SELECT mode FROM maintenance WHERE singleton=1",[],|r|r.get::<_,String>(0))?,"cutover");
+        tx.sql().execute("UPDATE maintenance SET mode='normal',owner=NULL,revision=revision+1 WHERE singleton=1",[])?;
+        tx.changed(None,"maintenance");Ok(())
+    }).await.unwrap();
+    writer.shutdown().await.unwrap();
+    let mut gate = Gate::new(&scratch.0, destination, env);
+    gate.boot();
+    let selector = json!({"kind":"name","value":"import-resume"});
+    gate.rpc(json!({"command":"project_update","args":{"project":selector,"paused":false,"author":"fixture","reason":"scratch cutover release"}}));
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"sluice was upgraded; continue where you left off. Resume the same session, do not create or commit first.txt again. Follow the new task.md and current Rust RunId instructions exclusively. Post an addressed message to the orchestrator using the current message_post command, then submit word=upgraded using the current step_submit command. Finish this turn.","reason":"scratch G7 cutover","author":"fixture"}}));
+    gate.scheduling();
+    let done = step_finished(&mut gate, &selector);
+    assert_eq!(done["outputs"]["session"], session);
+    assert_eq!(done["outputs"]["word"], "upgraded");
+    let new_run = done["run_ids"][0].as_str().unwrap();
+    assert_ne!(new_run, old_run);
+    gate.track(new_run);
+    let task = gate.home.join("runs").join(new_run).join("task.md");
+    let text = fs::read_to_string(&task).unwrap();
+    assert!(text.contains(new_run), "new run header absent");
+    assert!(!text.contains(&old_run), "old callback present");
+    assert_eq!(git(&cwd, &["rev-parse", "HEAD"]), first_commit);
+    assert_eq!(
+        git(&cwd, &["rev-list", "--count", &format!("{baseline}..HEAD")]),
+        "1"
+    );
+    let CommandReply::Data(context) =
+        gate.rpc(json!({"command":"step_context","args":{"project":selector,"step":"work"}}))
+    else {
+        panic!("context reply")
+    };
+    assert!(context.into_value().to_string().contains("upgraded"));
+    assert_eq!(
+        fs::read(source.join("sluice.db")).unwrap(),
+        snapshot,
+        "Rust callback changed source Python home"
+    );
+    gate.assert_clean();
+    gate.cleanup();
+    println!(
+        "g7_codex_import_resume PASS before_session={session} after_session={session} old_run={old_run} new_run={new_run} task={} original_commits=1",
+        task.display()
+    );
+}

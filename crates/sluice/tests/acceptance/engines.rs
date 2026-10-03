@@ -39,21 +39,15 @@ pub fn credentials(root: &Path, engine: &str) -> Result<BTreeMap<String, String>
             let auth = fs::read(owner.join(".codex/auth.json"))
                 .map_err(|_| "no privately copyable Codex auth.json")?;
             private_write(&home.join(".codex/auth.json"), &auth);
-            let mut config = toml_edit::DocumentMut::new();
-            if let Ok(text) = fs::read_to_string(owner.join(".codex/config.toml")) {
-                let doc = text
-                    .parse::<toml_edit::DocumentMut>()
-                    .map_err(|_| "invalid source Codex config")?;
-                for key in ["model_provider", "model_providers", "service_tier"] {
-                    if let Some(v) = doc.get(key) {
-                        config[key] = v.clone();
-                    }
-                }
+            let out = Command::new(workspace().join(".venv/bin/python"))
+                .arg(workspace().join("crates/sluice/tests/acceptance/fixtures/private_config.py"))
+                .arg(owner.join(".codex/config.toml"))
+                .output()
+                .map_err(|_| "cannot trim Codex config")?;
+            if !out.status.success() {
+                return Err("invalid source Codex config".into());
             }
-            private_write(
-                &home.join(".codex/config.toml"),
-                config.to_string().as_bytes(),
-            );
+            private_write(&home.join(".codex/config.toml"), &out.stdout);
         }
         "claude" => {
             let auth = fs::read(owner.join(".claude/.credentials.json"))
@@ -271,6 +265,40 @@ impl Gate {
             self.units.push(unit);
         }
     }
+    pub fn assert_clean(&self) {
+        for unit in &self.units {
+            let out = Command::new("/usr/bin/systemctl")
+                .args(["--user", "show", unit, "--property=ControlGroup", "--value"])
+                .output()
+                .unwrap();
+            let group = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !group.is_empty() {
+                let events = Path::new("/sys/fs/cgroup")
+                    .join(group.trim_start_matches('/'))
+                    .join("cgroup.events");
+                if let Ok(text) = fs::read_to_string(events) {
+                    assert!(
+                        text.lines().any(|l| l == "populated 0"),
+                        "owned cgroup still populated after settlement: {unit}"
+                    );
+                }
+            }
+        }
+        if let Ok(runs) = fs::read_dir(self.home.join("runs")) {
+            for run in runs.flatten() {
+                let socket = run.path().join("tmux.sock");
+                if socket.exists() {
+                    let out = Command::new(workspace().join("target/private-tmux/bin/tmux"))
+                        .arg("-S")
+                        .arg(socket)
+                        .arg("list-sessions")
+                        .output()
+                        .unwrap();
+                    assert!(!out.status.success(), "private tmux survived settlement");
+                }
+            }
+        }
+    }
     pub fn cleanup(&mut self) {
         self.lease.take();
         if let Some(mut broker) = self.broker.take() {
@@ -337,6 +365,9 @@ pub fn step_finished(gate: &mut Gate, selector: &Value) -> Value {
     gate.wait(Duration::from_secs(240), |g| {
         let status = g.status(selector);
         let step = &status["steps"]["work"];
+        if let Some(run) = step["run_ids"][0].as_str() {
+            g.track(run);
+        }
         if matches!(step["status"].as_str(), Some("succeeded" | "failed")) {
             terminal = step.clone();
             true
@@ -402,6 +433,7 @@ fn g3(engine: &str) {
         git(&cwd, &["rev-list", "--count", &format!("{baseline}..HEAD")]),
         "1"
     );
+    gate.assert_clean();
     gate.cleanup();
     println!(
         "g3_{engine}_fresh_submit_live_feedback_cleanup PASS before_session={session} after_session={session} original_commits=1"

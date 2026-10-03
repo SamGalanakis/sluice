@@ -33,9 +33,3 @@ async fn missing_session_fallback_lock_conflict_and_missing_cwd() {
         support::session_policy(engine).await;
     }
 }
-
-#[path = "../../../sluice/tests/acceptance/import_resume.rs"]
-mod import_resume;
-
-#[path = "../../../sluice/tests/acceptance/engines.rs"]
-mod engines;
