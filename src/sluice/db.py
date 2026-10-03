@@ -26,7 +26,7 @@ from typing import Any
 from .errors import SluiceError
 
 FILE = "sluice.db"
-VERSION = 5
+VERSION = 6
 TIMEOUT = 5.0  # seconds a write waits for the lock before Busy
 CACHED = 8  # connections kept per thread (one per home)
 MIN_SQLITE = (3, 37)  # STRICT tables
@@ -235,6 +235,33 @@ FROM records;
 """
 
 
+# Empty kind is the whole log. Distinct scopes separate global records from projects.
+# Revisions detect even interior deletions and updates, independent of retention size.
+LOG_REVISIONS = """
+CREATE TABLE log_revisions (
+  scope TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  ver INTEGER NOT NULL,
+  PRIMARY KEY (scope, kind)
+) STRICT;
+INSERT INTO log_revisions
+  SELECT CASE WHEN project IS NULL THEN 'global' ELSE 'project:' || project END,
+         '', count(*) FROM records GROUP BY project;
+INSERT INTO log_revisions
+  SELECT CASE WHEN project IS NULL THEN 'global' ELSE 'project:' || project END,
+         kind, count(*) FROM records GROUP BY project, kind;
+"""
+for _event, _rows in (("INSERT", ("NEW",)), ("DELETE", ("OLD",)),
+                       ("UPDATE", ("OLD", "NEW"))):
+    LOG_REVISIONS += f"CREATE TRIGGER log_revision_{_event.lower()} AFTER {_event} ON records BEGIN "
+    for _row in _rows:
+        _scope = f"CASE WHEN {_row}.project IS NULL THEN 'global' ELSE 'project:' || {_row}.project END"
+        for _kind in ("''", f"{_row}.kind"):
+            LOG_REVISIONS += (f"INSERT INTO log_revisions VALUES ({_scope}, {_kind}, 1) "
+                              "ON CONFLICT(scope, kind) DO UPDATE SET ver = ver + 1;")
+    LOG_REVISIONS += "END;\n"
+
+
 def _triggers() -> str:
     """`projects.ver` counts up with every change to a project's rows (a rollback takes it
     back); `changed` is the time of its last state write."""
@@ -250,13 +277,13 @@ def _triggers() -> str:
     return "\n".join(out) + "\n"
 
 
-SCHEMA = TABLES + OUTCOMES + DRAIN + READERS + LEASES + VIEWS + _triggers()
+SCHEMA = TABLES + OUTCOMES + DRAIN + READERS + LEASES + VIEWS + _triggers() + LOG_REVISIONS
 # version -> the script that takes a database of that version to the next
 # a project's resources (SPEC §6 "Resources"): {name: {capacity} or {capacity_fn}}
 RESOURCES = ("ALTER TABLE projects ADD COLUMN resources TEXT NOT NULL DEFAULT '{}' "
              "CHECK (json_type(resources) = 'object');")
 MIGRATIONS = {1: OUTCOMES, 2: "ALTER TABLE inbox ADD COLUMN run TEXT;" + DRAIN, 3: READERS,
-              4: RESOURCES + LEASES}
+              4: RESOURCES + LEASES, 5: LOG_REVISIONS}
 
 
 def _split_senders(conn: sqlite3.Connection) -> None:

@@ -12,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from sluice import util, views
+from sluice import assets, util, views
 from tests.conftest import create, d, message, src
 
 
@@ -167,7 +167,7 @@ def test_the_logo_and_the_favicon_are_served_as_svg_and_every_page_links_the_fav
         r = urllib.request.urlopen(f"http://127.0.0.1:{port}/static/{name}", timeout=10)
         assert r.status == 200 and r.headers["content-type"].startswith("image/svg+xml"), name
         assert r.read().decode().startswith("<svg"), name
-    icon = '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
+    icon = f'<link rel="icon" href="{assets.url("favicon.svg")}" type="image/svg+xml">'
     for path in ("/", "/projects/p", "/projects/p/threads", "/projects/p/log", "/log", "/fns",
                  "/inbox", "/projects/p/inbox", "/projects/p/steps/a"):
         code, page = get(port, path)
@@ -175,7 +175,7 @@ def test_the_logo_and_the_favicon_are_served_as_svg_and_every_page_links_the_fav
     # the nav's brand is the mark with the wordmark beside it, one link named for assistive tech
     page = get(port, "/")[1]
     assert re.search(r'<a class="brand" href="/" aria-label="sluice: all projects">'
-                     r'<img class="mark" src="/static/logo.svg"[^>]* alt="">', page)
+                     rf'<img class="mark" src="{re.escape(assets.url("logo.svg"))}"[^>]* alt="">', page)
 
 
 # ---- the Host allowlist (the loopback trust boundary) --------------------------------------
@@ -410,7 +410,7 @@ def test_every_page_renders(store, port):
     assert code == 200 and '<div id="step-detail">' in step and '<h2 id="d-title">a</h2>' in step
     assert "@get('/projects/p/steps/a/stream'" in step and '"sver"' in html.unescape(step)
     assert get(port, "/projects/p/steps/nope")[0] == 404
-    assert get(port, "/projects/p/steps/nope/stream")[0] == 404
+    assert get(port, "/projects/p/steps/nope/stream")[0] == 204
     code, fns = get(port, "/fns?project=p")
     assert code == 200 and "<b>test.add</b>" in fns
     assert '<a href="/projects/p/log">Log</a>' in fns  # the project's sections
@@ -421,9 +421,9 @@ def test_every_page_renders(store, port):
     assert code == 200 and "made without a project" in home and "No matching records." in home
     assert get(port, "/projects/nope")[0] == 404
     assert get(port, "/projects/nope/log")[0] == 404
-    assert get(port, "/projects/nope/stream")[0] == 404
-    assert get(port, "/projects/nope/threads/stream")[0] == 404
-    assert get(port, "/projects/nope/inbox/stream")[0] == 404
+    assert get(port, "/projects/nope/stream")[0] == 204
+    assert get(port, "/projects/nope/threads/stream")[0] == 204
+    assert get(port, "/projects/nope/inbox/stream")[0] == 204
     assert get(port, "/projects/p/log?kind=bogus")[0] == 400
     assert get(port, "/projects/p/log?before=x")[0] == 400
     assert get(port, "/projects/p/log?before=3&after=1")[0] == 400
@@ -672,20 +672,22 @@ def test_the_runner_indicator_follows_the_heartbeat(store, port):
     assert "Runner stopped · last seen" in summary
 
 
-def test_the_log_stream_prepends_new_matching_records_on_the_newest_page(store, port):
+def test_the_log_stream_morphs_the_recent_window_on_the_newest_page(store, port):
     store.create_project("p")
     page = get(port, "/projects/p/log?kind=message&thread=q")[1]
     sig = signals_of(page)
     assert sig["view"] == "kind=message&thread=q" and sig["seen"] == 1
-    assert stream(port, "/projects/p/log/stream", sig, seconds=1.0) == []  # idle
+    initial = stream(port, "/projects/p/log/stream", sig, seconds=1.0)
+    assert len(patches(initial)) == 1  # one idempotent reconnect baseline, then idle
 
     def post():
         store.append("p", message("other", "not shown"))
         store.append("p", message("q", "<script>alert(1)</script>"))
 
     events = stream(port, "/projects/p/log/stream", sig, action=later(post))
-    [rows_patch] = patches(events)
-    assert rows_patch.startswith("mode prepend\nselector #log-rows\nelements <tr id=\"r3\">")
+    rows_patch = patches(events)[-1]
+    assert rows_patch.startswith('elements <div id="log-view"')
+    assert '<tr id="r3">' in rows_patch
     assert "q from t: &lt;script&gt;alert(1)&lt;/script&gt;" in rows_patch
     assert "not shown" not in rows_patch and "<script>alert" not in rows_patch
     assert events[-1]["data"] == ['signals {"seen":3}']
@@ -693,7 +695,7 @@ def test_the_log_stream_prepends_new_matching_records_on_the_newest_page(store, 
     sig["seen"] = 3
     events = stream(port, "/projects/p/log/stream", sig,
                     action=later(lambda: store.append("p", message("other", "x"))))
-    assert patches(events) == [] and events[-1]["data"] == ['signals {"seen":4}']
+    assert len(patches(events)) == 1 and events[-1]["data"] == ['signals {"seen":4}']
 
 
 def test_the_log_stream_hides_thread_post_calls_too(store, port):
@@ -707,7 +709,7 @@ def test_the_log_stream_hides_thread_post_calls_too(store, port):
                      {"kind": "call", "call": "c1", "fn": "thread.post",
                       "status": "succeeded"})
 
-    [rows_patch] = patches(stream(port, "/projects/p/log/stream", sig, action=later(post)))
+    rows_patch = patches(stream(port, "/projects/p/log/stream", sig, action=later(post)))[-1]
     assert "q from t: hello" in rows_patch and "thread.post" not in rows_patch
 
 
@@ -962,3 +964,159 @@ def test_project_queries_are_bounded_as_the_plan_grows(store):
         counts.append(sum(q.startswith("SELECT") for q in queries))
     assert counts[0] == counts[1]
     assert counts[1] <= 25
+
+
+def test_log_reconnect_gap_trim_and_filter_keep_a_bounded_idempotent_window(store):
+    import anyio
+
+    from sluice import db
+    from sluice.dashboard import Dashboard
+
+    store.create_project("p")
+    store.append("p", *(message("q", f"row-{i}") for i in range(120)))
+    dashboard = Dashboard(store)
+
+    async def tick():
+        return False
+
+    dashboard._tick = tick
+
+    def collect(signals):
+        async def events():
+            return [event async for event in dashboard._log_stream("p", dict(signals))]
+        return anyio.run(events)
+
+    signals = {"view": "kind=message&thread=q", "kinds": ["message"], "thread": "q", "seen": 1}
+    events = collect(signals)
+    table = events[0]
+    assert table.count('<tr id="r') == views.PAGE_SIZE
+    assert "row-119" in table and "row-0</summary>" not in table
+    assert "older ›" in table and "mode prepend" not in table
+    # Disconnect before the cursor: replay reconstructs the same window without duplicating IDs.
+    assert collect(signals) == events
+    signals["seen"] = 121
+    assert collect(signals)[0] == table
+    with store.tx() as conn:
+        db.one(conn, "SELECT 1")
+        conn.execute("DELETE FROM records WHERE project = 'p' AND seq < 115")
+    trimmed = collect(signals)
+    assert trimmed[0].count('<tr id="r') == 7
+    assert "older ›" not in trimmed[0]
+    signals.update(thread="other", view="kind=message&thread=q")
+    filtered = collect(signals)
+    assert '<tr id="r' not in filtered[0]
+    assert '"view":"kind=message&thread=other"' in filtered[-1]
+
+
+def test_hidden_thread_calls_do_not_consume_visible_log_pages(store):
+    from sluice import log as L
+
+    store.create_project("p")
+    store.append("p", *(message("q", f"visible-{i}") for i in range(60)))
+    store.append("p", *({"kind": "call", "fn": "thread.post", "status": "succeeded"}
+                         for _ in range(100)))
+    page = L.page(store.home, "p", size=50, hide_thread_calls=True)
+    assert len(page["records"]) == 50 and page["older"]
+    assert all(rec["kind"] == "message" for rec in page["records"])
+    older = L.page(store.home, "p", before=page["records"][-1]["seq"], size=50,
+                   hide_thread_calls=True)
+    assert len(older["records"]) == 11 and not older["older"] and older["newer"]
+    store.append("p", {"kind": "call", "fn": "thread.post", "status": "failed"})
+    assert L.page(store.home, "p", hide_thread_calls=True)["records"][0]["status"] == "failed"
+
+
+def test_visible_versions_ignore_unrelated_logs_but_follow_their_dependencies(store):
+    from sluice.dashboard import inbox_ver, step_ver, threads_ver
+
+    create(store, "p", {"a": {"run": "test.add", "in": {"a": d(1), "b": d(2)}}})
+
+    def versions():
+        return threads_ver(store, "p"), step_ver(store, "p", "a"), inbox_ver(store, None, "open")
+
+    before = versions()
+    store.append("p", {"kind": "call", "fn": "irrelevant", "status": "succeeded"})
+    store.update_project("p", description="irrelevant on these parts")
+    assert versions() == before
+    store.append("p", message("step-a", "question"))
+    current = versions()
+    assert current[:2] != before[:2] and current[2] == before[2]
+    store.inbox_post("p", "Question", sender="a")
+    after = versions()
+    assert after[0] != current[0] and after[2] != current[2]
+    assert after[1] == current[1]
+
+
+def test_stream_gzip_flushes_each_event_and_respects_negotiation():
+    import zlib
+
+    import anyio
+    from starlette.requests import Request
+
+    from sluice.dashboard import _events
+
+    def request(encoding):
+        return Request({"type": "http", "headers": [(b"accept-encoding", encoding.encode())]})
+
+    async def events():
+        yield "event: datastar-patch-elements\ndata: elements <p id='p'>first</p>\n\n"
+        yield 'event: datastar-patch-signals\ndata: signals {"seen":2}\n\n'
+
+    async def verify():
+        response = _events(request("br, gzip;q=0.5"), events())
+        assert response.headers["content-encoding"] == "gzip"
+        assert response.headers["vary"] == "Accept-Encoding"
+        decoder = zlib.decompressobj(wbits=31)
+        stream = response.body_iterator
+        first = decoder.decompress(await anext(stream)).decode()
+        assert first.endswith("\n\n") and "first" in first and not decoder.eof
+        second = decoder.decompress(await anext(stream)).decode()
+        assert second.endswith("\n\n") and '"seen":2' in second
+        decoder.decompress(await anext(stream))
+        assert decoder.eof
+        for encoding in ("", "gzip;q=0, *;q=1", "br", "gzip;q=bogus"):
+            assert "content-encoding" not in _events(request(encoding), events()).headers
+
+    anyio.run(verify)
+
+
+def test_only_matching_asset_versions_are_immutable_and_modules_share_urls(store, port):
+    for name in ("sluice.js", "dashboard.css", "datastar-rocket-1.0.4.js"):
+        for suffix, expected in (("", "no-cache"), ("?v=wrong", "no-cache"),
+                                 ("?v=" + assets.digest(name), "immutable")):
+            response = urllib.request.urlopen(f"http://127.0.0.1:{port}/static/{name}{suffix}")
+            assert expected in response.headers["cache-control"]
+    script = urllib.request.urlopen(f"http://127.0.0.1:{port}" + assets.url("sluice.js")).read().decode()
+    assert assets.url("nav.js") in script and assets.url("datastar-rocket-1.0.4.js") in script
+
+
+def test_file_only_registry_and_run_activity_changes_invalidate_visible_versions(store):
+    from sluice.dashboard import home_ver, project_ver, step_ver, threads_ver
+    from tests.conftest import write_fn
+
+    store.create_project("p", "the p project", "test", "test")
+    root = store.project_dir("p") / "fns"
+    write_fn(root, "local.add", inputs={"a": "int", "b": "int"}, outputs={"sum": "int"})
+    spec = {"run": "local.add", "in": {"a": d(1), "b": d(1)}}
+    store.patch("p", 1, [{"op": "add", "path": "/steps/a", "value": spec}], "test", "test")
+
+    def versions():
+        return (home_ver(store), project_ver(store, "p"), threads_ver(store, "p"),
+                step_ver(store, "p", "a"))
+
+    before = versions()
+    write_fn(root, "local.add", inputs={"a": "int", "b": "int"}, outputs={"sum": "int"},
+             spec={"icon": "NEW"})
+    assert all(a != b for a, b in zip(before, versions(), strict=True))
+    run = store.runs_dir("p") / "20260101T000000-test"
+    run.mkdir(parents=True)
+    with store.tx() as conn:
+        conn.execute("UPDATE states SET doc = json_set(doc, '$.steps.a', json(?)) WHERE project = ?",
+                     (json.dumps({"status": "running", "run_ids": [run.name]}), "p"))
+    before = versions()
+    (run / "input.json").write_text('{"a":42}')
+    current = versions()
+    assert current[3] != before[3] and current[2] == before[2]
+    before = current
+    (run / "exit.json").write_text('{"code":0}')
+    current = versions()
+    assert current[0] != before[0] and current[1] != before[1] and current[3] != before[3]

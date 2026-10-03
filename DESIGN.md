@@ -469,7 +469,8 @@ badge, the Types switch's track, a boolean value and the "n new" pill: a bubble 
   bubbles lose their border and fill and their text turns muted ink, so they stay readable
   (at least 3:1, measured 6.1:1 on the box). Opening the drawer clears any tracing; a focus given back
   after a click does not trace, and a card the reflow puts under a still pointer does not
-  trace until the pointer moves.
+  trace until the pointer moves. A stationary trace stays idle: only a geometry change
+  redraws its SVG; tint classes and an unchanged elapsed-time label do not.
 - **Under the board**: the Result (`name value` rows; long text folds to 132px under a fade with
   "Show all") and the plan inputs (name, value, doc). The counts line (with the bar, Pause and
   Archive) heads the page instead.
@@ -595,6 +596,9 @@ A table of seq, time, kind (12px data) and a one-line summary in plain words (a 
 runner adopted or stopped reads as a sentence; a step's message on its own thread does not
 repeat the thread). On a phone the kind filter folds behind a 44px "Filter: all kinds" /
 "Filter: 3 kinds" summary, so the records start near the top; its labels are 44px tall.
+The live table keeps the newest 50 visible records; older records remain available through
+the pager, which moves with the table. Reconnection preserves one copy of each row and any
+expanded disclosure.
 
 ### Touch
 At phone width every control is at least 44px tall: Pause and Archive, the board toolbar's

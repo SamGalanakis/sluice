@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, quote, urlencode
 
 from markdown_it import MarkdownIt
 
-from . import db
+from . import assets, db
 from . import log as L
 from . import state as S
 from . import types as T
@@ -68,13 +68,12 @@ CLASSES = {"pending": "fill:#f5eede,stroke:#788190,color:#46587a",
            "manual": "fill:#fdf8ec,stroke:#11813c,stroke-width:3px,stroke-dasharray:6 3"}
 # Datastar with Rocket (web components), served from static/ like every script the dashboard
 # runs; static/sluice.js imports the same module
-DATASTAR_JS = "/static/datastar-rocket-1.0.4.js"
+DATASTAR_JS = assets.url("datastar-rocket-1.0.4.js")
 # Archivo (weight and width axes) for display, Public Sans for text; the system sans without them
 FONT_CSS = ("https://cdn.jsdelivr.net/npm/@fontsource-variable/archivo@5.3.0/wdth.css",
             "https://cdn.jsdelivr.net/npm/@fontsource-variable/public-sans@5.3.0/index.css")
-# Keep the stream open across server restarts and network blips (Datastar backs off to 30 s).
-# Reconnect for good, and within 3 s once the server is back (Datastar backs off to 30 s).
-STREAM_OPTIONS = "{retry: 'always', retryMaxCount: 1000000, retryMaxWait: 3000}"
+# Reconnect after a deploy's clean EOF; persistent failures back off and stop after 10 tries.
+STREAM_OPTIONS = "{retry: 'always', retryMaxCount: 10, retryMaxWait: 30000}"
 PAGE_SIZE = 50  # log records per log page
 SCOPE_TITLES = {"builtin": "Built-in", "global": "Global", "project": "Project"}
 # The log viewer's kind filter: each group name, then the kinds under it (§6b).
@@ -369,7 +368,7 @@ def nav_inbox(count: int | None, current: bool = False) -> str:
 
 NAV = (("/log", "Log"), ("/fns", "Functions"))  # with no project chosen; "/" is the switcher's
 # The brand: the owner's mark (static/logo.svg) and the wordmark as live text beside it.
-BRAND_MARK = ('<img class="mark" src="/static/logo.svg" width="27" height="26" alt="">'
+BRAND_MARK = (f'<img class="mark" src="{assets.url("logo.svg")}" width="27" height="26" alt="">'
               '<span class="wordmark" aria-hidden="true">sluice</span>')
 _CHEVRON = ('<path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" '
             'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>')
@@ -562,7 +561,7 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
     theme as `data-theme` (none until one is picked, when the OS's shows) and `show-types`,
     so the page never flashes the wrong theme."""
     head = f'<script type="module" src="{DATASTAR_JS}"></script>' if stream else ""
-    scripts = "".join(f'<script type="module" src="{e(s)}"></script>'
+    scripts = "".join(f'<script type="module" src="{e(assets.url(s.removeprefix("/static/")))}"></script>'
                       for s in (script, "/static/sluice.js" if board else "",
                                 "/static/nav.js" if nav else "") if s)
     top = top_nav(store, project, tab, here, inbox, sub) if nav else ""
@@ -577,9 +576,9 @@ def layout(title: str, body: str, nav: bool = True, stream: str | None = None,
     return (f'<!doctype html>\n<html lang="en"{root}><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{e(title)} · sluice</title>"
-            + '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
+            + f'<link rel="icon" href="{assets.url("favicon.svg")}" type="image/svg+xml">'
             + "".join(f'<link rel="stylesheet" href="{u}">' for u in FONT_CSS)
-            + ('<link rel="stylesheet" href="/static/dashboard.css">' if nav else
+            + (f'<link rel="stylesheet" href="{assets.url("dashboard.css")}">' if nav else
                f"<style>{CSS}</style>") + f"{head}</head>\n"
             f"<body{body_attrs}>{GLYPH_DEFS}{top}<main{main_attrs}>\n{body}\n</main>{tail}{scripts}"
             "</body></html>\n")
@@ -2153,7 +2152,7 @@ def _drawer(project: str) -> str:
     modal dialog (the component sets its role and makes the page behind it inert). Then the polite live
     region the board announces status changes in."""
     url = f"'/projects/{quote(project)}/steps/' + encodeURIComponent($step) + '/stream'"
-    effect = (f"$step ? @get({url}, {{retry: 'always', retryMaxCount: 1000000, "
+    effect = (f"$step ? @get({url}, {{retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, "
               f"requestCancellation: window.sluiceStream ? window.sluiceStream() : 'auto'}}) "
               f": window.sluiceStream && window.sluiceStream()")
     hash_to_step = ("$step = location.hash.startsWith('#step:') ? "
@@ -2927,7 +2926,7 @@ def log_view(store: Store, project: str | None, q: LogQuery) -> tuple[str, int]:
     """The `log-view` part: one page of records (newest first) and the pager; with the log's
     last seq when it was read."""
     res = L.page(store.home, project, q.kinds, q.threads, q.before, q.after, PAGE_SIZE,
-                 history=q.history(project))
+                 history=q.history(project), hide_thread_calls="call" not in q.kinds)
     recs = [r for r in res["records"] if log_shown(r, q)]
     base = log_base(project)
 

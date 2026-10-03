@@ -88,12 +88,15 @@ sets a plan input both of those and the item; a submission its row and its recor
 state change the state and its `step.status` records; a call's status change its row and its
 record. A write that cannot get the database within 5 s fails with `busy` ("the store is busy,
 try again"), having written nothing. Reads that must agree (a status, a log page and its
-cursor) come from one snapshot. `user_version` is the schema's version, now 3. A new file gets
-the whole schema at 4; version-1, -2 and -3 files are upgraded in place on first open,
+cursor) come from one snapshot. `user_version` is the schema's version, now 6. A new file gets
+the whole schema; version-1 through version-5 files are upgraded in place on first open,
 in one `BEGIN IMMEDIATE` transaction that checks the version again under the lock. Version 1
 adds `outcomes` and its index (`IF NOT EXISTS`: a file may have them already); version 2 adds
 the inbox's separate `run` column and the maintenance ledger; version 3 adds `readers`
-(`IF NOT EXISTS`). Existing inbox sender strings
+(`IF NOT EXISTS`); version 4 adds resource limits and section leases; version 5 adds indexed
+log revisions, initialized from existing records. Insert, update and delete triggers advance
+those revisions for the global or project scope and each kind, including writes through
+connections opened before the migration. Existing inbox sender strings
 are decoded exactly as the old reader did, including ambiguous literal names that matched
 `<from>#<run>`; their original intent cannot be recovered. The version advances only when
 all migration work commits; a database of any other version is refused, and so is a home
@@ -1134,40 +1137,56 @@ and log pages then open one Datastar SSE stream each (`GET /stream`, `/projects/
 `/projects/<name>/log/stream`, `/log/stream`), and a step's detail one of its own
 (`/projects/<name>/steps/<id>/stream`, under the `sver` signal; the drawer ends the previous
 one when it shows another step). The index and project pages carry a `ver` signal, a hash of
-what they show, read from the database in one snapshot: the index (and the inbox page) the
-runner's liveness and every project's name and change counter (`projects.ver`, §2) — plus, on
-the index, the stats (mtime, size) of the `stderr.log` of every running step's runs; a project
-page the runner's liveness, its own counter, the number of open inbox items (the nav's badge)
-and its running steps' `stderr.log` stats, so a progress line moves while an agent works; a
-step's version adds the step and the stderr of its runs; a log page's, its log's last seq and
-size. The server polls those versions about once a second off the event loop, each poll a
-short read that holds nothing between polls (never blocking the runner or the MCP tools); when
-they change it re-renders the page's parts
-(each an element with an id: the project page's summary, graph, result and nav badge; the
-Threads tab's threads and nav badge) and sends
-a `datastar-patch-elements` event for each part that differs, then the new version. An idle
-page receives nothing; a client whose version is not current (e.g. reconnecting) first gets
-every part. Each version/render baseline is gathered in one short SQLite read snapshot,
-with the version checked before and after rendering. External stderr/liveness changes that
-alter that observation defer delivery until the next poll; the server does not retry in a
-loop or advance an unsent baseline. SQLite snapshots do not make external files atomic.
-The project stream reuses its parts when only the log changes. Its cache belongs to that
-connection and is keyed by the plan and state documents, project description, pause,
-archive, icon and last state-write time, open inbox senders and count, runner liveness and
-running stderr stats and the function registry fingerprint. A log-only change sends the
-new version signal alone; the browser keeps elapsed and relative times current. Nothing is cached between connections.
+what they show, read from the database in one snapshot. The index uses runner liveness,
+project counters, function registry fingerprints and running-run file stats; a project uses
+its own counter and registry, the open inbox count and running-run file stats. Run activity
+includes stderr, input and exit files and the directory's fallback timestamp. Threads use
+the board data, message revision and nav badge. Inbox pages use their filtered item projection
+(including sender liveness) and nav badge. Step details use the board data, submissions,
+status/output/adoption/message revisions and their run files. Unrelated call logs do not
+invalidate threads, inbox or step details. Log pages use indexed revision counters and the
+latest plan edit revision; appends, trims and record corrections change their version without
+scanning retained history.
+
+The server polls those versions about once a second off the event loop, each poll a short
+read that holds nothing between polls. When they change it re-renders the page's parts
+(each an element with an id) and sends a `datastar-patch-elements` event for each part that
+differs, then the new version. An idle page receives nothing; a reconnecting parts client
+whose version is not current first gets every part. Each version/render baseline is gathered
+in one short SQLite read snapshot, with the version checked before and after rendering.
+External file/liveness changes that alter that observation defer delivery until the next
+poll; the server does not retry in a loop or advance an unsent baseline. SQLite snapshots do
+not make external files atomic. The project stream reuses its parts when only the log
+changes. Its cache belongs to that connection and is keyed by the plan and state documents,
+project description, pause, archive, icon and last state-write time, open inbox senders and
+count, runner liveness, run files and function registry fingerprint. A log-only change sends
+the new version signal alone; the browser keeps elapsed and relative times current. Nothing
+is cached between connections.
 Parts are morphed, so an expanded disclosure stays open. The page loads Datastar
-from its Rocket bundle (`datastar-rocket.js`, which adds web components) and
+from its Rocket bundle (`datastar-rocket-1.0.4.js`, which adds web components) and
 `/static/sluice.js`, which keeps relative and running times current and defines three
 components in the light DOM around what the server rendered (their hosts keep Rocket's
 attributes through a morph with `data-preserve-attr`): `<sluice-board>` draws and traces the
-edges (redrawn when its `edges` or the board changes or it resizes; the SVG it draws into is
+edges (redrawn when its `edges` or board geometry changes or it resizes; the SVG it draws into is
 `data-ignore-morph`), moves between cards with the arrow keys and flips a glyph whose status
 changes; `<sluice-drawer>` opens and closes the drawer; `<sluice-thread>` marks unseen
 messages. On the log page, changing the filter updates the `kinds`/`thread` signals and
 reconnects the stream, which sends the new table and rewrites the address bar to the filter's
-query string; on the newest page, new matching records are prepended as they are appended.
-Streams end when the server shuts down; the client reconnects with backoff.
+query string. The newest live log always shows at most 50 visible records, plus the pager
+for older records. Each connection starts by morphing that desired table and pager, including
+when its `seen` cursor is current; a replay before cursor delivery cannot duplicate rows.
+Filters reset the cursor and table baseline. Suppressed thread-post call noise does not count
+against the visible page size. Expanded rows remain open through morphing.
+
+Components that enhance server-rendered children disable Rocket rendering on prop changes;
+patched descendants retain Datastar's local scope. Disconnecting a host aborts its listeners,
+stream, observers and pending callbacks before a same-node reconnect. Presentation-only
+tracing classes and identical timer text do not redraw the graph or rescan the body.
+Streams end when the server shuts down; the client reconnects with backoff, up to ten retries
+and a 30-second maximum wait. Missing or deleted resources return terminal HTTP 204.
+Dashboard SSE negotiates gzip and flushes each event immediately. Dashboard asset URLs carry
+a content version shared with their local module imports and receive immutable caching;
+unversioned or stale-version URLs revalidate with `no-cache`.
 
 - `GET /inbox` (every project) and `GET /projects/<name>/inbox`: the items, filtered by
   `?status=open|answered|closed|all` (default open; open oldest first, the others newest first).

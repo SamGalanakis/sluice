@@ -7,10 +7,11 @@ step's current run, so a progress line moves while an agent works). Its stream p
 version every `interval` seconds off the event loop; when they change it re-renders the
 page's parts and sends a `datastar-patch-elements` event for each part that differs from what
 the client has, then the new `ver` (so a reconnecting client resumes from there). An idle page
-gets nothing. A step's detail (the project page's drawer, or its own page) streams the same way
-under the `sver` signal, versioned by the project and that step's runs.
-The log page's stream sends the table when the filter signals changed, and on the newest page
-prepends new matching records. The inbox page streams its items the same way, and its answer
+gets nothing after its baseline. A step's detail (the project page's drawer, or its own page)
+streams the same way under `sver`, versioned by its board data, relevant history and run files.
+Threads and inbox versions follow their visible dependencies, excluding unrelated log writes.
+The log page's stream morphs a bounded recent table and pager on the newest page. The inbox
+page streams its items the same way, and its answer
 route is one of the dashboard's writes: it calls the same Store.inbox_answer as the MCP
 tool. The others archive or pause a project (Store.update_project, like project_update) or
 pause a step. The settings menu's route writes nothing on the server: it sets the browser's
@@ -19,10 +20,10 @@ cookies (theme, value types), which every page reads to render them.
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import ipaddress
 import threading
+import zlib
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -30,12 +31,11 @@ from urllib.parse import urlsplit
 
 import anyio
 from datastar_py import ServerSentEventGenerator as SSE
-from datastar_py.consts import ElementPatchMode
 from datastar_py.starlette import DatastarResponse, read_signals
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from . import db, views
+from . import assets, db, views
 from . import inbox as I
 from . import log as L
 from .errors import BadRequest, NotFound, SluiceError
@@ -147,9 +147,14 @@ RUNNING = ("SELECT s.project, j.value FROM states s, json_each(s.doc, '$.steps')
            "json_each(e.value, '$.run_ids') j WHERE e.value ->> '$.status' = 'running'")
 
 
-def _running_stderr(store: Store, rows: list[Any]) -> list[tuple[int, int] | None]:
-    """The stats of the stderr.log of each (project, run id) row."""
-    return [_stat(store.runs_dir(p) / r / "stderr.log") for p, r in rows
+def _run_files(directory: Path) -> list[tuple[int, int] | None]:
+    return [_stat(directory), _stat(directory / "stderr.log"),
+            _stat(directory / "exit.json"), _stat(directory / "input.json")]
+
+
+def _running_stderr(store: Store, rows: list[Any]) -> list[list[tuple[int, int] | None]]:
+    """Run files used by progress and activity (including its directory fallback)."""
+    return [_run_files(store.runs_dir(p) / r) for p, r in rows
             if isinstance(r, str) and L.RUN_ID_RE.match(r)]
 
 
@@ -159,7 +164,8 @@ def index_ver(store: Store) -> str:
     with store.rx() as conn:
         vers = [tuple(r) for r in db.all_rows(conn, "SELECT name, ver FROM projects "
                                                     "ORDER BY name")]
-    return _digest([views.runner_state(store.home), vers])
+    return _digest([views.runner_state(store.home), vers,
+                    [(name, store.registry(name).key) for name, _ in vers]])
 
 
 def home_ver(store: Store) -> str:
@@ -179,7 +185,7 @@ def project_ver(store: Store, project: str) -> str:
         badge = I.open_count(conn)
         runs = db.all_rows(conn, RUNNING + " AND s.project = ?", (project,))
     return _digest([views.runner_state(store.home), row and row[0], badge,
-                    _running_stderr(store, runs)])
+                    store.registry(project).key, _running_stderr(store, runs)])
 
 
 def project_stamp(store: Store, project: str) -> str:
@@ -199,19 +205,85 @@ def project_stamp(store: Store, project: str) -> str:
                     _running_stderr(store, runs)])
 
 
+def _log_revision(store: Store, project: str | None, kinds: tuple[str, ...] = ()) -> list:
+    scope = "global" if project is None else "project:" + project
+    kinds = kinds or ("",)
+    with store.rx() as conn:
+        return [tuple(r) for r in db.all_rows(
+            conn, "SELECT kind, ver FROM log_revisions WHERE scope = ? AND kind IN ("
+            + ",".join("?" for _ in kinds) + ") ORDER BY kind", (scope, *kinds))]
+
+
+def _board_data(store: Store, project: str) -> Any:
+    with store.rx() as conn:
+        row = db.one(conn, "SELECT p.paused, p.resources, l.doc, s.doc FROM projects p "
+                     "JOIN plans l ON l.project = p.name JOIN states s ON s.project = p.name "
+                     "WHERE p.name = ?", (project,))
+    if row is None:
+        raise NotFound(f"no project {project!r}")
+    return tuple(row), store.registry(project).key
+
+
+def threads_ver(store: Store, project: str) -> str:
+    """Thread labels and waiting state depend on the board, messages and the nav badge."""
+    with store.rx() as conn:
+        return _digest([_board_data(store, project), _log_revision(store, project, ("message",)),
+                        I.open_count(conn)])
+
+
+def inbox_ver(store: Store, project: str | None, status: str) -> str:
+    """The item projection includes sender liveness; unrelated logs do not invalidate it."""
+    with store.rx() as conn:
+        return _digest([store.inbox(project, status), I.open_count(conn)])
+
+
 def step_ver(store: Store, project: str, sid: str) -> str:
-    """The version of a step's detail: the step, the project's version, and the stderr of the
-    step's runs (the step is part of it: the drawer's `sver` moves on when it shows another)."""
+    """Detail dependencies include resolved plan/state, relevant history and run files."""
     runs = views.step_run_dirs(store, project, sid)
-    return _digest([sid, project_ver(store, project), [_stat(r / "stderr.log") for r in runs]])
+    with store.rx() as conn:
+        submissions = [tuple(r) for r in db.all_rows(
+            conn, "SELECT run, outputs FROM submissions WHERE project = ? ORDER BY run", (project,))]
+        return _digest([sid, _board_data(store, project), submissions,
+                        _log_revision(store, project, ("step.status", "step.output", "run.adopt",
+                                                       "message")),
+                        [_run_files(r) for r in runs]])
 
 
 def log_ver(store: Store, project: str | None) -> str:
-    """The version of a log page: its log's last seq and its size (a trim changes that)."""
+    """An indexed revision detects append, trim and record updates without scanning history."""
     with store.rx() as conn:
-        row = db.one(conn, "SELECT max(seq), count(*) FROM records WHERE project IS ?",
-                     (project,))
-    return _digest(tuple(row))
+        edit = db.one(conn, "SELECT max(rev) FROM plan_edits WHERE project IS ?", (project,))[0]
+        return _digest([_log_revision(store, project), edit])
+
+
+def _accepts_gzip(request: Request) -> bool:
+    encodings = {}
+    for token in request.headers.get("accept-encoding", "").lower().split(","):
+        name, *params = token.strip().split(";")
+        quality = 1.0
+        for param in params:
+            if param.strip().startswith("q="):
+                try:
+                    quality = float(param.strip()[2:])
+                except ValueError:
+                    quality = 0.0
+        encodings[name] = quality
+    return encodings.get("gzip", encodings.get("*", 0.0)) > 0
+
+
+def _events(request: Request, events: AsyncIterator[str]) -> DatastarResponse:
+    """Compress only dashboard streams, flushing each event before waiting for the next."""
+    if not _accepts_gzip(request):
+        return DatastarResponse(events, headers={"Vary": "Accept-Encoding"})
+
+    async def compressed() -> AsyncIterator[bytes]:
+        compressor = zlib.compressobj(wbits=31)
+        async for event in events:
+            yield compressor.compress(event.encode()) + compressor.flush(zlib.Z_SYNC_FLUSH)
+        yield compressor.flush(zlib.Z_FINISH)
+
+    return DatastarResponse(compressed(), headers={"Content-Encoding": "gzip",
+                                                   "Vary": "Accept-Encoding"})
 
 
 def _patch(html: str) -> str:
@@ -278,6 +350,14 @@ class Dashboard:
                 return None
             return before, rendered
 
+    def _log_snapshot(self, project: str | None, q: views.LogQuery,
+                      known: str | None) -> tuple[str, tuple[str, int] | None]:
+        with self.store.rx():
+            if project is not None:
+                self.store.project(project)
+            stamp = log_ver(self.store, project)
+            return stamp, views.log_view(self.store, project, q) if stamp != known else None
+
     async def _log_stream(self, project: str | None,
                           signals: dict[str, Any]) -> AsyncIterator[str]:
         run = anyio.to_thread.run_sync
@@ -289,45 +369,45 @@ class Dashboard:
             while await self._tick():
                 pass
             return
-        seen = signals.get("seen")
-        if signals.get("view") != q.query() or not isinstance(seen, int):
-            html, seen = await run(views.log_view, self.store, project, q)
-            yield SSE.patch_elements(html)
-            yield SSE.patch_signals({"view": q.query(), "seen": seen})
-        if not q.newest:  # an older page stays as it is
-            while await self._tick():
-                pass
+        stamp, last = None, None
+        changed_filter = signals.get("view") != q.query()
+        try:
+            while not self.stop.is_set():
+                stamp, observed = await run(self._log_snapshot, project, q, stamp)
+                if observed is not None:
+                    html, seen = observed
+                    # Reapply the bounded desired window on reconnect. A disconnect between
+                    # HTML and cursor events is safe because morphing the same IDs is idempotent.
+                    if last != html:
+                        yield SSE.patch_elements(html)
+                    if changed_filter:
+                        yield SSE.patch_signals({"view": q.query(), "seen": seen})
+                        changed_filter = False
+                    elif last is None or signals.get("seen") != seen:
+                        yield SSE.patch_signals({"seen": seen})
+                    signals["seen"] = seen
+                    last = html
+                if not await self._tick():
+                    return
+                if not q.newest:
+                    while await self._tick():
+                        pass
+                    return
+        except NotFound:
             return
-        stamp, history = None, q.history(project)
-        while True:
-            new_stamp = await run(log_ver, self.store, project)
-            if new_stamp != stamp:
-                stamp = new_stamp
-                res = await run(functools.partial(L.read, self.store.home, project, seen,
-                                                  q.kinds, q.threads, history=history))
-                recs = [r for r in res["records"] if views.log_shown(r, q)]
-                if recs:
-                    rows = views.log_rows(reversed(recs))
-                    yield SSE.patch_elements(rows, selector="#log-rows",
-                                             mode=ElementPatchMode.PREPEND)
-                if res["last_seq"] != seen:
-                    seen = res["last_seq"]
-                    yield SSE.patch_signals({"seen": seen})
-            if not await self._tick():
-                return
 
     async def _stream(self, request: Request, ver: Callable[[], str],
                       parts: Callable[[], dict[str, str]], signal: str = "ver",
                       exists: Callable[[], Any] | None = None) -> Response:
-        """One page's stream route: `exists` checked off the event loop (-> 404), the
+        """One page's stream route: `exists` checked off the event loop (-> terminal 204), the
         client's signals, then the SSE response patching `parts` as `ver` moves."""
         if exists is not None:
             try:
                 await anyio.to_thread.run_sync(exists)
-            except SluiceError as err:
-                return Response(err.message, status_code=404)
+            except NotFound:
+                return Response(status_code=204)
         signals = await _signals(request)
-        return DatastarResponse(self._parts_stream(signals.get(signal), ver, parts,
+        return _events(request, self._parts_stream(signals.get(signal), ver, parts,
                                                    signal=signal))
 
     def _has_step(self, name: str, sid: str) -> None:
@@ -414,14 +494,14 @@ class Dashboard:
 
     def _threads(self, name: str) -> str:
         self.store.project(name)
-        return views.threads_page(self.store, name, project_ver(self.store, name))
+        return views.threads_page(self.store, name, threads_ver(self.store, name))
 
     async def threads(self, request: Request) -> Response:
         return await self._page(self._threads, request.path_params["name"])
 
     async def threads_stream(self, request: Request) -> Response:
         name = request.path_params["name"]
-        return await self._stream(request, lambda: project_ver(self.store, name),
+        return await self._stream(request, lambda: threads_ver(self.store, name),
                                   lambda: views.threads_parts(self.store, name),
                                   exists=lambda: self.store.project(name))
 
@@ -452,12 +532,12 @@ class Dashboard:
         if name is not None:
             try:
                 await anyio.to_thread.run_sync(self.store.project, name)
-            except SluiceError as err:
-                return Response(err.message, status_code=404)
-        return DatastarResponse(self._log_stream(name, await _signals(request)))
+            except NotFound:
+                return Response(status_code=204)
+        return _events(request, self._log_stream(name, await _signals(request)))
 
     def _inbox(self, project: str | None, status: str) -> str:
-        return views.inbox_page(self.store, project, status, index_ver(self.store))
+        return views.inbox_page(self.store, project, status, inbox_ver(self.store, project, status))
 
     async def inbox(self, request: Request) -> Response:
         return await self._page(self._inbox, request.path_params.get("name"),
@@ -469,7 +549,7 @@ class Dashboard:
         status = signals.get("status") if signals.get("status") in views.INBOX_FILTERS \
             else "open"
         return await self._stream(
-            request, lambda: index_ver(self.store),
+            request, lambda: inbox_ver(self.store, name, status),
             lambda: views.inbox_parts(self.store, name, status),
             exists=(lambda: self.store.project(name)) if name is not None else None)
 
@@ -601,8 +681,12 @@ class Dashboard:
         name = request.path_params["file"]
         if name not in STATIC_TYPES:
             return Response("not found", status_code=404)
-        return FileResponse(STATIC / name, media_type=STATIC_TYPES[name],
-                            headers={"cache-control": "no-cache"})
+        immutable = request.query_params.get("v") == assets.digest(name)
+        headers = {"cache-control": "public, max-age=31536000, immutable" if immutable else "no-cache",
+                   "etag": f'"{assets.digest(name)}"'}
+        if request.headers.get("if-none-match") == headers["etag"]:
+            return Response(status_code=304, headers=headers)
+        return Response(assets.content(name), media_type=STATIC_TYPES[name], headers=headers)
 
     async def fns(self, request: Request) -> Response:
         return await self._page(views.fns_page, self.store,

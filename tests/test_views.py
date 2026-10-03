@@ -211,8 +211,8 @@ def test_the_board_shows_each_step_as_a_bubble(store):
     assert 'id="drawer"' in page
     assert "'/projects/v/steps/' + encodeURIComponent($step)" in html.unescape(page)
     assert "data-init=\"@get('/projects/v/stream', {retry: 'always'" in page
-    assert '<script type="module" src="/static/sluice.js">' in page
-    assert '<script type="module" src="/static/datastar-rocket-1.0.4.js">' in page
+    assert f'<script type="module" src="{views.assets.url("sluice.js")}">' in page
+    assert f'<script type="module" src="{views.DATASTAR_JS}">' in page
     assert "mermaid" not in page
 
 

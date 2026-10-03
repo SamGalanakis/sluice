@@ -399,3 +399,54 @@ def test_the_views_agree_with_status(tmp_path):
     assert [e["rev"] for e in edits] == list(range(1, store.get("p")["rev"] + 1))
     assert all(json.loads(e["ops"]) and e["author"] == "test" for e in edits)
     assert {s: log[s] for s in log} == {r["seq"]: r for r in L.read(home, "p")["records"]}
+
+
+def test_log_revisions_cover_global_trim_interior_deletion_updates_and_rollback(store):
+    from sluice.dashboard import _log_revision, log_ver
+
+    store.create_project("p")
+    store.append("p", msg("first"), msg("middle"), msg("last"))
+    seqs = [r["seq"] for r in L.read(store.home, "p", kinds=["message"])["records"]]
+    before = log_ver(store, "p")
+    with store.tx() as conn:
+        conn.execute("DELETE FROM records WHERE seq = ?", (seqs[1],))
+    assert log_ver(store, "p") != before
+    before = log_ver(store, "p")
+    with store.tx() as conn:
+        conn.execute("UPDATE records SET data = json_set(data, '$.body', 'edited') WHERE seq = ?",
+                     (seqs[-1],))
+    assert log_ver(store, "p") != before
+    message_ver = _log_revision(store, "p", ("message",))
+    store.append("p", {"kind": "project.update"})
+    assert _log_revision(store, "p", ("message",)) == message_ver
+    before = log_ver(store, "p")
+    with pytest.raises(ValueError), store.tx() as conn:
+        conn.execute("DELETE FROM records WHERE project = 'p'")
+        raise ValueError("rollback")
+    assert log_ver(store, "p") == before
+    with store.tx() as conn:
+        L.trim(conn, "p", 1)
+    assert log_ver(store, "p") != before
+    global_before = log_ver(store, None)
+    store.append(None, msg("global"))
+    assert log_ver(store, None) != global_before
+    with store.tx() as conn:
+        conn.execute("DELETE FROM records WHERE project IS NULL")
+    assert log_ver(store, None) != global_before
+
+
+def test_version_five_migration_preserves_records_and_existing_writer(tmp_path):
+    home = tmp_path / "old"
+    home.mkdir()
+    writer = sqlite3.connect(home / db.FILE, isolation_level=None)
+    writer.executescript(db.SCHEMA.replace(db.LOG_REVISIONS, "") + "PRAGMA user_version = 5;")
+    writer.execute("INSERT INTO records (at, kind, data) VALUES ('now', 'message', '{}')")
+    migrated = db.connect(home)
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
+    baseline = migrated.execute("SELECT ver FROM log_revisions WHERE scope = 'global' AND kind = ''").fetchone()[0]
+    assert baseline == 1
+    # This connection predates the migration, just like a running deployed fn process.
+    writer.execute("INSERT INTO records (at, kind, data) VALUES ('now', 'message', '{}')")
+    assert migrated.execute("SELECT ver FROM log_revisions WHERE scope = 'global' AND kind = ''").fetchone()[0] == baseline + 1
+    assert migrated.execute("SELECT count(*) FROM records").fetchone()[0] == 2
+    writer.close()

@@ -192,11 +192,11 @@ wheels = [
 
 [[package]]
 name = "datastar-py"
-version = "1.0.2"
+version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d9/56/697b0c2300985f5143384696fd4854cfdcadf6839577fde49d5b9e0d9000/datastar_py-1.0.2.tar.gz", hash = "sha256:c6f86e2b48c3a5ea08570a4e958267307a5ffc0253c259f054dc3bb6de8a2c0e", size = 129512, upload-time = "2026-06-02T17:47:58.417Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/85/8d1f9caacc6d6e60040deced44cb538ccdb2e105e77305108b68e7c2afc9/datastar_py-1.0.3.tar.gz", hash = "sha256:f25634140803da069f765f02de95e2be6ea6bf9ddd1c8955d8eee93c9aecc537", size = 32418, upload-time = "2026-09-27T03:35:04.176Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/14/2cffb0ef9a69d113349f483786c435abf06ea5091e275328cc163b2a2f23/datastar_py-1.0.2-py3-none-any.whl", hash = "sha256:d84735e5cc55ed85e02f80bbab01c2877e7ed7a6185cc144f802a9821616c9d3", size = 19727, upload-time = "2026-06-02T17:47:57.285Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/ce/3dc775e6cef186eb4172f81ad56de05c292c94477d089a8718cc007b9599/datastar_py-1.0.3-py3-none-any.whl", hash = "sha256:38ce441fcd866249662e610d315857bde046e74c3b989a6993e31da88a0a5139", size = 22194, upload-time = "2026-09-27T03:35:03.29Z" },
 ]
 
 [[package]]
@@ -765,7 +765,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4" },
-    { name = "datastar-py", specifier = ">=1.0.2" },
+    { name = "datastar-py", specifier = ">=1.0.3" },
     { name = "jsonpatch", specifier = ">=1.33" },
     { name = "jsonpointer", specifier = ">=3" },
     { name = "markdown-it-py", specifier = ">=4,<5" },

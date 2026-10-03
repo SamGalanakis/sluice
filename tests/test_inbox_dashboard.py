@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from sluice import assets
 from sluice.dashboard import STATIC_TYPES
 from sluice.mcp_server import DOCS
 from tests.browser import Chrome, find_chrome
@@ -62,13 +63,13 @@ def test_inbox_pages_and_the_badge(store, port):
     assert page.count('class="badge"') == 1  # the one coral badge
     code, page = get(port, "/inbox")
     assert "First?" in page and "Second?" in page and '<script type="module" ' \
-        'src="/static/inbox.js">' in page and "@get('/inbox/stream'" in page
+        f'src="{assets.url("inbox.js")}">' in page and "@get('/inbox/stream'" in page
     assert '<a href="/projects/p/inbox">p</a>' in page and "from plan" in page
     code, page = get(port, "/projects/p/inbox")
     assert code == 200 and "First?" in page and "Second?" not in page
     assert '<form method="post" action="/projects/p/inbox/i1/answer">' in page
     assert get(port, "/projects/nope/inbox")[0] == 404
-    assert get(port, "/projects/nope/inbox/stream")[0] == 404
+    assert get(port, "/projects/nope/inbox/stream")[0] == 204
     assert get(port, "/inbox?status=bogus")[0] == 400
 
     store.inbox_answer("p", a, {"action": "answer", "text": "yes"}, "me")
@@ -89,7 +90,7 @@ def test_everything_from_an_item_is_escaped(store, port):
     page = get(port, "/inbox")[1]
     # the one image on the page is the nav's own mark
     assert "<script>alert" not in page and re.findall(r"<img [^>]*", page) == [
-        '<img class="mark" src="/static/logo.svg" width="27" height="26" alt=""']
+        f'<img class="mark" src="{assets.url("logo.svg")}" width="27" height="26" alt=""']
     assert "title &lt;script&gt;alert(1)&lt;/script&gt;" in page
     assert "<p>body &lt;script&gt;alert(1)&lt;/script&gt;</p>" in page
     assert 'href="javascript' not in page

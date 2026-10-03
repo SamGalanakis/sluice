@@ -50,14 +50,16 @@ const QUIET = 15 * 60;  // seconds without a write before a running step has gon
 function tick() {
   const now = Date.now();
   for (const t of $$("time[data-since]")) {
-    t.textContent = dur((now - Date.parse(t.dataset.since)) / 1000);
+    const text = dur((now - Date.parse(t.dataset.since)) / 1000);
+    if (t.textContent !== text) t.textContent = text;
   }
   for (const t of $$("time[data-ago]")) {
-    t.textContent = ago((now - Date.parse(t.getAttribute("datetime"))) / 1000);
+    const text = ago((now - Date.parse(t.getAttribute("datetime"))) / 1000);
+    if (t.textContent !== text) t.textContent = text;
   }
   for (const t of $$("[data-quiet]")) {  // a badge, to the minute: `quiet 42m`
     const age = (now - Date.parse(t.dataset.quiet)) / 1000;
-    t.hidden = age < QUIET;
+    if (t.hidden !== (age < QUIET)) t.hidden = age < QUIET;
     const text = age < QUIET ? "" : `quiet ${age >= 3600 ? dur(age) : `${Math.floor(age / 60)}m`}`;
     const q = $(".qt", t);
     if (q && q.textContent !== text) q.textContent = text;
@@ -82,7 +84,7 @@ function markOpen(sid) {
     if (box) box.open = true;
     return;
   }
-  card.classList.add("open");
+  if (!card.classList.contains("open")) card.classList.add("open");
   const box = card.closest("details.fold-box:not([open])");  // a finished box opens to it
   if (box) box.open = true;
 }
@@ -260,11 +262,13 @@ function trace(host, node) {
     if (from || to) near.add(el.dataset.from).add(el.dataset.to);
   }
   for (const n of $$(".node", host)) n.classList.toggle("near", near.has(n.dataset.node));
-  $(".plane", host)?.classList.add("tracing");
+  const plane = $(".plane", host);
+  if (plane && !plane.classList.contains("tracing")) plane.classList.add("tracing");
 }
 
 function untrace(host) {
-  $(".plane", host)?.classList.remove("tracing");
+  const plane = $(".plane", host);
+  if (plane?.classList.contains("tracing")) plane.classList.remove("tracing");
   for (const el of $$(".on, .near", host)) el.classList.remove("on", "near");
 }
 
@@ -350,14 +354,22 @@ function restoreBoxes(host) {
   }
 }
 
+// These classes change highlighting or animation, without changing card geometry.
+const presentation = new Set(["tracing", "near", "open", "flip"]);
+const layoutClasses = (value) => (value || "").split(/\s+/)
+  .filter((c) => c && !presentation.has(c)).sort().join(" ");
+
 rocket("sluice-board", {
   mode: "light",
+  renderOnPropChange: false,
   props: ({ json }) => ({ edges: json.default([]) }),
   setup({ host, props, observeProps, cleanup }) {
-    let frame = 0;
+    let frame = 0, active = true;
+    const listeners = new AbortController();
     const redraw = () => {
-      cancelAnimationFrame(frame);
+      if (!active || frame) return;
       frame = requestAnimationFrame(() => {
+        frame = 0;
         drawEdges(host, boardEdges(host, props.edges));
         const held = $(still ? ".node:focus-visible" : ".node:hover, .node:focus-visible",
                        host);  // new paths: keep it lit
@@ -371,9 +383,11 @@ rocket("sluice-board", {
     // a patch of the board: redraw, keep the open card marked, flip a glyph whose status moved
     const changes = new MutationObserver((records) => {
       let board = false;
-      const said = [];
+      const said = new Set();
       for (const r of records) {
         if (r.target.closest?.("svg.edges")) continue;
+        if (r.type === "attributes" && r.attributeName === "class"
+            && layoutClasses(r.oldValue) === layoutClasses(r.target.getAttribute("class"))) continue;
         board = true;
         const el = r.target;
         if (r.type === "attributes" && el.classList?.contains("node")
@@ -383,11 +397,11 @@ rocket("sluice-board", {
           void g?.offsetWidth;
           g?.classList.add("flip");
           const word = $(".g .vh", el)?.textContent.replace(/,\s*$/, "");
-          if (word) said.push(`${el.dataset.node.slice(2)} ${word}`);
+          if (word) said.add(`${el.dataset.node.slice(2)} ${word}`);
         }
       }
       if (!board) return;
-      announce(said.join(". "));
+      announce([...said].join(". "));
       restoreBoxes(host);
       const sid = currentStep();
       if (sid && !document.getElementById(`n-${sid}`)?.classList.contains("open")) markOpen(sid);
@@ -415,11 +429,13 @@ rocket("sluice-board", {
       const next = nearestCard(here, evt, boardEdges(host, props.edges));
       if (next) { evt.preventDefault(); next.focus(); }
     };
-    host.addEventListener("pointerover", over);
-    host.addEventListener("pointerout", out);
-    host.addEventListener("focusin", focus);
-    host.addEventListener("focusout", (evt) => { if (!host.contains(evt.relatedTarget)) untrace(host); });
-    host.addEventListener("keydown", keys);
+    host.addEventListener("pointerover", over, { signal: listeners.signal });
+    host.addEventListener("pointerout", out, { signal: listeners.signal });
+    host.addEventListener("focusin", focus, { signal: listeners.signal });
+    host.addEventListener("focusout", (evt) => {
+      if (!host.contains(evt.relatedTarget)) untrace(host);
+    }, { signal: listeners.signal });
+    host.addEventListener("keydown", keys, { signal: listeners.signal });
     host.addEventListener("toggle", (evt) => {
       const d = evt.target;
       if (!d.matches?.("details.fold-box[data-box]")) return;
@@ -428,11 +444,13 @@ rocket("sluice-board", {
       const open = openBoxes(), k = `${location.pathname}:${d.dataset.box}`;
       if (d.open) open[k] = 1; else delete open[k];
       try { sessionStorage.setItem(BOXES, JSON.stringify(open)); } catch { /* no storage */ }
-    }, true);
+    }, { capture: true, signal: listeners.signal });
     PHONE.addEventListener("change", redraw);
     restoreBoxes(host);
     markOpen(currentStep());
     cleanup(() => {
+      active = false;
+      listeners.abort();
       cancelAnimationFrame(frame);
       sizes.disconnect();
       changes.disconnect();
@@ -451,6 +469,7 @@ rocket("sluice-drawer", {
   setup({ host, cleanup }) {
     const drawer = $("#drawer", host);
     let opener = null, stream = null, last = "";
+    let focusFrame = 0, scrollTimer = 0;
     let pinned = true;  // the log follows its newest line until the reader scrolls up
     // the drawer's stream: each call ends the previous one (Datastar's requestCancellation)
     window.sluiceStream = () => {
@@ -476,6 +495,8 @@ rocket("sluice-drawer", {
       }
     };
     const open = () => {
+      cancelAnimationFrame(focusFrame);
+      clearTimeout(scrollTimer);
       const sid = currentStep();
       if (sid || last) still = true;  // it opens, moves on or closes: the page reflows
       document.documentElement.classList.toggle("drawer-open", Boolean(sid));
@@ -483,6 +504,7 @@ rocket("sluice-drawer", {
       markOpen(sid);
       for (const b of $$("sluice-board")) untrace(b);  // the drawer shows the step, undimmed
       if (!sid) {
+        stream?.abort();
         const card = last && document.getElementById(`n-${last}`);
         (card || opener)?.focus({ preventScroll: true });
         opener = null;
@@ -496,10 +518,10 @@ rocket("sluice-drawer", {
         detail.dataset.step = sid;
         pinned = true;  // a new step's log starts following again
       }
-      requestAnimationFrame(() => drawer.focus({ preventScroll: true }));
+      focusFrame = requestAnimationFrame(() => drawer.focus({ preventScroll: true }));
       // once the page has made room, bring the card into view beside the drawer
       if (!PHONE.matches) {
-        setTimeout(() => document.getElementById(`n-${sid}`)
+        scrollTimer = setTimeout(() => document.getElementById(`n-${sid}`)
           ?.scrollIntoView({ block: "nearest", inline: "nearest" }), 220);
       }
     };
@@ -527,8 +549,7 @@ rocket("sluice-drawer", {
     };
     const scrolled = (evt) => {
       const pre = evt.target;
-      // (on the band, not the drawer: a change to the drawer's own attributes restarts its
-      // Datastar attributes, and so its stream)
+      // The band owns its scroll shadow; the drawer retains its dialog attributes.
       if (pre === drawer) $(".d-top", drawer)?.classList.toggle("scrolled", drawer.scrollTop > 0);
       if (pre.classList?.contains("tail")) {
         pinned = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
@@ -552,7 +573,13 @@ rocket("sluice-drawer", {
       document.removeEventListener("keydown", escape);
       window.removeEventListener("hashchange", open);
       OVER.removeEventListener("change", modal);
+      drawer.removeEventListener("scroll", scrolled, true);
       follow.disconnect();
+      stream?.abort();
+      cancelAnimationFrame(focusFrame);
+      clearTimeout(scrollTimer);
+      document.documentElement.classList.remove("drawer-open");
+      for (const el of document.body.children) el.inert = false;
       delete window.sluiceStream;
       delete window.sluiceClose;
     });
@@ -591,8 +618,10 @@ function restyle() {
 
 rocket("sluice-thread", {
   mode: "light",
+  renderOnPropChange: false,
   props: ({ string, number }) => ({ project: string, thread: string, last: number.default(0) }),
   setup({ host, props, observeProps, cleanup }) {
+    let active = true;
     const key = () => `${props.project}/${props.thread}`;
     const details = () => $("details.thread", host);
     const update = () => {
@@ -611,7 +640,8 @@ rocket("sluice-thread", {
       const n = d.open ? 0 : unseen.length;
       host.classList.toggle("unseen", n > 0);
       const pill = $(".th-new", d);
-      if (pill) pill.textContent = n ? `${n} new` : "";
+      const text = n ? `${n} new` : "";
+      if (pill && pill.textContent !== text) pill.textContent = text;
     };
     const toggled = () => {
       const d = details();
@@ -625,12 +655,19 @@ rocket("sluice-thread", {
         d.scrollIntoView({ block: "start" });
       }
     };
-    observeProps(update, "last");
+    // The attribute arrives before morphing the messages. Count the completed patch.
+    observeProps(() => queueMicrotask(() => { if (active) update(); }), "last");
     host.addEventListener("toggle", toggled, true);
     window.addEventListener("hashchange", named);
     named();
     update();
-    cleanup(() => window.removeEventListener("hashchange", named));
+    cleanup(() => {
+      active = false;
+      host.removeEventListener("toggle", toggled, true);
+      window.removeEventListener("hashchange", named);
+      const d = details();
+      if (d && fresh.delete(d.id)) restyle();
+    });
   },
 });
 
@@ -640,12 +677,21 @@ document.addEventListener("click", (evt) => {
   if (evt.target.closest?.(".types-toggle")) setTypes(!typesOn());
 });
 // a patch brings new switches: keep them in step
-new MutationObserver(() => {
+const addedMatches = (records, selector) => records.flatMap((r) => [...r.addedNodes])
+  .flatMap((node) => {
+    if (!(node instanceof HTMLElement)) return [];
+    return [...(node.matches(selector) ? [node] : []), ...$$(selector, node)];
+  });
+new MutationObserver((records) => {
   const on = String(typesOn());
-  for (const b of $$(".types-toggle")) {
+  const buttons = new Set([...addedMatches(records, ".types-toggle"), ...records
+    .filter((r) => r.type === "attributes" && r.target.matches?.(".types-toggle"))
+    .map((r) => r.target)]);
+  for (const b of buttons) {
     if (b.getAttribute("aria-pressed") !== on) b.setAttribute("aria-pressed", on);
   }
-}).observe(document.body, { childList: true, subtree: true });
+}).observe(document.body, { childList: true, subtree: true, attributes: true,
+                           attributeFilter: ["class", "aria-pressed"] });
 
 // ---- copying an id, path or session: its button (shown with script) copies the whole value;
 // where the clipboard is not allowed (not a secure context) it selects it instead ------------
@@ -676,17 +722,21 @@ document.addEventListener("click", async (evt) => {
 
 function retitle() {
   const mark = $("[data-title-failed]");
-  if (!mark) return;
   const now = Date.now();
-  const failed = Number(mark.dataset.titleFailed) || 0;
-  const quiet = (mark.dataset.titleQuiet || "").split(" ")
+  const failed = Number(mark?.dataset.titleFailed) || 0;
+  const quiet = (mark?.dataset.titleQuiet || "").split(" ")
     .filter((t) => t && (now - Date.parse(t)) / 1000 >= QUIET).length;
   const base = document.title.replace(/^(\d+ failed · )?(\d+ quiet · )?/, "");
   const want = [failed && `${failed} failed`, quiet && `${quiet} quiet`, base]
     .filter(Boolean).join(" · ");
   if (document.title !== want) document.title = want;
 }
-new MutationObserver(retitle).observe(document.body, {
+new MutationObserver((records) => {
+  const selector = "[data-title-failed]";
+  if (records.some((r) => r.type === "attributes") || addedMatches(records, selector).length
+      || records.some((r) => [...r.removedNodes].some((n) => n instanceof HTMLElement
+        && (n.matches(selector) || n.querySelector(selector))))) retitle();
+}).observe(document.body, {
   childList: true, subtree: true, attributes: true,
   attributeFilter: ["data-title-failed", "data-title-quiet"] });
 

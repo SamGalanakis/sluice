@@ -165,7 +165,8 @@ def latest(home: Path, project: str) -> tuple[dict[str, str], dict[str, dict[str
 
 def page(home: Path, project: str | None, kinds: Iterable[str] | None = None,
          threads: Iterable[str] | None = None, before: int | None = None,
-         after: int | None = None, size: int = 50, history: bool = False) -> dict[str, Any]:
+         after: int | None = None, size: int = 50, history: bool = False,
+         hide_thread_calls: bool = False) -> dict[str, Any]:
     """One page of matching records, newest first, for the log viewer:
     `{records, newer, older, last_seq}`, from one snapshot.
 
@@ -174,6 +175,9 @@ def page(home: Path, project: str | None, kinds: Iterable[str] | None = None,
     records exist on either side of the page; `last_seq` is the log's last seq.
     """
     where, params = _filter(kinds, threads)
+    if hide_thread_calls:
+        where += (" AND NOT (kind = 'call' AND coalesce(data ->> '$.fn', '') = 'thread.post' "
+                  "AND coalesce(data ->> '$.status', '') != 'failed')")
     src = HISTORY if history else "records"
     with db.read(home) as conn:
         def exists(cond: str, seq: int) -> bool:

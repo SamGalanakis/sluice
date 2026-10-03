@@ -603,7 +603,7 @@ def test_the_runner_alerts_only_with_unread_alert_min(store):
 
 def test_a_version_2_file_gets_the_readers_table(tmp_path):
     """A real version-2 file (the SCHEMA before the inbox's `run` column, the drain tables and
-    `readers`) is upgraded in place through 3 and 4 to 5, keeping its rows; `next` then notes
+    `readers`) is upgraded in place to the current schema, keeping its rows; `next` then notes
     where it has read."""
     home = tmp_path / "h"
     write_config(home)
@@ -618,7 +618,7 @@ def test_a_version_2_file_gets_the_readers_table(tmp_path):
     conn.close()
     store = Store(home)
     with store.rx() as c:
-        assert c.execute("PRAGMA user_version").fetchone()[0] == db.VERSION == 5
+        assert c.execute("PRAGMA user_version").fetchone()[0] == db.VERSION
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"readers", "drain", "drain_projects"} <= tables
         assert "run" in {r[1] for r in c.execute("PRAGMA table_info(inbox)")}
