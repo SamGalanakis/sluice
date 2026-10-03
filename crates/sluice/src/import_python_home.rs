@@ -176,7 +176,7 @@ pub fn import(options: &Options) -> Result<Value> {
     let mut import_id = ledger::identity(&snapshot, &src, &staging)?;
     let conflict_list = conflicts(&src, &staging)?;
     import_id = artifacts::fingerprint(&sluice_model::hash::canonical_json(
-        &json!({"snapshot":import_id,"conflicts":conflict_list}),
+        &json!({"snapshot":import_id,"conflicts":conflict_list,"native_predecessors":1}),
     )?);
     if dst.exists() && !files::entries(&dst)?.is_empty() {
         let saved = files::json(&dst.join("import-ledger.json"))
@@ -302,7 +302,7 @@ pub fn import(options: &Options) -> Result<Value> {
     };
     let global = copy_assets(&staging, &home, &rewrites)?;
     require_private_config(&src, &staging)?;
-    let mut report = json!({"projects":snapshot.projects.len(),"steps_by_state":{},"interrupted_runs":0,"sessions_copied":0,"questions_converted":0,"conflicts":conflict_list,"conversions":[],"exceptions":[],"dropped":snapshot.dropped,"operationally_paused":true,"pause_state_source":ledger["pause_state_source"]});
+    let mut report = json!({"projects":snapshot.projects.len(),"steps_by_state":{},"interrupted_runs":0,"sessions_copied":0,"session_imports":[],"questions_converted":0,"conflicts":conflict_list,"conversions":[],"exceptions":[],"dropped":snapshot.dropped,"operationally_paused":true,"pause_state_source":ledger["pause_state_source"]});
     let mut prepared = Vec::new();
     for old in snapshot.projects {
         let id = ledger["projects"][&old.name]["id"]
@@ -442,6 +442,7 @@ pub fn import(options: &Options) -> Result<Value> {
                 pred["index"] = json!(index);
                 pred["run"] = ids["run"].clone();
                 pred["attempt"] = ids["attempt"].clone();
+                pred["invocation"] = ids["invocation"].clone();
                 pred["step"] = json!(step_id);
                 let good = index >= 0
                     && entry["results"]
@@ -451,16 +452,17 @@ pub fn import(options: &Options) -> Result<Value> {
                 if !good {
                     increment(&mut report, "interrupted_runs");
                     if pred["checkpoint"].is_object() {
-                        let run = pred["run"].as_str().context("missing run id")?;
-                        pred["session"] =
-                            sessions::copy(&src, &home, &dst, run, &pred["checkpoint"])?
-                                .unwrap_or(Value::Null);
+                        let run = pred["run"].as_str().context("missing run id")?.to_owned();
+                        pred["session"] = sessions::copy(&src, &home, &dst, &pred["checkpoint"])?
+                            .unwrap_or(Value::Null);
                         if pred["session"].is_object() {
                             increment(&mut report, "sessions_copied");
+                            report["session_imports"].as_array_mut().expect("array").push(json!({"run":run,"engine":pred["session"]["engine"],"session":pred["session"]["session"],"cwd":pred["session"]["cwd"],"details":pred["session"]["metadata"]}));
                         }
                         if let Some(error) = pred["session"]["metadata"].get("validation_error") {
                             report["exceptions"].as_array_mut().expect("array").push(json!({"predecessor":format!("{}/{step_id}[{index}]",old.name),"resume_validation_error":error}));
                         }
+                        sessions::write_checkpoint(&home, &pred)?;
                     }
                     if !pred["session"].is_object() {
                         report["exceptions"].as_array_mut().expect("array").push(json!(format!("{}/{step_id}[{index}]: interrupted predecessor has no engine session; reconcile external effects before retry",old.name)));
@@ -504,7 +506,7 @@ pub fn import(options: &Options) -> Result<Value> {
     let check_id = ledger::identity(&check, &src, &staging)?;
     ensure!(
         artifacts::fingerprint(&sluice_model::hash::canonical_json(
-            &json!({"snapshot":check_id,"conflicts":conflicts(&src,&staging)?})
+            &json!({"snapshot":check_id,"conflicts":conflicts(&src,&staging)?,"native_predecessors":1})
         )?) == import_id,
         "source/staging changed while importing"
     );

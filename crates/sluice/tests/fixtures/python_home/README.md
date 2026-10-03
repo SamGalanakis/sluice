@@ -57,7 +57,12 @@ published, an identical snapshot is a no-op; changed snapshots or missing requir
 files are refused. The destination must have an existing parent directory.
 
 Only referenced session data is retained. Codex private state is copied and its
-rollout paths are rewritten. External credential symlinks are inspected without
+rollout paths are rewritten into `codex-native-homes/<session>`. The adapter's
+native `codex-native-sessions/<session>.json` maps that home and cwd. Each
+interrupted agent predecessor has a supervisor `runs/<RunId>/native.json`, with
+terminal state, fresh invocation counters, original git baseline and no process
+identity. SQLite session rows retain standard dashboard fields; import details
+live in the report. External credential symlinks are inspected without
 reading their contents. Claude and Devin keep their external engine stores; the
 importer validates the selected session and cwd read-only. Missing recorded cwd
 is a reported paused resume error; no replacement directory is created. Actual

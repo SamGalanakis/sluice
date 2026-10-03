@@ -157,17 +157,30 @@ impl Codex {
             .private_home
             .clone()
             .ok_or_else(|| error(EngineErrorKind::Fatal, "Codex has no private home"))?;
+        self.save_session_mapping(session, &home, &context.cwd)
+    }
+    /// Persist the native mapping, including when importing an interrupted session.
+    pub fn save_session_mapping(
+        &self,
+        session: &str,
+        home: &Path,
+        cwd: &Path,
+    ) -> Result<(), EngineError> {
         let path = self.registry(session)?;
         let parent = path
             .parent()
             .ok_or_else(|| local("invalid mapping directory"))?;
         private_dir(parent).map_err(local)?;
         let bytes = serde_json::to_vec(&SavedSession {
-            home,
-            cwd: context.cwd.clone(),
+            home: home.into(),
+            cwd: cwd.into(),
         })
         .map_err(local)?;
         atomic_private(&path, &bytes).map_err(local)
+    }
+    /// Return the private home recorded in the native session map.
+    pub fn session_home(&self, session: &str) -> Result<Option<PathBuf>, EngineError> {
+        Ok(self.saved(session)?.map(|saved| saved.home))
     }
     fn rpc(&mut self) -> Result<&mut Rpc, EngineError> {
         self.rpc

@@ -1,7 +1,7 @@
 use super::{files, parser::Snapshot, sessions};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use sluice_model::ids::{AttemptId, ProjectId, ResultId, RunId};
+use sluice_model::ids::{AttemptId, InvocationId, ProjectId, ResultId, RunId};
 use std::path::Path;
 
 pub fn identity(snapshot: &Snapshot, src: &Path, staging: &Path) -> Result<String> {
@@ -146,8 +146,7 @@ pub fn allocate(snapshot: &Snapshot, import: &str, source: &Path, destination: &
                     } else {
                         -1
                     };
-                    predecessors[index.to_string()] =
-                        json!({"run":RunId::new(),"attempt":AttemptId::new()});
+                    predecessors[index.to_string()] = json!({"run":RunId::new(),"attempt":AttemptId::new(),"invocation":InvocationId::new()});
                 }
             }
             steps[id] =

@@ -2,6 +2,15 @@
 use super::files;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
+use sluice_agents::{
+    engines::{
+        EngineAdapter, SessionMetadata,
+        claude::Claude,
+        codex::{Codex, CodexOptions},
+        devin::{Devin, DevinOptions},
+    },
+    supervisor::{Checkpoint, State},
+};
 use std::{
     fs,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
@@ -42,7 +51,6 @@ pub fn copy(
     src: &Path,
     home: &Path,
     destination: &Path,
-    run: &str,
     checkpoint: &Value,
 ) -> Result<Option<Value>> {
     let Some(session) = checkpoint["session"].as_str().filter(|s| !s.is_empty()) else {
@@ -59,6 +67,7 @@ pub fn copy(
     let available = cwd.is_dir();
     let cwd = if available { cwd.canonicalize()? } else { cwd };
     let mut metadata = checkpoint.clone();
+    metadata["imported"] = json!(true);
     if !available {
         // Keep the predecessor and checkpoint so the owner's later retry fails
         // with the actual missing cwd, never silently starts a fresh worker.
@@ -90,8 +99,29 @@ pub fn copy(
                 old_home.starts_with(src.join("codex-native-homes").canonicalize()?),
                 "Codex private home escapes source snapshot"
             );
-            let relative = format!("engine-homes/{run}");
+            let relative = format!("codex-native-homes/{session}");
             let private = home.join(&relative);
+            if private.exists() {
+                let adapter = codex(home);
+                ensure!(
+                    adapter.session_home(session)?.as_deref()
+                        == Some(destination.join(&relative).as_path()),
+                    "conflicting imported Codex session home"
+                );
+                let mapping = files::json(
+                    &home
+                        .join("codex-native-sessions")
+                        .join(format!("{session}.json")),
+                )?;
+                ensure!(
+                    mapping["cwd"] == json!(cwd),
+                    "conflicting imported Codex session cwd"
+                );
+                metadata["private_home"] = json!(destination.join(&relative));
+                return Ok(Some(
+                    json!({"engine":engine,"cwd":cwd,"session":session,"metadata":metadata}),
+                ));
+            }
             files::directory(&private)?;
             let mut found = false;
             for path in files::entries(&old_home)? {
@@ -135,6 +165,7 @@ pub fn copy(
                 "Codex session has no matching saved rollout: {session}"
             );
             rewrite_state_paths(&private, &old_home, &destination.join(&relative))?;
+            restore_directory_modes(&old_home, &private, 0)?;
             // The runtime builds current configuration/hooks and takes a fresh
             // lock. Existing auth/skills links are inspected but never copied.
             let mut ownership = json!({});
@@ -166,67 +197,127 @@ pub fn copy(
             }
             metadata["external_credentials"] = ownership;
             metadata["private_home"] = json!(destination.join(&relative));
-            metadata["python_mapping"] = json!({"home":destination.join(&relative),"cwd":cwd});
-            files::write(
-                &private.join("session.json"),
-                &serde_json::to_vec_pretty(
-                    &json!({"home":destination.join(&relative),"cwd":cwd,"session":session}),
-                )?,
-                0o600,
-            )?;
+            codex(home).save_session_mapping(session, &destination.join(&relative), &cwd)?;
         }
         "claude" => {
-            files::safe_component(session)?;
             let config = std::env::var_os("CLAUDE_CONFIG_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| owner_home().join(".claude"));
-            let mut found = None;
-            for project in files::entries(&config.join("projects"))? {
-                let transcript = project.join(format!("{session}.jsonl"));
-                if !transcript.is_file() {
-                    continue;
-                }
-                for line in files::read(&transcript)?.split(|b| *b == b'\n') {
-                    if let Ok(rec) = serde_json::from_slice::<Value>(line)
-                        && let Some(old_cwd) = rec["cwd"].as_str()
-                    {
-                        ensure!(recorded_cwd(old_cwd) == cwd, "Claude session cwd differs");
-                        found = Some(transcript.clone());
-                        break;
-                    }
-                }
-            }
-            metadata["external_store"] = json!(found.context("Claude session transcript missing")?);
+            let mut adapter = Claude::new(
+                "claude".into(),
+                config.clone(),
+                "sluice".into(),
+                Default::default(),
+            );
+            let resolved = if available {
+                resolve(&mut adapter, session)?
+            } else {
+                adapter
+                    .recorded_session(session)?
+                    .context("engine session is missing")?
+            };
+            ensure!(
+                recorded_cwd(resolved.cwd.to_str().context("non-UTF8 session cwd")?) == cwd,
+                "Claude session cwd differs"
+            );
+            metadata["external_store"] = json!(config);
+            return Ok(Some(
+                json!({"engine":engine,"cwd":cwd,"session":resolved.id,"metadata":metadata}),
+            ));
         }
         "devin" => {
-            let db = owner_home().join(".local/share/devin/cli/sessions.db");
-            // This is an external engine-owned store, not the Python home.
-            // Validate only its one session row through the narrowly versioned
-            // read-only adapter; copying the entire store leaks unrelated data.
-            let con = rusqlite::Connection::open_with_flags(
-                &db,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                    | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
-            )?;
-            let key = session
-                .rsplit('/')
-                .next()
-                .context("invalid Devin session")?;
-            let recorded: String = con.query_row(
-                "SELECT working_directory FROM sessions WHERE id=?1",
-                [key],
-                |r| r.get(0),
-            )?;
-            ensure!(recorded_cwd(&recorded) == cwd, "Devin session cwd differs");
-            drop(con);
+            let options = DevinOptions::default();
+            let db = options.data_home.join("devin/cli/sessions.db");
+            let mut adapter = Devin::new(options);
+            let resolved = resolve(&mut adapter, session)?;
+            ensure!(
+                recorded_cwd(resolved.cwd.to_str().context("non-UTF8 session cwd")?) == cwd,
+                "Devin session cwd differs"
+            );
             metadata["external_store"] = json!(db);
+            return Ok(Some(
+                json!({"engine":engine,"cwd":cwd,"session":resolved.id,"metadata":metadata}),
+            ));
         }
         _ => bail!("unsupported checkpoint engine {engine}"),
     }
-    metadata["imported"] = json!(true);
     Ok(Some(
         json!({"engine":engine,"cwd":cwd,"session":session,"metadata":metadata}),
     ))
+}
+
+fn codex(home: &Path) -> Codex {
+    Codex::new(CodexOptions::new(
+        "codex".into(),
+        PathBuf::new(),
+        home.into(),
+    ))
+}
+
+fn restore_directory_modes(source: &Path, copy: &Path, depth: usize) -> Result<()> {
+    ensure!(depth <= 32, "session directory tree too deep");
+    for path in files::entries(copy)? {
+        if fs::symlink_metadata(&path)?.is_dir() {
+            restore_directory_modes(
+                &source.join(path.file_name().context("directory name missing")?),
+                &path,
+                depth + 1,
+            )?;
+        }
+    }
+    fs::set_permissions(copy, fs::metadata(source)?.permissions())?;
+    Ok(())
+}
+
+fn resolve(adapter: &mut impl EngineAdapter, session: &str) -> Result<SessionMetadata> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(adapter.session(session))?
+        .context("engine session is missing")
+}
+
+pub fn write_checkpoint(home: &Path, predecessor: &Value) -> Result<()> {
+    let old = &predecessor["checkpoint"];
+    let engine = old["engine"].as_str().context("checkpoint has no engine")?;
+    ensure!(
+        matches!(engine, "codex" | "claude" | "devin"),
+        "unsupported checkpoint engine {engine}"
+    );
+    let session = &predecessor["session"];
+    let cwd = session["cwd"]
+        .as_str()
+        .or_else(|| old["cwd"].as_str())
+        .context("checkpoint has no cwd")?;
+    let run = serde_json::from_value(predecessor["run"].clone())?;
+    let checkpoint = Checkpoint {
+        version: 1,
+        run,
+        attempt: serde_json::from_value(predecessor["attempt"].clone())?,
+        invocation: serde_json::from_value(predecessor["invocation"].clone())?,
+        engine: engine.into(),
+        cwd: recorded_cwd(cwd),
+        internal_attempt: 1,
+        session: session["session"].as_str().map(str::to_owned),
+        head_before: old["head_before"]
+            .as_str()
+            .or_else(|| old["git"]["head_before"].as_str())
+            .map(str::to_owned),
+        started_ms: 0,
+        state: State::Done,
+        delivery: Default::default(),
+        submissions: serde_json::from_value(predecessor["outputs"].clone())?,
+        reminded: false,
+        nudges: 0,
+        compactions: 0,
+        live_after: Default::default(),
+        final_text: old["final"].as_str().unwrap_or_default().into(),
+        notes: vec![super::INTERRUPTED.into()],
+    };
+    let directory = home.join("runs").join(format!("{run}"));
+    files::directory(&directory)?;
+    checkpoint.save(&directory)?;
+    Ok(())
 }
 
 fn rewrite_state_paths(private: &Path, old: &Path, destination: &Path) -> Result<()> {

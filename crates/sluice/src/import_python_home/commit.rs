@@ -157,7 +157,7 @@ pub fn commit(
                 let result = json!({"status":if good {"succeeded"} else {"failed"},"outputs":pred["outputs"],"error":if good {None} else {Some(PublicError::ProcessLost {message:super::INTERRUPTED.into()})}});
                 tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,item_index,unit,created_at,started_at,finished_at,completion_id,completion_ack,result) VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?7,?8,1,?9)",params![run,id,attempt,step_id.as_str(),index,step.unit_name().to_string(),at,format!("import:{run}"),result.to_string()])?;
                 if let Some(session) = pred.get("session").filter(|s| s.is_object()) {
-                    tx.sql().execute("INSERT INTO sessions(run_id,project_id,engine,cwd,session_id,metadata,recorded_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",params![run,id,session["engine"].as_str(),session["cwd"].as_str(),session["session"].as_str(),session["metadata"].to_string(),at])?;
+                    tx.sql().execute("INSERT INTO sessions(run_id,project_id,engine,cwd,session_id,recorded_at) VALUES (?1,?2,?3,?4,?5,?6)",params![run,id,session["engine"].as_str(),session["cwd"].as_str(),session["session"].as_str(),at])?;
                 }
                 if pred["outputs"].is_object()
                     && pred["outputs"].as_object().is_some_and(|o| !o.is_empty())

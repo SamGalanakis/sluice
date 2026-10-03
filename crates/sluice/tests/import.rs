@@ -4,6 +4,15 @@ mod import_python_home;
 use import_python_home::{FailurePoint, Options, import};
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use sluice_agents::{
+    engines::{
+        EngineAdapter,
+        claude::Claude,
+        codex::{Codex, CodexOptions},
+        devin::{Devin, DevinOptions},
+    },
+    supervisor::{Checkpoint, State},
+};
 use std::{
     collections::BTreeMap,
     fs,
@@ -354,6 +363,31 @@ fn crash_recovery_reuses_ids_and_rolls_back_partial_rows() {
         )
         .unwrap();
         assert_eq!(allocated["projects"], committed["projects"]);
+        for step in ["work", "scatter"] {
+            for ids in committed["projects"]["fixture"]["steps"][step]["predecessors"]
+                .as_object()
+                .unwrap()
+                .values()
+            {
+                let directory = fixture
+                    .destination
+                    .join("runs")
+                    .join(ids["run"].as_str().unwrap());
+                if let Some(checkpoint) = Checkpoint::read(&directory).unwrap() {
+                    assert_eq!(json!(checkpoint.attempt), ids["attempt"]);
+                    assert_eq!(json!(checkpoint.invocation), ids["invocation"]);
+                } else {
+                    let result = json_query(
+                        &fixture.imported(),
+                        &format!(
+                            "SELECT result FROM runs WHERE run_id='{}'",
+                            ids["run"].as_str().unwrap()
+                        ),
+                    );
+                    assert_eq!(result["status"], "succeeded");
+                }
+            }
+        }
         assert_eq!(before, fingerprints(&fixture.source));
         assert_eq!(
             fixture
@@ -368,6 +402,20 @@ fn crash_recovery_reuses_ids_and_rolls_back_partial_rows() {
 #[test]
 fn interrupted_predecessors_have_resume_data_and_no_process_identity() {
     let fixture = Fixture::new();
+    let generation = fixture.source.join("codex-native-homes/generation");
+    fs::set_permissions(
+        generation.join("sessions"),
+        fs::Permissions::from_mode(0o750),
+    )
+    .unwrap();
+    fs::set_permissions(
+        generation.join("state_5.sqlite"),
+        fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
+    let unused = fixture.source.join("codex-native-homes/unused-generation");
+    fs::create_dir_all(&unused).unwrap();
+    fs::write(unused.join("do-not-copy"), "unrelated session").unwrap();
     import(&fixture.options(FailurePoint::None)).unwrap();
     let db = fixture.imported();
     let mut query = db.prepare("SELECT r.run_id,s.engine,s.cwd,s.session_id,s.metadata,a.request FROM runs r JOIN sessions s USING(run_id) JOIN attempts a USING(attempt_id) WHERE a.phase='terminal' AND r.finished_at IS NOT NULL AND r.guardian_pid IS NULL AND r.guardian_start IS NULL AND r.unit_name IS NULL AND r.cgroup IS NULL AND r.boot_id IS NULL").unwrap();
@@ -386,15 +434,49 @@ fn interrupted_predecessors_have_resume_data_and_no_process_identity() {
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
     assert_eq!(rows.len(), 2);
-    for (_, engine, cwd, session, metadata, request) in rows {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut adapter = Codex::new(CodexOptions::new(
+        "unused".into(),
+        fixture.source.parent().unwrap().join("unused-owner"),
+        fixture.destination.clone(),
+    ));
+    for (run, engine, cwd, session, metadata, request) in rows {
         assert_eq!(engine, "codex");
         assert_eq!(cwd, fs::canonicalize("/tmp").unwrap().to_str().unwrap());
         assert_eq!(session, "fake-session");
         let metadata: Value = serde_json::from_str(&metadata).unwrap();
-        assert!(metadata.get("pid").is_none());
-        assert!(metadata.get("tmux").is_none());
-        let private = Path::new(metadata["private_home"].as_str().unwrap());
-        assert!(private.starts_with(&fixture.destination));
+        assert_eq!(metadata, json!({}));
+        let directory = fixture.destination.join("runs").join(&run);
+        let checkpoint = Checkpoint::read(&directory).unwrap().unwrap();
+        assert_eq!(checkpoint.run.to_string(), run);
+        assert_eq!(checkpoint.engine, engine);
+        assert_eq!(checkpoint.cwd, Path::new(&cwd));
+        assert_eq!(checkpoint.session.as_deref(), Some(session.as_str()));
+        assert_eq!(checkpoint.head_before.as_deref(), Some("abcdef"));
+        assert_eq!(checkpoint.state, State::Done);
+        assert_eq!(checkpoint.internal_attempt, 1);
+        assert_eq!(checkpoint.started_ms, 0);
+        assert_eq!(checkpoint.live_after.0, 0);
+        assert!(checkpoint.delivery.entries.is_empty());
+        assert_eq!((checkpoint.nudges, checkpoint.compactions), (0, 0));
+        assert!(!checkpoint.reminded);
+        let resolved = runtime
+            .block_on(adapter.session(&session))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.id, session);
+        assert_eq!(resolved.cwd, checkpoint.cwd);
+        let private = adapter.session_home(&session).unwrap().unwrap();
+        assert_eq!(
+            private,
+            fixture
+                .destination
+                .join("codex-native-homes")
+                .join(&session)
+        );
         assert!(
             private
                 .join("sessions/2026/10/03/rollout-fixture-fake-session.jsonl")
@@ -409,13 +491,51 @@ fn interrupted_predecessors_have_resume_data_and_no_process_identity() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(Path::new(&rollout).starts_with(private));
+        assert!(Path::new(&rollout).starts_with(&private));
         assert!(Path::new(&rollout).exists());
         assert!(!private.join("config.toml").exists());
         assert!(!private.join("auth.json").exists());
+        assert!(!private.join("session.json").exists());
+        assert!(!fixture.destination.join("engine-homes").exists());
+        assert!(
+            !fixture
+                .destination
+                .join("codex-native-homes/unused-generation")
+                .exists()
+        );
+        assert_eq!(
+            fs::metadata(private.join("sessions"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o750
+        );
+        assert_eq!(
+            fs::metadata(private.join("state_5.sqlite"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        assert_eq!(
+            fs::metadata(directory.join("native.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
         let request: Value = serde_json::from_str(&request).unwrap();
         assert_eq!(request["provenance"]["head_before"], "abcdef");
         assert_eq!(request["inputs"]["cwd"], cwd);
+        let attempt: String = db
+            .query_row("SELECT attempt_id FROM runs WHERE run_id=?1", [&run], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(checkpoint.attempt.to_string(), attempt);
         if request["item_count"].is_number() {
             assert_eq!(request["item_count"], 2);
             assert_eq!(request["inputs"]["spec"], "second");
@@ -429,6 +549,186 @@ fn interrupted_predecessors_have_resume_data_and_no_process_identity() {
         json_query(&db, "SELECT outputs FROM submissions WHERE step_id='work'")["final"],
         "submitted progress"
     );
+}
+
+#[test]
+fn external_predecessors_resolve_through_their_native_adapters() {
+    for engine in ["claude", "devin"] {
+        for scenario in [
+            "valid",
+            "missing",
+            "cwd_mismatch",
+            "unsupported_schema",
+            "escaping_transcript",
+            "missing_cwd",
+        ] {
+            if (engine == "claude" && scenario == "unsupported_schema")
+                || (engine == "devin" && scenario == "escaping_transcript")
+            {
+                continue;
+            }
+            let fixture = Fixture::new();
+            let owner = fixture.source.parent().unwrap().join("owner");
+            let cwd = if scenario == "missing_cwd" {
+                owner.join("missing-cwd")
+            } else {
+                fs::canonicalize("/tmp").unwrap()
+            };
+            let session = "imported-external-session";
+            let claude_home = owner.join("claude");
+            let data_home = owner.join("data");
+            if engine == "claude" {
+                let project = claude_home.join("projects/scratch");
+                fs::create_dir_all(&project).unwrap();
+                fs::write(
+                    project.join(format!("{session}.jsonl")),
+                    format!("{}\n", json!({"type":"user","cwd":cwd,"sessionId":session})),
+                )
+                .unwrap();
+            } else {
+                fs::create_dir_all(data_home.join("devin/cli")).unwrap();
+                let db = Connection::open(data_home.join("devin/cli/sessions.db")).unwrap();
+                db.execute_batch(
+                    "CREATE TABLE sessions(id TEXT PRIMARY KEY,working_directory TEXT);",
+                )
+                .unwrap();
+                db.execute(
+                    "INSERT INTO sessions VALUES(?1,?2)",
+                    (session, cwd.to_str().unwrap()),
+                )
+                .unwrap();
+            }
+            for run in ["scalar-run", "scatter-busy"] {
+                fs::write(fixture.source.join("projects/fixture/runs").join(run).join("native.json"), json!({"engine":engine,"session":session,"cwd":cwd,"git":{"head_before":"original-head","head_after":"later-head"},"final":"saved progress","pid":999999}).to_string()).unwrap();
+            }
+            let transcript = claude_home
+                .join("projects/scratch")
+                .join(format!("{session}.jsonl"));
+            if engine == "claude" {
+                match scenario {
+                    "missing" => fs::remove_file(&transcript).unwrap(),
+                    "cwd_mismatch" => {
+                        fs::write(&transcript, format!("{}\n", json!({"cwd":fixture.source})))
+                            .unwrap()
+                    }
+                    "escaping_transcript" => {
+                        let outside = owner.join("outside.jsonl");
+                        fs::rename(&transcript, &outside).unwrap();
+                        std::os::unix::fs::symlink(outside, &transcript).unwrap();
+                    }
+                    _ => {}
+                }
+            } else {
+                let db = Connection::open(data_home.join("devin/cli/sessions.db")).unwrap();
+                match scenario {
+                    "missing" => {
+                        db.execute("DELETE FROM sessions", []).unwrap();
+                    }
+                    "cwd_mismatch" => {
+                        db.execute(
+                            "UPDATE sessions SET working_directory=?1",
+                            [fixture.source.to_str().unwrap()],
+                        )
+                        .unwrap();
+                    }
+                    "unsupported_schema" => db.execute_batch("PRAGMA user_version=7;").unwrap(),
+                    _ => {}
+                }
+            }
+            let before = fingerprints(&owner);
+            let source_before = fingerprints(&fixture.source);
+            let output = Command::new(env!("CARGO_BIN_EXE_sluice"))
+                .arg("import-python-home")
+                .arg(&fixture.source)
+                .arg(&fixture.destination)
+                .arg("--staging")
+                .arg(&fixture.staging)
+                .env("HOME", &owner)
+                .env("CLAUDE_CONFIG_DIR", &claude_home)
+                .env("XDG_DATA_HOME", &data_home)
+                .output()
+                .unwrap();
+            assert_eq!(before, fingerprints(&owner));
+            assert_eq!(source_before, fingerprints(&fixture.source));
+            if !["valid", "missing_cwd"].contains(&scenario) {
+                assert!(!output.status.success(), "{engine} accepted {scenario}");
+                assert!(!fixture.destination.exists());
+                let error = String::from_utf8_lossy(&output.stderr);
+                let expected = match scenario {
+                    "missing" => "engine session is missing",
+                    "cwd_mismatch" => "session cwd differs",
+                    "unsupported_schema" => "unsupported Devin sessions.db schema",
+                    "escaping_transcript" => "session transcript escapes home",
+                    _ => unreachable!(),
+                };
+                assert!(error.contains(expected), "{error}");
+                continue;
+            }
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["sessions_copied"], 2);
+            assert_eq!(report["session_imports"].as_array().unwrap().len(), 2);
+            if scenario == "missing_cwd" {
+                assert!(!cwd.exists());
+                assert!(report["exceptions"].as_array().unwrap().iter().any(|e| {
+                    e["resume_validation_error"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("cwd is missing"))
+                }));
+            }
+            assert!(!fixture.destination.join("codex-native-homes").exists());
+            let db = fixture.imported();
+            let runs: Vec<String> = db
+                .prepare("SELECT run_id FROM sessions WHERE engine=?1")
+                .unwrap()
+                .query_map([engine], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert_eq!(runs.len(), 2);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            for run in runs {
+                let checkpoint = Checkpoint::read(&fixture.destination.join("runs").join(run))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(checkpoint.engine, engine);
+                assert_eq!(checkpoint.cwd, cwd);
+                assert_eq!(checkpoint.session.as_deref(), Some(session));
+                assert_eq!(checkpoint.head_before.as_deref(), Some("original-head"));
+                assert_eq!(checkpoint.final_text, "saved progress");
+                assert_eq!(checkpoint.state, State::Done);
+                let resolved = if engine == "claude" {
+                    let mut adapter = Claude::new(
+                        "unused".into(),
+                        claude_home.clone(),
+                        "unused".into(),
+                        checkpoint.run,
+                    );
+                    if scenario == "missing_cwd" {
+                        assert!(runtime.block_on(adapter.session(session)).is_err());
+                        adapter.recorded_session(session).unwrap().unwrap()
+                    } else {
+                        runtime.block_on(adapter.session(session)).unwrap().unwrap()
+                    }
+                } else {
+                    let mut adapter = Devin::new(DevinOptions {
+                        data_home: data_home.clone(),
+                        ..Default::default()
+                    });
+                    runtime.block_on(adapter.session(session)).unwrap().unwrap()
+                };
+                assert_eq!(resolved.id, session);
+                assert_eq!(resolved.cwd, cwd);
+            }
+        }
+    }
 }
 
 struct ImportHooks;
@@ -545,9 +845,10 @@ fn feedback_retry_selects_imported_prev_run_and_never_reserves_a_good_scatter_it
         .build()
         .unwrap();
     let writer = sluice_store::Writer::open(&fixture.destination).unwrap();
+    let imported_home = fixture.destination.clone();
     runtime
         .block_on(
-            writer.write(sluice_store::RetrySafety::NonIdempotent, |tx| {
+            writer.write(sluice_store::RetrySafety::NonIdempotent, move |tx| {
                 use sluice_model::{
                     commands::{StepRetry, StepSelection},
                     ids::{AttemptId, ProjectId, ProjectSelector, Revision, RunId},
@@ -641,6 +942,28 @@ fn feedback_retry_selects_imported_prev_run_and_never_reserves_a_good_scatter_it
                     )?;
                     assert_eq!(reservation.prev_run.unwrap().to_string(), prior);
                     assert!(reservation.messages.through > reservation.messages.after);
+                    let checkpoint =
+                        Checkpoint::read(&imported_home.join("runs").join(&prior))?.unwrap();
+                    let previous = sluice_agents::supervisor::PreviousSession {
+                        engine: checkpoint.engine,
+                        cwd: checkpoint.cwd.clone(),
+                        session: checkpoint.session,
+                    };
+                    let assigned = sluice_process::socket::AssignedRange {
+                        after: sluice_model::ids::MessageId(reservation.messages.after),
+                        through: sluice_model::ids::MessageId(reservation.messages.through),
+                    };
+                    assert_eq!(
+                        sluice_agents::supervisor::select_session(
+                            None,
+                            Some(&previous),
+                            "codex",
+                            &checkpoint.cwd,
+                            assigned
+                        )
+                        .as_deref(),
+                        Some("fake-session")
+                    );
                 }
                 let state = sluice_store::plans::read_state(tx.sql(), project)?;
                 let step: sluice_model::ids::StepId = "scatter".parse().unwrap();
@@ -770,10 +1093,86 @@ fn never_executes_converted_scripts_and_wires_the_cli_mode() {
 
 #[test]
 fn missing_published_required_file_prevents_idempotent_success() {
+    for path in [
+        ".env",
+        "codex-native-sessions/fake-session.json",
+        "codex-native-homes/fake-session/state_5.sqlite",
+        "checkpoint",
+    ] {
+        let fixture = Fixture::new();
+        import(&fixture.options(FailurePoint::None)).unwrap();
+        let path = if path == "checkpoint" {
+            let run: String = fixture
+                .imported()
+                .query_row("SELECT run_id FROM sessions LIMIT 1", [], |r| r.get(0))
+                .unwrap();
+            fixture
+                .destination
+                .join("runs")
+                .join(run)
+                .join("native.json")
+        } else {
+            fixture.destination.join(path)
+        };
+        fs::remove_file(path).unwrap();
+        assert!(import(&fixture.options(FailurePoint::None)).is_err());
+    }
+}
+
+#[test]
+fn interrupted_sessionless_agent_keeps_a_native_checkpoint() {
     let fixture = Fixture::new();
-    import(&fixture.options(FailurePoint::None)).unwrap();
-    fs::remove_file(fixture.destination.join(".env")).unwrap();
-    assert!(import(&fixture.options(FailurePoint::None)).is_err());
+    for run in ["scalar-run", "scatter-busy"] {
+        fs::write(
+            fixture
+                .source
+                .join("projects/fixture/runs")
+                .join(run)
+                .join("native.json"),
+            json!({"engine":"codex","cwd":"/tmp","head_before":"baseline","session":null})
+                .to_string(),
+        )
+        .unwrap();
+    }
+    let report = import(&fixture.options(FailurePoint::None)).unwrap();
+    assert_eq!(report["sessions_copied"], 0);
+    let db = fixture.imported();
+    let runs: Vec<String> = db
+        .prepare("SELECT run_id FROM runs WHERE json_extract(result,'$.status')='failed'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(runs.len(), 2);
+    for run in runs {
+        let checkpoint = Checkpoint::read(&fixture.destination.join("runs").join(run))
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.session, None);
+        assert_eq!(checkpoint.head_before.as_deref(), Some("baseline"));
+        assert_eq!(checkpoint.state, State::Done);
+    }
+    assert!(!fixture.destination.join("codex-native-homes").exists());
+}
+
+#[test]
+fn required_codex_state_symlinks_are_refused() {
+    for relative in [
+        "state_5.sqlite",
+        "sessions/2026/10/03/rollout-fixture-fake-session.jsonl",
+    ] {
+        let fixture = Fixture::new();
+        let original = fixture
+            .source
+            .join("codex-native-homes/generation")
+            .join(relative);
+        let outside = fixture.source.parent().unwrap().join("outside-state");
+        fs::rename(&original, &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &original).unwrap();
+        assert!(import(&fixture.options(FailurePoint::None)).is_err());
+        assert!(!fixture.destination.exists());
+    }
 }
 
 #[test]
@@ -871,6 +1270,15 @@ fn missing_cwd_is_reported_without_losing_the_checkpoint_or_substituting_a_direc
         2
     );
     assert!(!missing.exists());
+    let run: String = fixture
+        .imported()
+        .query_row("SELECT run_id FROM sessions LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    let checkpoint = Checkpoint::read(&fixture.destination.join("runs").join(run))
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.cwd, missing);
+    assert_eq!(checkpoint.session.as_deref(), Some("fake-session"));
 }
 
 #[test]

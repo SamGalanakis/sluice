@@ -732,6 +732,23 @@ impl Claude {
         &self,
         session: &str,
     ) -> Result<Option<(PathBuf, SessionMetadata)>, EngineError> {
+        self.find_recorded_session(session)?
+            .map(|(path, mut metadata)| {
+                metadata.cwd = fs::canonicalize(metadata.cwd).map_err(io_error)?;
+                Ok((path, metadata))
+            })
+            .transpose()
+    }
+    /// Read the recorded cwd even if it has disappeared, for paused import diagnostics.
+    pub fn recorded_session(&self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
+        Ok(self
+            .find_recorded_session(session)?
+            .map(|(_, metadata)| metadata))
+    }
+    fn find_recorded_session(
+        &self,
+        session: &str,
+    ) -> Result<Option<(PathBuf, SessionMetadata)>, EngineError> {
         protocol::session_id(session)?;
         let projects = self.home.join("projects");
         let entries = match fs::read_dir(&projects) {
@@ -759,7 +776,7 @@ impl Claude {
                 let before = tail.offset();
                 for record in tail.read()? {
                     if let Some(cwd) = record["cwd"].as_str() {
-                        let cwd = fs::canonicalize(cwd).map_err(io_error)?;
+                        let cwd = PathBuf::from(cwd);
                         return Ok(Some((
                             path,
                             SessionMetadata {
