@@ -101,3 +101,81 @@ keys or signals. JSON evidence goes under `target/p3-00-evidence` by default.
 This proves host prerequisites and the pinned tmux's containment. Guardian
 crash/reconciliation and engine admission belong to the subsequent P3 units
 and G4. They must pass before live engines connect.
+
+## Process ownership API
+
+`TransientService::for_run(RunId)` reserves `sluice-run-<UUID>.service`.
+`for_test` uses `sluice-test-<UUID>.service`. Both start through argument-safe
+`systemd-run --user` with `Delegate=yes`, `KillMode=control-group`,
+`Restart=no`, and a description. `start_once` reserves its in-memory attempt
+before the first await and reconciles every ambiguous command result by that
+same unit name. `StartOutcome::Uncertain` never permits another launch.
+The coordinator must persist its spawn-attempted claim before calling this
+API and use `adopt` when reconstructing a production handle. Unit queries,
+stop and reset use bounded `systemctl` commands.
+
+Open the reconciled service cgroup while it exists and retain the `Cgroup`
+handle. Operations resolve against its pinned directory descriptor, so a
+removed service can be proven empty without reopening a replacement at the
+same path. `RunCgroups::create` creates `control`, moves the guardian there,
+and enables delegated `pids` before creating `payload`. `invocation` creates
+an exclusive `payload/<InvocationId>` leaf; duplicate IDs fail.
+The caller must own the service it supplies. Sluice service name validation
+prevents using an unrelated root, but is not an admission capability.
+
+The executable routes its internal `payload-exec` mode to
+`launcher::payload_exec_main(args, dispatch)` before executing any fn. Its
+arguments are a fresh nonce, a barrier timeout in milliseconds, and dispatcher
+arguments. `PreparedLaunch::spawn` uses the same executable with no initial
+arguments, preserves its command environment/cwd/stdout/stderr, and installs
+an inherited socketpair as stdin. There is no pre-exec stop or callback.
+The post-exec launcher announces nonce and process identity and blocks.
+`continue_in` verifies placement, calls the guardian's durable recording
+closure, rechecks cancellation and grants continuation. The launcher verifies
+the placed identity, replaces stdin with `/dev/null`, acknowledges
+`RunStarted`, closes the barrier descriptor and invokes the injected dispatcher.
+The dispatcher can exec uv or run a Rust fn; it must explicitly configure
+payload input if needed. No payload inherits the barrier socket.
+
+Spawn and barrier calls are blocking and belong on a dedicated thread or
+`spawn_blocking`; the guardian must serialize grant delivery with cancellation
+state transitions. A recording failure or pre-grant cancellation kills and
+reaps the launcher without dispatch. A grant/acknowledgement failure can have
+an unknown dispatch outcome: the API kills the leaf, and the guardian must
+still prove cleanup before releasing holds. It must never retry that executor
+launch. `RunningPayload` owns the child wait and original pidfd; its handle is
+not an invocation cleanup proof.
+
+`ProcessIdentity` contains PID, procfs start time, boot ID and cgroup path.
+`OwnedProcess` checks the recorded generation on both sides of opening a
+pidfd. It signals only that descriptor, and pidfd polling distinguishes exited
+processes, including zombies, from live ones. Procfs descendant and CPU
+snapshots include waited-child counters and exclude roots/zombies. Detached
+or reparented work must also be observed through cgroup membership.
+
+After closing admission, `stop_invocation` sends TERM through pidfds, waits
+five seconds by default, escalates through recursive `cgroup.kill`, and
+returns `EmptyProof` only after `cgroup.events` reports `populated 0`.
+`StopPolicy` permits shorter test grace periods. `stop_run`, called outside
+the service, reconciles its cgroup, stops/reset-fails the unit and proves the
+pinned service subtree empty. `wait_owned_gone` also proves every recorded
+pidfd exited. Errors and timeouts retain resource holds.
+
+`FileLock::try_acquire` holds a flock descriptor and records project/run plus
+PID/start-time/boot metadata. Conflicts return the holder after matching its
+metadata to the kernel's `/proc/locks` flock owner and live identity. A short
+flock on the adjacent `<lock>.publish` file serializes acquisition/publication
+with conflict reads, including successive acquisitions by the same process.
+Initialization races retry for one second; unverifiable metadata returns an
+error rather than naming a stale holder. Both lock files must remain on the
+same inode and must never be unlinked. These Linux primitives use the workspace's pinned Rust
+1.97.0, rustix 1.1.5 with the local `stdio` feature, procfs 0.18.0 and fs4 1.1.0.
+
+The P3.01 ignored host tests extend the artifact gates with the actual
+post-exec fixture mode, cancellation/record-failure injection, exclusive
+invocation leaves, TERM-resistant double-fork work, private tmux server/pane,
+setsid children, a mock app-server child, and guardian SIGKILL. They observe
+all identities for at least 3.2 seconds and require recursive emptiness and
+pidfd exit after cleanup. Every disposable service has a stop/reset drop
+guard. Build the fixture with the workspace/all-target test recipe before
+running these gates. JSON evidence is under `target/p3-01-evidence`.

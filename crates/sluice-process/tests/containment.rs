@@ -512,3 +512,244 @@ fn service_worker() {
         thread::sleep(Duration::from_millis(100));
     }
 }
+
+// P3.01 exercises the production ownership API, in addition to P3.00's
+// intentionally independent positive and negative artifact probes above.
+struct OwnershipUnit(sluice_process::systemd::TransientService);
+impl Drop for OwnershipUnit {
+    fn drop(&mut self) {
+        for operation in ["stop", "reset-failed"] {
+            let _ = systemctl(operation, self.0.name());
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "delegated systemd and approved private tmux required"]
+async fn containment_invocation_cleanup_proves_detached_and_tmux_gone() {
+    ownership_fixture(false).await.unwrap();
+}
+#[tokio::test]
+#[ignore = "delegated systemd and approved private tmux required"]
+async fn containment_guardian_kill_proves_service_and_descendants_gone() {
+    ownership_fixture(true).await.unwrap();
+}
+async fn ownership_fixture(kill_guardian: bool) -> io::Result<()> {
+    use sluice_model::ids::RunId;
+    use sluice_process::{
+        cgroup::Cgroup,
+        identity::OwnedProcess,
+        signals::{stop_run, wait_owned_gone},
+        systemd::{ServiceCommand, StartOutcome, TransientService},
+    };
+    let scratch = tempfile::Builder::new()
+        .prefix("sluice-test-ownership-")
+        .tempdir()?;
+    fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700))?;
+    let prefix = std::env::var_os("SLUICE_PRIVATE_TMUX_PREFIX")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_prefix);
+    ApprovedTmux::load(&prefix).await?;
+    let binary = std::env::var_os("SLUICE_FIXTURE_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("fixture")
+        });
+    let mut unit = OwnershipUnit(TransientService::for_test(RunId::new()));
+    let mut spec = ServiceCommand::new(std::env::current_exe()?);
+    spec.args = ["--exact", "ownership_worker", "--ignored", "--nocapture"]
+        .map(Into::into)
+        .to_vec();
+    spec.cwd = Some(scratch.path().into());
+    for (key, value) in [
+        (
+            "SLUICE_TEST_OWNERSHIP_DIR",
+            scratch.path().as_os_str().to_owned(),
+        ),
+        ("SLUICE_PRIVATE_TMUX_PREFIX", prefix.into_os_string()),
+        ("SLUICE_FIXTURE_BINARY", binary.into_os_string()),
+        (
+            "SLUICE_TEST_KILL_GUARDIAN",
+            kill_guardian.to_string().into(),
+        ),
+    ] {
+        spec.env.insert(key.into(), value);
+    }
+    let outcome = unit.0.start_once(&spec).await?;
+    let StartOutcome::Confirmed { state, .. } = outcome else {
+        return Err(io::Error::other(format!("{outcome:?}")));
+    };
+    let root = Cgroup::open_service(
+        state
+            .cgroup
+            .as_deref()
+            .ok_or_else(|| io::Error::other("missing service cgroup"))?,
+    )?;
+    let mut guardian = OwnedProcess::capture(
+        state
+            .main_pid
+            .ok_or_else(|| io::Error::other("missing guardian pid"))?,
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !scratch.path().join("observed").exists() {
+        if Instant::now() >= deadline || unit.0.query().await?.stopped() {
+            return Err(io::Error::other(format!(
+                "ownership worker failed in {}",
+                unit.0.name()
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let evidence: serde_json::Value =
+        serde_json::from_slice(&fs::read(scratch.path().join("ownership.json"))?)?;
+    let guardian_identity = guardian.refresh()?.clone();
+    let mut tracked = Vec::new();
+    if kill_guardian {
+        for identity in evidence["delayed"]
+            .as_array()
+            .ok_or_else(|| io::Error::other("missing evidence"))?
+        {
+            let id = serde_json::from_value::<sluice_process::identity::ProcessIdentity>(
+                identity["identity"].clone(),
+            )?;
+            tracked.push(OwnedProcess::open(&id)?);
+        }
+        guardian.signal(Signal::KILL)?;
+        wait_owned_gone(&tracked, Duration::from_secs(10)).await?;
+    }
+    let proof = stop_run(&unit.0, &root, Duration::from_secs(5)).await?;
+    assert!(!root.populated()?);
+    assert_eq!(proof.cgroup(), root.path());
+    assert!(guardian.exited()?);
+    let mut evidence = evidence;
+    evidence["unit"] = unit.0.name().into();
+    evidence["guardian_identity"] = serde_json::to_value(guardian_identity)?;
+    evidence["invocation_empty_before_stop"] = evidence["invocation_empty"].clone();
+    evidence["invocation_empty"] = true.into();
+    evidence["service_empty"] = true.into();
+    evidence["guardian_exited"] = guardian.exited()?.into();
+    evidence["owned_gone"] = true.into();
+    let suffix = if kill_guardian {
+        "guardian-kill"
+    } else {
+        "invocation-cleanup"
+    };
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/p3-01-evidence");
+    fs::create_dir_all(&dir)?;
+    fs::write(
+        dir.join(format!("{suffix}.json")),
+        serde_json::to_vec_pretty(&evidence)?,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&evidence)?);
+    Ok(())
+}
+
+#[test]
+#[ignore = "internal P3.01 service worker"]
+fn ownership_worker() {
+    use sluice_model::ids::InvocationId;
+    use sluice_process::{
+        cgroup::{Cgroup, RunCgroups},
+        identity::OwnedProcess,
+        signals::{StopPolicy, stop_invocation, wait_owned_gone},
+        spawn::PreparedLaunch,
+    };
+    let Some(home) = std::env::var_os("SLUICE_TEST_OWNERSHIP_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let prefix = PathBuf::from(std::env::var_os("SLUICE_PRIVATE_TMUX_PREFIX").unwrap());
+        let tmux = ApprovedTmux::load(&prefix).await.unwrap();
+        let mut guardian = OwnedProcess::capture(std::process::id()).unwrap();
+        let service = Cgroup::open_service(&guardian.identity().cgroup).unwrap();
+        let groups = RunCgroups::create(service, &mut guardian).unwrap();
+        let leaf = groups.invocation(InvocationId::new()).unwrap();
+        fs::write(home.join("pane.sh"), "#!/bin/sh\necho $$ > pane.pid\n/usr/bin/sleep 120 &\necho $! > sleep.pid\n/usr/bin/setsid /usr/bin/sleep 120 &\necho $! > setsid.pid\nwait\n").unwrap();
+        // Fixed fixture script. No shell-generated names, paths or payload argv.
+        fs::write(home.join("payload.py"), r#"import os, signal, subprocess, sys, time
+from pathlib import Path
+Path('executor.pid').write_text(str(os.getpid()))
+first = os.fork()
+if first == 0:
+    os.setsid()
+    second = os.fork()
+    if second != 0:
+        os._exit(0)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    Path('doublefork.pid').write_text(str(os.getpid()))
+    while True:
+        time.sleep(1)
+os.waitpid(first, 0)
+env = {k: v for k, v in os.environ.items() if k not in ('TMUX', 'TMUX_PANE')}
+server = subprocess.Popen([sys.argv[1], '-D', '-S', 'tmux.sock', '-f', '/dev/null'], env=env)
+Path('server.pid').write_text(str(server.pid))
+app = subprocess.Popen(['/usr/bin/sleep', '120'])
+Path('app.pid').write_text(str(app.pid))
+deadline = time.monotonic() + 5
+while not Path('tmux.sock').exists():
+    assert time.monotonic() < deadline
+    time.sleep(.01)
+subprocess.run([sys.argv[1], '-S', 'tmux.sock', '-f', '/dev/null', 'new-session', '-d', '-s', 'ownership-fixture', '--', '/bin/sh', 'pane.sh'], env=env, check=True)
+while not Path('finish').exists():
+    time.sleep(.01)
+"#).unwrap();
+        let binary = PathBuf::from(std::env::var_os("SLUICE_FIXTURE_BINARY").unwrap());
+        let mut command = Command::new(binary); command.current_dir(&home).env("SLUICE_HOME", &home);
+        let args = vec!["exec".into(), "/usr/bin/python3".into(), home.join("payload.py").into_os_string(), tmux.binary().as_os_str().to_owned()];
+        let prepared = PreparedLaunch::spawn(&mut command, &args, Duration::from_secs(5)).unwrap();
+        let mut running = prepared.continue_in(&leaf, &tokio_util::sync::CancellationToken::new(), |id| {
+            fs::write(home.join("recorded.json"), serde_json::to_vec(id)?)
+        }).unwrap();
+        let roles = ["executor", "server", "pane", "sleep", "setsid", "doublefork", "app"];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut tracked = Vec::new();
+        loop {
+            if tracked.len() == roles.len() { break; }
+            assert!(Instant::now() < deadline, "payload identities never ready");
+            for role in roles.iter().skip(tracked.len()) {
+                let Ok(pid) = fs::read_to_string(home.join(format!("{role}.pid"))) else { break };
+                let owned = OwnedProcess::capture(match pid.trim().parse() { Ok(pid) => pid, Err(_) => break }).unwrap();
+                let observation = sluice_process::proc::observe(owned.identity().pid).unwrap();
+                if *role == "setsid" && observation.session != owned.identity().pid as i32 { break; }
+                assert_eq!(owned.identity().cgroup, leaf.path()); tracked.push(owned);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let sample = || tracked.iter().zip(roles).map(|(process, role)| {
+            let observation = sluice_process::proc::observe(process.identity().pid).unwrap();
+            assert_eq!(observation.identity.cgroup, leaf.path());
+            serde_json::json!({"role":role,"identity":observation.identity,"session":observation.session,"parent":observation.parent})
+        }).collect::<Vec<_>>();
+        let immediate = sample(); let observed = Instant::now();
+        tokio::time::sleep(Duration::from_millis(3200)).await;
+        let delayed = sample();
+        let observation_delay_ms = observed.elapsed().as_millis();
+        let tree = sluice_process::proc::descendants(&[running.process().identity().clone()]).unwrap();
+        assert!(tree.iter().any(|p| p.identity.pid == tracked[1].identity().pid));
+        assert!(!tree.iter().any(|p| p.identity.pid == tracked[5].identity().pid), "double-fork should have reparented");
+        let kill = std::env::var("SLUICE_TEST_KILL_GUARDIAN").unwrap() == "true";
+        let proof = if !kill {
+            // A successful executor can leave detached work behind. Cleanup
+            // must prove descendants gone before terminal success is allowed.
+            fs::write(home.join("finish"), b"finish").unwrap();
+            assert!(running.wait().unwrap().success());
+            assert!(leaf.populated().unwrap(), "executor completion is not cleanup");
+            let proof = stop_invocation(&leaf, StopPolicy { term_grace: Duration::from_millis(100), kill_timeout: Duration::from_secs(5) }).await.unwrap();
+            assert!(proof.escalated(), "double-fork ignores TERM");
+            wait_owned_gone(&tracked, Duration::from_secs(5)).await.unwrap();
+            assert!(!leaf.populated().unwrap());
+            Some(proof)
+        } else { None };
+        let evidence = serde_json::json!({"service_cgroup":groups.service.path(),"control_cgroup":groups.control.path(),"payload_cgroup":leaf.path(),"observation_delay_ms":observation_delay_ms,"immediate":immediate,"delayed":delayed,"executor_completed_normally":!kill,"invocation_empty":!leaf.populated().unwrap(),"invocation_proof":proof});
+        fs::write(home.join("ownership.json"), serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+        fs::write(home.join("observed"), b"observed").unwrap();
+        loop { tokio::time::sleep(Duration::from_secs(1)).await; }
+    });
+}

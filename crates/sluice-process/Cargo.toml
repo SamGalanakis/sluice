@@ -9,7 +9,7 @@ license.workspace = true
 sluice-model.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["stdio"] }
 procfs.workspace = true
 fs4.workspace = true
 bytes.workspace = true
