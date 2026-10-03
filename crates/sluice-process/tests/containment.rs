@@ -329,8 +329,10 @@ async fn run_fixture(expect_migration: bool) -> io::Result<Evidence> {
         ));
     }
     let immediate = fixture.sample()?;
+    // Compare fresh samples: identities recorded from pid files predate setsid.
     assert_ne!(
-        fixture.tracked["detached"].identity.session, fixture.tracked["pane"].identity.session,
+        fixture.tracked["detached"].sample()?.session,
+        fixture.tracked["pane"].sample()?.session,
         "setsid child must have a different session identity"
     );
     let observed = Instant::now();
