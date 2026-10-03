@@ -1001,3 +1001,168 @@ async fn fake_same_run_transient_after_commit_preserves_session_and_original_bas
     );
     h.cleanup().await;
 }
+
+#[path = "acceptance/support.rs"]
+mod acceptance;
+
+#[tokio::test]
+async fn supervisor_fresh_required_submit() {
+    acceptance::scenario("fresh_required_submit", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_busy_submitted() {
+    acceptance::scenario("busy_submitted", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_background() {
+    acceptance::scenario("background", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_quiet() {
+    acceptance::scenario("quiet", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_compaction() {
+    acceptance::scenario("compaction", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_addressed_live_message() {
+    acceptance::scenario("addressed_live_message", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_feedback_resume() {
+    acceptance::scenario("feedback_resume", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_missing_outputs() {
+    acceptance::scenario("missing_outputs", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_nudge() {
+    acceptance::scenario("nudge", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_unknown_acceptance() {
+    acceptance::scenario("unknown_acceptance", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_cancel_backoff() {
+    acceptance::scenario("cancel_backoff", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_retry_exhaustion() {
+    acceptance::scenario("retry_exhaustion", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_session_cwd_mismatch() {
+    acceptance::scenario("session_cwd_mismatch", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_engine_mismatch() {
+    acceptance::scenario("engine_mismatch", "claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
+    let mut h = Harness::new(json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
+    let hook = h.scratch.0.join("journal-hook");
+    fs::write(&hook, include_str!("acceptance/hook.py")).unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/fixture")
+        .canonicalize()
+        .unwrap();
+    let wrapper = h.scratch.0.join("supervised-claude");
+    fs::write(&wrapper, format!("#!/bin/sh\nexport SLUICE_HOME={}\nexport HOME={}\nexport SLUICE_FAKE_CLAUDE={}\nexec {} claude \"$@\"\n", protocol::shell_quote(&h.scratch.0.to_string_lossy()), protocol::shell_quote(&h.scratch.0.join("home").to_string_lossy()), protocol::shell_quote(&h.scratch.0.join("config.json").to_string_lossy()), protocol::shell_quote(&fixture.to_string_lossy()))).unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut cfg = acceptance::config(&h.scratch.0, "claude");
+    cfg.limits.wall = Duration::from_secs(15);
+    cfg.limits.ready = Duration::from_secs(5);
+    cfg.limits.turn_start = Duration::from_secs(5);
+    cfg.limits.stall = Duration::from_secs(10);
+    cfg.limits.settle = Duration::from_millis(100);
+    let mut adapter = Claude::new(wrapper, h.scratch.0.join("claude"), hook, cfg.run);
+    let directory = cfg.run_dir.clone();
+    let mut host = acceptance::Host {
+        directory: Some(directory.clone()),
+        messages: vec![acceptance::message(1)],
+        ..Default::default()
+    };
+    let result = sluice_agents::supervisor::supervise(
+        cfg.clone(),
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&h.tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(host.submissions["word"], json!("blue"));
+    assert_eq!(host.acks, vec![sluice_model::ids::MessageId(1)]);
+    assert!(
+        fs::read_to_string(directory.join("me.md"))
+            .unwrap()
+            .contains("current acceptance")
+    );
+    assert!(!h.client(&["list-sessions"]).status.success());
+    fs::write(
+        h.scratch.0.join("config.json"),
+        serde_json::to_vec(
+            &json!({"turns":vec![json!({"reply":"resumed","submit":{"word":"blue"}});8]}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    cfg.run = RunId::new();
+    cfg.attempt = sluice_model::ids::AttemptId::new();
+    cfg.invocation = sluice_model::ids::InvocationId::new();
+    cfg.run_dir = h.scratch.0.join("resumed");
+    cfg.previous = Some(sluice_agents::supervisor::PreviousSession {
+        engine: "claude".into(),
+        cwd: cfg.cwd.clone(),
+        session: Some(result.session.clone()),
+    });
+    cfg.assigned.through = sluice_model::ids::MessageId(2);
+    cfg.messages = vec![acceptance::message(2)];
+    let mut host = acceptance::Host {
+        directory: Some(cfg.run_dir.clone()),
+        ..Default::default()
+    };
+    let next = sluice_agents::supervisor::supervise(
+        cfg,
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&h.tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next.session, result.session);
+    assert_eq!(host.acks, vec![sluice_model::ids::MessageId(2)]);
+    h.cleanup().await;
+}
+
+#[tokio::test]
+async fn supervisor_same_run_transient_commits_without_feedback() {
+    acceptance::transient_commits("claude").await;
+}
+
+#[tokio::test]
+async fn supervisor_missing_session_lock_and_cwd() {
+    acceptance::session_policy("claude").await;
+}

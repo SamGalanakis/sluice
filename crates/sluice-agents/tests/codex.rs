@@ -923,3 +923,139 @@ async fn cleanup_after_cancelled_prepare_reaps_auxiliary_child() {
     }
     adapter.close().await.unwrap();
 }
+
+#[path = "acceptance/support.rs"]
+mod acceptance;
+
+#[tokio::test]
+async fn supervisor_fresh_required_submit() {
+    acceptance::scenario("fresh_required_submit", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_busy_submitted() {
+    acceptance::scenario("busy_submitted", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_background() {
+    acceptance::scenario("background", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_quiet() {
+    acceptance::scenario("quiet", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_compaction() {
+    acceptance::scenario("compaction", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_addressed_live_message() {
+    acceptance::scenario("addressed_live_message", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_feedback_resume() {
+    acceptance::scenario("feedback_resume", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_missing_outputs() {
+    acceptance::scenario("missing_outputs", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_nudge() {
+    acceptance::scenario("nudge", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_unknown_acceptance() {
+    acceptance::scenario("unknown_acceptance", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_cancel_backoff() {
+    acceptance::scenario("cancel_backoff", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_retry_exhaustion() {
+    acceptance::scenario("retry_exhaustion", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_session_cwd_mismatch() {
+    acceptance::scenario("session_cwd_mismatch", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_engine_mismatch() {
+    acceptance::scenario("engine_mismatch", "codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_codex_wire_compaction_required_submit_and_cleanup() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "normal");
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd;
+    cfg.run_dir = context.run_dir;
+    cfg.limits.wall = Duration::from_millis(300);
+    let mut host = acceptance::Host::submitted();
+    let directory = cfg.run_dir.clone();
+    let result = acceptance::run(cfg, &mut adapter, &mut host).await.unwrap();
+    assert_eq!(result.session, "fixture-thread");
+    let checkpoint = sluice_agents::supervisor::Checkpoint::read(&directory)
+        .unwrap()
+        .unwrap();
+    assert!(checkpoint.compactions > 0);
+    assert!(
+        checkpoint
+            .delivery
+            .entries
+            .iter()
+            .any(|e| matches!(e.id, InputId::Reprime { .. }))
+    );
+    assert!(adapter.server_pid().is_none());
+    assert_eq!(host.cleanups, 1);
+}
+
+#[tokio::test]
+async fn supervisor_codex_wire_missing_output_and_unknown_acceptance() {
+    for (scenario, expected) in [
+        (
+            "normal",
+            sluice_agents::supervisor::FailureKind::MissingOutputs,
+        ),
+        (
+            "uncertain",
+            sluice_agents::supervisor::FailureKind::UnknownAcceptance,
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let (mut adapter, context) = setup(&scratch, scenario);
+        let mut cfg = acceptance::config(scratch.path(), "codex");
+        cfg.cwd = context.cwd;
+        cfg.run_dir = context.run_dir;
+        cfg.limits.wall = Duration::from_millis(200);
+        let error = acceptance::run(cfg, &mut adapter, &mut acceptance::Host::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, expected);
+        assert!(adapter.server_pid().is_none());
+    }
+}
+
+#[tokio::test]
+async fn supervisor_same_run_transient_commits_without_feedback() {
+    acceptance::transient_commits("codex").await;
+}
+
+#[tokio::test]
+async fn supervisor_missing_session_lock_and_cwd() {
+    acceptance::session_policy("codex").await;
+}

@@ -1,5 +1,7 @@
 //! Native engine supervision and agent builtin composition.
 pub mod delivery;
+pub mod doctor;
+pub use doctor::engine_diagnostics;
 pub mod engines;
 pub mod git;
 pub mod prompt;

@@ -1447,3 +1447,86 @@ async fn supervised_devin(synchronous: bool) {
     assert_eq!(next.session, result.session);
     assert_eq!(host.acks, vec![sluice_model::ids::MessageId(2)]);
 }
+
+#[path = "acceptance/support.rs"]
+mod acceptance;
+
+#[tokio::test]
+async fn supervisor_fresh_required_submit() {
+    acceptance::scenario("fresh_required_submit", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_busy_submitted() {
+    acceptance::scenario("busy_submitted", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_background() {
+    acceptance::scenario("background", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_quiet() {
+    acceptance::scenario("quiet", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_compaction() {
+    acceptance::scenario("compaction", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_addressed_live_message() {
+    acceptance::scenario("addressed_live_message", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_feedback_resume() {
+    acceptance::scenario("feedback_resume", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_missing_outputs() {
+    acceptance::scenario("missing_outputs", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_nudge() {
+    acceptance::scenario("nudge", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_unknown_acceptance() {
+    acceptance::scenario("unknown_acceptance", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_cancel_backoff() {
+    acceptance::scenario("cancel_backoff", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_retry_exhaustion() {
+    acceptance::scenario("retry_exhaustion", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_session_cwd_mismatch() {
+    acceptance::scenario("session_cwd_mismatch", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_engine_mismatch() {
+    acceptance::scenario("engine_mismatch", "devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_same_run_transient_commits_without_feedback() {
+    acceptance::transient_commits("devin").await;
+}
+
+#[tokio::test]
+async fn supervisor_missing_session_lock_and_cwd() {
+    acceptance::session_policy("devin").await;
+}
