@@ -1064,3 +1064,32 @@ async fn supervisor_missing_session_lock_and_cwd() {
 async fn supervisor_predecessor_cwd_mismatch_starts_fresh() {
     acceptance::scenario("predecessor_cwd_mismatch", "codex").await;
 }
+
+// g3-fix owns native generation cloning. Real Codex creates these links in CODEX_HOME/tmp.
+#[tokio::test]
+#[ignore = "g3-fix: native resume rejects real Codex tmp/arg0 executable symlinks"]
+async fn supervisor_codex_resume_with_native_temporary_executable_links() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "normal");
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd.clone();
+    cfg.run_dir = context.run_dir;
+    cfg.limits.wall = Duration::from_millis(300);
+    let first = acceptance::run(cfg, &mut adapter, &mut acceptance::Host::submitted())
+        .await
+        .unwrap();
+    let home = adapter.session_home(&first.session).unwrap().unwrap();
+    let temporary = home.join("tmp/arg0/codex-arg0-fixture");
+    fs::create_dir_all(&temporary).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/true", temporary.join("apply_patch")).unwrap();
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd;
+    cfg.run_dir = scratch.path().join("resumed");
+    cfg.session = Some(first.session.clone());
+    cfg.limits.wall = Duration::from_millis(300);
+    let resumed = acceptance::run(cfg, &mut adapter, &mut acceptance::Host::submitted())
+        .await
+        .unwrap();
+    assert_eq!(resumed.session, first.session);
+    assert!(adapter.server_pid().is_none());
+}

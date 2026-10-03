@@ -1,5 +1,5 @@
-//! Imported-session fixtures are compiled by the agents acceptance executable.
-//! All importer calls use this worktree's absolute binary and synthetic Python homes.
+//! Imported-session fixtures are compiled by the sluice acceptance executable.
+//! Importer calls use this worktree's absolute binary and labelled scratch Python homes.
 use crate::support::Scratch;
 use serde_json::{Value, json};
 use sluice_agents::engines::{

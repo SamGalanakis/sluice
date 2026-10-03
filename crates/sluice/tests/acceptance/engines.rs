@@ -152,6 +152,9 @@ impl Gate {
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         env.extend(BTreeMap::from([
             ("SLUICE_HOME".into(), home.to_string_lossy().into()),
+            ("SLUICE_AGENT_SETTLE_S".into(), "0.3".into()),
+            ("SLUICE_AGENT_GRACE_MIN".into(), "0.02".into()),
+            ("SLUICE_AGENT_WORK_MIN".into(), "0.02".into()),
             ("PATH".into(), path.clone()),
             ("SLUICE_HOST_PATH".into(), path),
             (
@@ -183,6 +186,35 @@ impl Gate {
                 absolute_tool("devin").to_string_lossy().into(),
             ),
         ]));
+        // Foreground private tmux intentionally starts with a cleared environment.
+        // Pin scratch-only defaults at the real executable boundary as well.
+        for engine in ["codex", "claude", "devin"] {
+            let key = format!("SLUICE_{}_BIN", engine.to_uppercase());
+            let binary = env[&key].clone();
+            let wrapper = root.join(format!("private-{engine}"));
+            let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+            let mut script = String::from("#!/bin/sh\nset -e\n");
+            for name in [
+                "HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "XDG_CACHE_HOME",
+                "XDG_STATE_HOME",
+                "SLUICE_HOME",
+            ] {
+                if let Some(value) = env.get(name) {
+                    script.push_str(&format!("export {name}=\"${{{name}:-{}}}\"\n", value));
+                }
+            }
+            script.push_str(&format!(
+                "export PATH={}\nexec {} \"$@\"\n",
+                quote(&env["PATH"]),
+                quote(&binary)
+            ));
+            private_write(&wrapper, script.as_bytes());
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+            env.insert(key, wrapper.to_string_lossy().into());
+        }
         Self {
             home,
             broker: None,
@@ -244,6 +276,7 @@ impl Gate {
         let CommandReply::Data(v)=self.rpc(json!({"command":"status","args":{"project":selector,"selection":{"steps":null,"tags":null}}})) else {panic!("status reply")};
         v.into_value()
     }
+    #[track_caller]
     pub fn wait(&mut self, timeout: Duration, mut f: impl FnMut(&mut Self) -> bool) {
         let deadline = Instant::now() + timeout;
         while !f(self) {
@@ -527,17 +560,17 @@ fn g3(engine: &str) {
     );
 }
 #[test]
-#[ignore = "Real Codex through public agent.run and guardian; privately copied credentials"]
+#[ignore = "g3-fix: real Codex temporary symlinks currently prevent native transient resume"]
 fn g3_codex_fresh_submit_live_feedback_cleanup() {
     g3("codex");
 }
 #[test]
-#[ignore = "Real Claude through public agent.run and guardian; privately copied credentials"]
+#[ignore = "g3-fix: real same-session transient resume currently exits before required submit"]
 fn g3_claude_fresh_submit_live_feedback_cleanup() {
     g3("claude");
 }
 #[test]
-#[ignore = "Real Devin through public agent.run and guardian; privately copied credentials"]
+#[ignore = "g3-fix: resumed real Devin requests interactive command approval"]
 fn g3_devin_fresh_submit_live_feedback_cleanup() {
     g3("devin");
 }
@@ -570,8 +603,9 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
         repo(&cwd);
         let baseline = git(&cwd, &["rev-parse", "HEAD"]);
         let config = scratch.0.join("adapter-fixture.json");
-        let mut turns = vec![json!({"busy_ms":300,"compact":true,"reply":"fixture done"})];
-        turns.extend((0..16).map(|_| json!({"busy_ms":300,"reply":"fixture done"})));
+        let mut turns =
+            vec![json!({"busy_s":0.5,"busy_ms":500,"compact":false,"reply":"fixture done"})];
+        turns.extend((0..16).map(|_| json!({"busy_s":0.5,"busy_ms":500,"reply":"fixture done"})));
         private_write(
             &config,
             &serde_json::to_vec(&json!({"turns":turns,"prompts":scratch.0.join("prompts.jsonl")}))
@@ -583,14 +617,20 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
         } else {
             "FAKE_DEVIN"
         };
+        let codex_tui = if engine == "codex" {
+            "export SLUICE_CODEX_FIXTURE=tui\ncase \"$1\" in -c) exec /usr/bin/sleep 600 ;; esac\n"
+        } else {
+            ""
+        };
         private_write(
             &binary,
             format!(
-                "#!/bin/sh\nset -e\nexport {env_name}='{}'\ncase \"$1\" in --version|--help) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
+                "#!/bin/sh\nset -e\nif [ -n \"${{SLUICE_RUN_DIR:-}}\" ]; then export SLUICE_HOME=\"${{SLUICE_RUN_DIR%/runs/*}}\"; fi\nexport HOME='{owner_home}'\nexport XDG_CONFIG_HOME='{owner_home}/.config'\nexport XDG_DATA_HOME='{owner_home}/.local/share'\n{codex_tui}export {env_name}='{}'\ncase \"$1\" in --version|--help) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
                 config.display(),
                 scratch.0.join("committed").display(),
                 scratch.0.join("committed").display(),
-                workspace().join("target/debug/fixture").display()
+                workspace().join("target/debug/fixture").display(),
+                owner_home = owner.display()
             )
             .as_bytes(),
         );
@@ -625,7 +665,7 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
             "SLUICE_TEST_AGENT_TRANSIENT_MARKER".into(),
             marker.to_string_lossy().into(),
         );
-        gate.env.insert("SLUICE_BACKOFF".into(), "3".into());
+        gate.env.insert("SLUICE_BACKOFF".into(), "15".into());
         gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.05".into());
         gate.boot();
         let CommandReply::Project(project)=gate.rpc(json!({"command":"project_create","args":{"name":"adapter-gate","description":"Public adapter fixture","resources":{},"icon":null,"author":"fixture"}})) else {panic!("project reply")};
@@ -676,6 +716,19 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
                         .sum::<u32>(),
                     1
                 );
+                gate.rpc(json!({"command":"message_post","args":{"project":selector,"body":"Addressed fixture input","thread":"step-work","to":"work","needs_reply":false,"reply_to":null,"answer":null,"title":null,"ui":null,"input":null,"data":null,"from":"fixture","run":null,"author":"fixture"}}));
+                gate.wait(Duration::from_secs(30), |_| {
+                    sluice_agents::supervisor::Checkpoint::read(&directory)
+                        .unwrap()
+                        .is_some_and(|c| {
+                            c.live_after.0 > 0
+                                && c.delivery.entries.iter().any(|e| {
+                                    matches!(e.id, sluice_agents::engines::InputId::Message { .. })
+                                        && e.state
+                                            == sluice_agents::delivery::DeliveryState::Acknowledged
+                                })
+                        })
+                });
             }
             gate.rpc(json!({"command":"step_submit","args":{"project":project.project_id,"step":"work","run":run,"outputs":{"word":word},"author":"fixture"}}));
             let done = step_finished(&mut gate, &selector);

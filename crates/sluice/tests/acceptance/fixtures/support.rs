@@ -9,8 +9,8 @@ pub struct Scratch(pub PathBuf);
 impl Scratch {
     pub fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let p = std::env::temp_dir().join(format!(
-            "sluice-test-cutover-{}-{}",
+        let p = PathBuf::from("/tmp").join(format!(
+            "sluice-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -21,6 +21,33 @@ impl Scratch {
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            let evidence = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/p5-05-evidence")
+                .join(self.0.file_name().unwrap());
+            let _ = fs::create_dir_all(&evidence);
+            for name in [
+                "python-ready.json",
+                "python-cleanup.json",
+                "python-runner.log",
+            ] {
+                if self.0.join(name).is_file() {
+                    let _ = fs::copy(self.0.join(name), evidence.join(name));
+                }
+            }
+            if let Ok(runs) = fs::read_dir(self.0.join("rust-home/runs")) {
+                for run in runs.flatten() {
+                    let dst = evidence.join(run.file_name());
+                    let _ = fs::create_dir_all(&dst);
+                    for name in ["native.json", "stderr-tail.log", "app-server.log"] {
+                        if run.path().join(name).is_file() {
+                            let _ = fs::copy(run.path().join(name), dst.join(name));
+                        }
+                    }
+                }
+            }
+            eprintln!("p5-05 failure evidence: {}", evidence.display());
+        }
         let _ = fs::remove_dir_all(&self.0);
     }
 }
