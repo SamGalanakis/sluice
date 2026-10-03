@@ -500,22 +500,18 @@ async fn owner_actions_send_the_displayed_revision_and_author_through_the_socket
     let id = ProjectId::new();
     let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured = requests.clone();
-    let broker = broker_fixture(home.path(), 3, move |request| {
+    let broker = broker_fixture(home.path(), 2, move |request| {
         captured.lock().unwrap().push(request);
         CommandReply::Ack
     })
     .await;
     let commands =
         http::SocketOwnerCommands(sluice_runtime::client::CoordinatorClient::new(home.path()));
-    for action in [Action::Retry, Action::Cancel, Action::PauseProject] {
+    for action in [Action::Retry, Action::Cancel] {
         commands
             .execute(OwnerCommand {
                 project: id,
-                step: if action == Action::PauseProject {
-                    None
-                } else {
-                    Some("work".parse().unwrap())
-                },
+                step: Some("work".parse().unwrap()),
                 action,
                 revision: 7,
                 message: "continue".into(),
@@ -536,12 +532,4 @@ async fn owner_actions_send_the_displayed_revision_and_author_through_the_socket
         panic!()
     };
     assert_eq!(cancel.expected_rev, Some(sluice_model::ids::Revision(7)));
-    let CommandRequest::ProjectUpdate(update) = &requests[2] else {
-        panic!()
-    };
-    assert_eq!(
-        update.expected_settings_rev,
-        Some(sluice_model::ids::Revision(7))
-    );
-    assert_eq!(update.paused, Some(true));
 }

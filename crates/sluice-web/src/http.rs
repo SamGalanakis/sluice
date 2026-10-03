@@ -441,30 +441,6 @@ impl step::CommandService for SocketOwnerCommands {
                     reason: command.message,
                     author: Some(command.author.into()),
                 }),
-                action => {
-                    let archived = match action {
-                        step::Action::ArchiveProject => Some(true),
-                        step::Action::RestoreProject => Some(false),
-                        _ => None,
-                    };
-                    let paused = match action {
-                        step::Action::PauseProject => Some(true),
-                        step::Action::ResumeProject => Some(false),
-                        _ => None,
-                    };
-                    CommandRequest::ProjectUpdate(ProjectUpdate {
-                        project,
-                        new_name: None,
-                        description: None,
-                        icon: None,
-                        resources: None,
-                        paused,
-                        archived,
-                        expected_settings_rev: Some(Revision(command.revision)),
-                        reason: Some(command.message),
-                        author: Some(command.author.into()),
-                    })
-                }
             };
             self.0.command(request).await?;
             Ok(())
