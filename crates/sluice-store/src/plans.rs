@@ -28,6 +28,127 @@ pub struct PlanContext {
     pub plan: Plan,
 }
 
+/// Store evidence for an age-filtered model prune. Prepare the model edit using
+/// units(), then pass both the edit and this certificate to apply_prune.
+#[derive(Debug, Clone)]
+pub struct PruneEligibility {
+    project: ProjectId,
+    revision: Revision,
+    cutoff: time::OffsetDateTime,
+    units: Vec<UnitName>,
+    results: std::collections::BTreeMap<StepId, ResultId>,
+}
+impl PruneEligibility {
+    pub fn units(&self) -> &[UnitName] {
+        &self.units
+    }
+}
+
+/// Read inside the same snapshot as the model's edit preparation. Each eligible
+/// unit is done and every member's current result was recorded by the cutoff.
+pub fn prune_eligible(
+    c: &Connection,
+    context: &PlanContext,
+    cutoff: time::OffsetDateTime,
+) -> Result<PruneEligibility> {
+    let (rev, doc): (i64, String) = c.query_row(
+        "SELECT rev,doc FROM plans WHERE project_id=?1",
+        [context.project.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if rev != sql_counter(context.revision.0)?
+        || serde_json::from_str::<JsonMap>(&doc)? != *context.plan.document()
+    {
+        return Err(conflict("plan changed before prune preparation"));
+    }
+    let state = read_state(c, context.project)?;
+    let mut evidence = PruneEligibility {
+        project: context.project,
+        revision: context.revision,
+        cutoff,
+        units: vec![],
+        results: Default::default(),
+    };
+    for (name, unit) in context.plan.units() {
+        if !unit.done(&state) {
+            continue;
+        }
+        let mut results = vec![];
+        for step in &unit.steps {
+            let Some((id, recorded_at)) = current_prune_result(c, context.project, step)? else {
+                break;
+            };
+            if recorded_at > cutoff {
+                break;
+            }
+            results.push((step.clone(), id));
+        }
+        if results.len() == unit.steps.len() {
+            evidence.units.push(name.clone());
+            evidence.results.extend(results);
+        }
+    }
+    Ok(evidence)
+}
+
+fn current_prune_result(
+    c: &Connection,
+    project: ProjectId,
+    step: &StepId,
+) -> Result<Option<(ResultId, time::OffsetDateTime)>> {
+    let row: Option<(String, String)> = c.query_row(
+        "SELECT r.result_id,r.recorded_at FROM steps s JOIN step_results r ON r.result_id=s.result_id
+         WHERE s.project_id=?1 AND s.step_id=?2",
+        params![project.to_string(), step.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).optional()?;
+    row.map(|(id, at)| {
+        let id = id
+            .parse()
+            .map_err(|e| StoreError::InvalidDatabase(format!("{e}")))?;
+        let at = time::OffsetDateTime::parse(&at, &time::format_description::well_known::Rfc3339)
+            .map_err(|e| StoreError::InvalidDatabase(e.to_string()))?;
+        Ok((id, at))
+    })
+    .transpose()
+}
+
+/// Apply an age-filtered prune with its original cutoff and frozen result IDs.
+/// A new result or a retried member conflicts even when plan revision is unchanged.
+pub fn apply_prune(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    edit: PreparedEdit,
+    evidence: &PruneEligibility,
+) -> Result<EditResult> {
+    let prune = edit
+        .prune
+        .as_ref()
+        .ok_or_else(|| invalid("edit is not a prune"))?;
+    if evidence.project != project
+        || evidence.revision != edit.expected
+        || prune
+            .units
+            .iter()
+            .any(|unit| !evidence.units.contains(unit))
+    {
+        return Err(conflict(
+            "prune eligibility does not match the prepared edit",
+        ));
+    }
+    for step in &prune.steps {
+        let current = current_prune_result(tx.sql(), project, step)?;
+        if current
+            .is_none_or(|(id, at)| evidence.results.get(step) != Some(&id) || at > evidence.cutoff)
+        {
+            return Err(conflict(format!(
+                "steps.{step}: prune result changed; prepare prune again"
+            )));
+        }
+    }
+    apply_edit(tx, project, edit)
+}
+
 /// The message owner implements this synchronous adapter with its post command.
 /// Validation checks all semantic preconditions without writes. After it succeeds,
 /// post_retry may report storage failures only; the writer then rolls back.
@@ -274,6 +395,35 @@ pub fn apply_edit(
     let current: Value = serde_json::from_str(&doc)?;
     let candidate = serde_json::to_value(edit.plan.document())?;
     let state = read_state(tx.sql(), project)?;
+    if let Some(prune) = &edit.prune {
+        // Retry and manual output writes can change eligibility without a plan edit.
+        // The revision check alone therefore cannot certify a prepared prune.
+        let members: Vec<&str> = prune.steps.iter().map(|id| id.as_str()).collect();
+        let mut query = tx
+            .sql()
+            .prepare("SELECT step_id,unit,status FROM steps WHERE project_id=?1")?;
+        for row in query.query_map([project.to_string()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })? {
+            let (id, unit, status) = row?;
+            let unit = unit.as_deref().unwrap_or(&id);
+            if (members.contains(&id.as_str())
+                || prune.units.iter().any(|name| name.as_str() == unit))
+                && !matches!(status.as_str(), "succeeded" | "skipped")
+            {
+                return Err(conflict(format!(
+                    "unit {unit} is no longer done; prepare prune again"
+                )));
+            }
+        }
+        if prune.steps.iter().any(|id| !state.steps.contains_key(id)) {
+            return Err(conflict("prune member disappeared; prepare prune again"));
+        }
+    }
     for (id, entry) in &state.steps {
         if entry.status != StepStatus::Running {
             continue;

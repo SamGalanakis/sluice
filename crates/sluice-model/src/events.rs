@@ -149,6 +149,13 @@ pub enum Event {
     },
     #[serde(rename = "run.orphan")]
     RunOrphan { run: RunId },
+    #[serde(rename = "run.completion_action.register")]
+    RunCompletionActionRegistered {
+        run: RunId,
+        target: CompletionActionTarget,
+        message: String,
+        author: String,
+    },
     #[serde(rename = "run.completion_action")]
     RunCompletionAction {
         run: RunId,

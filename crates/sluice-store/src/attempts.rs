@@ -79,6 +79,9 @@ pub trait ExecutionHooks: RetryMessages {
         cursor: i64,
         exact: Option<&AssignedRange>,
     ) -> Result<AssignedRange>;
+    /// Called after executing phase and started_at are persisted in this transaction.
+    /// Delegate cursor advancement to messages::advance_cursor; acknowledge invocation
+    /// delivery separately. Hook errors must propagate so all start writes roll back.
     fn started(
         &mut self,
         tx: &mut WriteTransaction<'_>,
@@ -238,6 +241,14 @@ pub fn reserve(
 ) -> Result<Reservation> {
     if let Some(existing) = stored_reservation(tx, &request, context.project)? {
         return Ok(existing);
+    }
+    let mode: String =
+        tx.sql()
+            .query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
+                r.get(0)
+            })?;
+    if mode != "normal" {
+        return Err(plans::conflict("maintenance fences new reservations"));
     }
     plans::check_context(tx, context)?;
     let step = context
@@ -561,7 +572,6 @@ pub fn started(
             })
         },
     )?;
-    hooks.started(tx, id, &range)?;
     tx.sql().execute(
         "UPDATE attempts SET phase='executing' WHERE attempt_id=?1",
         [id.attempt.to_string()],
@@ -570,7 +580,7 @@ pub fn started(
         "UPDATE runs SET started_at=?2 WHERE run_id=?1",
         params![id.run.to_string(), plans::now()?],
     )?;
-    tx.sql().execute("UPDATE steps SET delivery_cursor=max(delivery_cursor,?3) WHERE project_id=?1 AND step_id=?2",params![id.project.to_string(),id.step.as_str(),range.through])?;
+    hooks.started(tx, id, &range)?;
     plans::status_record(
         tx,
         id.project,
@@ -774,15 +784,12 @@ pub fn register_completion_action(
         "UPDATE runs SET completion_action=?2 WHERE run_id=?1",
         params![request.run.to_string(), value.to_string()],
     )?;
-    // The existing authored event carries registration detail without a new event type.
     tx.append_record(
         Some(request.project),
-        Event::ProjectUpdate {
-            fields: vec![
-                format!("run.{}.completion_action", request.run),
-                value.to_string(),
-            ],
-            reason: Some("register conditional retry".into()),
+        Event::RunCompletionActionRegistered {
+            run: request.run,
+            target: request.target,
+            message: request.message,
             author: request.author,
         },
     )?;

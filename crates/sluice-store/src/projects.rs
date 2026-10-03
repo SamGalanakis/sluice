@@ -596,7 +596,17 @@ pub fn project_delete(
             author: request.author,
         },
     )?;
-    for view in ["plan", "messages", "resources", "artifacts"] {
+    for view in [
+        "plan",
+        "messages",
+        "resources",
+        "artifacts",
+        "log",
+        "questions",
+        "edits",
+        "outcomes",
+        "readers",
+    ] {
         tx.changed(Some(id), view);
     }
     tx.changed(None, "maintenance");

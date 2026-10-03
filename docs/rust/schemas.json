@@ -6109,6 +6109,34 @@
               "run": {
                 "$ref": "#/$defs/RunId"
               },
+              "target": {
+                "$ref": "#/$defs/CompletionActionTarget"
+              },
+              "message": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "run.completion_action.register"
+              }
+            },
+            "required": [
+              "kind",
+              "run",
+              "target",
+              "message",
+              "author"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
               "outcome": {
                 "$ref": "#/$defs/CompletionActionOutcome"
               },
@@ -6628,6 +6656,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -6753,54 +6829,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",
@@ -7661,6 +7689,34 @@
               "run": {
                 "$ref": "#/$defs/RunId"
               },
+              "target": {
+                "$ref": "#/$defs/CompletionActionTarget"
+              },
+              "message": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "run.completion_action.register"
+              }
+            },
+            "required": [
+              "kind",
+              "run",
+              "target",
+              "message",
+              "author"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
               "outcome": {
                 "$ref": "#/$defs/CompletionActionOutcome"
               },
@@ -8180,6 +8236,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -8305,54 +8409,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",
@@ -13429,6 +13485,34 @@
               "run": {
                 "$ref": "#/$defs/RunId"
               },
+              "target": {
+                "$ref": "#/$defs/CompletionActionTarget"
+              },
+              "message": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "run.completion_action.register"
+              }
+            },
+            "required": [
+              "kind",
+              "run",
+              "target",
+              "message",
+              "author"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
               "outcome": {
                 "$ref": "#/$defs/CompletionActionOutcome"
               },
@@ -13730,6 +13814,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -13806,54 +13938,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",
@@ -14826,6 +14910,34 @@
           "run": {
             "$ref": "#/$defs/RunId"
           },
+          "target": {
+            "$ref": "#/$defs/CompletionActionTarget"
+          },
+          "message": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "run.completion_action.register"
+          }
+        },
+        "required": [
+          "kind",
+          "run",
+          "target",
+          "message",
+          "author"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
           "outcome": {
             "$ref": "#/$defs/CompletionActionOutcome"
           },
@@ -15345,6 +15457,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -15470,54 +15630,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",
@@ -16493,6 +16605,34 @@
               "run": {
                 "$ref": "#/$defs/RunId"
               },
+              "target": {
+                "$ref": "#/$defs/CompletionActionTarget"
+              },
+              "message": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "run.completion_action.register"
+              }
+            },
+            "required": [
+              "kind",
+              "run",
+              "target",
+              "message",
+              "author"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
               "outcome": {
                 "$ref": "#/$defs/CompletionActionOutcome"
               },
@@ -17012,6 +17152,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -17137,54 +17325,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",
@@ -21900,6 +22040,34 @@
               "run": {
                 "$ref": "#/$defs/RunId"
               },
+              "target": {
+                "$ref": "#/$defs/CompletionActionTarget"
+              },
+              "message": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "run.completion_action.register"
+              }
+            },
+            "required": [
+              "kind",
+              "run",
+              "target",
+              "message",
+              "author"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
               "outcome": {
                 "$ref": "#/$defs/CompletionActionOutcome"
               },
@@ -22201,6 +22369,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -22277,54 +22493,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",
@@ -24115,6 +24283,34 @@
               "run": {
                 "$ref": "#/$defs/RunId"
               },
+              "target": {
+                "$ref": "#/$defs/CompletionActionTarget"
+              },
+              "message": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "run.completion_action.register"
+              }
+            },
+            "required": [
+              "kind",
+              "run",
+              "target",
+              "message",
+              "author"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
               "outcome": {
                 "$ref": "#/$defs/CompletionActionOutcome"
               },
@@ -24416,6 +24612,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -24492,54 +24736,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",
@@ -25723,6 +25919,35 @@
           "run": {
             "$ref": "#/$defs/RunId"
           },
+          "target": {
+            "$ref": "#/$defs/CompletionActionTarget"
+          },
+          "message": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "run.completion_action.register"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "run",
+          "target",
+          "message",
+          "author"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
           "outcome": {
             "$ref": "#/$defs/CompletionActionOutcome"
           },
@@ -26244,6 +26469,54 @@
           "lost"
         ]
       },
+      "CompletionActionTarget": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "work": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/$defs/ResultId"
+          },
+          "result_attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttemptId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "generation",
+          "work",
+          "result"
+        ]
+      },
+      "ResultId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "AttemptId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "CompletionActionOutcome": {
         "oneOf": [
           {
@@ -26369,54 +26642,6 @@
           "expected",
           "message"
         ]
-      },
-      "CompletionActionTarget": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "$ref": "#/$defs/StepId"
-          },
-          "generation": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "work": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "result": {
-            "$ref": "#/$defs/ResultId"
-          },
-          "result_attempt": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AttemptId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "step",
-          "generation",
-          "work",
-          "result"
-        ]
-      },
-      "ResultId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-      },
-      "AttemptId": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "UnitName": {
         "type": "string",

@@ -379,6 +379,7 @@ mod support {
             id: &AttemptIdentity,
             _range: &AssignedRange,
         ) -> sluice_store::Result<()> {
+            sluice_store::messages::advance_cursor(tx, id.project, id.run)?;
             tx.sql().execute(
                 "UPDATE message_deliveries SET acknowledged_at='now' WHERE run_id=?1",
                 [id.run.to_string()],

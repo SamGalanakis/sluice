@@ -7,7 +7,7 @@ use sluice_model::{
     commands::{Message, MessageAnswer, MessagePost},
     error::PublicError,
     events::{Event, NotificationOutcome},
-    ids::{AttemptId, MessageId, ProjectId, ProjectSelector, Revision, RunId, StepId},
+    ids::{AttemptId, MessageId, ProjectId, ProjectSelector, Revision, RunId},
     rpc::JsonValue,
     types::{Type, check_value_at},
 };
@@ -682,7 +682,7 @@ async fn delivery_reservation_does_not_consume_and_actual_start_advances_once() 
     let range = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            assign_run_range(tx, p, run)
+            assign_run_range(tx, p, run, 0, None)
         })
         .await
         .unwrap();
@@ -701,7 +701,7 @@ async fn delivery_reservation_does_not_consume_and_actual_start_advances_once() 
     assert_eq!(
         f.writer
             .write(RetrySafety::NonIdempotent, move |tx| assign_run_range(
-                tx, p, retry
+                tx, p, retry, 0, None
             ))
             .await
             .unwrap(),
@@ -719,16 +719,28 @@ async fn delivery_reservation_does_not_consume_and_actual_start_advances_once() 
         })
         .await
         .unwrap();
+    f.stop(retry).await;
+    let next_run = f.run("work", -1, 1, Some(retry)).await;
     let next = f
         .writer
         .write(RetrySafety::Idempotent, move |tx| {
-            assign_range(tx, p, &StepId::new("work").unwrap())
+            assign_run_range(tx, p, next_run, m.id.0, None)
         })
         .await
         .unwrap();
     assert_eq!(next.after, m.id);
     assert!(next.messages.is_empty());
-    let acknowledged:bool=f.reads.snapshot(|c|Ok(c.query_row("SELECT acknowledged_at IS NOT NULL FROM message_deliveries ORDER BY run_id DESC LIMIT 1",[],|r|r.get(0))?)).await.unwrap();
+    let acknowledged: bool = f
+        .reads
+        .snapshot(move |c| {
+            Ok(c.query_row(
+                "SELECT acknowledged_at IS NOT NULL FROM message_deliveries WHERE run_id=?1",
+                [retry.to_string()],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
     assert!(acknowledged);
 }
 #[tokio::test]
@@ -743,9 +755,12 @@ async fn scatter_windows_and_not_started_item_survive_shared_cursor_advance() {
     let window = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            let range = assign_range(tx, p, &StepId::new("work").unwrap())?;
-            assign_delivery(tx, p, r0, &range)?;
-            assign_delivery(tx, p, r1, &range)?;
+            let range = assign_run_range(tx, p, r0, 0, None)?;
+            let exact = sluice_store::attempts::AssignedRange {
+                after: range.after.0,
+                through: range.through.0,
+            };
+            assign_run_range(tx, p, r1, 0, Some(&exact))?;
             Ok(range)
         })
         .await
@@ -771,7 +786,7 @@ async fn scatter_windows_and_not_started_item_survive_shared_cursor_advance() {
     let next = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            assign_run_range(tx, p, retry)
+            assign_run_range(tx, p, retry, 0, None)
         })
         .await
         .unwrap();
@@ -790,7 +805,7 @@ async fn live_feed_starts_at_exact_window_end_and_generation_fences_old_start() 
     let assigned = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            assign_run_range(tx, p, run)
+            assign_run_range(tx, p, run, 0, None)
         })
         .await
         .unwrap();
@@ -859,7 +874,7 @@ async fn delivery_acknowledgement_claims_answer_and_claim_outlives_log_trimming(
     let p = f.project;
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            assign_run_range(tx, p, run)?;
+            assign_run_range(tx, p, run, 0, None)?;
             tx.sql().execute(
                 "UPDATE runs SET started_at='now' WHERE run_id=?1",
                 [run.to_string()],
@@ -983,17 +998,21 @@ async fn repeated_range_request_keeps_the_frozen_window_and_leaves_late_messages
     let first = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            assign_run_range(tx, p, run)
+            assign_run_range(tx, p, run, 0, None)
         })
         .await
         .unwrap();
     let mut late = draft(p, "late");
     late.to = Some("work".into());
     let late = f.post(late).await.unwrap();
+    let exact = sluice_store::attempts::AssignedRange {
+        after: first.after.0,
+        through: first.through.0,
+    };
     let again = f
         .writer
         .write(RetrySafety::Idempotent, move |tx| {
-            assign_run_range(tx, p, run)
+            assign_run_range(tx, p, run, exact.after, Some(&exact))
         })
         .await
         .unwrap();

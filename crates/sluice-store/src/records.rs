@@ -33,6 +33,7 @@ const KINDS: &[&str] = &[
     "run.adopt",
     "run.orphan",
     "run.completion_action",
+    "run.completion_action.register",
     "unit.settled",
 ];
 const GROUPS: &[&str] = &["plan", "step", "project", "run", "unit"];

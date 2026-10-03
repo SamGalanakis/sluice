@@ -6,7 +6,7 @@ use sluice_model::{
     commands::{MarkRead, Message, MessagePost, MessageView},
     error::PublicError,
     events::{Event, NotificationOutcome},
-    ids::{AttemptId, MessageId, ProjectId, ProjectSelector, RecordSeq, RunId, StepId},
+    ids::{AttemptId, MessageId, ProjectId, ProjectSelector, RecordSeq, RunId},
     rpc::JsonValue,
 };
 
@@ -580,22 +580,6 @@ pub struct AssignedRange {
     pub messages: Vec<MessageId>,
 }
 
-pub fn assign_range(
-    tx: &mut WriteTransaction<'_>,
-    project: ProjectId,
-    step: &StepId,
-) -> Result<AssignedRange> {
-    let cursor: i64 = tx
-        .sql()
-        .query_row(
-            "SELECT delivery_cursor FROM steps WHERE project_id=?1 AND step_id=?2",
-            params![project.to_string(), step.as_str()],
-            |r| r.get(0),
-        )
-        .optional()?
-        .ok_or_else(|| missing("no step"))?;
-    range(tx.sql(), project, step.as_str(), cursor, None)
-}
 fn range(
     sql: &Connection,
     project: ProjectId,
@@ -625,7 +609,7 @@ fn range(
 }
 
 /// Freeze an already chosen batch window on each launched item. Kept items have no run.
-pub fn assign_delivery(
+fn assign_delivery(
     tx: &mut WriteTransaction<'_>,
     project: ProjectId,
     run: RunId,
@@ -680,34 +664,27 @@ pub fn assign_delivery(
     Ok(())
 }
 
-/// A retry of an item that never started preserves its old window even if a
-/// sibling advanced the shared cursor. The reservation provides the batch window
-/// through assign_delivery for other items.
+/// Assign using the attempts owner's lower bound and optional exact sibling window.
+/// Without an exact window, include all currently addressed messages after the bound.
+/// Reservation replay, including empty windows, belongs to attempts::reserve.
 pub fn assign_run_range(
     tx: &mut WriteTransaction<'_>,
     project: ProjectId,
     run: RunId,
+    cursor: i64,
+    exact: Option<&crate::attempts::AssignedRange>,
 ) -> Result<AssignedRange> {
     let info = run_info(tx.sql(), project, run)?;
     let step = info
         .step
         .ok_or_else(|| invalid("delivery requires a step run"))?;
-    let frozen: Option<(i64,i64)> = tx.sql().query_row(
-        "SELECT assigned_after,assigned_through FROM runs WHERE project_id=?1 AND run_id=?2 AND (assigned_after>0 OR assigned_through>0 OR EXISTS(SELECT 1 FROM message_deliveries WHERE run_id=?2))",
-        params![project.to_string(),run.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-    if let Some((after, through)) = frozen {
-        return range(tx.sql(), project, &step, after, Some(through));
-    }
-    let prior:Option<(i64,i64)>=tx.sql().query_row("SELECT p.assigned_after,p.assigned_through FROM runs r JOIN runs p ON p.run_id=r.prev_run JOIN attempts a ON a.attempt_id=r.attempt_id JOIN attempts pa ON pa.attempt_id=p.attempt_id WHERE r.project_id=?1 AND r.run_id=?2 AND p.project_id=r.project_id AND p.step_id=r.step_id AND p.generation=r.generation AND p.item_index=r.item_index AND p.started_at IS NULL AND a.inputs_hash=pa.inputs_hash",params![project.to_string(),run.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-    let assigned = if let Some((after, end)) = prior {
-        range(tx.sql(), project, &step, after, Some(end))?
-    } else {
-        assign_range(
-            tx,
-            project,
-            &StepId::new(step).map_err(|e| invalid(e.to_string()))?,
-        )?
-    };
+    let assigned = range(
+        tx.sql(),
+        project,
+        &step,
+        exact.map_or(cursor, |window| window.after),
+        exact.map(|window| window.through),
+    )?;
     assign_delivery(tx, project, run, &assigned)?;
     Ok(assigned)
 }
