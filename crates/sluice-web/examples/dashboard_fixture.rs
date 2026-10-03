@@ -7,6 +7,27 @@ use sluice_store::{
 };
 use sluice_web::views::*;
 use std::sync::Arc;
+struct FixtureResources;
+impl sluice_model::plan::SignatureProvider for FixtureResources {
+    fn signature(&self, name: &str) -> Option<sluice_model::plan::FnSignature> {
+        (name == "fixture.capacity").then(|| sluice_model::plan::FnSignature {
+            outputs: [("capacity".into(), sluice_model::types::Type::Int)]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        })
+    }
+}
+impl projects::ResourceSettings for FixtureResources {
+    fn set_resources(
+        &self,
+        tx: &mut sluice_store::WriteTransaction<'_>,
+        project: ProjectId,
+        patch: &serde_json::Value,
+    ) -> sluice_store::Result<bool> {
+        sluice_store::resources::patch_resources(tx, project, patch, self)
+    }
+}
 struct FixtureCatalog;
 impl CatalogSource for FixtureCatalog {
     fn catalog(&self, project: Option<ProjectId>) -> Result<FunctionCatalog, PublicError> {
@@ -135,30 +156,47 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     println!("URL http://{}", listener.local_addr().unwrap());
     let id = first.unwrap();
-    let router = dashboard_router(state).route(
-        "/fixture/rename",
-        axum::routing::post(move || {
-            let writer = writer.clone();
-            async move {
-                writer
-                    .write(RetrySafety::NonIdempotent, move |tx| {
-                        projects::project_update(
-                            tx,
-                            &sluice_model::ids::ProjectSelector::Id(id),
-                            projects::UpdateProject {
-                                new_name: Some("renamed-dashboard".parse().unwrap()),
-                                author: "owner".into(),
-                                ..Default::default()
-                            },
-                            &NoResourceSettings,
-                        )
-                    })
-                    .await
-                    .unwrap();
-                axum::http::StatusCode::NO_CONTENT
-            }
-        }),
-    );
+    writer.write(RetrySafety::NonIdempotent, move |tx| {
+        projects::project_update(tx, &sluice_model::ids::ProjectSelector::Id(id), projects::UpdateProject {
+            resources:Some(serde_json::json!({"workers":3,"dynamic":{"capacity_fn":"fixture.capacity"}})),
+            author:"owner".into(), ..Default::default()
+        }, &FixtureResources)?;
+        sluice_store::resources::observe_capacity(tx, id, "dynamic", 1, Err(PublicError::FnFailure {message:"Capacity service is unavailable. Last good capacity retained.".into()}))?;
+        Ok(())
+    }).await.unwrap();
+    let guard = Arc::new(projects::StoredWorkOnly);
+    let commands = Arc::new(sluice_web::settings::StoreCommands {
+        writer: writer.clone(),
+        resources: Arc::new(FixtureResources),
+        deletion_guard: guard.clone(),
+    });
+    let settings = sluice_web::settings::SettingsState::new(state.clone(), commands, guard);
+    let router = dashboard_router(state)
+        .merge(sluice_web::settings::router(settings))
+        .route(
+            "/fixture/rename",
+            axum::routing::post(move || {
+                let writer = writer.clone();
+                async move {
+                    writer
+                        .write(RetrySafety::NonIdempotent, move |tx| {
+                            projects::project_update(
+                                tx,
+                                &sluice_model::ids::ProjectSelector::Id(id),
+                                projects::UpdateProject {
+                                    new_name: Some("renamed-dashboard".parse().unwrap()),
+                                    author: "owner".into(),
+                                    ..Default::default()
+                                },
+                                &NoResourceSettings,
+                            )
+                        })
+                        .await
+                        .unwrap();
+                    axum::http::StatusCode::NO_CONTENT
+                }
+            }),
+        );
     axum::serve(listener, router)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

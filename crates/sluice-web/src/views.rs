@@ -422,6 +422,7 @@ pub fn asset_url(name: &str) -> String {
 fn asset(name: &str) -> Option<(&'static str, &'static [u8])> {
     Some(match name {
         "style.css" | "dashboard.css" => ("text/css", include_bytes!("../assets/style.css")),
+        "settings.css" => ("text/css", include_bytes!("../assets/settings.css")),
         "nav.js" => ("text/javascript", include_bytes!("../assets/nav.js")),
         "datastar-rocket-1.0.4.js" => (
             "text/javascript",

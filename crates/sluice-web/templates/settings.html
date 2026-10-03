@@ -1,0 +1,143 @@
+<link rel="stylesheet" href="{{ css }}">
+<div class="settings-page">
+<!--settings-live--><header id="settings-live" data-revision="{{ view.project.settings_rev }}" data-name="{{ view.project.name }}" data-paused="{{ view.project.paused }}" data-archived="{{ view.project.archived }}" data-page-title="{{ view.project.name }} · Settings · sluice">
+<h1>{{ view.project.name }}{% if view.project.paused %} <span class="tag">Paused</span>{% endif %}</h1>
+<p class="settings-lead">Project settings{% if view.project.archived %} · Archived{% endif %}</p></header><!--/settings-live-->
+<p class="setting-help">Each Apply commits one change right away. <a href="/projects/id/{{ view.project.project_id }}/log?kinds=project">View authored changes</a>.</p>
+<section aria-labelledby="details-heading"><h2 id="details-heading">Details</h2>
+<dl class="settings-fields">
+<div class="setting-row"><dt><label for="project-name">Name</label></dt><dd>
+<form method="post" action="{{ view.path() }}" data-setting="name">
+<input type="hidden" name="field" value="name"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<input id="project-name" name="value" value="{{ feedback.value("name", view.project.name.as_str()) }}" required aria-describedby="name-help name-feedback">
+<p id="name-help" class="setting-help">Lowercase letters, numbers, underscores and hyphens. Links and running work keep the same project ID.</p>
+<div class="setting-actions"><button type="submit">Apply name</button><span id="name-feedback" class="settings-feedback{% if feedback.error("name") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "name" %}{{ feedback.message }}{% endif %}</span></div>
+</form></dd></div>
+<div class="setting-row"><dt><label for="project-description">Description</label></dt><dd>
+<form method="post" action="{{ view.path() }}" data-setting="description">
+<input type="hidden" name="field" value="description"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<textarea id="project-description" name="value" aria-describedby="description-feedback">{{ feedback.value("description", view.project.description.as_str()) }}</textarea>
+<div class="setting-actions"><button type="submit">Apply description</button><button type="button" data-preview hidden>Preview</button><span id="description-feedback" class="settings-feedback{% if feedback.error("description") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "description" %}{{ feedback.message }}{% endif %}</span></div>
+</form><div id="description-preview" class="settings-preview" aria-label="Markdown preview">{{ preview|safe }}</div></dd></div>
+<div class="setting-row"><dt><label for="project-icon">Icon</label></dt><dd>
+{% if !icon_url.is_empty() %}<img class="settings-icon" id="icon-preview" src="{{ icon_url }}" alt="Current project icon">{% endif %}
+<form method="post" action="{{ view.path() }}" data-setting="icon">
+<input type="hidden" name="field" value="icon"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<input id="project-icon" name="value" value="{{ feedback.value("icon", icon_text.as_str()) }}" aria-describedby="icon-help icon-feedback">
+<p id="icon-help" class="setting-help">Up to 16 text characters. Leave empty to remove.</p>
+<div class="setting-actions"><button type="submit">Apply icon</button><span id="icon-feedback" class="settings-feedback{% if feedback.error("icon") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "icon" %}{{ feedback.message }}{% endif %}</span></div>
+</form><div data-upload hidden><label for="icon-file">Or upload an image, up to 256 KiB</label><input id="icon-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><button type="button" data-upload-button>Apply image</button></div></dd></div>
+</dl></section>
+<section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
+<p class="setting-help">Use a nonnegative capacity, {"capacity_fn":"fn"} for a dynamic capacity, or null to remove. Lowering capacity holds new work while active work continues.</p>
+<!--resource-status--><div id="resource-status"><ul class="resource-list">
+{% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · Step queue unavailable{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
+{% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
+</ul></div><!--/resource-status-->
+<div id="resource-editors"><dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources">
+<input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<input id="resource-{{ r.name }}" name="value" value="{% if feedback.error("resources") && feedback.resource == r.name %}{{ feedback.value }}{% else %}{{ r.value }}{% endif %}" aria-label="Capacity for {{ r.name }}">
+<div class="setting-actions"><button type="submit">Apply capacity</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" && feedback.resource == r.name %}{{ feedback.message }}{% endif %}</span></div>
+</form></dd></div>{% endfor %}</dl></div>
+<form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource">
+<input type="hidden" name="field" value="resources"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<label for="resource-name">Resource name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required>
+<label for="resource-value">Capacity</label><input id="resource-value" name="value" value="{% if feedback.error("resources") %}{{ feedback.value }}{% else %}1{% endif %}" required>
+<div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></section>
+<section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
+<form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch"><div><p>Pause project</p><p class="setting-help">Hold future work. Running work continues.</p></div>
+<input type="hidden" name="field" value="paused"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.paused %}false{% else %}true{% endif %}">
+<button type="submit" role="switch" aria-checked="{{ view.project.paused }}" aria-label="Pause project">{% if view.project.paused %}Resume{% else %}Pause{% endif %}</button><span class="settings-feedback" role="status"></span></form>
+<form method="post" action="{{ view.path() }}" data-setting="archived" class="settings-switch"><div><p>Archive project</p><p class="setting-help">Move to the archived list. Running work continues.</p></div>
+<input type="hidden" name="field" value="archived"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.archived %}false{% else %}true{% endif %}">
+<button type="submit" role="switch" aria-checked="{{ view.project.archived }}" aria-label="Archive project">{% if view.project.archived %}Unarchive{% else %}Archive{% endif %}</button><span class="settings-feedback" role="status"></span></form>
+</section>
+<section class="settings-danger" aria-labelledby="danger-heading"><h2 id="danger-heading">Delete project</h2>
+<p>This permanently removes the plan, messages, history, functions, secrets and artifacts.</p>
+<!--delete-guard--><div id="delete-guard" data-allowed="{{ view.blocker.is_none() }}"><p id="delete-explanation" class="setting-help">{% if let Some(reason) = view.blocker %}Cannot delete: {{ reason }}.{% else %}Archived with no active work. Type the exact current name below.{% endif %}</p></div><!--/delete-guard-->
+<form method="post" action="{{ view.path() }}/delete" id="delete-form"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<label for="confirm-name">Current project name: <span data-current-name>{{ view.project.name }}</span></label><input id="confirm-name" name="confirm_name" autocomplete="off" aria-describedby="delete-explanation delete-feedback">
+<div class="setting-actions"><button type="submit" id="delete-button"{% if view.blocker.is_some() %} disabled{% endif %}>Delete project</button><span id="delete-feedback" class="settings-feedback setting-error" role="status"></span></div></form></section>
+</div>
+<script type="module">
+const base = location.pathname;
+let name = document.querySelector('#settings-live').dataset.name;
+let saving = false;
+const refresh = () => {
+ const live = document.querySelector('#settings-live');
+ if (live.dataset.deleted === 'true') { location.assign('/'); return; }
+ document.title = live.dataset.pageTitle;
+ for (const field of ['paused','archived']) {
+  const form = document.querySelector('form[data-setting=' + field + ']');
+  const on = live.dataset[field] === 'true';
+  form.querySelector('[name=value]').value = String(!on);
+  form.querySelector('button').setAttribute('aria-checked',String(on));
+  form.querySelector('button').textContent = field === 'paused' ? (on ? 'Resume' : 'Pause') : (on ? 'Unarchive' : 'Archive');
+ }
+ if (name !== live.dataset.name) { document.querySelector('#confirm-name').value = ''; name = live.dataset.name; }
+ document.querySelector('[data-current-name]').textContent = name;
+ for (const input of document.querySelectorAll('[name=expected_settings_rev]')) input.value = live.dataset.revision;
+ document.querySelector('#delete-button').disabled = saving || document.querySelector('#delete-guard').dataset.allowed !== 'true' || document.querySelector('#confirm-name').value !== name;
+};
+document.addEventListener('datastar-signal-patch', refresh);
+document.querySelector('#confirm-name').addEventListener('input', refresh);
+document.querySelector('[data-preview]').hidden = false;
+document.querySelector('[data-upload]').hidden = false;
+function patch(doc, ids) {
+ for (const id of ids) { const node = doc.getElementById(id); if (node) document.getElementById(id)?.replaceWith(node); }
+ refresh();
+}
+async function sendForm(form) {
+ if (saving) return;
+ saving = true;
+ const feedback = form.querySelector('.settings-feedback');
+ feedback.textContent = 'Saving…';
+ try {
+  const response = await fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form))});
+  const text = await response.text();
+  const doc = new DOMParser().parseFromString(text, 'text/html');
+  if (doc.getElementById('settings-live')) {
+   patch(doc, ['settings-live','top-nav','resource-status','delete-guard']);
+   const field = form.dataset.setting;
+   const source = [...doc.querySelectorAll('form[data-setting]')].find(f => f.dataset.setting === field && (f.querySelector('[name=resource]')?.value || '') === (form.querySelector('[name=resource]')?.value || ''));
+   feedback.textContent = source?.querySelector('.settings-feedback')?.textContent || (response.ok ? 'Saved' : 'Could not save.');
+   feedback.classList.toggle('setting-error', !response.ok);
+   feedback.classList.toggle('setting-saved', response.ok);
+   if (response.ok && field === 'resources') patch(doc, ['resource-editors']);
+   if (response.ok && field === 'description') patch(doc, ['description-preview']);
+   if (response.ok && field === 'icon') { const image = doc.querySelector('#icon-preview'); document.querySelector('#icon-preview')?.remove(); if(image) form.before(image); }
+   if (response.ok && ['paused','archived'].includes(field)) form.replaceWith(source);
+  } else { feedback.textContent = JSON.parse(text).message || 'Could not save.'; }
+ } catch { feedback.textContent = 'Could not save. Check the connection and try again.'; }
+ finally { saving = false; refresh(); }
+}
+document.addEventListener('submit', event => {
+ const form = event.target;
+ if (form.matches('form[data-setting]')) { event.preventDefault(); sendForm(form); }
+ if (form.id === 'delete-form') {
+  event.preventDefault(); if (document.querySelector('#delete-button').disabled) return;
+  saving = true; refresh();
+  fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form))}).then(async response => {
+   if (response.ok && response.redirected) { location.assign('/'); return; }
+   const error = await response.json(); document.querySelector('#delete-feedback').textContent = error.message;
+  }).catch(() => { document.querySelector('#delete-feedback').textContent = 'Could not delete. Check the connection and try again.'; }).finally(() => { saving = false; refresh(); });
+ }
+});
+document.querySelector('[data-preview]').addEventListener('click', async () => {
+ const response = await fetch(base + '/preview', {method:'POST',body:document.querySelector('#project-description').value});
+ if(response.ok) document.querySelector('#description-preview').innerHTML = await response.text();
+});
+document.querySelector('[data-upload-button]').addEventListener('click', async () => {
+ const file = document.querySelector('#icon-file').files[0]; const feedback = document.querySelector('#icon-feedback');
+ if (!file) { feedback.textContent = 'Choose an image first.'; return; }
+ if (file.size > 262144) { feedback.textContent = 'Image must be at most 256 KiB.'; return; }
+ const response = await fetch(base + '/icon?expected_settings_rev=' + document.querySelector('#settings-live').dataset.revision, {method:'POST',body:file});
+ if (!response.ok) { feedback.textContent = (await response.json()).message; return; }
+ const doc = new DOMParser().parseFromString(await response.text(),'text/html');
+ patch(doc,['settings-live','top-nav']);
+ document.querySelector('#icon-preview')?.remove(); const image = doc.querySelector('#icon-preview'); if(image) document.querySelector('form[data-setting=icon]').before(image);
+ feedback.textContent = 'Saved';
+});
+new MutationObserver(() => { if(document.querySelector('#settings-live')?.dataset.deleted === 'true') location.assign('/'); }).observe(document.querySelector('#content'),{childList:true,subtree:true});
+refresh();
+</script>
