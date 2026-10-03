@@ -1,0 +1,17 @@
+{
+  "name": "linear.create",
+  "doc": "Create a Linear issue with the linear CLI. The team is `team`, else the parent issue's team, else $LINEAR_TEAM, else FIG. Returns its id (e.g. FIG-123) and url.",
+  "inputs": {
+    "title": "string",
+    "description": "string?",
+    "team": "string?",
+    "labels": "string[]?",
+    "parent": "string?",
+    "project": "string?",
+    "state": "string?"
+  },
+  "outputs": {
+    "id": "string",
+    "url": "string"
+  }
+}

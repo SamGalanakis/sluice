@@ -1,0 +1,21 @@
+{
+  "name": "lash.dev_test",
+  "doc": "Run the change-scoped developer tests in a fork (`. ./env.sh && python3 scripts/dev-test.py`, `--dependents` and `--base` when given) and read its receipt. Succeeds either way unless require_ok: `ok` is true only when it passed and the checkout did not change during the run; `commands` are what it selected and `tested` says whether any of them ran tests. With require_ok, a red (or a checkout that changed during the run) fails the step, so nothing after it runs. With require_tests, a selection that runs no tests fails the step. With dry_run, returns the plan without running it.",
+  "inputs": {
+    "fork": "string",
+    "dependents": "boolean?",
+    "base": "string?",
+    "dry_run": "boolean?",
+    "require_ok": "boolean?",
+    "require_tests": "boolean?"
+  },
+  "outputs": {
+    "ok": "boolean",
+    "code": "int",
+    "selection": "string",
+    "commands": "string[]",
+    "tested": "boolean",
+    "changed_files": "string[]",
+    "tail": "string"
+  }
+}
