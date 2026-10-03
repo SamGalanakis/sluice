@@ -13,3 +13,7 @@ pub mod types;
 pub mod units;
 
 pub use commands::RuntimeApi;
+
+pub use gates::{CachedResources, DryRun, Gate, GateDecision, StateSnapshot, StepState, ValueRef};
+pub use plan::{Binding, Declaration, FnSignature, Pause, Plan, SignatureProvider, Step};
+pub use units::{PruneSet, RetryWalk, Unit};
