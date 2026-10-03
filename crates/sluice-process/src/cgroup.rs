@@ -45,6 +45,9 @@ impl RunCgroups {
             payload,
         })
     }
+    pub fn payload_empty(&self) -> io::Result<bool> {
+        Ok(!self.payload.populated()?)
+    }
     pub fn invocation(&self, id: InvocationId) -> io::Result<Cgroup> {
         let name = id.to_string();
         mkdirat(&self.payload.dir, &name, Mode::RWXU)?;

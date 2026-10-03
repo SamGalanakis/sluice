@@ -182,6 +182,12 @@ impl RunningPayload {
     pub fn started(&self) -> &RunStarted {
         &self.started
     }
+    pub fn take_stdout(&mut self) -> Option<std::process::ChildStdout> {
+        self.child.stdout.take()
+    }
+    pub fn take_stderr(&mut self) -> Option<std::process::ChildStderr> {
+        self.child.stderr.take()
+    }
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         self.child.wait()
     }

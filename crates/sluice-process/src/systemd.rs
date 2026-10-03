@@ -80,6 +80,11 @@ impl TransientService {
         service.attempted = true;
         service
     }
+    pub fn adopt_test(run: RunId) -> Self {
+        let mut service = Self::for_test(run);
+        service.attempted = true;
+        service
+    }
     pub fn name(&self) -> &str {
         &self.name
     }
