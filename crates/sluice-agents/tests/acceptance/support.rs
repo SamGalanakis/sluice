@@ -42,6 +42,7 @@ pub struct Host {
     pub snapshots: u32,
     pub submit_after_nudge: bool,
     pub cancel_on_backoff: Option<CancellationToken>,
+    pub cancel_on_note: Option<CancellationToken>,
 }
 impl Host {
     pub fn submitted() -> Self {
@@ -89,6 +90,9 @@ impl SupervisorHost for Host {
     }
     async fn note(&mut self, text: &str) -> io::Result<()> {
         self.notes.push(text.into());
+        if let Some(cancel) = &self.cancel_on_note {
+            cancel.cancel();
+        }
         Ok(())
     }
     async fn checkpoint(&mut self, cp: &Checkpoint) -> io::Result<()> {
@@ -356,6 +360,10 @@ pub async fn scenario(name: &str, engine_name: &str) {
         );
     }
     let cancel = CancellationToken::new();
+    if name == "quiet" {
+        cfg.limits.wall = Duration::from_secs(5);
+        host.cancel_on_note = Some(cancel.clone());
+    }
     if name == "cancel_backoff" {
         cfg.retry.backoff = Duration::from_secs(600);
         host.cancel_on_backoff = Some(cancel.clone());
@@ -371,11 +379,10 @@ pub async fn scenario(name: &str, engine_name: &str) {
     )
     .await;
     match name {
-        "busy_submitted" | "quiet" => {
-            assert_eq!(result.unwrap_err().kind, FailureKind::WallCap);
-            if name == "quiet" {
-                assert!(!host.notes.is_empty());
-            }
+        "busy_submitted" => assert_eq!(result.unwrap_err().kind, FailureKind::WallCap),
+        "quiet" => {
+            assert_eq!(result.unwrap_err().kind, FailureKind::Cancelled);
+            assert!(!host.notes.is_empty());
         }
         "missing_outputs" => assert_eq!(result.unwrap_err().kind, FailureKind::MissingOutputs),
         "unknown_acceptance" => {
