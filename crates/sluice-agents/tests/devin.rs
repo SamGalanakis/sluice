@@ -1530,3 +1530,8 @@ async fn supervisor_same_run_transient_commits_without_feedback() {
 async fn supervisor_missing_session_lock_and_cwd() {
     acceptance::session_policy("devin").await;
 }
+
+#[tokio::test]
+async fn supervisor_predecessor_cwd_mismatch_starts_fresh() {
+    acceptance::scenario("predecessor_cwd_mismatch", "devin").await;
+}

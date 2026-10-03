@@ -7,7 +7,7 @@ macro_rules! matrix {
         }
     )*};
 }
-matrix! { fresh_required_submit, busy_submitted, background, quiet, compaction, addressed_live_message, feedback_resume, missing_outputs, nudge, unknown_acceptance, cancel_backoff, retry_exhaustion, session_cwd_mismatch, engine_mismatch }
+matrix! { fresh_required_submit, busy_submitted, background, quiet, compaction, addressed_live_message, feedback_resume, missing_outputs, nudge, unknown_acceptance, cancel_backoff, retry_exhaustion, session_cwd_mismatch, engine_mismatch, predecessor_cwd_mismatch }
 
 #[tokio::test]
 #[ignore = "Read-only version probes on this host, using a private scratch HOME"]

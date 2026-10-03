@@ -305,10 +305,19 @@ pub async fn scenario(name: &str, engine_name: &str) {
             }
         }
         "session_cwd_mismatch" => cfg.session = Some("acceptance-session".into()),
-        "engine_mismatch" => {
+        "engine_mismatch" | "predecessor_cwd_mismatch" => {
             cfg.previous = Some(PreviousSession {
-                engine: "other".into(),
-                cwd: cfg.cwd.clone(),
+                engine: if name == "engine_mismatch" {
+                    "other"
+                } else {
+                    engine_name
+                }
+                .into(),
+                cwd: if name == "predecessor_cwd_mismatch" {
+                    root.0.clone()
+                } else {
+                    cfg.cwd.clone()
+                },
                 session: Some("acceptance-session".into()),
             });
             cfg.assigned.through = MessageId(1);
@@ -388,7 +397,7 @@ pub async fn scenario(name: &str, engine_name: &str) {
     if name == "feedback_resume" {
         assert!(matches!(engine.commands[0], EngineCommand::Resume { .. }));
     }
-    if name == "engine_mismatch" {
+    if name == "engine_mismatch" || name == "predecessor_cwd_mismatch" {
         assert_eq!(engine.commands[0], EngineCommand::StartFresh);
     }
     if name == "addressed_live_message" || name == "feedback_resume" {
