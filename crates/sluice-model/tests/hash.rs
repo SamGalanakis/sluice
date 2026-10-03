@@ -233,3 +233,20 @@ proptest::proptest! {
         proptest::prop_assert_eq!(InputsHash::of(&first).unwrap(), InputsHash::of(&second).unwrap());
     }
 }
+
+#[test]
+fn structural_data_comparison_matches_canonical_numeric_and_order_rules() {
+    use sluice_model::hash::data_equal;
+    for (left, right, equal) in [
+        (json!({"x":[-0.0]}), json!({"x":[0.0]}), false),
+        (json!({"x":[1]}), json!({"x":[1.0]}), false),
+        (
+            json!({"x":1,"y":{"b":2,"a":3}}),
+            json!({"y":{"a":3,"b":2},"x":1}),
+            true,
+        ),
+        (json!([1, 2]), json!([2, 1]), false),
+    ] {
+        assert_eq!(data_equal(&left, &right).unwrap(), equal);
+    }
+}

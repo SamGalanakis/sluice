@@ -74,12 +74,26 @@ impl SignatureProvider for IndexMap<String, FnSignature> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Binding {
     Default(JsonValue),
     Source(ValueRef),
     Sources(Vec<ValueRef>),
     File(String),
+}
+impl PartialEq for Binding {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Default(left), Self::Default(right)) => {
+                crate::hash::data_equal(left.as_value(), right.as_value())
+                    .expect("strict binding values")
+            }
+            (Self::Source(left), Self::Source(right)) => left == right,
+            (Self::Sources(left), Self::Sources(right)) => left == right,
+            (Self::File(left), Self::File(right)) => left == right,
+            _ => false,
+        }
+    }
 }
 impl Binding {
     pub fn references(&self) -> &[ValueRef] {

@@ -247,7 +247,7 @@ pub fn prepare_edit(
                     fields.insert(key, value.into_value());
                 }
             }
-            if &step != raw_step(raw, &request.step)? {
+            if !crate::hash::data_equal(&step, raw_step(raw, &request.step)?)? {
                 ops.push(replace(&step_path(&request.step), step)?);
             }
         }
@@ -296,7 +296,12 @@ pub fn prepare_edit(
                         .expect("validated bindings")
                         .insert(name.clone(), json!({"default":value}));
                 }
-                if old.get("in") != Some(&bindings) {
+                if !old
+                    .get("in")
+                    .map(|old| crate::hash::data_equal(old, &bindings))
+                    .transpose()?
+                    .unwrap_or(false)
+                {
                     ops.push(set_field(old, &id, "in", Some(bindings))?);
                     report.changed.push(id);
                 }

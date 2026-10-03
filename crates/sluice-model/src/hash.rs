@@ -119,6 +119,12 @@ pub fn canonical_json(value: &Value) -> Result<Vec<u8>, PublicError> {
     })?;
     serde_json::to_vec(&canonical_node(value)).map_err(|e| bad_request(e.to_string()))
 }
+
+/// Structural equality in the validity-hash domain. Object order is irrelevant;
+/// arrays retain order, integers differ from floats and float bits must match.
+pub fn data_equal(left: &Value, right: &Value) -> Result<bool, PublicError> {
+    Ok(canonical_json(left)? == canonical_json(right)?)
+}
 fn canonical_node(value: &Value) -> Value {
     match value {
         Value::Null => json!(["null"]),

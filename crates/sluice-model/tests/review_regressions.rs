@@ -155,3 +155,90 @@ fn float_input_hash_survives_json_storage_roundtrip() {
         );
     }
 }
+
+#[test]
+fn running_step_cannot_change_signed_zero_input() {
+    let p = parse(json!({"steps":{"a":{"run":"work","in":{"x":{"default":-0.0}}}}}));
+    let state = StateSnapshot {
+        steps: IndexMap::from([(
+            id("a"),
+            StepState {
+                status: StepStatus::Running,
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let result = plan::prepare_plan_edit(
+        &Snapshot {
+            revision: Revision(1),
+            document: p.document().clone(),
+        },
+        &state,
+        plan::PlanEdit {
+            expected: Revision(1),
+            ops: decode_json(br#"[{"op":"replace","path":"/steps/a/in/x/default","value":0.0}]"#)
+                .unwrap(),
+        },
+        &signatures(),
+        &CachedResources::default(),
+        &IndexMap::new(),
+    );
+    if let Ok(prepared) = &result {
+        let after = prepared.plan.compile(&signatures()).unwrap();
+        assert_ne!(
+            inputs_hash(&p, &state, &p.steps()[&id("a")]),
+            inputs_hash(&after, &state, &after.steps()[&id("a")])
+        );
+    }
+    assert!(
+        result.is_err(),
+        "a different effective input hash passed running-step protection"
+    );
+}
+
+#[test]
+fn bulk_input_signed_zero_change_must_not_be_discarded() {
+    let p = parse(json!({"steps":{"a":{"run":"work","in":{"x":{"default":-0.0}}}}}));
+    let result = prepare(
+        &p,
+        &StateSnapshot::default(),
+        command(
+            "step_set_input",
+            json!({
+                "selection":{"steps":["a"],"tags":null},"inputs":{"x":0.0}
+            }),
+        ),
+    );
+    assert!(
+        result.is_ok(),
+        "hash-changing edit was refused as a no-op: {result:?}"
+    );
+}
+
+#[test]
+fn step_update_signed_zero_change_is_preserved_and_stales_success() {
+    let p = parse(json!({"steps":{"a":{"run":"work","in":{"x":{"default":-0.0}}}}}));
+    let mut state = StateSnapshot::default();
+    state.steps.insert(
+        id("a"),
+        StepState {
+            status: StepStatus::Succeeded,
+            inputs_hash: inputs_hash(&p, &state, &p.steps()[&id("a")]),
+            ..Default::default()
+        },
+    );
+    let result = prepare(
+        &p,
+        &state,
+        command(
+            "step_update",
+            json!({
+                "step":"a","changes":{"in":{"x":{"default":0.0}}}
+            }),
+        ),
+    )
+    .unwrap();
+    assert!(!result.ops.is_empty());
+    assert_eq!(result.preview.would_stale, [id("a")]);
+}
