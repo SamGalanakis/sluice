@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.."
+# Override the shim's shared target default without setting CARGO_* variables.
+cargo() { command cargo --config "build.target-dir=\"$PWD/target\"" "$@"; }
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --all-targets --locked
+cargo test --workspace --doc --locked

@@ -1,0 +1,3498 @@
+{
+  "ProjectId": [
+    "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+  ],
+  "RunId": [
+    "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+  ],
+  "AttemptId": [
+    "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+  ],
+  "ResultId": [
+    "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+  ],
+  "InvocationId": [
+    "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+  ],
+  "HomeId": [
+    "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+  ],
+  "StepId": [
+    "work-1"
+  ],
+  "UnitName": [
+    "work-1"
+  ],
+  "ProjectName": [
+    "work-1"
+  ],
+  "Revision": [
+    1
+  ],
+  "RecordSeq": [
+    1
+  ],
+  "MessageId": [
+    1
+  ],
+  "WorkGeneration": [
+    1
+  ],
+  "StepGeneration": [
+    1
+  ],
+  "LeaseId": [
+    1
+  ],
+  "JsonValue": [
+    null,
+    false,
+    1,
+    -9223372036854775808,
+    9223372036854775807,
+    1.5,
+    "x",
+    [
+      1,
+      null
+    ],
+    {
+      "file": "/tmp/brief.md"
+    }
+  ],
+  "JsonMap": [
+    {
+      "engine": "codex",
+      "model": "sol"
+    }
+  ],
+  "RequestId": [
+    "request-1"
+  ],
+  "RunCapability": [
+    "fixture-capability"
+  ],
+  "PathErrors": [
+    [
+      "steps.work.in.engine: required"
+    ]
+  ],
+  "ValueRef": [
+    "check/ok"
+  ],
+  "ValidatedPlan": [
+    {
+      "steps": {}
+    }
+  ],
+  "Type": [
+    {
+      "kind": "string"
+    },
+    {
+      "kind": "int"
+    },
+    {
+      "kind": "float"
+    },
+    {
+      "kind": "boolean"
+    },
+    {
+      "kind": "any"
+    },
+    {
+      "kind": "optional",
+      "of": {
+        "kind": "optional",
+        "of": {
+          "kind": "string"
+        }
+      }
+    },
+    {
+      "kind": "list",
+      "of": {
+        "kind": "optional",
+        "of": {
+          "kind": "string"
+        }
+      }
+    },
+    {
+      "kind": "enum",
+      "of": [
+        "fixture"
+      ]
+    },
+    {
+      "kind": "record",
+      "of": {
+        "field": {
+          "kind": "string"
+        }
+      }
+    }
+  ],
+  "ProjectIdentity": [
+    {
+      "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "name": "work-1"
+    },
+    {
+      "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "name": "work-1"
+    }
+  ],
+  "ProjectUpdate": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "new_name": null,
+      "description": null,
+      "icon": null,
+      "resources": null,
+      "paused": null,
+      "archived": null,
+      "expected_settings_rev": null,
+      "reason": null,
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "new_name": "work-1",
+      "description": "fixture",
+      "icon": "fixture",
+      "resources": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "paused": false,
+      "archived": false,
+      "expected_settings_rev": 1,
+      "reason": "fixture",
+      "author": "fixture"
+    }
+  ],
+  "ProjectDelete": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "confirm_name": "work-1",
+      "expected_settings_rev": 1,
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "confirm_name": "work-1",
+      "expected_settings_rev": 1,
+      "author": "fixture"
+    }
+  ],
+  "StepSelection": [
+    {
+      "steps": null,
+      "tags": null
+    },
+    {
+      "steps": [
+        "work-1"
+      ],
+      "tags": [
+        "fixture"
+      ]
+    }
+  ],
+  "EditOptions": [
+    {
+      "expected": null,
+      "dry_run": false,
+      "reason": "fixture",
+      "author": null
+    },
+    {
+      "expected": 1,
+      "dry_run": false,
+      "reason": "fixture",
+      "author": "fixture"
+    }
+  ],
+  "PlanPatch": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "rev": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ],
+      "dry_run": false,
+      "reason": "fixture",
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "rev": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ],
+      "dry_run": false,
+      "reason": "fixture",
+      "author": "fixture"
+    }
+  ],
+  "StepAdd": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "spec": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "spec": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "UnitAdd": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "recipe": "fixture",
+      "unit": "work-1",
+      "params": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "start": false,
+      "after": {
+        "*": [
+          "unit:up",
+          "check/ok"
+        ],
+        "work": [
+          "review?"
+        ]
+      },
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "recipe": "fixture",
+      "unit": "work-1",
+      "params": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "start": false,
+      "after": {
+        "*": [
+          "unit:up",
+          "check/ok"
+        ],
+        "work": [
+          "review?"
+        ]
+      },
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "EdgeEdit": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "fixture",
+      "after": [
+        "fixture"
+      ],
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "fixture",
+      "after": [
+        "fixture"
+      ],
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "StepUpdate": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "changes": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "changes": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "StepRemove": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": null
+      },
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": [
+          "work-1"
+        ],
+        "tags": [
+          "fixture"
+        ]
+      },
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "StepPause": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": null
+      },
+      "paused": false,
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": [
+          "work-1"
+        ],
+        "tags": [
+          "fixture"
+        ]
+      },
+      "paused": false,
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "UnitTag": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "unit": "work-1",
+      "add": [
+        "fixture"
+      ],
+      "remove": [
+        "fixture"
+      ],
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "unit": "work-1",
+      "add": [
+        "fixture"
+      ],
+      "remove": [
+        "fixture"
+      ],
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "PlanPrune": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "units": null,
+      "older_than_seconds": 1,
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "units": [
+        "work-1"
+      ],
+      "older_than_seconds": 1,
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "PlanSetInput": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "name": "fixture",
+      "value": {
+        "file": "/tmp/brief.md"
+      },
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "name": "fixture",
+      "value": {
+        "file": "/tmp/brief.md"
+      },
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "StepSetInput": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": null
+      },
+      "inputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "edit": {
+        "expected": null,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": [
+          "work-1"
+        ],
+        "tags": [
+          "fixture"
+        ]
+      },
+      "inputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "edit": {
+        "expected": 1,
+        "dry_run": false,
+        "reason": "fixture",
+        "author": "fixture"
+      }
+    }
+  ],
+  "StepSetOutput": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "outputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "force": false,
+      "reason": "fixture",
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "outputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "force": false,
+      "reason": "fixture",
+      "author": "fixture"
+    }
+  ],
+  "StepRetry": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": null
+      },
+      "message": null,
+      "reason": null,
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": [
+          "work-1"
+        ],
+        "tags": [
+          "fixture"
+        ]
+      },
+      "message": "fixture",
+      "reason": "fixture",
+      "author": "fixture"
+    }
+  ],
+  "StepCancel": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": null
+      },
+      "reason": "fixture",
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": [
+          "work-1"
+        ],
+        "tags": [
+          "fixture"
+        ]
+      },
+      "reason": "fixture",
+      "author": "fixture"
+    }
+  ],
+  "StepSubmit": [
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "step": "work-1",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "outputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "author": null
+    },
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "step": "work-1",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "outputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "author": "fixture"
+    }
+  ],
+  "MessageAnswer": [
+    {
+      "action": "fixture",
+      "params": null,
+      "values": null
+    },
+    {
+      "action": "fixture",
+      "params": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "values": {
+        "engine": "codex",
+        "model": "sol"
+      }
+    }
+  ],
+  "MessagePost": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "body": "fixture",
+      "thread": null,
+      "to": null,
+      "needs_reply": null,
+      "reply_to": null,
+      "answer": null,
+      "title": null,
+      "ui": null,
+      "input": null,
+      "data": null,
+      "from": null,
+      "run": null,
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "body": "fixture",
+      "thread": "fixture",
+      "to": "fixture",
+      "needs_reply": false,
+      "reply_to": 1,
+      "answer": {
+        "action": "fixture",
+        "params": null,
+        "values": null
+      },
+      "title": "fixture",
+      "ui": "fixture",
+      "input": "fixture",
+      "data": {
+        "file": "/tmp/brief.md"
+      },
+      "from": "fixture",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "author": "fixture"
+    }
+  ],
+  "Messages": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "view": "inbox",
+      "thread": null,
+      "since": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "view": "inbox",
+      "thread": "fixture",
+      "since": 1
+    }
+  ],
+  "MarkRead": [
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "identity": "fixture",
+      "thread": "fixture",
+      "through": 1
+    },
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "identity": "fixture",
+      "thread": "fixture",
+      "through": 1
+    }
+  ],
+  "FnCall": [
+    {
+      "name": "fixture",
+      "inputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "project": null,
+      "wait_seconds": null,
+      "direct": false,
+      "author": null
+    },
+    {
+      "name": "fixture",
+      "inputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "wait_seconds": 1,
+      "direct": false,
+      "author": "fixture"
+    }
+  ],
+  "LogRead": [
+    {
+      "project": null,
+      "since_seq": null,
+      "kinds": null,
+      "threads": null,
+      "limit": 1
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "since_seq": 1,
+      "kinds": [
+        "fixture"
+      ],
+      "threads": [
+        "fixture"
+      ],
+      "limit": 1
+    }
+  ],
+  "LogWait": [
+    {
+      "read": {
+        "project": null,
+        "since_seq": null,
+        "kinds": null,
+        "threads": null,
+        "limit": 1
+      },
+      "timeout_seconds": 1,
+      "questions_only": false
+    },
+    {
+      "read": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "since_seq": 1,
+        "kinds": [
+          "fixture"
+        ],
+        "threads": [
+          "fixture"
+        ],
+        "limit": 1
+      },
+      "timeout_seconds": 1,
+      "questions_only": false
+    }
+  ],
+  "Next": [
+    {
+      "projects": [
+        {
+          "kind": "name",
+          "value": "work-1"
+        }
+      ],
+      "since_seq": 1,
+      "me": "fixture",
+      "timeout_seconds": 1,
+      "all": false,
+      "settle_seconds": 1,
+      "settle_max_seconds": 1,
+      "settles": "short"
+    },
+    {
+      "projects": [
+        {
+          "kind": "name",
+          "value": "work-1"
+        }
+      ],
+      "since_seq": 1,
+      "me": "fixture",
+      "timeout_seconds": 1,
+      "all": false,
+      "settle_seconds": 1,
+      "settle_max_seconds": 1,
+      "settles": "short"
+    }
+  ],
+  "Query": [
+    {
+      "sql": "fixture",
+      "params": [
+        {
+          "file": "/tmp/brief.md"
+        }
+      ],
+      "limit": 1
+    },
+    {
+      "sql": "fixture",
+      "params": [
+        {
+          "file": "/tmp/brief.md"
+        }
+      ],
+      "limit": 1
+    }
+  ],
+  "AcquireLease": [
+    {
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "resource": "fixture",
+      "amount": 1,
+      "priority": 1,
+      "request_id": "fixture"
+    },
+    {
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "resource": "fixture",
+      "amount": 1,
+      "priority": 1,
+      "request_id": "fixture"
+    }
+  ],
+  "ReleaseLease": [
+    {
+      "lease": 1,
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    },
+    {
+      "lease": 1,
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    }
+  ],
+  "CompletionActionTarget": [
+    {
+      "step": "work-1",
+      "generation": 1,
+      "work": 1,
+      "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "result_attempt": null
+    },
+    {
+      "step": "work-1",
+      "generation": 1,
+      "work": 1,
+      "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "result_attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    }
+  ],
+  "RegisterCompletionAction": [
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "target": {
+        "step": "work-1",
+        "generation": 1,
+        "work": 1,
+        "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "result_attempt": null
+      },
+      "message": "fixture",
+      "author": "fixture"
+    },
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "target": {
+        "step": "work-1",
+        "generation": 1,
+        "work": 1,
+        "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "result_attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      },
+      "message": "fixture",
+      "author": "fixture"
+    }
+  ],
+  "EditPreview": [
+    {
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ],
+      "would_start": [
+        "work-1"
+      ],
+      "would_queue": [
+        "work-1"
+      ],
+      "would_skip": [
+        "work-1"
+      ],
+      "would_stale": [
+        "work-1"
+      ],
+      "errors": [
+        "fixture"
+      ]
+    },
+    {
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ],
+      "would_start": [
+        "work-1"
+      ],
+      "would_queue": [
+        "work-1"
+      ],
+      "would_skip": [
+        "work-1"
+      ],
+      "would_stale": [
+        "work-1"
+      ],
+      "errors": [
+        "fixture"
+      ]
+    }
+  ],
+  "EditResult": [
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 1,
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
+      }
+    },
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 1,
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
+      }
+    }
+  ],
+  "RetryResult": [
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "steps": [
+        "work-1"
+      ],
+      "rearmed": [
+        "work-1"
+      ],
+      "stopped_at": [
+        "work-1"
+      ]
+    },
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "steps": [
+        "work-1"
+      ],
+      "rearmed": [
+        "work-1"
+      ],
+      "stopped_at": [
+        "work-1"
+      ]
+    }
+  ],
+  "InputEditResult": [
+    {
+      "edit": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "rev": 1,
+        "preview": {
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ],
+          "would_start": [
+            "work-1"
+          ],
+          "would_queue": [
+            "work-1"
+          ],
+          "would_skip": [
+            "work-1"
+          ],
+          "would_stale": [
+            "work-1"
+          ],
+          "errors": [
+            "fixture"
+          ]
+        }
+      },
+      "changed": [
+        "work-1"
+      ],
+      "running": [
+        "work-1"
+      ],
+      "unsupported": [
+        {
+          "step": "work-1",
+          "inputs": [
+            "fixture"
+          ]
+        }
+      ]
+    },
+    {
+      "edit": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "rev": 1,
+        "preview": {
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ],
+          "would_start": [
+            "work-1"
+          ],
+          "would_queue": [
+            "work-1"
+          ],
+          "would_skip": [
+            "work-1"
+          ],
+          "would_stale": [
+            "work-1"
+          ],
+          "errors": [
+            "fixture"
+          ]
+        }
+      },
+      "changed": [
+        "work-1"
+      ],
+      "running": [
+        "work-1"
+      ],
+      "unsupported": [
+        {
+          "step": "work-1",
+          "inputs": [
+            "fixture"
+          ]
+        }
+      ]
+    }
+  ],
+  "UnsupportedInput": [
+    {
+      "step": "work-1",
+      "inputs": [
+        "fixture"
+      ]
+    },
+    {
+      "step": "work-1",
+      "inputs": [
+        "fixture"
+      ]
+    }
+  ],
+  "Message": [
+    {
+      "id": 1,
+      "thread": "fixture",
+      "from": "fixture",
+      "to": null,
+      "title": null,
+      "body": "fixture",
+      "needs_reply": false,
+      "reply_to": null,
+      "answer": null,
+      "ui": null,
+      "input": null,
+      "data": null,
+      "run": null,
+      "at": "fixture",
+      "claimed_by": null
+    },
+    {
+      "id": 1,
+      "thread": "fixture",
+      "from": "fixture",
+      "to": "fixture",
+      "title": "fixture",
+      "body": "fixture",
+      "needs_reply": false,
+      "reply_to": 1,
+      "answer": {
+        "action": "fixture",
+        "params": null,
+        "values": null
+      },
+      "ui": "fixture",
+      "input": "fixture",
+      "data": {
+        "file": "/tmp/brief.md"
+      },
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "at": "fixture",
+      "claimed_by": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    }
+  ],
+  "MessagePage": [
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "messages": [
+        {
+          "id": 1,
+          "thread": "fixture",
+          "from": "fixture",
+          "to": null,
+          "title": null,
+          "body": "fixture",
+          "needs_reply": false,
+          "reply_to": null,
+          "answer": null,
+          "ui": null,
+          "input": null,
+          "data": null,
+          "run": null,
+          "at": "fixture",
+          "claimed_by": null
+        }
+      ],
+      "last_id": null
+    },
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "messages": [
+        {
+          "id": 1,
+          "thread": "fixture",
+          "from": "fixture",
+          "to": null,
+          "title": null,
+          "body": "fixture",
+          "needs_reply": false,
+          "reply_to": null,
+          "answer": null,
+          "ui": null,
+          "input": null,
+          "data": null,
+          "run": null,
+          "at": "fixture",
+          "claimed_by": null
+        }
+      ],
+      "last_id": 1
+    }
+  ],
+  "RecordPage": [
+    {
+      "records": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "last_seq": 1
+    },
+    {
+      "records": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "last_seq": 1
+    }
+  ],
+  "NextResult": [
+    {
+      "records": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "notes": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "last_seq": 1,
+      "timed_out": false
+    },
+    {
+      "records": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "notes": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "last_seq": 1,
+      "timed_out": false
+    }
+  ],
+  "CompletionActionConflict": [
+    {
+      "expected": {
+        "step": "work-1",
+        "generation": 1,
+        "work": 1,
+        "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "result_attempt": null
+      },
+      "current": null,
+      "message": "fixture"
+    },
+    {
+      "expected": {
+        "step": "work-1",
+        "generation": 1,
+        "work": 1,
+        "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "result_attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      },
+      "current": {
+        "step": "work-1",
+        "generation": 1,
+        "work": 1,
+        "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "result_attempt": null
+      },
+      "message": "fixture"
+    }
+  ],
+  "TransientRetry": [
+    {
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "invocation": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "internal_attempt": 1,
+      "backoff_seconds": 1
+    },
+    {
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "invocation": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "internal_attempt": 1,
+      "backoff_seconds": 1
+    }
+  ],
+  "FileBinding": [
+    {
+      "file": "fixture"
+    },
+    {
+      "file": "fixture"
+    }
+  ],
+  "Snapshot": [
+    {
+      "revision": 1,
+      "document": {
+        "engine": "codex",
+        "model": "sol"
+      }
+    },
+    {
+      "revision": 1,
+      "document": {
+        "engine": "codex",
+        "model": "sol"
+      }
+    }
+  ],
+  "PlanEdit": [
+    {
+      "expected": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ]
+    },
+    {
+      "expected": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ]
+    }
+  ],
+  "PreparedEdit": [
+    {
+      "expected": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ],
+      "plan": {
+        "steps": {}
+      },
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
+      }
+    },
+    {
+      "expected": 1,
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ],
+      "plan": {
+        "steps": {}
+      },
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
+      }
+    }
+  ],
+  "RpcRequest": [
+    {
+      "protocol": 1,
+      "request_id": "request-1",
+      "run_capability": null,
+      "command": {
+        "command": "project_update",
+        "args": {
+          "project": {
+            "kind": "name",
+            "value": "work-1"
+          },
+          "new_name": null,
+          "description": null,
+          "icon": null,
+          "resources": null,
+          "paused": null,
+          "archived": null,
+          "expected_settings_rev": null,
+          "reason": null,
+          "author": null
+        }
+      }
+    },
+    {
+      "protocol": 1,
+      "request_id": "request-1",
+      "run_capability": "fixture-capability",
+      "command": {
+        "command": "project_update",
+        "args": {
+          "project": {
+            "kind": "name",
+            "value": "work-1"
+          },
+          "new_name": null,
+          "description": null,
+          "icon": null,
+          "resources": null,
+          "paused": null,
+          "archived": null,
+          "expected_settings_rev": null,
+          "reason": null,
+          "author": null
+        }
+      }
+    }
+  ],
+  "RpcReply": [
+    {
+      "protocol": 1,
+      "request_id": "request-1",
+      "result": {
+        "status": "ok",
+        "value": {
+          "reply": "project",
+          "data": {
+            "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+            "name": "work-1"
+          }
+        }
+      }
+    },
+    {
+      "protocol": 1,
+      "request_id": "request-1",
+      "result": {
+        "status": "ok",
+        "value": {
+          "reply": "project",
+          "data": {
+            "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+            "name": "work-1"
+          }
+        }
+      }
+    }
+  ],
+  "FnInvocation": [
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "step": null,
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "invocation": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "name": "fixture",
+      "inputs": {
+        "engine": "codex",
+        "model": "sol"
+      }
+    },
+    {
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "step": "work-1",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "invocation": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "name": "fixture",
+      "inputs": {
+        "engine": "codex",
+        "model": "sol"
+      }
+    }
+  ],
+  "Record": [
+    {
+      "seq": 1,
+      "at": "fixture",
+      "project": null,
+      "kind": "plan.edit",
+      "rev": 1,
+      "author": "fixture",
+      "reason": "fixture",
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ]
+    },
+    {
+      "seq": 1,
+      "at": "fixture",
+      "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "kind": "plan.edit",
+      "rev": 1,
+      "author": "fixture",
+      "reason": "fixture",
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ]
+    }
+  ],
+  "UnitStep": [
+    {
+      "id": "work-1",
+      "status": "pending",
+      "held": false,
+      "outputs": null,
+      "omitted": [
+        "fixture"
+      ]
+    },
+    {
+      "id": "work-1",
+      "status": "pending",
+      "held": false,
+      "outputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "omitted": [
+        "fixture"
+      ]
+    }
+  ],
+  "ChangeCursor": [
+    {
+      "after": 1,
+      "projects": [
+        "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      ]
+    },
+    {
+      "after": 1,
+      "projects": [
+        "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      ]
+    }
+  ],
+  "ChangeBatch": [
+    {
+      "records": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "cursor": {
+        "after": 1,
+        "projects": [
+          "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+        ]
+      }
+    },
+    {
+      "records": [
+        {
+          "seq": 1,
+          "at": "fixture",
+          "project": null,
+          "kind": "plan.edit",
+          "rev": 1,
+          "author": "fixture",
+          "reason": "fixture",
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ]
+        }
+      ],
+      "cursor": {
+        "after": 1,
+        "projects": [
+          "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+        ]
+      }
+    }
+  ],
+  "StreamBatch": [
+    {
+      "html": [
+        {
+          "target": "fixture",
+          "html": "fixture"
+        }
+      ],
+      "version": {
+        "view": "fixture",
+        "version": 1,
+        "cursor": 1
+      }
+    },
+    {
+      "html": [
+        {
+          "target": "fixture",
+          "html": "fixture"
+        }
+      ],
+      "version": {
+        "view": "fixture",
+        "version": 1,
+        "cursor": 1
+      }
+    }
+  ],
+  "HtmlPatch": [
+    {
+      "target": "fixture",
+      "html": "fixture"
+    },
+    {
+      "target": "fixture",
+      "html": "fixture"
+    }
+  ],
+  "StreamVersion": [
+    {
+      "view": "fixture",
+      "version": 1,
+      "cursor": 1
+    },
+    {
+      "view": "fixture",
+      "version": 1,
+      "cursor": 1
+    }
+  ],
+  "PatchOperation": [
+    {
+      "op": "add",
+      "path": "fixture",
+      "value": {
+        "file": "/tmp/brief.md"
+      }
+    },
+    {
+      "op": "remove",
+      "path": "fixture"
+    },
+    {
+      "op": "replace",
+      "path": "fixture",
+      "value": {
+        "file": "/tmp/brief.md"
+      }
+    },
+    {
+      "op": "move",
+      "from": "fixture",
+      "path": "fixture"
+    },
+    {
+      "op": "copy",
+      "from": "fixture",
+      "path": "fixture"
+    },
+    {
+      "op": "test",
+      "path": "fixture",
+      "value": {
+        "file": "/tmp/brief.md"
+      }
+    }
+  ],
+  "MessageView": [
+    "inbox",
+    "questions",
+    "history",
+    "thread"
+  ],
+  "Settles": [
+    "short",
+    "full",
+    "none"
+  ],
+  "StepStatus": [
+    "pending",
+    "running",
+    "succeeded",
+    "failed",
+    "stale",
+    "skipped"
+  ],
+  "AttemptPhase": [
+    "reserved",
+    "claimed",
+    "executing",
+    "completing",
+    "terminal"
+  ],
+  "LeaseState": [
+    "waiting",
+    "held",
+    "released"
+  ],
+  "CompletionActionOutcome": [
+    {
+      "outcome": "applied",
+      "details": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "steps": [
+          "work-1"
+        ],
+        "rearmed": [
+          "work-1"
+        ],
+        "stopped_at": [
+          "work-1"
+        ]
+      }
+    },
+    {
+      "outcome": "conflict",
+      "details": {
+        "expected": {
+          "step": "work-1",
+          "generation": 1,
+          "work": 1,
+          "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "result_attempt": null
+        },
+        "current": null,
+        "message": "fixture"
+      }
+    },
+    {
+      "outcome": "discarded"
+    }
+  ],
+  "CommandRequest": [
+    {
+      "command": "project_update",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "new_name": null,
+        "description": null,
+        "icon": null,
+        "resources": null,
+        "paused": null,
+        "archived": null,
+        "expected_settings_rev": null,
+        "reason": null,
+        "author": null
+      }
+    },
+    {
+      "command": "project_delete",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "confirm_name": "work-1",
+        "expected_settings_rev": 1,
+        "author": null
+      }
+    },
+    {
+      "command": "plan_patch",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "rev": 1,
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "dry_run": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "command": "step_add",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "step": "work-1",
+        "spec": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "unit_add",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "recipe": "fixture",
+        "unit": "work-1",
+        "params": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "start": false,
+        "after": {
+          "*": [
+            "unit:up",
+            "check/ok"
+          ],
+          "work": [
+            "review?"
+          ]
+        },
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "step_update",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "step": "work-1",
+        "changes": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "step_remove",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "selection": {
+          "steps": null,
+          "tags": null
+        },
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "step_pause",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "selection": {
+          "steps": null,
+          "tags": null
+        },
+        "paused": false,
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "unit_tag",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "unit": "work-1",
+        "add": [
+          "fixture"
+        ],
+        "remove": [
+          "fixture"
+        ],
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "plan_prune",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "units": null,
+        "older_than_seconds": 1,
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "plan_set_input",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "name": "fixture",
+        "value": {
+          "file": "/tmp/brief.md"
+        },
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "step_set_input",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "selection": {
+          "steps": null,
+          "tags": null
+        },
+        "inputs": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "step_set_output",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "step": "work-1",
+        "outputs": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "force": false,
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "command": "step_retry",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "selection": {
+          "steps": null,
+          "tags": null
+        },
+        "message": null,
+        "reason": null,
+        "author": null
+      }
+    },
+    {
+      "command": "step_cancel",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "selection": {
+          "steps": null,
+          "tags": null
+        },
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
+      "command": "step_submit",
+      "args": {
+        "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "step": "work-1",
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "outputs": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "author": null
+      }
+    },
+    {
+      "command": "message_post",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "body": "fixture",
+        "thread": null,
+        "to": null,
+        "needs_reply": null,
+        "reply_to": null,
+        "answer": null,
+        "title": null,
+        "ui": null,
+        "input": null,
+        "data": null,
+        "from": null,
+        "run": null,
+        "author": null
+      }
+    },
+    {
+      "command": "messages",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "view": "inbox",
+        "thread": null,
+        "since": null
+      }
+    },
+    {
+      "command": "mark_read",
+      "args": {
+        "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "identity": "fixture",
+        "thread": "fixture",
+        "through": 1
+      }
+    },
+    {
+      "command": "fn_call",
+      "args": {
+        "name": "fixture",
+        "inputs": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "project": null,
+        "wait_seconds": null,
+        "direct": false,
+        "author": null
+      }
+    },
+    {
+      "command": "log_read",
+      "args": {
+        "project": null,
+        "since_seq": null,
+        "kinds": null,
+        "threads": null,
+        "limit": 1
+      }
+    },
+    {
+      "command": "log_wait",
+      "args": {
+        "read": {
+          "project": null,
+          "since_seq": null,
+          "kinds": null,
+          "threads": null,
+          "limit": 1
+        },
+        "timeout_seconds": 1,
+        "questions_only": false
+      }
+    },
+    {
+      "command": "next",
+      "args": {
+        "projects": [
+          {
+            "kind": "name",
+            "value": "work-1"
+          }
+        ],
+        "since_seq": 1,
+        "me": "fixture",
+        "timeout_seconds": 1,
+        "all": false,
+        "settle_seconds": 1,
+        "settle_max_seconds": 1,
+        "settles": "short"
+      }
+    },
+    {
+      "command": "query",
+      "args": {
+        "sql": "fixture",
+        "params": [
+          {
+            "file": "/tmp/brief.md"
+          }
+        ],
+        "limit": 1
+      }
+    },
+    {
+      "command": "acquire_lease",
+      "args": {
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "resource": "fixture",
+        "amount": 1,
+        "priority": 1,
+        "request_id": "fixture"
+      }
+    },
+    {
+      "command": "release_lease",
+      "args": {
+        "lease": 1,
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      }
+    },
+    {
+      "command": "register_completion_action",
+      "args": {
+        "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "target": {
+          "step": "work-1",
+          "generation": 1,
+          "work": 1,
+          "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "result_attempt": null
+        },
+        "message": "fixture",
+        "author": "fixture"
+      }
+    },
+    {
+      "command": "edge_add",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "step": "fixture",
+        "after": [
+          "fixture"
+        ],
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "edge_remove",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "step": "fixture",
+        "after": [
+          "fixture"
+        ],
+        "edit": {
+          "expected": null,
+          "dry_run": false,
+          "reason": "fixture",
+          "author": null
+        }
+      }
+    },
+    {
+      "command": "projects_list"
+    },
+    {
+      "command": "project_create",
+      "args": {
+        "name": "work-1",
+        "description": "fixture",
+        "icon": null,
+        "resources": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "author": null
+      }
+    },
+    {
+      "command": "plan_get",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        }
+      }
+    },
+    {
+      "command": "plan_history",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "since_rev": null
+      }
+    },
+    {
+      "command": "recipe_list",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        }
+      }
+    },
+    {
+      "command": "fn_list",
+      "args": {
+        "project": null
+      }
+    },
+    {
+      "command": "fn_get",
+      "args": {
+        "name": "fixture",
+        "project": null
+      }
+    },
+    {
+      "command": "fn_save",
+      "args": {
+        "manifest": {
+          "engine": "codex",
+          "model": "sol"
+        },
+        "main_py": "fixture",
+        "project": null
+      }
+    },
+    {
+      "command": "call_status",
+      "args": {
+        "call": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "project": null
+      }
+    },
+    {
+      "command": "step_context",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "step": "work-1"
+      }
+    },
+    {
+      "command": "status",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "selection": {
+          "steps": null,
+          "tags": null
+        }
+      }
+    },
+    {
+      "command": "plan_view",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "format": "mermaid"
+      }
+    },
+    {
+      "command": "verify",
+      "args": {
+        "project": null
+      }
+    },
+    {
+      "command": "drain",
+      "args": {
+        "projects": null,
+        "author": null
+      }
+    },
+    {
+      "command": "release",
+      "args": {
+        "author": null
+      }
+    },
+    {
+      "command": "backup",
+      "args": {
+        "destination": "fixture"
+      }
+    },
+    {
+      "command": "docs",
+      "args": {
+        "topic": null
+      }
+    },
+    {
+      "command": "builtin",
+      "args": {
+        "invocation": {
+          "project": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "step": null,
+          "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "invocation": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "fixture",
+          "inputs": {
+            "engine": "codex",
+            "model": "sol"
+          }
+        }
+      }
+    },
+    {
+      "command": "submission",
+      "args": {
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      }
+    }
+  ],
+  "PlanViewFormat": [
+    "mermaid",
+    "html"
+  ],
+  "CommandReply": [
+    {
+      "reply": "project",
+      "data": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      }
+    },
+    {
+      "reply": "projects",
+      "data": [
+        {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        }
+      ]
+    },
+    {
+      "reply": "deleted",
+      "data": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1",
+        "deleted": false
+      }
+    },
+    {
+      "reply": "edit",
+      "data": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "rev": 1,
+        "preview": {
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ],
+          "would_start": [
+            "work-1"
+          ],
+          "would_queue": [
+            "work-1"
+          ],
+          "would_skip": [
+            "work-1"
+          ],
+          "would_stale": [
+            "work-1"
+          ],
+          "errors": [
+            "fixture"
+          ]
+        }
+      }
+    },
+    {
+      "reply": "preview",
+      "data": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
+      }
+    },
+    {
+      "reply": "retry",
+      "data": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "steps": [
+          "work-1"
+        ],
+        "rearmed": [
+          "work-1"
+        ],
+        "stopped_at": [
+          "work-1"
+        ]
+      }
+    },
+    {
+      "reply": "inputs",
+      "data": {
+        "edit": {
+          "project": {
+            "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+            "name": "work-1"
+          },
+          "rev": 1,
+          "preview": {
+            "ops": [
+              {
+                "op": "add",
+                "path": "fixture",
+                "value": {
+                  "file": "/tmp/brief.md"
+                }
+              }
+            ],
+            "would_start": [
+              "work-1"
+            ],
+            "would_queue": [
+              "work-1"
+            ],
+            "would_skip": [
+              "work-1"
+            ],
+            "would_stale": [
+              "work-1"
+            ],
+            "errors": [
+              "fixture"
+            ]
+          }
+        },
+        "changed": [
+          "work-1"
+        ],
+        "running": [
+          "work-1"
+        ],
+        "unsupported": [
+          {
+            "step": "work-1",
+            "inputs": [
+              "fixture"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "reply": "posted",
+      "data": {
+        "id": 1
+      }
+    },
+    {
+      "reply": "messages",
+      "data": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "messages": [
+          {
+            "id": 1,
+            "thread": "fixture",
+            "from": "fixture",
+            "to": null,
+            "title": null,
+            "body": "fixture",
+            "needs_reply": false,
+            "reply_to": null,
+            "answer": null,
+            "ui": null,
+            "input": null,
+            "data": null,
+            "run": null,
+            "at": "fixture",
+            "claimed_by": null
+          }
+        ],
+        "last_id": null
+      }
+    },
+    {
+      "reply": "records",
+      "data": {
+        "records": [
+          {
+            "seq": 1,
+            "at": "fixture",
+            "project": null,
+            "kind": "plan.edit",
+            "rev": 1,
+            "author": "fixture",
+            "reason": "fixture",
+            "ops": [
+              {
+                "op": "add",
+                "path": "fixture",
+                "value": {
+                  "file": "/tmp/brief.md"
+                }
+              }
+            ]
+          }
+        ],
+        "last_seq": 1
+      }
+    },
+    {
+      "reply": "next",
+      "data": {
+        "records": [
+          {
+            "seq": 1,
+            "at": "fixture",
+            "project": null,
+            "kind": "plan.edit",
+            "rev": 1,
+            "author": "fixture",
+            "reason": "fixture",
+            "ops": [
+              {
+                "op": "add",
+                "path": "fixture",
+                "value": {
+                  "file": "/tmp/brief.md"
+                }
+              }
+            ]
+          }
+        ],
+        "notes": [
+          {
+            "seq": 1,
+            "at": "fixture",
+            "project": null,
+            "kind": "plan.edit",
+            "rev": 1,
+            "author": "fixture",
+            "reason": "fixture",
+            "ops": [
+              {
+                "op": "add",
+                "path": "fixture",
+                "value": {
+                  "file": "/tmp/brief.md"
+                }
+              }
+            ]
+          }
+        ],
+        "last_seq": 1,
+        "timed_out": false
+      }
+    },
+    {
+      "reply": "lease",
+      "data": {
+        "lease": 1,
+        "state": "waiting"
+      }
+    },
+    {
+      "reply": "completion_action",
+      "data": {
+        "outcome": "applied",
+        "details": {
+          "project": {
+            "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+            "name": "work-1"
+          },
+          "steps": [
+            "work-1"
+          ],
+          "rearmed": [
+            "work-1"
+          ],
+          "stopped_at": [
+            "work-1"
+          ]
+        }
+      }
+    },
+    {
+      "reply": "data",
+      "data": {
+        "file": "/tmp/brief.md"
+      }
+    },
+    {
+      "reply": "ack"
+    }
+  ],
+  "ProjectSelector": [
+    {
+      "kind": "name",
+      "value": "work-1"
+    },
+    {
+      "kind": "id",
+      "value": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    }
+  ],
+  "RpcResult": [
+    {
+      "status": "ok",
+      "value": {
+        "reply": "project",
+        "data": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        }
+      }
+    },
+    {
+      "status": "error",
+      "value": {
+        "error": "bad_request",
+        "message": "fixture"
+      }
+    }
+  ],
+  "BoundValue": [
+    {
+      "kind": "ready",
+      "value": {
+        "file": "/tmp/brief.md"
+      }
+    },
+    {
+      "kind": "waiting"
+    },
+    {
+      "kind": "skipped",
+      "value": {
+        "kind": "boolean",
+        "reference": "fixture",
+        "value": null,
+        "negate": false
+      }
+    }
+  ],
+  "SkipReason": [
+    {
+      "kind": "boolean",
+      "reference": "fixture",
+      "value": null,
+      "negate": false
+    },
+    {
+      "kind": "step",
+      "step": "work-1"
+    },
+    {
+      "kind": "unit",
+      "unit": "work-1",
+      "exit": "work-1"
+    }
+  ],
+  "Gate": [
+    {
+      "kind": "step",
+      "id": "work-1",
+      "accept_skip": false
+    },
+    {
+      "kind": "bool",
+      "reference": "check/ok",
+      "negate": false
+    },
+    {
+      "kind": "unit",
+      "name": "work-1",
+      "accept_skip": false
+    }
+  ],
+  "Event": [
+    {
+      "kind": "plan.edit",
+      "rev": 1,
+      "author": "fixture",
+      "reason": "fixture",
+      "ops": [
+        {
+          "op": "add",
+          "path": "fixture",
+          "value": {
+            "file": "/tmp/brief.md"
+          }
+        }
+      ]
+    },
+    {
+      "kind": "plan.input",
+      "rev": 1,
+      "author": "fixture",
+      "reason": "fixture",
+      "name": "fixture",
+      "value": {
+        "file": "/tmp/brief.md"
+      }
+    },
+    {
+      "kind": "step.output",
+      "rev": 1,
+      "author": "fixture",
+      "reason": "fixture",
+      "step": "work-1",
+      "outputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "force": false
+    },
+    {
+      "kind": "step.retry",
+      "rev": 1,
+      "author": "fixture",
+      "reason": "fixture",
+      "step": "work-1",
+      "work": 1
+    },
+    {
+      "kind": "step.cancel",
+      "step": "work-1",
+      "author": "fixture",
+      "reason": "fixture"
+    },
+    {
+      "kind": "step.submit",
+      "step": "work-1",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "outputs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "author": null
+    },
+    {
+      "kind": "step.status",
+      "step": "work-1",
+      "from": null,
+      "to": "pending",
+      "error": null,
+      "run_ids": [
+        "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      ],
+      "needs": {
+        "engine": "codex",
+        "model": "sol"
+      }
+    },
+    {
+      "kind": "step.lease",
+      "step": null,
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "lease": 1,
+      "resource": "fixture",
+      "amount": 1,
+      "state": "waiting",
+      "reason": null
+    },
+    {
+      "kind": "step.queued",
+      "step": "work-1",
+      "needs": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "resources": {
+        "engine": "codex",
+        "model": "sol"
+      },
+      "reason": "fixture"
+    },
+    {
+      "kind": "call",
+      "call": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "status": "pending",
+      "inputs": null,
+      "outputs": null,
+      "error": null,
+      "direct": false,
+      "author": null,
+      "fn": "fixture"
+    },
+    {
+      "kind": "message",
+      "id": 1,
+      "thread": "fixture",
+      "from": "fixture",
+      "to": null,
+      "title": null,
+      "body": "fixture",
+      "needs_reply": false,
+      "reply_to": null,
+      "answer": null,
+      "ui": null,
+      "input": null,
+      "data": null,
+      "run": null,
+      "at": "fixture",
+      "claimed_by": null
+    },
+    {
+      "kind": "project.pause",
+      "paused": false,
+      "reason": null,
+      "author": "fixture"
+    },
+    {
+      "kind": "project.archive",
+      "archived": false,
+      "reason": null,
+      "author": "fixture"
+    },
+    {
+      "kind": "project.update",
+      "fields": [
+        "fixture"
+      ],
+      "reason": null,
+      "author": "fixture"
+    },
+    {
+      "kind": "project.rename",
+      "old_name": "work-1",
+      "new_name": "work-1",
+      "author": "fixture"
+    },
+    {
+      "kind": "project.delete",
+      "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "name": "work-1",
+      "author": "fixture"
+    },
+    {
+      "kind": "project.capacity",
+      "resource": "fixture",
+      "capacity": null,
+      "error": null,
+      "fn": "fixture"
+    },
+    {
+      "kind": "project.notify",
+      "message": 1,
+      "outcome": "reserved",
+      "error": null
+    },
+    {
+      "kind": "run.adopt",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "step": null,
+      "call": null,
+      "outcome": "watching"
+    },
+    {
+      "kind": "run.orphan",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    },
+    {
+      "kind": "run.completion_action",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "outcome": {
+        "outcome": "applied",
+        "details": {
+          "project": {
+            "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+            "name": "work-1"
+          },
+          "steps": [
+            "work-1"
+          ],
+          "rearmed": [
+            "work-1"
+          ],
+          "stopped_at": [
+            "work-1"
+          ]
+        }
+      },
+      "author": "fixture"
+    },
+    {
+      "kind": "unit.settled",
+      "unit": "work-1",
+      "work": 1,
+      "steps": [
+        {
+          "id": "work-1",
+          "status": "pending",
+          "held": false,
+          "outputs": null,
+          "omitted": [
+            "fixture"
+          ]
+        }
+      ]
+    }
+  ],
+  "AdoptionOutcome": [
+    "watching",
+    "finished",
+    "lost"
+  ],
+  "NotificationOutcome": [
+    "reserved",
+    "dispatched",
+    "failed",
+    "uncertain"
+  ],
+  "StreamEvent": [
+    {
+      "event": "elements",
+      "data": {
+        "target": "fixture",
+        "html": "fixture"
+      }
+    },
+    {
+      "event": "version",
+      "data": {
+        "view": "fixture",
+        "version": 1,
+        "cursor": 1
+      }
+    }
+  ],
+  "PublicError": [
+    {
+      "error": "bad_request",
+      "message": "fixture"
+    },
+    {
+      "error": "not_found",
+      "message": "fixture"
+    },
+    {
+      "error": "conflict",
+      "message": "fixture"
+    },
+    {
+      "error": "invalid",
+      "message": "fixture",
+      "errors": [
+        "steps.work.in.engine: required"
+      ]
+    },
+    {
+      "error": "busy",
+      "message": "fixture",
+      "retryable": false
+    },
+    {
+      "error": "storage",
+      "message": "fixture"
+    },
+    {
+      "error": "cursor_expired",
+      "message": "fixture"
+    },
+    {
+      "error": "process_lost",
+      "message": "fixture"
+    },
+    {
+      "error": "cancelled",
+      "message": "fixture"
+    },
+    {
+      "error": "fn_failure",
+      "message": "fixture"
+    },
+    {
+      "error": "agent_failure",
+      "message": "fixture"
+    }
+  ]
+}

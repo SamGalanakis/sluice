@@ -1,0 +1,21 @@
+[package]
+name = "sluice-process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sluice-model.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+rustix.workspace = true
+procfs.workspace = true
+fs4.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

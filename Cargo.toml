@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/sluice-model",
+    "crates/sluice-store",
+    "crates/sluice-process",
+    "crates/sluice-agents",
+    "crates/sluice-runtime",
+    "crates/sluice-web",
+    "crates/sluice",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+
+[workspace.dependencies]
+sluice-model = { path = "crates/sluice-model" }
+sluice-store = { path = "crates/sluice-store" }
+sluice-process = { path = "crates/sluice-process" }
+sluice-agents = { path = "crates/sluice-agents" }
+sluice-runtime = { path = "crates/sluice-runtime" }
+sluice-web = { path = "crates/sluice-web" }
+sluice = { path = "crates/sluice" }
+tokio = { version = "=1.53.2", features = ["rt-multi-thread", "macros", "process", "signal", "net", "io-util", "sync", "time"] }
+tokio-util = { version = "=0.7.19", features = ["rt", "codec"] }
+rusqlite = { version = "=0.40.2", features = ["bundled", "hooks", "backup", "limits"] }
+axum = { version = "=0.8.9", features = ["query", "json", "http1", "tokio"] }
+tower = { version = "=0.5.3", features = ["util", "limit", "timeout"] }
+tower-http = { version = "=0.7.1", features = ["trace", "request-id", "set-header", "limit", "compression-gzip"] }
+rmcp = { version = "=3.5.0", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["preserve_order"] }
+schemars = { version = "=1.2.2", features = ["derive"] }
+thiserror = { version = "=2.0.21" }
+anyhow = { version = "=1.0.104" }
+clap = { version = "=4.6.7", features = ["derive"] }
+indexmap = { version = "=2.14.2", features = ["serde"] }
+sha2 = { version = "=0.11.0" }
+json-patch = { version = "=4.2.0" }
+jsonptr = { version = "=0.8.2" }
+comrak = { version = "=0.55.0", default-features = false }
+askama = { version = "=0.16.1" }
+datastar = { version = "=0.4.1", features = ["axum"] }
+rustix = { version = "=1.1.5", features = ["fs", "process", "event", "pty", "termios", "system"] }
+procfs = { version = "=0.18.0" }
+fs4 = { version = "=1.1.0" }
+notify = { version = "=8.2.0" }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+futures-util = { version = "=0.3.34", features = ["sink"] }
+bytes = { version = "=1.12.1" }
+reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls"] }
+toml_edit = { version = "=0.25.15", features = ["parse", "display", "serde"] }
+tracing = { version = "=0.1.44" }
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "=1.27.0", features = ["v7", "serde"] }
+time = { version = "=0.3.55", features = ["formatting", "parsing", "serde"] }
+url = { version = "=2.5.8" }
+base64 = { version = "=0.23.1" }
+tempfile = { version = "=3.27.0" }
+proptest = { version = "=1.11.0" }

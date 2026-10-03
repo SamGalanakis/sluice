@@ -1,0 +1,13 @@
+[package]
+name = "sluice-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sluice-model.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+time.workspace = true

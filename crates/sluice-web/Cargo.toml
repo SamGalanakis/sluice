@@ -1,0 +1,25 @@
+[package]
+name = "sluice-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sluice-model.workspace = true
+sluice-runtime.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+comrak.workspace = true
+askama.workspace = true
+datastar.workspace = true
+futures-util.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

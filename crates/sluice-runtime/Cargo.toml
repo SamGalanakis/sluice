@@ -1,0 +1,21 @@
+[package]
+name = "sluice-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sluice-model.workspace = true
+sluice-store.workspace = true
+sluice-process.workspace = true
+sluice-agents.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+notify.workspace = true
+reqwest.workspace = true
+url.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

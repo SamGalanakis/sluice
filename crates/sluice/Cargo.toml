@@ -1,0 +1,22 @@
+[package]
+name = "sluice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sluice-model.workspace = true
+sluice-store.workspace = true
+sluice-process.workspace = true
+sluice-agents.workspace = true
+sluice-runtime.workspace = true
+sluice-web.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

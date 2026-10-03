@@ -1,0 +1,127 @@
+{
+  "transient": [
+    {
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "invocation": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "internal_attempt": 1,
+      "backoff_seconds": 1
+    },
+    {
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "attempt": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "invocation": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "internal_attempt": 2,
+      "backoff_seconds": 1
+    }
+  ],
+  "binding": {
+    "file": "/tmp/brief.md"
+  },
+  "leases": [
+    {
+      "command": "acquire_lease",
+      "args": {
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "resource": "fixture",
+        "amount": 1,
+        "priority": 1,
+        "request_id": "section-1"
+      }
+    },
+    {
+      "command": "release_lease",
+      "args": {
+        "lease": 1,
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      }
+    },
+    {
+      "command": "acquire_lease",
+      "args": {
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "resource": "fixture",
+        "amount": 1,
+        "priority": 1,
+        "request_id": "section-2"
+      }
+    }
+  ],
+  "stream": [
+    {
+      "event": "elements",
+      "data": {
+        "target": "#board",
+        "html": "<div id=\"board\">board</div>"
+      }
+    },
+    {
+      "event": "elements",
+      "data": {
+        "target": "#counts",
+        "html": "<div id=\"counts\">1</div>"
+      }
+    },
+    {
+      "event": "version",
+      "data": {
+        "view": "project",
+        "version": 2,
+        "cursor": 2
+      }
+    }
+  ],
+  "actions": [
+    {
+      "outcome": "applied",
+      "details": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "steps": [
+          "work-1"
+        ],
+        "rearmed": [
+          "work-1"
+        ],
+        "stopped_at": [
+          "work-1"
+        ]
+      }
+    },
+    {
+      "outcome": "conflict",
+      "details": {
+        "expected": {
+          "step": "work-1",
+          "generation": 1,
+          "work": 1,
+          "result": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "result_attempt": null
+        },
+        "current": null,
+        "message": "fixture"
+      }
+    },
+    {
+      "outcome": "discarded"
+    }
+  ],
+  "grants": [
+    {
+      "reply": "lease",
+      "data": {
+        "lease": 1,
+        "state": "held"
+      }
+    },
+    {
+      "reply": "lease",
+      "data": {
+        "lease": 2,
+        "state": "held"
+      }
+    }
+  ]
+}
