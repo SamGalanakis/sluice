@@ -1,9 +1,8 @@
 //! jev.* builtins: TypeSafe's System One ("Jev") over HTTP, ported from packs/jev.
 //!
 //! POST {TYPESAFE_BASE_URL or https://api.typesafe.ai}/v1/systemone with a bearer key from
-//! TYPESAFE_API_KEY, read from the run's environment. p0 left no builtin descriptor, context
-//! or failure shape; the minimal BuiltinDescriptor, BuiltinCtx and FnFailure below are the
-//! local contract until P4.02 unifies them.
+//! TYPESAFE_API_KEY, read from the run's environment. The descriptor, context and failure
+//! shapes are p4-02's shared builtin contract, re-exported for this module's callers.
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -11,60 +10,19 @@ use sluice_model::{
     rpc::{JsonMap, JsonValue, decode_json},
     types::Type,
 };
-use std::{fmt, time::Duration};
+use std::time::Duration;
+
+pub use super::descriptor::{BuiltinCtx, BuiltinDescriptor, FnFailure, RetryBudget};
 
 const DEFAULT_BASE: &str = "https://api.typesafe.ai";
 const DEFAULT_MODEL: &str = "jev-latest";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const DETAIL_LIMIT: usize = 2000;
-
-/// A compiled fn's manifest, equal to its fn.json (name, doc, typed inputs and outputs).
-pub struct BuiltinDescriptor {
-    pub name: &'static str,
-    pub doc: &'static str,
-    pub inputs: Vec<(&'static str, Type)>,
-    pub outputs: Vec<(&'static str, Type)>,
-}
-
-/// What a builtin sees of its run: the environment holding secrets and provider config.
-#[derive(Debug, Default, Clone)]
-pub struct BuiltinCtx {
-    pub env: IndexMap<String, String>,
-}
-impl BuiltinCtx {
-    pub fn new(env: impl IntoIterator<Item = (String, String)>) -> Self {
-        Self {
-            env: env.into_iter().collect(),
-        }
-    }
-    fn env(&self, name: &str) -> Option<&str> {
-        self.env.get(name).map(String::as_str)
-    }
-}
-
-/// How a fn run ended. Transient is retryable within the run under the spec's same-run
-/// retry rule (the Python helper's `Transient`); Terminal fails the step.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FnFailure {
-    Transient(String),
-    Terminal(String),
-}
-impl FnFailure {
-    pub fn is_transient(&self) -> bool {
-        matches!(self, Self::Transient(_))
-    }
-    fn terminal(message: impl Into<String>) -> Self {
-        Self::Terminal(message.into())
-    }
-}
-impl fmt::Display for FnFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Transient(m) | Self::Terminal(m) => f.write_str(m),
-        }
-    }
-}
-impl std::error::Error for FnFailure {}
+/// The pack's `run(main, retries=3, backoff=5)` same-run retry budget.
+const JEV_RETRY: RetryBudget = RetryBudget {
+    retries: 3,
+    backoff: Duration::from_secs(5),
+};
 
 /// The fn.json type grammar these fns declare: names, `?` optional and `[]` list suffixes.
 fn ty(form: &str) -> Type {
@@ -97,6 +55,10 @@ single call. questions maps your ids to {type: choice|score|noul, instructions, 
 answers come back under the same ids. Needs TYPESAFE_API_KEY.",
             inputs: ports(&[("state", "Any"), ("questions", "Any"), ("model", "string?")]),
             outputs: ports(&[("answers", "Any"), ("model", "string"), ("usage", "Any")]),
+            open: false,
+            submits: vec![],
+            icon: None,
+            retry: JEV_RETRY,
         },
         BuiltinDescriptor {
             name: "jev.choice",
@@ -117,6 +79,10 @@ Needs TYPESAFE_API_KEY.",
                 ("confident", "boolean"),
                 ("model", "string"),
             ]),
+            open: false,
+            submits: vec![],
+            icon: None,
+            retry: JEV_RETRY,
         },
         BuiltinDescriptor {
             name: "jev.score",
@@ -135,6 +101,10 @@ the probability-weighted level index and can land between levels. Needs TYPESAFE
                 ("legend", "Any"),
                 ("model", "string"),
             ]),
+            open: false,
+            submits: vec![],
+            icon: None,
+            retry: JEV_RETRY,
         },
         BuiltinDescriptor {
             name: "jev.noul",
@@ -148,6 +118,10 @@ yes, from Jev. yes/no optionally describe what each answer means. Needs TYPESAFE
                 ("model", "string?"),
             ]),
             outputs: ports(&[("noul", "float"), ("model", "string")]),
+            open: false,
+            submits: vec![],
+            icon: None,
+            retry: JEV_RETRY,
         },
     ]
 }
