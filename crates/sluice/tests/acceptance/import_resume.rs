@@ -329,6 +329,7 @@ async fn g7_codex_import_resume() {
         snapshot,
         "Rust callback changed source Python home"
     );
+    gate.wait(Duration::from_secs(20), |g| g.groups_empty());
     gate.assert_clean();
     gate.cleanup();
     println!(

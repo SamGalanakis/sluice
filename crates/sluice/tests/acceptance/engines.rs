@@ -196,11 +196,11 @@ impl Gate {
         self.broker = Some(
             Command::new(workspace().join("target/debug/sluice"))
                 .arg("coordinator")
-                .envs(&self.env)
                 .env_remove("CLAUDECODE")
                 .env_remove("CLAUDE_CODE_SESSION_ID")
                 .env_remove("AI_AGENT")
                 .env_remove("SLUICE_FIXTURE")
+                .envs(&self.env)
                 .stdout(Stdio::null())
                 .stderr(log)
                 .spawn()
@@ -262,10 +262,11 @@ impl Gate {
         assert!(run.parse::<sluice_model::ids::RunId>().is_ok());
         let unit = format!("sluice-test-{run}.service");
         if !self.units.contains(&unit) {
+            println!("p5-05 owned unit: {unit}");
             self.units.push(unit);
         }
     }
-    pub fn assert_clean(&self) {
+    pub fn groups_empty(&self) -> bool {
         for unit in &self.units {
             let out = Command::new("/usr/bin/systemctl")
                 .args(["--user", "show", unit, "--property=ControlGroup", "--value"])
@@ -276,14 +277,20 @@ impl Gate {
                 let events = Path::new("/sys/fs/cgroup")
                     .join(group.trim_start_matches('/'))
                     .join("cgroup.events");
-                if let Ok(text) = fs::read_to_string(events) {
-                    assert!(
-                        text.lines().any(|l| l == "populated 0"),
-                        "owned cgroup still populated after settlement: {unit}"
-                    );
+                match fs::read_to_string(events) {
+                    Ok(text) if text.lines().any(|l| l == "populated 0") => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => return false,
                 }
             }
         }
+        true
+    }
+    pub fn assert_clean(&self) {
+        assert!(
+            self.groups_empty(),
+            "owned cgroup still populated after settlement"
+        );
         if let Ok(runs) = fs::read_dir(self.home.join("runs")) {
             for run in runs.flatten() {
                 let socket = run.path().join("tmux.sock");
@@ -392,10 +399,20 @@ fn g3(engine: &str) {
     repo(&cwd);
     let baseline = git(&cwd, &["rev-parse", "HEAD"]);
     let mut gate = Gate::new(&scratch.0, scratch.0.join("rust-home"), env);
+    let marker = gate.home.join("transient-after-commit");
+    gate.env.insert("SLUICE_FIXTURE".into(), "1".into());
+    gate.env.insert(
+        "SLUICE_TEST_AGENT_TRANSIENT_MARKER".into(),
+        marker.to_string_lossy().into(),
+    );
+    gate.env.insert("SLUICE_BACKOFF".into(), "15".into());
+    gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.1".into());
+    gate.env
+        .insert("SLUICE_AGENT_SETTLE_S".into(), "0.2".into());
     gate.boot();
     let CommandReply::Project(p)=gate.rpc(json!({"command":"project_create","args":{"name":"g3-acceptance","description":"Labelled scratch G3 engine acceptance","icon":null,"resources":{},"author":"fixture"}}))else{panic!("project reply")};
     let selector = json!({"kind":"id","value":p.project_id});
-    let spec = "Labelled G3 scratch fixture. Create original.txt containing original and make exactly one commit with message 'Record the engine fixture turn.' Then wait by running sleep 8, so an addressed live message can arrive. Submit the declared word as blue using the current run's step_submit callback. Finish this turn. Do no other work.";
+    let spec = "Labelled G3 scratch fixture. On the FIRST task turn, create original.txt containing original and make exactly one commit with message 'Record the engine fixture turn.' Finish that turn with G3_WAITING, WITHOUT submitting word: the harness intentionally injects one transient after the completed turn. On AUTOMATIC CONTINUATION after the transient, continue this same session, never recreate or commit original.txt. Run sleep 8 to allow an addressed live message to arrive, then submit word=blue to the current run and finish. For later feedback retries, follow their new addressed message instead. Do no other work.";
     let mut inputs = json!({"engine":{"default":engine},"cwd":{"default":cwd},"spec":{"default":spec},"listen":{"default":true}});
     if engine == "codex" {
         inputs["model"] = json!({"default":"sol"});
@@ -415,8 +432,40 @@ fn g3(engine: &str) {
         }
     });
     gate.wait(Duration::from_secs(120), |_| {
-        cwd.join("original.txt").exists()
+        cwd.join("original.txt").exists() && git(&cwd, &["rev-parse", "HEAD"]) != baseline
     });
+    private_write(&marker, b"one completed-turn transient\n");
+    let directory = gate.home.join("runs").join(&run);
+    let mut retried = None;
+    gate.wait(Duration::from_secs(180), |_| {
+        let checkpoint = sluice_agents::supervisor::Checkpoint::read(&directory).unwrap();
+        if let Some(cp) = checkpoint
+            && cp.internal_attempt == 2
+            && cp.state != sluice_agents::supervisor::State::Backoff
+        {
+            retried = Some(cp);
+            true
+        } else {
+            false
+        }
+    });
+    let retried = retried.unwrap();
+    assert_eq!(retried.head_before.as_deref(), Some(baseline.as_str()));
+    assert_eq!(retried.run.to_string(), run);
+    assert_eq!(
+        retried.live_after.0, 0,
+        "new messages were required for automatic retry"
+    );
+    assert_eq!(
+        retried
+            .delivery
+            .entries
+            .iter()
+            .filter(|e| e.id == sluice_agents::engines::InputId::Task)
+            .map(|e| e.tries)
+            .sum::<u32>(),
+        1
+    );
     gate.rpc(json!({"command":"message_post","args":{"project":selector,"body":"Addressed live fixture input: write live.txt containing received, without another commit. Submit word=blue for this current run and finish.","thread":"step-work","to":"work","needs_reply":false,"reply_to":null,"answer":null,"title":null,"ui":null,"input":null,"data":null,"from":"fixture","run":null,"author":"fixture"}}));
     let first = step_finished(&mut gate, &selector);
     assert_eq!(first["outputs"]["word"], "blue");
@@ -430,14 +479,51 @@ fn g3(engine: &str) {
     let next = step_finished(&mut gate, &selector);
     assert_eq!(next["outputs"]["word"], "green");
     assert_eq!(next["outputs"]["session"], session);
+    assert_eq!(retried.session.as_deref(), Some(session.as_str()));
+    fs::remove_file(marker.with_extension("injected")).unwrap();
+    private_write(&marker, b"cancel the next backoff\n");
+    let feedback_run = next["run_ids"][0].as_str().unwrap().to_string();
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Cancellation fixture: resume the same session, make no files or commits, and finish this turn with G3_CANCEL_WAITING WITHOUT submitting any word. The harness cancels the injected transient backoff.","reason":"scratch backoff cancellation","author":"fixture"}}));
+    let mut cancel_run = String::new();
+    gate.wait(Duration::from_secs(30), |g| {
+        let status = g.status(&selector);
+        if let Some(id) = status["steps"]["work"]["run_ids"][0].as_str()
+            && id != feedback_run
+        {
+            cancel_run = id.into();
+            g.track(id);
+            true
+        } else {
+            false
+        }
+    });
+    let cancel_directory = gate.home.join("runs").join(&cancel_run);
+    gate.wait(Duration::from_secs(120), |_| {
+        sluice_agents::supervisor::Checkpoint::read(&cancel_directory)
+            .unwrap()
+            .is_some_and(|c| c.state == sluice_agents::supervisor::State::Backoff)
+    });
+    gate.rpc(json!({"command":"step_cancel","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"reason":"cancel during fixture backoff","author":"fixture"}}));
+    gate.wait(Duration::from_secs(30), |g| {
+        g.status(&selector)["steps"]["work"]["status"] == "failed"
+    });
+    let cancelled = sluice_agents::supervisor::Checkpoint::read(&cancel_directory)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cancelled.internal_attempt, 1,
+        "cancellation started another retry"
+    );
+    assert_eq!(cancelled.session.as_deref(), Some(session.as_str()));
     assert_eq!(
         git(&cwd, &["rev-list", "--count", &format!("{baseline}..HEAD")]),
         "1"
     );
+    gate.wait(Duration::from_secs(20), |g| g.groups_empty());
     gate.assert_clean();
     gate.cleanup();
     println!(
-        "g3_{engine}_fresh_submit_live_feedback_cleanup PASS before_session={session} after_session={session} original_commits=1"
+        "g3_{engine}_fresh_submit_live_feedback_cleanup PASS before_session={session} after_session={session} original_commits=1 internal_attempt=2 cancel_attempt=1"
     );
 }
 #[test]
@@ -482,6 +568,7 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
         let cwd = scratch.0.join("work");
         fs::create_dir(&cwd).unwrap();
         repo(&cwd);
+        let baseline = git(&cwd, &["rev-parse", "HEAD"]);
         let config = scratch.0.join("adapter-fixture.json");
         let mut turns = vec![json!({"busy_ms":300,"compact":true,"reply":"fixture done"})];
         turns.extend((0..16).map(|_| json!({"busy_ms":300,"reply":"fixture done"})));
@@ -499,8 +586,10 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
         private_write(
             &binary,
             format!(
-                "#!/bin/sh\nexport {env_name}='{}'\nexec '{}' {engine} \"$@\"\n",
+                "#!/bin/sh\nset -e\nexport {env_name}='{}'\ncase \"$1\" in --version|--help) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
                 config.display(),
+                scratch.0.join("committed").display(),
+                scratch.0.join("committed").display(),
                 workspace().join("target/debug/fixture").display()
             )
             .as_bytes(),
@@ -530,6 +619,14 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
             format!("SLUICE_{}_BIN", engine.to_uppercase()),
             binary.to_string_lossy().into(),
         );
+        let marker = gate.home.join("transient-after-commit");
+        gate.env.insert("SLUICE_FIXTURE".into(), "1".into());
+        gate.env.insert(
+            "SLUICE_TEST_AGENT_TRANSIENT_MARKER".into(),
+            marker.to_string_lossy().into(),
+        );
+        gate.env.insert("SLUICE_BACKOFF".into(), "3".into());
+        gate.env.insert("SLUICE_AGENT_POLL_S".into(), "0.05".into());
         gate.boot();
         let CommandReply::Project(project)=gate.rpc(json!({"command":"project_create","args":{"name":"adapter-gate","description":"Public adapter fixture","resources":{},"icon":null,"author":"fixture"}})) else {panic!("project reply")};
         let selector = json!({"kind":"id","value":project.project_id});
@@ -551,6 +648,35 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
                     false
                 }
             });
+            if word == "blue" {
+                gate.wait(Duration::from_secs(30), |_| {
+                    scratch.0.join("committed").exists()
+                });
+                private_write(&marker, b"fake adapter fault after first commit\n");
+                let directory = gate.home.join("runs").join(&run);
+                gate.wait(Duration::from_secs(30), |_| {
+                    sluice_agents::supervisor::Checkpoint::read(&directory)
+                        .unwrap()
+                        .is_some_and(|c| {
+                            c.internal_attempt == 2
+                                && c.state != sluice_agents::supervisor::State::Backoff
+                        })
+                });
+                let cp = sluice_agents::supervisor::Checkpoint::read(&directory)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(cp.head_before.as_deref(), Some(baseline.as_str()));
+                assert_eq!(cp.live_after.0, 0);
+                assert_eq!(
+                    cp.delivery
+                        .entries
+                        .iter()
+                        .filter(|e| e.id == sluice_agents::engines::InputId::Task)
+                        .map(|e| e.tries)
+                        .sum::<u32>(),
+                    1
+                );
+            }
             gate.rpc(json!({"command":"step_submit","args":{"project":project.project_id,"step":"work","run":run,"outputs":{"word":word},"author":"fixture"}}));
             let done = step_finished(&mut gate, &selector);
             assert_eq!(done["outputs"]["word"], word);
@@ -560,8 +686,44 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
                 gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Resume the same fixture session","reason":"fixture feedback","author":"fixture"}}));
             } else {
                 assert_eq!(done["outputs"]["session"], first_session);
+                prior = run;
             }
         }
+        fs::remove_file(marker.with_extension("injected")).unwrap();
+        private_write(&marker, b"cancel fake backoff\n");
+        gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Cancellation fixture","reason":"fixture cancel backoff","author":"fixture"}}));
+        let mut cancel_directory = PathBuf::new();
+        gate.wait(Duration::from_secs(30), |g| {
+            let status = g.status(&selector);
+            if let Some(run) = status["steps"]["work"]["run_ids"][0].as_str()
+                && run != prior
+            {
+                g.track(run);
+                cancel_directory = g.home.join("runs").join(run);
+                true
+            } else {
+                false
+            }
+        });
+        gate.wait(Duration::from_secs(30), |_| {
+            sluice_agents::supervisor::Checkpoint::read(&cancel_directory)
+                .unwrap()
+                .is_some_and(|c| c.state == sluice_agents::supervisor::State::Backoff)
+        });
+        gate.rpc(json!({"command":"step_cancel","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"reason":"cancel fake transient backoff","author":"fixture"}}));
+        gate.wait(Duration::from_secs(30), |g| {
+            g.status(&selector)["steps"]["work"]["status"] == "failed"
+        });
+        let cp = sluice_agents::supervisor::Checkpoint::read(&cancel_directory)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cp.internal_attempt, 1);
+        assert_eq!(cp.session.as_deref(), first_session.as_str());
+        assert_eq!(
+            git(&cwd, &["rev-list", "--count", &format!("{baseline}..HEAD")]),
+            "1"
+        );
+        gate.wait(Duration::from_secs(20), |g| g.groups_empty());
         gate.assert_clean();
         gate.cleanup();
     }
