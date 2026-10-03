@@ -44,6 +44,7 @@ fn failed(result: Result<JsonMap, FnFailure>) -> String {
     match result {
         Err(FnFailure::Terminal(message)) => message,
         Err(FnFailure::Transient(message)) => panic!("unexpected transient failure: {message}"),
+        Err(FnFailure::NotBuilt(name)) => panic!("unexpected not-built failure: {name}"),
         Ok(value) => panic!("expected a terminal failure, got {value:?}"),
     }
 }

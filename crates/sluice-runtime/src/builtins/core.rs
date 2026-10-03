@@ -1,12 +1,12 @@
 //! core.* builtins: echo, collect and format run inline; core.external never runs.
 //!
-//! The shared BuiltinDescriptor/BuiltinCtx/FnFailure contract lives in builtins/jev.rs
-//! until p4-02 unifies it; this module reuses it unchanged. `core.external` has no
+//! The shared BuiltinDescriptor/BuiltinCtx/FnFailure contract is p4-02's unified
+//! builtins/descriptor.rs; this module reuses it unchanged. `core.external` has no
 //! dispatch: a step running it stays pending until `step_set_output` settles it or a
 //! pending cancellation fails it at once (both store-side), and the calls path refuses
 //! `fn_call` on `is_external` names before admission.
 
-use super::jev::{BuiltinCtx, BuiltinDescriptor, FnFailure};
+use super::descriptor::{BuiltinCtx, BuiltinDescriptor, BuiltinIcon, DEFAULT_RETRY, FnFailure};
 use indexmap::IndexMap;
 use serde_json::Value;
 use sluice_model::{
@@ -24,6 +24,12 @@ pub fn is_external(name: &str) -> bool {
     name == EXTERNAL
 }
 
+/// The core.external icon: its fn.json's status glyph, embedded like descriptor.rs does.
+const EXTERNAL_ICON: BuiltinIcon = BuiltinIcon {
+    media_type: "image/svg+xml",
+    bytes: include_bytes!("../../assets/icons/external.svg"),
+};
+
 /// Descriptors equal to the core.* fn.json manifests, in manifest field order.
 /// `core.external` declares no ports of its own: it is open, so the plan declares the
 /// outputs it will get and binds extra inputs to order it after them.
@@ -34,6 +40,10 @@ pub fn descriptors() -> [BuiltinDescriptor; 4] {
             doc: "Pass the value through. Built in: runs inline, no process.",
             inputs: ports(&[("value", "Any")]),
             outputs: ports(&[("value", "Any")]),
+            open: false,
+            submits: vec![],
+            icon: None,
+            retry: DEFAULT_RETRY,
         },
         BuiltinDescriptor {
             name: "core.collect",
@@ -41,14 +51,21 @@ pub fn descriptors() -> [BuiltinDescriptor; 4] {
 process.",
             inputs: ports(&[("items", "Any[]")]),
             outputs: ports(&[("items", "Any[]")]),
+            open: false,
+            submits: vec![],
+            icon: None,
+            retry: DEFAULT_RETRY,
         },
         BuiltinDescriptor {
             name: "core.format",
-            doc: "Fill a template: {name} placeholders draw from a record, {0}, {1}... from \
-an array or a single value, and {{ and }} escape the braces. Non-strings render as \
-canonical JSON. Built in: runs inline, no process.",
+            doc: "Python str.format: an array fills {0}, {1}...; a record fills {name}. \
+Non-strings are rendered as JSON. Built in: runs inline, no process.",
             inputs: ports(&[("template", "string"), ("values", "Any")]),
             outputs: ports(&[("text", "string")]),
+            open: false,
+            submits: vec![],
+            icon: None,
+            retry: DEFAULT_RETRY,
         },
         BuiltinDescriptor {
             name: EXTERNAL,
@@ -57,6 +74,10 @@ until its outputs are set by hand with step_set_output, or it is cancelled. Decl
 outputs it will get; bind extra inputs to order it after them.",
             inputs: vec![],
             outputs: vec![],
+            open: true,
+            submits: vec![],
+            icon: Some(EXTERNAL_ICON),
+            retry: DEFAULT_RETRY,
         },
     ]
 }

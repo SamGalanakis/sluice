@@ -6,11 +6,11 @@
 //! A wait never holds a writer transaction: it snapshots through the ReadPool and parks
 //! on a durable-cursor subscription.
 //!
-//! The shared BuiltinDescriptor/FnFailure contract lives in builtins/jev.rs until p4-02
-//! unifies it. The context here is wider than BuiltinCtx because these fns write and
-//! read the home's database as the step's run.
+//! The shared BuiltinDescriptor/FnFailure contract is p4-02's unified
+//! builtins/descriptor.rs. The context here is wider than BuiltinCtx because these fns
+//! write and read the home's database as the step's run.
 
-use super::jev::{BuiltinDescriptor, FnFailure};
+use super::descriptor::{BuiltinDescriptor, BuiltinIcon, DEFAULT_RETRY, FnFailure};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use sluice_model::{
@@ -32,6 +32,17 @@ use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_TIMEOUT: u64 = 300;
+
+/// The message icons: the inbox.ask and thread.wait status glyphs, embedded like
+/// descriptor.rs does.
+const BUBBLE: BuiltinIcon = BuiltinIcon {
+    media_type: "image/svg+xml",
+    bytes: include_bytes!("../../assets/icons/bubble.svg"),
+};
+const ENVELOPE: BuiltinIcon = BuiltinIcon {
+    media_type: "image/svg+xml",
+    bytes: include_bytes!("../../assets/icons/envelope.svg"),
+};
 
 /// What a message fn sees of its run: the durable home it posts and waits in.
 /// `run`/`step` are the executing run's identity — `message.post` needs them to own
@@ -61,11 +72,10 @@ pub fn descriptors() -> [BuiltinDescriptor; 2] {
     [
         BuiltinDescriptor {
             name: "message.post",
-            doc: "Post a message to a project thread, as this step's run. Root messages \
-default to questions (needs_reply true), replies to notes; a reply joins its parent's \
-thread. With wait: true it asks and blocks until the first answering reply, returned as \
-reply; a close fails it with \"question closed\". A retried ask with the same title takes \
-up its earlier question.",
+            doc: "Post a message to a thread of the project. needs_reply (default true for \
+a new thread, false for a reply) makes it a question; false marks a note. wait: true \
+blocks until the first answering reply, which it returns, and fails when the question is \
+closed.",
             inputs: ports(&[
                 ("body", "string"),
                 ("thread", "string?"),
@@ -81,13 +91,17 @@ up its earlier question.",
                 ("wait", "boolean?"),
             ]),
             outputs: ports(&[("id", "int"), ("reply", "Any?")]),
+            open: false,
+            submits: vec![],
+            icon: Some(BUBBLE),
+            retry: DEFAULT_RETRY,
         },
         BuiltinDescriptor {
             name: "message.wait",
-            doc: "Wait for messages on a thread after since (with to: those addressed to \
+            doc: "Wait for messages on a thread after since (with `to`: those addressed to \
 it or to nobody). Returns as soon as there is one, or with none after timeout seconds \
 (default 300). wake \"questions\": notes (needs_reply false) do not end the wait; they \
-come back with the next question, or at the timeout. last_seq is the log's high water.",
+come back with the next question, or at the timeout.",
             inputs: ports(&[
                 ("thread", "string"),
                 ("since", "int?"),
@@ -96,6 +110,10 @@ come back with the next question, or at the timeout. last_seq is the log's high 
                 ("wake", "string?"),
             ]),
             outputs: ports(&[("messages", "Any[]"), ("last_seq", "int")]),
+            open: false,
+            submits: vec![],
+            icon: Some(ENVELOPE),
+            retry: DEFAULT_RETRY,
         },
     ]
 }
