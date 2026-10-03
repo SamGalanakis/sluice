@@ -368,7 +368,11 @@ fn string(value: &Value, path: &str, errors: &mut Vec<PathError>) -> Option<Stri
         None
     })
 }
-fn declaration(raw: &Value, path: &str, errors: &mut Vec<PathError>) -> Option<Declaration> {
+pub(crate) fn declaration(
+    raw: &Value,
+    path: &str,
+    errors: &mut Vec<PathError>,
+) -> Option<Declaration> {
     let (form, doc) = if let Some(map) = raw
         .as_object()
         .filter(|map| map.contains_key("doc") || map.get("type").is_some_and(|ty| !ty.is_string()))
