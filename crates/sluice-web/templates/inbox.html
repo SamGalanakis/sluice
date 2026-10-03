@@ -1,0 +1,9 @@
+<div id="messages-view">
+<h1>{{ view.title() }}</h1><nav class="seg" aria-label="Messages"><a href="{{ view.base() }}/inbox"{% if view.title() == "Inbox" %} aria-current="page"{% endif %}>Inbox</a><a href="{{ view.base() }}/questions"{% if view.title() == "Questions" %} aria-current="page"{% endif %}>Questions</a><a href="{{ view.base() }}/history">History</a></nav>
+<div id="inbox-items">
+{% for item in view.questions %}<article class="item" id="item-{{ item.project }}-{{ item.id() }}"><h3>{{ item.title() }}</h3><p class="meta"><a href="{{ item.thread_url() }}">{{ item.project_name }} · {{ item.message.thread }}</a> · from {{ item.message.from }} to {{ item.recipient() }} · <time datetime="{{ item.message.at }}">{{ item.message.at }}</time>{% if !item.input().is_empty() %} · sets <code>{{ item.input() }}</code>{% endif %}</p>{% if !item.stopped.is_empty() %}<p class="meta gone">Nobody is waiting: {{ item.stopped }}</p>{% endif %}<div class="md">{{ item.body|safe }}</div>{% include "answer.html" %}</article>{% endfor %}
+{% if view.questions.is_empty() %}<p class="empty">{% if view.title() == "Inbox" %}Nothing is waiting on you.{% else %}No open questions.{% endif %}</p>{% endif %}
+</div>
+{% if !view.threads.is_empty() %}<h2>Unread notes</h2><div class="threads">{% for thread in view.threads %}<article class="item" data-read-url="{{ thread.read_url() }}" data-thread="{{ thread.thread }}" data-through="{{ thread.through }}"><h3><a href="{{ thread.href() }}">{{ thread.project_name }} · {{ thread.thread }}</a></h3><ol class="msgs">{% for item in thread.messages %}{% include "message.html" %}{% endfor %}</ol></article>{% endfor %}</div>{% endif %}
+<script type="module" src="/static/inbox.js"></script>
+</div>

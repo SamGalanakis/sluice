@@ -1,6 +1,9 @@
 //! Shared dashboard facade. Load once per page or SSE batch, then render owned
 //! models. URLs use immutable project IDs; labels may change independently.
 pub mod home;
+pub mod inbox;
+pub mod log;
+pub mod threads;
 
 use askama::Template;
 use axum::{
@@ -307,13 +310,10 @@ impl NavView {
         let sections: Vec<(&str, String, &str)> = if chosen.is_some() {
             vec![
                 ("plan", base.clone(), "Plan"),
-                ("threads", format!("{base}/threads"), "Threads"),
+                ("inbox", format!("{base}/inbox"), "Inbox"),
+                ("questions", format!("{base}/questions"), "Questions"),
                 ("log", format!("{base}/log"), "Log"),
-                (
-                    "history",
-                    format!("{base}/log?kinds=plan.edit,plan.input,step.manual"),
-                    "History",
-                ),
+                ("history", format!("{base}/history"), "History"),
                 (
                     "functions",
                     format!("/fns?project={}", project.expect("chosen project")),
@@ -423,6 +423,20 @@ fn asset(name: &str) -> Option<(&'static str, &'static [u8])> {
     Some(match name {
         "style.css" | "dashboard.css" => ("text/css", include_bytes!("../assets/style.css")),
         "settings.css" => ("text/css", include_bytes!("../assets/settings.css")),
+        "inbox.js" => ("text/javascript", include_bytes!("../assets/inbox.js")),
+        "openui.js" => ("text/javascript", include_bytes!("../assets/openui.js")),
+        "lang-core-0.3.0.js" => (
+            "text/javascript",
+            include_bytes!("../assets/lang-core-0.3.0.js"),
+        ),
+        "zod-4.6.5-v4-core.js" => (
+            "text/javascript",
+            include_bytes!("../assets/zod-4.6.5-v4-core.js"),
+        ),
+        "zod-4.6.5-v4.js" => (
+            "text/javascript",
+            include_bytes!("../assets/zod-4.6.5-v4.js"),
+        ),
         "nav.js" => ("text/javascript", include_bytes!("../assets/nav.js")),
         "datastar-rocket-1.0.4.js" => (
             "text/javascript",
