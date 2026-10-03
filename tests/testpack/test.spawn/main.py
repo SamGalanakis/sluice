@@ -6,7 +6,7 @@ import signal
 import subprocess
 import sys
 
-from sluice.fn import run
+from sluice_fn import run
 
 
 def main(inp, ctx):

@@ -2,7 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-from sluice.fn import run
+from sluice_fn import run
 
 
 def main(inp, ctx):

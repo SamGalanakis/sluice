@@ -4,7 +4,7 @@
 # ///
 import os
 
-from sluice.fn import run
+from sluice_fn import run
 
 
 def main(inp, ctx):
