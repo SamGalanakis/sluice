@@ -4,6 +4,11 @@ use sluice_agents::engines::{
     EngineObservation, EngineStatus, HookEvent, InputId,
     devin::{Devin, DevinOptions, profile, protocol},
 };
+use sluice_agents::supervisor::{
+    Checkpoint, HostSnapshot, Limits, RetryPolicy, State, SupervisorConfig, SupervisorHost,
+};
+use sluice_model::ids::{AttemptId, InvocationId, MessageId, RunId};
+use sluice_process::socket::{AssignedRange, DeliveryMessage};
 use std::{
     collections::BTreeMap,
     fs, io,
@@ -250,6 +255,252 @@ async fn deliver(adapter: &mut Devin, ctx: &EngineContext, id: InputId, text: &s
         DeliveryOutcome::Pending
     );
     poll(adapter, ctx, |o| o.acknowledged.contains(&id)).await;
+}
+
+#[tokio::test]
+async fn devin_session_start_reports_readiness_before_any_input() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({})));
+    let ctx = context(&root, "run", false);
+    adapter.prepare(&ctx, None).await.unwrap();
+    adapter
+        .execute(&ctx, EngineCommand::StartFresh)
+        .await
+        .unwrap();
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Starting
+    );
+
+    let start = json!({"hook_event_name":"SessionStart","session_id":"ready-session"});
+    event(&mut adapter, start.clone());
+    let ready = adapter.observe(&ctx).await.unwrap();
+    assert_eq!(ready.status, EngineStatus::Idle);
+    assert_eq!(ready.session_id.as_deref(), Some("ready-session"));
+    assert_eq!((ready.turns_started, ready.turns_completed), (0, 0));
+    assert!(ready.acknowledged.is_empty());
+    assert!(ready.not_accepted.is_empty());
+
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"UserPromptSubmit","prompt_id":"0"}),
+    );
+    event(&mut adapter, start.clone());
+    let busy = adapter.observe(&ctx).await.unwrap();
+    assert_eq!(busy.status, EngineStatus::Busy);
+    assert_eq!((busy.turns_started, busy.turns_completed), (1, 0));
+    event(&mut adapter, json!({"hook_event_name":"SessionEnd"}));
+    event(&mut adapter, start);
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Exited
+    );
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn devin_visible_composer_reports_readiness_without_session_start() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(
+        &root,
+        json!({"omit_session_start":true,"boot_ms":100}),
+    ));
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let mut pane = Pane::start(&ctx, launch).await;
+    let pid = pane.pid();
+    adapter
+        .execute(&ctx, EngineCommand::StartFresh)
+        .await
+        .unwrap();
+    let ready = poll(&mut adapter, &ctx, |o| o.status == EngineStatus::Idle).await;
+    assert_eq!((ready.turns_started, ready.turns_completed), (0, 0));
+    assert!(ready.acknowledged.is_empty());
+    assert!(ready.session_id.is_none());
+    assert!(!root.join("prompts.jsonl").exists());
+    assert!(
+        fs::read(ctx.run_dir.join("devin-hooks.jsonl"))
+            .unwrap()
+            .is_empty()
+    );
+
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"UserPromptSubmit","prompt_id":"0"}),
+    );
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Busy
+    );
+    event(&mut adapter, json!({"hook_event_name":"SessionEnd"}));
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Exited
+    );
+    adapter
+        .execute(&ctx, EngineCommand::RequestExit)
+        .await
+        .unwrap();
+    poll(&mut adapter, &ctx, |o| {
+        o.status == EngineStatus::Exited && !Path::new(&format!("/proc/{pid}")).exists()
+    })
+    .await;
+    adapter.close().await.unwrap();
+    pane.close();
+    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+}
+
+#[derive(Default)]
+struct DevinHost {
+    directory: PathBuf,
+    submissions: BTreeMap<String, Value>,
+    messages: Vec<DeliveryMessage>,
+    acks: Vec<MessageId>,
+    cleanups: u32,
+}
+impl SupervisorHost for DevinHost {
+    async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        match fs::read(self.directory.join("submission.json")) {
+            Ok(bytes) => self.submissions = serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        Ok(HostSnapshot {
+            submissions: self.submissions.clone(),
+            messages: self
+                .messages
+                .iter()
+                .filter(|m| m.id > after)
+                .cloned()
+                .collect(),
+            ..HostSnapshot::default()
+        })
+    }
+    async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
+        for id in ids {
+            if !self.acks.contains(id) {
+                self.acks.push(*id);
+            }
+        }
+        Ok(())
+    }
+    async fn me(&mut self) -> io::Result<String> {
+        Ok("current scratch run context".into())
+    }
+    async fn note(&mut self, _body: &str) -> io::Result<()> {
+        Ok(())
+    }
+    async fn checkpoint(&mut self, _checkpoint: &Checkpoint) -> io::Result<()> {
+        Ok(())
+    }
+    async fn cleanup(&mut self) -> io::Result<()> {
+        self.cleanups += 1;
+        Ok(())
+    }
+}
+fn supervisor_config(root: &Scratch) -> SupervisorConfig {
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    SupervisorConfig {
+        run: RunId::new(),
+        attempt: AttemptId::new(),
+        invocation: InvocationId::new(),
+        project: "readiness".into(),
+        home: root.0.clone(),
+        run_dir: root.join("run"),
+        cwd,
+        engine: "devin".into(),
+        task: "Submit the declared word blue and finish.".into(),
+        required: vec!["word".into()],
+        session: None,
+        previous: None,
+        assigned: AssignedRange {
+            after: MessageId(0),
+            through: MessageId(0),
+        },
+        messages: vec![],
+        model: None,
+        effort: None,
+        limits: Limits {
+            wall: Duration::from_secs(15),
+            ready: Duration::from_secs(5),
+            turn_start: Duration::from_secs(5),
+            stall: Duration::from_secs(10),
+            settle: Duration::from_millis(100),
+            ..Limits::test_profile()
+        },
+        retry: RetryPolicy::agent(),
+        internal_attempt: 1,
+    }
+}
+fn supervisor_message(id: i64) -> DeliveryMessage {
+    DeliveryMessage {
+        id: MessageId(id),
+        body: sluice_model::rpc::JsonValue::try_from(
+            json!({"body":"Keep word blue and finish after feedback."}),
+        )
+        .unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn supervisor_devin_fresh_task_delivered_once_submission_and_finish() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(
+        &root,
+        json!({"boot_ms":100,"turns":[{"reply":"done","submit":{"word":"blue"}}]}),
+    ));
+    let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
+        .await
+        .unwrap();
+    let cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    let result = sluice_agents::supervisor::supervise(
+        cfg,
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.final_text, "done");
+    assert_eq!(result.session, "fixture-devin-session");
+    assert_eq!(host.submissions["word"], json!("blue"));
+    assert_eq!(host.cleanups, 1);
+    let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+    assert_eq!(checkpoint.state, State::Done);
+    assert_eq!(checkpoint.delivery.entries.len(), 1);
+    let task = &checkpoint.delivery.entries[0];
+    assert_eq!(task.id, InputId::Task);
+    assert_eq!(task.tries, 1);
+    assert_eq!(
+        task.state,
+        sluice_agents::delivery::DeliveryState::Acknowledged
+    );
+    let prompts: Vec<Value> = fs::read_to_string(root.join("prompts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0]["text"].as_str().unwrap().trim_end(), task.text);
+    assert!(
+        !tmux
+            .client_command(&dir)
+            .unwrap()
+            .arg("list-sessions")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
 }
 
 #[test]
@@ -1100,4 +1351,99 @@ async fn g3_devin() -> io::Result<()> {
         session.chars().take(8).collect::<String>()
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn supervisor_devin_hooks_submit_live_compact_and_resume() {
+    supervised_devin(true).await;
+}
+#[tokio::test]
+async fn supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
+    supervised_devin(false).await;
+}
+async fn supervised_devin(synchronous: bool) {
+    let root = Scratch::new();
+    let mut opts = options(
+        &root,
+        json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"busy_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]}),
+    );
+    let hook = root.join("journal-hook");
+    fs::write(&hook, include_str!("fixtures/devin/supervisor-hook.py")).unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+    if synchronous {
+        opts.hook_binary = hook;
+    }
+    let mut adapter = Devin::new(opts);
+    let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
+        .await
+        .unwrap();
+    let mut cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        messages: vec![supervisor_message(1)],
+        ..Default::default()
+    };
+    let result = sluice_agents::supervisor::supervise(
+        cfg.clone(),
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(host.submissions["word"], json!("blue"));
+    assert_eq!(host.acks, vec![sluice_model::ids::MessageId(1)]);
+    let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+    assert_eq!(checkpoint.state, State::Done);
+    assert_eq!(checkpoint.compactions, 1);
+    assert!(checkpoint.delivery.all_acknowledged());
+    assert!(
+        checkpoint
+            .delivery
+            .entries
+            .iter()
+            .any(|entry| entry.id == InputId::Reprime { ordinal: 1 })
+    );
+    assert!(
+        !tmux
+            .client_command(&dir)
+            .unwrap()
+            .arg("list-sessions")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::remove_file(cfg.cwd.join("submission.json")).unwrap();
+    cfg.run = sluice_model::ids::RunId::new();
+    cfg.attempt = sluice_model::ids::AttemptId::new();
+    cfg.invocation = sluice_model::ids::InvocationId::new();
+    cfg.run_dir = root.join("resumed");
+    cfg.previous = Some(sluice_agents::supervisor::PreviousSession {
+        engine: "devin".into(),
+        cwd: cfg.cwd.clone(),
+        session: Some(result.session.clone()),
+    });
+    cfg.assigned.through = sluice_model::ids::MessageId(2);
+    cfg.messages = vec![supervisor_message(2)];
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    let next = sluice_agents::supervisor::supervise(
+        cfg,
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(next.session, result.session);
+    assert_eq!(host.acks, vec![sluice_model::ids::MessageId(2)]);
 }

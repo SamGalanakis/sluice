@@ -214,7 +214,11 @@ impl Devin {
                     self.log(&format!("tool error {e}"))?;
                 }
             }
-            "SessionStart" => {}
+            "SessionStart" => {
+                if self.observation.status == EngineStatus::Starting {
+                    self.observation.status = EngineStatus::Idle;
+                }
+            }
             _ => {
                 return Err(error(
                     EngineErrorKind::CapabilityMismatch,
@@ -737,6 +741,13 @@ impl EngineAdapter for Devin {
     }
     async fn observe(&mut self, context: &EngineContext) -> Result<EngineObservation, EngineError> {
         self.read_hooks()?;
+        if self.observation.status == EngineStatus::Starting
+            && !self.exit_requested
+            && context.tmux_binary.is_some()
+            && protocol::composer_ready(&self.capture(context).await?)
+        {
+            self.observation.status = EngineStatus::Idle;
+        }
         self.advance_delivery(context).await?;
         if self.exit_requested
             && self.observation.status != EngineStatus::Exited

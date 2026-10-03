@@ -177,7 +177,9 @@ pub fn main(args: &[String]) -> io::Result<()> {
     if let Some(ms) = settings["boot_ms"].as_u64() {
         std::thread::sleep(Duration::from_millis(ms));
     }
-    hook(&config, "SessionStart", &sid, json!({}))?;
+    if !settings["omit_session_start"].as_bool().unwrap_or(false) {
+        hook(&config, "SessionStart", &sid, json!({}))?;
+    }
     let mut dialog = settings["dialog"].as_bool().unwrap_or(false);
     let mut draft = String::new();
     let mut bytes = Vec::new();
