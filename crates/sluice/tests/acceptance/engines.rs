@@ -425,6 +425,7 @@ fn g3(engine: &str) {
         "received"
     );
     let session = first["outputs"]["session"].as_str().unwrap().to_string();
+    println!("g3_{engine}_fresh_submit_live_feedback_cleanup fresh session={session} run={run}");
     gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Feedback resume: continue this same session, do not create or commit original.txt again. Submit word=green to the new current RunId using its current step_submit instructions; finish.","reason":"scratch feedback","author":"fixture"}}));
     let next = step_finished(&mut gate, &selector);
     assert_eq!(next["outputs"]["word"], "green");

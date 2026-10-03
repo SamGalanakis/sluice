@@ -9,7 +9,7 @@ import time
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO / "src"))
 from sluice import db
-from sluice.runner import Runner, kill
+from sluice.runner import Runner, kill, _native_roots
 from sluice.store import Store
 
 root = Path(sys.argv[1]).resolve()
@@ -66,5 +66,10 @@ try:
         time.sleep(0.05)
     raise TimeoutError("Python Codex did not commit and reach its waiting turn")
 finally:
-    kill(*(run for active in runner.active.values() for run in active.runs))
+    owned = [run for active in runner.active.values() for run in active.runs]
+    kill(*owned)
+    checks = [{"run_dir": str(run.run_dir), "native_empty": not _native_roots(run.run_dir),
+               "wrapper_reaped": run.proc is None or run.proc.poll() is not None} for run in owned]
+    assert checks and all(c["native_empty"] and c["wrapper_reaped"] for c in checks)
     db.connect(source).execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    (root / "python-cleanup.json").write_text(json.dumps(checks))

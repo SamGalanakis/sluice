@@ -238,6 +238,7 @@ async fn g7_codex_import_resume() {
         serde_json::from_slice(&fs::read(scratch.0.join("python-ready.json")).unwrap()).unwrap();
     let session = ready["checkpoint"]["session"].as_str().unwrap().to_string();
     let old_run = ready["old_run"].as_str().unwrap().to_string();
+    println!("g7_codex_import_resume Python waiting: session={session} old_run={old_run}");
     let first_commit = git(&cwd, &["rev-parse", "HEAD"]);
     assert_ne!(first_commit, baseline);
     assert_eq!(
@@ -245,6 +246,17 @@ async fn g7_codex_import_resume() {
         "1"
     );
     runner.stop();
+    let cleanup: Value = serde_json::from_slice(
+        &fs::read(scratch.0.join("python-cleanup.json")).expect("old Python cleanup proof absent"),
+    )
+    .unwrap();
+    assert!(
+        cleanup
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["native_empty"] == true && c["wrapper_reaped"] == true)
+    );
     let snapshot = fs::read(source.join("sluice.db")).unwrap();
     private_write(
         &scratch.0.join("staging/config.json"),
