@@ -1,9 +1,11 @@
 //! Shared dashboard facade. Load once per page or SSE batch, then render owned
 //! models. URLs use immutable project IDs; labels may change independently.
+pub mod board;
 pub mod home;
 pub mod inbox;
 pub mod log;
 pub mod threads;
+pub mod step;
 
 use askama::Template;
 use axum::{
@@ -437,6 +439,7 @@ fn asset(name: &str) -> Option<(&'static str, &'static [u8])> {
             "text/javascript",
             include_bytes!("../assets/zod-4.6.5-v4.js"),
         ),
+        "sluice.js" => ("text/javascript", include_bytes!("../assets/sluice.js")),
         "nav.js" => ("text/javascript", include_bytes!("../assets/nav.js")),
         "datastar-rocket-1.0.4.js" => (
             "text/javascript",
@@ -499,6 +502,27 @@ async fn functions_handler(
 pub fn dashboard_router(state: DashboardState) -> Router {
     Router::new()
         .route("/", get(home_handler))
+        .route("/projects/{name}", get(board::project_redirect))
+        .route("/projects/id/{project}", get(board::project_page))
+        .route("/projects/id/{project}/stream", get(board::project_stream))
+        .route("/projects/id/{project}/units/{unit}", get(board::unit_page))
+        .route(
+            "/projects/id/{project}/units/{unit}/stream",
+            get(board::unit_stream),
+        )
+        .route("/projects/id/{project}/steps/{step}", get(step::step_page))
+        .route(
+            "/projects/id/{project}/steps/{step}/stream",
+            get(step::step_stream),
+        )
+        .route(
+            "/projects/id/{project}/steps/{step}/actions",
+            axum::routing::post(step::action),
+        )
+        .route(
+            "/projects/id/{project}/actions",
+            axum::routing::post(step::project_action),
+        )
         .route("/fns", get(functions_handler))
         .route("/stream", get(crate::streams::home_stream))
         .route("/fns/stream", get(crate::streams::functions_stream))
