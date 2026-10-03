@@ -1,1 +1,646 @@
+//! Immutable project identity, authored settings and guarded id-keyed deletion.
 
+use crate::{
+    Result, StoreError, WriteTransaction,
+    artifacts::{self, Bundle, enqueue, invalid, now},
+};
+use rusqlite::{Connection, OptionalExtension};
+use serde_json::{Value, json};
+use sluice_model::{
+    error::PublicError,
+    events::Event,
+    ids::{InvocationId, ProjectId, ProjectName, ProjectSelector, Revision, RunId},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    io::Read,
+    path::Path,
+};
+
+pub const ICON_MAX: usize = 256 * 1024;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Icon {
+    text: Option<String>,
+    media_type: Option<String>,
+    bytes: Vec<u8>,
+}
+impl Icon {
+    /// Empty text clears the icon. Other text is stripped and bounded by characters.
+    pub fn text(value: &str) -> Result<Self> {
+        let value = value.trim();
+        if value.chars().count() > 16 {
+            return Err(invalid("text icon has at most 16 characters"));
+        }
+        if value.chars().any(char::is_control) {
+            return Err(invalid("text icon contains control characters"));
+        }
+        Ok(Self {
+            text: (!value.is_empty()).then(|| value.into()),
+            media_type: None,
+            bytes: Vec::new(),
+        })
+    }
+    pub fn image(bytes: Vec<u8>) -> Result<Self> {
+        if bytes.len() > ICON_MAX {
+            return Err(invalid("icon is over 256 KB"));
+        }
+        let media_type = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            "image/png"
+        } else if bytes.starts_with(b"\xff\xd8\xff") {
+            "image/jpeg"
+        } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            "image/gif"
+        } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+            "image/webp"
+        } else if std::str::from_utf8(&bytes).is_ok_and(|s| {
+            let s = s.trim_start_matches('\u{feff}').trim_start();
+            s.starts_with("<svg") || s.starts_with("<?xml") && s.contains("<svg")
+        }) {
+            "image/svg+xml"
+        } else {
+            return Err(invalid("icon is not an SVG, PNG, WebP, JPEG or GIF"));
+        };
+        Ok(Self {
+            text: None,
+            media_type: Some(media_type.into()),
+            bytes,
+        })
+    }
+    /// Import once, with a bounded read through the opened file. Caller supplies
+    /// the tilde root; store commands never consult or open a default live home.
+    pub fn from_argument(value: &str, tilde_root: &Path) -> Result<Self> {
+        let expanded;
+        let path = if let Some(suffix) = value.strip_prefix("~/") {
+            expanded = tilde_root.join(suffix);
+            expanded.as_path()
+        } else {
+            Path::new(value)
+        };
+        match File::open(path) {
+            Ok(file) => {
+                if !file.metadata()?.is_file() {
+                    return Err(invalid("icon has no readable file"));
+                }
+                let mut bytes = Vec::new();
+                file.take(ICON_MAX as u64 + 1).read_to_end(&mut bytes)?;
+                Self::image(bytes)
+            }
+            Err(_) if value.starts_with('/') || value.starts_with('~') => {
+                Err(invalid("icon has no readable file"))
+            }
+            Err(_) => Self::text(value),
+        }
+    }
+    fn hash(&self) -> Option<String> {
+        self.media_type
+            .as_ref()
+            .map(|_| artifacts::fingerprint(&self.bytes))
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectIcon {
+    Text(String),
+    Image {
+        media_type: String,
+        hash: String,
+        generation: i64,
+    },
+}
+impl ProjectIcon {
+    pub fn url(&self, id: ProjectId) -> Option<String> {
+        match self {
+            Self::Image { generation, .. } => {
+                Some(format!("/projects/id/{id}/icon?generation={generation}"))
+            }
+            Self::Text(_) => None,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Project {
+    pub project_id: ProjectId,
+    pub name: ProjectName,
+    pub description: String,
+    pub icon: Option<ProjectIcon>,
+    pub paused: bool,
+    pub archived: bool,
+    pub settings_rev: Revision,
+    pub resources_rev: Revision,
+}
+/// Resolve on admission; all subsequent state and callbacks carry the immutable id.
+pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
+    let (column, value) = match selector {
+        ProjectSelector::Id(id) => ("project_id", id.to_string()),
+        ProjectSelector::Name(name) => ("name", name.to_string()),
+    };
+    let row=c.query_row(&format!("SELECT project_id,name,description,icon_text,icon_type,icon_hash,icon_generation,paused,archived,settings_rev,resources_rev FROM projects WHERE {column}=?1 AND deleted_at IS NULL"),[value],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?,r.get::<_,bool>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?))).optional()?.ok_or_else(|| StoreError::from(PublicError::NotFound{message:format!("project {selector} not found")}))?;
+    let icon = match (row.3, row.4, row.5) {
+        (Some(t), None, None) => Some(ProjectIcon::Text(t)),
+        (None, Some(media_type), Some(hash)) => Some(ProjectIcon::Image {
+            media_type,
+            hash,
+            generation: row.6,
+        }),
+        (None, None, None) => None,
+        _ => return Err(invalid("invalid persisted project icon")),
+    };
+    Ok(Project {
+        project_id: row
+            .0
+            .parse()
+            .map_err(|_| invalid("invalid persisted ProjectId"))?,
+        name: row
+            .1
+            .parse()
+            .map_err(|_| invalid("invalid persisted project name"))?,
+        description: row.2,
+        icon,
+        paused: row.7,
+        archived: row.8,
+        settings_rev: Revision(
+            row.9
+                .try_into()
+                .map_err(|_| invalid("invalid settings revision"))?,
+        ),
+        resources_rev: Revision(
+            row.10
+                .try_into()
+                .map_err(|_| invalid("invalid resource revision"))?,
+        ),
+    })
+}
+
+/// P2.04 adapter: implement by calling its synchronous validated patch function.
+/// Return whether declarations changed. This command records the authored change.
+pub trait ResourceSettings {
+    fn set_resources(
+        &self,
+        tx: &mut WriteTransaction<'_>,
+        project: ProjectId,
+        patch: &Value,
+    ) -> Result<bool>;
+}
+/// Safe default while P2.04 is absent: no resource changes are silently accepted.
+pub struct NoResourceSettings;
+impl ResourceSettings for NoResourceSettings {
+    fn set_resources(
+        &self,
+        _: &mut WriteTransaction<'_>,
+        _: ProjectId,
+        patch: &Value,
+    ) -> Result<bool> {
+        if patch.as_object().is_some_and(|p| p.is_empty()) {
+            Ok(false)
+        } else {
+            Err(invalid("resource settings adapter is required"))
+        }
+    }
+}
+/// P2.02 adapter: initialize the validated empty plan, edit and authored record.
+pub trait PlanInitializer {
+    fn initialize(
+        &self,
+        tx: &mut WriteTransaction<'_>,
+        project: ProjectId,
+        author: &str,
+    ) -> Result<()>;
+}
+/// Foundation requires creation here until the plans owner supplies its initializer.
+pub struct EmptyPlanInitializer;
+impl PlanInitializer for EmptyPlanInitializer {
+    fn initialize(
+        &self,
+        tx: &mut WriteTransaction<'_>,
+        project: ProjectId,
+        author: &str,
+    ) -> Result<()> {
+        tx.sql().execute(
+            "INSERT INTO plans(project_id,rev,doc) VALUES (?1,1,?2)",
+            [project.to_string(), json!({"steps":{}}).to_string()],
+        )?;
+        let record = tx.append_record(
+            Some(project),
+            Event::PlanEdit {
+                rev: Revision(1),
+                author: author.into(),
+                reason: "project created".into(),
+                ops: Vec::new(),
+            },
+        )?;
+        tx.sql().execute("INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,1,?2,?3,?4,'project created','[]')",rusqlite::params![project.to_string(),record.seq.0,record.at,author])?;
+        tx.changed(Some(project), "plan");
+        Ok(())
+    }
+}
+#[derive(Debug, Clone)]
+pub struct CreateProject {
+    pub name: ProjectName,
+    pub description: String,
+    pub icon: Option<Icon>,
+    pub resources: Option<Value>,
+    pub author: String,
+}
+pub fn project_create(
+    tx: &mut WriteTransaction<'_>,
+    request: CreateProject,
+    plans: &dyn PlanInitializer,
+    resources: &dyn ResourceSettings,
+) -> Result<Project> {
+    let id = ProjectId::new();
+    tx.sql().execute(
+        "INSERT INTO projects(project_id,name,description,created_at) VALUES (?1,?2,?3,?4)",
+        rusqlite::params![
+            id.to_string(),
+            request.name.to_string(),
+            request.description,
+            now()?
+        ],
+    )?;
+    enqueue(
+        tx,
+        Some(id),
+        None,
+        "project_dir",
+        1,
+        format!("projects/{id}"),
+        json!({"version":1}),
+    )?;
+    plans.initialize(tx, id, &request.author)?;
+    if let Some(patch) = request.resources {
+        resources.set_resources(tx, id, &patch)?;
+    }
+    if let Some(icon) = request.icon {
+        set_icon(tx, id, icon)?;
+    }
+    changed(tx, id);
+    resolve(tx.sql(), &ProjectSelector::Id(id))
+}
+#[derive(Debug, Clone, Default)]
+pub struct UpdateProject {
+    pub new_name: Option<ProjectName>,
+    pub description: Option<String>,
+    pub icon: Option<Icon>,
+    pub resources: Option<Value>,
+    pub paused: Option<bool>,
+    pub archived: Option<bool>,
+    pub expected_settings_rev: Option<Revision>,
+    pub reason: Option<String>,
+    pub author: String,
+}
+fn check_revision(project: &Project, expected: Option<Revision>) -> Result<()> {
+    if expected.is_some_and(|r| r != project.settings_rev) {
+        return Err(PublicError::Conflict {
+            message: "project settings changed".into(),
+            current_rev: Some(project.settings_rev),
+        }
+        .into());
+    }
+    Ok(())
+}
+fn changed(tx: &mut WriteTransaction<'_>, id: ProjectId) {
+    tx.changed(Some(id), "settings");
+    tx.changed(Some(id), "status");
+    tx.changed(None, "projects");
+}
+fn set_icon(tx: &mut WriteTransaction<'_>, id: ProjectId, icon: Icon) -> Result<bool> {
+    let old = resolve(tx.sql(), &ProjectSelector::Id(id))?;
+    let hash = icon.hash();
+    let same = match &old.icon {
+        Some(ProjectIcon::Text(t)) => icon.text.as_ref() == Some(t),
+        Some(ProjectIcon::Image { hash: h, .. }) => hash.as_ref() == Some(h),
+        None => icon.text.is_none() && hash.is_none(),
+    };
+    if same {
+        return Ok(false);
+    }
+    let generation: i64 = tx.sql().query_row(
+        "SELECT icon_generation+1 FROM projects WHERE project_id=?1",
+        [id.to_string()],
+        |r| r.get(0),
+    )?;
+    if icon.media_type.is_some() {
+        let bundle = Bundle::new(BTreeMap::from([("image".into(), icon.bytes)]))?;
+        let manifest = artifacts::manifest(bundle);
+        enqueue(
+            tx,
+            Some(id),
+            None,
+            "icon",
+            generation,
+            format!("projects/{id}/icons/{generation}"),
+            manifest,
+        )?;
+    }
+    tx.sql().execute("UPDATE projects SET icon_generation=?2,icon_text=?3,icon_type=?4,icon_hash=?5 WHERE project_id=?1",rusqlite::params![id.to_string(),generation,icon.text,icon.media_type,hash])?;
+    Ok(true)
+}
+/// Compose in one Writer::write closure. Any error must propagate out of it.
+pub fn project_update(
+    tx: &mut WriteTransaction<'_>,
+    selector: &ProjectSelector,
+    request: UpdateProject,
+    resources: &dyn ResourceSettings,
+) -> Result<Project> {
+    let project = resolve(tx.sql(), selector)?;
+    check_revision(&project, request.expected_settings_rev)?;
+    let id = project.project_id;
+    let rename = request.new_name.filter(|n| n != &project.name);
+    let description = request.description.filter(|d| d != &project.description);
+    let paused = request.paused.filter(|p| *p != project.paused);
+    let archived = request.archived.filter(|a| *a != project.archived);
+    // Name uniqueness is checked before adapters or other settings mutate.
+    if let Some(name) = &rename {
+        tx.sql().execute(
+            "UPDATE projects SET name=?2,settings_rev=settings_rev+1,changed_at=?3 WHERE project_id=?1",
+            [id.to_string(), name.to_string(), now()?],
+        )?;
+        tx.append_record(
+            Some(id),
+            Event::ProjectRename {
+                old_name: project.name,
+                new_name: name.clone(),
+                author: request.author.clone(),
+            },
+        )?;
+    }
+    let mut fields = Vec::new();
+    if let Some(value) = description {
+        tx.sql().execute(
+            "UPDATE projects SET description=?2 WHERE project_id=?1",
+            [id.to_string(), value],
+        )?;
+        fields.push("description".into());
+    }
+    if let Some(patch) = request.resources
+        && resources.set_resources(tx, id, &patch)?
+    {
+        tx.changed(Some(id), "resources");
+        fields.push("resources".into());
+    }
+    if let Some(icon) = request.icon
+        && set_icon(tx, id, icon)?
+    {
+        fields.push("icon".into());
+    }
+    for (column, value) in [("paused", paused), ("archived", archived)] {
+        if let Some(value) = value {
+            tx.sql().execute(
+                &format!("UPDATE projects SET {column}=?2 WHERE project_id=?1"),
+                rusqlite::params![id.to_string(), value],
+            )?;
+            let event = if column == "paused" {
+                Event::ProjectPause {
+                    paused: value,
+                    reason: request.reason.clone(),
+                    author: request.author.clone(),
+                }
+            } else {
+                Event::ProjectArchive {
+                    archived: value,
+                    reason: request.reason.clone(),
+                    author: request.author.clone(),
+                }
+            };
+            tx.append_record(Some(id), event)?;
+        }
+    }
+    let modified = rename.is_some() || !fields.is_empty() || paused.is_some() || archived.is_some();
+    if !fields.is_empty() {
+        tx.append_record(
+            Some(id),
+            Event::ProjectUpdate {
+                fields,
+                reason: request.reason,
+                author: request.author,
+            },
+        )?;
+    }
+    if modified {
+        if rename.is_none() {
+            tx.sql().execute(
+                "UPDATE projects SET settings_rev=settings_rev+1,changed_at=?2 WHERE project_id=?1",
+                [id.to_string(), now()?],
+            )?;
+        }
+        changed(tx, id);
+    }
+    resolve(tx.sql(), &ProjectSelector::Id(id))
+}
+/// Coordinator can add live-process knowledge not yet reflected in attempt rows.
+/// This check runs under the writer transaction and must not perform external I/O.
+pub trait DeletionGuard {
+    fn check(&self, project: ProjectId) -> Result<()>;
+}
+pub struct StoredWorkOnly;
+impl DeletionGuard for StoredWorkOnly {
+    fn check(&self, _: ProjectId) -> Result<()> {
+        Ok(())
+    }
+}
+/// A specific reason for the settings page's disabled delete action.
+pub fn deletion_blocker(c: &Connection, selector: &ProjectSelector) -> Result<Option<String>> {
+    let project = resolve(c, selector)?;
+    if !project.archived {
+        return Ok(Some("archive the project before deleting it".into()));
+    }
+    let id = project.project_id.to_string();
+    for (sql, reason) in [
+        (
+            "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND status='running')",
+            "project has running steps",
+        ),
+        (
+            "SELECT EXISTS(SELECT 1 FROM calls WHERE project_id=?1 AND status IN ('pending','running'))",
+            "project has pending or running calls, including direct calls",
+        ),
+        (
+            "SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND phase<>'terminal')",
+            "project has active attempts",
+        ),
+        (
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND finished_at IS NULL)",
+            "project has a live run or guardian",
+        ),
+    ] {
+        if c.query_row(sql, [&id], |r| r.get::<_, bool>(0))? {
+            return Ok(Some(reason.into()));
+        }
+    }
+    Ok(None)
+}
+#[derive(Debug, Clone)]
+pub struct DeleteProject {
+    pub confirm_name: String,
+    pub expected_settings_rev: Revision,
+    pub author: String,
+}
+#[derive(Debug, Clone)]
+pub struct DeletedProject {
+    pub project_id: ProjectId,
+    pub name: ProjectName,
+    pub cleanup_jobs: Vec<InvocationId>,
+}
+pub fn project_delete(
+    tx: &mut WriteTransaction<'_>,
+    selector: &ProjectSelector,
+    request: DeleteProject,
+    guard: &dyn DeletionGuard,
+) -> Result<DeletedProject> {
+    let project = resolve(tx.sql(), selector)?;
+    check_revision(&project, Some(request.expected_settings_rev))?;
+    if request.confirm_name != project.name.as_str() {
+        return Err(invalid("confirmation must match the current project name"));
+    }
+    if let Some(reason) = deletion_blocker(tx.sql(), selector)? {
+        return Err(invalid(reason));
+    }
+    let id = project.project_id;
+    guard.check(id)?;
+    let mut paths = BTreeSet::from([format!("projects/{id}")]);
+    let runs = {
+        let mut query = tx
+            .sql()
+            .prepare("SELECT run_id FROM runs WHERE project_id=?1")?;
+        query
+            .query_map([id.to_string()], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for run in runs {
+        let run: RunId = run
+            .parse()
+            .map_err(|_| invalid("invalid persisted run id"))?;
+        paths.insert(format!("runs/{run}"));
+    }
+    let private_homes = {
+        let mut query=tx.sql().prepare("SELECT DISTINCT json_extract(metadata,'$.private_home') FROM sessions WHERE project_id=?1 AND json_type(metadata,'$.private_home')='text'")?;
+        query
+            .query_map([id.to_string()], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for path in private_homes {
+        // External engine stores are engine-owned. Only explicit private_home
+        // entries in our closed home grammar can be Sluice cleanup targets.
+        if !path.starts_with("engine-homes/") {
+            continue;
+        }
+        artifacts::validate_cleanup_path(&path)?;
+        let shared:bool=tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE project_id IS NOT ?1 AND json_extract(metadata,'$.private_home')=?2)",rusqlite::params![id.to_string(),path],|r|r.get(0))?;
+        if !shared {
+            paths.insert(path);
+        }
+    }
+    tx.sql().execute("UPDATE artifact_jobs SET state='failed',manifest='{}',error=?2,finished_at=?3 WHERE project_id=?1 AND kind<>'cleanup'",[id.to_string(),json!({"deleted":true}).to_string(),now()?])?;
+    let mut cleanup_jobs = Vec::new();
+    for path in paths {
+        // Existing cleanup job is already durable and must not be duplicated.
+        let existing: Option<String> = tx
+            .sql()
+            .query_row(
+                "SELECT job_id FROM artifact_jobs WHERE kind='cleanup' AND path=?1",
+                [&path],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            cleanup_jobs.push(
+                existing
+                    .parse()
+                    .map_err(|_| invalid("invalid cleanup job id"))?,
+            );
+        } else {
+            cleanup_jobs.push(enqueue(
+                tx,
+                Some(id),
+                None,
+                "cleanup",
+                1,
+                path,
+                json!({"version":1}),
+            )?);
+        }
+    }
+    // Delete dependants before runs/resources. Tombstones preserve artifact FKs.
+    for table in [
+        "notification_attempts",
+        "question_attachments",
+        "message_deliveries",
+        "readers",
+        "messages",
+        "leases",
+        "submissions",
+        "sessions",
+        "calls",
+        "runs",
+        "attempts",
+        "steps",
+        "step_results",
+        "inputs",
+        "plan_edits",
+        "plans",
+        "resources",
+        "records",
+    ] {
+        tx.sql().execute(
+            &format!("DELETE FROM {table} WHERE project_id=?1"),
+            [id.to_string()],
+        )?;
+    }
+    tx.sql().execute("UPDATE maintenance SET paused_projects=(SELECT coalesce(json_group_array(value),'[]') FROM json_each(maintenance.paused_projects) WHERE value<>?1),revision=revision+1 WHERE EXISTS(SELECT 1 FROM json_each(maintenance.paused_projects) WHERE value=?1)",[id.to_string()])?;
+    tx.sql().execute("UPDATE projects SET deleted_at=?2,changed_at=?2,settings_rev=settings_rev+1,icon_text=NULL,icon_type=NULL,icon_hash=NULL,description='' WHERE project_id=?1",[id.to_string(),now()?])?;
+    tx.append_record(
+        None,
+        Event::ProjectDelete {
+            project_id: id,
+            name: project.name.clone(),
+            author: request.author,
+        },
+    )?;
+    for view in ["plan", "messages", "resources", "artifacts"] {
+        tx.changed(Some(id), view);
+    }
+    tx.changed(None, "maintenance");
+    changed(tx, id);
+    Ok(DeletedProject {
+        project_id: id,
+        name: project.name,
+        cleanup_jobs,
+    })
+}
+/// Frozen image bytes are durable in the job even before filesystem recovery.
+/// HTTP may serve these owned bytes without consulting a mutable path.
+pub fn icon_image(
+    c: &Connection,
+    selector: &ProjectSelector,
+    generation: i64,
+) -> Result<(String, Vec<u8>, String)> {
+    let project = resolve(c, selector)?;
+    let Some(ProjectIcon::Image {
+        media_type,
+        hash,
+        generation: current,
+    }) = project.icon
+    else {
+        return Err(PublicError::NotFound {
+            message: "project has no image icon".into(),
+        }
+        .into());
+    };
+    if generation != current {
+        return Err(PublicError::NotFound {
+            message: "icon generation is no longer current".into(),
+        }
+        .into());
+    }
+    let manifest:String=c.query_row("SELECT manifest FROM artifact_jobs WHERE project_id=?1 AND kind='icon' AND generation=?2 AND state<>'failed'",rusqlite::params![project.project_id.to_string(),generation],|r|r.get(0))?;
+    let bundle = artifacts::decode_manifest(&serde_json::from_str(&manifest)?)?;
+    let bytes = bundle
+        .files()
+        .get("image")
+        .ok_or_else(|| invalid("icon job has no image"))?
+        .clone();
+    if artifacts::fingerprint(&bytes) != hash {
+        return Err(invalid("icon hash mismatch"));
+    }
+    Ok((media_type, bytes, hash))
+}
