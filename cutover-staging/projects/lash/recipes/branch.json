@@ -1,102 +1,103 @@
 {
- "name": "branch",
- "doc": "One lash branch lane: a kiln fork, a lash.worker that commits and pushes to lanes/{unit} (never main) for an integrating lane to merge, the fork removed once its work step is done",
- "params": {
-  "ticket": "string",
-  "spec": "string",
-  "model": [
-   "null",
-   {
-    "type": "enum",
-    "symbols": [
-     "sol",
-     "astra"
-    ]
-   }
-  ],
-  "engine": {
-   "type": "enum",
-   "symbols": [
-    "devin",
-    "codex",
-    "opus"
-   ]
-  }
- },
- "steps": {
-  "{unit}-fork": {
-   "run": "lash.fork",
-   "tags": [
-    "branch"
-   ],
-   "in": {
-    "name": {
-     "default": "{unit}"
-    }
-   }
-  },
-  "{unit}-work": {
-   "run": "lash.worker",
-   "tags": [
-    "branch"
-   ],
-   "in": {
+  "name": "branch",
+  "doc": "One lash branch lane: a kiln fork, a lash.worker that commits and pushes to lanes/{unit} (never main) for an integrating lane to merge, the fork removed once its work step is done",
+  "params": {
+    "ticket": "string",
+    "spec": "string",
+    "model": [
+      "null",
+      {
+        "type": "enum",
+        "symbols": [
+          "sol",
+          "astra"
+        ]
+      }
+    ],
     "engine": {
-     "default": "{engine}"
-    },
-    "model": {
-     "default": "{model}"
-    },
-    "cwd": {
-     "source": "{unit}-fork/path"
-    },
-    "lands": {
-     "default": false
-    },
-    "ticket": {
-     "default": "{ticket}"
-    },
-    "spec": {
-     "file": "{spec}"
-    },
-    "push_branch": {
-     "default": "lanes/{unit}"
+      "type": "enum",
+      "symbols": [
+        "devin",
+        "codex",
+        "opus"
+      ]
     }
-   },
-   "outputs": {
-    "head_sha": {
-     "type": "string",
-     "doc": "Branch head pushed to lanes/{unit}"
-    },
-    "evidence": {
-     "type": "string",
-     "doc": "Gates with counts, red side"
-    },
-    "unresolved": {
-     "type": "string",
-     "doc": "Open items; empty if none"
-    }
-   },
-   "needs": {
-    "lane": 1
-   }
   },
-  "{unit}-rm": {
-   "run": "lash.fork_rm",
-   "tags": [
-    "branch"
-   ],
-   "after": [
-    "{unit}-work"
-   ],
-   "in": {
-    "name": {
-     "default": "{unit}"
+  "steps": {
+    "{unit}-fork": {
+      "run": "lash.fork",
+      "tags": [
+        "branch"
+      ],
+      "in": {
+        "name": {
+          "default": "{unit}"
+        }
+      }
     },
-    "path": {
-     "source": "{unit}-fork/path"
+    "{unit}-work": {
+      "run": "lash.worker",
+      "tags": [
+        "branch",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "{engine}"
+        },
+        "model": {
+          "default": "{model}"
+        },
+        "cwd": {
+          "source": "{unit}-fork/path"
+        },
+        "lands": {
+          "default": false
+        },
+        "ticket": {
+          "default": "{ticket}"
+        },
+        "spec": {
+          "file": "{spec}"
+        },
+        "push_branch": {
+          "default": "lanes/{unit}"
+        }
+      },
+      "outputs": {
+        "head_sha": {
+          "type": "string",
+          "doc": "Branch head pushed to lanes/{unit}"
+        },
+        "evidence": {
+          "type": "string",
+          "doc": "Gates with counts, red side"
+        },
+        "unresolved": {
+          "type": "string",
+          "doc": "Open items; empty if none"
+        }
+      },
+      "needs": {
+        "lane": 1
+      }
+    },
+    "{unit}-rm": {
+      "run": "lash.fork_rm",
+      "tags": [
+        "branch"
+      ],
+      "after": [
+        "{unit}-work?"
+      ],
+      "in": {
+        "name": {
+          "default": "{unit}"
+        },
+        "path": {
+          "source": "{unit}-fork/path"
+        }
+      }
     }
-   }
   }
- }
 }

@@ -12,7 +12,7 @@ listed in `discarded`, and the archive path is `archived`.
 import shutil
 from pathlib import Path
 
-from sluice.fn import run, sh
+from sluice_fn import run, sh
 
 # Lane evidence (logs a report cites) outlives the fork: untracked paths are archived here
 # before removal, unless they exceed the cap.
@@ -92,7 +92,7 @@ def main(inp, ctx):
         ctx.log(f"discarding {len(kept)} untracked or evidence path(s) in {name}"
                 + (f" (archived to {archived})" if archived else "") + ": "
                 + ", ".join(untracked[:50]))
-    sh(["kiln", "rm", "lash", name])
+    sh(["kiln", "rm", "lash", name], cwd=ctx.project_dir)
     return {"removed": True, "discarded": untracked, "archived": archived}
 
 

@@ -10,9 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice.fn import run, sh
-
-from _lashlib import ISSUE_RE, URL_RE, text_file, linear_bin
+from _lashlib import ISSUE_RE, URL_RE, linear_bin, text_file
+from sluice_fn import run, sh
 
 DEFAULT_TEAM = "FIG"  # lash's Linear team
 

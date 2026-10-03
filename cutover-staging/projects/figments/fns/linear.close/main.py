@@ -9,9 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice.fn import run, sh
-
 from _figlib import text_file
+from sluice_fn import run, sh
 
 
 def main(inp, ctx):

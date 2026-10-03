@@ -1,132 +1,133 @@
 {
- "name": "pr",
- "doc": "One figments PR lane: a kiln fork on branch samuel-<unit> from origin/main (or an existing fork of that name, resumed as it is), a figments.worker (engine opus, codex with model sol, or devin with no model = SWE-2 High) on a spec file that commits, pushes and opens a PR, then the PR's checks watched until green or red. Sam merges. The fork (and its Bazel server) is removed once the checks settle; the work is safe on the pushed branch.",
- "params": {
-  "spec": "string",
-  "engine": {
-   "type": "enum",
-   "symbols": [
-    "devin",
-    "codex",
-    "opus"
-   ]
-  },
-  "model": [
-   "null",
-   {
-    "type": "enum",
-    "symbols": [
-     "sol",
-     "astra"
-    ]
-   }
-  ],
-  "effort": [
-   "null",
-   {
-    "type": "enum",
-    "symbols": [
-     "minimal",
-     "low",
-     "medium",
-     "high",
-     "xhigh",
-     "max"
-    ]
-   }
-  ]
- },
- "steps": {
-  "{unit}-fork": {
-   "run": "figments.fork",
-   "tags": [
-    "pr"
-   ],
-   "in": {
-    "name": {
-     "default": "{unit}"
-    },
-    "branch": {
-     "default": "samuel-{unit}"
-    }
-   }
-  },
-  "{unit}-work": {
-   "run": "figments.worker",
-   "tags": [
-    "pr"
-   ],
-   "in": {
+  "name": "pr",
+  "doc": "One figments PR lane: a kiln fork on branch samuel-<unit> from origin/main (or an existing fork of that name, resumed as it is), a figments.worker (engine opus, codex with model sol, or devin with no model = SWE-2 High) on a spec file that commits, pushes and opens a PR, then the PR's checks watched until green or red. Sam merges. The fork (and its Bazel server) is removed once the checks settle; the work is safe on the pushed branch.",
+  "params": {
+    "spec": "string",
     "engine": {
-     "default": "{engine}"
+      "type": "enum",
+      "symbols": [
+        "devin",
+        "codex",
+        "opus"
+      ]
     },
-    "model": {
-     "default": "{model}"
-    },
-    "effort": {
-     "default": "{effort}"
-    },
-    "cwd": {
-     "source": "{unit}-fork/path"
-    },
-    "pr": {
-     "default": true
-    },
-    "spec": {
-     "file": "{spec}"
-    }
-   },
-   "outputs": {
-    "pr_url": {
-     "type": "string",
-     "doc": "URL of the PR opened or updated"
-    },
-    "head_sha": {
-     "type": "string",
-     "doc": "The fork's HEAD after the last push"
-    },
-    "unresolved": {
-     "type": "string",
-     "doc": "Open items; empty if none"
-    }
-   }
+    "model": [
+      "null",
+      {
+        "type": "enum",
+        "symbols": [
+          "sol",
+          "astra"
+        ]
+      }
+    ],
+    "effort": [
+      "null",
+      {
+        "type": "enum",
+        "symbols": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    ]
   },
-  "{unit}-checks": {
-   "run": "gh.pr_wait",
-   "tags": [
-    "pr"
-   ],
-   "in": {
-    "path": {
-     "source": "{unit}-fork/path"
+  "steps": {
+    "{unit}-fork": {
+      "run": "figments.fork",
+      "tags": [
+        "pr"
+      ],
+      "in": {
+        "name": {
+          "default": "{unit}"
+        },
+        "branch": {
+          "default": "samuel-{unit}"
+        }
+      }
     },
-    "pr": {
-     "source": "{unit}-work/pr_url"
+    "{unit}-work": {
+      "run": "figments.worker",
+      "tags": [
+        "pr",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "{engine}"
+        },
+        "model": {
+          "default": "{model}"
+        },
+        "effort": {
+          "default": "{effort}"
+        },
+        "cwd": {
+          "source": "{unit}-fork/path"
+        },
+        "pr": {
+          "default": true
+        },
+        "spec": {
+          "file": "{spec}"
+        }
+      },
+      "outputs": {
+        "pr_url": {
+          "type": "string",
+          "doc": "URL of the PR opened or updated"
+        },
+        "head_sha": {
+          "type": "string",
+          "doc": "The fork's HEAD after the last push"
+        },
+        "unresolved": {
+          "type": "string",
+          "doc": "Open items; empty if none"
+        }
+      }
     },
-    "until": {
-     "default": "checks"
+    "{unit}-checks": {
+      "run": "gh.pr_wait",
+      "tags": [
+        "pr"
+      ],
+      "in": {
+        "path": {
+          "source": "{unit}-fork/path"
+        },
+        "pr": {
+          "source": "{unit}-work/pr_url"
+        },
+        "until": {
+          "default": "checks"
+        },
+        "timeout": {
+          "default": 7200
+        }
+      }
     },
-    "timeout": {
-     "default": 7200
+    "{unit}-rm": {
+      "run": "figments.fork_rm",
+      "tags": [
+        "pr"
+      ],
+      "after": [
+        "{unit}-checks?"
+      ],
+      "in": {
+        "name": {
+          "default": "{unit}"
+        },
+        "path": {
+          "source": "{unit}-fork/path"
+        }
+      }
     }
-   }
-  },
-  "{unit}-rm": {
-   "run": "figments.fork_rm",
-   "tags": [
-    "pr"
-   ],
-   "after": [
-    "{unit}-checks"
-   ],
-   "in": {
-    "name": {
-     "default": "{unit}"
-    },
-    "path": {
-     "source": "{unit}-fork/path"
-    }
-   }
   }
- }
 }

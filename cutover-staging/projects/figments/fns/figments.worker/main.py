@@ -4,16 +4,13 @@
 # ///
 """figments.worker: agent.run with the figments header and a worker-written summary."""
 
-import importlib.util
-import json
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice.fn import run, sh
-
+from sluice_fn import run, sh
 
 SUMMARY_WORDS = 120
 FALLBACK_CHARS = 1500
@@ -50,26 +47,7 @@ def worker_header(inp, ctx):
               "branch and HEAD SHA (and PR URL if any), gates with counts, and open items (say "
               "none if there are none). It becomes the step's summary and final. Submit any other "
               "declared outputs with step_submit.")
-    return "\n\n".join((work, vcs, output)).replace("$TASK", str(ctx.run_dir)) + "\n\n"
-
-
-def fn_dirs(ctx):
-    """Where the project finds its fns, in lookup order after the built-ins."""
-    cfg_file = ctx.home / "config.json"
-    cfg = json.loads(cfg_file.read_text()) if cfg_file.exists() else {}
-    project = [ctx.home / "projects" / ctx.project / "fns"] if ctx.project else []
-    return [*project, ctx.home / "fns", *(ctx.home / d for d in cfg.get("fn_dirs", []))]
-
-
-def agent_run(ctx):
-    """The agents pack's agent.run, wherever this project finds it."""
-    found = [d / "agent.run" for d in fn_dirs(ctx) if (d / "agent.run" / "fn.json").is_file()]
-    if not found:
-        raise RuntimeError("figments.worker needs agent.run: install the agents pack")
-    spec = importlib.util.spec_from_file_location("agent_run", found[0] / "main.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return f"{work}\n\n{vcs}\n\n{output}".replace("$TASK", str(ctx.run_dir)) + "\n\n"
 
 
 def bounded_summary(text):
@@ -99,12 +77,11 @@ def main(inp, ctx):
         raise ValueError("effort is for the codex engine")
     if inp.get("model") and inp["engine"] != "codex":
         raise ValueError("sol and astra are codex models; opus and devin take no model")
-    spec = worker_header(inp, ctx) + inp["spec"]
+    spec = ctx.header(worker_header(inp, ctx) + inp["spec"])
     fwd = {k: v for k, v in inp.items() if k not in ("pr", "read_only")}
-    out = agent_run(ctx).main({**fwd, "engine": engine, "spec": spec,
-                               "report_path": str(ctx.run_dir / "summary.txt")}, ctx)
-    sent_file = ctx.run_dir / "submitted.json"
-    sent = json.loads(sent_file.read_text()) if sent_file.exists() else {}
+    out = ctx.builtin("agent.run", {**fwd, "engine": engine, "spec": spec,
+                                    "report_path": str(ctx.run_dir / "summary.txt")})
+    sent = ctx.submission()
     claimed = sent.get("head_sha")
     if isinstance(claimed, str) and claimed:
         head = sh(["git", "-C", inp["cwd"], "rev-parse", "HEAD"]).stdout.strip()

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
+from sluice_fn import Rejected
 
 FNS = Path(__file__).resolve().parents[1]
 
@@ -59,17 +59,14 @@ def test_worker_submitted_summary_becomes_final(tmp_path, monkeypatch):
     report = "Landed abc123. Focused tests: 4 passed; format: 1 passed. Open items: none."
     calls = []
 
-    def fake_agent_run(ctx):
-        def fake_main(inp, _ctx):
-            calls.append(inp)
-            assert inp["report_path"] == str(tmp_path / "summary.txt")
-            assert "summary.txt" in inp["spec"]
-            return {"report": report, "final": "raw transcript tail", "session": "session-1"}
-        return SimpleNamespace(main=fake_main)
-
-    monkeypatch.setattr(worker, "agent_run", fake_agent_run)
+    def builtin(name, inp):
+        assert name == "agent.run"
+        calls.append(inp)
+        assert inp["report_path"] == str(tmp_path / "summary.txt")
+        assert "summary.txt" in inp["spec"]
+        return {"report": report, "final": "raw transcript tail", "session": "session-1"}
     out = worker.main({"engine": "codex", "cwd": str(tmp_path), "spec": "Do the task."},
-                      SimpleNamespace(run_dir=tmp_path))
+                      SimpleNamespace(run_dir=tmp_path, header=lambda text: text, builtin=builtin, submission=dict))
     assert len(calls) == 1
     assert out == {"summary": report, "final": report, "session": "session-1"}
 
@@ -77,10 +74,9 @@ def test_worker_submitted_summary_becomes_final(tmp_path, monkeypatch):
 def test_worker_fallback_uses_final_message_with_1500_character_cap(tmp_path, monkeypatch):
     worker = load_fn("lash.worker")
     last_message = "x" * 1700
-    monkeypatch.setattr(worker, "agent_run", lambda _ctx: SimpleNamespace(
-        main=lambda _inp, _ctx: {"report": None, "final": last_message, "session": "s"}))
     out = worker.main({"engine": "codex", "cwd": str(tmp_path), "spec": "Do the task."},
-                      SimpleNamespace(run_dir=tmp_path))
+                      SimpleNamespace(run_dir=tmp_path, header=lambda text: text, submission=dict, builtin=lambda *args:
+                          {"report": None, "final": last_message, "session": "s"}))
     assert out == {"summary": last_message[:1500], "final": last_message[:1500],
                    "session": "s"}
 
@@ -88,10 +84,9 @@ def test_worker_fallback_uses_final_message_with_1500_character_cap(tmp_path, mo
 def test_worker_fallback_uses_harness_final_without_codex_message(tmp_path, monkeypatch):
     worker = load_fn("lash.worker")
     (tmp_path / "codex.log.final").write_text("y" * 1600)
-    monkeypatch.setattr(worker, "agent_run", lambda _ctx: SimpleNamespace(
-        main=lambda _inp, _ctx: {"report": None, "final": "", "session": "s"}))
     out = worker.main({"engine": "codex", "cwd": str(tmp_path), "spec": "Do the task."},
-                      SimpleNamespace(run_dir=tmp_path))
+                      SimpleNamespace(run_dir=tmp_path, header=lambda text: text, submission=dict, builtin=lambda *args:
+                          {"report": None, "final": "", "session": "s"}))
     assert out["final"] == "y" * 1500
     assert out["summary"] == out["final"]
 
@@ -211,9 +206,9 @@ def test_worker_passes_fusion_to_devin_and_refuses_it_elsewhere(tmp_path, monkey
         seen.update(inp)
         return {"report": "Landed abc. Open items: none.", "final": "", "session": "s"}
 
-    monkeypatch.setattr(worker, "agent_run", lambda _ctx: SimpleNamespace(main=run))
+    builtin = lambda name, inp: run(inp, None)
     worker.main({"engine": "devin", "model": "fusion", "cwd": str(tmp_path), "spec": "Do it."},
-                SimpleNamespace(run_dir=tmp_path))
+                SimpleNamespace(run_dir=tmp_path, header=lambda text: text, builtin=builtin, submission=dict))
     assert seen["engine"] == "devin" and seen["model"] == "fusion"
     for engine, model in (("opus", "fusion"), ("codex", "fusion"), ("devin", "sol")):
         try:
@@ -262,9 +257,11 @@ def land_repos(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout="BUILD SUCCEEDED\n")
 
     monkeypatch.setattr(land, "kiln", kiln)
-    monkeypatch.setattr(land, "SEND_BACK", tmp_path / "absent.sh")
+    actions = []
     return SimpleNamespace(land=land, fork=fork, other=other, calls=calls,
-                           ctx=SimpleNamespace(log=lambda _m: None, acquire=_no_lease))
+                           ctx=SimpleNamespace(log=lambda _m: None, acquire=_no_lease, step="lane-land",
+                                               retry_on_failure=lambda *args: actions.append(args)),
+                           actions=actions)
 
 
 def _landed(r):
@@ -307,9 +304,10 @@ def test_land_refuses_a_logic_conflict_and_leaves_the_fork_unrebased(land_repos)
     head = _git(r.fork, "rev-parse", "HEAD")
     _commit(r.other, {"a.rs": "theirs\n"}, "conflict")
     _git(r.other, "push", "-q", "origin", "HEAD:main")
-    with pytest.raises(RuntimeError, match="conflicts in a.rs"):
+    with pytest.raises(Rejected, match="conflicts in a.rs"):
         r.land.main({"fork": str(r.fork)}, r.ctx)
     assert _git(r.fork, "rev-parse", "HEAD") == head and r.calls == []
+    assert len(r.actions) == 1 and r.actions[0][0] == "lane-work"
 
 
 def test_land_skips_the_check_when_main_touched_only_the_changes_docs(land_repos):
@@ -344,6 +342,7 @@ def test_close_leaves_a_partial_change_open(monkeypatch, tmp_path):
     close = load_fn("linear.close")
     calls = []
     monkeypatch.setattr(close, "sh", lambda argv, **kw: calls.append(argv))
+    monkeypatch.setattr(close, "linear_bin", lambda: "linear")
     ctx = SimpleNamespace(run_dir=tmp_path)
     out = close.main({"issue": "FIG-1", "message": "Slice one\n\nPart of FIG-1"}, ctx)
     assert out["closed"] is False and not any("update" in a for a in calls)

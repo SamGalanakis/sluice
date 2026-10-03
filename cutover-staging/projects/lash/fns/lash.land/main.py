@@ -2,9 +2,9 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""lash.land: the landing queue. Squash (optionally); under a host-wide lock, rebase onto main and
+"""lash.land: the landing queue. Squash (optionally); under an explicit land lease, rebase onto main and
 push; when main's new commits touched the change's code or a generated file was regenerated,
-release the lock, `kiln check //...`, and go again."""
+release the lease, `kiln check //...`, and go again."""
 
 import re
 import shlex
@@ -13,9 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice.fn import run, sh
-
 from _lashlib import net_sh, on_main
+from sluice_fn import Rejected, run, sh
 
 REGENERATED = re.compile(r"(^|/)BUCK$|^tools/buck2/target-inventory\.json$")
 ATTEMPTS = 30
@@ -46,8 +45,8 @@ def squash(fork, inp):
 
 
 def kiln(fork, args):
-    return sh(["bash", "-c", f"cd {shlex.quote(fork)} && . ./env.sh >/dev/null 2>&1 && "
-               f"kiln {args} 2>&1"], check=False)
+    return sh(["bash", "-c", (f"cd {shlex.quote(fork)} && . ./env.sh >/dev/null 2>&1 && "
+                f"kiln {args} 2>&1")], check=False)
 
 
 def names(fork, rng):
@@ -62,24 +61,18 @@ def regenerated(fork, path):
     return "@generated" in head
 
 
-SEND_BACK = Path("/workspace/notes/lash/send-back.sh")
+def reject(inp, ctx, reason, feedback):
+    """Only an intentional refusal may retry the captured work result on completion."""
+    target = inp.get("work_step")
+    if target is None and ctx.step and ctx.step.endswith("-land"):
+        target = ctx.step.removesuffix("-land") + "-work"
+    if target:
+        feedback = (feedback + " Do not re-submit the old commit.").encode("utf-8")
+        ctx.retry_on_failure(target, feedback[:8192].decode("utf-8", errors="ignore"))
+    raise Rejected(reason)
 
 
-def send_back(fork, files, message=None):
-    """Hand a conflict or a failed check back to the lane that wrote the change (its unit is
-    the fork's name); the lane fixes it and this step is retried when its work succeeds again."""
-    if not SEND_BACK.exists():
-        return
-    message = message or (
-        f"The land step cannot apply your commit: rebasing onto main conflicts in "
-        f"{', '.join(files) or 'your files'}. Run git pull --rebase origin main now and resolve, "
-        "keeping both sides' intent; kiln check the resolved code and run the tests covering it "
-        "once; commit and submit ready=true.")
-    sh([str(SEND_BACK), Path(fork).name, message + " Do not re-submit the old commit."],
-       check=False)
-
-
-def rebase(fork):
+def rebase(fork, inp, ctx):
     """Rebase onto origin/main. Conflicts confined to generated files are resolved by taking
     main's copy and regenerating; any other conflict aborts. Returns whether it regenerated."""
     git = ["git", "-C", fork]
@@ -88,13 +81,16 @@ def rebase(fork):
         files = sh([*git, "diff", "--name-only", "--diff-filter=U"]).stdout.split()
         if not files or not all(regenerated(fork, f) for f in files):
             sh([*git, "rebase", "--abort"], check=False)
-            send_back(fork, files)
-            raise RuntimeError(f"rebase onto origin/main conflicts in {', '.join(files) or '?'}: "
-                               "resolve it in the fork (rebase, build), then retry this step")
+            reason = f"rebase onto origin/main conflicts in {', '.join(files) or '?'}"
+            reject(inp, ctx, reason,
+                   reason + ": run git pull --rebase origin main and resolve, keeping both "
+                   "sides' intent; kiln check the resolved code and run the tests covering it "
+                   "once; commit and submit ready=true.")
         sh([*git, "checkout", "--ours", "--", *files])  # during a rebase, ours is main
         if kiln(fork, "sync").returncode != 0:
             sh([*git, "rebase", "--abort"], check=False)
-            raise RuntimeError("kiln sync failed while regenerating a conflicted generated file")
+            reject(inp, ctx, "kiln sync failed while regenerating a conflicted generated file",
+                   "Fix the generated-file conflict with kiln sync, check, commit and submit ready=true.")
         sh([*git, "add", "-A", "--", *files,
             *(f for f in names(fork, "HEAD") if regenerated(fork, f))])
         r, regen = sh([*git, "-c", "core.editor=true", "rebase", "--continue"], check=False), True
@@ -119,24 +115,25 @@ def amend_formatting(fork):
 BUILD_INPUT = re.compile(r"\.(rs|bzl|toml)$|(^|/)BUCK$|(^|/)Cargo\.lock$")  # what `kiln check` compiles
 
 
-def land(fork, log, ctx):
+def land(fork, log, ctx, inp):
     """Hold the land lease only to rebase and push. A change main's new commits touched (in code,
     not docs) or one that needed regenerating is checked with the lock released, then
     retried; a clean, untouched rebase pushes at once."""
     git = ["git", "-C", fork]
-    net_sh([*git, "fetch", "-q", "origin", "main"])
-    built = sh([*git, "merge-base", "HEAD", "origin/main"]).stdout.strip()  # the worker built here
+    built = None
     tail, fmt_fixed = "", False
     for _ in range(ATTEMPTS):
         log("waiting for the land lease")
         with ctx.acquire("land", 1):  # one rebase+push at a time, granted in step priority
             net_sh([*git, "fetch", "-q", "origin", "main"])
+            if built is None:
+                built = sh([*git, "merge-base", "HEAD", "origin/main"]).stdout.strip()
             if sh([*git, "rev-list", "--count", "origin/main..HEAD"]).stdout.strip() == "0":
                 raise RuntimeError("nothing to land: the fork has no commits ahead of origin/main")
             mine = names(fork, "origin/main...HEAD")
             main = sh([*git, "rev-parse", "origin/main"]).stdout.strip()
             touched = {f for f in mine & names(fork, f"{built}..{main}") if BUILD_INPUT.search(f)}
-            regen = rebase(fork)
+            regen = rebase(fork, inp, ctx)
             if not (regen or touched):
                 push = sh([*git, "push", "-q", "origin", "HEAD:main"], check=False)
                 if push.returncode == 0:
@@ -160,10 +157,11 @@ def land(fork, log, ctx):
         tail = "\n".join(b.stdout.strip().splitlines()[-40:])
         if b.returncode != 0:
             errors = "\n".join(l for l in tail.splitlines() if "error" in l or "-->" in l)[:1500]
-            send_back(fork, [], f"The land step's kiln check failed after rebasing onto main "
-                      f"{main[:10]}:\n{errors}\nRun git pull --rebase origin main, fix it, kiln "
-                      "check, run the tests covering the fix once, commit and submit ready=true.")
-            raise RuntimeError(f"kiln check failed after the rebase onto {main[:10]}:\n{tail}")
+            reason = f"kiln check failed after the rebase onto {main[:10]}:\n{tail}"
+            reject(inp, ctx, reason,
+                   f"The land step's kiln check failed after rebasing onto main {main[:10]}:\n"
+                   f"{errors}\nRun git pull --rebase origin main, fix it, kiln check, run the "
+                   "tests covering the fix once, commit and submit ready=true.")
         built = main
     raise RuntimeError(f"no clean push after {ATTEMPTS} attempts")
 
@@ -172,15 +170,15 @@ def main(inp, ctx):
     fork = inp["fork"]
     log = getattr(ctx, "log", print)
     if inp.get("ready") is False:
-        # Fail rather than skip: a skipped land would skip `-landed`, and steps ordered `after`
-        # it would start as if the change had landed. A failed land keeps them waiting.
-        raise RuntimeError("not ready: the work step submitted ready=false. Unresolved: "
-                           + (inp.get("unresolved") or "(none given)")[:1500])
+        reason = ("not ready: the work step submitted ready=false. Unresolved: "
+                  + (inp.get("unresolved") or "(none given)")[:1500])
+        reject(inp, ctx, reason, reason + ". Finish the work, commit and submit ready=true.")
     if inp.get("title"):
-        squash(fork, inp)
-    tail = land(fork, log, ctx)
+        with ctx.acquire("land", 1):
+            squash(fork, inp)
+    tail = land(fork, log, ctx, inp)
     sha = sh(["git", "-C", fork, "rev-parse", "HEAD"]).stdout.strip()
-    if not on_main(fork, sha):
+    if not on_main(fork, sha, fetch=False):
         raise RuntimeError(f"HEAD {sha} is not on origin/main after the push")
     subject = sh(["git", "-C", fork, "log", "-1", "--format=%s"]).stdout.strip()
     message = sh(["git", "-C", fork, "log", "-1", "--format=%B"]).stdout.strip()

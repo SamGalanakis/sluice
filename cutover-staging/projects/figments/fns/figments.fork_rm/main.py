@@ -6,7 +6,7 @@
 
 from pathlib import Path
 
-from sluice.fn import run, sh
+from sluice_fn import run, sh
 
 
 def main(inp, ctx):
@@ -24,7 +24,7 @@ def main(inp, ctx):
             ahead = sh(["git", "-C", str(path), "log", "--oneline", "origin/main..HEAD"]).stdout.strip()
             raise RuntimeError(f"fork {inp['name']} has commits on no remote branch (push them, or "
                                f"force to remove anyway):\n{ahead[:2000]}")
-    sh(["kiln", "rm", "figments", inp["name"]])
+    sh(["kiln", "rm", "figments", inp["name"]], cwd=ctx.project_dir)
     return {"removed": True}
 
 

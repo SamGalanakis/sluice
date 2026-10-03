@@ -1,158 +1,164 @@
 {
- "name": "lane",
- "doc": "One lash lane: a kiln fork, a lash.worker (engine opus, codex with model sol, or devin with no model = SWE-2 High) on a spec file that commits a ready change, the landing queue (lash.land: one lander at a time, rebase, build only on overlap, push), proof the landed sha is on origin/main, the ticket closed, the fork removed. The land step fails (never skips) when the work submits ready=false, so a dependent ordered after <unit>-landed keeps waiting.",
- "params": {
-  "ticket": "string",
-  "spec": "string",
-  "model": [
-   "null",
-   {
-    "type": "enum",
-    "symbols": [
-     "sol",
-     "astra"
-    ]
-   }
-  ],
-  "engine": {
-   "type": "enum",
-   "symbols": [
-    "devin",
-    "codex",
-    "opus"
-   ]
-  }
- },
- "steps": {
-  "{unit}-fork": {
-   "run": "lash.fork",
-   "tags": [
-    "lane"
-   ],
-   "in": {
-    "name": {
-     "default": "{unit}"
-    }
-   }
-  },
-  "{unit}-work": {
-   "run": "lash.worker",
-   "tags": [
-    "lane"
-   ],
-   "in": {
+  "name": "lane",
+  "doc": "One lash lane: a kiln fork, a lash.worker (engine opus, codex with model sol, or devin with no model = SWE-2 High) on a spec file that commits a ready change, the landing queue (lash.land: one lander at a time, rebase, build only on overlap, push), proof the landed sha is on origin/main, the ticket closed, the fork removed. The land step fails (never skips) when the work submits ready=false, so a dependent ordered after <unit>-landed keeps waiting.",
+  "params": {
+    "ticket": "string",
+    "spec": "string",
+    "model": [
+      "null",
+      {
+        "type": "enum",
+        "symbols": [
+          "sol",
+          "astra"
+        ]
+      }
+    ],
     "engine": {
-     "default": "{engine}"
-    },
-    "model": {
-     "default": "{model}"
-    },
-    "cwd": {
-     "source": "{unit}-fork/path"
-    },
-    "ticket": {
-     "default": "{ticket}"
-    },
-    "spec": {
-     "file": "{spec}"
-    },
-    "queued": {
-     "default": true
+      "type": "enum",
+      "symbols": [
+        "devin",
+        "codex",
+        "opus"
+      ]
     }
-   },
-   "outputs": {
-    "ready": {
-     "type": "boolean",
-     "doc": "true once the commit is final and its proof passed"
-    },
-    "evidence": {
-     "type": "string",
-     "doc": "Root cause, red side, counts"
-    },
-    "unresolved": {
-     "type": "string",
-     "doc": "Open items; empty if none"
-    }
-   },
-   "needs": {
-    "lane": 1
-   }
   },
-  "{unit}-land": {
-   "run": "lash.land",
-   "tags": [
-    "lane"
-   ],
-   "in": {
-    "fork": {
-     "source": "{unit}-fork/path"
+  "steps": {
+    "{unit}-fork": {
+      "run": "lash.fork",
+      "tags": [
+        "lane"
+      ],
+      "in": {
+        "name": {
+          "default": "{unit}"
+        }
+      }
     },
-    "ready": {
-     "source": "{unit}-work/ready"
+    "{unit}-work": {
+      "run": "lash.worker",
+      "tags": [
+        "lane"
+      ],
+      "in": {
+        "engine": {
+          "default": "{engine}"
+        },
+        "model": {
+          "default": "{model}"
+        },
+        "cwd": {
+          "source": "{unit}-fork/path"
+        },
+        "ticket": {
+          "default": "{ticket}"
+        },
+        "spec": {
+          "file": "{spec}"
+        },
+        "queued": {
+          "default": true
+        }
+      },
+      "outputs": {
+        "ready": {
+          "type": "boolean",
+          "doc": "true once the commit is final and its proof passed"
+        },
+        "evidence": {
+          "type": "string",
+          "doc": "Root cause, red side, counts"
+        },
+        "unresolved": {
+          "type": "string",
+          "doc": "Open items; empty if none"
+        }
+      },
+      "needs": {
+        "lane": 1
+      }
     },
-    "unresolved": {
-     "source": "{unit}-work/unresolved"
+    "{unit}-land": {
+      "run": "lash.land",
+      "tags": [
+        "lane"
+      ],
+      "in": {
+        "fork": {
+          "source": "{unit}-fork/path"
+        },
+        "ready": {
+          "source": "{unit}-work/ready"
+        },
+        "unresolved": {
+          "source": "{unit}-work/unresolved"
+        },
+        "work_step": {
+          "default": "{unit}-work"
+        }
+      }
+    },
+    "{unit}-landed": {
+      "run": "lash.on_main",
+      "tags": [
+        "lane",
+        "exit"
+      ],
+      "in": {
+        "repo": {
+          "default": "/workspace/code/lash"
+        },
+        "sha": {
+          "source": "{unit}-land/landed_sha"
+        },
+        "interval": {
+          "default": 30
+        },
+        "timeout": {
+          "default": 900
+        }
+      },
+      "after": [
+        "{unit}-land/landed"
+      ]
+    },
+    "{unit}-close": {
+      "run": "linear.close",
+      "tags": [
+        "lane"
+      ],
+      "in": {
+        "issue": {
+          "default": "{ticket}"
+        },
+        "evidence": {
+          "source": "{unit}-work/evidence"
+        },
+        "message": {
+          "source": "{unit}-land/message"
+        }
+      },
+      "after": [
+        "{unit}-land/landed",
+        "{unit}-landed"
+      ]
+    },
+    "{unit}-rm": {
+      "run": "lash.fork_rm",
+      "tags": [
+        "lane"
+      ],
+      "after": [
+        "{unit}-close"
+      ],
+      "in": {
+        "name": {
+          "default": "{unit}"
+        },
+        "path": {
+          "source": "{unit}-fork/path"
+        }
+      }
     }
-   }
-  },
-  "{unit}-landed": {
-   "run": "lash.on_main",
-   "tags": [
-    "lane"
-   ],
-   "when": "{unit}-land/landed",
-   "in": {
-    "repo": {
-     "default": "/workspace/code/lash"
-    },
-    "sha": {
-     "source": "{unit}-land/landed_sha"
-    },
-    "interval": {
-     "default": 30
-    },
-    "timeout": {
-     "default": 900
-    }
-   }
-  },
-  "{unit}-close": {
-   "run": "linear.close",
-   "tags": [
-    "lane"
-   ],
-   "when": "{unit}-land/landed",
-   "in": {
-    "issue": {
-     "default": "{ticket}"
-    },
-    "evidence": {
-     "source": "{unit}-work/evidence"
-    },
-    "message": {
-     "source": "{unit}-land/message"
-    }
-   },
-   "after": [
-    "{unit}-landed"
-   ]
-  },
-  "{unit}-rm": {
-   "run": "lash.fork_rm",
-   "tags": [
-    "lane"
-   ],
-   "after": [
-    "{unit}-close"
-   ],
-   "in": {
-    "name": {
-     "default": "{unit}"
-    },
-    "path": {
-     "source": "{unit}-fork/path"
-    }
-   }
   }
- }
 }

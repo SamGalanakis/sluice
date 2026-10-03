@@ -9,7 +9,7 @@ import shlex
 import time
 from pathlib import Path
 
-from sluice.fn import run, sh, sh_stream
+from sluice_fn import run, sh, stream
 
 
 def receipt_path(fork):
@@ -25,7 +25,7 @@ def main(inp, ctx):
     args += ["--dry-run"] if inp.get("dry_run") else []
     started = time.time_ns()
     script = ". ./env.sh && python3 scripts/dev-test.py " + " ".join(map(shlex.quote, args))
-    res = sh_stream(["bash", "-c", script.rstrip()], cwd=fork, check=False)
+    res = stream(["bash", "-c", script.rstrip()], cwd=fork, check=False)
     tail = "\n".join((res.stdout + res.stderr).strip().splitlines()[-60:])
     if inp.get("dry_run"):
         if res.returncode != 0:

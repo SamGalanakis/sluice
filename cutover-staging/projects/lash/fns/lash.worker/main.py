@@ -4,16 +4,13 @@
 # ///
 """lash.worker: agent.run with the lash lane header and a worker-written summary."""
 
-import importlib.util
-import json
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice.fn import run, sh
-
+from sluice_fn import AgentFailure, run, sh
 
 SUMMARY_WORDS = 120
 FALLBACK_CHARS = 1500
@@ -116,25 +113,6 @@ WALL_CAP_CONTINUE = ("You ran past the wall-clock cap; this is the same session,
                      "allows. Your original task follows for reference.\n\n")
 
 
-def fn_dirs(ctx):
-    """Where the project finds its fns, in lookup order after the built-ins (SPEC §2)."""
-    cfg_file = ctx.home / "config.json"
-    cfg = json.loads(cfg_file.read_text()) if cfg_file.exists() else {}
-    project = [ctx.home / "projects" / ctx.project / "fns"] if ctx.project else []
-    return [*project, ctx.home / "fns", *(ctx.home / d for d in cfg.get("fn_dirs", []))]
-
-
-def agent_run(ctx):
-    """The agents pack's agent.run, wherever this project finds it."""
-    found = [d / "agent.run" for d in fn_dirs(ctx) if (d / "agent.run" / "fn.json").is_file()]
-    if not found:
-        raise RuntimeError("lash.worker needs agent.run: install the agents pack")
-    spec = importlib.util.spec_from_file_location("agent_run", found[0] / "main.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 def bounded_summary(text):
     """Keep the worker's own report within the function's 120-word contract."""
     text = text.strip()
@@ -161,20 +139,16 @@ def main(inp, ctx):
     if inp.get("model") and (inp["engine"] == "opus"
                              or (inp["model"] == "fusion") != (inp["engine"] == "devin")):
         raise ValueError("model fusion is for the devin engine; sol and astra are for codex")
-    spec = worker_header(inp, ctx) + inp["spec"]
+    spec = ctx.header(worker_header(inp, ctx) + inp["spec"])
     base = {**inp, "engine": engine, "report_path": str(ctx.run_dir / "summary.txt")}
     try:
-        out = agent_run(ctx).main({**base, "spec": spec}, ctx)
-    except RuntimeError as e:
-        # One more stretch past the wall cap, in the same session: a lane that hits it is
-        # usually landing a finished commit.
-        sid = re.search(r"session: ([\w-]+)\. To resume", str(e))
-        if "wall-clock cap" not in str(e) or not sid:
+        out = ctx.builtin("agent.run", {**base, "spec": spec})
+    except AgentFailure as failure:
+        if failure.kind != "WallCap" or not failure.session:
             raise
-        out = agent_run(ctx).main({**base, "session": sid.group(1),
-                                   "spec": WALL_CAP_CONTINUE + spec}, ctx)
-    sent_file = ctx.run_dir / "submitted.json"
-    sent = json.loads(sent_file.read_text()) if sent_file.exists() else {}
+        out = ctx.builtin("agent.run", {**base, "session": failure.session,
+                                        "spec": WALL_CAP_CONTINUE + spec})
+    sent = ctx.submission()
     claimed = sent.get("head_sha")
     if isinstance(claimed, str) and claimed:
         head = sh(["git", "-C", inp["cwd"], "rev-parse", "HEAD"]).stdout.strip()

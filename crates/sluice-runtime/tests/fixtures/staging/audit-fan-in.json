@@ -1,0 +1,501 @@
+{
+  "steps": {
+    "ta-exec-runtime-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-exec-runtime",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-exec-tests-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-exec-tests",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-exec-src-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-exec-src",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-lashlang-rt-tests-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-lashlang-rt-tests",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-lashlang-rt-core-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-lashlang-rt-core",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-lashlang-rest-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-lashlang-rest",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-facade-builder-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-facade-builder",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-facade-streaming-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-facade-streaming",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-facade-tests-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-facade-tests",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-facade-rest-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-facade-rest",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-ts-ecma-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-ts-ecma",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-ts-graph-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-ts-graph",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-ts-rest-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-ts-rest",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-restate-a-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-restate-a",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-restate-b-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-restate-b",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-rlm-exec-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-rlm-exec",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-rlm-rest-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-rlm-rest",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-core-tests-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-core-tests",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-core-src-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-core-src",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-store-core-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-store-core",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-store-backends-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-store-backends",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-wire-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-wire",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-llm-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-llm",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-plugins-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-plugins",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-examples-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-examples",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "codex"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        }
+      }
+    },
+    "ta-integrate-work": {
+      "run": "lash.worker",
+      "tags": [
+        "unit:ta-integrate",
+        "exit"
+      ],
+      "in": {
+        "engine": {
+          "default": "opus"
+        },
+        "cwd": {
+          "default": "/tmp/fake-fork"
+        },
+        "spec": {
+          "default": "Offline fixture"
+        },
+        "lanes": {
+          "source": [
+            "ta-exec-runtime-work/final",
+            "ta-exec-tests-work/final",
+            "ta-exec-src-work/final",
+            "ta-lashlang-rt-tests-work/final",
+            "ta-lashlang-rt-core-work/final",
+            "ta-lashlang-rest-work/final",
+            "ta-facade-builder-work/final",
+            "ta-facade-streaming-work/final",
+            "ta-facade-tests-work/final",
+            "ta-facade-rest-work/final",
+            "ta-ts-ecma-work/final",
+            "ta-ts-graph-work/final",
+            "ta-ts-rest-work/final",
+            "ta-restate-a-work/final",
+            "ta-restate-b-work/final",
+            "ta-rlm-exec-work/final",
+            "ta-rlm-rest-work/final",
+            "ta-core-tests-work/final",
+            "ta-core-src-work/final",
+            "ta-store-core-work/final",
+            "ta-store-backends-work/final",
+            "ta-wire-work/final",
+            "ta-llm-work/final",
+            "ta-plugins-work/final",
+            "ta-examples-work/final"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -8,7 +8,7 @@ import json
 import re
 import time
 
-from sluice.fn import run, sh
+from sluice_fn import run, sh
 
 FIELDS = "databaseId,headSha,status,conclusion,workflowName,event,url"
 DEFAULT_WORKFLOW = "CI"  # name of .github/workflows/ci.yml in gh run list

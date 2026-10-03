@@ -9,9 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice.fn import run, sh
-
 from _figlib import FORKS
+from sluice_fn import run, sh
 
 
 def git(path, *args, check=True):
@@ -27,7 +26,7 @@ def main(inp, ctx):
     opts = ["--no-build"] if inp.get("review") else []
     if inp.get("base"):
         opts += ["--branch", inp["base"].removeprefix("origin/")]
-    res = sh(["kiln", "fork", *opts, "figments", inp["name"]])
+    res = sh(["kiln", "fork", *opts, "figments", inp["name"]], cwd=ctx.project_dir)
     lines = [x.strip() for x in res.stdout.splitlines() if x.strip()]
     if not lines or not Path(lines[-1]).is_dir():
         raise RuntimeError(f"kiln fork printed no fork directory: {res.stdout.strip()!r}")

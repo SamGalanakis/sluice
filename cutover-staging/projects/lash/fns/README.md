@@ -11,4 +11,16 @@ Functions only the sluice `lash` project sees (its `fns/` dir). Local for now; n
 | `lash.on_main` | waits for a sha, or a commit matching `grep`, to be on origin/main |
 | `lash.main_red` | waits for the next completed `ci.yml` dispatch run on main by `databaseId` (overridable `workflow` and `event`); returns `{red, failed_jobs, failed_job_ids, failed_tests, sha, url, run_id}` |
 | `linear.create` / `linear.comment` / `linear.close` | the `linear` CLI; `close` completes the issue on `Closes <ticket>` in the body or a title ending ` (<ticket>)`, else comments only |
-| `lash.decide` | logs a non-blocking orchestrator decision: appends it numbered to REVISIT.md and posts an inbox item with Accept/Override (nothing waits; an Override answer wakes the orchestrator via `/workspace/notes/lash/watch.py`) |
+| `lash.decide` | posts a decision note to the owner on the supplied thread, returns its message id, and requires no acknowledgement. An owner reply can override it. |
+
+These copies use the standalone `sluice_fn` helper and protocol-1 envelope. The runtime
+pins `_lashlib` with each bundle. Workers compose `agent.run` in their parent run and read
+validated submissions through `ctx.submission()`. Lash permits one continuation for a typed
+`WallCap` with a session. Both workers retain three retries with a 600-second backoff.
+
+`lash.land` holds the `land` lease for fetch/rebase/push, releases it before checking and
+reacquires it on the next iteration. An intentional refusal raises `Rejected` and registers
+`ctx.retry_on_failure` against the explicit `work_step`, or the matching `-work` step for a
+`-land` launch. Direct calls can supply `work_step`; without one they fail without a retry
+action. Push failures retain their ordinary failure behavior because an unknown external
+outcome must not retry the worker.

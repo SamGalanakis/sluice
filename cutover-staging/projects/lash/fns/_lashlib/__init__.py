@@ -4,7 +4,7 @@ import re
 import time
 from pathlib import Path
 
-from sluice.fn import ShError, sh
+from sluice_fn import ShError, sh
 
 NETWORK_ERRORS = ("unable to access", "Connection reset", "Could not resolve host", "early EOF",
                   "The remote end hung up", "Connection timed out")

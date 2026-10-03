@@ -1,13 +1,14 @@
 {
   "name": "lash.land",
-  "doc": "The landing queue. With title, first squash all work ahead of origin/main into one commit (a change that completes a ticket ends its title with ' (<ticket>)'; a partial change has body 'Part of <ticket>'). Under a host-wide lock: rebase onto origin/main (conflicts confined to generated files - BUCK, target inventory, @generated - are regenerated with kiln sync; any other conflict fails the step) and push. When main's new commits touched the change's code (not docs) or a file was regenerated, the lock is released, `kiln check //...` runs, and it goes again. Succeeds only when HEAD is on origin/main. With ready=false (the work step's output) it fails at once without landing, so steps after `-landed` keep waiting instead of seeing a skip. A push refused by the cargo-fmt pre-push hook is amended with the hook's formatting edits once and pushed again.",
+  "doc": "The landing queue. With title, first squash all work ahead of origin/main into one commit (a change that completes a ticket ends its title with ' (<ticket>)'; a partial change has body 'Part of <ticket>'). Under a host-wide lock: rebase onto origin/main (conflicts confined to generated files - BUCK, target inventory, @generated - are regenerated with kiln sync; any other conflict fails the step) and push. When main's new commits touched the change's code (not docs) or a file was regenerated, the lock is released, `kiln check //...` runs, and it goes again. Succeeds only when HEAD is on origin/main. With ready=false (the work step's output) it fails at once without landing, so steps after `-landed` keep waiting instead of seeing a skip. A push refused by the cargo-fmt pre-push hook is amended with the hook's formatting edits once and pushed again. Intentional rebase/check/ready refusals register a conditional completion retry of work_step (default: the current -land step's matching -work); external push failures do not.",
   "inputs": {
     "fork": "string",
     "title": "string?",
     "ticket": "string?",
     "completes": "boolean?",
     "ready": "boolean?",
-    "unresolved": "string?"
+    "unresolved": "string?",
+    "work_step": "string?"
   },
   "outputs": {
     "landed_sha": "string",

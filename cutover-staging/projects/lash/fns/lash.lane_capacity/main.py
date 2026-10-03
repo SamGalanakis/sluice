@@ -6,7 +6,7 @@
 
 import os
 
-from sluice.fn import run
+from sluice_fn import run
 
 LANES = 56
 LOAD_MAX = 48  # 1-minute load above this (1.5x the 32 cores): admit nothing new
