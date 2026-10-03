@@ -2369,6 +2369,7 @@ dependencies = [
  "sluice-model",
  "sluice-process",
  "sluice-store",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
