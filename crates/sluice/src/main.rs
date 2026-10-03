@@ -1,5 +1,5 @@
 use clap::Parser;
-use sluice::cli::{Cli, Mode};
+use sluice::cli::{AgentCommand, Cli, Engine, Mode};
 use sluice_model::{RuntimeApi, error::PublicError, rpc::decode_json};
 use sluice_process::host::{OWNER_HOME, guard_scratch_home};
 use std::{path::PathBuf, process::ExitCode};
@@ -28,7 +28,29 @@ fn dispatch() -> Result<(), PublicError> {
             runtime.block_on(sluice_runtime::execution::payload_entry(home))
         });
     }
+    let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|arg| arg == "agent-hook") {
+        if args.len() != 4 {
+            return Err(PublicError::BadRequest {
+                message: "usage: sluice agent-hook <engine> <event>".into(),
+            });
+        }
+        let code = sluice_agents::engine_hook_cli(&args[2], &args[3], None)?;
+        std::process::exit(code);
+    }
     let cli = Cli::parse();
+    if let Mode::Agent {
+        command: AgentCommand::Hook { engine, event, run },
+    } = &cli.mode
+    {
+        let engine = match engine {
+            Engine::Codex => "codex",
+            Engine::Claude => "claude",
+            Engine::Devin => "devin",
+        };
+        let code = sluice_agents::engine_hook_cli(engine, event, *run)?;
+        std::process::exit(code);
+    }
     if let Mode::ImportPythonHome { src, dst } = &cli.mode {
         guard_scratch_home(src)?;
         guard_scratch_home(dst)?;

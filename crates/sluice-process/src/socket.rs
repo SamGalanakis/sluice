@@ -221,6 +221,12 @@ impl CoordinatorLink for UnixCoordinatorLink {
 )]
 pub enum ControlCommand {
     Challenge(String),
+    EngineHook {
+        engine: String,
+        run: RunId,
+        event: String,
+        payload: JsonValue,
+    },
     Cancel,
     DeliveryAck(DeliveryAck),
     Callback(Box<CommandRequest>),
@@ -238,6 +244,7 @@ pub enum ControlCommand {
 )]
 pub enum ControlReply {
     Identity(Box<GuardianIdentity>),
+    EngineHook(EngineHookReply),
     Ack,
     Callback(Box<CommandReply>),
 }
@@ -492,4 +499,20 @@ fn unavailable() -> PublicError {
         message: "fake coordinator unavailable".into(),
         retryable: true,
     }
+}
+
+/// Engine-independent hook wire result; process must not depend on sluice-agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineHookReply {
+    pub stdout: Option<JsonValue>,
+    pub exit_code: i32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineHookRequest {
+    pub engine: String,
+    pub run: RunId,
+    pub event: String,
+    pub payload: JsonValue,
 }

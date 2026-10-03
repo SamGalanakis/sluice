@@ -55,6 +55,12 @@ pub trait PayloadHost: FnHost {
     fn empty_without_payload(&self) -> io::Result<CleanupEvidence>;
 }
 pub trait PayloadInvocation: Send {
+    fn engine_hook(
+        &mut self,
+        _request: EngineHookRequest,
+    ) -> impl Future<Output = Result<EngineHookReply, PublicError>> + Send {
+        async { Err(PublicError::not_implemented("engine hook transport")) }
+    }
     fn id(&self) -> InvocationId;
     fn executor(&self) -> &ProcessIdentity;
     fn exit_evidence(&self) -> Option<ExitEvidence> {
@@ -170,6 +176,7 @@ pub async fn guardian_main<L: CoordinatorLink, H: PayloadHost>(
     if !matches!(reply, CoordinatorReply::Claimed(true)) {
         return Ok(GuardianOutcome::ClaimRefused);
     }
+    atomic_json(&args.run_dir, "hook-capability.json", &args.capability)?;
     let (events, mut control) = mpsc::channel(16);
     let server = ControlServer::bind(
         args.run_dir.join("control.sock"),
@@ -329,7 +336,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         let launch_result = loop {
             tokio::select! {
                 r = &mut launch => break r,
-                event = control.recv() => { if let Some(event) = event { handle_control(event, args, link, &cancel, &mut delivery, invocation.invocation, None).await; } },
+                event = control.recv() => { if let Some(event) = event { handle_control::<L, H::Invocation>(event, args, link, &cancel, &mut delivery, invocation.invocation, None, None).await; } },
                 _ = tokio::time::sleep(args.poll_interval) => { if matches!(cancelled(link, id).await, Ok(true)) { cancel.cancel(); } },
             }
         };
@@ -356,7 +363,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
             }
             tokio::select! {
                 event = control.recv() => {
-                    if let Some(event) = event { handle_control(event, args, link, &cancel, &mut delivery, payload.id(), Some(&mut retry)).await; }
+                    if let Some(event) = event { handle_control(event, args, link, &cancel, &mut delivery, payload.id(), Some(&mut retry), Some(&mut payload)).await; }
                 },
                 _ = tokio::time::sleep(args.poll_interval) => {
                     if matches!(cancelled(link, id).await, Ok(true)) { cancel.cancel(); }
@@ -421,7 +428,7 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                     break 'invocations;
                 }
                 tokio::select! {
-                    event = control.recv() => { if let Some(event) = event { handle_control(event, args, link, &cancel, &mut delivery, invocation.invocation, None).await; } },
+                    event = control.recv() => { if let Some(event) = event { handle_control::<L, H::Invocation>(event, args, link, &cancel, &mut delivery, invocation.invocation, None, None).await; } },
                     _ = tokio::time::sleep(args.poll_interval.min(until.saturating_duration_since(tokio::time::Instant::now()))) => {},
                 }
             }
@@ -491,7 +498,8 @@ async fn freeze_submissions<L: CoordinatorLink>(
         _ => Err(invalid("wrong submission reply")),
     }
 }
-async fn handle_control<L: CoordinatorLink>(
+#[allow(clippy::too_many_arguments)]
+async fn handle_control<L: CoordinatorLink, I: PayloadInvocation>(
     event: ControlEvent,
     args: &GuardianArgs,
     link: &L,
@@ -499,8 +507,49 @@ async fn handle_control<L: CoordinatorLink>(
     delivery: &mut DeliveryState,
     current: InvocationId,
     retry: Option<&mut Option<(JsonMap, u64)>>,
+    payload: Option<&mut I>,
 ) {
     let result = match event.request.command {
+        ControlCommand::EngineHook {
+            engine,
+            run,
+            event,
+            payload: body,
+        } => {
+            if !["codex", "claude", "devin", "fake"].contains(&engine.as_str())
+                || run != args.invocation.run
+                || event.is_empty()
+                || event.len() > 128
+                || serde_json::to_vec(&body).map_or(true, |bytes| bytes.len() > 1024 * 1024)
+            {
+                Err(PublicError::BadRequest {
+                    message: "invalid hook run/event/payload".into(),
+                })
+            } else if let Some(payload) = payload {
+                match tokio::time::timeout(
+                    Duration::from_secs(3),
+                    payload.engine_hook(EngineHookRequest {
+                        engine,
+                        run,
+                        event,
+                        payload: body,
+                    }),
+                )
+                .await
+                {
+                    Ok(result) => result.map(ControlReply::EngineHook),
+                    Err(_) => Err(PublicError::Busy {
+                        message: "engine hook decision timed out; do not replay".into(),
+                        retryable: false,
+                    }),
+                }
+            } else {
+                Err(PublicError::Conflict {
+                    message: "no active engine invocation".into(),
+                    current_rev: None,
+                })
+            }
+        }
         ControlCommand::Challenge(challenge) if challenge == args.guardian.socket_challenge => {
             Ok(ControlReply::Identity(Box::new(args.guardian.clone())))
         }
@@ -894,6 +943,46 @@ pub async fn invoke_payload<H: FnHost>(host: &H, invocation: FnInvocation) -> (V
     )
 }
 impl PayloadInvocation for OsInvocation {
+    async fn engine_hook(
+        &mut self,
+        request: EngineHookRequest,
+    ) -> Result<EngineHookReply, PublicError> {
+        let directory = self.run_dir.join("engine-hooks");
+        fs::create_dir_all(&directory).map_err(|e| PublicError::Storage {
+            message: e.to_string(),
+        })?;
+        if fs::read_dir(&directory)
+            .map_err(|e| PublicError::Storage {
+                message: e.to_string(),
+            })?
+            .count()
+            >= 4096
+        {
+            return Err(PublicError::BadRequest {
+                message: "engine hook journal bound exceeded".into(),
+            });
+        }
+        let id = InvocationId::new().to_string();
+        atomic_json(&directory, &format!("{id}.request.json"), &request).map_err(|e| {
+            PublicError::Storage {
+                message: e.to_string(),
+            }
+        })?;
+        let path = directory.join(format!("{id}.reply.json"));
+        loop {
+            if let Some(reply) =
+                read_json::<Result<EngineHookReply, PublicError>>(&path).map_err(|e| {
+                    PublicError::Storage {
+                        message: e.to_string(),
+                    }
+                })?
+            {
+                return reply;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     fn id(&self) -> InvocationId {
         self.id
     }

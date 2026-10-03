@@ -7,10 +7,12 @@ use std::{path::PathBuf, process::ExitCode};
 struct Fixture {
     #[arg(value_enum)]
     kind: Kind,
+    script: Option<PathBuf>,
 }
 #[derive(Clone, clap::ValueEnum)]
 enum Kind {
     Fn,
+    Engine,
     Codex,
     Claude,
     Devin,
@@ -91,7 +93,20 @@ fn main() -> ExitCode {
             }
         };
     }
-    let _fixture = Fixture::parse();
+    let fixture = Fixture::parse();
+    if matches!(fixture.kind, Kind::Engine) {
+        let result = fixture
+            .script
+            .ok_or_else(|| std::io::Error::other("engine fixture requires a scripted event file"))
+            .and_then(|path| sluice_agents::fixture_engine_main(&path));
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     eprintln!(
         "{}",
         sluice::error_json(&PublicError::not_implemented("fake fn/engine"))
