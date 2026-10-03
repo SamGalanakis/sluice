@@ -51,11 +51,6 @@ fn every_dispatch_mode_fails_without_touching_a_scratch_home() {
         vec!["tool", "projects_list", "{}"],
         vec!["me", "--json"],
         vec!["doctor", "--json"],
-        vec![
-            "import-python-home",
-            "scratch-source",
-            "scratch-destination",
-        ],
         vec!["agent", "hook", "--engine", "codex", "--event", "Stop"],
     ] {
         let output = run(home.path(), &args);

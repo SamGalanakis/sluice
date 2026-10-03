@@ -2291,6 +2291,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "fs4",
+ "rusqlite",
  "serde_json",
  "sluice-agents",
  "sluice-model",
@@ -2299,6 +2301,7 @@ dependencies = [
  "sluice-store",
  "sluice-web",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

@@ -1,0 +1,11 @@
+{
+  "name": "fixture.worker",
+  "inputs": {
+    "cwd": "string",
+    "spec": "string"
+  },
+  "outputs": {
+    "final": "string",
+    "session": "string?"
+  }
+}
