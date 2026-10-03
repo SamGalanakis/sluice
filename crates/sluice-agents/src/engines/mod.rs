@@ -146,6 +146,13 @@ pub struct EngineLaunch {
 /// All methods run inside the admitted invocation. Implementations must tolerate cancellation
 /// by future drop; cleanup must reap auxiliary children. Session aliases resolve before locking.
 pub trait EngineAdapter: Send {
+    /// Synchronous hook decisions must stay bounded and perform no provider calls.
+    fn on_hook(&mut self, _hook: HookEvent) -> Result<HookReply, EngineError> {
+        Err(EngineError {
+            kind: EngineErrorKind::CapabilityMismatch,
+            message: "engine hooks are unsupported".into(),
+        })
+    }
     fn profile(&self) -> EngineProfile;
     fn session(
         &mut self,
@@ -184,4 +191,19 @@ pub struct ScriptFrame {
     pub observation: EngineObservation,
     pub error: Option<EngineError>,
     pub delay_ms: u64,
+}
+
+/// Profile marker: the engine supplies context in the compaction hook reply itself.
+pub const INLINE_COMPACTION_CONTEXT: &str = "sluice.compaction_context_inline";
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookEvent {
+    pub event: String,
+    pub payload: serde_json::Value,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookReply {
+    pub stdout: Option<serde_json::Value>,
+    pub exit_code: i32,
 }
