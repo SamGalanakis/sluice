@@ -1,0 +1,181 @@
+[
+  {
+    "method": "turn/started",
+    "params": {
+      "threadId": "fixture-thread",
+      "turn": {
+        "id": "[redacted]",
+        "items": [],
+        "itemsView": "[redacted]",
+        "status": "inProgress",
+        "error": null,
+        "startedAt": 1791063405,
+        "completedAt": null,
+        "durationMs": null
+      }
+    },
+    "emittedAtMs": 1791063405424
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "item": {
+        "type": "agentMessage",
+        "id": "[redacted]",
+        "text": "[redacted]",
+        "phase": "commentary",
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null
+      },
+      "threadId": "fixture-thread",
+      "turnId": "[redacted]",
+      "completedAtMs": 1791063409947
+    },
+    "emittedAtMs": 1791063409949
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "item": {
+        "type": "commandExecution",
+        "id": "[redacted]",
+        "pluginId": null,
+        "scriptPath": null,
+        "command": "[redacted]",
+        "cwd": "[redacted]",
+        "processId": "[redacted]",
+        "source": "[redacted]",
+        "status": "completed",
+        "commandActions": [
+          {
+            "type": "unknown",
+            "command": "[redacted]"
+          }
+        ],
+        "aggregatedOutput": null,
+        "exitCode": 0,
+        "durationMs": 0
+      },
+      "threadId": "fixture-thread",
+      "turnId": "[redacted]",
+      "completedAtMs": 1791063410689
+    },
+    "emittedAtMs": 1791063410691
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "item": {
+        "type": "commandExecution",
+        "id": "[redacted]",
+        "pluginId": null,
+        "scriptPath": null,
+        "command": "[redacted]",
+        "cwd": "[redacted]",
+        "processId": "[redacted]",
+        "source": "[redacted]",
+        "status": "completed",
+        "commandActions": [
+          {
+            "type": "read",
+            "command": "[redacted]",
+            "name": "[redacted]",
+            "path": "[redacted]"
+          }
+        ],
+        "aggregatedOutput": "[redacted]",
+        "exitCode": 0,
+        "durationMs": 0
+      },
+      "threadId": "fixture-thread",
+      "turnId": "[redacted]",
+      "completedAtMs": 1791063415007
+    },
+    "emittedAtMs": 1791063415008
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "item": {
+        "type": "commandExecution",
+        "id": "[redacted]",
+        "pluginId": null,
+        "scriptPath": null,
+        "command": "[redacted]",
+        "cwd": "[redacted]",
+        "processId": "[redacted]",
+        "source": "[redacted]",
+        "status": "completed",
+        "commandActions": [
+          {
+            "type": "unknown",
+            "command": "[redacted]"
+          }
+        ],
+        "aggregatedOutput": "[redacted]",
+        "exitCode": 0,
+        "durationMs": 0
+      },
+      "threadId": "fixture-thread",
+      "turnId": "[redacted]",
+      "completedAtMs": 1791063418796
+    },
+    "emittedAtMs": 1791063418797
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "item": {
+        "type": "agentMessage",
+        "id": "[redacted]",
+        "text": "[redacted]",
+        "phase": "final_answer",
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null
+      },
+      "threadId": "fixture-thread",
+      "turnId": "[redacted]",
+      "completedAtMs": 1791063422562
+    },
+    "emittedAtMs": 1791063422563
+  },
+  {
+    "method": "item/completed",
+    "params": {
+      "threadId": "fixture-thread",
+      "item": {
+        "id": "compact-fixture",
+        "type": "contextCompaction"
+      }
+    }
+  },
+  {
+    "method": "turn/completed",
+    "params": {
+      "threadId": "fixture-thread",
+      "turn": {
+        "id": "[redacted]",
+        "items": [
+          {
+            "type": "agentMessage",
+            "id": "[redacted]",
+            "text": "[redacted]",
+            "phase": "final_answer",
+            "memoryCitation": null,
+            "delivery": null,
+            "questions": null
+          }
+        ],
+        "itemsView": "[redacted]",
+        "status": "completed",
+        "error": null,
+        "startedAt": 1791063405,
+        "completedAt": 1791063422,
+        "durationMs": 17163
+      }
+    },
+    "emittedAtMs": 1791063422573
+  }
+]

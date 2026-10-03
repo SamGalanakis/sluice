@@ -25,6 +25,16 @@ fn main() -> ExitCode {
         eprintln!("{}", sluice::error_json(&error));
         return ExitCode::FAILURE;
     }
+    if std::env::args().nth(1).as_deref() == Some("codex") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        return match sluice_agents::engines::codex::protocol::fixture_main(&args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() == Some(std::ffi::OsStr::new("payload-exec")) {
         sluice_process::launcher::payload_exec_main(args.collect(), |args| {
