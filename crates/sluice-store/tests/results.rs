@@ -274,6 +274,7 @@ mod support {
     }
     pub fn retry_request(project: ProjectId, steps: &[&str], message: Option<&str>) -> StepRetry {
         StepRetry {
+            expected_rev: None,
             project: ProjectSelector::Id(project),
             selection: StepSelection {
                 steps: Some(steps.iter().map(|s| id(s)).collect()),

@@ -23,6 +23,7 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(PlanDocument);
         $m!(Type);
         $m!(ProjectIdentity);
+        $m!(IconUpload);
         $m!(ProjectUpdate);
         $m!(ProjectDelete);
         $m!(StepSelection);

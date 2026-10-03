@@ -376,6 +376,32 @@
       }
     }
   },
+  "IconUpload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "IconUpload",
+    "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+    "anyOf": [
+      {
+        "type": "string"
+      },
+      {
+        "type": "object",
+        "properties": {
+          "media_type": {
+            "type": "string"
+          },
+          "bytes_base64": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "media_type",
+          "bytes_base64"
+        ]
+      }
+    ]
+  },
   "ProjectUpdate": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "ProjectUpdate",
@@ -401,9 +427,13 @@
         ]
       },
       "icon": {
-        "type": [
-          "string",
-          "null"
+        "anyOf": [
+          {
+            "$ref": "#/$defs/IconUpload"
+          },
+          {
+            "type": "null"
+          }
         ]
       },
       "resources": {
@@ -500,6 +530,30 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "IconUpload": {
+        "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "media_type": {
+                "type": "string"
+              },
+              "bytes_base64": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "media_type",
+              "bytes_base64"
+            ]
+          }
+        ]
       },
       "JsonMap": {
         "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
@@ -2497,6 +2551,14 @@
     "title": "StepRetry",
     "type": "object",
     "properties": {
+      "expected_rev": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
       "project": {
         "$ref": "#/$defs/ProjectSelector"
       },
@@ -2610,6 +2672,14 @@
     "title": "StepCancel",
     "type": "object",
     "properties": {
+      "expected_rev": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
       "project": {
         "$ref": "#/$defs/ProjectSelector"
       },
@@ -10393,9 +10463,13 @@
             ]
           },
           "icon": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IconUpload"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "resources": {
@@ -10492,6 +10566,30 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "IconUpload": {
+        "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "media_type": {
+                "type": "string"
+              },
+              "bytes_base64": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "media_type",
+              "bytes_base64"
+            ]
+          }
+        ]
       },
       "JsonMap": {
         "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
@@ -11105,6 +11203,14 @@
       "StepRetry": {
         "type": "object",
         "properties": {
+          "expected_rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
@@ -11139,6 +11245,14 @@
       "StepCancel": {
         "type": "object",
         "properties": {
+          "expected_rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
@@ -19000,9 +19114,13 @@
             ]
           },
           "icon": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IconUpload"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "resources": {
@@ -19099,6 +19217,30 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "IconUpload": {
+        "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "media_type": {
+                "type": "string"
+              },
+              "bytes_base64": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "media_type",
+              "bytes_base64"
+            ]
+          }
+        ]
       },
       "JsonMap": {
         "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
@@ -19712,6 +19854,14 @@
       "StepRetry": {
         "type": "object",
         "properties": {
+          "expected_rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
@@ -19746,6 +19896,14 @@
       "StepCancel": {
         "type": "object",
         "properties": {
+          "expected_rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },

@@ -14,13 +14,29 @@ pub struct ProjectIdentity {
     pub name: ProjectName,
 }
 
+/// Strings preserve the text icon contract; images cross the broker as bounded data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum IconUpload {
+    Text(String),
+    Image {
+        media_type: String,
+        bytes_base64: String,
+    },
+}
+impl From<String> for IconUpload {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectUpdate {
     pub project: ProjectSelector,
     pub new_name: Option<ProjectName>,
     pub description: Option<String>,
-    pub icon: Option<String>,
+    pub icon: Option<IconUpload>,
     pub resources: Option<JsonMap>,
     pub paused: Option<bool>,
     pub archived: Option<bool>,
@@ -188,6 +204,8 @@ pub struct StepSetOutput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepRetry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_rev: Option<Revision>,
     pub project: ProjectSelector,
     pub selection: StepSelection,
     pub message: Option<String>,
@@ -198,6 +216,8 @@ pub struct StepRetry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepCancel {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_rev: Option<Revision>,
     pub project: ProjectSelector,
     pub selection: StepSelection,
     pub reason: String,

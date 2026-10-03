@@ -274,6 +274,7 @@ mod support {
     }
     pub fn retry_request(project: ProjectId, steps: &[&str], message: Option<&str>) -> StepRetry {
         StepRetry {
+            expected_rev: None,
             project: ProjectSelector::Id(project),
             selection: StepSelection {
                 steps: Some(steps.iter().map(|s| id(s)).collect()),
@@ -692,6 +693,7 @@ async fn external_never_reserves_and_pending_cancellation_commits_failure() {
     assert_eq!(f.counts().await, before);
     let context = f.context.clone();
     let request = StepCancel {
+        expected_rev: None,
         project: ProjectSelector::Id(context.project),
         selection: StepSelection {
             steps: Some(vec![id("a")]),
@@ -861,6 +863,7 @@ async fn cancelling_a_mixed_selection_refuses_pending_executable_without_partial
     let before = f.counts().await;
     let context = f.context.clone();
     let request = StepCancel {
+        expected_rev: None,
         project: ProjectSelector::Id(context.project),
         selection: StepSelection {
             steps: Some(vec![id("x"), id("y")]),

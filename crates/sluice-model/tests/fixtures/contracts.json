@@ -698,6 +698,20 @@
       "message": "fixture",
       "reason": "fixture",
       "author": "fixture"
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": null
+      },
+      "message": null,
+      "reason": null,
+      "author": null,
+      "expected_rev": 7
     }
   ],
   "StepCancel": [
@@ -728,6 +742,19 @@
       },
       "reason": "fixture",
       "author": "fixture"
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": null
+      },
+      "reason": "fixture",
+      "author": null,
+      "expected_rev": 7
     }
   ],
   "StepSubmit": [
@@ -3490,6 +3517,13 @@
           }
         }
       ]
+    }
+  ],
+  "IconUpload": [
+    "🌊",
+    {
+      "media_type": "image/gif",
+      "bytes_base64": "R0lGODlh"
     }
   ]
 }

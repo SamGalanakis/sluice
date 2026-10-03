@@ -862,6 +862,7 @@ async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_compl
                             tx,
                             &copy,
                             StepRetry {
+                                expected_rev: None,
                                 project: ProjectSelector::Id(project),
                                 selection: StepSelection {
                                     steps: Some(vec!["work".parse().unwrap()]),

@@ -98,6 +98,43 @@ impl Icon {
             .map(|_| artifacts::fingerprint(&self.bytes))
     }
 }
+impl From<Icon> for sluice_model::commands::IconUpload {
+    fn from(icon: Icon) -> Self {
+        use base64::Engine;
+        match icon.media_type {
+            Some(media_type) => Self::Image {
+                media_type,
+                bytes_base64: base64::engine::general_purpose::STANDARD.encode(icon.bytes),
+            },
+            None => Self::Text(icon.text.unwrap_or_default()),
+        }
+    }
+}
+impl TryFrom<sluice_model::commands::IconUpload> for Icon {
+    type Error = StoreError;
+    fn try_from(upload: sluice_model::commands::IconUpload) -> Result<Self> {
+        use base64::Engine;
+        match upload {
+            sluice_model::commands::IconUpload::Text(text) => Self::text(&text),
+            sluice_model::commands::IconUpload::Image {
+                media_type,
+                bytes_base64,
+            } => {
+                if bytes_base64.len() > ICON_MAX.div_ceil(3) * 4 {
+                    return Err(invalid("icon is over 256 KB"));
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(bytes_base64)
+                    .map_err(|_| invalid("icon has invalid base64"))?;
+                let icon = Self::image(bytes)?;
+                if icon.media_type.as_deref() != Some(media_type.as_str()) {
+                    return Err(invalid("icon media type disagrees with its bytes"));
+                }
+                Ok(icon)
+            }
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectIcon {
     Text(String),

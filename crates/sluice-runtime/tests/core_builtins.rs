@@ -504,6 +504,7 @@ async fn pending_external_cancels_into_failure_at_once() {
         Fixture::new(json!({"steps":{"a":{"run":"core.external","outputs":{"n":"int"}}}})).await;
     let context = f.context.clone();
     let request = StepCancel {
+        expected_rev: None,
         project: ProjectSelector::Id(context.project),
         selection: StepSelection {
             steps: Some(vec![id("a")]),

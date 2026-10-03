@@ -579,6 +579,7 @@ fn feedback_retry_selects_imported_prev_run_and_never_reserves_a_good_scatter_it
                     tx,
                     &context,
                     StepRetry {
+                        expected_rev: None,
                         project: ProjectSelector::Id(project),
                         selection: StepSelection {
                             steps: Some(vec!["work".parse().unwrap(), "scatter".parse().unwrap()]),
