@@ -433,10 +433,6 @@ pub enum Action {
     Unpause,
     Retry,
     Cancel,
-    PauseProject,
-    ResumeProject,
-    ArchiveProject,
-    RestoreProject,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OwnerCommand {
@@ -469,23 +465,14 @@ pub async fn action(
     Path((project, id)): Path<(ProjectId, StepId)>,
     Form(form): Form<ActionForm>,
 ) -> Response {
-    execute_action(state, commands, registry, project, Some(id), form).await
-}
-pub async fn project_action(
-    State(state): State<DashboardState>,
-    registry: Option<Extension<board::Registry>>,
-    commands: Option<Extension<Commands>>,
-    Path(project): Path<ProjectId>,
-    Form(form): Form<ActionForm>,
-) -> Response {
-    execute_action(state, commands, registry, project, None, form).await
+    execute_action(state, commands, registry, project, id, form).await
 }
 async fn execute_action(
     state: DashboardState,
     commands: Option<Extension<Commands>>,
     registry: Option<Extension<board::Registry>>,
     project: ProjectId,
-    id: Option<StepId>,
+    id: StepId,
     form: ActionForm,
 ) -> Response {
     let Some(Extension(commands)) = commands else {
@@ -510,30 +497,19 @@ async fn execute_action(
     if form.message.len() > 16_384 {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
-    let valid = if let Some(id) = &id {
-        let Some(step) = view
-            .units
-            .iter()
-            .flat_map(|u| &u.steps)
-            .find(|s| &s.id == id)
-        else {
-            return StatusCode::NOT_FOUND.into_response();
-        };
-        match form.action {
-            Action::Retry => step.retryable(),
-            Action::Cancel => step.cancellable(),
-            Action::Pause => step.pausable(),
-            Action::Unpause => step.paused,
-            _ => false,
-        }
-    } else {
-        matches!(
-            form.action,
-            Action::PauseProject
-                | Action::ResumeProject
-                | Action::ArchiveProject
-                | Action::RestoreProject
-        )
+    let Some(step) = view
+        .units
+        .iter()
+        .flat_map(|u| &u.steps)
+        .find(|s| s.id == id)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let valid = match form.action {
+        Action::Retry => step.retryable(),
+        Action::Cancel => step.cancellable(),
+        Action::Pause => step.pausable(),
+        Action::Unpause => step.paused,
     };
     if !valid {
         return (
@@ -542,15 +518,12 @@ async fn execute_action(
         )
             .into_response();
     }
-    let next = id
-        .as_ref()
-        .map(|id| format!("{}/steps/{id}", view.href()))
-        .unwrap_or_else(|| view.href());
+    let next = format!("{}/steps/{id}", view.href());
     match commands
         .0
         .execute(OwnerCommand {
             project,
-            step: id,
+            step: Some(id),
             action: form.action,
             revision: form.revision,
             message: form.message,

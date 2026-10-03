@@ -151,6 +151,27 @@ fn mermaid_and_html_escape_values_and_fold_all_skipped_units() {
     assert!(!region.as_str().contains("data-init"));
 }
 #[test]
+fn header_is_a_passive_status_view_without_project_actions() {
+    let (plan, state, mut project) = fixture();
+    project.paused = true;
+    project.archived = true;
+    let view = ProjectView::new(project.clone(), &plan, &state, 1);
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(html.contains(">Paused</span>"));
+    assert!(html.contains("Archived: listed apart"));
+    assert!(!html.contains("switches"));
+    assert!(!html.contains("/actions"));
+    assert!(!html.contains("pause_project"));
+    assert!(!html.contains("archive_project"));
+    project.paused = false;
+    project.archived = false;
+    let view = ProjectView::new(project, &plan, &state, 1);
+    let html = view.body().unwrap();
+    assert!(!html.as_str().contains(">Paused</span>"));
+    assert!(!html.as_str().contains("Archived: listed apart"));
+}
+#[test]
 fn paused_and_queued_work_have_distinct_wait_projection() {
     let (plan, mut state, project) = fixture();
     state.steps.insert(

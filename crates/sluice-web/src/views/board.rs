@@ -857,10 +857,6 @@ pub fn registration() -> super::PageRegistration {
                     "/projects/id/{project}/steps/{step}/actions",
                     axum::routing::post(super::step::action),
                 )
-                .route(
-                    "/projects/id/{project}/actions",
-                    axum::routing::post(super::step::project_action),
-                )
                 .with_state(state.dashboard.clone())
         },
         nav: |project| {
