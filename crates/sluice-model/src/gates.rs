@@ -239,44 +239,46 @@ fn status_name(status: &StepStatus) -> &'static str {
     }
 }
 
-/// Availability is distinct from null. Missing optional values, fields below a
-/// null ancestor and absent Any fields resolve to null; a required missing value waits.
+/// Resolve root availability before navigation. An absent required root waits;
+/// an absent optional root and missing paths within available values are null.
 pub fn resolve_reference(plan: &Plan, state: &StateSnapshot, reference: &ValueRef) -> BoundValue {
     let Ok(parts) = reference.parts() else {
         return BoundValue::Waiting;
     };
-    let base = if let Some(id) = parts.step {
+    let (base, root_type) = if let Some(id) = parts.step {
         match state.status(&id) {
             StepStatus::Skipped => return BoundValue::Skipped(SkipReason::Step { step: id }),
-            StepStatus::Succeeded => state
-                .steps
-                .get(&id)
-                .and_then(|entry| entry.outputs.0.get(&parts.name)),
+            StepStatus::Succeeded => (
+                state
+                    .steps
+                    .get(&id)
+                    .and_then(|entry| entry.outputs.0.get(&parts.name)),
+                plan.steps()
+                    .get(&id)
+                    .and_then(|step| step.output_type(&parts.name)),
+            ),
             _ => return BoundValue::Waiting,
         }
     } else {
-        state.inputs.0.get(&parts.name)
+        (
+            state.inputs.0.get(&parts.name),
+            plan.inputs().get(&parts.name).map(|decl| decl.ty.clone()),
+        )
+    };
+    let null = || BoundValue::Ready(JsonValue::try_from(Value::Null).expect("null"));
+    let Some(base) = base else {
+        return if matches!(root_type, Some(Type::Optional(_))) {
+            null()
+        } else {
+            BoundValue::Waiting
+        };
     };
     let fields: Vec<_> = parts.fields.iter().map(String::as_str).collect();
-    if let Some(value) = base.and_then(|value| navigate_value(value.as_value(), &fields)) {
-        return BoundValue::Ready(
-            JsonValue::try_from(value.clone()).expect("strict snapshot value"),
-        );
-    }
-    // A null ancestor is a known null, rather than an unavailable producer.
-    let null_ancestor = base.is_some_and(|value| {
-        (0..=fields.len()).any(|length| {
-            navigate_value(value.as_value(), &fields[..length]).is_some_and(Value::is_null)
-        })
-    });
-    if null_ancestor
-        || plan.reference_type(reference).is_ok_and(|ty| {
-            matches!(ty, Type::Optional(_)) || (base.is_some() && matches!(ty, Type::Any))
-        })
-    {
-        BoundValue::Ready(JsonValue::try_from(Value::Null).expect("null"))
-    } else {
-        BoundValue::Waiting
+    match navigate_value(base.as_value(), &fields) {
+        Some(value) => {
+            BoundValue::Ready(JsonValue::try_from(value.clone()).expect("strict snapshot value"))
+        }
+        None => null(),
     }
 }
 fn wait_reference(reference: &ValueRef, state: &StateSnapshot) -> String {
