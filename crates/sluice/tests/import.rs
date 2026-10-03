@@ -468,9 +468,8 @@ impl sluice_store::attempts::ExecutionHooks for ImportHooks {
         exact: Option<&sluice_store::attempts::AssignedRange>,
     ) -> sluice_store::Result<sluice_store::attempts::AssignedRange> {
         assert!(exact.is_none());
-        let range = sluice_store::messages::assign_range(tx, id.project, &id.step)?;
+        let range = sluice_store::messages::assign_run_range(tx, id.project, id.run, cursor, None)?;
         assert_eq!(range.after.0, cursor);
-        sluice_store::messages::assign_delivery(tx, id.project, id.run, &range)?;
         Ok(sluice_store::attempts::AssignedRange {
             after: range.after.0,
             through: range.through.0,
@@ -596,6 +595,9 @@ fn feedback_retry_selects_imported_prev_run_and_never_reserves_a_good_scatter_it
                     [project.to_string()],
                     |r| r.get::<_, bool>(0)
                 )?);
+                // Simulate the owner's release (cutover step 8): leave the import's cutover
+                // maintenance, which fences new reservations.
+                tx.sql().execute("UPDATE maintenance SET mode='normal' WHERE singleton=1", [])?;
                 // Release only the scratch project's pause for reservation checks.
                 tx.sql().execute(
                     "UPDATE projects SET paused=0 WHERE project_id=?1",
