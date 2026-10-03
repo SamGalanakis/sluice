@@ -97,6 +97,14 @@ impl Cgroup {
             path: path.into(),
         })
     }
+    /// Read the retained service's payload subtree without creating directories.
+    pub fn payload_populated(&self) -> io::Result<bool> {
+        match self.open_child("payload") {
+            Ok(payload) => payload.populated(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
     pub fn path(&self) -> &str {
         &self.path
     }

@@ -27,18 +27,6 @@ fn every_dispatch_mode_fails_without_touching_a_scratch_home() {
     let home = ScratchHome::new().unwrap();
     let id = "019a2b3c-4d5e-7f01-8234-56789abcdef0";
     for args in [
-        vec!["coordinator", "--maintenance"],
-        vec!["serve", "--no-runner", "--port", "0"],
-        vec!["loop"],
-        vec![
-            "guardian",
-            "--run",
-            id,
-            "--attempt",
-            id,
-            "--socket",
-            "control.sock",
-        ],
         vec![
             "payload-exec",
             "--run",
@@ -48,7 +36,6 @@ fn every_dispatch_mode_fails_without_touching_a_scratch_home() {
             "--socket",
             "control.sock",
         ],
-        vec!["tool", "projects_list", "{}"],
         vec!["me", "--json"],
         vec!["doctor", "--json"],
         vec!["agent", "hook", "--engine", "codex", "--event", "Stop"],

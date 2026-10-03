@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+rusqlite.workspace = true
 sluice-model.workspace = true
 sluice-store.workspace = true
 sluice-process.workspace = true

@@ -753,6 +753,88 @@ pub(crate) fn validate_outputs(
     }
 }
 
+/// Record failure of ready work that never created a process or acquired holds.
+pub fn fail_unlaunched(
+    tx: &mut WriteTransaction<'_>,
+    context: &PlanContext,
+    id: &StepId,
+    expected_hash: sluice_model::hash::InputsHash,
+    error: PublicError,
+) -> Result<()> {
+    check_context(tx, context)?;
+    let state = read_state(tx.sql(), context.project)?;
+    let step = context
+        .plan
+        .steps()
+        .get(id)
+        .ok_or_else(|| invalid("no such step"))?;
+    if state.status(id) != StepStatus::Pending
+        || !matches!(
+            gates::evaluate_step(&context.plan, &state, step),
+            GateDecision::Ready
+        )
+        || inputs_hash(&context.plan, &state, step) != Some(expected_hash)
+    {
+        return Err(conflict("unlaunched step changed during evaluation"));
+    }
+    tx.sql().execute("UPDATE steps SET status='failed',error=?3,skipped=NULL,manual=0,result_id=NULL WHERE project_id=?1 AND step_id=?2", params![context.project.to_string(), id.as_str(), serde_json::to_string(&error)?])?;
+    snapshot_result(tx, context.project, id, None, None)?;
+    status_record(
+        tx,
+        context.project,
+        id,
+        StepStatus::Pending,
+        StepStatus::Failed,
+        Some(error),
+    )?;
+    reconcile(tx, context)
+}
+
+/// Settle scheduler-owned inline work without a process or a manual-output marker.
+/// Rechecks readiness and effective inputs in the writer transaction.
+pub fn settle_inline(
+    tx: &mut WriteTransaction<'_>,
+    context: &PlanContext,
+    expected_hash: sluice_model::hash::InputsHash,
+    request: sluice_model::commands::StepSetOutput,
+) -> Result<ResultId> {
+    check_context(tx, context)?;
+    let step = context
+        .plan
+        .steps()
+        .get(&request.step)
+        .ok_or_else(|| invalid("no such step"))?;
+    let state = read_state(tx.sql(), context.project)?;
+    if state.status(&request.step) != StepStatus::Pending
+        || !matches!(
+            gates::evaluate_step(&context.plan, &state, step),
+            GateDecision::Ready
+        )
+    {
+        return Err(conflict("inline step is no longer ready"));
+    }
+    validate_outputs(step, &request.outputs, false, false)?;
+    let hash = inputs_hash(&context.plan, &state, step)
+        .ok_or_else(|| invalid("inline inputs unavailable"))?;
+    if hash != expected_hash {
+        return Err(conflict("inline inputs changed during evaluation"));
+    }
+    let inputs = effective_map(&context.plan, &state, step)?;
+    tx.sql().execute("UPDATE steps SET status='succeeded',outputs=?3,inputs_hash=?4,error=NULL,skipped=NULL,manual=0,run_ids='[]',instances='{}',total=NULL,done=0,result_id=NULL WHERE project_id=?1 AND step_id=?2",
+        params![context.project.to_string(), request.step.as_str(), serde_json::to_string(&request.outputs)?, hash.to_string()])?;
+    let result = snapshot_result(tx, context.project, &request.step, None, inputs.as_ref())?;
+    status_record(
+        tx,
+        context.project,
+        &request.step,
+        StepStatus::Pending,
+        StepStatus::Succeeded,
+        None,
+    )?;
+    reconcile(tx, context)?;
+    Ok(result)
+}
+
 pub fn step_set_output(
     tx: &mut WriteTransaction<'_>,
     context: &PlanContext,

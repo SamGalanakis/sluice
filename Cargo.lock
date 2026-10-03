@@ -2366,6 +2366,7 @@ dependencies = [
  "indexmap",
  "notify",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "sluice-agents",
