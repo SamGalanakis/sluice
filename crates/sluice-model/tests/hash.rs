@@ -218,3 +218,18 @@ proptest! {
         prop_assert_eq!(InputsHash::of(&first).unwrap(),InputsHash::of(&second).unwrap());
     }
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(1024))]
+    #[test]
+    fn finite_float_bits_and_hash_survive_strict_json_roundtrips(bits in proptest::prelude::any::<u64>()) {
+        let value = f64::from_bits(bits);
+        proptest::prop_assume!(value.is_finite());
+        let first: JsonMap = decode_json(&serde_json::to_vec(&json!({"x": value})).unwrap()).unwrap();
+        proptest::prop_assert_eq!(first.0["x"].as_value().as_f64().unwrap().to_bits(), bits);
+        let encoded = serde_json::to_vec(&first).unwrap();
+        let second: JsonMap = decode_json(&encoded).unwrap();
+        proptest::prop_assert_eq!(second.0["x"].as_value().as_f64().unwrap().to_bits(), bits);
+        proptest::prop_assert_eq!(InputsHash::of(&first).unwrap(), InputsHash::of(&second).unwrap());
+    }
+}

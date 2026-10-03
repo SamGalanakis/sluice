@@ -132,3 +132,26 @@ fn adding_boolean_gate_does_not_stale_completed_work() {
         StepStatus::Succeeded
     );
 }
+
+#[test]
+fn float_input_hash_survives_json_storage_roundtrip() {
+    use sluice_model::hash::InputsHash;
+    let mut seed = 42_u64;
+    for _ in 0..10000 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let value = f64::from_bits(seed);
+        if !value.is_finite() {
+            continue;
+        }
+        let first: JsonMap =
+            decode_json(&serde_json::to_vec(&json!({"x":value})).unwrap()).unwrap();
+        let bytes = serde_json::to_vec(&first).unwrap();
+        let second: JsonMap = decode_json(&bytes).unwrap();
+        assert_eq!(
+            InputsHash::of(&first).unwrap(),
+            InputsHash::of(&second).unwrap(),
+            "stored JSON {} changed value on read: first={first:?} second={second:?}",
+            String::from_utf8(bytes).unwrap()
+        );
+    }
+}
