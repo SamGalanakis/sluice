@@ -11,3 +11,10 @@ rusqlite.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 time.workspace = true
+fs4.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+sluice-process.workspace = true

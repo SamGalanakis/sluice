@@ -12,3 +12,9 @@ pub mod records;
 pub mod resources;
 pub mod schema;
 pub mod writer;
+
+pub use reads::{DurableCursor, ReadPool, Subscription};
+pub use schema::{Result, StoreError};
+pub use writer::{
+    ChangeKey, ChangeNotification, RetrySafety, WriteTransaction, Writer, WriterOptions,
+};

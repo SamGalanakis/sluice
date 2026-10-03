@@ -2379,8 +2379,13 @@ dependencies = [
 name = "sluice-store"
 version = "0.1.0"
 dependencies = [
+ "fs4",
  "rusqlite",
+ "serde_json",
  "sluice-model",
+ "sluice-process",
+ "tempfile",
+ "thiserror",
  "time",
  "tokio",
  "tracing",
