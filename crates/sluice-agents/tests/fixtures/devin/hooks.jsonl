@@ -1,0 +1,7 @@
+{"hook_event_name":"SessionStart","session_id":"captured-redacted"}
+{"hook_event_name":"UserPromptSubmit","session_id":"captured-redacted","prompt_id":"0","prompt":"Your task is in /scratch/task.md; read it fully\n"}
+{"hook_event_name":"PreToolUse","session_id":"captured-redacted","prompt_id":"0","tool_name":"exec","tool_input":{"command":"echo done"}}
+{"hook_event_name":"PostToolUse","session_id":"captured-redacted","prompt_id":"0","tool_name":"exec","tool_response":{"success":true,"output":"done","error":null}}
+{"hook_event_name":"PostCompaction","session_id":"captured-redacted","prompt_id":"0","summary":"Redacted task context"}
+{"hook_event_name":"Stop","session_id":"captured-redacted","prompt_id":"0","last_assistant_message":"Finished."}
+{"hook_event_name":"SessionEnd","session_id":"captured-redacted","reason":"exit"}

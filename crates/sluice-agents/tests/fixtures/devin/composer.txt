@@ -1,0 +1,5 @@
+old answer
+─────────────────────────────────────────────────────────────────────────
+❯ Your task is in /scratch/task.md; read it fully
+─────────────────────────────────────────────────────────────────────────
+Ask Devin to build features, fix bugs, or work on your code

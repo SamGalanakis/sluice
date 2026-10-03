@@ -72,6 +72,25 @@ fn main() -> ExitCode {
             }
         });
     }
+    let devin_args: Vec<String> = std::env::args().skip(1).collect();
+    if devin_args.first().is_some_and(|s| {
+        s == "devin"
+            || s == "devin-submit"
+            || (s == "agent-hook" && devin_args.get(1).is_some_and(|engine| engine == "devin"))
+    }) {
+        let args = if devin_args[0] == "devin" {
+            &devin_args[1..]
+        } else {
+            &devin_args[..]
+        };
+        return match sluice_agents::engines::devin::fixture::main(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let _fixture = Fixture::parse();
     eprintln!(
         "{}",
