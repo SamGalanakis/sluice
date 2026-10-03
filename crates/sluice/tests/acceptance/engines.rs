@@ -454,3 +454,114 @@ fn g3_claude_fresh_submit_live_feedback_cleanup() {
 fn g3_devin_fresh_submit_live_feedback_cleanup() {
     g3("devin");
 }
+
+#[test]
+fn scratch_coordinator_acceptance_transport_and_scheduler_lease() {
+    let scratch = Scratch::new();
+    let mut gate = Gate::new(&scratch.0, scratch.0.join("rust-home"), BTreeMap::new());
+    gate.boot();
+    let CommandReply::Project(project) = gate.rpc(json!({"command":"project_create","args":{"name":"transport","description":"Scratch acceptance transport","resources":{},"icon":null,"author":"fixture"}})) else {panic!("project reply")};
+    let selector = json!({"kind":"id","value":project.project_id});
+    assert_eq!(gate.status(&selector)["steps"], json!({}));
+    gate.scheduling();
+    gate.assert_clean();
+    gate.cleanup();
+}
+
+#[test]
+fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
+    for engine in ["codex", "claude", "devin"] {
+        let scratch = Scratch::new();
+        let owner = scratch.0.join("owner");
+        private_write(&owner.join(".codex/config.toml"), b"");
+        private_write(&owner.join(".codex/auth.json"), b"fixture credential");
+        private_write(&owner.join(".config/devin/config.json"), b"{}");
+        fs::create_dir_all(owner.join(".claude")).unwrap();
+        fs::create_dir_all(owner.join(".local/share")).unwrap();
+        let cwd = scratch.0.join("work");
+        fs::create_dir(&cwd).unwrap();
+        repo(&cwd);
+        let config = scratch.0.join("adapter-fixture.json");
+        let mut turns = vec![json!({"busy_ms":300,"compact":true,"reply":"fixture done"})];
+        turns.extend((0..16).map(|_| json!({"busy_ms":300,"reply":"fixture done"})));
+        private_write(
+            &config,
+            &serde_json::to_vec(&json!({"turns":turns,"prompts":scratch.0.join("prompts.jsonl")}))
+                .unwrap(),
+        );
+        let binary = scratch.0.join("adapter-fixture");
+        let env_name = if engine == "claude" {
+            "SLUICE_FAKE_CLAUDE"
+        } else {
+            "FAKE_DEVIN"
+        };
+        private_write(
+            &binary,
+            format!(
+                "#!/bin/sh\nexport {env_name}='{}'\nexec '{}' {engine} \"$@\"\n",
+                config.display(),
+                workspace().join("target/debug/fixture").display()
+            )
+            .as_bytes(),
+        );
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+        let env = BTreeMap::from([
+            ("HOME".into(), owner.to_string_lossy().into()),
+            (
+                "CODEX_HOME".into(),
+                owner.join(".codex").to_string_lossy().into(),
+            ),
+            (
+                "CLAUDE_CONFIG_DIR".into(),
+                owner.join(".claude").to_string_lossy().into(),
+            ),
+            (
+                "XDG_CONFIG_HOME".into(),
+                owner.join(".config").to_string_lossy().into(),
+            ),
+            (
+                "XDG_DATA_HOME".into(),
+                owner.join(".local/share").to_string_lossy().into(),
+            ),
+        ]);
+        let mut gate = Gate::new(&scratch.0, scratch.0.join("rust-home"), env);
+        gate.env.insert(
+            format!("SLUICE_{}_BIN", engine.to_uppercase()),
+            binary.to_string_lossy().into(),
+        );
+        gate.boot();
+        let CommandReply::Project(project)=gate.rpc(json!({"command":"project_create","args":{"name":"adapter-gate","description":"Public adapter fixture","resources":{},"icon":null,"author":"fixture"}})) else {panic!("project reply")};
+        let selector = json!({"kind":"id","value":project.project_id});
+        gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{},"steps":{"work":{"run":"agent.run","in":{"engine":{"default":engine},"cwd":{"default":cwd},"spec":{"default":"Complete the labelled fixture turn"},"listen":{"default":true}},"outputs":{"word":"string"}}}}}],"start":true,"dry_run":false,"reason":"public fixture","author":"fixture"}}));
+        gate.scheduling();
+        let mut prior = String::new();
+        let mut first_session = Value::Null;
+        for word in ["blue", "green"] {
+            let mut run = String::new();
+            gate.wait(Duration::from_secs(30), |g| {
+                let status = g.status(&selector);
+                if let Some(id) = status["steps"]["work"]["run_ids"][0].as_str()
+                    && id != prior
+                {
+                    run = id.into();
+                    g.track(id);
+                    true
+                } else {
+                    false
+                }
+            });
+            gate.rpc(json!({"command":"step_submit","args":{"project":project.project_id,"step":"work","run":run,"outputs":{"word":word},"author":"fixture"}}));
+            let done = step_finished(&mut gate, &selector);
+            assert_eq!(done["outputs"]["word"], word);
+            if word == "blue" {
+                first_session = done["outputs"]["session"].clone();
+                prior = run;
+                gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Resume the same fixture session","reason":"fixture feedback","author":"fixture"}}));
+            } else {
+                assert_eq!(done["outputs"]["session"], first_session);
+            }
+        }
+        gate.assert_clean();
+        gate.cleanup();
+    }
+}

@@ -170,7 +170,6 @@ async fn g7_codex_import_resume() {
         engines::{Gate, absolute_tool, credentials, private_write, step_finished},
         support::{git, repo as git_repo},
     };
-    use sluice_model::commands::CommandReply;
     use std::time::{Duration, Instant};
     let scratch = Scratch::new();
     let mut env = match credentials(&scratch.0, "codex") {
@@ -278,7 +277,7 @@ async fn g7_codex_import_resume() {
     gate.boot();
     let selector = json!({"kind":"name","value":"import-resume"});
     gate.rpc(json!({"command":"project_update","args":{"project":selector,"paused":false,"author":"fixture","reason":"scratch cutover release"}}));
-    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"sluice was upgraded; continue where you left off. Resume the same session, do not create or commit first.txt again. Follow the new task.md and current Rust RunId instructions exclusively. Post an addressed message to the orchestrator using the current message_post command, then submit word=upgraded using the current step_submit command. Finish this turn.","reason":"scratch G7 cutover","author":"fixture"}}));
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"sluice was upgraded; continue where you left off. Resume the same session, do not create or commit first.txt again. Follow the new task.md and current Rust RunId instructions exclusively. Post an addressed message with exact body G7_UPGRADED to the orchestrator using the current message_post command, then submit word=upgraded using the current step_submit command. Finish this turn.","reason":"scratch G7 cutover","author":"fixture"}}));
     gate.scheduling();
     let done = step_finished(&mut gate, &selector);
     assert_eq!(done["outputs"]["session"], session);
@@ -295,12 +294,24 @@ async fn g7_codex_import_resume() {
         git(&cwd, &["rev-list", "--count", &format!("{baseline}..HEAD")]),
         "1"
     );
-    let CommandReply::Data(context) =
-        gate.rpc(json!({"command":"step_context","args":{"project":selector,"step":"work"}}))
-    else {
-        panic!("context reply")
-    };
-    assert!(context.into_value().to_string().contains("upgraded"));
+    let reads = sluice_store::ReadPool::open(&gate.home, 1).unwrap();
+    let owned_run = new_run.to_string();
+    let owned_session = session.clone();
+    let (submissions,messages,private_home)=reads.snapshot(move |sql|{
+        let submitted:String=sql.query_row("SELECT outputs FROM submissions WHERE run_id=?1",[&owned_run],|r|r.get(0))?;
+        let messages:i64=sql.query_row("SELECT count(*) FROM messages WHERE run_id=?1 AND body='G7_UPGRADED' AND \"to\"='orchestrator'",[&owned_run],|r|r.get(0))?;
+        let private_home:String=sql.query_row("SELECT json_extract(metadata,'$.private_home') FROM sessions WHERE session_id=?1 AND json_type(metadata,'$.private_home')='text' LIMIT 1",[&owned_session],|r|r.get(0))?;
+        Ok((submitted,messages,private_home))
+    }).await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&submissions).unwrap()["word"],
+        "upgraded"
+    );
+    assert_eq!(messages, 1, "new-run message_post callback absent");
+    assert!(
+        rollout_contains_task(Path::new(&private_home), &task),
+        "resumed transcript lacks current task path and Rust RunId"
+    );
     assert_eq!(
         fs::read(source.join("sluice.db")).unwrap(),
         snapshot,
@@ -312,4 +323,28 @@ async fn g7_codex_import_resume() {
         "g7_codex_import_resume PASS before_session={session} after_session={session} old_run={old_run} new_run={new_run} task={} original_commits=1",
         task.display()
     );
+}
+
+fn rollout_contains_task(home: &Path, task: &Path) -> bool {
+    let mut dirs = vec![home.join("sessions")];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                dirs.push(entry.path());
+            } else if kind.is_file()
+                && entry.path().extension().is_some_and(|e| e == "jsonl")
+                && fs::read_to_string(entry.path())
+                    .is_ok_and(|text| text.contains(task.to_str().unwrap()))
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
