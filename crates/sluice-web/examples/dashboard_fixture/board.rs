@@ -64,7 +64,7 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
         Ok(())
     }).await.unwrap();
     println!("BOARD {project}");
-    let paused = writer.write(RetrySafety::NonIdempotent, |tx| projects::project_create(tx, CreateProject { name: "board-paused".parse().unwrap(), description: "Held work keeps its board while no step starts.".into(), icon: None, resources: None, author: "owner".into() }, &EmptyPlanInitializer, &NoResourceSettings)).await.unwrap().project_id;
+    let paused = writer.write(RetrySafety::NonIdempotent, |tx| projects::project_create(tx, CreateProject { name: "board-paused".parse().unwrap(), description: "Work is held for review.".into(), icon: None, resources: None, author: "owner".into() }, &EmptyPlanInitializer, &NoResourceSettings)).await.unwrap().project_id;
     writer.write(RetrySafety::NonIdempotent, move |tx| {
         let doc = json!({"steps":{
             "held":{"run":"custom.open","outputs":{"ok":"boolean"},"tags":["unit:build"]},
