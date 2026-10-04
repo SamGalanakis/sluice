@@ -1003,12 +1003,110 @@ async fn devin_transient_resume_keeps_session_and_new_invocation_counters() {
 }
 
 #[tokio::test]
-async fn devin_resume_preserves_already_restored_bypass_mode() {
-    let root = Scratch::new();
-    let opts = options(
-        &root,
-        json!({"resume_bypass":true,"turns":[{"reply":"continued"}]}),
+async fn devin_exit_probe_drains_terminal_hooks_before_reporting_exit() {
+    for (stop, on_client) in [(false, false), (true, false), (false, true), (true, true)] {
+        let root = Scratch::new();
+        let opts = options(&root, json!({}));
+        let mut ctx = context(&root, "exit-probe", false);
+        let tmux = root.join("probe-tmux");
+        fs::write(&tmux, include_str!("fixtures/devin/exit-during-probe.py")).unwrap();
+        fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).unwrap();
+        ctx.tmux_binary = Some(tmux);
+        let mut adapter = Devin::new(opts);
+        adapter.prepare(&ctx, None).await.unwrap();
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "finish the task".into(),
+                },
+            )
+            .await
+            .unwrap();
+        adapter.observe(&ctx).await.unwrap();
+        let mut hooks = vec![
+            json!({"hook_event_name":"UserPromptSubmit", "session_id":"fixture-devin-session", "prompt_id":"last", "prompt":"finish the task"}),
+        ];
+        if stop {
+            hooks.push(json!({"hook_event_name":"Stop", "session_id":"fixture-devin-session", "prompt_id":"last", "last_assistant_message":"done"}));
+        }
+        if on_client {
+            fs::write(ctx.run_dir.join("exit-on-client"), "").unwrap();
+        }
+        fs::write(
+            ctx.run_dir.join("exit-hooks.json"),
+            serde_json::to_vec(&hooks).unwrap(),
+        )
+        .unwrap();
+        let observation = adapter.observe(&ctx).await.unwrap();
+        assert_eq!(observation.status, EngineStatus::Exited);
+        assert_eq!(observation.acknowledged, vec![InputId::Task]);
+        assert_eq!(observation.turns_started, 1);
+        assert_eq!(observation.turns_completed, u64::from(stop));
+        adapter.close().await.unwrap();
+    }
+}
+
+#[test]
+fn devin_permission_mode_reads_the_release_indicator_near_the_composer() {
+    use protocol::{PermissionMode::*, permission_mode};
+    let real = include_str!("fixtures/devin/resume-footer-excerpt.txt");
+    assert_eq!(permission_mode(real), Bypass);
+    let coloured = real.replace(
+        "(bypass permissions on)",
+        "\x1b[38;5;214m(bypass\x1b[0m permissions on)\x1b]8;;\x07",
     );
+    assert_eq!(permission_mode(&coloured), Bypass);
+    let normal: String = real.lines().skip(1).map(|l| format!("{l}\n")).collect();
+    assert_eq!(permission_mode(&normal), NotBypass);
+    let history = format!(
+        "(bypass permissions on)\n{}{normal}",
+        "earlier output\n".repeat(8)
+    );
+    assert_eq!(permission_mode(&history), NotBypass);
+    assert_eq!(
+        permission_mode(&real.replace("bypass permissions on", "accept edits on")),
+        NotBypass
+    );
+    // A draft hides the placeholder; an undrawn footer leaves the mode unknown.
+    assert_eq!(
+        permission_mode(&real.replace(
+            "Ask Devin to build features, fix bugs, or work on your code",
+            "/bypass"
+        )),
+        Unknown
+    );
+    assert_eq!(
+        permission_mode("❭ Ask Devin to build features, fix bugs, or work on your code\n"),
+        Unknown
+    );
+}
+
+#[tokio::test]
+async fn devin_resume_accepts_reported_real_footer_without_toggling() {
+    resumed_bypass(json!({"ready_pane":include_str!("fixtures/devin/resume-footer-excerpt.txt")}))
+        .await;
+}
+
+#[tokio::test]
+async fn devin_resume_preserves_already_restored_bypass_mode() {
+    resumed_bypass(json!({})).await;
+}
+
+#[tokio::test]
+async fn devin_resume_waits_for_late_mode_restore_without_toggling() {
+    resumed_bypass(json!({"restore_ms":400})).await;
+}
+
+async fn resumed_bypass(settings: Value) {
+    let root = Scratch::new();
+    let mut script = json!({"resume_bypass":true,"turns":[{"reply":"continued"}]});
+    script
+        .as_object_mut()
+        .unwrap()
+        .extend(settings.as_object().unwrap().clone());
+    let opts = options(&root, script);
     let ctx = context(&root, "resume", true);
     fs::create_dir_all(opts.data_home.join("devin/cli")).unwrap();
     assert!(Command::new("/usr/bin/sqlite3")
@@ -1166,6 +1264,44 @@ async fn devin_captured_live_steering_has_two_starts_and_one_completion() {
     assert_eq!(obs.status, EngineStatus::Idle);
 }
 
+/// With SLUICE_G3_DEVIN_EVIDENCE set, saves the latest real pane and the pane behind each
+/// permission-mode verdict change, for redacted replay fixtures.
+fn g3_capture(ctx: &EngineContext, verdict: &mut Option<protocol::PermissionMode>) {
+    let Some(dir) = std::env::var_os("SLUICE_G3_DEVIN_EVIDENCE").map(PathBuf::from) else {
+        return;
+    };
+    let Ok(out) = Command::new(ctx.tmux_binary.as_ref().unwrap())
+        .current_dir(&ctx.run_dir)
+        .args([
+            "-S",
+            "tmux.sock",
+            "-f",
+            "/dev/null",
+            "capture-pane",
+            "-p",
+            "-t",
+            "%0",
+        ])
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .output()
+    else {
+        return;
+    };
+    if !out.status.success() {
+        return;
+    }
+    let pane = String::from_utf8_lossy(&out.stdout);
+    let run = ctx.run_dir.file_name().unwrap().to_string_lossy();
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(format!("{run}-latest.txt")), pane.as_bytes());
+    let mode = protocol::permission_mode(&pane);
+    if *verdict != Some(mode) {
+        *verdict = Some(mode);
+        println!("g3_devin {run} permission verdict {mode:?}");
+        let _ = fs::write(dir.join(format!("{run}-{mode:?}.txt")), pane.as_bytes());
+    }
+}
 async fn real_poll(
     adapter: &mut Devin,
     ctx: &EngineContext,
@@ -1173,7 +1309,9 @@ async fn real_poll(
 ) -> io::Result<EngineObservation> {
     let deadline = Instant::now() + Duration::from_secs(180);
     let mut reported_session = None;
+    let mut verdict = None;
     loop {
+        g3_capture(ctx, &mut verdict);
         let obs = adapter.observe(ctx).await.map_err(io::Error::other)?;
         if obs.session_id.is_some() && obs.session_id != reported_session {
             println!(

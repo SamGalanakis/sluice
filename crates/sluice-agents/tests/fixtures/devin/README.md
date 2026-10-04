@@ -16,3 +16,10 @@ nonblocking fixture journal to cover fresh submission, live feedback, compaction
 and same-session resume. Both tests failed with ReadyTimeout before the readiness
 fix. The executable fixture's omit_session_start setting separately proves that
 the visible ready composer reports Idle before any input is offered.
+
+resume-footer-excerpt.txt reproduces the bottom of the resumed real pane quoted in the
+g3-real report (the raw captures were not retained). Devin 3000.11.3 shows
+`(bypass permissions on)` above the composer and no indicator at all in Normal mode; the
+executable fixture now draws that layout. exit-during-probe.py is a scripted tmux client
+whose Devin journals its last hooks and exits during the pane probe or the next client
+command, the window in which an exit used to drop the latest acknowledgement.

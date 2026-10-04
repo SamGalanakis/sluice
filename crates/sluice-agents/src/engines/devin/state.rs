@@ -65,6 +65,13 @@ struct Pending {
     last_escape: Option<Instant>,
 }
 
+#[derive(Clone, Copy)]
+struct Restore {
+    began: Instant,
+    unbypassed: Option<Instant>,
+    entered: Option<Instant>,
+}
+
 pub struct Devin {
     options: DevinOptions,
     observation: EngineObservation,
@@ -81,7 +88,7 @@ pub struct Devin {
     inject_transient: bool,
     exit_requested: bool,
     exit_enter: Option<Instant>,
-    restore_mode: Option<(Instant, Option<Instant>)>,
+    restore_mode: Option<Restore>,
 }
 impl Devin {
     pub fn new(options: DevinOptions) -> Self {
@@ -359,45 +366,115 @@ impl Devin {
         &mut self,
         context: &EngineContext,
     ) -> Result<bool, EngineError> {
-        let Some((began, entered)) = self.restore_mode else {
+        let Some(mut restore) = self.restore_mode else {
             return Ok(true);
         };
         let pane = self.capture(context).await?;
-        let footer = pane
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("")
-            .to_lowercase();
-        if protocol::composer_ready(&pane)
-            && !protocol::draft_visible(&pane, "/bypass")
-            && (footer.contains("bypass mode") || footer.contains("dangerous mode"))
-        {
+        let mode = protocol::permission_mode(&pane);
+        if mode == protocol::PermissionMode::Bypass {
             self.restore_mode = None;
             return Ok(true);
         }
-        if began.elapsed() >= self.options.ready_timeout {
+        if restore.began.elapsed() >= self.options.ready_timeout {
             return Err(error(
                 EngineErrorKind::CapabilityMismatch,
                 "Devin resumed permission mode could not be verified as bypass",
             ));
         }
-        if entered.is_none() && protocol::composer_ready(&pane) && footer.contains("normal mode") {
+        // The release restores the session's mode after drawing the composer, so only a
+        // settled non-bypass verdict sends /bypass, at most once per invocation.
+        restore.unbypassed = (mode == protocol::PermissionMode::NotBypass)
+            .then(|| restore.unbypassed.unwrap_or_else(Instant::now));
+        if let Some(entered) = restore.entered {
+            if entered.elapsed() >= Duration::from_secs(1)
+                && protocol::draft_visible(&pane, "/bypass")
+            {
+                restore.entered = Some(Instant::now());
+                self.restore_mode = Some(restore);
+                self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
+                    .await?;
+            }
+        } else if restore
+            .unbypassed
+            .is_some_and(|t| t.elapsed() >= Duration::from_secs(1))
+        {
+            restore.entered = Some(Instant::now());
+            self.restore_mode = Some(restore);
             self.tmux(context, &["send-keys", "-t", "%0", "C-a", "C-k"])
                 .await?;
             self.tmux(context, &["send-keys", "-t", "%0", "-l", "/bypass"])
                 .await?;
             self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
                 .await?;
-            self.restore_mode = Some((began, Some(Instant::now())));
-        } else if entered.is_some_and(|t| t.elapsed() >= Duration::from_secs(1))
-            && protocol::draft_visible(&pane, "/bypass")
-        {
-            self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
-                .await?;
-            self.restore_mode = Some((began, Some(Instant::now())));
         }
+        self.restore_mode = Some(restore);
         Ok(false)
+    }
+    async fn pane_alive(&self, context: &EngineContext) -> Result<bool, EngineError> {
+        let panes = match self
+            .tmux(
+                context,
+                &["list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"],
+            )
+            .await
+        {
+            Ok(panes) => panes,
+            Err(error)
+                if error.message.contains("no current target")
+                    || error.message.contains("no server running")
+                    || error.message.contains("no sessions") =>
+            {
+                String::new()
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(panes.lines().any(|line| line.trim() == "%0 0"))
+    }
+    /// Hooks are journaled before Devin exits, so ones written during the pane probe or a
+    /// failed client command still belong to this observation.
+    fn exited(&mut self) -> Result<EngineObservation, EngineError> {
+        self.read_hooks()?;
+        self.observation.status = EngineStatus::Exited;
+        self.read_export()?;
+        Ok(self.observation.clone())
+    }
+    async fn drive(&mut self, context: &EngineContext) -> Result<EngineObservation, EngineError> {
+        if !self.restore_permission_mode(context).await? {
+            let mut observation = self.observation.clone();
+            observation.status = EngineStatus::Starting;
+            return Ok(observation);
+        }
+        if self.observation.status == EngineStatus::Starting
+            && !self.exit_requested
+            && context.tmux_binary.is_some()
+            && protocol::composer_ready(&self.capture(context).await?)
+        {
+            self.observation.status = EngineStatus::Idle;
+        }
+        self.advance_delivery(context).await?;
+        if self.exit_requested
+            && self.observation.status != EngineStatus::Exited
+            && self
+                .exit_enter
+                .is_none_or(|t| t.elapsed() >= Duration::from_millis(200))
+        {
+            let pane = self.capture(context).await?;
+            if protocol::draft_visible(&pane, "/exit") {
+                self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
+                    .await?;
+                self.exit_enter = Some(Instant::now());
+            }
+        }
+        self.read_export()?;
+        let mut observation = self.observation.clone();
+        if self.inject_transient {
+            self.inject_transient = false;
+            observation.error = Some(error(
+                EngineErrorKind::Transient,
+                "injected Devin transient",
+            ));
+        }
+        Ok(observation)
     }
     async fn advance_delivery(&mut self, context: &EngineContext) -> Result<(), EngineError> {
         let Some(pending) = &self.pending else {
@@ -657,7 +734,11 @@ impl EngineAdapter for Devin {
         self.prepared = Some(context.clone());
         self.restore_mode = session
             .filter(|_| context.tmux_binary.is_some())
-            .map(|_| (Instant::now(), None));
+            .map(|_| Restore {
+                began: Instant::now(),
+                unbypassed: None,
+                entered: None,
+            });
         let journal = context.run_dir.join("devin-hooks.jsonl");
         protocol::private_write(&journal, b"").map_err(fatal)?;
         protocol::private_write(&context.run_dir.join("devin.log"), b"").map_err(fatal)?;
@@ -800,66 +881,16 @@ impl EngineAdapter for Devin {
     }
     async fn observe(&mut self, context: &EngineContext) -> Result<EngineObservation, EngineError> {
         self.read_hooks()?;
-        if context.tmux_binary.is_some() {
-            let panes = match self
-                .tmux(
-                    context,
-                    &["list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"],
-                )
-                .await
-            {
-                Ok(panes) => panes,
-                Err(error)
-                    if error.message.contains("no current target")
-                        || error.message.contains("no server running")
-                        || error.message.contains("no sessions") =>
-                {
-                    String::new()
-                }
-                Err(error) => return Err(error),
-            };
-            if !panes.lines().any(|line| line.trim() == "%0 0") {
-                self.observation.status = EngineStatus::Exited;
-                self.read_export()?;
-                return Ok(self.observation.clone());
+        if context.tmux_binary.is_some() && !self.pane_alive(context).await? {
+            return self.exited();
+        }
+        match self.drive(context).await {
+            // The pane can exit between the probe and a later client command.
+            Err(_) if context.tmux_binary.is_some() && !self.pane_alive(context).await? => {
+                self.exited()
             }
+            result => result,
         }
-        if !self.restore_permission_mode(context).await? {
-            let mut observation = self.observation.clone();
-            observation.status = EngineStatus::Starting;
-            return Ok(observation);
-        }
-        if self.observation.status == EngineStatus::Starting
-            && !self.exit_requested
-            && context.tmux_binary.is_some()
-            && protocol::composer_ready(&self.capture(context).await?)
-        {
-            self.observation.status = EngineStatus::Idle;
-        }
-        self.advance_delivery(context).await?;
-        if self.exit_requested
-            && self.observation.status != EngineStatus::Exited
-            && self
-                .exit_enter
-                .is_none_or(|t| t.elapsed() >= Duration::from_millis(200))
-        {
-            let pane = self.capture(context).await?;
-            if protocol::draft_visible(&pane, "/exit") {
-                self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
-                    .await?;
-                self.exit_enter = Some(Instant::now());
-            }
-        }
-        self.read_export()?;
-        let mut observation = self.observation.clone();
-        if self.inject_transient {
-            self.inject_transient = false;
-            observation.error = Some(error(
-                EngineErrorKind::Transient,
-                "injected Devin transient",
-            ));
-        }
-        Ok(observation)
     }
     async fn close(&mut self) -> io::Result<()> {
         self.read_hooks().map_err(io::Error::other)?;

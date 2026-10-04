@@ -208,6 +208,81 @@ pub fn composer_ready(pane: &str) -> bool {
     .iter()
     .any(|s| pane.contains(s))
 }
+/// Permission state shown around an empty composer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionMode {
+    Bypass,
+    /// Another indicator, or the release's indicator-free Normal mode under a rendered footer.
+    NotBypass,
+    Unknown,
+}
+/// 3000.11.3 prints `(bypass permissions on)` above the composer and no indicator in Normal
+/// mode. Only rows near the last placeholder count, so resumed history cannot match.
+pub fn permission_mode(pane: &str) -> PermissionMode {
+    let pane = strip_ansi(pane);
+    let lines: Vec<_> = pane.lines().collect();
+    let Some(composer) = lines.iter().rposition(|line| composer_ready(line)) else {
+        return PermissionMode::Unknown;
+    };
+    let region = lines[composer.saturating_sub(4)..]
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    if ["bypass permissions on", "bypass mode", "dangerous mode"]
+        .iter()
+        .any(|s| region.contains(s))
+    {
+        PermissionMode::Bypass
+    } else if [
+        "accept edits on",
+        "smart mode on",
+        "bash mode",
+        "handoff mode",
+        "autonomous",
+        "plan mode",
+        "normal mode",
+    ]
+    .iter()
+    .any(|s| region.contains(s))
+        || lines[composer + 1..]
+            .iter()
+            .any(|line| line.contains("Context:"))
+    {
+        PermissionMode::NotBypass
+    } else {
+        PermissionMode::Unknown
+    }
+}
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
 pub fn draft_visible(pane: &str, needle: &str) -> bool {
     let region = plain(&composer_region(pane));
     !needle.is_empty() && region.contains(&plain(needle))

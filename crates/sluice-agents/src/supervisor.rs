@@ -1143,12 +1143,21 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             )?;
         }
         persist(machine, config, host).await?;
-        bounded_host(
-            cancel,
-            deadline,
-            host.acknowledge(&machine.checkpoint.delivery.acknowledged_messages()),
-        )
-        .await?;
+        // The guardian answers control requests in order and may first be waiting on a hook
+        // reply that only this loop writes; keep answering hooks while the ack is in flight.
+        {
+            let acknowledged = machine.checkpoint.delivery.acknowledged_messages();
+            let ack = bounded_host(cancel, deadline, host.acknowledge(&acknowledged));
+            tokio::pin!(ack);
+            loop {
+                tokio::select! {
+                    result = &mut ack => break result?,
+                    _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                        process_hooks(engine, config.run, &config.run_dir).map_err(invalid)?;
+                    }
+                }
+            }
+        }
         match action {
             Action::Send { id, text, steer } => {
                 machine.offered(&id, &o, now)?;

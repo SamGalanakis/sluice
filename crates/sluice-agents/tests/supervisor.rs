@@ -942,3 +942,94 @@ async fn composed_message_continuation_preserves_uncertain_acceptance() {
         EngineCommand::DeliverText { .. } | EngineCommand::Steer { .. }
     )));
 }
+/// The guardian answers control requests in order: a hook it accepted first must be
+/// answered by the supervisor before a DeliveryAck queued behind it can return.
+struct SerialGuardian {
+    host: Host,
+    hooks: PathBuf,
+    run: RunId,
+    engine: String,
+    held: bool,
+}
+impl SupervisorHost for SerialGuardian {
+    async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        self.host.snapshot(after).await
+    }
+    async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
+        if !ids.is_empty() && !self.held {
+            self.held = true;
+            fs::create_dir_all(&self.hooks)?;
+            let request = serde_json::json!({"engine":self.engine,"run":self.run,"event":"Stop","payload":{"hook_event_name":"Stop"}});
+            fs::write(self.hooks.join("held.tmp"), request.to_string())?;
+            fs::rename(
+                self.hooks.join("held.tmp"),
+                self.hooks.join("held.request.json"),
+            )?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            while !self.hooks.join("held.reply.json").exists() {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(io::Error::other("engine hook decision timed out"));
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        self.host.acknowledge(ids).await
+    }
+    async fn me(&mut self) -> io::Result<String> {
+        self.host.me().await
+    }
+    async fn note(&mut self, body: &str) -> io::Result<()> {
+        self.host.note(body).await
+    }
+    async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
+        self.host.checkpoint(checkpoint).await
+    }
+    async fn cleanup(&mut self) -> io::Result<()> {
+        self.host.cleanup().await
+    }
+}
+#[tokio::test]
+async fn hooks_are_answered_while_a_delivery_ack_waits_on_the_guardian() {
+    let scratch = Scratch::new();
+    let config = config(&scratch);
+    let mut frames = happy()[..2].to_vec();
+    frames.push(frame(
+        Some(EngineCommand::Steer {
+            id: InputId::Message { id: MessageId(1) },
+            text: "*".into(),
+        }),
+        observation(EngineStatus::Busy, 2, 0),
+    ));
+    frames.push(frame(None, observation(EngineStatus::Idle, 2, 1)));
+    let mut engine = ScriptedEngine::new(frames);
+    engine.hook_reply = Some(HookReply {
+        stdout: None,
+        exit_code: 0,
+    });
+    let mut host = Host::new();
+    host.messages = vec![DeliveryMessage {
+        id: MessageId(1),
+        body: JsonValue::try_from(serde_json::json!({"body":"live"})).unwrap(),
+    }];
+    let mut guardian = SerialGuardian {
+        host,
+        hooks: config.run_dir.join("engine-hooks"),
+        run: config.run,
+        engine: engine.profile.engine.clone(),
+        held: false,
+    };
+    let started = std::time::Instant::now();
+    supervise(
+        config,
+        &mut engine,
+        &mut guardian,
+        &mut SessionGuard::default(),
+        None,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(engine.hooks.len(), 1);
+    assert_eq!(guardian.host.acks, vec![MessageId(1)]);
+}

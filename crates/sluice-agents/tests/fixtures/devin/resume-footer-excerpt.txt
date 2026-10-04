@@ -1,0 +1,3 @@
+(bypass permissions on)
+❭ Ask Devin to build features, fix bugs, or work on your code
+SWE-2 High · Context: 18k / 262k tokens (6%)

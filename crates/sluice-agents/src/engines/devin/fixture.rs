@@ -95,9 +95,14 @@ fn draw(draft: &str, collapsed: bool, wrap: usize, dialog: bool, bypass: bool) -
     } else {
         format!("❯ {}", draft.lines().next().unwrap_or(""))
     };
+    // 3000.11.3 layout: Normal mode has no indicator; bypass is a row above the composer.
     print!(
-        "\x1b[H\x1b[2J{rule}\r\n{region}\r\n{rule}\r\nswe-2-high {}",
-        if bypass { "Bypass mode" } else { "Normal mode" }
+        "\x1b[H\x1b[2J{}{rule}\r\n{region}\r\n{rule}\r\nSWE-2 High \u{b7} Context: 0k / 262k tokens (0%)",
+        if bypass {
+            "\x1b[33m(bypass permissions on)\x1b[0m\r\n"
+        } else {
+            ""
+        }
     );
     io::stdout().flush()
 }
@@ -195,7 +200,17 @@ pub fn main(args: &[String]) -> io::Result<()> {
     let wrap = settings["wrap"].as_u64().unwrap_or(0) as usize;
     let mut index = 0usize;
     let mut cursor = 0usize;
-    draw(&draft, collapsed, wrap, dialog, bypass)?;
+    if let Some(pane) = settings["ready_pane"].as_str() {
+        print!("\x1b[H\x1b[2J{}", pane.replace('\n', "\r\n"));
+        io::stdout().flush()?;
+    } else if let Some(ms) = settings["restore_ms"].as_u64().filter(|_| bypass) {
+        // A resumed session's mode is restored after the composer first appears.
+        draw(&draft, collapsed, wrap, dialog, false)?;
+        std::thread::sleep(Duration::from_millis(ms));
+        draw(&draft, collapsed, wrap, dialog, bypass)?;
+    } else {
+        draw(&draft, collapsed, wrap, dialog, bypass)?;
+    }
     loop {
         let mut buf = [0u8; 65536];
         let n = io::stdin().read(&mut buf)?;
