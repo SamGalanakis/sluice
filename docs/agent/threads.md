@@ -78,6 +78,18 @@ given:
   one carrying an `answer` is refused (`conflict`). See `docs("inbox")` for `ui`, `answer`
   and the `input` an answer sets.
 
+From a shell, `sluice tool` takes the same arguments as one JSON object or as flags, a
+message's body from a file or stdin so it needs no quoting (`sluice tool reply --help` lists
+the fields). Inside a step's run, `project` and `run` default to the run's own:
+
+```sh
+sluice tool ask --project myproj --to work --body 'Which schema version?'
+sluice tool reply --project myproj --to-message 24771 --body-file - <<'END'
+Use v3; it's on the "parser" branch.
+END
+sluice tool say --to orchestrator --body-file note.md      # in a step's run
+```
+
 `to` is a step of the project's current plan, `orchestrator` or `owner`. Anything else (left
 out, an unknown or removed step, any other name, yourself) is `invalid` and nothing is
 stored. A message to or from a step lives on that step's thread, `step-<step>`; when a

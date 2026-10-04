@@ -695,8 +695,8 @@ derived, never given:
 - `say(project, to, body, data?)`: a note; no reply is expected.
 - `reply(project, to_message, body="", answer?)`: a reply to that message.
 
-Each takes `run?` too: the run that speaks (agent and fn callers; `sluice tool` fills it from
-`SLUICE_RUN_ID`). The dashboard speaks as the owner (`owner: true`, which MCP and `sluice
+Each takes `run?` too: the run that speaks (agent and fn callers; `sluice tool` fills it in a
+run, §14). The dashboard speaks as the owner (`owner: true`, which MCP and `sluice
 tool` do not take).
 
 - `from` is derived: a run's step for a step's run (`orchestrator` for a call's run), `owner`
@@ -914,7 +914,7 @@ against the plan.
   (`conflict`, `cursor_expired`), 503 (`busy`), 408 (`cancelled`) and 500.
 - **MCP over stdio**: `sluice mcp` serves the same tools, instructions and resources on its
   stdin and stdout, through the home's coordinator (started when nothing answers).
-- **CLI**: `sluice tool <name> '<json>'` (§14).
+- **CLI**: `sluice tool <name> '<json>'`, or `--field value` flags (§14).
 - **Wire**: every tool is a command `{"command": name, "args": {...}}` with a reply `{"reply":
   kind, "data": …}` on the coordinator socket (`sluice tool rpc '<request>'` sends a raw
   request). `docs/rust/schemas.json` (`CommandRequest`, `CommandReply`) is its schema.
@@ -926,10 +926,25 @@ wait plus 30 s (`busy`, not retryable, "command deadline exceeded").
 
 ### 12.2 Arguments, results and errors
 
-MCP and HTTP arguments are flat; an argument a tool does not take is refused (`bad_request`
-naming the ones it takes). `project` is a current name or `id:<uuid>`; `steps`, `tags`,
-`projects` and `state` also accept a single string. Waits (`wait`, `timeout`, `settle_max`) are
-capped at 3600 s. A reply object is returned as is; a non-object reply is wrapped as
+MCP and HTTP arguments are flat; an argument a tool does not take is refused (`bad_request`,
+below). `project` is a current name or `id:<uuid>`; `steps`, `tags`, `projects` and `state`
+also accept a single string. Waits (`wait`, `timeout`, `settle_max`) are capped at 3600 s.
+
+Arguments are forgiving in the same way on every path that takes them (MCP, HTTP, a fn's
+`ctx.tool` and `sluice tool`), and both rules read the command's generated schema:
+
+- An unknown tool, or an argument a tool does not take, is `bad_request` naming it and the
+  nearest valid names, at most three: those within edit distance 3 (at most half the given
+  name's length, at least 1), and those containing it or contained in it (case, and `-` for
+  `_`, ignored): `unknown tool step_contxt; did you mean step_context?`, `step_submit takes no
+  argument 'output'; did you mean outputs?`. With no near name, the message lists the
+  arguments the tool takes instead.
+- Where an argument's schema takes an integer and no string (message ids such as
+  `to_message` and `since`, seqs such as `since_seq`, revisions such as `rev` and
+  `expected_rev`, limits and waits), at any depth, a string of decimal digits (surrounding
+  whitespace ignored) is that integer: `"to_message": "24771"` is `24771`. Any other string
+  there is `bad_request` naming the field (`to_message: expected an integer, not "abc"`). A
+  field that takes strings keeps its digits as a string. A reply object is returned as is; a non-object reply is wrapped as
 `{"result": …}` in MCP structured content; an acknowledgement is `{"ok": true}`.
 
 Errors are `{"error": kind, "message", …}`:
@@ -1165,7 +1180,7 @@ the plan. Project settings has a Board section: the program, a live preview, Sav
 | `loop` | takes the scheduler lease and holds it until SIGINT/SIGTERM |
 | `coordinator [--maintenance]` | runs the home's coordinator in the foreground |
 | `install fence <reason> \| unfence \| select <release_dir> <home> \| status` | §2.2 |
-| `tool [name] [json]` | without a name, lists the tools; with one, runs it (JSON from the argument or stdin) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement) |
+| `tool [name [json\|-] [--field value]…]` | without a name, lists the tools; with one, runs it (its arguments as below) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement); `tool <name> --help` lists its fields |
 | `tool rpc '<request>'` | sends a raw wire request |
 | `next [-p P]… [--since-seq N \| --cursor FILE] [--me NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
@@ -1186,10 +1201,53 @@ read them with `sluice query` or `--settles full`), `PROJECT <id> paused by <aut
 
 `sluice tool` takes the wire argument names with these conveniences: `steps`/`tags` (and
 `after`, `projects`, `state`) as plain values or lists, `expected`/`dry_run`/`reason`/`author`
-flat on edit tools, `wait` for `fn_call`, `timeout` and `wake` for `log_wait`, `timeout`
-for `step_wait`, `timeout`, `settle` and `settle_max` for `next`, `fn` for `fn_save`, `name` for `project_update` and
-`project_delete` (which also fills `confirm_name` and the current `expected_settings_rev`),
-`params.unit` for `unit_add`, and `step`/`input`/`value` for `step_set_input`.
+flat on edit tools, MCP's public names (`rev` for `expected`, `wait` for `fn_call`, `timeout`
+and `wake` for `log_wait`, `timeout` for `step_wait`, `timeout`, `settle` and `settle_max` for
+`next`, `older_than` for `plan_prune`, `fn` for `fn_save`), `older_than_hours` for
+`plan_prune`, `name` for `project_update` and `project_delete` (which also fills
+`confirm_name` and the current `expected_settings_rev`), `params.unit` for `unit_add`, and
+`step`/`input`/`value` for `step_set_input`. Any other name is refused with the nearest ones (§12.2).
+
+A tool's arguments are one JSON object, flags, or both:
+
+- **JSON**: the object as the argument after the name; `-` there reads it from stdin. With
+  neither an argument nor a flag, stdin is read only when it is a redirected regular file
+  (`< args.json`), never a pipe or a terminal, so such a call never waits on a stdin nobody
+  writes to.
+- **Flags**: `--<field> VALUE` or `--<field>=VALUE`, one per field, the flag being the field
+  name with `-` or `_` (`--to-message`, `--to_message`). The value is the text as given for a
+  field whose schema takes only strings (`--to owner`, `--body 42` and `--project demo` stay
+  strings). For any other field it is parsed as JSON when it parses (`--to-message 24771`,
+  `--outputs '{"ok": true}'`, `--steps '["a","b"]'`, `--until '{"any_of": ["failed"]}'`);
+  else, for a list of strings that takes no single string, it is a one-item list of the text
+  (`--kinds message`, `--statuses failed`, `--recipients orchestrator`); else it is the text
+  (`--steps a`, `--until settled`, `--value hello`). A field that takes neither a string nor
+  a number nor a boolean (an object such as `outputs`) refuses text that is not JSON. A boolean field's flag with no value is
+  `true` (`--owner`, `--dry-run`). A value that starts with `--` needs the `=` form; a
+  repeated flag keeps its last value.
+- **Files**: `--<field>-file PATH` reads the value from a file by the same rule, taking the
+  file's text exactly (no newline trimmed); `-` reads stdin, which one argument at most may do.
+- **Both**: the flags apply over the JSON object, so a flag wins over the same field in it.
+- **Run defaults**: in a run (`SLUICE_RUN_ID` set), a call that leaves out `project` gets
+  `id:$SLUICE_PROJECT_ID` (when set), and one that leaves out `run` gets `$SLUICE_RUN_ID`, on
+  every tool that takes them; `step_submit` and `step_context` also get `step` from
+  `SLUICE_STEP`. No other step is defaulted: a step that names a target is always given. A
+  field the call gives is kept, even as null (`"run": null` speaks as the orchestrator,
+  `"project": null` leaves an optional project out), and `project_update` or `project_delete`
+  given `name` names its project that way. Only `sluice tool` defaults; MCP, HTTP and
+  `ctx.tool` do not.
+- **Help**: `sluice tool <name> --help` (or `-h`) prints the tool's description and each field
+  with its type, whether it is required or its default, and what it is, from the tool's schema;
+  `sluice tool --help` prints the usage.
+
+```sh
+sluice tool reply --project demo --to-message 24771 --body-file - <<'END'
+It's on the "parser" branch.
+END
+sluice tool say --to orchestrator --body 'blocked on the schema'   # in a run
+sluice tool step_submit --outputs-file outputs.json                # in a run
+sluice tool status '{"project": "demo"}' --brief
+```
 
 ## 15. Agent engines
 
@@ -1197,8 +1255,9 @@ for `step_wait`, `timeout`, `settle` and `settle_max` for `next`, `fn` for `fn_s
 interactive session of the engine CLI in the run's private tmux, in `cwd`. The supervisor
 writes the task (the prompt or spec, the step's inputs under `## Inputs`, the outputs to submit
 with the exact `step_submit` command under `## Outputs you must submit` and "Submit only when
-you are finished: submitting ends your session.", and, unless `listen: false`, how to `ask` the
-orchestrator, `say` to it and `reply`, with the run's id), watches the session through the
+you are finished: submitting ends your session." with the `--outputs-file` form that needs no
+shell quoting, and, unless `listen: false`, how to `ask` the orchestrator, `say` to it and
+`reply`, with the run's id, and their flag form, §14), watches the session through the
 engine's hooks, nudges a stalled session, and ends it when the agent is done. The result carries
 `session` (pass it back to resume) and `git` facts `{head_before, head_after, commits, dirty}`
 of `cwd`. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns

@@ -47,6 +47,8 @@ pub fn project_selector(project: &str) -> String {
         Err(_) => project.into(),
     }
 }
+/// The flag form of the message verbs, which needs no JSON quoting (SPEC §14).
+const FLAGS: &str = "Each verb also takes flags instead of the JSON, e.g. `sluice tool reply --to-message 12 --body-file -` with the body on stdin; in this run, project and run default to its own.";
 pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) -> String {
     let mut text = String::new();
     let project = project_selector(&ctx.project);
@@ -102,7 +104,7 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
             .collect::<Vec<_>>()
             .join(", ");
         payload = payload.replace("\"outputs\":{}", &format!("\"outputs\":{{{outputs}}}"));
-        text.push_str(&format!("\n\n{SUBMIT_ENDS_SESSION} Submit them as JSON values of those types:\n`sluice tool step_submit {}`\nIf it returns `invalid`, nothing was submitted: fix what it lists and submit again.", shell_quote(&payload)));
+        text.push_str(&format!("\n\n{SUBMIT_ENDS_SESSION} Submit them as JSON values of those types:\n`sluice tool step_submit {}`\nIf it returns `invalid`, nothing was submitted: fix what it lists and submit again. To avoid shell quoting, write the outputs object to a file and run `sluice tool step_submit --outputs-file <file>` (`-` reads it from stdin); in this run, project, step and run default to its own.", shell_quote(&payload)));
     }
     // Every step speaks with its own run identity; `listen` only adds live delivery.
     if !ctx.project.is_empty() && !ctx.step.is_empty() {
@@ -123,9 +125,9 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
             json!({"project":project,"run":ctx.run,"to_message":"<id>","body":"..."}),
         );
         if ctx.listen {
-            text.push_str(&format!("\n\nMessages addressed to this step arrive in this session as they come, on its sluice thread `{thread}` of project `{project}`; you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, ask the orchestrator with {ask} and continue with anything not blocked by it. To tell it something that needs no answer, use {say}. Answer a question you are asked with {reply}, giving its message id. Post questions and changes of scope, not progress."));
+            text.push_str(&format!("\n\nMessages addressed to this step arrive in this session as they come, on its sluice thread `{thread}` of project `{project}`; you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, ask the orchestrator with {ask} and continue with anything not blocked by it. To tell it something that needs no answer, use {say}. Answer a question you are asked with {reply}, giving its message id. Post questions and changes of scope, not progress. {FLAGS}"));
         } else {
-            text.push_str(&format!("\n\nTo ask the orchestrator a question, use {ask}; to tell it something that needs no answer, use {say}. Both land on this step's sluice thread `{thread}` of project `{project}`."));
+            text.push_str(&format!("\n\nTo ask the orchestrator a question, use {ask}; to tell it something that needs no answer, use {say}. Both land on this step's sluice thread `{thread}` of project `{project}`. {FLAGS}"));
         }
     }
     text

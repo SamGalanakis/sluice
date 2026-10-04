@@ -48,9 +48,12 @@ pub enum Mode {
     Loop {},
     Guardian(RunArgs),
     PayloadExec(RunArgs),
+    /// `sluice tool [<name> [JSON] [--field VALUE]...]`; `sluice tool <name> --help` lists
+    /// the tool's fields.
+    #[command(disable_help_flag = true)]
     Tool {
-        name: Option<String>,
-        json: Option<String>,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     Next {
         #[arg(short = 'p', long = "project", value_name = "P")]
@@ -205,7 +208,7 @@ macro_rules! println {
 pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
     Box::pin(async move {
         match mode {
-            Mode::Tool { name, json } => tool(&home, name, json).await,
+            Mode::Tool { args } => tool(&home, args).await,
             Mode::Next {
                 projects,
                 since_seq,
@@ -507,6 +510,15 @@ async fn normalize_args(
         args.insert("project".into(), Value::String(id.to_string()));
         Ok(())
     }
+    // MCP's public names for wire fields (`rev` for an edit's `expected`, `wait`, `older_than`,
+    // ...) are taken here too, so a call copied from the tool descriptions works.
+    for (public, wire) in sluice_web::mcp::renames(name) {
+        if !args.contains_key(*wire)
+            && let Some(value) = args.remove(*public)
+        {
+            args.insert((*wire).into(), value);
+        }
+    }
     let seconds = |args: &mut serde_json::Map<String, Value>, from: &str, to: &str| {
         if let Some(value) = args.remove(from) {
             args.insert(to.into(), value);
@@ -656,28 +668,12 @@ async fn normalize_args(
             args.entry("force").or_insert(Value::Bool(false));
             args.entry("reason").or_insert(Value::String(String::new()));
         }
-        "step_submit" => {
-            project_id_arg(home, args).await?;
-            if args.get("run").is_none()
-                && let Ok(run) = std::env::var("SLUICE_RUN_ID")
-            {
-                args.insert("run".into(), Value::String(run));
-            }
-        }
-        // A run's agent speaks as its step: the run identity comes from its environment
-        // when the call does not name it. The owner is the dashboard's alone.
-        "ask" | "say" | "reply" | "message_post" => {
-            if args.contains_key("owner") && name != "message_post" {
-                return Err(bad_request(format!(
-                    "{name} takes no argument 'owner': the dashboard speaks as the owner"
-                )));
-            }
-            if args.get("run").is_none_or(Value::is_null)
-                && let Ok(run) = std::env::var("SLUICE_RUN_ID")
-                && !run.trim().is_empty()
-            {
-                args.insert("run".into(), Value::String(run));
-            }
+        "step_submit" => project_id_arg(home, args).await?,
+        // The owner is the dashboard's alone.
+        "ask" | "say" | "reply" if args.contains_key("owner") => {
+            return Err(bad_request(format!(
+                "{name} takes no argument 'owner': the dashboard speaks as the owner"
+            )));
         }
         "mark_read" => project_id_arg(home, args).await?,
         "fn_save" => {
@@ -721,11 +717,15 @@ async fn normalize_args(
             {
                 *value = json!(3600);
             }
-            let wake = args.remove("wake").unwrap_or(json!("any"));
-            args.insert(
-                "questions_only".into(),
-                Value::Bool(wake.as_str() == Some("questions")),
-            );
+            // `wake` arrives renamed: "any" or "questions" (a boolean passes as is).
+            let wake = args.remove("questions_only").unwrap_or(json!("any"));
+            let questions = match wake {
+                Value::Bool(questions) => questions,
+                Value::String(wake) if wake == "any" => false,
+                Value::String(wake) if wake == "questions" => true,
+                _ => return Err(bad_request("wake must be any or questions")),
+            };
+            args.insert("questions_only".into(), Value::Bool(questions));
         }
         "step_wait" => {
             selection(args);
@@ -772,8 +772,360 @@ async fn normalize_args(
     Ok(())
 }
 
-async fn tool(home: &Path, name: Option<String>, args: Option<String>) -> Result<(), PublicError> {
+const TOOL_USAGE: &str = "\
+usage: sluice tool [<name> [JSON] [--field VALUE]...]
+
+Without a name, lists the tools; `sluice tool <name> --help` lists one tool's fields.
+";
+/// How `sluice tool` reads a tool's arguments (SPEC §14), printed with every usage.
+const TOOL_ARGUMENTS: &str = "\
+A tool's arguments are one JSON object (the first argument; `-` reads it from stdin)
+and/or one flag per field: --field VALUE or --field=VALUE, `-` or `_` alike, a
+boolean's flag alone meaning true. A value is the text as given for a field that takes
+only strings; any other value is parsed as JSON when it parses, else taken as text (as
+a one-item list for a list of strings: --statuses failed).
+--<field>-file PATH reads the value from a file (`-` for stdin). Flags win over the
+JSON object. In a run, project, run and (step_submit, step_context) step default to
+the run's own.
+";
+
+/// The names only `sluice tool` takes, rewritten by `normalize_args`, with their schema.
+fn cli_aliases(name: &str) -> Vec<(&'static str, Value)> {
+    let text = |doc: &str| json!({"type": "string", "description": doc});
+    match name {
+        "project_update" => vec![("name", text("the project's current name (as project)"))],
+        "project_delete" => vec![(
+            "name",
+            text(
+                "the project's current name: fills project, confirm_name and expected_settings_rev",
+            ),
+        )],
+        "plan_prune" => vec![(
+            "older_than_hours",
+            json!({"type": "number", "description": "older_than, in hours"}),
+        )],
+        "step_set_input" => vec![
+            ("step", text("one step to select (as steps)")),
+            ("input", text("one input to bind, to value (as inputs)")),
+            ("value", json!({"description": "the value of input"})),
+        ],
+        _ => vec![],
+    }
+}
+
+/// Every field `sluice tool <name>` takes, each with its JSON schema: the command's public
+/// fields (MCP's, from the command schema), the few names only the CLI takes, and the wire
+/// fields flat (`expected`, `timeout_seconds`, ...), which it has always taken too.
+struct CliFields {
+    /// `{"properties", "$defs"}`, the shape `coerce_integers` reads.
+    schema: Value,
+    /// The names it offers (suggested, and listed by --help): public, then CLI-only.
+    public: Vec<String>,
+    required: Vec<String>,
+}
+impl CliFields {
+    fn of(name: &str) -> Self {
+        let mut properties = serde_json::Map::new();
+        let mut defs = sluice_web::mcp::command_schema()["$defs"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let mut public = Vec::new();
+        let mut required = Vec::new();
+        if let Some(schema) = sluice_web::mcp::tool_schema(name) {
+            for (key, value) in schema["properties"].as_object().into_iter().flatten() {
+                properties.insert(key.clone(), value.clone());
+                public.push(key.clone());
+            }
+            for (key, value) in schema["$defs"].as_object().into_iter().flatten() {
+                defs.insert(key.clone(), value.clone());
+            }
+            required = schema["required"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+        }
+        for (key, value) in cli_aliases(name) {
+            properties.insert(key.into(), value);
+            public.push(key.into());
+        }
+        for (key, value) in sluice_web::mcp::wire_fields(name) {
+            properties.entry(key).or_insert(value);
+        }
+        Self {
+            schema: json!({"properties": properties, "$defs": defs}),
+            public,
+            required,
+        }
+    }
+    fn field(&self, key: &str) -> Option<&Value> {
+        self.schema["properties"].get(key)
+    }
+    fn accepts(&self, key: &str) -> sluice_web::tool_args::Accepts {
+        sluice_web::tool_args::accepts(&self.schema["properties"][key], &self.schema["$defs"])
+    }
+    fn unknown(&self, tool: &str, key: &str) -> PublicError {
+        sluice_web::tool_args::unknown_argument(tool, key, self.public.iter().map(String::as_str))
+    }
+    /// `sluice tool <name> --help`: the description, then each field with its type,
+    /// whether it is required or its default, and what it is.
+    fn help(&self, tool: &str) -> String {
+        let description = sluice_web::mcp::tools()
+            .iter()
+            .find(|t| t.name == tool)
+            .and_then(|t| t.description.as_deref().map(str::to_owned))
+            .or_else(|| {
+                TOOLS
+                    .iter()
+                    .find(|(name, _)| *name == tool)
+                    .map(|(_, doc)| format!("{doc}."))
+            })
+            .unwrap_or_default();
+        let (text, described) = sluice_web::tool_args::described_args(&description);
+        let mut out =
+            format!("usage: sluice tool {tool} [JSON] [--field VALUE]...\n\n{text}\n\nfields:\n");
+        let mut names: Vec<&String> = self.public.iter().collect();
+        names.sort_by_key(|name| !self.required.contains(name));
+        for name in names {
+            let schema = &self.schema["properties"][name.as_str()];
+            let kind = sluice_web::tool_args::type_text(schema, &self.schema["$defs"]);
+            let mut notes = Vec::new();
+            if self.required.contains(name) {
+                notes.push("required".to_owned());
+            } else if let Some(default) = schema.get("default") {
+                notes.push(format!("default {default}"));
+            }
+            let in_run = match name.as_str() {
+                "project" => Some("id:$SLUICE_PROJECT_ID"),
+                "run" => Some("$SLUICE_RUN_ID"),
+                "step" if matches!(tool, "step_submit" | "step_context") => Some("$SLUICE_STEP"),
+                _ => None,
+            };
+            if let Some(value) = in_run {
+                notes.push(format!("in a run: {value}"));
+            }
+            let doc = described
+                .iter()
+                .find(|(field, _)| field == name)
+                .map(|(_, doc)| doc.clone())
+                .or_else(|| schema["description"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let notes = if notes.is_empty() {
+                String::new()
+            } else {
+                format!("  ({})", notes.join("; "))
+            };
+            out.push_str(&format!("  --{} <{kind}>{notes}\n", name.replace('_', "-")));
+            if !doc.is_empty() {
+                out.push_str(&format!("      {doc}\n"));
+            }
+        }
+        out.push('\n');
+        out.push_str(TOOL_ARGUMENTS);
+        out
+    }
+}
+
+/// A flag's value: the text itself for a field that takes only strings (`--to owner`,
+/// `--body 42`); else its JSON when it parses (`--to-message 24771`, `--outputs '{..}'`);
+/// else, for a list of strings that takes no string, a list of the text (`--kinds message`,
+/// `--statuses failed`); else the text. A field that takes no string or scalar at all must
+/// be JSON.
+fn flag_value(
+    flag: &str,
+    accepts: sluice_web::tool_args::Accepts,
+    items: Option<sluice_web::tool_args::Accepts>,
+    text: String,
+) -> Result<Value, PublicError> {
+    if accepts.only_string() {
+        return Ok(Value::String(text));
+    }
+    match serde_json::from_str::<Value>(&text) {
+        Ok(value) => Ok(value),
+        Err(_)
+            if accepts.array
+                && !accepts.string
+                && !accepts.any
+                && items.is_some_and(|items| items.string || items.any) =>
+        {
+            Ok(Value::Array(vec![Value::String(text)]))
+        }
+        Err(error)
+            if !(accepts.any
+                || accepts.string
+                || accepts.integer
+                || accepts.number
+                || accepts.boolean) =>
+        {
+            Err(bad_request(format!("--{flag}: not JSON: {error}")))
+        }
+        Err(_) => Ok(Value::String(text)),
+    }
+}
+
+/// Whether stdin is a regular file (`< args.json`), as opposed to a pipe or a terminal.
+fn stdin_is_file() -> bool {
+    use std::os::fd::AsFd;
+    std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .ok()
+        .and_then(|fd| std::fs::File::from(fd).metadata().ok())
+        .is_some_and(|meta| meta.is_file())
+}
+
+fn read_stdin() -> Result<String, PublicError> {
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .map_err(storage)?;
+    Ok(text)
+}
+
+/// The arguments of `sluice tool <name> [JSON] [--field VALUE]...`: the JSON object (the
+/// first argument, `-` reading it from stdin; with no argument and no flag, a file stdin is
+/// redirected from), then each flag over it. Every field must be one the tool takes. None
+/// asks for its help.
+fn parse_tool_args(
+    tool: &str,
+    fields: &CliFields,
+    rest: Vec<String>,
+) -> Result<Option<serde_json::Map<String, Value>>, PublicError> {
+    let mut rest = rest.into_iter().peekable();
+    let json_text = rest.next_if(|first| !first.starts_with("--") && first != "-h");
+    let mut flags: Vec<(String, Value)> = Vec::new();
+    let mut stdin_read = false;
+    while let Some(arg) = rest.next() {
+        if arg == "--help" || arg == "-h" {
+            return Ok(None);
+        }
+        let Some(flag) = arg.strip_prefix("--").filter(|flag| !flag.is_empty()) else {
+            return Err(bad_request(format!(
+                "unexpected argument {arg:?}: give one JSON object first, then --field VALUE flags"
+            )));
+        };
+        let (flag, inline) = match flag.split_once('=') {
+            Some((flag, value)) => (flag.to_owned(), Some(value.to_owned())),
+            None => (flag.to_owned(), None),
+        };
+        let key = flag.replace('-', "_");
+        let (field, from_file) = if fields.field(&key).is_some() {
+            (key, false)
+        } else if let Some(base) = key.strip_suffix("_file")
+            && fields.field(base).is_some()
+        {
+            (base.to_owned(), true)
+        } else {
+            return Err(fields.unknown(tool, key.strip_suffix("_file").unwrap_or(&key)));
+        };
+        let accepts = fields.accepts(&field);
+        let items = sluice_web::tool_args::item_accepts(
+            &fields.schema["properties"][field.as_str()],
+            &fields.schema["$defs"],
+        );
+        let text = inline.or_else(|| rest.next_if(|next| !next.starts_with("--")));
+        let value = match (text, from_file) {
+            (Some(path), true) => {
+                let content = if path == "-" {
+                    if stdin_read || json_text.as_deref() == Some("-") {
+                        return Err(bad_request(
+                            "stdin is read once: by `-` or by one --<field>-file -",
+                        ));
+                    }
+                    stdin_read = true;
+                    read_stdin()?
+                } else {
+                    std::fs::read_to_string(&path)
+                        .map_err(|e| bad_request(format!("--{flag}: {path}: {e}")))?
+                };
+                flag_value(&flag, accepts, items, content)?
+            }
+            (Some(text), false) => flag_value(&flag, accepts, items, text)?,
+            (None, false) if accepts.boolean => Value::Bool(true),
+            (None, _) => return Err(bad_request(format!("--{flag} needs a value"))),
+        };
+        flags.push((field, value));
+    }
+    let text = match json_text {
+        Some(text) if text == "-" => {
+            if stdin_read {
+                return Err(bad_request(
+                    "stdin is read once: by `-` or by one --<field>-file -",
+                ));
+            }
+            read_stdin()?
+        }
+        Some(text) => text,
+        // A redirected file is read as the object; an open pipe or a terminal never is, so a
+        // call with no arguments never waits on a stdin nobody writes to.
+        None if flags.is_empty() && stdin_is_file() => read_stdin()?,
+        None => String::new(),
+    };
+    let text = text.trim();
+    let args_value: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text })
+        .map_err(|e| bad_request(format!("args: not JSON: {e}")))?;
+    let mut args = match args_value {
+        Value::Object(map) => map,
+        _ => return Err(bad_request("args: expected a JSON object")),
+    };
+    for (field, value) in flags {
+        args.insert(field, value);
+    }
+    if let Some(key) = args.keys().find(|key| fields.field(key).is_none()) {
+        return Err(fields.unknown(tool, key));
+    }
+    Ok(Some(args))
+}
+
+/// In a run (SLUICE_RUN_ID set), a call that leaves out `project` or `run` gets the run's
+/// own, `id:$SLUICE_PROJECT_ID` and `$SLUICE_RUN_ID`, on every tool that takes it, and
+/// `step_submit` and `step_context` get `$SLUICE_STEP` as `step`. A field the call gives,
+/// even as null, is kept, and project_update or project_delete given `name` names its
+/// project that way.
+fn run_defaults(tool: &str, fields: &CliFields, args: &mut serde_json::Map<String, Value>) {
+    let var = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let Some(run) = var("SLUICE_RUN_ID") else {
+        return;
+    };
+    if fields.field("run").is_some() {
+        args.entry("run").or_insert(Value::String(run));
+    }
+    let named = matches!(tool, "project_update" | "project_delete") && args.contains_key("name");
+    if fields.field("project").is_some()
+        && !named
+        && let Some(project) = var("SLUICE_PROJECT_ID")
+    {
+        args.entry("project")
+            .or_insert(Value::String(sluice_agents::prompt::project_selector(
+                &project,
+            )));
+    }
+    if matches!(tool, "step_submit" | "step_context")
+        && let Some(step) = var("SLUICE_STEP")
+    {
+        args.entry("step").or_insert(Value::String(step));
+    }
+}
+
+async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
     ensure_home(home)?;
+    let mut argv = argv.into_iter();
+    let name = match argv.next() {
+        None => None,
+        Some(flag) if flag == "--help" || flag == "-h" => {
+            print!("{TOOL_USAGE}\n{TOOL_ARGUMENTS}\n");
+            None
+        }
+        Some(name) => Some(name),
+    };
     let Some(name) = name else {
         let mut tools: Vec<(&str, &str)> = TOOLS.to_vec();
         tools.sort_unstable();
@@ -783,33 +1135,26 @@ async fn tool(home: &Path, name: Option<String>, args: Option<String>) -> Result
         }
         return Ok(());
     };
+    let rest: Vec<String> = argv.collect();
     if name == "rpc" {
-        return rpc(home, args).await;
+        return rpc(home, rest.into_iter().next()).await;
     }
     // message_post is retired and unlisted; runs started on an older release still
     // call it, and the coordinator translates it for them.
     if !TOOLS.iter().any(|(tool, _)| *tool == name) && name != "message_post" {
-        return Err(bad_request(format!(
-            "unknown tool {name:?} (sluice tool lists them)"
-        )));
+        return Err(sluice_web::tool_args::unknown_tool(
+            &name,
+            TOOLS.iter().map(|(tool, _)| *tool),
+            " (sluice tool lists them)",
+        ));
     }
-    let text = match args {
-        Some(text) => text,
-        None => {
-            let mut text = String::new();
-            std::io::stdin()
-                .read_to_string(&mut text)
-                .map_err(storage)?;
-            text
-        }
+    let fields = CliFields::of(&name);
+    let Some(mut args) = parse_tool_args(&name, &fields, rest)? else {
+        print!("{}", fields.help(&name));
+        return Ok(());
     };
-    let text = text.trim();
-    let args_value: Value = serde_json::from_str(if text.is_empty() { "{}" } else { text })
-        .map_err(|e| bad_request(format!("args: not JSON: {e}")))?;
-    let mut args = match args_value {
-        Value::Object(map) => map,
-        _ => return Err(bad_request("args: expected a JSON object")),
-    };
+    sluice_web::tool_args::coerce_integers(&fields.schema, &mut args)?;
+    run_defaults(&name, &fields, &mut args);
     normalize_args(home, &name, &mut args).await?;
     let body = if name == "projects_list" {
         json!({"command": name})
@@ -860,13 +1205,7 @@ async fn tool(home: &Path, name: Option<String>, args: Option<String>) -> Result
 async fn rpc(home: &Path, request: Option<String>) -> Result<(), PublicError> {
     let text = match request {
         Some(text) => text,
-        None => {
-            let mut text = String::new();
-            std::io::stdin()
-                .read_to_string(&mut text)
-                .map_err(storage)?;
-            text
-        }
+        None => read_stdin()?,
     };
     let request: CommandRequest =
         decode_json(text.trim().as_bytes()).map_err(|e| bad_request(format!("request: {e}")))?;

@@ -1,4 +1,5 @@
 //! MCP and tool adapters use the same typed commands as the CLI and Unix broker.
+use crate::tool_args;
 use futures_util::future::BoxFuture;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
@@ -15,6 +16,7 @@ use sluice_model::{
     error::PublicError,
 };
 use std::{
+    collections::BTreeMap,
     sync::{Arc, OnceLock},
     time::Duration,
 };
@@ -94,21 +96,23 @@ pub fn decode_tool(
     mut args: Map<String, Value>,
     client: Option<&str>,
 ) -> Result<CommandRequest, PublicError> {
-    let tool = tools()
-        .iter()
-        .find(|tool| tool.name == name)
-        .ok_or_else(|| bad(format!("unknown tool {name}")))?;
-    let properties = tool.input_schema["properties"]
-        .as_object()
-        .expect("tool properties");
-    for key in args.keys() {
-        if !properties.contains_key(key) {
-            return Err(bad(format!(
-                "{name} takes no argument '{key}'; its arguments are {}",
-                properties.keys().cloned().collect::<Vec<_>>().join(", ")
-            )));
-        }
+    if !tools().iter().any(|tool| tool.name == name) {
+        return Err(tool_args::unknown_tool(
+            name,
+            tools().iter().map(|tool| tool.name.as_ref()),
+            "",
+        ));
     }
+    let schema = tool_schema(name).expect("an offered tool's schema");
+    let properties = schema["properties"].as_object().expect("tool properties");
+    if let Some(key) = args.keys().find(|key| !properties.contains_key(*key)) {
+        return Err(tool_args::unknown_argument(
+            name,
+            key,
+            properties.keys().map(String::as_str),
+        ));
+    }
+    tool_args::coerce_integers(schema, &mut args)?;
     for (key, schema) in properties {
         if !args.contains_key(key)
             && let Some(default) = schema.get("default")
@@ -271,7 +275,8 @@ fn bad(message: impl Into<String>) -> PublicError {
         message: message.into(),
     }
 }
-fn command_schema() -> &'static Value {
+/// The wire schema of every command (`CommandRequest`), its `$defs` included.
+pub fn command_schema() -> &'static Value {
     static SCHEMA: OnceLock<Value> = OnceLock::new();
     SCHEMA.get_or_init(|| {
         serde_json::to_value(schemars::schema_for!(CommandRequest)).expect("command schema")
@@ -295,7 +300,9 @@ fn argument_schema<'a>(root: &'a Value, name: &str) -> &'a Value {
         .expect("registered command");
     resolve(root, &variant["properties"]["args"])
 }
-fn renames(name: &str) -> &'static [(&'static str, &'static str)] {
+/// The public names MCP gives some wire fields (`rev` for an edit's `expected`, `wait` for
+/// `wait_seconds`, ...), as (public, wire) pairs.
+pub fn renames(name: &str) -> &'static [(&'static str, &'static str)] {
     match name {
         "fn_call" => &[("wait", "wait_seconds")],
         "fn_save" => &[("fn", "manifest")],
@@ -356,6 +363,58 @@ pub fn tools() -> &'static [Tool] {
     })
 }
 fn tool_definition(name: &str, description: &str) -> Tool {
+    let schema = tool_schema(name).expect("registered command");
+    Tool::new(
+        name.to_owned(),
+        description.to_owned(),
+        schema.as_object().expect("object schema").clone(),
+    )
+}
+/// The flat public argument schema of any command, by its tool name: the input schema MCP
+/// lists for the tools it offers, and the same shape for the commands it does not (which
+/// `sluice tool` still runs). `properties`, `required`, `additionalProperties: false` and the
+/// `$defs` they reference.
+pub fn tool_schema(name: &str) -> Option<&'static Value> {
+    static SCHEMAS: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
+    SCHEMAS
+        .get_or_init(|| {
+            command_schema()["oneOf"]
+                .as_array()
+                .expect("command variants")
+                .iter()
+                .filter_map(|v| v["properties"]["command"]["const"].as_str())
+                .map(|name| (name.to_owned(), public_schema(name)))
+                .collect()
+        })
+        .get(name)
+}
+/// Every field of a command's wire arguments by name, the nested `edit`, `selection` and
+/// `read` objects flattened, each with its schema (references into `command_schema`'s
+/// `$defs`).
+pub fn wire_fields(name: &str) -> Map<String, Value> {
+    fn flatten(root: &Value, schema: &Value, out: &mut Map<String, Value>) {
+        let Some(fields) = schema["properties"].as_object() else {
+            return;
+        };
+        for (key, value) in fields {
+            if matches!(key.as_str(), "edit" | "selection" | "read") {
+                flatten(root, resolve(root, value), out);
+            } else {
+                out.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    let root = command_schema();
+    let mut out = Map::new();
+    if root["oneOf"].as_array().is_some_and(|vs| {
+        vs.iter()
+            .any(|v| v["properties"]["command"]["const"] == name)
+    }) {
+        flatten(root, argument_schema(root, name), &mut out);
+    }
+    out
+}
+fn public_schema(name: &str) -> Value {
     let root = command_schema();
     let raw = argument_schema(root, name);
     let mut properties = Map::new();
@@ -372,12 +431,7 @@ fn tool_definition(name: &str, description: &str) -> Tool {
         properties.insert("project".into(), definitions["ProjectSelector"].clone());
     }
     let needed = reachable_definitions(&Value::Object(properties.clone()), &definitions);
-    let schema = json!({"type":"object","properties":properties,"required":required,"additionalProperties":false,"$defs":needed});
-    Tool::new(
-        name.to_owned(),
-        description.to_owned(),
-        schema.as_object().expect("object schema").clone(),
-    )
+    json!({"type":"object","properties":properties,"required":required,"additionalProperties":false,"$defs":needed})
 }
 fn schema_fields(
     root: &Value,

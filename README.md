@@ -59,9 +59,10 @@ is set, else the installation's selected home (`SLUICE_INSTALL_DIR`, default
   `claude mcp add --transport http sluice http://127.0.0.1:3065/mcp`. The server's instructions
   and the `docs` tool explain the workflow. Over stdio: `sluice mcp`, e.g.
   `claude mcp add sluice -- sluice mcp`.
-- Shell: `sluice tool` lists the tools and `sluice tool <name> '<json>'` runs one;
-  `sluice next` waits for what an orchestrator should act on; `sluice watch` follows a log;
-  `sluice query` reads the database; `sluice docs` prints the agent docs.
+- Shell: `sluice tool` lists the tools and `sluice tool <name> '<json>'` runs one (or
+  `--field value` flags; `sluice tool <name> --help` lists them); `sluice next` waits for
+  what an orchestrator should act on; `sluice watch` follows a log; `sluice query` reads the
+  database; `sluice docs` prints the agent docs.
 
 ## Develop
 

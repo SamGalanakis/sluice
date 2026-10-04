@@ -5,4 +5,5 @@ pub mod markdown;
 pub mod mcp;
 pub mod settings;
 pub mod streams;
+pub mod tool_args;
 pub mod views;

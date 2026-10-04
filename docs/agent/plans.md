@@ -80,8 +80,9 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   type-checked where it is read.
 - The agent is told the outputs under `## Outputs you must submit`, with the exact command:
   `sluice tool step_submit '{"project": ..., "step": ..., "run": ..., "outputs": {...}}'`
-  (the `step_submit` tool), and: "Submit only when you are finished: submitting ends your
-  session." A submission that does not fit returns `invalid` listing every problem and
+  (the `step_submit` tool; in the run, `sluice tool step_submit --outputs-file out.json` does
+  the same with no shell quoting), and: "Submit only when you are finished: submitting ends
+  your session." A submission that does not fit returns `invalid` listing every problem and
   changes nothing; the agent fixes them and submits again.
 - A valid submission is the agent's done signal (a `step.submit` record): its session is
   stopped at once and the step completes with the fn's outputs (`session`, `final`, `git` for

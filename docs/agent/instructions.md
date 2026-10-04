@@ -55,5 +55,10 @@ To give the owner a live view of a project (a lane overview, a few numbers, a ch
 that asks you for something), set its board: `board_set(project, program)`, drawn beside the
 plan on the dashboard; see `docs("board")`.
 
+Tool arguments are forgiving: an unknown tool or argument names the nearest valid ones, and an
+integer argument (a message id, a seq, a limit) may be given as a string of digits. From a
+shell, `sluice tool <name> --help` lists a tool's fields, and `sluice tool <name> --field
+value` (or `--field-file PATH`, `-` for stdin) takes them as flags instead of JSON.
+
 Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
 plan.

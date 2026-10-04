@@ -1162,3 +1162,498 @@ fn ask_say_and_reply_through_sluice_tool() {
     }
     assert_eq!(count(), before);
 }
+
+/// `sluice tool` with an environment and, optionally, stdin.
+fn tool_with(home: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&str>) -> Output {
+    use std::io::Write;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sluice"));
+    command
+        .env("SLUICE_HOME", home)
+        .env_remove("SLUICE_STEP")
+        .env_remove("SLUICE_AUTHOR")
+        .env_remove("SLUICE_RUN_ID")
+        .env_remove("SLUICE_PROJECT")
+        .env_remove("SLUICE_PROJECT_ID")
+        .envs(env.iter().copied())
+        .arg("tool")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    if let Some(text) = stdin {
+        input.write_all(text.as_bytes()).unwrap();
+    }
+    drop(input);
+    child.wait_with_output().unwrap()
+}
+
+fn ok(out: Output) -> Value {
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stdout(&out)
+}
+
+fn refused(out: &Output) -> String {
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(
+        stderr(out)["error"],
+        "bad_request",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stderr(out)["message"].as_str().unwrap().to_owned()
+}
+
+/// A message id, seq, limit or wait given as a string of digits is that integer; anything
+/// else is refused naming the field.
+#[test]
+fn tool_takes_decimal_strings_for_integer_arguments() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    project_with_steps(home);
+    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"orchestrator","body":"which db?","owner":true}});
+    let question = ok(run(home, &["tool", "rpc", &owner_ask.to_string()]))["data"]["id"]
+        .as_i64()
+        .unwrap();
+    let replied = ok(tool(
+        home,
+        "reply",
+        &json!({"project":"p","to_message":question.to_string(),"body":"postgres"}).to_string(),
+    ));
+    assert_eq!(replied["thread"], "owner");
+    let thread = ok(tool(
+        home,
+        "messages",
+        r#"{"project":"p","view":"thread","thread":"owner","since":"0"}"#,
+    ));
+    assert_eq!(thread["messages"][0]["state"], "answered", "{thread}");
+    let page = ok(tool(
+        home,
+        "log_read",
+        r#"{"project":"p","since_seq":"0","limit":"2"}"#,
+    ));
+    assert_eq!(page["records"].as_array().unwrap().len(), 2);
+    for (args, field) in [
+        (
+            json!({"project":"p","to_message":"abc","body":"x"}),
+            "to_message",
+        ),
+        (
+            json!({"project":"p","to_message":"-3","body":"x"}),
+            "to_message",
+        ),
+    ] {
+        let message = refused(&tool(home, "reply", &args.to_string()));
+        assert!(message.starts_with(field), "{message}");
+    }
+    let message = refused(&tool(home, "log_read", r#"{"project":"p","limit":"lots"}"#));
+    assert!(message.starts_with("limit"), "{message}");
+}
+
+/// An unknown tool or field names itself and the nearest valid names.
+#[test]
+fn tool_suggests_the_nearest_tool_and_field() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    let message = refused(&tool(home, "step_contxt", "{}"));
+    assert_eq!(
+        message,
+        "unknown tool step_contxt; did you mean step_context?"
+    );
+    let message = refused(&tool(home, "step_submit", r#"{"output":{}}"#));
+    assert_eq!(
+        message,
+        "step_submit takes no argument 'output'; did you mean outputs?"
+    );
+    let message = refused(&tool_with(
+        home,
+        &["step_submit", "--output-file", "-"],
+        &[],
+        Some("{}"),
+    ));
+    assert_eq!(
+        message,
+        "step_submit takes no argument 'output'; did you mean outputs?"
+    );
+    let message = refused(&tool_with(home, &["reply", "--message", "3"], &[], None));
+    assert!(message.contains("did you mean to_message?"), "{message}");
+    let message = refused(&tool(home, "nothing_like_it", "{}"));
+    assert_eq!(
+        message,
+        "unknown tool nothing_like_it (sluice tool lists them)"
+    );
+}
+
+/// `--field value` flags, `--field-file PATH` and `-` for stdin: a string field takes the
+/// text as is, any other value its JSON, and flags win over the JSON object.
+#[test]
+fn tool_takes_flags_files_and_stdin() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    project_with_steps(home);
+    let body = "it's \"quoted\" $HOME `ls` {not json}\n";
+    let said = ok(tool_with(
+        home,
+        &["say", "--project", "p", "--to", "q", "--body-file", "-"],
+        &[],
+        Some(body),
+    ));
+    assert_eq!(said["to"], "q");
+    let file = home.join("body.md");
+    std::fs::write(&file, "42").unwrap();
+    // The JSON object first, then flags over it: --to wins; a numeric text stays a string body.
+    ok(tool_with(
+        home,
+        &[
+            "say",
+            r#"{"project":"p","to":"r","body":"x"}"#,
+            "--to=q",
+            &format!("--body-file={}", file.display()),
+        ],
+        &[],
+        None,
+    ));
+    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"orchestrator","body":"which db?","owner":true}});
+    let question =
+        ok(run(home, &["tool", "rpc", &owner_ask.to_string()]))["data"]["id"].to_string();
+    let replied = ok(tool_with(
+        home,
+        &[
+            "reply",
+            "--project",
+            "p",
+            "--to_message",
+            &question,
+            "--body",
+            "owner",
+        ],
+        &[],
+        None,
+    ));
+    assert_eq!(replied["to"], "owner");
+    // A boolean's flag alone means true; the JSON object can come from stdin with `-`.
+    let inbox = ok(tool_with(
+        home,
+        &["messages", "-", "--owner"],
+        &[],
+        Some(r#"{"project":"p","view":"thread","thread":"owner"}"#),
+    ));
+    let bodies: Vec<&str> = inbox["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["body"].as_str().unwrap())
+        .collect();
+    assert_eq!(bodies, ["which db?", "owner"]);
+    let thread = ok(tool_with(
+        home,
+        &[
+            "messages",
+            "--project",
+            "p",
+            "--view",
+            "thread",
+            "--thread",
+            "step-q",
+        ],
+        &[],
+        None,
+    ));
+    let bodies: Vec<&str> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["body"].as_str().unwrap())
+        .collect();
+    assert_eq!(bodies, [body, "42"]);
+    // A field that takes only objects must be JSON; a flag must be the tool's.
+    let message = refused(&tool_with(
+        home,
+        &[
+            "step_set_output",
+            "--project",
+            "p",
+            "--step",
+            "q",
+            "--outputs",
+            "{ok",
+        ],
+        &[],
+        None,
+    ));
+    assert!(message.starts_with("--outputs: not JSON"), "{message}");
+    let message = refused(&tool_with(home, &["status", "--project"], &[], None));
+    assert_eq!(message, "--project needs a value");
+}
+
+/// In a run, a call that leaves out project, run or (step_submit, step_context) step gets
+/// the run's own; a value the call gives is never replaced.
+#[test]
+fn tool_defaults_project_run_and_step_inside_a_run() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    project_with_steps(home);
+    let other = ok(tool(home, "project_create", r#"{"name":"other"}"#));
+    let project = stdout(&tool(home, "status", r#"{"project":"p"}"#))["project"]["project_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let run_id = sluice_model::ids::RunId::new().to_string();
+    let env = [
+        ("SLUICE_PROJECT_ID", project.as_str()),
+        ("SLUICE_RUN_ID", run_id.as_str()),
+        ("SLUICE_STEP", "q"),
+    ];
+    // Outside a run nothing is filled in.
+    let message = refused(&tool_with(home, &["status"], &[], None));
+    assert!(message.contains("missing field `project`"), "{message}");
+    let status = ok(tool_with(home, &["status"], &env, None));
+    assert_eq!(status["project"]["name"], "p");
+    let status = ok(tool_with(
+        home,
+        &["status", "--project", "other"],
+        &env,
+        None,
+    ));
+    assert_eq!(status["project"]["project_id"], other["project_id"]);
+    let context = ok(tool_with(home, &["step_context"], &env, None));
+    assert_eq!(
+        (
+            context["project"]["project_id"].as_str(),
+            context["step"].as_str()
+        ),
+        (Some(project.as_str()), Some("q"))
+    );
+    let context = ok(tool_with(
+        home,
+        &["step_context", "--step", "r"],
+        &env,
+        None,
+    ));
+    assert_eq!(context["step"], "r");
+    // The run speaks as its step: this run is not one of the project's, so it is refused.
+    let out = tool_with(home, &["say", "--to", "owner", "--body", "hi"], &env, None);
+    assert_eq!(
+        stderr(&out)["error"],
+        "not_found",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // An explicit null run keeps the orchestrator's voice.
+    let said = ok(tool_with(
+        home,
+        &["say", r#"{"run":null}"#, "--to", "owner", "--body", "hi"],
+        &env,
+        None,
+    ));
+    assert_eq!(said["thread"], "owner");
+    // step_submit gets project, step and run: the coordinator sees this run's submission.
+    let out = tool_with(home, &["step_submit", "--outputs", "{}"], &env, None);
+    assert_eq!(
+        stderr(&out)["message"],
+        "stale submission",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Without SLUICE_RUN_ID it is not a run: no defaults.
+    let message = refused(&tool_with(
+        home,
+        &["step_submit", "--outputs", "{}"],
+        &env[..1],
+        None,
+    ));
+    assert!(message.contains("missing field"), "{message}");
+}
+
+/// `sluice tool <name> --help` lists the tool's fields from its schema.
+#[test]
+fn tool_help_lists_the_fields_with_types_and_descriptions() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    let help = tool_with(home, &["reply", "--help"], &[], None);
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert!(help.starts_with("usage: sluice tool reply "), "{help}");
+    assert!(help.contains("Reply to a message"), "{help}");
+    assert!(
+        help.contains(
+            "  --to-message <integer>  (required)\n      the id of the message replied to."
+        ),
+        "{help}"
+    );
+    assert!(help.contains("  --body <string>  (default \"\")"), "{help}");
+    assert!(help.contains("--<field>-file PATH"), "{help}");
+    let help = String::from_utf8(tool_with(home, &["messages", "-h"], &[], None).stdout).unwrap();
+    assert!(
+        help.contains("--view <inbox|questions|history|thread>"),
+        "{help}"
+    );
+    // A tool MCP does not offer still lists its fields.
+    let help =
+        String::from_utf8(tool_with(home, &["submission", "--help"], &[], None).stdout).unwrap();
+    assert!(help.contains("--run <string>"), "{help}");
+    let usage = String::from_utf8(tool_with(home, &["--help"], &[], None).stdout).unwrap();
+    assert!(usage.starts_with("usage: sluice tool"), "{usage}");
+    assert!(usage.contains("step_submit"), "{usage}");
+}
+
+/// step_wait and the log's statuses and recipients filters get the same treatment: flags
+/// (a word for a list of strings is a one-item list), decimal strings, suggestions and the
+/// run's project.
+#[test]
+fn step_wait_and_the_log_filters_take_flags_strings_and_run_defaults() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    project_with_steps(home);
+    post(home, "q", "to q", false);
+    post(home, "r", "to r", false);
+    // q is a pending core.external step: settled at once. The timeout is a JSON string.
+    let waited = ok(tool_with(
+        home,
+        &[
+            "step_wait",
+            "--project",
+            "p",
+            "--steps",
+            "q",
+            "--until",
+            "settled",
+            "--timeout",
+            "\"5\"",
+        ],
+        &[],
+        None,
+    ));
+    assert_eq!(waited["met"], true, "{waited}");
+    assert_eq!(waited["steps"]["q"], "pending", "{waited}");
+    let waited = ok(tool_with(
+        home,
+        &[
+            "step_wait",
+            "--project",
+            "p",
+            "--steps",
+            "q",
+            "--until",
+            r#"{"any_of":["failed"]}"#,
+            "--timeout",
+            "0",
+        ],
+        &[],
+        None,
+    ));
+    assert_eq!(waited["met"], false, "{waited}");
+    let message = refused(&tool_with(
+        home,
+        &["step_wait", "--project", "p", "--untill", "settled"],
+        &[],
+        None,
+    ));
+    assert_eq!(
+        message,
+        "step_wait takes no argument 'untill'; did you mean until?"
+    );
+    let message = refused(&tool_with(home, &["step_wiat"], &[], None));
+    assert_eq!(message, "unknown tool step_wiat; did you mean step_wait?");
+    // recipients narrows messages to those to q; a word is a one-item list.
+    let page = ok(tool_with(
+        home,
+        &[
+            "log_read",
+            "--project",
+            "p",
+            "--kinds",
+            "message",
+            "--recipients",
+            "q",
+            "--since-seq",
+            "0",
+            "--limit",
+            "50",
+        ],
+        &[],
+        None,
+    ));
+    let bodies: Vec<&str> = page["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["body"].as_str().unwrap())
+        .collect();
+    assert_eq!(bodies, ["to q"]);
+    let page = ok(tool_with(
+        home,
+        &[
+            "log_read",
+            "--project",
+            "p",
+            "--kinds",
+            "step.status",
+            "--statuses",
+            "failed",
+            "--since-seq",
+            "0",
+        ],
+        &[],
+        None,
+    ));
+    assert_eq!(page["records"], json!([]));
+    let message = refused(&tool_with(
+        home,
+        &["log_read", "--project", "p", "--status", "failed"],
+        &[],
+        None,
+    ));
+    assert_eq!(
+        message,
+        "log_read takes no argument 'status'; did you mean statuses?"
+    );
+    // In a run, step_wait waits in the run's project; its steps are always named.
+    let project = stdout(&tool(home, "status", r#"{"project":"p"}"#))["project"]["project_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let run_id = sluice_model::ids::RunId::new().to_string();
+    let env = [
+        ("SLUICE_PROJECT_ID", project.as_str()),
+        ("SLUICE_RUN_ID", run_id.as_str()),
+        ("SLUICE_STEP", "q"),
+    ];
+    let waited = ok(tool_with(
+        home,
+        &[
+            "step_wait",
+            "--steps",
+            "r",
+            "--until",
+            "settled",
+            "--timeout",
+            "0",
+        ],
+        &env,
+        None,
+    ));
+    assert_eq!(waited["met"], true, "{waited}");
+    let out = tool_with(
+        home,
+        &["step_wait", "--until", "settled", "--timeout", "0"],
+        &env,
+        None,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "no step is defaulted for step_wait"
+    );
+    assert_eq!(stderr(&out)["error"], "invalid");
+}

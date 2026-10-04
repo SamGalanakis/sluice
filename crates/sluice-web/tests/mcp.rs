@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use sluice_model::{
     commands::{CommandReply, CommandRequest, IconUpload, StepStatus},
     error::PublicError,
-    ids::Revision,
+    ids::{MessageId, RecordSeq, Revision},
 };
 use sluice_web::mcp::{self, CommandService, McpServer};
 use std::sync::{Arc, Mutex};
@@ -694,4 +694,124 @@ fn message_verbs_take_a_required_recipient_and_no_owner_over_mcp() {
         mcp::decode_tool("message_post", serde_json::Map::new(), None),
         Err(PublicError::BadRequest { .. })
     ));
+}
+
+/// A string of decimal digits is the integer wherever the command's schema wants one (message
+/// ids, seqs, limits, waits, revisions); a string field keeps its digits; anything else is
+/// refused naming the field.
+#[test]
+fn decimal_strings_are_taken_for_integer_arguments() {
+    let Ok(CommandRequest::Reply(reply)) = decode(
+        "reply",
+        json!({"project":"p","to_message":"24771","body":"x"}),
+    ) else {
+        panic!("reply")
+    };
+    assert_eq!(reply.to_message, MessageId(24771));
+    let Ok(CommandRequest::LogRead(read)) =
+        decode("log_read", json!({"since_seq":"5","limit":"10"}))
+    else {
+        panic!("log_read")
+    };
+    assert_eq!((read.since_seq, read.limit), (Some(RecordSeq(5)), 10));
+    let Ok(CommandRequest::FnCall(call)) = decode("fn_call", json!({"name":"x","wait":"60"}))
+    else {
+        panic!("fn_call")
+    };
+    assert_eq!(call.wait_seconds, Some(60));
+    let Ok(CommandRequest::Next(next)) = decode("next", json!({"since_seq":"7","timeout":"5000"}))
+    else {
+        panic!("next")
+    };
+    assert_eq!(
+        (next.since_seq, next.timeout_seconds),
+        (RecordSeq(7), mcp::WAIT_CAP)
+    );
+    let Ok(CommandRequest::StepAdd(add)) = decode(
+        "step_add",
+        json!({"project":"p","step":"s","spec":{},"rev":"3"}),
+    ) else {
+        panic!("step_add")
+    };
+    assert_eq!(add.edit.expected, Some(Revision(3)));
+    let Ok(CommandRequest::StepWait(wait)) = decode(
+        "step_wait",
+        json!({"project":"p","steps":"a","until":"settled","timeout":"30"}),
+    ) else {
+        panic!("step_wait")
+    };
+    assert_eq!(wait.timeout_seconds, 30);
+    let Ok(CommandRequest::LogWait(wait)) = decode(
+        "log_wait",
+        json!({"since_seq":"9","statuses":["failed"],"recipients":["orchestrator"],"timeout":"1"}),
+    ) else {
+        panic!("log_wait")
+    };
+    assert_eq!(
+        (wait.read.since_seq, wait.timeout_seconds),
+        (Some(RecordSeq(9)), 1)
+    );
+    let Ok(CommandRequest::Say(say)) = decode("say", json!({"project":"p","to":"12","body":"34"}))
+    else {
+        panic!("say")
+    };
+    assert_eq!((say.to.as_str(), say.body.as_str()), ("12", "34"));
+    for (name, args, field) in [
+        (
+            "reply",
+            json!({"project":"p","to_message":"abc"}),
+            "to_message",
+        ),
+        ("log_read", json!({"limit":"-1"}), "limit"),
+        ("fn_call", json!({"name":"x","wait":"1m"}), "wait"),
+    ] {
+        let Err(PublicError::BadRequest { message }) = decode(name, args) else {
+            panic!("{name}")
+        };
+        assert!(message.starts_with(field), "{name}: {message}");
+    }
+}
+
+/// An unknown tool or argument is named with the nearest valid names, from the schema.
+#[test]
+fn unknown_tools_and_arguments_suggest_the_nearest_names() {
+    let message = |name: &str, args: Value| match decode(name, args) {
+        Err(PublicError::BadRequest { message }) => message,
+        other => panic!("{name}: {other:?}"),
+    };
+    assert_eq!(
+        message("step_contxt", json!({})),
+        "unknown tool step_contxt; did you mean step_context?"
+    );
+    assert_eq!(
+        message("step_submit", json!({"output":{}})),
+        "step_submit takes no argument 'output'; did you mean outputs?"
+    );
+    assert_eq!(
+        message("reply", json!({"project":"p","message":1})),
+        "reply takes no argument 'message'; did you mean to_message?"
+    );
+    assert!(
+        message("status", json!({"project":"p","zzzzzz":1}))
+            .starts_with("status takes no argument 'zzzzzz'; its arguments are project, ")
+    );
+    assert_eq!(
+        message("step_wiat", json!({})),
+        "unknown tool step_wiat; did you mean step_wait?"
+    );
+    assert_eq!(
+        message(
+            "step_wait",
+            json!({"project":"p","steps":"a","untill":"settled"})
+        ),
+        "step_wait takes no argument 'untill'; did you mean until?"
+    );
+    assert_eq!(
+        message("log_read", json!({"status":["failed"]})),
+        "log_read takes no argument 'status'; did you mean statuses?"
+    );
+    assert_eq!(
+        message("nothing_like_it", json!({})),
+        "unknown tool nothing_like_it"
+    );
 }
