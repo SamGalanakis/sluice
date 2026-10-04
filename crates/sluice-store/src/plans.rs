@@ -1194,3 +1194,63 @@ pub fn read_result(c: &Connection, id: ResultId) -> Result<Option<StepResult>> {
         removed_at: serde_json::from_value(value["removed_at"].clone())?,
     }))
 }
+
+/// Complete authored edits plus retained manual/input/retry records in sequence order.
+/// Feed retention must not shorten the plan's edit history.
+pub fn history(
+    sql: &Connection,
+    project: ProjectId,
+    since_rev: Option<Revision>,
+) -> Result<Vec<sluice_model::events::Record>> {
+    let mut stmt = sql.prepare(
+        "SELECT seq,at,payload,payload_version FROM (
+         SELECT seq,at,payload,payload_version FROM records WHERE project_id=?1
+           AND kind IN ('plan.input','step.output','step.retry')
+         UNION ALL
+         SELECT seq,at,json_object('kind','plan.edit','rev',rev,'author',author,
+           'reason',reason,'ops',json(ops)),1 FROM plan_edits WHERE project_id=?1
+         ) WHERE (?2 IS NULL OR json_extract(payload,'$.rev')>?2) ORDER BY seq",
+    )?;
+    let rows = stmt.query_map(
+        params![
+            project.to_string(),
+            since_rev.map(|r| sql_counter(r.0)).transpose()?
+        ],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        },
+    )?;
+    rows.map(|row| {
+        let (seq, at, payload, version) = row?;
+        if version != crate::schema::RECORD_PAYLOAD_VERSION {
+            return Err(StoreError::InvalidDatabase(format!(
+                "unsupported record payload version {version}"
+            )));
+        }
+        Ok(sluice_model::events::Record {
+            seq: sluice_model::ids::RecordSeq(seq),
+            at,
+            project: Some(project),
+            event: serde_json::from_str(&payload)?,
+        })
+    })
+    .collect()
+}
+
+/// Compute and freeze an age cutoff for coordinator prune preparation.
+pub fn prune_eligible_age(
+    sql: &Connection,
+    context: &PlanContext,
+    older_than_seconds: u64,
+) -> Result<PruneEligibility> {
+    let seconds = i64::try_from(older_than_seconds).map_err(|_| invalid("prune age too large"))?;
+    let cutoff = time::OffsetDateTime::now_utc()
+        .checked_sub(time::Duration::seconds(seconds))
+        .ok_or_else(|| invalid("prune age too large"))?;
+    prune_eligible(sql, context, cutoff)
+}

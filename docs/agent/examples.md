@@ -1,0 +1,63 @@
+# Examples
+
+## One call
+`fn_call("git.head", {"path": "/repo"}, wait=30)` →
+`{"call": "20260926-120000-a1b2c3", "status": "succeeded", "outputs": {"branch": "main", "sha": "..."}}`.
+For long functions use `wait=0` and poll `call_status(call)`. Pass `project` to run it with that
+project's functions and `.env`. (`git.head` comes from the `git` pack — install it first, see
+`docs("fns")`. The `agent.*` functions below come from the `agents` pack.)
+
+## Parallel work, then a summary (fan-out, fan-in)
+`project_create("health", "Add health checks to the API and UI")`, then `plan_patch("health",
+1, ...)` replacing `/inputs`, `/outputs` and `/steps` to reach:
+```json
+{"inputs": {"repo": "string"},
+ "outputs": {"summary": {"source": "summary/result"}},
+ "steps": {
+   "api": {"run": "agent.devin", "outputs": {"branch": "string"},
+           "in": {"cwd": {"source": "repo"},
+                  "spec": {"default": "Add a /health endpoint on a new branch of your own"}}},
+   "ui":  {"run": "agent.devin", "outputs": {"branch": "string"},
+           "in": {"cwd": {"source": "repo"},
+                  "spec": {"default": "Show health status in the footer, on a new branch of your own"}}},
+   "summary": {"run": "agent.claude",
+           "in": {"cwd": {"source": "repo"}, "api": {"source": "api/branch"},
+                  "ui": {"source": "ui/branch"},
+                  "prompt": {"default": "Summarise the changes on these two branches for the changelog"}}}}}
+```
+`api` and `ui` run in parallel once `plan_set_input("health", "repo", "/repo")` is set; each
+submits the branch it worked on. `summary` waits for both (fan-in) and gets both branches as
+inputs. More on shaping plans like this: `docs("composing")`.
+
+## One step per item (scatter)
+```json
+{"inputs": {"repo": "string", "issues": "string[]"},
+ "outputs": {},
+ "steps": {"fix": {"run": "agent.run", "scatter": "spec",
+   "in": {"engine": {"default": "devin"}, "cwd": {"source": "repo"}, "spec": {"source": "issues"}}}}}
+```
+`plan_set_input("fixes", "repo", "/repo")` and `plan_set_input("fixes", "issues", [...])` start it.
+
+## A project function
+`fn_save({"name": "text.upper", "inputs": {"text": "string"}, "outputs": {"text": "string"}},
+main_py, project="fixes")`, then use `"run": "text.upper"` in that project's plan.
+
+## A step that failed
+1. `status("fixes")` shows `fix` failed with its error and stderr tail.
+2. Either fix the cause (e.g. `plan_patch` to change an input, with the current `rev`) and
+   `step_retry("fixes", steps=["fix"])`, or record the result yourself with
+   `step_set_output("fixes", "fix", {...})`.
+
+## A step that went stale
+You fixed an upstream by hand: `step_set_output("fixes", "fix", {...})` with a different result
+than before. Everything computed from the old result turns `stale` (`status` shows it; its
+readers wait). `step_retry` each stale step in order, or accept one as it is with
+`step_set_output`.
+
+## A human or orchestrator step
+Declare a plan input (e.g. `"approved": "boolean"`) and have later steps read it. They wait until
+someone calls `plan_set_input(project, "approved", true)`.
+
+## Something is off
+`verify("fixes")` → `{"ok": false, "problems": [{"where": "projects/fixes/fns/thread.post/fn.json",
+"message": "fn thread.post collides with the builtin fn at ..."}]}`: rename or remove that function.

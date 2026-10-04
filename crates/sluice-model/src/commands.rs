@@ -70,6 +70,10 @@ pub struct EditOptions {
     pub author: Option<String>,
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 fn default_start() -> bool {
     true
 }
@@ -632,6 +636,8 @@ pub enum CommandRequest {
     PlanView {
         project: ProjectSelector,
         format: PlanViewFormat,
+        #[serde(default, skip_serializing_if = "is_false")]
+        all: bool,
     },
     Verify {
         project: Option<ProjectSelector>,

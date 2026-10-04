@@ -249,6 +249,9 @@ impl<H: ExecutionHost> Coordinator<H> {
         {
             return Ok(reply);
         }
+        if let Some(reply) = crate::dispatch_ext::dispatch_ext(self, request.clone()).await? {
+            return Ok(reply);
+        }
         let catalog = self.inner.catalog.clone();
         match request {
             CommandRequest::FnList { project } => {
@@ -288,7 +291,8 @@ impl<H: ExecutionHost> Coordinator<H> {
                 Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"inputs":state.inputs,"steps":steps,"outputs":outputs,"resources":resources::status(sql,id,&ctx.plan)?.into_iter().map(|(n,r)|(n,json!({"capacity":r.resource.capacity,"held":r.held,"queued":r.queued,"error":r.resource.error}))).collect::<BTreeMap<_,_>>()}))
             }).await.map_err(|e|e.into_public(true)).and_then(data),
             command if project_mutation(&command) => {
-                let reply = self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, command)).await?;
+                let home = self.home().to_owned();
+                let reply = self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, &home, command)).await?;
                 if matches!(reply, CommandReply::Project(_)) { artifacts::recover(self.writer(), self.home()).await.map_err(|e|e.into_public(false))?; }
                 Ok(reply)
             },
@@ -552,6 +556,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         let encoded = serde_json::to_value(&command).map_err(storage)?;
         let refresh = matches!(command, CommandRequest::AcquireLease(_));
         let catalog = self.inner.catalog.clone();
+        let home = self.home().to_owned();
         let reply = self
             .callback_transaction(id.clone(), key, encoded, refresh, move |tx| {
                 let reply = match command.clone() {
@@ -612,7 +617,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                         if Some(messages_project(tx.sql(), &selector)?) != id.project {
                             return Err(conflict("tool project differs from run").into());
                         }
-                        mutate_project(tx, &catalog, command)?
+                        mutate_project(tx, &catalog, &home, command)?
                     }
                     _ => return Err(conflict("unsupported callback").into()),
                 };
@@ -1433,6 +1438,7 @@ fn project_mutation(command: &CommandRequest) -> bool {
 fn mutate_project(
     tx: &mut sluice_store::WriteTransaction<'_>,
     catalog: &Catalog,
+    home: &std::path::Path,
     command: CommandRequest,
 ) -> sluice_store::Result<CommandReply> {
     match command {
@@ -1516,7 +1522,7 @@ fn mutate_project(
                     snapshot: &snapshot,
                     state: &state,
                     signatures: &catalog.for_project(Some(id)),
-                    recipes: &Default::default(),
+                    recipes: &crate::dispatch_ext::load_recipes(home, id)?,
                     resources: &CachedResources::default(),
                     limits: &resource_limits(tx.sql(), id)?,
                     prune_eligible: None,

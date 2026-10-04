@@ -20,3 +20,6 @@ pub mod compose;
 pub mod publication;
 
 mod sidecar;
+
+pub mod dispatch_ext;
+pub mod docs;

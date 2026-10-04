@@ -10304,6 +10304,9 @@
                   },
                   "format": {
                     "$ref": "#/$defs/PlanViewFormat"
+                  },
+                  "all": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false,
@@ -19069,6 +19072,9 @@
               },
               "format": {
                 "$ref": "#/$defs/PlanViewFormat"
+              },
+              "all": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false,

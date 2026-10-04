@@ -580,28 +580,7 @@ pub fn docs(topic: Option<&str>) -> Result<Value, PublicError> {
     }
 }
 
-const DOCS: &[(&str, &str)] = &[
-    (
-        "composing",
-        include_str!("../../../src/sluice/docs/composing.md"),
-    ),
-    (
-        "examples",
-        include_str!("../../../src/sluice/docs/examples.md"),
-    ),
-    ("fns", include_str!("../../../src/sluice/docs/fns.md")),
-    ("inbox", include_str!("../../../src/sluice/docs/inbox.md")),
-    (
-        "instructions",
-        include_str!("../../../src/sluice/docs/instructions.md"),
-    ),
-    ("plans", include_str!("../../../src/sluice/docs/plans.md")),
-    (
-        "threads",
-        include_str!("../../../src/sluice/docs/threads.md"),
-    ),
-    ("types", include_str!("../../../src/sluice/docs/types.md")),
-];
+const DOCS: &[(&str, &str)] = sluice_runtime::docs::PAGES;
 
 const DESCRIPTIONS: &[(&str, &str)] = &[
     (
