@@ -1,7 +1,0 @@
-{
-  "name": "lash.on_main",
-  "doc": "Wait until a commit is on lash's origin/main: the given `sha`, or the newest commit whose message matches `grep` (e.g. a ticket id). Fetches every `interval` seconds (default 60) for up to `timeout` seconds (default: no limit). Returns that commit and when it was committed.",
-  "inputs": {"repo": "string", "sha": "string?", "grep": "string?", "interval": "int?",
-             "timeout": "int?"},
-  "outputs": {"sha": "string", "at": "string"}
-}

@@ -1,6 +1,0 @@
-{
-  "name": "lash.lane_capacity",
-  "doc": "Capacity of the `lane` resource: LANES (56) concurrent build-lane work steps while the 1-minute load is at most LOAD_MAX (48, 1.5x the 32 cores); 0 above it, so nothing new starts until load falls. Read-only studies request no lane and are never held.",
-  "inputs": {},
-  "outputs": {"capacity": "int"}
-}

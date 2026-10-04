@@ -1,5 +1,0 @@
-{
-  "name": "fixture.worker",
-  "inputs": {"value": "boolean"},
-  "outputs": {"value": "boolean"}
-}

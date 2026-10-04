@@ -26,15 +26,6 @@ impl Drop for Scratch {
                 .join("../../target/p5-05-evidence")
                 .join(self.0.file_name().unwrap());
             let _ = fs::create_dir_all(&evidence);
-            for name in [
-                "python-ready.json",
-                "python-cleanup.json",
-                "python-runner.log",
-            ] {
-                if self.0.join(name).is_file() {
-                    let _ = fs::copy(self.0.join(name), evidence.join(name));
-                }
-            }
             if let Ok(runs) = fs::read_dir(self.0.join("rust-home/runs")) {
                 for run in runs.flatten() {
                     let dst = evidence.join(run.file_name());

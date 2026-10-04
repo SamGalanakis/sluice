@@ -1,6 +1,0 @@
-{
-  "name": "linear.comment",
-  "doc": "Add a markdown comment to a Linear issue with the linear CLI.",
-  "inputs": {"issue": "string", "body": "string"},
-  "outputs": {"ok": "boolean"}
-}

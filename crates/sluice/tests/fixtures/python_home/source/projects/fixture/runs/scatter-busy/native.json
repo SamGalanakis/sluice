@@ -1,9 +1,0 @@
-{
-  "engine": "codex",
-  "session": "fake-session",
-  "cwd": "/tmp",
-  "head_before": "abcdef",
-  "pid": 999999,
-  "tmux": "never-import",
-  "control": "never-import"
-}

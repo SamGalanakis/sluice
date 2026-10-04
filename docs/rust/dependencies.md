@@ -21,20 +21,19 @@ specified published `0.25.15+spec-1.1.0` package.
 
 | Dependency | Exact pin | Defaults | Requested features | Consumers |
 |---|---|---|---|---|
-| tokio | `=1.53.2` | on | rt-multi-thread, macros, process, signal, net, io-util, sync, time | sluice-store, sluice-process, sluice-agents, sluice-runtime |
-| tokio-util | `=0.7.19` | on | rt, codec | sluice-process, sluice-agents, sluice-runtime |
-| rusqlite | `=0.40.2` | on | bundled, hooks, backup, limits | sluice-store |
-| axum | `=0.8.9` | on | query, json, http1, tokio | sluice-web |
+| tokio | `=1.53.2` | on | rt-multi-thread, macros, process, signal, net, io-util, sync, time | sluice-store, sluice-process, sluice-agents, sluice-runtime, sluice-web, sluice |
+| tokio-util | `=0.7.19` | on | rt, codec | sluice-process, sluice-agents, sluice-runtime, sluice-web |
+| rusqlite | `=0.40.2` | on | bundled, hooks, backup, limits | sluice-store, sluice-runtime, sluice-web, sluice |
+| axum | `=0.8.9` | on | query, json, http1, tokio | sluice-runtime tests, sluice-web |
 | tower | `=0.5.3` | on | util, limit, timeout | sluice-web |
 | tower-http | `=0.7.1` | on | trace, request-id, set-header, limit, compression-gzip | sluice-web |
-| rmcp | `=3.5.0` | off | server, macros, transport-io, transport-streamable-http-server | sluice-web |
-| serde | `=1.0.229` | on | derive | sluice-model, sluice-process, sluice-agents, sluice-runtime, sluice-web |
-| serde_json | `=1.0.151` | on | preserve_order | sluice-model, sluice-process, sluice-agents, sluice-runtime, sluice-web, sluice |
+| rmcp | `=3.5.0` | off | server, macros, transport-io, transport-streamable-http-server | sluice-web, sluice-web tests |
+| serde | `=1.0.229` | on | derive | sluice-model, sluice-process, sluice-agents, sluice-runtime, sluice-web, sluice |
+| serde_json | `=1.0.151` | on | preserve_order, float_roundtrip | sluice-model, sluice-store, sluice-process, sluice-agents, sluice-runtime, sluice-web, sluice |
 | schemars | `=1.2.2` | on | derive | sluice-model, sluice-web |
-| thiserror | `=2.0.21` | on | none | sluice-model |
-| anyhow | `=1.0.104` | on | none | sluice |
+| thiserror | `=2.0.21` | on | none | sluice-model, sluice-store |
 | clap | `=4.6.7` | on | derive | sluice |
-| indexmap | `=2.14.2` | on | serde | sluice-model |
+| indexmap | `=2.14.2` | on | serde | sluice-model, sluice-runtime |
 | sha2 | `=0.11.0` | on | none | sluice-model |
 | json-patch | `=4.2.0` | on | none | sluice-model |
 | jsonptr | `=0.8.2` | on | none | sluice-model |
@@ -43,20 +42,20 @@ specified published `0.25.15+spec-1.1.0` package.
 | datastar | `=0.4.1` | on | axum | sluice-web |
 | rustix | `=1.1.5` | on | fs, process, event, pty, termios, system | sluice-process |
 | procfs | `=0.18.0` | on | none | sluice-process |
-| fs4 | `=1.1.0` | on | none | sluice-process |
+| fs4 | `=1.1.0` | on | none | sluice-store, sluice-process, sluice-runtime |
 | notify | `=8.2.0` | on | none | sluice-runtime |
 | tokio-tungstenite | `=0.30.0` | off | handshake | sluice-agents |
 | futures-util | `=0.3.34` | on | sink | sluice-agents, sluice-web |
 | bytes | `=1.12.1` | on | none | sluice-process |
-| reqwest | `=0.13.5` | off | json, rustls | sluice-runtime |
+| reqwest | `=0.13.5` | off | json, rustls | sluice-runtime, sluice-web tests |
 | toml_edit | `=0.25.15` | on | parse, display, serde | sluice-agents |
 | tracing | `=0.1.44` | on | none | sluice-store, sluice-process, sluice-agents, sluice-runtime, sluice |
 | tracing-subscriber | `=0.3.23` | on | env-filter, fmt, json | sluice |
-| uuid | `=1.27.0` | on | v7, serde | sluice-model |
+| uuid | `=1.27.0` | on | v7, serde | sluice-model, sluice-web |
 | time | `=0.3.55` | on | formatting, parsing, serde | sluice-model, sluice-store |
 | url | `=2.5.8` | on | none | sluice-runtime, sluice-web |
-| base64 | `=0.23.1` | on | none | sluice-runtime |
-| tempfile | `=3.27.0` | on | none | sluice-model tests, sluice-process tests, sluice-web tests, sluice tests |
+| base64 | `=0.23.1` | on | none | sluice-store, sluice-runtime |
+| tempfile | `=3.27.0` | on | none | sluice-model tests, sluice-store tests, sluice-process tests, sluice-runtime tests, sluice-web tests, sluice tests |
 | proptest | `=1.11.0` | on | none | sluice-model tests |
 
 ## Native build requirements
@@ -76,7 +75,6 @@ a native library: many generate version/cfg/data or proc-macro support.
 
 | Package | Build script | Native `links` | Direct build dependencies | Resolved features |
 |---|---|---|---|---|
-| anyhow 1.0.104 | build.rs | none | none | default, std |
 | aws-lc-rs 1.18.1 | build.rs | aws_lc_rs_1_18_1_sys | none | aws-lc-sys, prebuilt-nasm |
 | aws-lc-sys 0.45.0 | main.rs | aws_lc_0_45_0 | cc 1.6.0, cmake 0.1.58, dunce 1.0.5, fs_extra 1.3.0, pkg-config 0.3.34 | prebuilt-nasm |
 | comrak 0.55.0 | build.rs | none | entities 1.0.1, phf_codegen 0.13.1 | none |
@@ -101,13 +99,13 @@ a native library: many generate version/cfg/data or proc-macro support.
 | quote 1.0.47 | build.rs | none | none | default, proc-macro |
 | ref-cast 1.0.27 | build.rs | none | none | none |
 | ring 0.17.14 | build.rs | ring_core_0_17_14_ | cc 1.6.0 | alloc, default, dev_urandom_fallback, wasm32_unknown_unknown_js |
-| rmcp 3.5.0 | build.rs | none | none | base64, macros, schemars, server, server-side-http, tower, transport-async-rw, transport-io, transport-streamable-http-server, transport-streamable-http-server-session, transport-worker, uuid |
-| rustix 1.1.5 | build.rs | none | none | alloc, default, event, fs, param, process, pty, std, system, termios, thread |
+| rmcp 3.5.0 | build.rs | none | none | __reqwest, base64, client, client-side-sse, macros, schemars, server, server-side-http, tower, transport-async-rw, transport-io, transport-streamable-http-client, transport-streamable-http-client-reqwest, transport-streamable-http-server, transport-streamable-http-server-session, transport-worker, uuid |
+| rustix 1.1.5 | build.rs | none | none | alloc, default, event, fs, param, process, pty, std, stdio, system, termios, thread |
 | rustls 0.23.45 | build.rs | none | none | aws-lc-rs, aws_lc_rs, std, tls12 |
 | rustversion 1.0.23 | build.rs | none | none | none |
 | serde 1.0.229 | build.rs | none | none | alloc, default, derive, rc, serde_derive, std |
 | serde_core 1.0.229 | build.rs | none | none | alloc, default, rc, result, std |
-| serde_json 1.0.151 | build.rs | none | none | alloc, default, indexmap, preserve_order, raw_value, std |
+| serde_json 1.0.151 | build.rs | none | none | alloc, default, float_roundtrip, indexmap, preserve_order, raw_value, std |
 | sqlite-wasm-rs 0.5.5 | build.rs | wsqlite3 | cc 1.6.0 | none |
 | thiserror 2.0.21 | build.rs | none | none | default, std |
 | valuable 0.1.1 | build.rs | none | none | alloc, std |
@@ -137,7 +135,6 @@ a native library: many generate version/cfg/data or proc-macro support.
 
 ```text
 sluice v0.1.0 (<workspace>/crates/sluice) []
-├── anyhow v1.0.104 [default,std]
 ├── clap v4.6.7 [color,default,derive,error-context,help,std,suggestions,usage]
 │   ├── clap_builder v4.6.7 [color,error-context,help,std,suggestions,usage]
 │   │   ├── anstream v1.0.0 [auto,default,wincon]
@@ -167,18 +164,84 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │           ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
 │           ├── quote v1.0.47 [default,proc-macro] (*)
 │           └── unicode-ident v1.0.26 []
-├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std]
+├── rusqlite v0.40.2 [backup,bundled,cache,default,ffi-sqlite-wasm-rs,hashlink,hooks,limits,modern_sqlite]
+│   ├── bitflags v2.13.2 [std]
+│   ├── fallible-iterator v0.3.0 [alloc,default]
+│   ├── fallible-streaming-iterator v0.1.9 []
+│   ├── hashlink v0.12.2 []
+│   │   └── hashbrown v0.17.1 [default-hasher]
+│   │       └── foldhash v0.2.0 []
+│   ├── libsqlite3-sys v0.38.2 [bundled,bundled_bindings,cc,default,min_sqlite_version_3_34_1,pkg-config,vcpkg]
+│   │   [build-dependencies]
+│   │   ├── cc v1.6.0 [parallel]
+│   │   │   ├── find-msvc-tools v0.1.14 []
+│   │   │   ├── jobserver v0.1.35 []
+│   │   │   │   ├── getrandom v0.4.3 [std]
+│   │   │   │   │   ├── cfg-if v1.0.5 []
+│   │   │   │   │   ├── libc v0.2.190 [default,std]
+│   │   │   │   │   └── r-efi v6.0.0 []
+│   │   │   │   └── libc v0.2.190 [default,std]
+│   │   │   ├── libc v0.2.190 [default,std]
+│   │   │   └── shlex v2.0.1 [default,std]
+│   │   ├── pkg-config v0.3.34 []
+│   │   └── vcpkg v0.2.15 []
+│   ├── smallvec v1.16.2 [const_generics,const_new]
+│   └── sqlite-wasm-rs v0.5.5 []
+│       ├── js-sys v0.3.106 [default,std,unsafe-eval]
+│       │   ├── cfg-if v1.0.5 []
+│       │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std]
+│       │   │   ├── futures-channel v0.3.34 [alloc,default,futures-sink,sink,std]
+│       │   │   │   ├── futures-core v0.3.34 [alloc,default,std]
+│       │   │   │   └── futures-sink v0.3.34 [alloc,default,std]
+│       │   │   ├── futures-core v0.3.34 [alloc,default,std]
+│       │   │   ├── futures-io v0.3.34 [std]
+│       │   │   ├── futures-macro v0.3.34 (proc-macro) []
+│       │   │   │   ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
+│       │   │   │   ├── quote v1.0.47 [default,proc-macro] (*)
+│       │   │   │   └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
+│       │   │   ├── futures-sink v0.3.34 [alloc,default,std]
+│       │   │   ├── futures-task v0.3.34 [alloc,std]
+│       │   │   ├── memchr v2.8.3 [alloc,default,std]
+│       │   │   ├── pin-project-lite v0.2.17 []
+│       │   │   └── slab v0.4.12 [std]
+│       │   └── wasm-bindgen v0.2.129 [default,std]
+│       │       ├── cfg-if v1.0.5 []
+│       │       ├── once_cell v1.21.4 [alloc,default,race,std]
+│       │       ├── wasm-bindgen-macro v0.2.129 (proc-macro) []
+│       │       │   ├── quote v1.0.47 [default,proc-macro] (*)
+│       │       │   └── wasm-bindgen-macro-support v0.2.129 []
+│       │       │       ├── bumpalo v3.20.3 [default]
+│       │       │       ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
+│       │       │       ├── quote v1.0.47 [default,proc-macro] (*)
+│       │       │       ├── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
+│       │       │       └── wasm-bindgen-shared v0.2.129 []
+│       │       │           └── unicode-ident v1.0.26 []
+│       │       └── wasm-bindgen-shared v0.2.129 [] (*)
+│       │       [build-dependencies]
+│       │       └── rustversion v1.0.23 (proc-macro) []
+│       ├── rsqlite-vfs v0.1.1 []
+│       │   ├── hashbrown v0.16.1 [default-hasher]
+│       │   │   └── foldhash v0.2.0 []
+│       │   └── thiserror v2.0.21 [default,std]
+│       │       └── thiserror-impl v2.0.21 (proc-macro) []
+│       │           ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
+│       │           ├── quote v1.0.47 [default,proc-macro] (*)
+│       │           └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
+│       └── wasm-bindgen v0.2.129 [default,std] (*)
+│       [build-dependencies]
+│       └── cc v1.6.0 [parallel] (*)
+├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std]
+│   ├── serde_core v1.0.229 [alloc,default,rc,result,std]
+│   │   └── serde_derive v1.0.229 (proc-macro) [default]
+│   │       ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
+│   │       ├── quote v1.0.47 [default,proc-macro] (*)
+│   │       └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
+│   └── serde_derive v1.0.229 (proc-macro) [default] (*)
+├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std]
 │   ├── indexmap v2.14.2 [default,serde,std]
 │   │   ├── equivalent v1.0.2 []
-│   │   ├── hashbrown v0.17.1 [default-hasher]
-│   │   │   └── foldhash v0.2.0 []
-│   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std]
-│   │   │   ├── serde_core v1.0.229 [alloc,default,rc,result,std]
-│   │   │   │   └── serde_derive v1.0.229 (proc-macro) [default]
-│   │   │   │       ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
-│   │   │   │       ├── quote v1.0.47 [default,proc-macro] (*)
-│   │   │   │       └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
-│   │   │   └── serde_derive v1.0.229 (proc-macro) [default] (*)
+│   │   ├── hashbrown v0.17.1 [default-hasher] (*)
+│   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
 │   │   └── serde_core v1.0.229 [alloc,default,rc,result,std] (*)
 │   ├── itoa v1.0.18 []
 │   ├── memchr v2.8.3 [alloc,default,std]
@@ -186,39 +249,21 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   ├── serde_core v1.0.229 [alloc,default,rc,result,std] (*)
 │   └── zmij v1.0.23 []
 ├── sluice-agents v0.1.0 (<workspace>/crates/sluice-agents) []
-│   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std]
-│   │   ├── futures-channel v0.3.34 [alloc,default,futures-sink,sink,std]
-│   │   │   ├── futures-core v0.3.34 [alloc,default,std]
-│   │   │   └── futures-sink v0.3.34 [alloc,default,std]
-│   │   ├── futures-core v0.3.34 [alloc,default,std]
-│   │   ├── futures-io v0.3.34 [std]
-│   │   ├── futures-macro v0.3.34 (proc-macro) []
-│   │   │   ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
-│   │   │   ├── quote v1.0.47 [default,proc-macro] (*)
-│   │   │   └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
-│   │   ├── futures-sink v0.3.34 [alloc,default,std]
-│   │   ├── futures-task v0.3.34 [alloc,std]
-│   │   ├── memchr v2.8.3 [alloc,default,std]
-│   │   ├── pin-project-lite v0.2.17 []
-│   │   └── slab v0.4.12 [std]
+│   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
 │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   ├── sluice-model v0.1.0 (<workspace>/crates/sluice-model) []
 │   │   ├── indexmap v2.14.2 [default,serde,std] (*)
 │   │   ├── json-patch v4.2.0 [default,diff]
 │   │   │   ├── jsonptr v0.7.1 [assign,default,delete,json,resolve,serde,std]
 │   │   │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   │   │   └── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   │   │   └── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   │   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
-│   │   │   └── thiserror v2.0.21 [default,std]
-│   │   │       └── thiserror-impl v2.0.21 (proc-macro) []
-│   │   │           ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
-│   │   │           ├── quote v1.0.47 [default,proc-macro] (*)
-│   │   │           └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
+│   │   │   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
+│   │   │   └── thiserror v2.0.21 [default,std] (*)
 │   │   ├── jsonptr v0.8.2 [assign,default,delete,json,resolve,serde,std]
 │   │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   │   └── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   │   └── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── schemars v1.2.2 [chrono04,default,derive,schemars_derive,std]
 │   │   │   ├── chrono v0.4.45 [alloc,clock,iana-time-zone,now,oldtime,serde,std,winapi,windows-link]
 │   │   │   │   ├── iana-time-zone v0.1.65 [fallback]
@@ -227,34 +272,8 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   │   ├── core-foundation-sys v0.8.7 [default,link]
 │   │   │   │   │   ├── iana-time-zone-haiku v0.1.2 []
 │   │   │   │   │   │   [build-dependencies]
-│   │   │   │   │   │   └── cc v1.6.0 [parallel]
-│   │   │   │   │   │       ├── find-msvc-tools v0.1.14 []
-│   │   │   │   │   │       ├── jobserver v0.1.35 []
-│   │   │   │   │   │       │   ├── getrandom v0.4.3 [std]
-│   │   │   │   │   │       │   │   ├── cfg-if v1.0.5 []
-│   │   │   │   │   │       │   │   ├── libc v0.2.190 [default,std]
-│   │   │   │   │   │       │   │   └── r-efi v6.0.0 []
-│   │   │   │   │   │       │   └── libc v0.2.190 [default,std]
-│   │   │   │   │   │       ├── libc v0.2.190 [default,std]
-│   │   │   │   │   │       └── shlex v2.0.1 [default,std]
-│   │   │   │   │   ├── js-sys v0.3.106 [default,std,unsafe-eval]
-│   │   │   │   │   │   ├── cfg-if v1.0.5 []
-│   │   │   │   │   │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
-│   │   │   │   │   │   └── wasm-bindgen v0.2.129 [default,std]
-│   │   │   │   │   │       ├── cfg-if v1.0.5 []
-│   │   │   │   │   │       ├── once_cell v1.21.4 [alloc,default,race,std]
-│   │   │   │   │   │       ├── wasm-bindgen-macro v0.2.129 (proc-macro) []
-│   │   │   │   │   │       │   ├── quote v1.0.47 [default,proc-macro] (*)
-│   │   │   │   │   │       │   └── wasm-bindgen-macro-support v0.2.129 []
-│   │   │   │   │   │       │       ├── bumpalo v3.20.3 [default]
-│   │   │   │   │   │       │       ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
-│   │   │   │   │   │       │       ├── quote v1.0.47 [default,proc-macro] (*)
-│   │   │   │   │   │       │       ├── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
-│   │   │   │   │   │       │       └── wasm-bindgen-shared v0.2.129 []
-│   │   │   │   │   │       │           └── unicode-ident v1.0.26 []
-│   │   │   │   │   │       └── wasm-bindgen-shared v0.2.129 [] (*)
-│   │   │   │   │   │       [build-dependencies]
-│   │   │   │   │   │       └── rustversion v1.0.23 (proc-macro) []
+│   │   │   │   │   │   └── cc v1.6.0 [parallel] (*)
+│   │   │   │   │   ├── js-sys v0.3.106 [default,std,unsafe-eval] (*)
 │   │   │   │   │   ├── log v0.4.34 [alloc,std]
 │   │   │   │   │   ├── wasm-bindgen v0.2.129 [default,std] (*)
 │   │   │   │   │   └── windows-core v0.62.2 [default,std]
@@ -294,9 +313,9 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   │   └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
 │   │   │   │   └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
 │   │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   │   └── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   │   └── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── sha2 v0.11.0 [alloc,default,oid]
 │   │   │   ├── cfg-if v1.0.5 []
 │   │   │   ├── cpufeatures v0.3.1 []
@@ -356,7 +375,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   │   ├── fastrand v2.5.0 [alloc,default,std]
 │   │   │   │   │   ├── getrandom v0.4.3 [std,sys_rng] (*)
 │   │   │   │   │   ├── once_cell v1.21.4 [alloc,default,race,std]
-│   │   │   │   │   ├── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,system,termios,thread]
+│   │   │   │   │   ├── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,stdio,system,termios,thread]
 │   │   │   │   │   │   ├── bitflags v2.13.2 [std]
 │   │   │   │   │   │   ├── errno v0.3.14 [default,std]
 │   │   │   │   │   │   │   ├── libc v0.2.190 [default,std]
@@ -373,7 +392,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   ├── sluice-process v0.1.0 (<workspace>/crates/sluice-process) []
 │   │   ├── bytes v1.12.1 [default,std]
 │   │   ├── fs4 v1.1.0 [default,sync]
-│   │   │   ├── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,system,termios,thread] (*)
+│   │   │   ├── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,stdio,system,termios,thread] (*)
 │   │   │   └── windows-sys v0.61.2 [Wdk,Wdk_Foundation,Wdk_Storage,Wdk_Storage_FileSystem,Wdk_System,Wdk_System_IO,Win32,Win32_Foundation,Win32_Networking,Win32_Networking_WinSock,Win32_Security,Win32_Security_Authentication,Win32_Security_Authentication_Identity,Win32_Security_Credentials,Win32_Security_Cryptography,Win32_Storage,Win32_Storage_FileSystem,Win32_System,Win32_System_Console,Win32_System_Diagnostics,Win32_System_Diagnostics_Debug,Win32_System_IO,Win32_System_LibraryLoader,Win32_System_Memory,Win32_System_Pipes,Win32_System_SystemInformation,Win32_System_SystemServices,Win32_System_Threading,Win32_System_WindowsProgramming,default] (*)
 │   │   ├── procfs v0.18.0 [chrono,default,flate2]
 │   │   │   ├── bitflags v2.13.2 [std]
@@ -388,12 +407,12 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   ├── bitflags v2.13.2 [std]
 │   │   │   │   ├── chrono v0.4.45 [alloc,clock,iana-time-zone,now,oldtime,serde,std,winapi,windows-link] (*)
 │   │   │   │   └── hex v0.4.3 [alloc,default,std]
-│   │   │   └── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,system,termios,thread] (*)
-│   │   ├── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,system,termios,thread] (*)
+│   │   │   └── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,stdio,system,termios,thread] (*)
+│   │   ├── rustix v1.1.5 [alloc,default,event,fs,param,process,pty,std,stdio,system,termios,thread] (*)
 │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── sluice-model v0.1.0 (<workspace>/crates/sluice-model) [] (*)
-│   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys]
+│   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys]
 │   │   │   ├── bytes v1.12.1 [default,std]
 │   │   │   ├── libc v0.2.190 [default,std]
 │   │   │   ├── mio v1.2.3 [default,log,net,os-ext,os-poll]
@@ -420,7 +439,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
 │   │   │   ├── libc v0.2.190 [default,std]
 │   │   │   ├── pin-project-lite v0.2.17 []
-│   │   │   └── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   └── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   └── tracing v0.1.44 [attributes,default,log,std,tracing-attributes]
 │   │       ├── log v0.4.34 [alloc,std]
 │   │       ├── pin-project-lite v0.2.17 []
@@ -432,11 +451,11 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │           └── once_cell v1.21.4 [alloc,default,race,std]
 │   │   [dev-dependencies]
 │   │   └── tempfile v3.27.0 [default,getrandom] (*)
-│   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   ├── tokio-tungstenite v0.30.0 [handshake]
 │   │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
 │   │   ├── log v0.4.34 [alloc,std]
-│   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   └── tungstenite v0.30.0 [data-encoding,handshake,http,httparse,sha1]
 │   │       ├── bytes v1.12.1 [default,std]
 │   │       ├── data-encoding v2.11.1 [alloc,default,std]
@@ -474,6 +493,8 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 ├── sluice-process v0.1.0 (<workspace>/crates/sluice-process) [] (*)
 ├── sluice-runtime v0.1.0 (<workspace>/crates/sluice-runtime) []
 │   ├── base64 v0.23.1 [alloc,default,simd-unsafe,std]
+│   ├── fs4 v1.1.0 [default,sync] (*)
+│   ├── indexmap v2.14.2 [default,serde,std] (*)
 │   ├── notify v8.2.0 [default,fsevent-sys,macos_fsevent]
 │   │   ├── bitflags v2.13.2 [std]
 │   │   ├── fsevent-sys v4.1.0 []
@@ -509,10 +530,11 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │           ├── windows_x86_64_gnu v0.53.1 []
 │   │           ├── windows_x86_64_gnullvm v0.53.1 []
 │   │           └── windows_x86_64_msvc v0.53.1 []
-│   ├── reqwest v0.13.5 [__rustls,__rustls-aws-lc-rs,__tls,json,rustls]
+│   ├── reqwest v0.13.5 [__rustls,__rustls-aws-lc-rs,__tls,json,rustls,stream]
 │   │   ├── base64 v0.23.1 [alloc,default,simd-unsafe,std]
 │   │   ├── bytes v1.12.1 [default,std]
 │   │   ├── futures-core v0.3.34 [alloc,default,std]
+│   │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
 │   │   ├── http v1.5.0 [default,std] (*)
 │   │   ├── http-body v1.1.0 []
 │   │   │   ├── bytes v1.12.1 [default,std]
@@ -535,7 +557,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   ├── itoa v1.0.18 []
 │   │   │   ├── pin-project-lite v0.2.17 []
 │   │   │   ├── smallvec v1.16.2 [const_generics,const_new]
-│   │   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   │   └── want v0.3.1 []
 │   │   │       └── try-lock v0.2.5 []
 │   │   ├── hyper-rustls v0.27.10 [aws-lc-rs,http1,tls12]
@@ -555,7 +577,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   ├── percent-encoding v2.3.2 [alloc,default,std]
 │   │   │   │   ├── pin-project-lite v0.2.17 []
 │   │   │   │   ├── socket2 v0.6.5 [all] (*)
-│   │   │   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   │   │   ├── tower-service v0.3.3 []
 │   │   │   │   └── tracing v0.1.44 [attributes,default,log,std,tracing-attributes] (*)
 │   │   │   ├── rustls v0.23.45 [aws-lc-rs,aws_lc_rs,std,tls12]
@@ -578,10 +600,10 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   │   └── untrusted v0.9.0 []
 │   │   │   │   ├── subtle v2.6.1 []
 │   │   │   │   └── zeroize v1.9.0 [alloc,default]
-│   │   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   │   ├── tokio-rustls v0.26.6 [aws-lc-rs,aws_lc_rs,tls12]
 │   │   │   │   ├── rustls v0.23.45 [aws-lc-rs,aws_lc_rs,std,tls12] (*)
-│   │   │   │   └── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   │   └── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   │   └── tower-service v0.3.3 []
 │   │   ├── hyper-util v0.1.21 [client,client-legacy,client-proxy,default,http1,server,service,tokio] (*)
 │   │   ├── js-sys v0.3.106 [default,std,unsafe-eval] (*)
@@ -645,17 +667,18 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   └── rustls-pki-types v1.15.1 [alloc,default,std] (*)
 │   │   │   └── windows-sys v0.61.2 [Wdk,Wdk_Foundation,Wdk_Storage,Wdk_Storage_FileSystem,Wdk_System,Wdk_System_IO,Win32,Win32_Foundation,Win32_Networking,Win32_Networking_WinSock,Win32_Security,Win32_Security_Authentication,Win32_Security_Authentication_Identity,Win32_Security_Credentials,Win32_Security_Cryptography,Win32_Storage,Win32_Storage_FileSystem,Win32_System,Win32_System_Console,Win32_System_Diagnostics,Win32_System_Diagnostics_Debug,Win32_System_IO,Win32_System_LibraryLoader,Win32_System_Memory,Win32_System_Pipes,Win32_System_SystemInformation,Win32_System_SystemServices,Win32_System_Threading,Win32_System_WindowsProgramming,default] (*)
 │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── sync_wrapper v1.0.2 [futures,futures-core]
 │   │   │   └── futures-core v0.3.34 [alloc,default,std]
-│   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   ├── tokio-rustls v0.26.6 [aws-lc-rs,aws_lc_rs,tls12] (*)
+│   │   ├── tokio-util v0.7.19 [codec,default,futures-util,io,libc,rt] (*)
 │   │   ├── tower v0.5.3 [futures-core,futures-util,limit,log,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,tokio-util,tracing,util]
 │   │   │   ├── futures-core v0.3.34 [alloc,default,std]
 │   │   │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
 │   │   │   ├── pin-project-lite v0.2.17 []
 │   │   │   ├── sync_wrapper v1.0.2 [futures,futures-core] (*)
-│   │   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   │   ├── tokio-util v0.7.19 [codec,default,futures-util,io,libc,rt] (*)
 │   │   │   ├── tower-layer v0.3.3 []
 │   │   │   ├── tower-service v0.3.3 []
@@ -745,72 +768,41 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   ├── wasm-bindgen v0.2.129 [default,std] (*)
 │   │   ├── wasm-bindgen-futures v0.4.79 [default,std]
 │   │   │   ├── js-sys v0.3.106 [default,std,unsafe-eval] (*)
-│   │   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   │   └── wasm-bindgen v0.2.129 [default,std] (*)
-│   │   └── web-sys v0.3.106 [AbortController,AbortSignal,Blob,BlobPropertyBag,EventTarget,File,FormData,Headers,ReadableStream,ReferrerPolicy,Request,RequestCache,RequestCredentials,RequestInit,RequestMode,Response,ServiceWorkerGlobalScope,Window,WorkerGlobalScope,default,std]
-│   │       ├── js-sys v0.3.106 [default,std,unsafe-eval] (*)
-│   │       └── wasm-bindgen v0.2.129 [default,std] (*)
+│   │   ├── wasm-streams v0.5.0 []
+│   │   │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
+│   │   │   ├── js-sys v0.3.106 [default,std,unsafe-eval] (*)
+│   │   │   ├── wasm-bindgen v0.2.129 [default,std] (*)
+│   │   │   ├── wasm-bindgen-futures v0.4.79 [default,std] (*)
+│   │   │   └── web-sys v0.3.106 [AbortController,AbortSignal,Blob,BlobPropertyBag,EventTarget,File,FormData,Headers,QueuingStrategy,ReadableByteStreamController,ReadableStream,ReadableStreamByobReader,ReadableStreamByobRequest,ReadableStreamDefaultController,ReadableStreamDefaultReader,ReadableStreamGetReaderOptions,ReadableStreamReadResult,ReadableStreamReaderMode,ReadableStreamType,ReadableWritablePair,ReferrerPolicy,Request,RequestCache,RequestCredentials,RequestInit,RequestMode,Response,ServiceWorkerGlobalScope,StreamPipeOptions,TransformStream,TransformStreamDefaultController,Transformer,UnderlyingSink,UnderlyingSource,Window,WorkerGlobalScope,WritableStream,WritableStreamDefaultController,WritableStreamDefaultWriter,default,std]
+│   │   │       ├── js-sys v0.3.106 [default,std,unsafe-eval] (*)
+│   │   │       └── wasm-bindgen v0.2.129 [default,std] (*)
+│   │   └── web-sys v0.3.106 [AbortController,AbortSignal,Blob,BlobPropertyBag,EventTarget,File,FormData,Headers,QueuingStrategy,ReadableByteStreamController,ReadableStream,ReadableStreamByobReader,ReadableStreamByobRequest,ReadableStreamDefaultController,ReadableStreamDefaultReader,ReadableStreamGetReaderOptions,ReadableStreamReadResult,ReadableStreamReaderMode,ReadableStreamType,ReadableWritablePair,ReferrerPolicy,Request,RequestCache,RequestCredentials,RequestInit,RequestMode,Response,ServiceWorkerGlobalScope,StreamPipeOptions,TransformStream,TransformStreamDefaultController,Transformer,UnderlyingSink,UnderlyingSource,Window,WorkerGlobalScope,WritableStream,WritableStreamDefaultController,WritableStreamDefaultWriter,default,std] (*)
+│   ├── rusqlite v0.40.2 [backup,bundled,cache,default,ffi-sqlite-wasm-rs,hashlink,hooks,limits,modern_sqlite] (*)
 │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   ├── sluice-agents v0.1.0 (<workspace>/crates/sluice-agents) [] (*)
 │   ├── sluice-model v0.1.0 (<workspace>/crates/sluice-model) [] (*)
 │   ├── sluice-process v0.1.0 (<workspace>/crates/sluice-process) [] (*)
 │   ├── sluice-store v0.1.0 (<workspace>/crates/sluice-store) []
-│   │   ├── rusqlite v0.40.2 [backup,bundled,cache,default,ffi-sqlite-wasm-rs,hashlink,hooks,limits,modern_sqlite]
-│   │   │   ├── bitflags v2.13.2 [std]
-│   │   │   ├── fallible-iterator v0.3.0 [alloc,default]
-│   │   │   ├── fallible-streaming-iterator v0.1.9 []
-│   │   │   ├── hashlink v0.12.2 []
-│   │   │   │   └── hashbrown v0.17.1 [default-hasher] (*)
-│   │   │   ├── libsqlite3-sys v0.38.2 [bundled,bundled_bindings,cc,default,min_sqlite_version_3_34_1,pkg-config,vcpkg]
-│   │   │   │   [build-dependencies]
-│   │   │   │   ├── cc v1.6.0 [parallel] (*)
-│   │   │   │   ├── pkg-config v0.3.34 []
-│   │   │   │   └── vcpkg v0.2.15 []
-│   │   │   ├── smallvec v1.16.2 [const_generics,const_new]
-│   │   │   └── sqlite-wasm-rs v0.5.5 []
-│   │   │       ├── js-sys v0.3.106 [default,std,unsafe-eval] (*)
-│   │   │       ├── rsqlite-vfs v0.1.1 []
-│   │   │       │   ├── hashbrown v0.16.1 [default-hasher]
-│   │   │       │   │   └── foldhash v0.2.0 []
-│   │   │       │   └── thiserror v2.0.21 [default,std] (*)
-│   │   │       └── wasm-bindgen v0.2.129 [default,std] (*)
-│   │   │       [build-dependencies]
-│   │   │       └── cc v1.6.0 [parallel] (*)
+│   │   ├── base64 v0.23.1 [alloc,default,simd-unsafe,std]
+│   │   ├── fs4 v1.1.0 [default,sync] (*)
+│   │   ├── rusqlite v0.40.2 [backup,bundled,cache,default,ffi-sqlite-wasm-rs,hashlink,hooks,limits,modern_sqlite] (*)
+│   │   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── sluice-model v0.1.0 (<workspace>/crates/sluice-model) [] (*)
+│   │   ├── thiserror v2.0.21 [default,std] (*)
 │   │   ├── time v0.3.55 [alloc,default,formatting,parsing,serde,std] (*)
-│   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   └── tracing v0.1.44 [attributes,default,log,std,tracing-attributes] (*)
-│   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   [dev-dependencies]
+│   │   ├── sluice-process v0.1.0 (<workspace>/crates/sluice-process) [] (*)
+│   │   └── tempfile v3.27.0 [default,getrandom] (*)
+│   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   ├── tokio-util v0.7.19 [codec,default,futures-util,io,libc,rt] (*)
 │   ├── tracing v0.1.44 [attributes,default,log,std,tracing-attributes] (*)
 │   └── url v2.5.8 [default,std] (*)
-├── sluice-store v0.1.0 (<workspace>/crates/sluice-store) [] (*)
-├── sluice-web v0.1.0 (<workspace>/crates/sluice-web) []
-│   ├── askama v0.16.1 [alloc,config,default,derive,std,urlencode]
-│   │   ├── askama_macros v0.16.1 (proc-macro) [alloc,config,std,urlencode]
-│   │   │   └── askama_derive v0.16.1 [alloc,config,external-sources,proc-macro,std,urlencode]
-│   │   │       ├── askama_parser v0.16.1 [config]
-│   │   │       │   ├── rustc-hash v2.1.3 [default,std]
-│   │   │       │   ├── serde v1.0.229 [default,std]
-│   │   │       │   │   └── serde_core v1.0.229 [result,std]
-│   │   │       │   │       └── serde_derive v1.0.229 (proc-macro) [default] (*)
-│   │   │       │   ├── serde_derive v1.0.229 (proc-macro) [default] (*)
-│   │   │       │   ├── unicode-ident v1.0.26 []
-│   │   │       │   └── winnow v1.0.4 [alloc,ascii,binary,default,parser,simd,std]
-│   │   │       │       └── memchr v2.8.3 [alloc,default,std]
-│   │   │       ├── basic-toml v0.1.10 []
-│   │   │       │   └── serde v1.0.229 [default,std] (*)
-│   │   │       ├── glob v0.3.4 []
-│   │   │       ├── memchr v2.8.3 [alloc,default,std]
-│   │   │       ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
-│   │   │       ├── quote v1.0.47 [default,proc-macro] (*)
-│   │   │       ├── rustc-hash v2.1.3 [default,std]
-│   │   │       ├── serde v1.0.229 [default,std] (*)
-│   │   │       ├── serde_derive v1.0.229 (proc-macro) [default] (*)
-│   │   │       └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
-│   │   ├── itoa v1.0.18 []
-│   │   └── percent-encoding v2.3.2 [alloc,default,std]
+│   [dev-dependencies]
 │   ├── axum v0.8.9 [default,form,http1,json,matched-path,original-uri,query,tokio,tower-log,tracing]
 │   │   ├── axum-core v0.5.6 [tracing]
 │   │   │   ├── bytes v1.12.1 [default,std]
@@ -839,7 +831,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   ├── percent-encoding v2.3.2 [alloc,default,std]
 │   │   ├── pin-project-lite v0.2.17 []
 │   │   ├── serde_core v1.0.229 [alloc,default,rc,result,std] (*)
-│   │   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── serde_path_to_error v0.1.20 []
 │   │   │   ├── itoa v1.0.18 []
 │   │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
@@ -850,11 +842,39 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   ├── ryu v1.0.23 []
 │   │   │   └── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
 │   │   ├── sync_wrapper v1.0.2 [futures,futures-core] (*)
-│   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   ├── tower v0.5.3 [futures-core,futures-util,limit,log,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,tokio-util,tracing,util] (*)
 │   │   ├── tower-layer v0.3.3 []
 │   │   ├── tower-service v0.3.3 []
 │   │   └── tracing v0.1.44 [attributes,default,log,std,tracing-attributes] (*)
+│   └── tempfile v3.27.0 [default,getrandom] (*)
+├── sluice-store v0.1.0 (<workspace>/crates/sluice-store) [] (*)
+├── sluice-web v0.1.0 (<workspace>/crates/sluice-web) []
+│   ├── askama v0.16.1 [alloc,config,default,derive,std,urlencode]
+│   │   ├── askama_macros v0.16.1 (proc-macro) [alloc,config,std,urlencode]
+│   │   │   └── askama_derive v0.16.1 [alloc,config,external-sources,proc-macro,std,urlencode]
+│   │   │       ├── askama_parser v0.16.1 [config]
+│   │   │       │   ├── rustc-hash v2.1.3 [default,std]
+│   │   │       │   ├── serde v1.0.229 [default,std]
+│   │   │       │   │   └── serde_core v1.0.229 [result,std]
+│   │   │       │   │       └── serde_derive v1.0.229 (proc-macro) [default] (*)
+│   │   │       │   ├── serde_derive v1.0.229 (proc-macro) [default] (*)
+│   │   │       │   ├── unicode-ident v1.0.26 []
+│   │   │       │   └── winnow v1.0.4 [alloc,ascii,binary,default,parser,simd,std]
+│   │   │       │       └── memchr v2.8.3 [alloc,default,std]
+│   │   │       ├── basic-toml v0.1.10 []
+│   │   │       │   └── serde v1.0.229 [default,std] (*)
+│   │   │       ├── glob v0.3.4 []
+│   │   │       ├── memchr v2.8.3 [alloc,default,std]
+│   │   │       ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
+│   │   │       ├── quote v1.0.47 [default,proc-macro] (*)
+│   │   │       ├── rustc-hash v2.1.3 [default,std]
+│   │   │       ├── serde v1.0.229 [default,std] (*)
+│   │   │       ├── serde_derive v1.0.229 (proc-macro) [default] (*)
+│   │   │       └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
+│   │   ├── itoa v1.0.18 []
+│   │   └── percent-encoding v2.3.2 [alloc,default,std]
+│   ├── axum v0.8.9 [default,form,http1,json,matched-path,original-uri,query,tokio,tower-log,tracing] (*)
 │   ├── comrak v0.55.0 []
 │   │   ├── caseless v0.2.2 []
 │   │   │   └── unicode-normalization v0.1.25 [default,std]
@@ -878,9 +898,9 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   ├── datastar v0.4.1 [axum]
 │   │   ├── axum v0.8.9 [default,form,http1,json,matched-path,original-uri,query,tokio,tower-log,tracing] (*)
 │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   └── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   └── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
-│   ├── rmcp v3.5.0 [base64,macros,schemars,server,server-side-http,tower,transport-async-rw,transport-io,transport-streamable-http-server,transport-streamable-http-server-session,transport-worker,uuid]
+│   ├── rmcp v3.5.0 [__reqwest,base64,client,client-side-sse,macros,schemars,server,server-side-http,tower,transport-async-rw,transport-io,transport-streamable-http-client,transport-streamable-http-client-reqwest,transport-streamable-http-server,transport-streamable-http-server-session,transport-worker,uuid]
 │   │   ├── async-trait v0.1.92 (proc-macro) []
 │   │   │   ├── proc-macro2 v1.0.107 [default,proc-macro] (*)
 │   │   │   ├── quote v1.0.47 [default,proc-macro] (*)
@@ -906,6 +926,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   ├── pastey v0.2.3 (proc-macro) []
 │   │   ├── pin-project-lite v0.2.17 []
 │   │   ├── rand v0.10.3 [alloc,default,std,std_rng,sys_rng,thread_rng] (*)
+│   │   ├── reqwest v0.13.5 [__rustls,__rustls-aws-lc-rs,__tls,json,rustls,stream] (*)
 │   │   ├── rmcp-macros v3.5.0 (proc-macro) []
 │   │   │   ├── darling v0.24.1 [default,suggestions]
 │   │   │   │   ├── darling_core v0.24.1 [strsim,suggestions]
@@ -929,7 +950,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   └── syn v3.0.6 [clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut] (*)
 │   │   ├── schemars v1.2.2 [chrono04,default,derive,schemars_derive,std] (*)
 │   │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   │   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   │   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   │   ├── sse-stream v0.2.6 [default]
 │   │   │   ├── bytes v1.12.1 [default,std]
 │   │   │   ├── futures-util v0.3.34 [alloc,async-await,async-await-macro,channel,default,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std] (*)
@@ -937,20 +958,24 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   ├── http-body-util v0.1.5 [default] (*)
 │   │   │   └── pin-project-lite v0.2.17 []
 │   │   ├── thiserror v2.0.21 [default,std] (*)
-│   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   ├── tokio-stream v0.1.19 [default,time]
 │   │   │   ├── futures-core v0.3.34 [alloc,default,std]
 │   │   │   ├── pin-project-lite v0.2.17 []
-│   │   │   └── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   └── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   ├── tokio-util v0.7.19 [codec,default,futures-util,io,libc,rt] (*)
 │   │   ├── tower-service v0.3.3 []
 │   │   ├── tracing v0.1.44 [attributes,default,log,std,tracing-attributes] (*)
 │   │   └── uuid v1.27.0 [default,rng,serde,std,v4,v7] (*)
+│   ├── rusqlite v0.40.2 [backup,bundled,cache,default,ffi-sqlite-wasm-rs,hashlink,hooks,limits,modern_sqlite] (*)
 │   ├── schemars v1.2.2 [chrono04,default,derive,schemars_derive,std] (*)
 │   ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-│   ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+│   ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
 │   ├── sluice-model v0.1.0 (<workspace>/crates/sluice-model) [] (*)
 │   ├── sluice-runtime v0.1.0 (<workspace>/crates/sluice-runtime) [] (*)
+│   ├── sluice-store v0.1.0 (<workspace>/crates/sluice-store) [] (*)
+│   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   ├── tokio-util v0.7.19 [codec,default,futures-util,io,libc,rt] (*)
 │   ├── tower v0.5.3 [futures-core,futures-util,limit,log,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,tokio-util,tracing,util] (*)
 │   ├── tower-http v0.7.1 [compression-gzip,default,futures-core,limit,request-id,set-header,tokio-util,trace,tracing,uuid]
 │   │   ├── async-compression v0.4.50 [gzip,tokio]
@@ -960,7 +985,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   │   │   └── memchr v2.8.3 [alloc,default,std]
 │   │   │   ├── compression-core v0.4.33 []
 │   │   │   ├── pin-project-lite v0.2.17 []
-│   │   │   └── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   │   └── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   ├── bitflags v2.13.2 [std]
 │   │   ├── bytes v1.12.1 [default,std]
 │   │   ├── futures-core v0.3.34 [alloc,default,std]
@@ -969,15 +994,19 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   │   ├── http-body-util v0.1.5 [default] (*)
 │   │   ├── percent-encoding v2.3.2 [alloc,default,std]
 │   │   ├── pin-project-lite v0.2.17 []
-│   │   ├── tokio v1.53.2 [bytes,default,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
+│   │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   │   ├── tokio-util v0.7.19 [codec,default,futures-util,io,libc,rt] (*)
 │   │   ├── tower-layer v0.3.3 []
 │   │   ├── tower-service v0.3.3 []
 │   │   ├── tracing v0.1.44 [attributes,default,log,std,tracing-attributes] (*)
 │   │   └── uuid v1.27.0 [default,rng,serde,std,v4,v7] (*)
-│   └── url v2.5.8 [default,std] (*)
+│   ├── url v2.5.8 [default,std] (*)
+│   └── uuid v1.27.0 [default,rng,serde,std,v4,v7] (*)
 │   [dev-dependencies]
+│   ├── reqwest v0.13.5 [__rustls,__rustls-aws-lc-rs,__tls,json,rustls,stream] (*)
+│   ├── rmcp v3.5.0 [__reqwest,base64,client,client-side-sse,macros,schemars,server,server-side-http,tower,transport-async-rw,transport-io,transport-streamable-http-client,transport-streamable-http-client-reqwest,transport-streamable-http-server,transport-streamable-http-server-session,transport-worker,uuid] (*)
 │   └── tempfile v3.27.0 [default,getrandom] (*)
+├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 ├── tracing v0.1.44 [attributes,default,log,std,tracing-attributes] (*)
 └── tracing-subscriber v0.3.23 [alloc,ansi,default,env-filter,fmt,json,matchers,nu-ansi-term,once_cell,registry,serde,serde_json,sharded-slab,smallvec,std,thread_local,tracing,tracing-log,tracing-serde]
     ├── matchers v0.2.0 []
@@ -988,7 +1017,7 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
     ├── once_cell v1.21.4 [alloc,default,race,std]
     ├── regex-automata v0.4.18 [alloc,dfa-build,dfa-search,nfa-thompson,std,syntax] (*)
     ├── serde v1.0.229 [alloc,default,derive,rc,serde_derive,std] (*)
-    ├── serde_json v1.0.151 [alloc,default,indexmap,preserve_order,raw_value,std] (*)
+    ├── serde_json v1.0.151 [alloc,default,float_roundtrip,indexmap,preserve_order,raw_value,std] (*)
     ├── sharded-slab v0.1.7 []
     │   └── lazy_static v1.5.1 []
     ├── smallvec v1.16.2 [const_generics,const_new]

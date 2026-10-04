@@ -7,9 +7,6 @@ use std::{path::PathBuf, process::ExitCode};
 fn dispatch() -> Result<(), PublicError> {
     sluice::install::early_dispatch()?;
     sluice::release::early_dispatch()?;
-    if let Some(result) = modes::import_python_home::early_dispatch() {
-        return result;
-    }
     let home = std::env::var_os("SLUICE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(OWNER_HOME));

@@ -1,8 +1,0 @@
-{
-  "name": "lash.main_red",
-  "doc": "Wait for the next completed run on lash main with databaseId above after_run. Defaults to the CI workflow (.github/workflows/ci.yml, named CI) and workflow_dispatch event, excluding push runs. Polls every interval seconds (default 120). Reports failed job names and IDs plus test identifiers extracted from failed job logs. Pass run_id as after_run to wait for the next run.",
-  "inputs": {"repo": "string", "workflow": "string?", "event": "string?", "after_run": "int?", "interval": "int?"},
-  "outputs": {"run_id": "int", "sha": "string", "red": "boolean", "conclusion": "string",
-              "url": "string", "failed_jobs": "string[]", "failed_job_ids": "int[]",
-              "failed_tests": "string[]"}
-}

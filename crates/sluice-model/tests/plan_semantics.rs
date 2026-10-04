@@ -446,6 +446,37 @@ fn valid_plan_preserves_order_scatter_navigation_and_typed_handoffs() {
 }
 
 #[test]
+fn open_fan_in_keeps_all_twenty_five_cross_unit_handoffs() {
+    let lanes: Vec<String> = (0..25).map(|n| format!("lane-{n}")).collect();
+    let mut steps = serde_json::Map::new();
+    for lane in &lanes {
+        steps.insert(
+            format!("{lane}-work"),
+            json!({"run":"test.open","tags":[format!("unit:{lane}"),"exit"],"in":{"attempts":{"default":[]}}}),
+        );
+    }
+    let sources: Vec<String> = lanes
+        .iter()
+        .map(|lane| format!("{lane}-work/results"))
+        .collect();
+    steps.insert(
+        "integrate-work".into(),
+        json!({"run":"test.open","tags":["unit:integrate","exit"],"in":{"lanes":{"source":sources}}}),
+    );
+    let plan = parse(json!({"steps": steps}));
+    assert_eq!(plan.units().len(), 26);
+    let step = &plan.steps()[&id("integrate-work")];
+    assert_eq!(step.bindings["lanes"].references().len(), 25);
+    assert!(step.bindings["lanes"].references().iter().all(|reference| {
+        reference
+            .parts()
+            .unwrap()
+            .step
+            .is_some_and(|source| plan.steps()[&source].unit_name() != step.unit_name())
+    }));
+}
+
+#[test]
 fn closed_shapes_and_value_errors_report_every_path() {
     let errors = Plan::parse(
         &map(

@@ -161,8 +161,8 @@ impl Codex {
             .ok_or_else(|| error(EngineErrorKind::Fatal, "Codex has no private home"))?;
         self.save_session_mapping(session, &home, &context.cwd)
     }
-    /// Persist the native mapping, including when importing an interrupted session.
-    pub fn save_session_mapping(
+    /// Persist the native mapping from a session to its private home and cwd.
+    fn save_session_mapping(
         &self,
         session: &str,
         home: &Path,

@@ -126,10 +126,6 @@ pub enum Mode {
     Docs {
         topic: Option<String>,
     },
-    ImportPythonHome {
-        src: PathBuf,
-        dst: PathBuf,
-    },
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
@@ -179,7 +175,6 @@ impl Mode {
             Self::Query { .. } => "query",
             Self::Backup { .. } => "backup",
             Self::Docs { .. } => "docs",
-            Self::ImportPythonHome { .. } => "import-python-home",
             Self::Agent { .. } => "agent hook",
         }
     }

@@ -1,5 +1,0 @@
-{
-  "name": "fixture.global",
-  "inputs": {"value": "string"},
-  "outputs": {"value": "string"}
-}

@@ -1,6 +1,0 @@
-{
-  "name": "linear.close",
-  "doc": "Close a Linear issue: comment the evidence (what landed, the sha, the gates) when given, then move it to `state` (default: the completed state).",
-  "inputs": {"issue": "string", "evidence": "string?", "state": "string?"},
-  "outputs": {"ok": "boolean"}
-}

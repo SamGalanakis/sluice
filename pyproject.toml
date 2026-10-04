@@ -1,14 +1,8 @@
 # Not a package. The fn helper lives in python/ and fns run with `uv run --no-project`.
-# This project only gives `uv run --project <repo> --no-sync python|pytest` an environment:
-# the import-python-home fixtures (legacy-python-fixture/) and the offline cutover-staging
-# tests, which crates/sluice-runtime/tests/staging.rs runs with pytest.
+# This project only gives the repository a standard-library Python environment (`.venv`):
+# the engine acceptance gates run crates/sluice/tests/acceptance/fixtures/private_config.py
+# with `.venv/bin/python`, and the client gate runs `uv run python`.
 [project]
 name = "sluice"
 version = "0.1.0"
 requires-python = ">=3.12"
-
-[dependency-groups]
-dev = [
-    "pytest>=8",
-    "pytest-xdist>=3.8.0",
-]

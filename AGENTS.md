@@ -5,10 +5,10 @@
   checkout's `target/`. Day to day, `cargo test --workspace` is the test command. For a bare
   cargo invocation pin the same directory with
   `cargo --config 'build.target-dir="<worktree>/target"' ...`; never set `CARGO_*` variables.
-- The only Python left is the fn helper (`python/`), custom-fn test fixtures,
-  `cutover-staging/` and `legacy-python-fixture/` (the schema-v6 home builder's imports, deleted
-  with `import-python-home`). Run `uv sync --locked` once per checkout: some Rust tests run
-  those fixtures and the staging pytest suite through `uv run --no-sync`.
+- The only Python left is the fn helper (`python/`), the custom-fn and engine test fixtures,
+  `tests/browser.py` and the dependency-inventory generator in `docs/rust/`. Run
+  `uv sync --locked` once per checkout: the engine acceptance gates use the repository's
+  `.venv/bin/python`.
 - `SPEC.md` is the contract, `DESIGN.md` the dashboard's look; change them with the code.
 - Commits: plain sentences, the user as sole author; no AI co-author trailers or mentions.
 - The live home runs a deployed release, never this working tree. After pushing to main,

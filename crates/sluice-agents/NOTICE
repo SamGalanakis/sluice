@@ -1,0 +1,28 @@
+sluice-agents
+
+Parts of this crate are ported from sluice's earlier Python agent pack, which adapted them from
+Omnigent (https://github.com/omnigent-ai/omnigent), licensed under the Apache License, Version
+2.0 (http://www.apache.org/licenses/LICENSE-2.0). The license text is in LICENSE-APACHE in this
+crate. The adapted sections are:
+
+- src/engines/claude/protocol.rs and src/engines/claude/state.rs: reading Claude Code's input
+  box off the pane and delivering a message into it through tmux with paste and submit checks
+  (omnigent/harnesses/claude_native/bridge.py: _is_box_rule, _composer_row,
+  _occupying_surface, _claude_prompt_rendered, _history_search_footer_shown,
+  _draft_in_input_box, inject_user_message, _paste_and_submit, _verify_submit_accepted,
+  _restore_occupied_input, _submit_needle, _paste_payload_bytes);
+- src/engines/devin/protocol.rs, strip_jsonc: parsing comments in the owner's Devin JSONC
+  config (omnigent/harnesses/devin_native/bridge.py: _strip_jsonc_comments).
+
+The Codex adapter's app-server and remote TUI arrangement follows Omnigent's
+omnigent/harnesses/codex_native design. Its WebSocket and JSON-RPC code is specific to sluice.
+The Devin adapter's TUI, per-run config and lifecycle-hook arrangement follows Omnigent's
+omnigent/harnesses/devin_native design. Its hook recording and turn state code is specific to
+sluice.
+
+Omnigent's NOTICE reads:
+
+  Copyright (2026) Databricks, Inc.
+
+  This Software includes software developed at Databricks (https://www.databricks.com/) and
+  its use is subject to the included LICENSE file.

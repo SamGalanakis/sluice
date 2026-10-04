@@ -5,7 +5,6 @@ use std::{future::Future, path::PathBuf, pin::Pin};
 pub mod agent;
 pub mod coordinator;
 pub mod guardian;
-pub mod import_python_home;
 pub mod install;
 pub mod payload_exec;
 pub mod scheduler;
@@ -29,7 +28,6 @@ register_modes! {
     "loop" => scheduler::run,
     "guardian" => guardian::run,
     "agent hook" => agent::run,
-    "import-python-home" => import_python_home::run,
     // p6-01's public commands live in the crate modules that own them.
     "tool" => crate::cli::run,
     "next" => crate::cli::run,

@@ -1,1 +1,0 @@
-VALUE = 'archived project helper'
