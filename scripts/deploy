@@ -69,6 +69,37 @@ def start_process(arguments, name):
     child = subprocess.Popen([str(program), *arguments], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
     log.close()
     return dict(pid=child.pid, start=start_time(child.pid), command=arguments, release=str(release))
+def alive(record):
+    if fixture: return start_time(record['pid']) == record['start']
+    return subprocess.run(['systemctl', '--user', 'is-active', '--quiet', record['unit']]).returncode == 0
+def wait_for_coordinator(record):
+    # The socket exists before the coordinator serves: it adopts the runs it finds
+    # first and queues requests meanwhile. Ready means it answered a cheap read.
+    deadline = time.monotonic() + READY_SECONDS
+    while True:
+        if not alive(record): raise RuntimeError('maintenance coordinator exited during startup')
+        if (home / 'coordinator.sock').exists():
+            try:
+                answered = subprocess.run([str(program), 'tool', 'rpc', '{"command":"projects_list"}'], env=env, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=max(1, deadline - time.monotonic())).returncode == 0
+            except subprocess.TimeoutExpired:
+                answered = False
+            if answered: return
+        if time.monotonic() > deadline: raise RuntimeError('maintenance coordinator did not answer within %d s' % READY_SECONDS)
+        time.sleep(.2)
+def unfence():
+    # The release handshake gives the coordinator a bounded time to answer. If it
+    # is still busy that deadline elapses with the installation fenced: ask again.
+    for attempt in range(UNFENCE_ATTEMPTS):
+        result = subprocess.run([str(program), 'install', 'unfence'], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if result.returncode == 0: return json.loads(result.stdout)
+        if 'deadline has elapsed' not in result.stderr or attempt + 1 == UNFENCE_ATTEMPTS: break
+        print('unfence: coordinator busy, retrying', file=sys.stderr)
+        time.sleep(5)
+    sys.stderr.write(result.stderr)
+    raise RuntimeError('install unfence failed')
+READY_SECONDS = int(os.environ.get('SLUICE_DEPLOY_READY_SECONDS', '600'))
+UNFENCE_ATTEMPTS = 6
 # An exclusive fence waits only for shared admission/activation decisions. It
 # does not wait for guardians. Errors after this point deliberately stay fenced.
 control('fence', 'deploy ' + sha)
@@ -107,15 +138,7 @@ try:
             services[name] = dict(unit=unit + '.service', release=str(release))
         publish('services.json', services)
         if name == 'coordinator':
-            import socket
-            deadline = time.monotonic() + 15
-            while True:
-                try:
-                    with socket.socket(socket.AF_UNIX) as sock: sock.connect(str(home / 'coordinator.sock'))
-                    break
-                except OSError:
-                    if time.monotonic() > deadline: raise RuntimeError('maintenance coordinator did not become ready')
-                    time.sleep(.05)
+            wait_for_coordinator(services[name])
     time.sleep(.2)
     if fixture:
         for record in services.values():
@@ -123,7 +146,7 @@ try:
     else:
         for record in services.values(): subprocess.run(['systemctl', '--user', 'is-active', '--quiet', record['unit']], check=True)
     subprocess.run([str(program), 'doctor', '--json'], env=env, check=True, stdout=sys.stderr)
-    control('unfence')
+    unfence()
 except Exception:
     print('Deploy failed; installation remains fenced. Inspect services.json before recovery.', file=sys.stderr)
     raise
