@@ -47,11 +47,11 @@ temporary = None
 if args.ref in ('HEAD', branch):
     work = worktree
 else:
-    # A local branch is checked out (git refuses one checked out elsewhere); anything else detached.
-    local = subprocess.run(['git', '-C', str(worktree), 'show-ref', '--verify', '--quiet', 'refs/heads/' + args.ref]).returncode == 0
+    # Detached, so a branch already checked out in another worktree (a worker's) can ship too;
+    # what ships is the rebased commit pushed to main, not the branch ref.
     temporary = pathlib.Path(tempfile.mkdtemp(prefix='ship-'))
     work = temporary / 'tree'
-    command = ['worktree', 'add', '--quiet', *([] if local else ['--detach']), str(work), args.ref]
+    command = ['worktree', 'add', '--quiet', '--detach', str(work), args.ref]
     say('$ git ' + ' '.join(command))
     if dry: work = worktree
     else: git(*command, cwd=worktree)
