@@ -1,6 +1,4 @@
 //! Real uv, isolated scratch PEP 723 bundles, and minimal framed callback servers.
-#[path = "../../../tests/support/executable.rs"]
-mod executable;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandRequest,
