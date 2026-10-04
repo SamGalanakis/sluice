@@ -14,7 +14,41 @@ pub struct ProjectIdentity {
     pub name: ProjectName,
 }
 
-/// Strings preserve the text icon contract; images cross the broker as bounded data.
+/// One live project as `projects_list` reports it. `settings_rev` is what
+/// `project_update` and `project_delete` take as `expected_settings_rev`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectSummary {
+    pub project_id: ProjectId,
+    pub name: ProjectName,
+    pub description: String,
+    pub rev: Revision,
+    pub settings_rev: Revision,
+    /// Step status to the number of the plan's steps in it.
+    pub counts: std::collections::BTreeMap<String, u64>,
+    pub paused: bool,
+    pub archived: bool,
+    /// Each declared resource: `{"capacity": n}` or `{"capacity_fn": fn}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<JsonMap>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<ProjectIconSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProjectIconSummary {
+    Image {
+        #[serde(rename = "type")]
+        media_type: String,
+    },
+    Text {
+        text: String,
+    },
+}
+
+/// A string is a text icon, or an absolute (or `~/`) path to an image file that the
+/// coordinator reads once; images otherwise cross the broker as bounded data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum IconUpload {
@@ -152,6 +186,10 @@ pub struct StepRemove {
 pub struct StepPause {
     pub project: ProjectSelector,
     pub selection: StepSelection,
+    /// Also every step downstream of the selection: those reading from or gated on
+    /// a selected step, transitively.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub subtree: bool,
     pub paused: bool,
     pub edit: EditOptions,
 }
@@ -432,8 +470,14 @@ pub struct EditPreview {
 #[serde(deny_unknown_fields)]
 pub struct EditResult {
     pub project: ProjectIdentity,
+    /// The new revision, or the current one when the edit changed nothing (its
+    /// `preview.ops` is then empty and nothing was committed).
     pub rev: Revision,
     pub preview: EditPreview,
+    /// The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,
+    /// `step_pause`'s selection (subtree included), `plan_prune`'s removed steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<StepId>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -445,13 +489,37 @@ pub struct RetryResult {
     pub stopped_at: Vec<StepId>,
 }
 
+/// `step_set_input`'s reply: the edit result plus what happened to each selected step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct InputEditResult {
+    #[serde(flatten)]
     pub edit: EditResult,
     pub changed: Vec<StepId>,
+    /// Selected but running, so left unchanged.
     pub running: Vec<StepId>,
+    /// Selected but lacking an input.
     pub unsupported: Vec<UnsupportedInput>,
+}
+
+/// `plan_prune`'s reply: the edit result (its `steps` are the removed steps), the
+/// removed units, and each candidate unit kept with what holds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PruneResult {
+    #[serde(flatten)]
+    pub edit: EditResult,
+    pub units: Vec<UnitName>,
+    pub kept: Vec<KeptUnit>,
+}
+
+/// A unit prune kept: held by a step outside the pruned set, or by a plan output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KeptUnit {
+    pub unit: UnitName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<StepId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -641,7 +709,7 @@ pub enum CommandRequest {
     ProjectCreate {
         name: ProjectName,
         description: String,
-        icon: Option<String>,
+        icon: Option<IconUpload>,
         resources: JsonMap,
         author: Option<String>,
     },
@@ -722,7 +790,7 @@ pub enum PlanViewFormat {
 #[non_exhaustive]
 pub enum CommandReply {
     Project(ProjectIdentity),
-    Projects(Vec<ProjectIdentity>),
+    Projects(Vec<ProjectSummary>),
     Deleted {
         project_id: ProjectId,
         name: ProjectName,
@@ -732,6 +800,7 @@ pub enum CommandReply {
     Preview(EditPreview),
     Retry(RetryResult),
     Inputs(InputEditResult),
+    Pruned(PruneResult),
     Posted {
         id: MessageId,
     },

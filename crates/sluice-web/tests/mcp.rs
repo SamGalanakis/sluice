@@ -193,6 +193,27 @@ fn flat_edits_decode_to_the_folded_commands() {
         .is_err()
     );
     assert!(decode("plan_patch", json!({"project":"p"})).is_err());
+    for (args, subtree) in [
+        (
+            json!({"project":"p","steps":"one","subtree":true,"reason":"hold"}),
+            true,
+        ),
+        (json!({"project":"p","steps":"one"}), false),
+    ] {
+        let CommandRequest::StepPause(request) = decode("step_pause", args).unwrap() else {
+            panic!()
+        };
+        assert_eq!(request.subtree, subtree);
+        assert!(request.paused);
+    }
+    let CommandRequest::ProjectCreate { icon, .. } = decode(
+        "project_create",
+        json!({"name":"p","icon":"/srv/icons/p.svg"}),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(icon, Some(IconUpload::Text("/srv/icons/p.svg".into())));
 }
 #[test]
 fn waits_are_capped_and_negative_waits_are_refused() {

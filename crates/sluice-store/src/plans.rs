@@ -4,7 +4,7 @@ use crate::{Result, StoreError, WriteTransaction};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{EditResult, ProjectIdentity, RetryResult, StepSelection, StepStatus},
+    commands::{EditPreview, EditResult, ProjectIdentity, RetryResult, StepSelection, StepStatus},
     edit::PreparedEdit,
     error::PublicError,
     events::Event,
@@ -394,6 +394,18 @@ pub fn apply_edit(
     }
     let current: Value = serde_json::from_str(&doc)?;
     let candidate = serde_json::to_value(edit.plan.document())?;
+    // An edit that changes nothing commits nothing: no rev, record or history row.
+    if sluice_model::hash::data_equal(&current, &candidate)? {
+        return Ok(EditResult {
+            project: project_identity,
+            rev: Revision(rev as u64),
+            preview: EditPreview {
+                ops: vec![],
+                ..edit.preview
+            },
+            steps: edit.steps,
+        });
+    }
     let state = read_state(tx.sql(), project)?;
     if let Some(prune) = &edit.prune {
         // Retry and manual output writes can change eligibility without a plan edit.
@@ -464,6 +476,7 @@ pub fn apply_edit(
             project: project_identity,
             rev: Revision(rev as u64),
             preview: edit.preview,
+            steps: edit.steps,
         });
     }
     let new_rev = Revision(
@@ -516,6 +529,7 @@ pub fn apply_edit(
         project: project_identity,
         rev: new_rev,
         preview: edit.preview,
+        steps: edit.steps,
     })
 }
 

@@ -398,6 +398,22 @@ pub fn evaluate_step(plan: &Plan, state: &StateSnapshot, step: &Step) -> GateDec
     if !holds.is_empty() {
         return GateDecision::Wait(holds);
     }
+    evaluate_inputs(plan, state, step)
+}
+/// Why a pending step has not started, resources aside: its own pause, its project's,
+/// then every handoff and gate entry still waiting, in order.
+pub fn wait_reasons(plan: &Plan, state: &StateSnapshot, step: &Step) -> Vec<String> {
+    let mut reasons: Vec<String> = step.paused.waiting_reason().into_iter().collect();
+    if state.paused.is_paused() {
+        reasons.push("project paused".into());
+    }
+    if let GateDecision::Wait(waiting) = evaluate_inputs(plan, state, step) {
+        reasons.extend(waiting);
+    }
+    reasons
+}
+/// Handoffs and gates only, with no holds applied.
+fn evaluate_inputs(plan: &Plan, state: &StateSnapshot, step: &Step) -> GateDecision {
     let handoffs =
         step.bindings.values().flat_map(Binding::references).map(
             |reference| match resolve_reference(plan, state, reference) {

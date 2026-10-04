@@ -403,12 +403,13 @@ async fn edit_extension<H: ExecutionHost>(
         .writer()
         .write(RetrySafety::NonIdempotent, move |tx| {
             crate::drain::ensure_edit(tx)?;
+            let prune = prepared.prune.clone();
             let result = if let Some(evidence) = evidence {
                 plans::apply_prune(tx, id, prepared, &evidence)?
             } else {
                 plans::apply_edit(tx, id, prepared)?
             };
-            Ok(CommandReply::Edit(result))
+            Ok(crate::coordinator::edit_reply(result, None, prune))
         })
         .await
 }

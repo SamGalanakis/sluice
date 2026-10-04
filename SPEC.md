@@ -489,7 +489,9 @@ capacity; no cycles. Errors are a list with paths
 Every edit tool produces RFC 6902 ops against the plan document, validates the result, and
 commits the new plan, a `plan_edits` row and a `plan.edit` record `{rev, author, reason, ops}`
 in one transaction. The reply is the **edit result** `{project: {project_id, name}, rev,
-preview}`, `preview` being `{ops, would_start, would_queue, would_skip, would_stale, errors}`.
+preview, steps?}`, `preview` being `{ops, would_start, would_queue, would_skip, would_stale,
+errors}` and `steps` the steps the edit was about (`unit_add`'s new steps, `unit_tag`'s unit,
+`step_pause`'s selection, `plan_prune`'s removed steps).
 With `dry_run: true` the reply is the preview alone and nothing is written. The simulation uses
 cached capacities and never runs fns; `core.external` steps never appear in `would_start`.
 
@@ -498,8 +500,10 @@ cached capacities and never runs fns; `core.external` steps never appear in `wou
 - A running step may change only `paused` and `tags`.
 - `start: false` (`plan_patch`, `step_add`, `unit_add`) adds steps with `"paused": true`
   unless a step sets `paused` itself.
-- An edit that changes nothing still commits a new rev, except `step_set_input`, which refuses
-  it (`bad_request`).
+- An edit that changes nothing (an edge already there, tags or pauses as they are, a prune
+  that removes nothing, a patch that yields the same plan) commits nothing: no rev, record or
+  history row. Its reply is the edit result with the current `rev` and empty `preview.ops`.
+  `step_set_input` refuses one instead (`bad_request`).
 - Removing a finished step keeps its result as an `outcomes` row; a pending step leaves none.
 
 ## 7. Running
@@ -582,7 +586,9 @@ the same totals as `needs`. A run that ends releases its leases. Grants and rele
   `plan.input` record; readers that already ran go stale when it changes.
 - `step_set_input(project, steps?, tags?, inputs)`: binds the named inputs of the selected
   steps to `{"default": value}` in one edit, skipping running steps and steps lacking an input;
-  a succeeded step whose binding changes goes stale.
+  a succeeded step whose binding changes goes stale. The reply is the edit result plus
+  `changed` (the steps changed), `running` (selected, running, left alone) and `unsupported`
+  (`[{step, inputs}]`, selected but lacking those inputs).
 - `step_set_output(project, step, outputs, force?, reason?)`: marks a non-running step
   `succeeded` with `manual: true`, outputs checked against the step's outputs (arrays for a
   scattered step). Without `force`, refused (`invalid`, "step gates or inputs are not ready")
@@ -806,16 +812,20 @@ unknown step `not_found`.
 | tool | arguments | result |
 |---|---|---|
 | `docs` | `topic?` | the topic's markdown, or the index |
-| `projects_list` | | `[{project_id, name}]` (live projects, by name) |
-| `project_create` | `name`, `description=""`, `icon?` (text, ≤ 16 characters), `resources={}`, `author?` | `{project_id, name}` |
-| `project_update` | `project`, `new_name?`, `description?`, `icon?` (text, or `{media_type, bytes_base64}`, ≤ 256 KiB; `""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
-| `project_delete` | `project`, `confirm_name`, `expected_settings_rev`, `author?` | `{project_id, name, deleted}`; the project must be archived, and nothing of it live |
+| `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, resources?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
+| `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `author?` | `{project_id, name}` |
+| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
+| `project_delete` | `project`, `confirm_name`, `expected_settings_rev` (from `projects_list`), `author?` | `{project_id, name, deleted}`; the project must be archived, and nothing of it live |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, submits?, icon?, open?}]` |
 | `fn_get` | `name`, `project?` | the fn.json plus `scope` and `path` (null for a builtin) |
 | `fn_save` | `fn`, `main_py`, `project?` | `{name, scope, path, generation}` |
 | `fn_call` | `name`, `inputs={}`, `project?`, `wait?` (seconds, default 0), `direct=false`, `author?` | `{call, project_id, status, inputs, outputs, error, direct}`; `direct` runs it now through a guardian and ignores `wait` |
 | `call_status` | `call`, `project?` | as `fn_call` |
 | `recipe_list` | `project` | `[{name, doc, params, scope}]`, a broken file as `{name, scope, error}` |
+
+An `icon` is a text icon (at most 16 characters), an absolute or `~/` path to an SVG, PNG,
+WebP, JPEG or GIF file of at most 256 KiB, which the coordinator reads once and stores, or
+`{media_type, bytes_base64}`. A missing or unreadable path is `invalid`.
 
 Each call's status changes are `call` records. `core.external` cannot be called.
 
@@ -827,17 +837,23 @@ Each call's status changes are `call` records. `core.external` cannot be called.
 | `step_add` | `project`, `step`, `spec`, `start=true` |
 | `step_update` | `project`, `step`, `changes` (each key replaces that field, null removes it) |
 | `step_remove` | `project`, `steps?`, `tags?` |
-| `step_pause` | `project`, `steps?`, `tags?`, `paused=true` (sets `"paused": true` or removes it) |
+| `step_pause` | `project`, `steps?`, `tags?`, `subtree=false`, `paused=true` (sets `"paused"` to the `reason`, or `true` without one, a step already paused keeping its own; `false` removes it) |
 | `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `start=true` |
 | `unit_tag` | `project`, `unit`, `add=[]`, `remove=[]` |
 | `edge_add`, `edge_remove` | `project`, `step` (a step or `unit:<name>`: its entry steps), `after` (entries) |
 | `step_set_input` | `project`, `steps?`, `tags?`, `inputs` |
 | `plan_prune` | `project`, `units?`, `tags?`, `older_than=0` (seconds) |
 
+`step_pause` with `subtree` also selects every step downstream of the selection (reading from
+or gated on one, transitively). `unit_add` reports the steps it added in `steps`, `unit_tag`
+the unit's steps and `step_pause` the steps selected.
+
 `plan_prune` selects done units (all, or those named or tagged) whose last step finished at
 least `older_than` seconds ago, keeps any unit that a surviving step or plan output references
 (computed as a closure), and removes the rest in one edit; naming a unit that does not exist or
-is not done is `invalid`.
+is not done is `invalid`. The reply is the edit result plus `units` (removed) and `kept`:
+`[{unit, step}]` or `[{unit, output}]`, each kept unit with the step or plan output that holds
+it; `steps` lists the removed steps.
 
 **State and values**
 
@@ -856,11 +872,16 @@ is not done is `invalid`.
 | `verify` | `project?` | `[{where, message}]` |
 
 `status`, steps view: `{project, rev, paused, inputs, outputs, resources, steps: {id: {status,
-outputs, error, run_ids, done, total, instances, manual, queued?, waiting?}}, done_units?}`.
+outputs, error, run_ids, done, total, instances, manual, paused?, queued?, waiting?}},
+done_units?}`.
 Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
 `all`. `brief` cuts strings over 200 characters (`… [n more characters]`). `resources` maps
-each to `{capacity, held, queued, error}`; `queued`/`waiting` appear on steps short of
-resources. Units view (`view: "units"`, `brief` refused): `{project, rev, paused, resources?,
+each to `{capacity, held, queued, error}`. `paused` is `true` or the pause's reason. Every
+pending step that is not about to start has `waiting`, the reasons in order: `paused` or
+`paused: <reason>`, `project paused`, each handoff not ready (`step <id> is <status>`, `plan
+input <name> has no value`), each gate not satisfied (`after <entry> (<why>)`), the resource
+shortfall (`queued: needs lane 1 (4/4 held)`, with `queued` listing the resources), and for a
+`core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, paused, resources?,
 units: [{unit, state, age, engine, steps, blocked, last, line}], done_units?}`, `state` one of
 `running`, `failed`, `settled`, `blocked`, `queued`, `pending`, filterable with `state`
 (`state` is refused in the steps view).

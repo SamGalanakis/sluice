@@ -4,15 +4,19 @@ use crate::dispatch::Catalog;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{StatusQuery, StatusView},
+    commands::{StatusQuery, StatusView, StepStatus},
     error::PublicError,
-    gates::resolve_reference,
+    gates::{resolve_reference, wait_reasons},
     ids::{ProjectId, StepId},
+    plan::Pause,
     status::{self, LastMessage, StepFacts},
     types::BoundValue,
 };
 use sluice_store::{plans, resources};
 use std::collections::BTreeMap;
+
+/// A pending `core.external` step with nothing else holding it: sluice never starts it.
+const EXTERNAL_WAIT: &str = "external: set its outputs with step_set_output";
 
 fn bad(message: impl Into<String>) -> sluice_store::StoreError {
     PublicError::BadRequest {
@@ -140,11 +144,29 @@ pub(crate) fn status(
         {
             *outputs = status::brief(outputs);
         }
-        if let Some((blocked, reason)) = queued.get(&step)
-            && let Value::Object(row) = &mut row
-        {
-            row.insert("queued".into(), json!(blocked));
-            row.insert("waiting".into(), json!([reason]));
+        if let (Some(spec), Value::Object(row)) = (plan.steps().get(&step), &mut row) {
+            match &spec.paused {
+                Pause::No => {}
+                Pause::Yes => {
+                    row.insert("paused".into(), json!(true));
+                }
+                Pause::Reason(reason) => {
+                    row.insert("paused".into(), json!(reason));
+                }
+            }
+            if state.status(&step) == StepStatus::Pending {
+                let mut waiting = wait_reasons(plan, &state, spec);
+                if let Some((blocked, reason)) = queued.get(&step) {
+                    row.insert("queued".into(), json!(blocked));
+                    waiting.push(reason.clone());
+                }
+                if waiting.is_empty() && spec.is_external() {
+                    waiting.push(EXTERNAL_WAIT.into());
+                }
+                if !waiting.is_empty() {
+                    row.insert("waiting".into(), json!(waiting));
+                }
+            }
         }
         steps.insert(step.to_string(), row);
     }

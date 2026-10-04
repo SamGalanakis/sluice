@@ -129,8 +129,8 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
   "spec": "/specs/fix-login.md", "engine": "devin"})` adds `fix-login-fork`, `fix-login-work`
   and `fix-login-cleanup` in one edit at the current rev (no rev to fetch), each tagged
   `unit:fix-login`; they start when ready (`start=false` adds them paused). It returns the
-  edit result `{project, rev, preview}` (the added steps are in `preview.ops`) and refuses an
-  id the plan already has.
+  edit result `{project, rev, preview, steps}` (`steps` the ids it added) and refuses an id
+  the plan already has.
 - The same call stages the whole lane, in that one edit. `after` and `inputs` are keyed by the
   recipe step's suffix (its id without `<unit>-`: `fork`, `work`, `cleanup`); `"*"` means the
   unit's entry steps:
@@ -147,7 +147,8 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 - `unit_add` takes `tags` too, for every step of the unit next to `unit:<unit>`: group units
   into an **arc** (`arc:auth`) and act on it with `status`, `step_pause`, `step_cancel`,
   `step_retry`, `step_remove` or `plan_prune` by `tags=["arc:auth"]`. `unit_tag(project, unit,
-  add=[...], remove=[...])` retags a unit later. `unit:` tags are reserved.
+  add=[...], remove=[...])` retags a unit later and returns the edit result with the unit's
+  `steps`; tags already as asked are no edit. `unit:` tags are reserved.
 - Substitution is tiny on purpose: `{param}` in step ids and in every string is replaced by the
   param's value; a string that is exactly `{param}` becomes the value with its type. `{{` and
   `}}` are literal braces; an unknown `{x}` is an error. `unit` (a valid step id) is always a
@@ -210,7 +211,9 @@ are the tags the model itself reads.
 - `step_set_input(project, steps=[...], tags=[...], inputs={name: value})`: pin literals on
   step inputs, across a selection in one edit. Only steps that have the inputs are changed
   (running steps are left alone), and a succeeded step turns stale. It returns the edit result
-  `{project, rev, preview}`; an edit that would change no step is refused (`bad_request`).
+  `{project, rev, preview}` with `changed` (the steps changed), `running` (selected but
+  running, left alone) and `unsupported` (`[{step, inputs}]`: selected but lacking those
+  inputs); an edit that would change no step is refused (`bad_request`).
 - `step_set_output(project, step, outputs)`: mark a step succeeded with outputs you supply (you
   did the work, or you know the result). Type-checked against the step's outputs (its
   function's and those it declares); for a
@@ -260,8 +263,9 @@ dashboard folds a done unit's box instead.
 default, or the ones you name or tag — whose last step finished at least `older_than` seconds
 ago, in one edit. A unit that any surviving step or plan output still references — a handoff, a
 gate, a `unit:` entry — is kept. Naming a unit that is not done is `invalid`. It returns the
-edit result `{project, rev, preview}`; the removed steps are the `remove` ops in
-`preview.ops`.
+edit result `{project, rev, preview, steps}` (`steps` the removed steps) with `units` (the
+removed units) and `kept`: each unit kept with what holds it, `{unit, step}` or `{unit,
+output}` for a plan output. When nothing can go it is no edit.
 
 Removing a step that finished (by `plan_prune`, `step_remove` or any `plan_patch`) keeps what it
 ended with in the `outcomes` view: its status, outputs, error, run ids, unit, when it was
@@ -289,7 +293,7 @@ key replaces that field, null removes it) and `step_remove(project, steps=[...])
 same edit, validated the same way. `edge_add` and `edge_remove` are the only verbs for gates:
 no rev to read, and edges someone else added are never dropped (a `plan_patch` of
 `/steps/<id>/after` replaces the whole list). Adding an edge that is there already, or
-removing one that is not, leaves the plan as it was (the edit still takes a new `rev`). `step`
+removing one that is not, leaves the plan as it was: no edit, the current `rev`. `step`
 may also be `unit:<name>`: the entries then go on every entry step of that unit.
 
 Tools that change one step's contents take `step` (`step_add`, `step_update`, `step_set_output`,
@@ -301,6 +305,9 @@ take, naming the ones it does.
 Every edit tool takes `dry_run: true`, which returns `{ops, would_start, would_queue,
 would_skip, would_stale, errors}` from one simulation without changing anything.
 
+An edit that changes nothing is no edit: it commits nothing and returns the current `rev`
+with empty `preview.ops` (`step_set_input` refuses one instead).
+
 You cannot remove or change a running step (only pause or tag it). Every edit needs a short
 `reason`; it goes into the plan's history (`plan_history`).
 
@@ -310,12 +317,14 @@ Steps you add start as soon as they are ready. To draft first, pass `start=false
 `paused` itself) and start nothing until you release them. To cap how many run at once, use
 resources and `needs` (Resources, below), not pauses.
 
-`step_pause(project, steps=[...], tags=[...], paused=true, reason="")` holds or releases steps
-in one edit, by id and/or tag — a `unit:` tag selects the whole unit. A paused step does not
-start, however ready its inputs; pausing never stops a running one (it finishes, and its next
-start is held). The step gets `"paused": true` (the reason goes into the plan's history), and
-the dashboard shows why each pending step waits. A plan may also set `"paused":
-"<reason>"` on a step directly. `project_update(project, paused=true)` holds the whole project.
+`step_pause(project, steps=[...], tags=[...], subtree=false, paused=true, reason="")` holds or
+releases steps in one edit, by id and/or tag — a `unit:` tag selects the whole unit; with
+`subtree=true` also every step downstream (reading from or gated on one, transitively). A
+paused step does not start, however ready its inputs; pausing never stops a running one (it
+finishes, and its next start is held). The step gets `"paused": "<reason>"`, or `true` without
+a reason (a step already paused keeps its own); `status` shows it as `paused` and in
+`waiting`, and so does the dashboard. It returns the edit result with the selected `steps`.
+A plan may also set `"paused": "<reason>"` on a step directly. `project_update(project, paused=true)` holds the whole project.
 `step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with the error
 `{"error": "cancelled", "message": <reason>}` and `step_retry` runs it again.
 
@@ -345,7 +354,10 @@ in plan order):
 It starts only when every resource it names has room (`capacity - held >= need`); while it
 runs it holds those amounts (a scattered step once, whatever its item count), and they free
 when it succeeds, fails or is cancelled. Until then it stays `pending`, queued — not paused —
-and `status` says why in its `waiting`: `queued: needs lane 1 (56/56 held)`. `status` also
+and `status` says why in its `waiting`: `queued: needs lane 1 (56/56 held)`. Every pending step
+that is not about to start has `waiting`: its pause, `project paused`, each handoff or gate
+not ready (`step a is running`, `plan input n has no value`, `after b (failed)`), the resource
+shortfall, or for `core.external` the external wait. `status` also
 returns `resources`: each one's `capacity`, `held` and how many steps are `queued` on it.
 Pausing is still the hold you put on by hand; a step without `needs` is never held back. An
 edit naming a resource the project does not declare, or asking for more than a fixed capacity,

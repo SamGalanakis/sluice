@@ -100,6 +100,9 @@ pub struct PreparedEdit {
     pub reason: String,
     pub inputs: Option<InputChanges>,
     pub prune: Option<PruneSet>,
+    /// The steps the edit was about, reported in the edit result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<StepId>>,
 }
 /// Prepare one complete candidate with immutable provider context. The store must
 /// recheck revision and running state before committing; dry runs return the preview.
@@ -136,6 +139,7 @@ pub fn prepare_edit(
     let mut ops = vec![];
     let mut inputs_report = None;
     let mut prune_report = None;
+    let mut steps_report = None;
     match edit {
         PlanEdit::Patch(request) => {
             ops = request.ops;
@@ -224,12 +228,15 @@ pub fn prepare_edit(
                         invalid(errors)
                     }
                 })?;
+            let mut added = vec![];
             for (id, spec) in expanded.0 {
                 ops.push(PatchOperation::Add {
                     path: format!("/steps/{}", pointer(&id)),
                     value: spec,
                 });
+                added.push(StepId::new(&id).map_err(|error| bad(error.to_string()))?);
             }
+            steps_report = Some(added);
         }
         PlanEdit::StepUpdate(request) => {
             let mut step = raw_step(raw, &request.step)?.clone();
@@ -349,19 +356,29 @@ pub fn prepare_edit(
                     )?);
                 }
             }
+            steps_report = Some(unit.steps.clone());
         }
         PlanEdit::StepPause(request) => {
-            for id in select(&plan, &request.selection)? {
-                let step = raw_step(raw, &id)?;
-                let pause = if request.paused {
-                    Some(Value::Bool(true))
-                } else {
-                    None
+            let mut chosen = select(&plan, &request.selection)?;
+            if request.subtree {
+                chosen = downstream(&plan, &chosen);
+            }
+            // The reason is kept on each step it pauses; without one, `true`, and a
+            // step already paused keeps its own reason.
+            let reason = request.edit.reason.trim();
+            for id in &chosen {
+                let step = raw_step(raw, id)?;
+                let pause = match (request.paused, reason.is_empty()) {
+                    (false, _) => None,
+                    (true, true) if plan.steps()[id].paused.is_paused() => continue,
+                    (true, true) => Some(Value::Bool(true)),
+                    (true, false) => Some(Value::String(reason.to_owned())),
                 };
                 if step.get("paused") != pause.as_ref() {
-                    ops.push(set_field(step, &id, "paused", pause)?);
+                    ops.push(set_field(step, id, "paused", pause)?);
                 }
             }
+            steps_report = Some(chosen);
         }
         PlanEdit::PlanPrune(request) => {
             if request.older_than_seconds > 0 && context.prune_eligible.is_none() {
@@ -412,6 +429,7 @@ pub fn prepare_edit(
             ops.extend(closure.steps.iter().map(|id| PatchOperation::Remove {
                 path: step_path(id),
             }));
+            steps_report = Some(closure.steps.clone());
             prune_report = Some(closure);
         }
     }
@@ -433,7 +451,24 @@ pub fn prepare_edit(
         reason,
         inputs: inputs_report,
         prune: prune_report,
+        steps: steps_report,
     })
+}
+
+/// The selected steps and every step downstream of them (reading from or gated on
+/// one, transitively), in plan order.
+fn downstream(plan: &Plan, selected: &[StepId]) -> Vec<StepId> {
+    let mut found: IndexSet<&StepId> = selected.iter().collect();
+    for id in plan.topological_order() {
+        if plan.dependencies(id).iter().any(|w| found.contains(w)) {
+            found.insert(id);
+        }
+    }
+    plan.steps()
+        .keys()
+        .filter(|id| found.contains(id))
+        .cloned()
+        .collect()
 }
 
 fn edges(

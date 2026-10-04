@@ -290,14 +290,22 @@ impl<H: ExecutionHost> Coordinator<H> {
                 self.refresh_registry().await?;
                 data(json!({"name":saved.name,"scope":saved.scope.label(),"path":saved.path,"generation":saved.generation}))
             }
-            CommandRequest::ProjectsList=>{let values=self.reads().snapshot(|sql|{let mut q=sql.prepare("SELECT project_id,name FROM projects WHERE deleted_at IS NULL ORDER BY name")?;let rows=q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(|(id,name)|Ok(ProjectIdentity{project_id:calls::parse_id(id)?,name:calls::parse_id(name)?})).collect::<sluice_store::Result<Vec<_>>>()}).await.map_err(|e|e.into_public(true))?;Ok(CommandReply::Projects(values))},
+            CommandRequest::ProjectsList=>{let values=self.reads().snapshot(projects::list).await.map_err(|e|e.into_public(true))?;Ok(CommandReply::Projects(values))},
             CommandRequest::ProjectCreate{name,description,icon,resources,author}=>{
-                let project=self.writer().write(RetrySafety::NonIdempotent,move|tx|projects::project_create(tx,projects::CreateProject{name,description,icon:icon.map(|s|projects::Icon::text(&s)).transpose()?,resources:Some(serde_json::to_value(resources)?),author:author.unwrap_or_else(||"cli".into())},&projects::EmptyPlanInitializer,&ResourceSettings((*catalog).clone()))).await?;
+                let icon=icon.map(read_icon).transpose()?;
+                let project=self.writer().write(RetrySafety::NonIdempotent,move|tx|projects::project_create(tx,projects::CreateProject{name,description,icon,resources:Some(serde_json::to_value(resources)?),author:author.unwrap_or_else(||"cli".into())},&projects::EmptyPlanInitializer,&ResourceSettings((*catalog).clone()))).await?;
                 artifacts::recover(self.writer(),self.home()).await.map_err(|e|e.into_public(false))?; Ok(CommandReply::Project(ProjectIdentity{project_id:project.project_id,name:project.name}))
             },
             CommandRequest::PlanGet{project}=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"plan":ctx.plan.document()}))}).await.map_err(|e|e.into_public(true)).and_then(data),
             CommandRequest::Status(query)=>self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,query)).await.map_err(|e|e.into_public(true)).and_then(data),
             command if project_mutation(&command) => {
+                let command = match command {
+                    CommandRequest::ProjectUpdate(mut update) => {
+                        update.icon = update.icon.map(|icon| read_icon(icon).map(IconUpload::from)).transpose()?;
+                        CommandRequest::ProjectUpdate(update)
+                    }
+                    command => command,
+                };
                 let home = self.home().to_owned();
                 let reply = self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, &home, command)).await?;
                 if matches!(reply, CommandReply::Project(_)) { artifacts::recover(self.writer(), self.home()).await.map_err(|e|e.into_public(false))?; }
@@ -1847,7 +1855,52 @@ fn mutate_project(
             if prepared.dry_run {
                 return Ok(CommandReply::Preview(prepared.preview));
             }
-            Ok(CommandReply::Edit(plans::apply_edit(tx, id, prepared)?))
+            let (inputs, prune) = (prepared.inputs.clone(), prepared.prune.clone());
+            Ok(edit_reply(
+                plans::apply_edit(tx, id, prepared)?,
+                inputs,
+                prune,
+            ))
         }
     }
+}
+
+/// A project icon argument, with a path read here, before any write transaction.
+fn read_icon(icon: IconUpload) -> Result<projects::Icon, PublicError> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    projects::Icon::from_upload(icon, home.as_deref()).map_err(|e| e.into_public(false))
+}
+
+/// The edit result, with `step_set_input`'s per-step report or `plan_prune`'s units.
+pub(crate) fn edit_reply(
+    result: EditResult,
+    inputs: Option<edit::InputChanges>,
+    prune: Option<sluice_model::units::PruneSet>,
+) -> CommandReply {
+    if let Some(inputs) = inputs {
+        return CommandReply::Inputs(InputEditResult {
+            edit: result,
+            changed: inputs.changed,
+            running: inputs.running,
+            unsupported: inputs.unsupported,
+        });
+    }
+    if let Some(prune) = prune {
+        return CommandReply::Pruned(PruneResult {
+            edit: result,
+            units: prune.units,
+            kept: prune
+                .kept
+                .into_iter()
+                .map(|(unit, holder)| {
+                    let (step, output) = match holder {
+                        sluice_model::units::PruneHolder::Step(step) => (Some(step), None),
+                        sluice_model::units::PruneHolder::PlanOutput(name) => (None, Some(name)),
+                    };
+                    KeptUnit { unit, step, output }
+                })
+                .collect(),
+        });
+    }
+    CommandReply::Edit(result)
 }

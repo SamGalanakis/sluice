@@ -7,9 +7,11 @@ use crate::{
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 use sluice_model::{
+    commands::{IconUpload, ProjectIconSummary, ProjectSummary},
     error::PublicError,
     events::Event,
     ids::{InvocationId, ProjectId, ProjectName, ProjectSelector, Revision, RunId},
+    rpc::{JsonMap, JsonValue},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -91,6 +93,23 @@ impl Icon {
             }
             Err(_) => Self::text(value),
         }
+    }
+    /// A command's icon: text, image bytes, or an absolute (or `~/`, against
+    /// `tilde_root`) path to an image file, read once here. Callers resolve it before
+    /// their write transaction.
+    pub fn from_upload(upload: IconUpload, tilde_root: Option<&Path>) -> Result<Self> {
+        if let IconUpload::Text(value) = &upload {
+            let value = value.trim();
+            if value.starts_with('/') {
+                return Self::from_argument(value, Path::new("/"));
+            }
+            if value.starts_with("~/") {
+                let root =
+                    tilde_root.ok_or_else(|| invalid("icon: no home directory to expand ~"))?;
+                return Self::from_argument(value, root);
+            }
+        }
+        Self::try_from(upload)
     }
     fn hash(&self) -> Option<String> {
         self.media_type
@@ -206,6 +225,59 @@ pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
                 .map_err(|_| invalid("invalid resource revision"))?,
         ),
     })
+}
+
+/// Every live project, by name, as `projects_list` reports it.
+pub fn list(c: &Connection) -> Result<Vec<ProjectSummary>> {
+    let ids: Vec<String> = c
+        .prepare("SELECT project_id FROM projects WHERE deleted_at IS NULL ORDER BY name")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id: ProjectId = id
+            .parse()
+            .map_err(|_| invalid("invalid persisted ProjectId"))?;
+        let project = resolve(c, &ProjectSelector::Id(id))?;
+        let rev: i64 = c.query_row(
+            "SELECT rev FROM plans WHERE project_id=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )?;
+        let counts = c
+            .prepare("SELECT status,count(*) FROM steps WHERE project_id=?1 GROUP BY status")?
+            .query_map([id.to_string()], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut resources = JsonMap::default();
+        for (name, resource) in crate::resources::declarations(c, id)? {
+            let declaration = match resource.declaration {
+                crate::resources::Capacity::Fixed(n) => json!({"capacity": n}),
+                crate::resources::Capacity::Function(f) => json!({"capacity_fn": f}),
+            };
+            resources.0.insert(name, JsonValue::try_from(declaration)?);
+        }
+        out.push(ProjectSummary {
+            project_id: id,
+            name: project.name,
+            description: project.description,
+            rev: Revision(
+                rev.try_into()
+                    .map_err(|_| invalid("invalid plan revision"))?,
+            ),
+            settings_rev: project.settings_rev,
+            counts,
+            paused: project.paused,
+            archived: project.archived,
+            resources: (!resources.0.is_empty()).then_some(resources),
+            icon: project.icon.map(|icon| match icon {
+                ProjectIcon::Text(text) => ProjectIconSummary::Text { text },
+                ProjectIcon::Image { media_type, .. } => ProjectIconSummary::Image { media_type },
+            }),
+        });
+    }
+    Ok(out)
 }
 
 /// P2.04 adapter: implement by calling its synchronous validated patch function.

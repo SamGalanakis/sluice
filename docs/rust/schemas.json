@@ -376,10 +376,215 @@
       }
     }
   },
+  "ProjectSummary": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ProjectSummary",
+    "description": "One live project as `projects_list` reports it. `settings_rev` is what\n`project_update` and `project_delete` take as `expected_settings_rev`.",
+    "type": "object",
+    "properties": {
+      "project_id": {
+        "$ref": "#/$defs/ProjectId"
+      },
+      "name": {
+        "$ref": "#/$defs/ProjectName"
+      },
+      "description": {
+        "type": "string"
+      },
+      "rev": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "settings_rev": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "counts": {
+        "description": "Step status to the number of the plan's steps in it.",
+        "type": "object",
+        "additionalProperties": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "paused": {
+        "type": "boolean"
+      },
+      "archived": {
+        "type": "boolean"
+      },
+      "resources": {
+        "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JsonMap"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "icon": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ProjectIconSummary"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project_id",
+      "name",
+      "description",
+      "rev",
+      "settings_rev",
+      "counts",
+      "paused",
+      "archived"
+    ],
+    "$defs": {
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "ProjectIconSummary": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "image"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "text"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "text"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "ProjectIconSummary": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ProjectIconSummary",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "image"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "type"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "text"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "text"
+        ]
+      }
+    ]
+  },
   "IconUpload": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "IconUpload",
-    "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+    "description": "A string is a text icon, or an absolute (or `~/`) path to an image file that the\ncoordinator reads once; images otherwise cross the broker as bounded data.",
     "anyOf": [
       {
         "type": "string"
@@ -532,7 +737,7 @@
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "IconUpload": {
-        "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+        "description": "A string is a text icon, or an absolute (or `~/`) path to an image file that the\ncoordinator reads once; images otherwise cross the broker as bounded data.",
         "anyOf": [
           {
             "type": "string"
@@ -1733,6 +1938,10 @@
       },
       "selection": {
         "$ref": "#/$defs/StepSelection"
+      },
+      "subtree": {
+        "description": "Also every step downstream of the selection: those reading from or gated on\na selected step, transitively.",
+        "type": "boolean"
       },
       "paused": {
         "type": "boolean"
@@ -4279,12 +4488,23 @@
         "$ref": "#/$defs/ProjectIdentity"
       },
       "rev": {
+        "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
         "type": "integer",
         "format": "uint64",
         "minimum": 0
       },
       "preview": {
         "$ref": "#/$defs/EditPreview"
+      },
+      "steps": {
+        "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/StepId"
+        }
       }
     },
     "additionalProperties": false,
@@ -4606,10 +4826,30 @@
   "InputEditResult": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "InputEditResult",
+    "description": "`step_set_input`'s reply: the edit result plus what happened to each selected step.",
     "type": "object",
     "properties": {
-      "edit": {
-        "$ref": "#/$defs/EditResult"
+      "project": {
+        "$ref": "#/$defs/ProjectIdentity"
+      },
+      "rev": {
+        "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "preview": {
+        "$ref": "#/$defs/EditPreview"
+      },
+      "steps": {
+        "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/StepId"
+        }
       },
       "changed": {
         "type": "array",
@@ -4618,48 +4858,29 @@
         }
       },
       "running": {
+        "description": "Selected but running, so left unchanged.",
         "type": "array",
         "items": {
           "$ref": "#/$defs/StepId"
         }
       },
       "unsupported": {
+        "description": "Selected but lacking an input.",
         "type": "array",
         "items": {
           "$ref": "#/$defs/UnsupportedInput"
         }
       }
     },
-    "additionalProperties": false,
     "required": [
-      "edit",
+      "project",
+      "rev",
+      "preview",
       "changed",
       "running",
       "unsupported"
     ],
     "$defs": {
-      "EditResult": {
-        "type": "object",
-        "properties": {
-          "project": {
-            "$ref": "#/$defs/ProjectIdentity"
-          },
-          "rev": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "preview": {
-            "$ref": "#/$defs/EditPreview"
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "project",
-          "rev",
-          "preview"
-        ]
-      },
       "ProjectIdentity": {
         "type": "object",
         "properties": {
@@ -4919,6 +5140,372 @@
           "step",
           "inputs"
         ]
+      }
+    }
+  },
+  "PruneResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PruneResult",
+    "description": "`plan_prune`'s reply: the edit result (its `steps` are the removed steps), the\nremoved units, and each candidate unit kept with what holds it.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectIdentity"
+      },
+      "rev": {
+        "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "preview": {
+        "$ref": "#/$defs/EditPreview"
+      },
+      "steps": {
+        "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/StepId"
+        }
+      },
+      "units": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/UnitName"
+        }
+      },
+      "kept": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/KeptUnit"
+        }
+      }
+    },
+    "required": [
+      "project",
+      "rev",
+      "preview",
+      "units",
+      "kept"
+    ],
+    "$defs": {
+      "ProjectIdentity": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "name": {
+            "$ref": "#/$defs/ProjectName"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "name"
+        ]
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "EditPreview": {
+        "type": "object",
+        "properties": {
+          "ops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PatchOperation"
+            }
+          },
+          "would_start": {
+            "description": "Ready executable candidates, including those also listed in `would_queue`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "would_queue": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "would_skip": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "would_stale": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "ops",
+          "would_start",
+          "would_queue",
+          "would_skip",
+          "would_stale",
+          "errors"
+        ]
+      },
+      "PatchOperation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "op": {
+                "type": "string",
+                "const": "add"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "path",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "const": "remove"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "path"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "op": {
+                "type": "string",
+                "const": "replace"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "path",
+              "value"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "const": "move"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "from",
+              "path"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "const": "copy"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "from",
+              "path"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "op": {
+                "type": "string",
+                "const": "test"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "path",
+              "value"
+            ]
+          }
+        ]
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "StepId": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "UnitName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "KeptUnit": {
+        "description": "A unit prune kept: held by a step outside the pruned set, or by a plan output.",
+        "type": "object",
+        "properties": {
+          "unit": {
+            "$ref": "#/$defs/UnitName"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StepId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "unit"
+        ]
+      }
+    }
+  },
+  "KeptUnit": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "KeptUnit",
+    "description": "A unit prune kept: held by a step outside the pruned set, or by a plan output.",
+    "type": "object",
+    "properties": {
+      "unit": {
+        "$ref": "#/$defs/UnitName"
+      },
+      "step": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StepId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "output": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "unit"
+    ],
+    "$defs": {
+      "UnitName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "StepId": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
       }
     }
   },
@@ -9050,6 +9637,16 @@
             "type": "null"
           }
         ]
+      },
+      "steps": {
+        "description": "The steps the edit was about, reported in the edit result.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/StepId"
+        }
       }
     },
     "required": [
@@ -9972,9 +10569,13 @@
                     "type": "string"
                   },
                   "icon": {
-                    "type": [
-                      "string",
-                      "null"
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/IconUpload"
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   },
                   "resources": {
@@ -10634,7 +11235,7 @@
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "IconUpload": {
-        "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+        "description": "A string is a text icon, or an absolute (or `~/`) path to an image file that the\ncoordinator reads once; images otherwise cross the broker as bounded data.",
         "anyOf": [
           {
             "type": "string"
@@ -11094,6 +11695,10 @@
           },
           "selection": {
             "$ref": "#/$defs/StepSelection"
+          },
+          "subtree": {
+            "description": "Also every step downstream of the selection: those reading from or gated on\na selected step, transitively.",
+            "type": "boolean"
           },
           "paused": {
             "type": "boolean"
@@ -12127,7 +12732,7 @@
               "data": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/ProjectIdentity"
+                  "$ref": "#/$defs/ProjectSummary"
                 }
               }
             },
@@ -12231,6 +12836,23 @@
               },
               "data": {
                 "$ref": "#/$defs/InputEditResult"
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "pruned"
+              },
+              "data": {
+                "$ref": "#/$defs/PruneResult"
               }
             },
             "required": [
@@ -12422,6 +13044,158 @@
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
+      "ProjectSummary": {
+        "description": "One live project as `projects_list` reports it. `settings_rev` is what\n`project_update` and `project_delete` take as `expected_settings_rev`.",
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "name": {
+            "$ref": "#/$defs/ProjectName"
+          },
+          "description": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "settings_rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "counts": {
+            "description": "Step status to the number of the plan's steps in it.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "resources": {
+            "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProjectIconSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "name",
+          "description",
+          "rev",
+          "settings_rev",
+          "counts",
+          "paused",
+          "archived"
+        ]
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "ProjectIconSummary": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "image"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "text"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "text"
+            ]
+          }
+        ]
+      },
       "EditResult": {
         "type": "object",
         "properties": {
@@ -12429,12 +13203,23 @@
             "$ref": "#/$defs/ProjectIdentity"
           },
           "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "preview": {
             "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
           }
         },
         "additionalProperties": false,
@@ -12621,41 +13406,6 @@
           }
         ]
       },
-      "JsonValue": {
-        "x-sluice-integer-lexemes": "i64",
-        "x-sluice-floats": "finite",
-        "anyOf": [
-          {
-            "type": "null"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "string"
-          },
-          {
-            "type": "integer",
-            "minimum": -9223372036854775808,
-            "maximum": 9223372036854775807
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/JsonValue"
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/$defs/JsonValue"
-            }
-          }
-        ]
-      },
       "StepId": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
@@ -12694,10 +13444,30 @@
         ]
       },
       "InputEditResult": {
+        "description": "`step_set_input`'s reply: the edit result plus what happened to each selected step.",
         "type": "object",
         "properties": {
-          "edit": {
-            "$ref": "#/$defs/EditResult"
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "preview": {
+            "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
           },
           "changed": {
             "type": "array",
@@ -12706,21 +13476,24 @@
             }
           },
           "running": {
+            "description": "Selected but running, so left unchanged.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
             }
           },
           "unsupported": {
+            "description": "Selected but lacking an input.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/UnsupportedInput"
             }
           }
         },
-        "additionalProperties": false,
         "required": [
-          "edit",
+          "project",
+          "rev",
+          "preview",
           "changed",
           "running",
           "unsupported"
@@ -12743,6 +13516,86 @@
         "required": [
           "step",
           "inputs"
+        ]
+      },
+      "PruneResult": {
+        "description": "`plan_prune`'s reply: the edit result (its `steps` are the removed steps), the\nremoved units, and each candidate unit kept with what holds it.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "preview": {
+            "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/UnitName"
+            }
+          },
+          "kept": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/KeptUnit"
+            }
+          }
+        },
+        "required": [
+          "project",
+          "rev",
+          "preview",
+          "units",
+          "kept"
+        ]
+      },
+      "UnitName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "KeptUnit": {
+        "description": "A unit prune kept: held by a step outside the pruned set, or by a plan output.",
+        "type": "object",
+        "properties": {
+          "unit": {
+            "$ref": "#/$defs/UnitName"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StepId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "unit"
         ]
       },
       "MessagePage": {
@@ -12906,13 +13759,6 @@
         "required": [
           "action"
         ]
-      },
-      "JsonMap": {
-        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/$defs/JsonValue"
-        }
       },
       "RunId": {
         "type": "string",
@@ -14213,10 +15059,6 @@
           "expected",
           "message"
         ]
-      },
-      "UnitName": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "UnitStep": {
         "type": "object",
@@ -18784,9 +19626,13 @@
                 "type": "string"
               },
               "icon": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/IconUpload"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "resources": {
@@ -19446,7 +20292,7 @@
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
       "IconUpload": {
-        "description": "Strings preserve the text icon contract; images cross the broker as bounded data.",
+        "description": "A string is a text icon, or an absolute (or `~/`) path to an image file that the\ncoordinator reads once; images otherwise cross the broker as bounded data.",
         "anyOf": [
           {
             "type": "string"
@@ -19906,6 +20752,10 @@
           },
           "selection": {
             "$ref": "#/$defs/StepSelection"
+          },
+          "subtree": {
+            "description": "Also every step downstream of the selection: those reading from or gated on\na selected step, transitively.",
+            "type": "boolean"
           },
           "paused": {
             "type": "boolean"
@@ -20887,7 +21737,7 @@
           "data": {
             "type": "array",
             "items": {
-              "$ref": "#/$defs/ProjectIdentity"
+              "$ref": "#/$defs/ProjectSummary"
             }
           }
         },
@@ -20991,6 +21841,23 @@
           },
           "data": {
             "$ref": "#/$defs/InputEditResult"
+          }
+        },
+        "required": [
+          "reply",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "reply": {
+            "type": "string",
+            "const": "pruned"
+          },
+          "data": {
+            "$ref": "#/$defs/PruneResult"
           }
         },
         "required": [
@@ -21182,6 +22049,158 @@
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
+      "ProjectSummary": {
+        "description": "One live project as `projects_list` reports it. `settings_rev` is what\n`project_update` and `project_delete` take as `expected_settings_rev`.",
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "name": {
+            "$ref": "#/$defs/ProjectName"
+          },
+          "description": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "settings_rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "counts": {
+            "description": "Step status to the number of the plan's steps in it.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "resources": {
+            "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProjectIconSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "name",
+          "description",
+          "rev",
+          "settings_rev",
+          "counts",
+          "paused",
+          "archived"
+        ]
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "ProjectIconSummary": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "image"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "text"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "text"
+            ]
+          }
+        ]
+      },
       "EditResult": {
         "type": "object",
         "properties": {
@@ -21189,12 +22208,23 @@
             "$ref": "#/$defs/ProjectIdentity"
           },
           "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "preview": {
             "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
           }
         },
         "additionalProperties": false,
@@ -21381,41 +22411,6 @@
           }
         ]
       },
-      "JsonValue": {
-        "x-sluice-integer-lexemes": "i64",
-        "x-sluice-floats": "finite",
-        "anyOf": [
-          {
-            "type": "null"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "string"
-          },
-          {
-            "type": "integer",
-            "minimum": -9223372036854775808,
-            "maximum": 9223372036854775807
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/JsonValue"
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/$defs/JsonValue"
-            }
-          }
-        ]
-      },
       "StepId": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
@@ -21454,10 +22449,30 @@
         ]
       },
       "InputEditResult": {
+        "description": "`step_set_input`'s reply: the edit result plus what happened to each selected step.",
         "type": "object",
         "properties": {
-          "edit": {
-            "$ref": "#/$defs/EditResult"
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "preview": {
+            "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
           },
           "changed": {
             "type": "array",
@@ -21466,21 +22481,24 @@
             }
           },
           "running": {
+            "description": "Selected but running, so left unchanged.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
             }
           },
           "unsupported": {
+            "description": "Selected but lacking an input.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/UnsupportedInput"
             }
           }
         },
-        "additionalProperties": false,
         "required": [
-          "edit",
+          "project",
+          "rev",
+          "preview",
           "changed",
           "running",
           "unsupported"
@@ -21503,6 +22521,86 @@
         "required": [
           "step",
           "inputs"
+        ]
+      },
+      "PruneResult": {
+        "description": "`plan_prune`'s reply: the edit result (its `steps` are the removed steps), the\nremoved units, and each candidate unit kept with what holds it.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "preview": {
+            "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/UnitName"
+            }
+          },
+          "kept": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/KeptUnit"
+            }
+          }
+        },
+        "required": [
+          "project",
+          "rev",
+          "preview",
+          "units",
+          "kept"
+        ]
+      },
+      "UnitName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "KeptUnit": {
+        "description": "A unit prune kept: held by a step outside the pruned set, or by a plan output.",
+        "type": "object",
+        "properties": {
+          "unit": {
+            "$ref": "#/$defs/UnitName"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StepId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "unit"
         ]
       },
       "MessagePage": {
@@ -21666,13 +22764,6 @@
         "required": [
           "action"
         ]
-      },
-      "JsonMap": {
-        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/$defs/JsonValue"
-        }
       },
       "RunId": {
         "type": "string",
@@ -22973,10 +24064,6 @@
           "expected",
           "message"
         ]
-      },
-      "UnitName": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "UnitStep": {
         "type": "object",
@@ -23168,7 +24255,7 @@
               "data": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/ProjectIdentity"
+                  "$ref": "#/$defs/ProjectSummary"
                 }
               }
             },
@@ -23272,6 +24359,23 @@
               },
               "data": {
                 "$ref": "#/$defs/InputEditResult"
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "pruned"
+              },
+              "data": {
+                "$ref": "#/$defs/PruneResult"
               }
             },
             "required": [
@@ -23463,6 +24567,158 @@
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
+      "ProjectSummary": {
+        "description": "One live project as `projects_list` reports it. `settings_rev` is what\n`project_update` and `project_delete` take as `expected_settings_rev`.",
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "name": {
+            "$ref": "#/$defs/ProjectName"
+          },
+          "description": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "settings_rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "counts": {
+            "description": "Step status to the number of the plan's steps in it.",
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "resources": {
+            "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProjectIconSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "name",
+          "description",
+          "rev",
+          "settings_rev",
+          "counts",
+          "paused",
+          "archived"
+        ]
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "ProjectIconSummary": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "image"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "text"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "text"
+            ]
+          }
+        ]
+      },
       "EditResult": {
         "type": "object",
         "properties": {
@@ -23470,12 +24726,23 @@
             "$ref": "#/$defs/ProjectIdentity"
           },
           "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "preview": {
             "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
           }
         },
         "additionalProperties": false,
@@ -23662,41 +24929,6 @@
           }
         ]
       },
-      "JsonValue": {
-        "x-sluice-integer-lexemes": "i64",
-        "x-sluice-floats": "finite",
-        "anyOf": [
-          {
-            "type": "null"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "string"
-          },
-          {
-            "type": "integer",
-            "minimum": -9223372036854775808,
-            "maximum": 9223372036854775807
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/JsonValue"
-            }
-          },
-          {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/$defs/JsonValue"
-            }
-          }
-        ]
-      },
       "StepId": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
@@ -23735,10 +24967,30 @@
         ]
       },
       "InputEditResult": {
+        "description": "`step_set_input`'s reply: the edit result plus what happened to each selected step.",
         "type": "object",
         "properties": {
-          "edit": {
-            "$ref": "#/$defs/EditResult"
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "preview": {
+            "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
           },
           "changed": {
             "type": "array",
@@ -23747,21 +24999,24 @@
             }
           },
           "running": {
+            "description": "Selected but running, so left unchanged.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/StepId"
             }
           },
           "unsupported": {
+            "description": "Selected but lacking an input.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/UnsupportedInput"
             }
           }
         },
-        "additionalProperties": false,
         "required": [
-          "edit",
+          "project",
+          "rev",
+          "preview",
           "changed",
           "running",
           "unsupported"
@@ -23784,6 +25039,86 @@
         "required": [
           "step",
           "inputs"
+        ]
+      },
+      "PruneResult": {
+        "description": "`plan_prune`'s reply: the edit result (its `steps` are the removed steps), the\nremoved units, and each candidate unit kept with what holds it.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "description": "The new revision, or the current one when the edit changed nothing (its\n`preview.ops` is then empty and nothing was committed).",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "preview": {
+            "$ref": "#/$defs/EditPreview"
+          },
+          "steps": {
+            "description": "The steps the edit was about: `unit_add`'s new steps, `unit_tag`'s unit,\n`step_pause`'s selection (subtree included), `plan_prune`'s removed steps.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/UnitName"
+            }
+          },
+          "kept": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/KeptUnit"
+            }
+          }
+        },
+        "required": [
+          "project",
+          "rev",
+          "preview",
+          "units",
+          "kept"
+        ]
+      },
+      "UnitName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "KeptUnit": {
+        "description": "A unit prune kept: held by a step outside the pruned set, or by a plan output.",
+        "type": "object",
+        "properties": {
+          "unit": {
+            "$ref": "#/$defs/UnitName"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StepId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "unit"
         ]
       },
       "MessagePage": {
@@ -23947,13 +25282,6 @@
         "required": [
           "action"
         ]
-      },
-      "JsonMap": {
-        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/$defs/JsonValue"
-        }
       },
       "RunId": {
         "type": "string",
@@ -25254,10 +26582,6 @@
           "expected",
           "message"
         ]
-      },
-      "UnitName": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "UnitStep": {
         "type": "object",

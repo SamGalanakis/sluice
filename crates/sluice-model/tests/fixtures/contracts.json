@@ -1200,6 +1200,42 @@
           "fixture"
         ]
       }
+    },
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 1,
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
+      },
+      "steps": [
+        "work-1"
+      ]
     }
   ],
   "RetryResult": [
@@ -1236,38 +1272,36 @@
   ],
   "InputEditResult": [
     {
-      "edit": {
-        "project": {
-          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
-          "name": "work-1"
-        },
-        "rev": 1,
-        "preview": {
-          "ops": [
-            {
-              "op": "add",
-              "path": "fixture",
-              "value": {
-                "file": "/tmp/brief.md"
-              }
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 1,
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
             }
-          ],
-          "would_start": [
-            "work-1"
-          ],
-          "would_queue": [
-            "work-1"
-          ],
-          "would_skip": [
-            "work-1"
-          ],
-          "would_stale": [
-            "work-1"
-          ],
-          "errors": [
-            "fixture"
-          ]
-        }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
       },
       "changed": [
         "work-1"
@@ -1285,38 +1319,36 @@
       ]
     },
     {
-      "edit": {
-        "project": {
-          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
-          "name": "work-1"
-        },
-        "rev": 1,
-        "preview": {
-          "ops": [
-            {
-              "op": "add",
-              "path": "fixture",
-              "value": {
-                "file": "/tmp/brief.md"
-              }
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 1,
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
             }
-          ],
-          "would_start": [
-            "work-1"
-          ],
-          "would_queue": [
-            "work-1"
-          ],
-          "would_skip": [
-            "work-1"
-          ],
-          "would_stale": [
-            "work-1"
-          ],
-          "errors": [
-            "fixture"
-          ]
-        }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
       },
       "changed": [
         "work-1"
@@ -2810,7 +2842,39 @@
       "data": [
         {
           "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
-          "name": "work-1"
+          "name": "work-1",
+          "description": "fixture",
+          "rev": 3,
+          "settings_rev": 2,
+          "counts": {
+            "pending": 1,
+            "succeeded": 2
+          },
+          "paused": false,
+          "archived": false,
+          "resources": {
+            "lane": {
+              "capacity": 4
+            }
+          },
+          "icon": {
+            "kind": "image",
+            "type": "image/png"
+          }
+        },
+        {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1",
+          "description": "",
+          "rev": 1,
+          "settings_rev": 1,
+          "counts": {},
+          "paused": true,
+          "archived": true,
+          "icon": {
+            "kind": "text",
+            "text": "🧪"
+          }
         }
       ]
     },
@@ -2908,38 +2972,36 @@
     {
       "reply": "inputs",
       "data": {
-        "edit": {
-          "project": {
-            "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
-            "name": "work-1"
-          },
-          "rev": 1,
-          "preview": {
-            "ops": [
-              {
-                "op": "add",
-                "path": "fixture",
-                "value": {
-                  "file": "/tmp/brief.md"
-                }
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "rev": 1,
+        "preview": {
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
               }
-            ],
-            "would_start": [
-              "work-1"
-            ],
-            "would_queue": [
-              "work-1"
-            ],
-            "would_skip": [
-              "work-1"
-            ],
-            "would_stale": [
-              "work-1"
-            ],
-            "errors": [
-              "fixture"
-            ]
-          }
+            }
+          ],
+          "would_start": [
+            "work-1"
+          ],
+          "would_queue": [
+            "work-1"
+          ],
+          "would_skip": [
+            "work-1"
+          ],
+          "would_stale": [
+            "work-1"
+          ],
+          "errors": [
+            "fixture"
+          ]
         },
         "changed": [
           "work-1"
@@ -3101,6 +3163,58 @@
     },
     {
       "reply": "ack"
+    },
+    {
+      "reply": "pruned",
+      "data": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "rev": 1,
+        "preview": {
+          "ops": [
+            {
+              "op": "add",
+              "path": "fixture",
+              "value": {
+                "file": "/tmp/brief.md"
+              }
+            }
+          ],
+          "would_start": [
+            "work-1"
+          ],
+          "would_queue": [
+            "work-1"
+          ],
+          "would_skip": [
+            "work-1"
+          ],
+          "would_stale": [
+            "work-1"
+          ],
+          "errors": [
+            "fixture"
+          ]
+        },
+        "steps": [
+          "work-1"
+        ],
+        "units": [
+          "work-1"
+        ],
+        "kept": [
+          {
+            "unit": "work-1",
+            "step": "work-1"
+          },
+          {
+            "unit": "work-1",
+            "output": "final"
+          }
+        ]
+      }
     }
   ],
   "ProjectSelector": [
@@ -3547,6 +3661,115 @@
     {
       "media_type": "image/gif",
       "bytes_base64": "R0lGODlh"
+    }
+  ],
+  "ProjectSummary": [
+    {
+      "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "name": "work-1",
+      "description": "fixture",
+      "rev": 3,
+      "settings_rev": 2,
+      "counts": {
+        "pending": 1,
+        "succeeded": 2
+      },
+      "paused": false,
+      "archived": false,
+      "resources": {
+        "lane": {
+          "capacity": 4
+        }
+      },
+      "icon": {
+        "kind": "image",
+        "type": "image/png"
+      }
+    },
+    {
+      "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "name": "work-1",
+      "description": "",
+      "rev": 1,
+      "settings_rev": 1,
+      "counts": {},
+      "paused": true,
+      "archived": true,
+      "icon": {
+        "kind": "text",
+        "text": "🧪"
+      }
+    }
+  ],
+  "ProjectIconSummary": [
+    {
+      "kind": "image",
+      "type": "image/svg+xml"
+    },
+    {
+      "kind": "text",
+      "text": "x"
+    }
+  ],
+  "KeptUnit": [
+    {
+      "unit": "work-1",
+      "step": "work-1"
+    },
+    {
+      "unit": "work-1",
+      "output": "final"
+    }
+  ],
+  "PruneResult": [
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 1,
+      "preview": {
+        "ops": [
+          {
+            "op": "add",
+            "path": "fixture",
+            "value": {
+              "file": "/tmp/brief.md"
+            }
+          }
+        ],
+        "would_start": [
+          "work-1"
+        ],
+        "would_queue": [
+          "work-1"
+        ],
+        "would_skip": [
+          "work-1"
+        ],
+        "would_stale": [
+          "work-1"
+        ],
+        "errors": [
+          "fixture"
+        ]
+      },
+      "steps": [
+        "work-1"
+      ],
+      "units": [
+        "work-1"
+      ],
+      "kept": [
+        {
+          "unit": "work-1",
+          "step": "work-1"
+        },
+        {
+          "unit": "work-1",
+          "output": "final"
+        }
+      ]
     }
   ]
 }

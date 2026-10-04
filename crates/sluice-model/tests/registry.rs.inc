@@ -23,6 +23,8 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(PlanDocument);
         $m!(Type);
         $m!(ProjectIdentity);
+        $m!(ProjectSummary);
+        $m!(ProjectIconSummary);
         $m!(IconUpload);
         $m!(ProjectUpdate);
         $m!(ProjectDelete);
@@ -60,6 +62,8 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(EditResult);
         $m!(RetryResult);
         $m!(InputEditResult);
+        $m!(PruneResult);
+        $m!(KeptUnit);
         $m!(UnsupportedInput);
         $m!(Message);
         $m!(MessagePage);

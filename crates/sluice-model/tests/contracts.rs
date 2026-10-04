@@ -620,6 +620,26 @@ fn contract_input_edit_result() {
 }
 
 #[test]
+fn contract_prune_result() {
+    contract::<PruneResult>("PruneResult");
+}
+
+#[test]
+fn contract_kept_unit() {
+    contract::<KeptUnit>("KeptUnit");
+}
+
+#[test]
+fn contract_project_summary() {
+    contract::<ProjectSummary>("ProjectSummary");
+}
+
+#[test]
+fn contract_project_icon_summary() {
+    contract::<ProjectIconSummary>("ProjectIconSummary");
+}
+
+#[test]
 fn contract_unsupported_input() {
     contract::<UnsupportedInput>("UnsupportedInput");
 }
@@ -688,6 +708,7 @@ fn contract_prepared_edit() {
             reason: value["reason"].as_str().unwrap().into(),
             inputs: None,
             prune: None,
+            steps: None,
         };
         assert_eq!(serde_json::to_value(&prepared).unwrap(), *value);
         assert!(matches_schema(&schema, &schema, value));

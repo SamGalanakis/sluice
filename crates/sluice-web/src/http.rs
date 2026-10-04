@@ -427,6 +427,7 @@ impl step::CommandService for SocketOwnerCommands {
                     CommandRequest::StepPause(StepPause {
                         project,
                         selection,
+                        subtree: false,
                         paused: command.action == step::Action::Pause,
                         edit,
                     })
