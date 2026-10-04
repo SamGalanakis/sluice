@@ -206,6 +206,8 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
     } else {
         30
     };
+    let settings_response =
+        parts.uri.path().starts_with("/projects/id/") && parts.uri.path().ends_with("/settings");
     let request = Request::from_parts(parts, Body::from(bytes));
     let mut response =
         match tokio::time::timeout(Duration::from_secs(budget), next.run(request)).await {
@@ -221,7 +223,10 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
         && !response
             .headers()
             .get(header::CONTENT_TYPE)
-            .is_some_and(|v| v.as_bytes().starts_with(b"application/json"))
+            .is_some_and(|v| {
+                v.as_bytes().starts_with(b"application/json")
+                    || (settings_response && v.as_bytes().starts_with(b"text/html"))
+            })
     {
         let status = response.status();
         let (parts, body) = response.into_parts();

@@ -37,7 +37,7 @@
 .settings-danger h2 { color:var(--status-attention); }
 .settings-danger button { color:var(--status-attention); border-color:var(--status-attention); }
 .settings-danger button:disabled { opacity:.6; cursor:not-allowed; }
-.settings-feedback { min-height:1.3em; }
+.settings-feedback { min-height:1.3em; min-width:0; max-width:100%; overflow-wrap:anywhere; white-space:normal; }
 @media(max-width:720px) {
  .setting-row { grid-template-columns:minmax(0,1fr); gap:6px; }
  .setting-row dt { padding:0; }
