@@ -29,6 +29,7 @@ pub struct CodexOptions {
     pub sluice_home: PathBuf,
     pub search: bool,
     pub request_timeout: Duration,
+    pub environment: BTreeMap<String, String>,
 }
 impl CodexOptions {
     pub fn new(binary: PathBuf, source_home: PathBuf, sluice_home: PathBuf) -> Self {
@@ -38,6 +39,7 @@ impl CodexOptions {
             sluice_home,
             search: false,
             request_timeout: Duration::from_secs(30),
+            environment: super::super::environment::host_environment(),
         }
     }
 }
@@ -457,6 +459,8 @@ impl Codex {
                 probe_deadline,
                 Command::new(&self.options.binary)
                     .arg("--version")
+                    .env_clear()
+                    .envs(&self.options.environment)
                     .kill_on_drop(true)
                     .output(),
             )
@@ -503,16 +507,26 @@ impl Codex {
                         "Codex session home is missing",
                     ));
                 }
-                if saved.home != target && !target.exists() {
-                    let staging = target.with_extension("clone");
-                    if staging.exists() {
-                        return Err(local("incomplete Codex home clone requires reconciliation"));
+                let owned = !saved.home.is_symlink()
+                    && fs::canonicalize(&saved.home).map_err(local)?.parent()
+                        == Some(fs::canonicalize(&homes).map_err(local)?.as_path());
+                if owned {
+                    saved.home
+                } else {
+                    if saved.home != target && !target.exists() {
+                        let staging = target.with_extension("clone");
+                        if staging.exists() {
+                            return Err(local(
+                                "incomplete Codex home clone requires reconciliation",
+                            ));
+                        }
+                        if let Err(e) = copy_tree(&saved.home, &staging) {
+                            let _ = fs::remove_dir_all(&staging);
+                            return Err(local(e));
+                        }
+                        fs::rename(staging, &target).map_err(local)?;
                     }
-                    if let Err(e) = copy_tree(&saved.home, &staging) {
-                        let _ = fs::remove_dir_all(&staging);
-                        return Err(local(e));
-                    }
-                    fs::rename(staging, &target).map_err(local)?;
+                    target
                 }
             } else if let Some((rollout, _)) = self.rollout(session)? {
                 private_dir(&target).map_err(local)?;
@@ -523,8 +537,13 @@ impl Codex {
                 private_dir(dest.parent().ok_or_else(|| local("invalid rollout"))?)
                     .map_err(local)?;
                 atomic_private(&dest, &fs::read(rollout).map_err(local)?).map_err(local)?;
+                target
+            } else {
+                return Err(error(
+                    EngineErrorKind::MissingSession,
+                    "Codex session home is missing",
+                ));
             }
-            target
         } else {
             let run = context
                 .run_dir
@@ -548,7 +567,8 @@ impl Codex {
         let socket_dir = unique_socket_dir().map_err(local)?;
         let socket = socket_dir.join("app.sock");
         self.socket_dir = Some(socket_dir);
-        let mut env = BTreeMap::from([
+        let mut env = self.options.environment.clone();
+        env.extend(BTreeMap::from([
             ("CODEX_HOME".into(), private.to_string_lossy().into_owned()),
             (
                 "SLUICE_HOME".into(),
@@ -561,7 +581,7 @@ impl Codex {
             ("GIT_TERMINAL_PROMPT".into(), "0".into()),
             ("GIT_EDITOR".into(), "true".into()),
             ("GIT_MERGE_AUTOEDIT".into(), "no".into()),
-        ]);
+        ]));
         if let Ok(path) = std::env::var("SLUICE_HOST_PATH") {
             env.insert("PATH".into(), path);
         }
@@ -577,6 +597,7 @@ impl Codex {
             .args(["app-server", "--listen"])
             .arg(format!("unix://{}", socket.display()))
             .current_dir(&context.cwd)
+            .env_clear()
             .envs(&env)
             .env_remove("PYTHONPATH")
             .env_remove("VIRTUAL_ENV")

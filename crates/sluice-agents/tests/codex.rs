@@ -1067,7 +1067,6 @@ async fn supervisor_predecessor_cwd_mismatch_starts_fresh() {
 
 // g3-fix owns native generation cloning. Real Codex creates these links in CODEX_HOME/tmp.
 #[tokio::test]
-#[ignore = "g3-fix: native resume rejects real Codex tmp/arg0 executable symlinks"]
 async fn supervisor_codex_resume_with_native_temporary_executable_links() {
     let scratch = Scratch::new();
     let (mut adapter, context) = setup(&scratch, "normal");
@@ -1091,5 +1090,79 @@ async fn supervisor_codex_resume_with_native_temporary_executable_links() {
         .await
         .unwrap();
     assert_eq!(resumed.session, first.session);
+    assert!(adapter.server_pid().is_none());
+}
+
+// Ported from p5-05's native temporary-link regression.
+#[tokio::test]
+async fn codex_resume_with_native_temporary_executable_links() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "normal");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "original task").await;
+    let first = completed(&mut adapter, &context, 1).await;
+    let session = first.session_id.unwrap();
+    let home = adapter.session_home(&session).unwrap().unwrap();
+    let temporary = home.join("tmp/arg0/codex-arg0-fixture");
+    fs::create_dir_all(&temporary).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/true", temporary.join("apply_patch")).unwrap();
+    adapter.close().await.unwrap();
+    adapter.prepare(&context, Some(&session)).await.unwrap();
+    adapter
+        .execute(
+            &context,
+            EngineCommand::Resume {
+                session: session.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    text(
+        &mut adapter,
+        &context,
+        InputId::Continue { attempt: 2 },
+        "continue",
+    )
+    .await;
+    assert_eq!(
+        completed(&mut adapter, &context, 1)
+            .await
+            .session_id
+            .as_deref(),
+        Some(session.as_str())
+    );
+    assert_eq!(adapter.private_home(), Some(home.as_path()));
+    assert!(temporary.join("apply_patch").is_symlink());
+    adapter.close().await.unwrap();
+    assert!(adapter.server_pid().is_none());
+}
+
+#[tokio::test]
+async fn imported_home_with_executable_symlink_is_still_rejected() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "normal");
+    let imported = scratch.path().join("imported");
+    fs::create_dir_all(imported.join("tmp/arg0")).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/true", imported.join("tmp/arg0/apply_patch")).unwrap();
+    let registry = scratch.path().join("home/codex-native-sessions");
+    fs::create_dir_all(&registry).unwrap();
+    fs::write(
+        registry.join("imported.json"),
+        json!({"home":imported,"cwd":context.cwd}).to_string(),
+    )
+    .unwrap();
+    let error = adapter
+        .prepare(&context, Some("imported"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, EngineErrorKind::Fatal);
+    assert!(error.message.contains("symlink"), "{error}");
+    assert!(
+        !scratch
+            .path()
+            .join("home/codex-native-homes/imported")
+            .exists()
+    );
+    assert!(imported.join("tmp/arg0/apply_patch").is_symlink());
     assert!(adapter.server_pid().is_none());
 }

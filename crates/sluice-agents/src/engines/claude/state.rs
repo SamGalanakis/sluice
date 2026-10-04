@@ -413,6 +413,7 @@ pub struct Claude {
     transient_fault: bool,
     outgoing: VecDeque<Delivery>,
     prepared_session: Option<String>,
+    environment: BTreeMap<String, String>,
 }
 impl Claude {
     pub fn new(binary: PathBuf, home: PathBuf, hook_binary: PathBuf, run: RunId) -> Self {
@@ -433,6 +434,7 @@ impl Claude {
             transient_fault: false,
             outgoing: VecDeque::new(),
             prepared_session: None,
+            environment: super::super::environment::host_environment(),
         }
     }
     pub fn from_environment() -> Result<Self, EngineError> {
@@ -456,6 +458,10 @@ impl Claude {
     }
     pub fn with_mcp(mut self, config: Option<String>) -> Self {
         self.mcp = config;
+        self
+    }
+    pub fn with_environment(mut self, environment: BTreeMap<String, String>) -> Self {
+        self.environment = environment;
         self
     }
     /// One injected transient after a completed turn, for the labelled acceptance gate.
@@ -846,6 +852,7 @@ impl EngineAdapter for Claude {
             ));
         }
         let mut command = Command::new(&self.binary);
+        command.env_clear().envs(&self.environment);
         for name in profile::SCRUB_ENV {
             command.env_remove(name);
         }
@@ -915,7 +922,8 @@ impl EngineAdapter for Claude {
         .map_err(io_error)?;
         let argv = profile::argv(&self.binary, &settings, session, self.mcp.as_deref());
         self.context = Some(context);
-        let env = BTreeMap::from([
+        let mut env = self.environment.clone();
+        env.extend(BTreeMap::from([
             (
                 "CLAUDE_CONFIG_DIR".into(),
                 self.home.to_string_lossy().into_owned(),
@@ -938,7 +946,7 @@ impl EngineAdapter for Claude {
             ("GIT_TERMINAL_PROMPT".into(), "0".into()),
             ("GIT_EDITOR".into(), "true".into()),
             ("GIT_MERGE_AUTOEDIT".into(), "no".into()),
-        ]);
+        ]));
         Ok(Some(EngineLaunch { argv, env }))
     }
     async fn execute(

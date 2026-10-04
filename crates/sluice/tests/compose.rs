@@ -25,7 +25,13 @@ struct Gate {
 }
 impl Gate {
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        Self::configured(|_| {})
+    }
+    fn configured(configure: impl FnOnce(&mut Self)) -> Self {
+        let temp = tempfile::Builder::new()
+            .prefix("sluice-test-compose-")
+            .tempdir_in("/tmp")
+            .unwrap();
         let home = temp.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let bin = temp.path().join("bin");
@@ -73,6 +79,7 @@ impl Gate {
             env,
             project: ProjectId::new(),
         };
+        configure(&mut gate);
         gate.boot();
         let CommandReply::Project(p)=gate.rpc(json!({"command":"project_create","args":{"name":"compose","description":"composition fixture","icon":null,"resources":{"section":1},"author":"test"}})) else {panic!("project")};
         gate.project = p.project_id;
@@ -100,8 +107,13 @@ impl Gate {
         while !condition(self) {
             assert!(
                 Instant::now() < deadline,
-                "timed out, broker: {}",
-                std::fs::read_to_string(self.home.join("broker.log")).unwrap_or_default()
+                "timed out, broker: {}, status: {}",
+                std::fs::read_to_string(self.home.join("broker.log")).unwrap_or_default(),
+                if self.home.join("coordinator.sock").exists() {
+                    self.status()
+                } else {
+                    Value::Null
+                }
             );
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -195,6 +207,31 @@ impl Gate {
 impl Drop for Gate {
     fn drop(&mut self) {
         let _ = &self.temp;
+        if std::thread::panicking() {
+            let evidence = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/g3-fix-evidence")
+                .join(self.temp.path().file_name().unwrap());
+            if let Ok(runs) = std::fs::read_dir(self.home.join("runs")) {
+                for run in runs.flatten() {
+                    let dest = evidence.join(run.file_name());
+                    let _ = std::fs::create_dir_all(&dest);
+                    for name in [
+                        "native.json",
+                        "stderr-tail.log",
+                        "engine-environments.jsonl",
+                        "fixture-events.jsonl",
+                        "fixture-errors.log",
+                        "devin-hooks.jsonl",
+                        "devin.log",
+                        "fixture-hook-replies.jsonl",
+                        "app-server.log",
+                        "codex-wire.jsonl",
+                    ] {
+                        let _ = std::fs::copy(run.path().join(name), dest.join(name));
+                    }
+                }
+            }
+        }
         if let Some(mut child) = self.broker.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -244,6 +281,349 @@ fn bindings(values: Value) -> Value {
 }
 fn agent(g: &Gate) -> Value {
     json!({"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":g.temp.path(),"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}})
+}
+fn native_factory(engine: &str) {
+    use sluice_agents::{
+        delivery::DeliveryState,
+        engines::InputId,
+        supervisor::{Checkpoint, State},
+    };
+    let g = Gate::configured(|g| {
+        let root = g.temp.path();
+        let owner = root.join("owner");
+        for suffix in [
+            ".codex",
+            ".claude",
+            ".config/devin",
+            ".local/share",
+            ".cache",
+            ".local/state",
+        ] {
+            std::fs::create_dir_all(owner.join(suffix)).unwrap();
+        }
+        std::fs::write(owner.join(".codex/config.toml"), "").unwrap();
+        std::fs::write(owner.join(".codex/auth.json"), "fake credential").unwrap();
+        std::fs::write(owner.join(".config/devin/config.json"), "{}").unwrap();
+        let cwd = root.join("work");
+        std::fs::create_dir(&cwd).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Scratch"],
+            vec!["config", "user.email", "scratch@example.invalid"],
+            vec!["commit", "-q", "--allow-empty", "-m", "Initialize scratch"],
+        ] {
+            assert!(
+                Command::new("/usr/bin/git")
+                    .args(args)
+                    .current_dir(&cwd)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let bin = root.join("bin");
+        symlink("/usr/bin/stty", bin.join("stty")).unwrap();
+        let path = bin.to_string_lossy().into_owned();
+        // Deliberately contaminate PATH. Engines must restore the explicitly pinned host PATH.
+        g.env
+            .insert("PATH".into(), format!("/missing-virtualenv/bin:{path}"));
+        g.env.insert("SLUICE_HOST_PATH".into(), path);
+        for (key, suffix) in [
+            ("HOME", ""),
+            ("CODEX_HOME", ".codex"),
+            ("CLAUDE_CONFIG_DIR", ".claude"),
+            ("XDG_CONFIG_HOME", ".config"),
+            ("XDG_DATA_HOME", ".local/share"),
+            ("XDG_CACHE_HOME", ".cache"),
+            ("XDG_STATE_HOME", ".local/state"),
+        ] {
+            g.env.insert(
+                key.into(),
+                owner.join(suffix).to_string_lossy().into_owned(),
+            );
+        }
+        g.env.insert("PYTHONHOME".into(), "/missing-python".into());
+        g.env.insert("CLAUDECODE".into(), "parent".into());
+        g.env.insert("SLUICE_BACKOFF".into(), "1".into());
+        g.env.insert("SLUICE_AGENT_POLL_S".into(), "0.02".into());
+        g.env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.1".into());
+        g.env
+            .insert("SLUICE_AGENT_GRACE_MIN".into(), "0.003".into());
+        g.env.insert("LANG".into(), "C.UTF-8".into());
+        g.env.insert("TERM".into(), "xterm-256color".into());
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        g.env.insert(
+            "SLUICE_TMUX_PREFIX".into(),
+            workspace
+                .join("target/private-tmux")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let config = root.join("native-fixture.json");
+        std::fs::write(&config, json!({"prompts":root.join("devin-prompts.jsonl"),"turns":[{"busy_s":0.05,"busy_ms":50,"reply":"first"},{"busy_s":0.05,"busy_ms":50,"reply":"continued"}]}).to_string()).unwrap();
+        g.env.insert(
+            "SLUICE_FAKE_CLAUDE".into(),
+            config.to_string_lossy().into_owned(),
+        );
+        g.env
+            .insert("FAKE_DEVIN".into(), config.to_string_lossy().into_owned());
+        g.env.insert("SLUICE_CODEX_FIXTURE".into(), "tui".into());
+        let executable = bin.join(engine);
+        let script = format!(
+            "#!/bin/sh\nset -e\ncase \"$1\" in --version|--help) exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
+            workspace.join("target/debug/fixture").display(),
+            if engine == "codex" {
+                "case \"$1\" in -c) exec /usr/bin/sleep 600 ;; esac"
+            } else {
+                ""
+            },
+            workspace.join("target/debug/fixture").display()
+        );
+        std::fs::write(&executable, script).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        g.env.insert(
+            format!("SLUICE_{}_BIN", engine.to_uppercase()),
+            executable.to_string_lossy().into_owned(),
+        );
+        std::fs::write(
+            g.home.join("turn-committed"),
+            "inject after a completed turn",
+        )
+        .unwrap();
+    });
+    let cwd = g.temp.path().join("work");
+    let baseline = String::from_utf8(
+        Command::new("/usr/bin/git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&cwd)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":engine,"cwd":cwd,"spec":"Complete a fake turn"})),"outputs":{"word":"string"}}}));
+    let _lease = g.lease();
+    g.wait(|g| g.status()["steps"]["work"]["run_ids"][0].is_string());
+    let run = g.run("work");
+    let directory = g.home.join("runs").join(&run);
+    g.wait(|_| {
+        Checkpoint::read(&directory)
+            .ok()
+            .flatten()
+            .is_some_and(|c| c.state == State::Backoff)
+    });
+    let first = Checkpoint::read(&directory).unwrap().unwrap();
+    let session = first.session.clone().unwrap();
+    if engine == "claude" {
+        // A shutdown callback already accepted by the guardian can outlive the old pane.
+        let journal = directory.join("engine-hooks");
+        std::fs::create_dir_all(&journal).unwrap();
+        std::fs::write(journal.join("stale.request.json"), json!({"run":run,"engine":"claude","event":"SessionEnd","payload":{"hook_event_name":"SessionEnd","session_id":session,"cwd":cwd,"transcript_path":g.temp.path().join("owner/.claude/projects/fixture").join(format!("{session}.jsonl"))}}).to_string()).unwrap();
+    }
+    g.wait(|_| {
+        Checkpoint::read(&directory)
+            .ok()
+            .flatten()
+            .is_some_and(|c| {
+                c.internal_attempt == 2
+                    && c.delivery.entries.iter().any(|e| {
+                        e.id == InputId::Continue { attempt: 2 }
+                            && e.state == DeliveryState::Acknowledged
+                    })
+            })
+    });
+    if engine == "devin" {
+        let addressed = g.post("work", "Addressed input before feedback retry");
+        g.wait(|_| {
+            Checkpoint::read(&directory)
+                .ok()
+                .flatten()
+                .is_some_and(|c| {
+                    c.delivery.entries.iter().any(|e| {
+                        e.id == InputId::Message {
+                            id: sluice_model::ids::MessageId(addressed),
+                        } && e.state == DeliveryState::Acknowledged
+                    })
+                })
+        });
+    }
+    g.rpc(json!({"command":"step_submit","args":{"project":g.project,"step":"work","run":run,"outputs":{"word":"blue"},"author":"fixture"}}));
+    let done = g.terminal("work");
+    assert_eq!(done["status"], "succeeded", "{engine}: {done}");
+    let checkpoint = Checkpoint::read(&directory).unwrap().unwrap();
+    assert_eq!(checkpoint.internal_attempt, 2);
+    assert_eq!(checkpoint.session.as_deref(), Some(session.as_str()));
+    assert_eq!(checkpoint.head_before.as_deref(), Some(baseline.as_str()));
+    assert_eq!(
+        checkpoint
+            .delivery
+            .entries
+            .iter()
+            .find(|e| e.id == InputId::Task)
+            .unwrap()
+            .tries,
+        1
+    );
+    let count = Command::new("/usr/bin/git")
+        .args(["rev-list", "--count", &format!("{baseline}..HEAD")])
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&count.stdout).trim(), "2");
+    let environments: Vec<Value> =
+        std::fs::read_to_string(directory.join("engine-environments.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+    assert!(environments.len() >= 2);
+    for env in environments {
+        for key in [
+            "HOME",
+            "PATH",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_STATE_HOME",
+            "LANG",
+            "TERM",
+        ] {
+            let expected = if key == "PATH" {
+                &g.env["SLUICE_HOST_PATH"]
+            } else {
+                &g.env[key]
+            };
+            assert_eq!(
+                env[key].as_str(),
+                Some(expected.as_str()),
+                "{engine}: {key}"
+            );
+        }
+        for (key, value) in [
+            ("SLUICE_HOME", g.home.to_string_lossy().into_owned()),
+            ("SLUICE_BIN", env!("CARGO_BIN_EXE_sluice").into()),
+            ("SLUICE_PROJECT_ID", g.project.to_string()),
+            ("SLUICE_PROJECT", "compose".into()),
+            (
+                "SLUICE_PROJECT_DIR",
+                g.home
+                    .join("projects")
+                    .join(g.project.to_string())
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "SLUICE_CONTROL_SOCKET",
+                directory
+                    .join("control.sock")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ("SLUICE_STEP", "work".into()),
+            ("SLUICE_RUN_ID", run.clone()),
+            ("SLUICE_RUN_DIR", directory.to_string_lossy().into_owned()),
+            ("SLUICE_FN_DIR", directory.to_string_lossy().into_owned()),
+            ("SLUICE_PREV_RUN", "".into()),
+        ] {
+            assert_eq!(env[key], value, "{engine}: {key}");
+        }
+        assert_eq!(env["callback_capability"], true);
+        assert_eq!(env["unrelated"], false);
+        assert_eq!(env["contaminated"], false);
+        let key = match engine {
+            "codex" => "CODEX_HOME",
+            "claude" => "CLAUDE_CONFIG_DIR",
+            _ => "XDG_DATA_HOME",
+        };
+        if engine == "codex" {
+            assert!(
+                Path::new(env[key].as_str().unwrap())
+                    .starts_with(g.home.join("codex-native-homes"))
+            );
+        } else {
+            assert_eq!(env[key], g.env[key]);
+        }
+    }
+    if engine == "claude" {
+        let reply: Value = serde_json::from_slice(
+            &std::fs::read(directory.join("engine-hooks/stale.reply.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            reply["Err"].is_object(),
+            "stale hook must not enter the resumed adapter"
+        );
+        let prompts = std::fs::read_to_string(directory.join("fixture-prompts.jsonl")).unwrap();
+        assert_eq!(
+            prompts
+                .lines()
+                .filter(|line| line.contains("Your task is in"))
+                .count(),
+            1
+        );
+    }
+    assert!(std::os::unix::net::UnixStream::connect(directory.join("tmux.sock")).is_err());
+    if engine == "devin" {
+        // Port p5-05's addressed-input/feedback sequence and force the missing Stop.
+        let config = g.temp.path().join("native-fixture.json");
+        std::fs::write(config, json!({"prompts":g.temp.path().join("devin-prompts.jsonl"),"turns":[{"reply":"task done"},{"exit_before_stop":true}]}).to_string()).unwrap();
+        g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":"Resume after addressed input","reason":"fixture feedback","author":"fixture"}}));
+        g.wait(|g| {
+            g.status()["steps"]["work"]["run_ids"][0]
+                .as_str()
+                .is_some_and(|id| id != run)
+        });
+        let feedback_run = g.run("work");
+        let failed = g.terminal("work");
+        assert_eq!(failed["status"], "failed", "{failed}");
+        assert_eq!(failed["error"]["kind"], "EngineExited", "{failed}");
+        let cp = Checkpoint::read(&g.home.join("runs").join(feedback_run))
+            .unwrap()
+            .unwrap();
+        assert_eq!(cp.session.as_deref(), Some(session.as_str()));
+        assert!(
+            cp.delivery
+                .entries
+                .iter()
+                .any(|e| matches!(e.id, InputId::Message { .. })
+                    && e.state == DeliveryState::Acknowledged)
+        );
+    }
+}
+const NATIVE_ENV_PROBE: &str = r#"import json, os, pathlib, subprocess
+run = pathlib.Path(os.environ['SLUICE_RUN_DIR'])
+keys = ['HOME','PATH','XDG_CONFIG_HOME','XDG_DATA_HOME','XDG_CACHE_HOME','XDG_STATE_HOME','LANG','TERM','SLUICE_HOME','SLUICE_BIN','SLUICE_PROJECT_ID','SLUICE_PROJECT','SLUICE_STEP','SLUICE_RUN_ID','SLUICE_RUN_DIR','SLUICE_PROJECT_DIR','SLUICE_CONTROL_SOCKET','SLUICE_FN_DIR','SLUICE_PREV_RUN','CODEX_HOME','CLAUDE_CONFIG_DIR']
+snapshot = {key: os.environ.get(key) for key in keys}
+snapshot['callback_capability'] = bool(os.environ.get('SLUICE_RUN_CAPABILITY'))
+snapshot['unrelated'] = 'COMPOSITION_ENV_FIXTURE' in os.environ
+snapshot['contaminated'] = any(key in os.environ for key in ['PYTHONHOME','VIRTUAL_ENV','PYTHONPATH','CLAUDECODE'])
+with (run / 'engine-environments.jsonl').open('a') as f:
+    f.write(json.dumps(snapshot) + '\n')
+attempt = json.loads((run / 'native.json').read_text())['internal_attempt']
+marker = pathlib.Path.cwd() / ('commit-' + str(attempt))
+if not marker.exists():
+    marker.write_text('fake turn')
+    subprocess.run(['/usr/bin/git','add',marker.name], check=True)
+    subprocess.run(['/usr/bin/git','commit','-qm','Record fake invocation ' + str(attempt)], check=True)
+if 'CODEX_HOME' in os.environ:
+    tmp = pathlib.Path(os.environ['CODEX_HOME']) / 'tmp/arg0/fake'
+    tmp.mkdir(parents=True, exist_ok=True)
+    link = tmp / 'apply_patch'
+    if not link.is_symlink(): link.symlink_to('/usr/bin/true')
+"#;
+#[test]
+fn composed_codex_environment_and_same_run_retry() {
+    native_factory("codex");
+}
+#[test]
+fn composed_claude_environment_and_stale_shutdown_retry() {
+    native_factory("claude");
+}
+#[test]
+fn composed_devin_environment_and_resumed_permission_mode() {
+    native_factory("devin");
 }
 #[test]
 fn builtin_python_tools_sections_and_inline_execute_through_guardian() {
@@ -562,6 +942,97 @@ print(json.dumps({'state':'OPEN','headRefOid':'fixture-sha','url':'fixture-url',
         .unwrap(),
         1
     );
+}
+#[test]
+fn coordinator_restart_keeps_native_engine_and_retry_budget() {
+    // Ported from execution review's broker_outage probe.
+    let mut g = Gate::new();
+    g.script(json!({"outputs":{"summary":"complete"},"wait_message":true}));
+    g.plan(json!({"work":agent(&g)}));
+    let lease = g.lease();
+    g.wait(|g| {
+        g.home.join("fake-events.jsonl").exists()
+            && g.events()
+                .iter()
+                .any(|e| e["command"]["id"]["kind"] == "task")
+    });
+    let run = g.run("work");
+    let mut broker = g.broker.take().unwrap();
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    g.boot();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(g.status()["steps"]["work"]["status"], "running");
+    assert_eq!(g.run("work"), run);
+    drop(lease);
+    let _lease = g.lease();
+    g.post("work", "Continue after coordinator reconnect");
+    assert_eq!(g.terminal("work")["status"], "succeeded");
+    let checkpoint = sluice_agents::supervisor::Checkpoint::read(&g.home.join("runs").join(run))
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.internal_attempt, 1);
+    let pids: std::collections::BTreeSet<_> = g
+        .events()
+        .iter()
+        .map(|event| event["pid"].as_u64().unwrap())
+        .collect();
+    assert_eq!(pids.len(), 1);
+}
+fn sequential_messages(live: bool) {
+    // Ported from execution review's sequential_message_delivery probe.
+    let g = Gate::new();
+    g.script(json!({"outputs":{"summary":"done"},"wait_message":live}));
+    g.function("custom.sequential", json!({"cwd":"string"}), json!({"session":"string"}), r#"from sluice_fn import run
+import json, os, pathlib
+def main(inp, ctx):
+    result = ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'First task'})
+    pathlib.Path(os.environ['SLUICE_FAKE_ENGINE_SCRIPT']).write_text(json.dumps({'outputs':{'summary':'done'}}))
+    result = ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'Second task', 'session':result['session']})
+    return {'session':result['session']}
+run(main)
+"#);
+    g.plan(json!({"work":{"run":"custom.sequential","in":bindings(json!({"cwd":g.temp.path()})),"outputs":{"summary":"string"}}}));
+    let assigned = (!live).then(|| g.post("work", "Apply this once"));
+    let _lease = g.lease();
+    let message = assigned.unwrap_or_else(|| {
+        g.wait(|g| {
+            g.home.join("fake-events.jsonl").exists()
+                && g.events()
+                    .iter()
+                    .any(|e| e["command"]["id"]["kind"] == "task")
+        });
+        g.post("work", "Apply this live message once")
+    });
+    let result = g.terminal("work");
+    assert_eq!(result["status"], "succeeded", "{result}");
+    let messages: Vec<_> = g
+        .events()
+        .into_iter()
+        .filter(|e| e["command"]["id"]["kind"] == "message")
+        .collect();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(messages[0]["command"]["id"]["id"], message);
+    let events = g.events();
+    let pids: std::collections::BTreeSet<_> =
+        events.iter().map(|e| e["pid"].as_u64().unwrap()).collect();
+    assert_eq!(pids.len(), 2);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e["command"]["id"]["kind"] == "task")
+            .count(),
+        2
+    );
+}
+#[test]
+fn sequential_composition_retains_acknowledged_assigned_messages() {
+    sequential_messages(false);
+}
+#[test]
+fn sequential_composition_retains_acknowledged_live_messages() {
+    sequential_messages(true);
 }
 const FAKE: &str = r#"#!/usr/bin/python3
 import os, sys, json, socket, struct, pathlib

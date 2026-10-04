@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, future::Future, io, path::PathBuf};
 pub mod claude;
 pub mod codex;
 pub mod devin;
+pub mod environment;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

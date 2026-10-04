@@ -73,7 +73,7 @@ fn arg(args: &[String], name: &str) -> Option<String> {
         .and_then(|i| args.get(i + 1))
         .cloned()
 }
-fn draw(draft: &str, collapsed: bool, wrap: usize, dialog: bool) -> io::Result<()> {
+fn draw(draft: &str, collapsed: bool, wrap: usize, dialog: bool, bypass: bool) -> io::Result<()> {
     let rule = "─".repeat(100);
     let region = if dialog {
         "Select a menu item".into()
@@ -95,7 +95,10 @@ fn draw(draft: &str, collapsed: bool, wrap: usize, dialog: bool) -> io::Result<(
     } else {
         format!("❯ {}", draft.lines().next().unwrap_or(""))
     };
-    print!("\x1b[H\x1b[2J{rule}\r\n{region}\r\n{rule}\r\nswe-2-high");
+    print!(
+        "\x1b[H\x1b[2J{rule}\r\n{region}\r\n{rule}\r\nswe-2-high {}",
+        if bypass { "Bypass mode" } else { "Normal mode" }
+    );
     io::stdout().flush()
 }
 
@@ -147,6 +150,9 @@ pub fn main(args: &[String]) -> io::Result<()> {
         arg(args, "--config").ok_or_else(|| io::Error::other("missing config"))?,
     )?)?;
     let sid = arg(args, "--resume").unwrap_or_else(|| "fixture-devin-session".into());
+    // The pinned real release restores session mode after processing launch flags.
+    let mut bypass =
+        arg(args, "--resume").is_none() || settings["resume_bypass"].as_bool().unwrap_or(false);
     let export =
         PathBuf::from(arg(args, "--export").ok_or_else(|| io::Error::other("missing export"))?);
     let prompts = PathBuf::from(
@@ -189,7 +195,7 @@ pub fn main(args: &[String]) -> io::Result<()> {
     let wrap = settings["wrap"].as_u64().unwrap_or(0) as usize;
     let mut index = 0usize;
     let mut cursor = 0usize;
-    draw(&draft, collapsed, wrap, dialog)?;
+    draw(&draft, collapsed, wrap, dialog, bypass)?;
     loop {
         let mut buf = [0u8; 65536];
         let n = io::stdin().read(&mut buf)?;
@@ -247,6 +253,15 @@ pub fn main(args: &[String]) -> io::Result<()> {
                         hook(&config, "SessionEnd", &sid, json!({}))?;
                         return Ok(());
                     }
+                    if draft.trim() == "/bypass" {
+                        bypass = !bypass;
+                        draft.clear();
+                        collapsed = false;
+                        continue;
+                    }
+                    if !bypass {
+                        return Err(io::Error::other("resumed fixture requires tool approval"));
+                    }
                     let mut file = fs::OpenOptions::new()
                         .create(true)
                         .append(true)
@@ -302,6 +317,9 @@ pub fn main(args: &[String]) -> io::Result<()> {
                         }
                     }
                     let reply = turn["reply"].as_str().unwrap_or("ok");
+                    if turn["exit_before_stop"].as_bool().unwrap_or(false) {
+                        return Ok(());
+                    }
                     hook(
                         &config,
                         "Stop",
@@ -324,6 +342,6 @@ pub fn main(args: &[String]) -> io::Result<()> {
         }
         bytes.drain(..cursor);
         cursor = 0;
-        draw(&draft, collapsed, wrap, dialog)?;
+        draw(&draft, collapsed, wrap, dialog, bypass)?;
     }
 }

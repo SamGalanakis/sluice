@@ -1003,6 +1003,64 @@ async fn devin_transient_resume_keeps_session_and_new_invocation_counters() {
 }
 
 #[tokio::test]
+async fn devin_resume_preserves_already_restored_bypass_mode() {
+    let root = Scratch::new();
+    let opts = options(
+        &root,
+        json!({"resume_bypass":true,"turns":[{"reply":"continued"}]}),
+    );
+    let ctx = context(&root, "resume", true);
+    fs::create_dir_all(opts.data_home.join("devin/cli")).unwrap();
+    assert!(Command::new("/usr/bin/sqlite3")
+        .arg(opts.data_home.join("devin/cli/sessions.db"))
+        .arg(format!("CREATE TABLE sessions(id TEXT PRIMARY KEY, working_directory TEXT); INSERT INTO sessions VALUES('fixture-devin-session','{}');", ctx.cwd.display()))
+        .status().unwrap().success());
+    let mut adapter = Devin::new(opts);
+    let launch = adapter
+        .prepare(&ctx, Some("fixture-devin-session"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(launch.env["DEVIN_PERMISSION_MODE"], "dangerous");
+    assert!(
+        launch
+            .argv
+            .windows(2)
+            .any(|args| args == ["--permission-mode", "dangerous"])
+    );
+    let _pane = Pane::start(&ctx, launch).await;
+    adapter
+        .execute(
+            &ctx,
+            EngineCommand::Resume {
+                session: "fixture-devin-session".into(),
+            },
+        )
+        .await
+        .unwrap();
+    deliver(
+        &mut adapter,
+        &ctx,
+        InputId::Continue { attempt: 2 },
+        "Continue without toggling permission mode",
+    )
+    .await;
+    let observation = poll(&mut adapter, &ctx, |o| o.turns_completed == 1).await;
+    assert_eq!(
+        observation.session_id.as_deref(),
+        Some("fixture-devin-session")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("prompts.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn devin_queued_inputs_restore_a_verified_menu_and_acknowledge_each_id() {
     let root = Scratch::new();
     let mut adapter = Devin::new(options(

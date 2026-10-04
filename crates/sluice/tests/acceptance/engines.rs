@@ -563,17 +563,17 @@ fn g3(engine: &str) {
     );
 }
 #[test]
-#[ignore = "g3-fix: real Codex temporary symlinks currently prevent native transient resume"]
+#[ignore = "real engine: labelled G3 gate"]
 fn g3_codex_fresh_submit_live_feedback_cleanup() {
     g3("codex");
 }
 #[test]
-#[ignore = "g3-fix: real same-session transient resume currently exits before required submit"]
+#[ignore = "real engine: labelled G3 gate"]
 fn g3_claude_fresh_submit_live_feedback_cleanup() {
     g3("claude");
 }
 #[test]
-#[ignore = "g3-fix: resumed real Devin requests interactive command approval"]
+#[ignore = "real engine: labelled G3 gate"]
 fn g3_devin_fresh_submit_live_feedback_cleanup() {
     g3("devin");
 }
@@ -597,7 +597,6 @@ fn public_agent_run_adapter_fixtures_submit_and_feedback_resume() {
 }
 
 #[test]
-#[ignore = "g3-fix: fake Devin loses completion after addressed input followed by feedback"]
 fn regression_devin_guardian_addressed_input_then_feedback() {
     public_adapter_fixture(&["devin"], true);
 }

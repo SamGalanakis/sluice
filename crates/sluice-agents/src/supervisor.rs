@@ -396,6 +396,13 @@ impl SessionGuard {
         }
     }
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageContinuation {
+    pub run: RunId,
+    pub delivery: DeliveryLedger,
+    pub live_after: MessageId,
+}
 pub fn select_session(
     explicit: Option<&str>,
     previous: Option<&PreviousSession>,
@@ -807,6 +814,26 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         if config.internal_attempt != 1 {
             return Err(invalid("transient re-entry requires its checkpoint"));
         }
+        let seed: Option<MessageContinuation> =
+            match fs::read(config.run_dir.join("message-continuation.json")) {
+                Ok(bytes) => Some(decode_json(&bytes).map_err(invalid)?),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(invalid(error)),
+            };
+        if seed.as_ref().is_some_and(|seed| {
+            seed.run != config.run
+                || seed
+                    .delivery
+                    .entries
+                    .iter()
+                    .any(|entry| !matches!(entry.id, InputId::Message { .. }))
+        }) {
+            return Err(invalid("message continuation does not belong to this run"));
+        }
+        let (mut delivery, live_after) = seed
+            .map(|seed| (seed.delivery, seed.live_after.max(config.assigned.through)))
+            .unwrap_or_else(|| (DeliveryLedger::default(), config.assigned.through));
+        delivery.recover();
         Checkpoint {
             version: 1,
             run: config.run,
@@ -825,12 +852,12 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             head_before: git::head(&config.cwd).await.map_err(invalid)?,
             started_ms: clock_ms().map_err(invalid)?,
             state: State::Boot,
-            delivery: DeliveryLedger::default(),
+            delivery,
             submissions: BTreeMap::new(),
             reminded: false,
             nudges: 0,
             compactions: 0,
-            live_after: config.assigned.through,
+            live_after,
             final_text: String::new(),
             notes: vec![],
         }
@@ -901,6 +928,9 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             refresh_me(host, &config.run_dir).await;
             let ready_deadline = deadline.min(tokio::time::Instant::now() + config.limits.ready);
             let startup = async {
+                while pending_hooks(&context.run_dir).map_err(invalid)? {
+                    process_hooks_inner(engine, None, &context.run_dir).map_err(invalid)?;
+                }
                 let launch = bounded(cancel, ready_deadline, engine.prepare(&context, machine.checkpoint.session.as_deref())).await?;
                 if let Some(mut launch) = launch {
                     launch.env.insert("SLUICE_RUN_DIR".into(), context.run_dir.to_string_lossy().into_owned());
@@ -1244,7 +1274,13 @@ async fn clean<E: EngineAdapter, H: SupervisorHost>(
     server_result.map_err(|e| failure(FailureKind::Cleanup, e.to_string()))?;
     proof
         .map_err(|_| failure(FailureKind::Cleanup, "containment cleanup timed out"))?
-        .map_err(|e| failure(FailureKind::Cleanup, e.to_string()))
+        .map_err(|e| failure(FailureKind::Cleanup, e.to_string()))?;
+    // Shutdown hooks belong to the stopped invocation, even when its session and
+    // run will be reused. Settle them before another adapter starts observing.
+    while pending_hooks(&context.run_dir).map_err(invalid)? {
+        process_hooks_inner(engine, None, &context.run_dir).map_err(invalid)?;
+    }
+    Ok(())
 }
 
 /// Foreground server and control client always use the verified release artifact and a
@@ -1255,6 +1291,18 @@ pub struct PrivateTmux {
 }
 impl PrivateTmux {
     pub async fn spawn(artifact: &ApprovedTmux, directory: &Path) -> io::Result<Self> {
+        let socket = directory.join("tmux.sock");
+        if let Ok(metadata) = fs::symlink_metadata(&socket) {
+            use std::os::unix::fs::FileTypeExt;
+            if !metadata.file_type().is_socket()
+                || std::os::unix::net::UnixStream::connect(&socket).is_ok()
+            {
+                return Err(io::Error::other(
+                    "private tmux socket is still owned or is not a socket",
+                ));
+            }
+            fs::remove_file(&socket)?;
+        }
         let command = artifact.server_command(directory, None)?;
         let mut command = tokio::process::Command::from(command);
         command
@@ -1305,6 +1353,13 @@ impl PrivateTmux {
             "AI_AGENT",
         ] {
             env.remove(name);
+        }
+        // tmux replaces the pane PATH with the unattached client's PATH after -e.
+        client.env_clear().envs(&env);
+        if let Some(term) = env.get("TERM") {
+            let mut options = artifact.client_command(&context.run_dir)?;
+            options.args(["set-option", "-g", "default-terminal", term]);
+            command_output(options).await?;
         }
         for (name, value) in env {
             if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
@@ -1366,6 +1421,31 @@ pub fn process_hooks<E: EngineAdapter>(
     run: RunId,
     directory: &Path,
 ) -> io::Result<()> {
+    process_hooks_inner(engine, Some(run), directory)
+}
+fn pending_hooks(directory: &Path) -> io::Result<bool> {
+    match fs::read_dir(directory.join("engine-hooks")) {
+        Ok(entries) => {
+            for entry in entries {
+                if entry?
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".request.json")
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+fn process_hooks_inner<E: EngineAdapter>(
+    engine: &mut E,
+    run: Option<RunId>,
+    directory: &Path,
+) -> io::Result<()> {
     use sluice_model::error::PublicError;
     use sluice_process::socket::{EngineHookReply, EngineHookRequest};
     let journal = directory.join("engine-hooks");
@@ -1396,12 +1476,17 @@ pub fn process_hooks<E: EngineAdapter>(
         fs::File::open(&journal)?.sync_all()?;
         let result: Result<EngineHookReply, PublicError> = if request.engine
             != engine.profile().engine
-            || request.run != run
+            || Some(request.run) != run
             || request.event.len() > 128
             || request.event.is_empty()
         {
             Err(PublicError::BadRequest {
-                message: "hook run/event mismatch".into(),
+                message: if run.is_none() {
+                    "hook belongs to a stopped invocation"
+                } else {
+                    "hook run/event mismatch"
+                }
+                .into(),
             })
         } else {
             engine

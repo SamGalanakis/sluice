@@ -325,6 +325,72 @@ impl AgentFactory for Factory {
             &prompt,
         )?;
         let bin = std::env::current_exe().map_err(invalid)?;
+        let mut environment = environment::host_environment();
+        for (name, value) in [
+            ("SLUICE_HOME", self.home.to_string_lossy().into_owned()),
+            ("SLUICE_BIN", bin.to_string_lossy().into_owned()),
+            ("SLUICE_PROJECT_ID", invocation.project.to_string()),
+            ("SLUICE_PROJECT", self.context.project_name.clone()),
+            (
+                "SLUICE_STEP",
+                invocation
+                    .step
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+            ),
+            ("SLUICE_RUN_ID", invocation.run.to_string()),
+            ("SLUICE_RUN_DIR", directory.to_string_lossy().into_owned()),
+            (
+                "SLUICE_PROJECT_DIR",
+                self.home
+                    .join("projects")
+                    .join(invocation.project.to_string())
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "SLUICE_FN_DIR",
+                self.context
+                    .execution
+                    .fn_dir
+                    .as_ref()
+                    .unwrap_or(&directory)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "SLUICE_PREV_RUN",
+                self.launch
+                    .prev_run
+                    .map(|run| run.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                "SLUICE_CONTROL_SOCKET",
+                outer_dir
+                    .join("control.sock")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "SLUICE_RUN_CAPABILITY",
+                serde_json::to_value(&self.launch.capability)
+                    .map_err(invalid)?
+                    .as_str()
+                    .ok_or_else(|| invalid("invalid capability"))?
+                    .to_owned(),
+            ),
+        ] {
+            environment.insert(name.into(), value);
+        }
+        if std::env::var_os("SLUICE_FIXTURE").is_some() {
+            for name in ["SLUICE_FAKE_CLAUDE", "FAKE_DEVIN", "SLUICE_CODEX_FIXTURE"] {
+                if let Ok(value) = std::env::var(name) {
+                    environment.insert(name.into(), value);
+                }
+            }
+        }
         let engine = match request.engine.as_str() {
             "fake" => {
                 let binary = std::env::var_os("SLUICE_FAKE_ENGINE_BIN")
@@ -340,17 +406,22 @@ impl AgentFactory for Factory {
                     self.home.clone(),
                 )))
             }
-            "codex" => Adapter::Codex(Box::new(codex::Codex::new(codex::CodexOptions::new(
-                std::env::var_os("SLUICE_CODEX_BIN")
-                    .unwrap_or_else(|| "codex".into())
-                    .into(),
-                std::env::var_os("CODEX_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| {
-                        PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
-                    }),
-                self.home.clone(),
-            )))),
+            "codex" => {
+                let mut options = codex::CodexOptions::new(
+                    std::env::var_os("SLUICE_CODEX_BIN")
+                        .unwrap_or_else(|| "codex".into())
+                        .into(),
+                    std::env::var_os("CODEX_HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| {
+                            PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                                .join(".codex")
+                        }),
+                    self.home.clone(),
+                );
+                options.environment = environment.clone();
+                Adapter::Codex(Box::new(codex::Codex::new(options)))
+            }
             "claude" => Adapter::Claude(Box::new(
                 claude::Claude::new(
                     std::env::var_os("SLUICE_CLAUDE_BIN")
@@ -365,10 +436,12 @@ impl AgentFactory for Factory {
                     bin.clone(),
                     invocation.run,
                 )
-                .with_mcp(std::env::var("SLUICE_CLAUDE_MCP_CONFIG").ok()),
+                .with_mcp(std::env::var("SLUICE_CLAUDE_MCP_CONFIG").ok())
+                .with_environment(environment.clone()),
             )),
             "devin" => Adapter::Devin(Box::new(devin::Devin::new(devin::DevinOptions {
                 hook_binary: bin.clone(),
+                environment,
                 ..Default::default()
             }))),
             _ => return Err(invalid("unknown engine")),
@@ -388,10 +461,51 @@ impl AgentFactory for Factory {
             path: self.home.join("coordinator.sock"),
             capability: self.launch.capability.clone(),
         };
-        let messages =
+        let mut messages: Vec<socket::DeliveryMessage> =
             decode_json(&std::fs::read(outer_dir.join("messages.json")).map_err(invalid)?)
                 .map_err(invalid)?;
         let existing = Checkpoint::read(&directory).map_err(invalid)?;
+        let acknowledgements: Vec<DeliveryAck> =
+            match std::fs::read(outer_dir.join("delivery.json")) {
+                Ok(bytes) => decode_json(&bytes).map_err(invalid)?,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(invalid(error)),
+            };
+        let acknowledged = |id: MessageId| {
+            acknowledgements
+                .iter()
+                .any(|ack| ack.invocation == self.launch.invocation.invocation && ack.message == id)
+        };
+        messages.retain(|message| !acknowledged(message.id));
+        if directory != outer_dir
+            && existing.is_none()
+            && let Some(parent) = Checkpoint::read(&outer_dir).map_err(invalid)?
+        {
+            if parent.run != invocation.run {
+                return Err(invalid("parent message checkpoint belongs to another run"));
+            }
+            let mut delivery = parent.delivery;
+            delivery
+                .entries
+                .retain(|entry| matches!(entry.id, InputId::Message { .. }));
+            for entry in &mut delivery.entries {
+                if let InputId::Message { id } = entry.id
+                    && acknowledged(id)
+                {
+                    entry.state = sluice_agents::delivery::DeliveryState::Acknowledged;
+                }
+            }
+            let seed = MessageContinuation {
+                run: invocation.run,
+                delivery,
+                live_after: parent.live_after,
+            };
+            std::fs::write(
+                directory.join("message-continuation.json"),
+                serde_json::to_vec(&seed).map_err(invalid)?,
+            )
+            .map_err(invalid)?;
+        }
         let previous = self
             .launch
             .prev_run
@@ -474,11 +588,34 @@ pub struct RunHost {
     directory: PathBuf,
     cancel: CancellationToken,
 }
+impl RunHost {
+    async fn read(&self, request: C) -> io::Result<R> {
+        loop {
+            let result = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => return Err(io::Error::new(io::ErrorKind::Interrupted, "agent cancelled")),
+                result = self.link.request(request.clone()) => result,
+            };
+            match result {
+                Ok(reply) => return Ok(reply),
+                Err(sluice_model::error::PublicError::Busy {
+                    retryable: true, ..
+                }) => {
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => return Err(io::Error::new(io::ErrorKind::Interrupted, "agent cancelled")),
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {},
+                    }
+                }
+                Err(error) => return Err(io::Error::other(error)),
+            }
+        }
+    }
+}
 impl SupervisorHost for RunHost {
     async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
         let submissions = match self
-            .link
-            .request(C::Submissions(self.launch.identity.clone()))
+            .read(C::Submissions(self.launch.identity.clone()))
             .await
             .map_err(io::Error::other)?
         {
@@ -491,8 +628,7 @@ impl SupervisorHost for RunHost {
             _ => return Err(io::Error::other("submission reply")),
         };
         let messages = match self
-            .link
-            .request(C::Messages {
+            .read(C::Messages {
                 identity: self.launch.identity.clone(),
                 after,
                 through: None,
@@ -505,8 +641,7 @@ impl SupervisorHost for RunHost {
             _ => return Err(io::Error::other("message reply")),
         };
         if let R::CancelIntent(true) = self
-            .link
-            .request(C::CancelIntent(self.launch.identity.clone()))
+            .read(C::CancelIntent(self.launch.identity.clone()))
             .await
             .map_err(io::Error::other)?
         {

@@ -25,7 +25,7 @@ pub struct DevinOptions {
     pub hook_binary: PathBuf,
     pub config: PathBuf,
     pub data_home: PathBuf,
-    /// Private engine homes for acceptance gates. Production keeps the host environment.
+    /// Explicit host and callback inputs, also used by private pane launches.
     pub environment: BTreeMap<String, String>,
     pub ready_timeout: Duration,
     pub delivery_timeout: Duration,
@@ -48,7 +48,7 @@ impl Default for DevinOptions {
             hook_binary: std::env::current_exe().unwrap_or_else(|_| "sluice".into()),
             config: config.join("devin/config.json"),
             data_home,
-            environment: BTreeMap::new(),
+            environment: super::super::environment::host_environment(),
             ready_timeout: Duration::from_secs(180),
             delivery_timeout: Duration::from_secs(20),
         }
@@ -81,6 +81,7 @@ pub struct Devin {
     inject_transient: bool,
     exit_requested: bool,
     exit_enter: Option<Instant>,
+    restore_mode: Option<(Instant, Option<Instant>)>,
 }
 impl Devin {
     pub fn new(options: DevinOptions) -> Self {
@@ -100,6 +101,7 @@ impl Devin {
             inject_transient: false,
             exit_requested: false,
             exit_enter: None,
+            restore_mode: None,
         }
     }
     /// One observation reports a transient without changing delivery or session evidence.
@@ -353,6 +355,50 @@ impl Devin {
         self.tmux(context, &["capture-pane", "-p", "-t", "%0"])
             .await
     }
+    async fn restore_permission_mode(
+        &mut self,
+        context: &EngineContext,
+    ) -> Result<bool, EngineError> {
+        let Some((began, entered)) = self.restore_mode else {
+            return Ok(true);
+        };
+        let pane = self.capture(context).await?;
+        let footer = pane
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .to_lowercase();
+        if protocol::composer_ready(&pane)
+            && !protocol::draft_visible(&pane, "/bypass")
+            && (footer.contains("bypass mode") || footer.contains("dangerous mode"))
+        {
+            self.restore_mode = None;
+            return Ok(true);
+        }
+        if began.elapsed() >= self.options.ready_timeout {
+            return Err(error(
+                EngineErrorKind::CapabilityMismatch,
+                "Devin resumed permission mode could not be verified as bypass",
+            ));
+        }
+        if entered.is_none() && protocol::composer_ready(&pane) && footer.contains("normal mode") {
+            self.tmux(context, &["send-keys", "-t", "%0", "C-a", "C-k"])
+                .await?;
+            self.tmux(context, &["send-keys", "-t", "%0", "-l", "/bypass"])
+                .await?;
+            self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
+                .await?;
+            self.restore_mode = Some((began, Some(Instant::now())));
+        } else if entered.is_some_and(|t| t.elapsed() >= Duration::from_secs(1))
+            && protocol::draft_visible(&pane, "/bypass")
+        {
+            self.tmux(context, &["send-keys", "-t", "%0", "Enter"])
+                .await?;
+            self.restore_mode = Some((began, Some(Instant::now())));
+        }
+        Ok(false)
+    }
     async fn advance_delivery(&mut self, context: &EngineContext) -> Result<(), EngineError> {
         let Some(pending) = &self.pending else {
             return Ok(());
@@ -460,7 +506,11 @@ async fn output(mut command: Command) -> Result<String, EngineError> {
         .map_err(fatal)?
         .map_err(fatal)?;
     if !out.status.success() {
-        return Err(fatal(format!("Devin probe/client exited {}", out.status)));
+        return Err(fatal(format!(
+            "Devin probe/client exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
     }
     String::from_utf8(out.stdout).map_err(fatal)
 }
@@ -551,10 +601,15 @@ impl EngineAdapter for Devin {
         self.profile()
             .validate_selection(context.model.as_deref(), context.effort.as_deref())?;
         let mut version = Command::new(&self.options.binary);
-        version.arg("--version").envs(&self.options.environment);
+        version
+            .arg("--version")
+            .env_clear()
+            .envs(&self.options.environment);
         let version = output(version).await?;
         let mut help = Command::new(&self.options.binary);
-        help.arg("--help").envs(&self.options.environment);
+        help.arg("--help")
+            .env_clear()
+            .envs(&self.options.environment);
         profile::validate_cli(&version, &output(help).await?)?;
         self.resume = match session {
             Some(session) => {
@@ -600,6 +655,9 @@ impl EngineAdapter for Devin {
         self.stopped.clear();
         self.active_prompt = None;
         self.prepared = Some(context.clone());
+        self.restore_mode = session
+            .filter(|_| context.tmux_binary.is_some())
+            .map(|_| (Instant::now(), None));
         let journal = context.run_dir.join("devin-hooks.jsonl");
         protocol::private_write(&journal, b"").map_err(fatal)?;
         protocol::private_write(&context.run_dir.join("devin.log"), b"").map_err(fatal)?;
@@ -667,6 +725,7 @@ impl EngineAdapter for Devin {
             env.insert("PATH".into(), path);
         }
         env.extend(BTreeMap::from([
+            ("DEVIN_PERMISSION_MODE".into(), "dangerous".into()),
             ("GIT_TERMINAL_PROMPT".into(), "0".into()),
             ("GIT_EDITOR".into(), "true".into()),
             ("GIT_MERGE_AUTOEDIT".into(), "no".into()),
@@ -741,6 +800,35 @@ impl EngineAdapter for Devin {
     }
     async fn observe(&mut self, context: &EngineContext) -> Result<EngineObservation, EngineError> {
         self.read_hooks()?;
+        if context.tmux_binary.is_some() {
+            let panes = match self
+                .tmux(
+                    context,
+                    &["list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"],
+                )
+                .await
+            {
+                Ok(panes) => panes,
+                Err(error)
+                    if error.message.contains("no current target")
+                        || error.message.contains("no server running")
+                        || error.message.contains("no sessions") =>
+                {
+                    String::new()
+                }
+                Err(error) => return Err(error),
+            };
+            if !panes.lines().any(|line| line.trim() == "%0 0") {
+                self.observation.status = EngineStatus::Exited;
+                self.read_export()?;
+                return Ok(self.observation.clone());
+            }
+        }
+        if !self.restore_permission_mode(context).await? {
+            let mut observation = self.observation.clone();
+            observation.status = EngineStatus::Starting;
+            return Ok(observation);
+        }
         if self.observation.status == EngineStatus::Starting
             && !self.exit_requested
             && context.tmux_binary.is_some()
@@ -763,17 +851,6 @@ impl EngineAdapter for Devin {
             }
         }
         self.read_export()?;
-        if context.tmux_binary.is_some() {
-            let dead = self
-                .tmux(
-                    context,
-                    &["display-message", "-p", "-t", "%0", "#{pane_dead}"],
-                )
-                .await?;
-            if dead.trim() == "1" {
-                self.observation.status = EngineStatus::Exited;
-            }
-        }
         let mut observation = self.observation.clone();
         if self.inject_transient {
             self.inject_transient = false;

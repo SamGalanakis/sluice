@@ -909,3 +909,36 @@ fn engine_error_precedes_queued_live_delivery_and_early_exit_never_finishes() {
         FailureKind::EngineExited
     );
 }
+
+#[tokio::test]
+async fn composed_message_continuation_preserves_uncertain_acceptance() {
+    use sluice_agents::delivery::DeliveryLedger;
+    let scratch = Scratch::new();
+    let config = config(&scratch);
+    fs::create_dir_all(&config.run_dir).unwrap();
+    let message = InputId::Message { id: MessageId(7) };
+    let mut delivery = DeliveryLedger::default();
+    delivery
+        .enqueue(message.clone(), "previous input".into())
+        .unwrap();
+    delivery.offer(&message).unwrap();
+    let seed = MessageContinuation {
+        run: config.run,
+        delivery,
+        live_after: MessageId(7),
+    };
+    fs::write(
+        config.run_dir.join("message-continuation.json"),
+        serde_json::to_vec(&seed).unwrap(),
+    )
+    .unwrap();
+    let mut engine = ScriptedEngine::new(happy());
+    let error = run(config, &mut engine, &mut Host::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, FailureKind::UnknownAcceptance);
+    assert!(!engine.commands.iter().any(|command| matches!(
+        command,
+        EngineCommand::DeliverText { .. } | EngineCommand::Steer { .. }
+    )));
+}
