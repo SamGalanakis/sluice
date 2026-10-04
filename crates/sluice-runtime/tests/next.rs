@@ -364,44 +364,80 @@ async fn multiple_project_pagination_never_skips_a_record() {
     );
     w.shutdown().await.unwrap();
 }
+/// Steps a manual clock until the spawned `next` returns, committing a wake
+/// before each step when `wake` is set, and returns the result with the number
+/// of wakes committed. Steps are virtual; each also yields a real millisecond so
+/// the writer and read-pool threads can answer. The step cap only turns a stuck
+/// call into a failure instead of a hang.
+async fn drive(
+    task: &mut tokio::task::JoinHandle<Result<NextResult, PublicError>>,
+    clock: &ManualClock,
+    step: Duration,
+    wake: Option<(&Writer, ProjectId)>,
+) -> (NextResult, usize) {
+    let mut woken = 0;
+    for _ in 0..10_000 {
+        if task.is_finished() {
+            break;
+        }
+        if let Some((w, p)) = wake {
+            settled(w, p, "u").await;
+            woken += 1;
+        }
+        clock.advance(step);
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(task.is_finished(), "next did not return");
+    (task.await.unwrap().unwrap(), woken)
+}
 #[tokio::test]
 async fn settle_batches_wakes_and_absolute_max_cuts_continuous_wakes() {
     let (_h, w, r, p) = setup().await;
-    let source = w.clone();
-    let producer = tokio::spawn(async move {
-        for _ in 0..10 {
-            settled(&source, p, "u").await;
-            tokio::time::sleep(Duration::from_millis(15)).await;
-        }
-    });
-    let batch = next(
-        &w,
-        &r,
-        NextOptions {
-            timeout: Some(Duration::from_secs(1)),
-            settle: Duration::from_millis(40),
-            settle_max: Duration::from_millis(70),
-            ..options(p)
-        },
-    )
-    .await
-    .unwrap();
+    let clock = ManualClock::new();
+    let day = Duration::from_secs(86_400);
+    let options_for = |since: RecordSeq, settle: Duration, settle_max: Duration| NextOptions {
+        since_seq: Some(since),
+        timeout: Some(day),
+        settle,
+        settle_max,
+        clock: Clock::Manual(clock.clone()),
+        ..options(p)
+    };
+    let spawn = |options: NextOptions| {
+        let (writer, reads) = (w.clone(), r.clone());
+        tokio::spawn(async move { next(&writer, &reads, options).await })
+    };
+    // Settle batches: wakes at t=0,0,20,35,35 with a 40ms settle. A wake is
+    // stamped when next reads it, never before its commit, so the earliest
+    // possible deadline is 40ms and all five commit before the clock reaches it.
+    let mut task = spawn(options_for(RecordSeq(0), Duration::from_millis(40), day));
+    settled(&w, p, "u").await;
+    settled(&w, p, "u").await;
+    clock.advance(Duration::from_millis(20));
+    settled(&w, p, "u").await;
+    clock.advance(Duration::from_millis(15));
+    settled(&w, p, "u").await;
+    settled(&w, p, "u").await;
+    let (batch, _) = drive(&mut task, &clock, Duration::from_millis(10), None).await;
     assert!(!batch.timed_out);
-    assert!(batch.records.len() >= 3 && batch.records.len() < 10);
-    producer.await.unwrap();
-    let more = next(
-        &w,
-        &r,
-        NextOptions {
-            since_seq: Some(batch.last_seq),
-            settle: Duration::from_millis(5),
-            settle_max: Duration::from_secs(1),
-            ..options(p)
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(batch.records.len() + more.records.len(), 10);
+    assert_eq!(batch.records.len(), 5);
+    // Max cuts continuous wakes: a wake every 30ms keeps a one-day settle open
+    // for as long as the producer runs (at most 300s of clock), so only the
+    // 70ms absolute maximum can end the call.
+    let mut task = spawn(options_for(batch.last_seq, day, Duration::from_millis(70)));
+    let (cut, woken) = drive(&mut task, &clock, Duration::from_millis(30), Some((&w, p))).await;
+    assert!(!cut.timed_out);
+    assert!(!cut.records.is_empty() && cut.records.len() <= woken);
+    let mut task = spawn(NextOptions {
+        timeout: Some(Duration::ZERO),
+        ..options_for(
+            cut.last_seq,
+            Duration::from_millis(5),
+            Duration::from_secs(1),
+        )
+    });
+    let (more, _) = drive(&mut task, &clock, Duration::from_millis(10), None).await;
+    assert_eq!(cut.records.len() + more.records.len(), woken);
     w.shutdown().await.unwrap();
 }
 #[tokio::test]

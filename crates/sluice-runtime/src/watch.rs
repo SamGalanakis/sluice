@@ -139,6 +139,62 @@ fn empty(v: &Value) -> bool {
         || v.as_object().is_some_and(serde_json::Map::is_empty)
 }
 
+/// Monotonic clock for the wake windows. Real time in production; tests drive a
+/// ManualClock so deadlines never depend on the host's wall clock.
+#[derive(Debug, Clone)]
+pub enum Clock {
+    Real(tokio::time::Instant),
+    Manual(ManualClock),
+}
+impl Clock {
+    fn now(&self) -> Duration {
+        match self {
+            Clock::Real(start) => start.elapsed(),
+            Clock::Manual(clock) => *clock.now.borrow(),
+        }
+    }
+    async fn sleep_until(&self, at: Duration) {
+        match self {
+            Clock::Real(start) => tokio::time::sleep_until(*start + at).await,
+            Clock::Manual(clock) => clock.sleep_until(at).await,
+        }
+    }
+}
+impl Default for Clock {
+    fn default() -> Self {
+        Clock::Real(tokio::time::Instant::now())
+    }
+}
+/// Manually advanced clock for tests. `advance` wakes every pending sleep whose
+/// deadline the new time has reached.
+#[derive(Debug, Clone)]
+pub struct ManualClock {
+    now: tokio::sync::watch::Sender<Duration>,
+}
+impl ManualClock {
+    pub fn new() -> Self {
+        Self {
+            now: tokio::sync::watch::channel(Duration::ZERO).0,
+        }
+    }
+    pub fn advance(&self, by: Duration) {
+        self.now.send_modify(|now| *now += by);
+    }
+    async fn sleep_until(&self, at: Duration) {
+        let mut receiver = self.now.subscribe();
+        while *receiver.borrow_and_update() < at {
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+impl Default for ManualClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NextOptions {
     pub projects: Vec<ProjectId>,
@@ -151,6 +207,7 @@ pub struct NextOptions {
     pub unread_alert_min: Option<i64>,
     pub kinds: Vec<String>,
     pub threads: Vec<String>,
+    pub clock: Clock,
 }
 impl Default for NextOptions {
     fn default() -> Self {
@@ -165,6 +222,7 @@ impl Default for NextOptions {
             unread_alert_min: None,
             kinds: vec![],
             threads: vec![],
+            clock: Clock::default(),
         }
     }
 }
@@ -294,6 +352,7 @@ pub async fn next_command(
             unread_alert_min: None,
             kinds: vec![],
             threads: vec![],
+            clock: Clock::default(),
         },
     )
     .await
@@ -337,7 +396,7 @@ pub async fn next(
         .map(|p| ChangeKey::new(Some(*p), "log"))
         .collect();
     let mut subscription = reads.subscribe(writer, keys).await.map_err(public)?;
-    let start = tokio::time::Instant::now();
+    let start = options.clock.now();
     let timeout = options.timeout.map(|t| start + t);
     let mut first = None;
     let mut last = None;
@@ -349,9 +408,9 @@ pub async fn next(
         timed_out: false,
     };
     loop {
-        if tokio::time::Instant::now() >= heartbeat {
+        if options.clock.now() >= heartbeat {
             beat(writer, &options, cursor).await?;
-            heartbeat = tokio::time::Instant::now() + Duration::from_secs(30);
+            heartbeat = options.clock.now() + Duration::from_secs(30);
         }
         let (batch, top) = batch(reads, &options, cursor).await?;
         let mut consumed = 0;
@@ -362,7 +421,7 @@ pub async fn next(
                 Classification::Note => result.notes.push(record),
                 Classification::Wake => {
                     result.records.push(record);
-                    let now = tokio::time::Instant::now();
+                    let now = options.clock.now();
                     first.get_or_insert(now);
                     last = Some(now);
                     if options.settle.is_zero() {
@@ -376,7 +435,7 @@ pub async fn next(
         }
         cursor = top;
         result.last_seq = cursor;
-        let now = tokio::time::Instant::now();
+        let now = options.clock.now();
         let finish = first
             .zip(last)
             .map(|(f, l)| (f + options.settle_max).min(l + options.settle));
@@ -394,8 +453,13 @@ pub async fn next(
             continue;
         }
         let deadline = finish.or(timeout).map_or(heartbeat, |d| d.min(heartbeat));
-        if let Ok(Err(e)) = tokio::time::timeout_at(deadline, subscription.wait()).await {
-            return Err(public(e));
+        tokio::select! {
+            result = subscription.wait() => {
+                if let Err(e) = result {
+                    return Err(public(e));
+                }
+            }
+            _ = options.clock.sleep_until(deadline) => {}
         }
     }
 }
