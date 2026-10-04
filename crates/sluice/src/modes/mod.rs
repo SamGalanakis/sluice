@@ -6,6 +6,7 @@ pub mod agent;
 pub mod coordinator;
 pub mod guardian;
 pub mod install;
+pub mod mcp;
 pub mod payload_exec;
 pub mod scheduler;
 pub mod serve;
@@ -38,8 +39,7 @@ register_modes! {
     "docs" => crate::cli::run,
     "me" => crate::me::run,
     "doctor" => crate::doctor::run,
-    // TODO(p6-02): register sluice_web::mcp::serve_stdio here as the stdio MCP
-    // mode once p6-02 exposes it — it is not on this tip.
+    "mcp" => mcp::run,
 }
 pub struct PendingMode {
     pub name: &'static str,

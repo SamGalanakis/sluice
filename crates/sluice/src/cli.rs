@@ -128,6 +128,8 @@ pub enum Mode {
     Docs {
         topic: Option<String>,
     },
+    /// The MCP server over stdio (the tools `serve` offers at /mcp).
+    Mcp {},
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
@@ -177,6 +179,7 @@ impl Mode {
             Self::Query { .. } => "query",
             Self::Backup { .. } => "backup",
             Self::Docs { .. } => "docs",
+            Self::Mcp { .. } => "mcp",
             Self::Agent { .. } => "agent hook",
         }
     }
@@ -380,11 +383,8 @@ fn local_tool(request: &CommandRequest) -> bool {
             | CommandRequest::Query(_)
             | CommandRequest::Backup { .. }
             | CommandRequest::StepContext { .. }
-            | CommandRequest::FnList { .. }
             | CommandRequest::FnGet { .. }
-            | CommandRequest::RecipeList { .. }
             | CommandRequest::LogRead(_)
-            | CommandRequest::LogWait(_)
     )
 }
 
@@ -621,8 +621,15 @@ async fn normalize_args(
             let input = args.remove("input");
             let value = args.remove("value");
             if let Some(step) = step {
-                args.insert("selection".into(), json!({"steps": [step]}));
+                listify(args, "steps");
+                match args.get_mut("steps") {
+                    Some(Value::Array(steps)) => steps.push(step),
+                    _ => {
+                        args.insert("steps".into(), json!([step]));
+                    }
+                }
             }
+            selection(args);
             if let (Some(Value::String(input)), Some(value)) = (input, value) {
                 args.insert("inputs".into(), json!({input: value}));
             }
@@ -788,14 +795,9 @@ async fn tool(home: &Path, name: Option<String>, args: Option<String>) -> Result
             let context = crate::me::context(home, &project, &step, None).await?;
             serde_json::to_value(context).map_err(storage)?
         }
-        CommandRequest::FnList { project } => fn_list(home, project.as_ref()).await?,
         CommandRequest::FnGet { name, project } => fn_get(home, &name, project.as_ref()).await?,
-        CommandRequest::RecipeList { project } => recipe_list(home, &project).await?,
         CommandRequest::LogRead(read) => {
             serde_json::to_value(log_read_page(home, &read).await?).map_err(storage)?
-        }
-        CommandRequest::LogWait(wait) => {
-            serde_json::to_value(log_wait(home, wait).await?).map_err(storage)?
         }
         _ => unreachable!("local_tool covered"),
     };
@@ -828,11 +830,11 @@ async fn rpc(home: &Path, request: Option<String>) -> Result<(), PublicError> {
     Ok(())
 }
 
-/// A tool result prints pretty JSON (text for docs/plan_view). A result object
-/// with `"ok": false` (verify's problems) still prints, but exits 1.
+/// A tool result prints pretty JSON (text for docs/plan_view), the value MCP returns: the
+/// reply's data, `{"ok": true}` for an acknowledgement. A result object with `"ok": false`
+/// still prints, but exits 1.
 fn print_reply(name: &str, reply: CommandReply) -> Result<(), PublicError> {
-    let value = serde_json::to_value(&reply).map_err(storage)?;
-    let data = value.get("data").cloned().unwrap_or(Value::Null);
+    let data = sluice_web::mcp::reply_value(reply)?;
     if matches!(name, "docs" | "plan_view") && data.is_string() {
         println!("{}", data.as_str().unwrap_or_default());
         return Ok(());
@@ -886,14 +888,6 @@ async fn project_id(home: &Path, selector: &ProjectSelector) -> Result<ProjectId
         .await
         .map_err(|e| e.into_public(true))
 }
-async fn fn_list(home: &Path, selector: Option<&ProjectSelector>) -> Result<Value, PublicError> {
-    let registry = FnRegistry::configured(home)?;
-    let project = match selector {
-        Some(selector) => Some(project_id(home, selector).await?),
-        None => None,
-    };
-    Ok(json!({"fns": registry.registry(project).listing()}))
-}
 async fn fn_get(
     home: &Path,
     name: &str,
@@ -906,24 +900,6 @@ async fn fn_get(
     };
     let function = registry.get(name, project)?;
     Ok(function.detail())
-}
-async fn recipe_list(home: &Path, selector: &ProjectSelector) -> Result<Value, PublicError> {
-    let id = project_id(home, selector).await?;
-    reads(home)?
-        .snapshot(move |sql| {
-            let doc: String = sql.query_row(
-                "SELECT doc FROM plans WHERE project_id=?1",
-                [id.to_string()],
-                |r| r.get(0),
-            )?;
-            let doc: serde_json::Value = serde_json::from_str(&doc)?;
-            Ok(json!({
-                "project": project_identity(sql, id)?,
-                "recipes": doc.get("recipes").cloned().unwrap_or(json!({})),
-            }))
-        })
-        .await
-        .map_err(|e| e.into_public(true))
 }
 /// `log_read`: one page of matching records (the last `limit` without
 /// --since-seq), straight from the store like `sluice watch` reads it.
@@ -951,89 +927,10 @@ async fn log_read_page(
         .map_err(|e| e.into_public(true))
 }
 
-/// `log_wait`: short reads (nothing held between) until a record wakes — any
-/// record, or one that is not a note with `wake: "questions"` — `limit`
-/// records gather, or `timeout` seconds pass. Notes held at the end come back
-/// in `held`.
-async fn log_wait(
-    home: &Path,
-    wait: sluice_model::commands::LogWait,
-) -> Result<Value, PublicError> {
-    let questions = wait.questions_only;
-    let wakes = |record: &sluice_model::events::Record| {
-        !questions
-            || !matches!(
-                &record.event,
-                sluice_model::events::Event::Message(message) if !message.needs_reply
-            )
-    };
-    let mut cursor = wait.read.since_seq.unwrap_or(RecordSeq(0));
-    let mut found: Vec<sluice_model::events::Record> = vec![];
-    let deadline = std::time::Instant::now() + Duration::from_secs(wait.timeout_seconds.min(3600));
-    loop {
-        let left = wait.read.limit.saturating_sub(found.len() as u32).max(1);
-        let filter = records::RecordFilter {
-            since: Some(cursor),
-            kinds: wait.read.kinds.clone().unwrap_or_default(),
-            threads: wait.read.threads.clone().unwrap_or_default(),
-            limit: left,
-        };
-        let project_sel = wait.read.project.clone();
-        let page = reads(home)?
-            .snapshot(move |sql| {
-                let project = project_sel
-                    .as_ref()
-                    .map(|s| sluice_store::messages::resolve_project(sql, s))
-                    .transpose()?;
-                records::read_records(sql, project, &filter)?.into_page()
-            })
-            .await
-            .map_err(|e| e.into_public(true))?;
-        cursor = page.last_seq;
-        found.extend(page.records);
-        if found.iter().any(&wakes)
-            || found.len() >= wait.read.limit as usize
-            || std::time::Instant::now() >= deadline
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    found.truncate(wait.read.limit as usize);
-    let held = found
-        .iter()
-        .rev()
-        .take_while(|record| !wakes(record))
-        .count();
-    let (records, held) = found.split_at(found.len() - held);
-    Ok(json!({
-        "records": records,
-        "held": held,
-        "last_seq": cursor,
-    }))
-}
-
-fn project_identity(sql: &rusqlite::Connection, id: ProjectId) -> sluice_store::Result<Value> {
-    let name: String = sql.query_row(
-        "SELECT name FROM projects WHERE project_id=?1",
-        [id.to_string()],
-        |r| r.get(0),
-    )?;
-    Ok(json!({"project_id": id.to_string(), "name": name}))
-}
-
 // ---- sluice docs --------------------------------------------------------------
 
-const DOCS: &[(&str, &str)] = &[
-    ("instructions", include_str!("../docs/instructions.md")),
-    ("composing", include_str!("../docs/composing.md")),
-    ("plans", include_str!("../docs/plans.md")),
-    ("fns", include_str!("../docs/fns.md")),
-    ("inbox", include_str!("../docs/inbox.md")),
-    ("threads", include_str!("../docs/threads.md")),
-    ("types", include_str!("../docs/types.md")),
-    ("examples", include_str!("../docs/examples.md")),
-];
+/// The pages the MCP `docs` tool serves (docs/agent), compiled into the binary.
+const DOCS: &[(&str, &str)] = sluice_runtime::docs::PAGES;
 
 /// `sluice docs <topic>` prints a page; no topic prints the index (each topic's
 /// first heading), the same index the docs tool returns.

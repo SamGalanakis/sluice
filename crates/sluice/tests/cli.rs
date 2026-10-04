@@ -738,3 +738,164 @@ fn serve_binds_config_http_unless_the_command_line_names_host_and_port() {
     let _ = coordinator.kill();
     let _ = coordinator.wait();
 }
+
+/// `sluice mcp` serves the MCP tools over stdio (newline-delimited JSON-RPC), backed by the
+/// home's coordinator, and exits when its input closes.
+#[test]
+fn mcp_mode_serves_the_tools_over_stdio() {
+    use std::io::{BufRead, BufReader, Write};
+    let home = ScratchHome::new().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sluice"))
+        .env("SLUICE_HOME", home.path())
+        .env_remove("SLUICE_STEP")
+        .env_remove("SLUICE_AUTHOR")
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let (lines, received) = std::sync::mpsc::channel::<Value>();
+    let output = BufReader::new(child.stdout.take().unwrap());
+    std::thread::spawn(move || {
+        for line in output.lines().map_while(Result::ok) {
+            if let Ok(value) = serde_json::from_str(&line)
+                && lines.send(value).is_err()
+            {
+                break;
+            }
+        }
+    });
+    let mut send = |message: Value| writeln!(input, "{message}").unwrap();
+    let reply = |id: u64| loop {
+        let message = received
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("an MCP reply");
+        if message["id"] == id {
+            return message;
+        }
+    };
+    send(
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-06-18","capabilities":{},
+        "clientInfo":{"name":"stdio-test","version":"0"}}}),
+    );
+    let init = reply(1);
+    assert_eq!(init["result"]["serverInfo"]["name"], "sluice", "{init}");
+    assert!(init["result"]["instructions"].is_string());
+    send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    send(json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    let listed = reply(2);
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    for name in ["projects_list", "project_create", "next", "docs"] {
+        assert!(names.contains(&name), "{name} missing from {names:?}");
+    }
+    send(
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+        "name":"project_create","arguments":{"name":"demo"}}}),
+    );
+    let created = reply(3);
+    assert_eq!(
+        created["result"]["structuredContent"]["name"], "demo",
+        "{created}"
+    );
+    send(
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
+        "name":"projects_list","arguments":{}}}),
+    );
+    let listed = reply(4);
+    assert_eq!(
+        listed["result"]["structuredContent"]["result"][0]["name"], "demo",
+        "{listed}"
+    );
+    drop(send);
+    drop(input);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "mcp did not exit");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// `recipe_list`, `fn_list` and `log_wait` answer through the coordinator, so the CLI prints
+/// what MCP returns; `step_set_input` takes the flat `steps`/`tags` selection.
+#[test]
+fn tool_results_match_the_mcp_shapes() {
+    let home = ScratchHome::new().unwrap();
+    let ok = |out: Output| {
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout(&out)
+    };
+    ok(tool(home.path(), "project_create", r#"{"name":"demo"}"#));
+    std::fs::create_dir_all(home.path().join("recipes")).unwrap();
+    std::fs::write(
+        home.path().join("recipes/lane.json"),
+        json!({"name":"lane","doc":"one lane","params":{"x":"string"},
+               "steps":{"{unit}-a":{"run":"core.echo","in":{"value":{"default":"{x}"}}}}})
+        .to_string(),
+    )
+    .unwrap();
+    let recipes = ok(tool(home.path(), "recipe_list", r#"{"project":"demo"}"#));
+    assert_eq!(recipes[0]["name"], "lane", "{recipes}");
+    assert_eq!(recipes[0]["scope"], "global");
+    assert_eq!(recipes[0]["doc"], "one lane");
+    assert_eq!(recipes[0]["params"]["x"], "string");
+    let fns = ok(tool(home.path(), "fn_list", r#"{"project":"demo"}"#));
+    assert!(
+        fns.as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "core.echo"),
+        "{fns}"
+    );
+    ok(tool(
+        home.path(),
+        "step_add",
+        &json!({"project":"demo","step":"a","start":false,
+                "spec":{"run":"core.echo","tags":["t"],"in":{"value":{"default":1}}}})
+        .to_string(),
+    ));
+    ok(tool(
+        home.path(),
+        "step_set_input",
+        r#"{"project":"demo","steps":"a","inputs":{"value":2}}"#,
+    ));
+    let plan = ok(tool(home.path(), "plan_get", r#"{"project":"demo"}"#));
+    assert_eq!(
+        plan["plan"]["steps"]["a"]["in"]["value"],
+        json!({"default":2})
+    );
+    ok(tool(
+        home.path(),
+        "step_set_input",
+        r#"{"project":"demo","tags":["t"],"inputs":{"value":3}}"#,
+    ));
+    let plan = ok(tool(home.path(), "plan_get", r#"{"project":"demo"}"#));
+    assert_eq!(
+        plan["plan"]["steps"]["a"]["in"]["value"],
+        json!({"default":3})
+    );
+    let waited = ok(tool(
+        home.path(),
+        "log_wait",
+        r#"{"project":"demo","since_seq":0,"timeout":5}"#,
+    ));
+    let mut keys: Vec<&String> = waited.as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["last_seq", "records"], "{waited}");
+    assert!(!waited["records"].as_array().unwrap().is_empty());
+}

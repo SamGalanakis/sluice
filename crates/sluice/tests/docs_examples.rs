@@ -1,4 +1,4 @@
-//! Every ```json block in crates/sluice/docs that is a plan compiles against
+//! Every ```json block in docs/agent (the pages `docs` serves) that is a plan compiles against
 //! the core catalog, and every recipe parses and substitutes into a valid
 //! plan — the docs cannot rot. Ported from tests/test_docs_examples.py.
 use serde_json::{Value, json};
@@ -9,7 +9,6 @@ use sluice_model::{
     types::Type,
 };
 use sluice_runtime::registry::FnRegistry;
-use std::path::PathBuf;
 
 const PAGES: &[&str] = &["plans", "examples", "threads", "inbox", "composing"];
 
@@ -21,12 +20,11 @@ fn catalog() -> sluice_runtime::dispatch::Catalog {
 }
 
 fn read_page(name: &str) -> String {
-    std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("docs")
-            .join(format!("{name}.md")),
-    )
-    .unwrap_or_else(|e| panic!("docs/{name}.md: {e}"))
+    sluice_runtime::docs::PAGES
+        .iter()
+        .find(|(topic, _)| *topic == name)
+        .map(|(_, page)| (*page).to_owned())
+        .unwrap_or_else(|| panic!("docs/agent/{name}.md is not served"))
 }
 
 /// ```json fenced blocks, in page order.

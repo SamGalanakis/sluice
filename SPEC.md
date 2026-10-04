@@ -789,6 +789,8 @@ against the plan.
 - **HTTP**: `POST /api/tools/<name>` with a JSON object body, the same flat arguments as MCP;
   the reply is the tool's JSON, errors mapped to 400 (`bad_request`, `invalid`), 404, 409
   (`conflict`, `cursor_expired`), 503 (`busy`), 408 (`cancelled`) and 500.
+- **MCP over stdio**: `sluice mcp` serves the same tools, instructions and resources on its
+  stdin and stdout, through the home's coordinator (started when nothing answers).
 - **CLI**: `sluice tool <name> '<json>'` (§14).
 - **Wire**: every tool is a command `{"command": name, "args": {...}}` with a reply `{"reply":
   kind, "data": …}` on the coordinator socket (`sluice tool rpc '<request>'` sends a raw
@@ -1001,7 +1003,7 @@ remains. A Button answers `{action, params, values}`; the text box answers with 
 | `loop` | takes the scheduler lease and holds it until SIGINT/SIGTERM |
 | `coordinator [--maintenance]` | runs the home's coordinator in the foreground |
 | `install fence <reason> \| unfence \| select <release_dir> <home> \| status` | §2.2 |
-| `tool [name] [json]` | without a name, lists the tools; with one, runs it (JSON from the argument or stdin) and prints the reply |
+| `tool [name] [json]` | without a name, lists the tools; with one, runs it (JSON from the argument or stdin) and prints its result as MCP returns it (`{"ok": true}` for an acknowledgement) |
 | `tool rpc '<request>'` | sends a raw wire request |
 | `next [-p P]… [--since-seq N \| --cursor FILE] [--me NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
@@ -1010,7 +1012,8 @@ remains. A Button answers `{action, params, values}`; the text box answers with 
 | `doctor [--json]` | host prerequisites, each engine (`codex`, `claude`, `devin`): its executable on PATH, `--version` and whether its profile supports it, and the selected release's manifest check. The engine probes run with HOME and the engines' config dirs in a private scratch directory, so no session starts and no credential is read; a missing or unsupported engine is a warning, not a failure |
 | `query [SQL [PARAM…]] [--limit N] [--table [--width 60]]` | the `query` tool, read directly from the database; without SQL, every public table and view with its columns |
 | `backup PATH [--force]` | an online copy of `sluice.db` |
-| `docs [topic]` | the agent docs |
+| `docs [topic]` | the agent docs: the pages the `docs` tool serves |
+| `mcp` | the MCP server over stdio (§12.1) |
 | `agent hook --engine codex\|claude\|devin --event E [--run R]` | engine hook entry (internal) |
 | `guardian`, `payload-exec` | internal |
 
