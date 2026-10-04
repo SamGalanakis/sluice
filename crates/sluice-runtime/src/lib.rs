@@ -2,6 +2,7 @@
 
 pub mod builtins;
 pub mod calls;
+mod contain;
 pub mod coordinator;
 pub mod drain;
 pub mod inline;

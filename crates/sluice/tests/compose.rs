@@ -360,13 +360,13 @@ fn native_factory(engine: &str) {
         let executable = bin.join(engine);
         let script = format!(
             "#!/bin/sh\nset -e\ncase \"$1\" in --version|--help) exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
-            workspace.join("target/debug/fixture").display(),
+            Path::new(env!("CARGO_BIN_EXE_fixture")).display(),
             if engine == "codex" {
                 "case \"$1\" in -c) exec /usr/bin/sleep 600 ;; esac"
             } else {
                 ""
             },
-            workspace.join("target/debug/fixture").display()
+            Path::new(env!("CARGO_BIN_EXE_fixture")).display()
         );
         std::fs::write(&executable, script).unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();

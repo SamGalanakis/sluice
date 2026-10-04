@@ -1032,40 +1032,48 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .await
                 .map_err(storage)?
                 .map_err(storage)?;
-        if request.protocol != rpc::PROTOCOL_VERSION {
-            return Err(conflict("unsupported protocol"));
-        }
-        if request.command.get("helper").is_some() {
-            let forwarded: crate::compose::HelperWire =
-                rpc::decode_json(&serde_json::to_vec(&request.command).map_err(storage)?)?;
-            let result = self
-                .helper(forwarded.helper, request.run_capability.as_ref())
+        let route = Route::of(&request.command);
+        let request_id = request.request_id.clone();
+        // A request that cannot be decoded is answered with its error, never dropped.
+        let incoming = match Incoming::decode(request.protocol, &request) {
+            Ok(incoming) => incoming,
+            Err(error) => {
+                tracing::warn!(request = %request_id.0, %error, "coordinator refused a request");
+                return route
+                    .refuse(&mut stream, request_id, error)
+                    .await
+                    .map_err(storage);
+            }
+        };
+        let capability = request.run_capability;
+        match incoming {
+            Incoming::Helper(forwarded) => {
+                let broker = self.clone();
+                let result = crate::contain::contained("helper", async move {
+                    broker.helper(forwarded.helper, capability.as_ref()).await
+                })
                 .await;
-            write_reply(
-                &mut stream,
-                &RpcReply {
-                    protocol: 1,
-                    request_id: request.request_id,
-                    result: match result {
-                        Ok(v) => RpcResult::Ok(Box::new(v)),
-                        Err(e) => RpcResult::Error(e),
+                write_reply(
+                    &mut stream,
+                    &RpcReply {
+                        protocol: 1,
+                        request_id,
+                        result: match result {
+                            Ok(v) => RpcResult::Ok(Box::new(v)),
+                            Err(e) => RpcResult::Error(e),
+                        },
                     },
-                },
-            )
-            .await
-            .map_err(storage)?;
-            return Ok(());
-        }
-        if request.command.get("runtime").is_some() {
-            let command: RuntimeCommand =
-                rpc::decode_json(&serde_json::to_vec(&request.command).map_err(storage)?)?;
-            match command {
+                )
+                .await
+                .map_err(storage)?;
+            }
+            Incoming::Runtime(command) => match command {
                 RuntimeCommand::AcquireScheduler { owner } => {
                     let result = self.acquire_scheduler(owner.clone()).await;
                     let accepted = result.is_ok();
                     let response = Reply {
                         protocol: 1,
-                        request_id: request.request_id,
+                        request_id,
                         result: result.map(|()| CommandReply::Ack),
                     };
                     if let Err(e) = write_reply(&mut stream, &response).await {
@@ -1093,7 +1101,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                         &mut stream,
                         &Reply {
                             protocol: 1,
-                            request_id: request.request_id,
+                            request_id,
                             result,
                         },
                     )
@@ -1106,60 +1114,134 @@ impl<H: ExecutionHost> Coordinator<H> {
                         &mut stream,
                         &Reply {
                             protocol: 1,
-                            request_id: request.request_id,
+                            request_id,
                             result,
                         },
                     )
                     .await
                     .map_err(storage)?;
                 }
-            }
-            return Ok(());
-        }
-        if request.command.get("method").is_some() {
-            let command: CoordinatorCommand =
-                rpc::decode_json(&serde_json::to_vec(&request.command).map_err(storage)?)?;
-            let result = self
-                .guardian(command, request.run_capability.as_ref())
+            },
+            Incoming::Guardian(command) => {
+                let broker = self.clone();
+                let result = crate::contain::contained("guardian callback", async move {
+                    broker.guardian(command, capability.as_ref()).await
+                })
                 .await;
-            write_reply(
-                &mut stream,
-                &Reply {
-                    protocol: 1,
-                    request_id: request.request_id,
-                    result,
-                },
-            )
-            .await
-            .map_err(storage)?;
-        } else {
-            if request.run_capability.is_some() {
-                return Err(conflict("use authenticated guardian callback"));
+                write_reply(
+                    &mut stream,
+                    &Reply {
+                        protocol: 1,
+                        request_id,
+                        result,
+                    },
+                )
+                .await
+                .map_err(storage)?;
             }
-            let command: CommandRequest =
-                rpc::decode_json(&serde_json::to_vec(&request.command).map_err(storage)?)?;
-            let reply = tokio::select! {
-                result=self.command(command)=>result,
-                _=stop.cancelled()=>return Ok(()),
-            };
-            let result = match reply {
-                Ok(reply) => RpcResult::Ok(Box::new(reply)),
-                Err(e) => RpcResult::Error(e),
-            };
-            write_reply(
-                &mut stream,
-                &RpcReply {
-                    protocol: 1,
-                    request_id: request.request_id,
-                    result,
-                },
-            )
-            .await
-            .map_err(storage)?;
+            Incoming::Command(command) => {
+                let broker = self.clone();
+                let reply = tokio::select! {
+                    result=crate::contain::contained("command", async move { broker.command(command).await })=>result,
+                    _=stop.cancelled()=>return Ok(()),
+                };
+                let result = match reply {
+                    Ok(reply) => RpcResult::Ok(Box::new(reply)),
+                    Err(e) => RpcResult::Error(e),
+                };
+                write_reply(
+                    &mut stream,
+                    &RpcReply {
+                        protocol: 1,
+                        request_id,
+                        result,
+                    },
+                )
+                .await
+                .map_err(storage)?;
+            }
         }
         Ok(())
     }
 }
+
+/// Which reply envelope a request's sender reads: helpers and public commands read an
+/// `RpcReply`, runtime and guardian callers a `Reply`.
+#[derive(Clone, Copy)]
+enum Route {
+    Rpc,
+    Reply,
+}
+impl Route {
+    fn of(command: &Value) -> Self {
+        if command.get("runtime").is_some() || command.get("method").is_some() {
+            Self::Reply
+        } else {
+            Self::Rpc
+        }
+    }
+    async fn refuse(
+        self,
+        stream: &mut UnixStream,
+        request_id: sluice_model::rpc::RequestId,
+        error: PublicError,
+    ) -> std::io::Result<()> {
+        match self {
+            Self::Rpc => {
+                write_reply(
+                    stream,
+                    &RpcReply {
+                        protocol: 1,
+                        request_id,
+                        result: RpcResult::Error(error),
+                    },
+                )
+                .await
+            }
+            Self::Reply => {
+                write_reply(
+                    stream,
+                    &Reply::<Value> {
+                        protocol: 1,
+                        request_id,
+                        result: Err(error),
+                    },
+                )
+                .await
+            }
+        }
+    }
+}
+
+/// A request decoded for its route before anything runs.
+enum Incoming {
+    Helper(crate::compose::HelperWire),
+    Runtime(RuntimeCommand),
+    Guardian(CoordinatorCommand),
+    Command(CommandRequest),
+}
+impl Incoming {
+    fn decode(protocol: u16, request: &Request<Value>) -> Result<Self, PublicError> {
+        if protocol != rpc::PROTOCOL_VERSION {
+            return Err(conflict("unsupported protocol"));
+        }
+        let command = &request.command;
+        let bytes = serde_json::to_vec(command).map_err(storage)?;
+        Ok(if command.get("helper").is_some() {
+            Self::Helper(rpc::decode_json(&bytes)?)
+        } else if command.get("runtime").is_some() {
+            Self::Runtime(rpc::decode_json(&bytes)?)
+        } else if command.get("method").is_some() {
+            Self::Guardian(rpc::decode_json(&bytes)?)
+        } else {
+            if request.run_capability.is_some() {
+                return Err(conflict("use authenticated guardian callback"));
+            }
+            Self::Command(rpc::decode_json(&bytes)?)
+        })
+    }
+}
+
 struct LocalLink<H: ExecutionHost> {
     broker: Coordinator<H>,
     capability: RunCapability,

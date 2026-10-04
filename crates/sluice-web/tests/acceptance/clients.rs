@@ -11,6 +11,12 @@ use std::{
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
+/// A workspace binary from the profile directory cargo built this test into (the
+/// shared or configured target dir), never a stale `<repo>/target/debug` copy.
+fn built(name: &str) -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    exe.parent().and_then(Path::parent).unwrap().join(name)
+}
 pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -43,7 +49,7 @@ impl Scratch {
         let index = self.children.len();
         let log =
             std::fs::File::create(self.home.path().join(format!("child-{index}.log"))).unwrap();
-        let child = Command::new(root().join("target/debug/sluice"))
+        let child = Command::new(built("sluice"))
             .args(args)
             .env("SLUICE_HOME", self.home.path())
             .env("SLUICE_FIXTURE", "1")
@@ -101,7 +107,7 @@ impl Scratch {
         child
     }
     pub fn cli(&self, args: &[&str]) -> Value {
-        let output = Command::new(root().join("target/debug/sluice"))
+        let output = Command::new(built("sluice"))
             .args(args)
             .env("SLUICE_HOME", self.home.path())
             .env("SLUICE_FIXTURE", "1")

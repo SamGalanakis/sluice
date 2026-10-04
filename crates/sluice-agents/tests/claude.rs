@@ -39,6 +39,13 @@ impl Drop for Scratch {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+/// A workspace binary from the profile directory cargo built this test into (the
+/// shared or configured target dir), never a stale `<repo>/target/debug` copy.
+fn built(name: &str) -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    exe.parent().and_then(Path::parent).unwrap().join(name)
+}
+
 fn hook(event: &str, extra: Value) -> protocol::Hook {
     let mut value = json!({"hook_event_name":event,"session_id":"redacted-session","cwd":"/scratch/repo","transcript_path":"/scratch/claude/projects/repo/redacted-session.jsonl"});
     value
@@ -237,8 +244,7 @@ impl Harness {
         let tmux = ApprovedTmux::load(&prefix)
             .await
             .expect("build scripts/build-private-tmux before Claude integration tests");
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/debug/fixture")
+        let fixture = built("fixture")
             .canonicalize()
             .expect("build workspace binaries first");
         let wrapper = scratch.0.join("fake-claude");
@@ -434,10 +440,7 @@ async fn fake_fresh_required_submit_live_message_compaction_and_opus_mcp_profile
     h.adapter = Claude::new(
         h.scratch.0.join("fake-claude"),
         h.scratch.0.join("claude"),
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/debug/fixture")
-            .canonicalize()
-            .unwrap(),
+        built("fixture").canonicalize().unwrap(),
         RunId::new(),
     )
     .with_mcp(Some("{\"mcpServers\":{}}".into()));
@@ -713,10 +716,7 @@ async fn g3_claude() {
     let binary = std::env::var_os("SLUICE_G3_CLAUDE_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/home/sam/.local/bin/claude".into());
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/fixture")
-        .canonicalize()
-        .unwrap();
+    let fixture = built("fixture").canonicalize().unwrap();
     h.adapter = Claude::new(
         binary,
         h.scratch.0.join("claude"),
@@ -1077,10 +1077,7 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     let mut h = Harness::new(json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
     let hook = h.scratch.0.join("journal-hook");
     executable::write(&hook, include_str!("acceptance/hook.py"));
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/fixture")
-        .canonicalize()
-        .unwrap();
+    let fixture = built("fixture").canonicalize().unwrap();
     let wrapper = h.scratch.0.join("supervised-claude");
     executable::write(
         &wrapper,

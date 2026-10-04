@@ -148,7 +148,8 @@ impl Gate {
         let ws = workspace();
         let bin = root.join("rust-bin");
         fs::create_dir_all(&bin).unwrap();
-        std::os::unix::fs::symlink(ws.join("target/debug/sluice"), bin.join("sluice")).unwrap();
+        std::os::unix::fs::symlink(Path::new(env!("CARGO_BIN_EXE_sluice")), bin.join("sluice"))
+            .unwrap();
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         env.extend(BTreeMap::from([
             ("SLUICE_HOME".into(), home.to_string_lossy().into()),
@@ -159,7 +160,9 @@ impl Gate {
             ("SLUICE_HOST_PATH".into(), path),
             (
                 "SLUICE_BIN".into(),
-                ws.join("target/debug/sluice").to_string_lossy().into(),
+                Path::new(env!("CARGO_BIN_EXE_sluice"))
+                    .to_string_lossy()
+                    .into(),
             ),
             (
                 "SLUICE_PYTHON_DIR".into(),
@@ -197,7 +200,7 @@ impl Gate {
     pub fn boot(&mut self) {
         let log = fs::File::create(self.home.join("broker.log")).unwrap();
         self.broker = Some(
-            Command::new(workspace().join("target/debug/sluice"))
+            Command::new(env!("CARGO_BIN_EXE_sluice"))
                 .arg("coordinator")
                 .env_remove("CLAUDECODE")
                 .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -669,7 +672,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
                 config.display(),
                 scratch.0.join("committed").display(),
                 scratch.0.join("committed").display(),
-                workspace().join("target/debug/fixture").display()
+                Path::new(env!("CARGO_BIN_EXE_fixture")).display()
             )
             .as_bytes(),
         );

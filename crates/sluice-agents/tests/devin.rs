@@ -44,6 +44,12 @@ impl Drop for Scratch {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+/// A workspace binary from the profile directory cargo built this test into (the
+/// shared or configured target dir), never a stale `<repo>/target/debug` copy.
+fn built(name: &str) -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    exe.parent().and_then(Path::parent).unwrap().join(name)
+}
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -51,7 +57,7 @@ fn workspace() -> PathBuf {
         .unwrap()
 }
 fn options(root: &Scratch, script: Value) -> DevinOptions {
-    let fixture = workspace().join("target/debug/fixture");
+    let fixture = built("fixture");
     assert!(
         fixture.is_file(),
         "build the workspace binaries before the Devin executable tests"
@@ -1424,7 +1430,7 @@ async fn g3_devin() -> io::Result<()> {
         &home.join(".config/devin/config.json"),
         &serde_json::to_vec(&cfg)?,
     )?;
-    let fixture = workspace().join("target/debug/fixture");
+    let fixture = built("fixture");
     let mut adapter = Devin::new(DevinOptions {
         binary: std::env::var_os("SLUICE_G3_DEVIN_BINARY")
             .unwrap_or_else(|| "/home/sam/.local/bin/devin".into())
