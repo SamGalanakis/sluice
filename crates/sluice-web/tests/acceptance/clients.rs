@@ -347,9 +347,10 @@ print('Claude initialized, discovered and called projects_list')
 #[test]
 #[ignore = "private stdio child entry point, requires explicit scratch home"]
 fn stdio_child() {
-    let home = PathBuf::from(
-        std::env::var_os("SLUICE_ACCEPTANCE_STDIO_HOME").expect("explicit scratch home"),
-    );
+    // Only the parent test spawns this entry point; a plain `--ignored` run has nothing to serve.
+    let Some(home) = std::env::var_os("SLUICE_ACCEPTANCE_STDIO_HOME").map(PathBuf::from) else {
+        return;
+    };
     assert!(home.starts_with(std::env::temp_dir()));
     println!("SLUICE_ACCEPTANCE_STDIO_READY");
     use std::io::Write;
