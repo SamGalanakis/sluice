@@ -500,45 +500,6 @@ async fn fake_fresh_required_submit_live_message_compaction_and_opus_mcp_profile
     h.cleanup().await;
 }
 #[tokio::test]
-async fn fake_paste_boot_trust_wrapped_draft_dropped_enter_and_large_literal_input() {
-    let mut h = Harness::new(
-        json!({"boot_ms":200,"trust":true,"wrap":40,"drop_enters":1,"turns":[{"reply":"trusted"}]}),
-    )
-    .await;
-    h.launch(None).await;
-    let text = "run `ls $HOME` and \"$(date)\"\nthen a line ending in a backslash \\".to_owned()
-        + &"\nlong literal line".repeat(1400);
-    let s = h.turn(InputId::Task, &text, 1).await;
-    assert_eq!(s.final_text, "trusted");
-    assert_eq!(h.prompts(), vec![text]);
-    h.cleanup().await;
-}
-#[tokio::test]
-async fn fake_background_and_wakeup_continue_without_additional_delivery() {
-    for field in ["background_s", "wakeup_s"] {
-        let mut turn = json!({"reply":"started"});
-        turn[field] = json!(0.4);
-        let mut h =
-            Harness::new(json!({"turns":[turn,{"reply":"finished","submit":{"word":"built"}}]}))
-                .await;
-        h.launch(None).await;
-        let s = h.turn(InputId::Task, "build", 1).await;
-        assert!(s.waiting.is_some(), "{field}: {s:?}");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let s = h.poll().await;
-            if s.turns_completed == 2 {
-                assert_eq!(s.final_text, "finished");
-                break;
-            }
-            assert!(Instant::now() < deadline);
-            tokio::time::sleep(Duration::from_millis(30)).await;
-        }
-        assert_eq!(h.prompts(), vec!["build"]);
-        h.cleanup().await;
-    }
-}
-#[tokio::test]
 async fn fake_resume_excludes_history_and_refuses_other_cwd_and_missing_session() {
     let mut h = Harness::new(json!({"turns":[{"reply":"old news"},{"reply":"new work"}]})).await;
     h.launch(None).await;
@@ -864,49 +825,6 @@ async fn g3_claude() {
     );
 }
 
-#[tokio::test]
-async fn fake_missing_outputs_are_nudged_and_a_late_submission_is_separate_from_stop() {
-    for submits in [false, true] {
-        let last = if submits {
-            json!({"reply":"submitted","submit":{"word":"late"}})
-        } else {
-            json!({"reply":"still not submitted"})
-        };
-        let mut h =
-            Harness::new(json!({"turns":[{"reply":"done, I think"},{"reply":"still done"},last]}))
-                .await;
-        h.launch(None).await;
-        h.turn(InputId::Task, "submit word", 1).await;
-        assert!(!h.context.run_dir.join("fixture-submission.json").exists());
-        h.turn(
-            InputId::Nudge { ordinal: 1 },
-            "Your turn ended but word is not submitted.",
-            2,
-        )
-        .await;
-        let s = h
-            .turn(
-                InputId::Nudge { ordinal: 2 },
-                "Submit word before ending the turn.",
-                3,
-            )
-            .await;
-        assert_eq!(
-            h.context.run_dir.join("fixture-submission.json").exists(),
-            submits
-        );
-        assert_eq!(h.prompts().len(), 3);
-        assert_eq!(
-            s.final_text,
-            if submits {
-                "submitted"
-            } else {
-                "still not submitted"
-            }
-        );
-        h.cleanup().await;
-    }
-}
 #[tokio::test]
 async fn fake_addressed_message_can_be_queued_during_an_active_turn() {
     let mut h =

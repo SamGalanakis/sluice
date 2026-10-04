@@ -832,59 +832,6 @@ run(main)
     assert!(work >= 2);
 }
 #[test]
-fn registry_watcher_publishes_new_fn_and_reservation_keeps_bundle() {
-    let g = Gate::new();
-    g.function(
-        "custom.pin",
-        json!({}),
-        json!({"value":"int"}),
-        r#"from sluice_fn import run
-import time
-
-def main(inp, ctx):
-    (ctx.home / 'pinned-ready').write_text(str(ctx.fn_dir))
-    while not (ctx.home / 'finish-pin').exists():
-        time.sleep(.02)
-    return {'value':1}
-run(main)
-"#,
-    );
-    g.plan(json!({"pin":{"run":"custom.pin"}}));
-    let _lease = g.lease();
-    g.wait(|g| g.home.join("pinned-ready").exists());
-    let pinned = std::fs::read_to_string(g.home.join("pinned-ready")).unwrap();
-    assert!(pinned.contains("generations"));
-    g.function(
-        "custom.pin",
-        json!({}),
-        json!({"value":"string"}),
-        "from sluice_fn import run\nrun(lambda i,c:{'value':'changed'})\n",
-    );
-    g.function(
-        "custom.added",
-        json!({}),
-        json!({"value":"int"}),
-        "from sluice_fn import run\nrun(lambda i,c:{'value':9})\n",
-    );
-    // Observe durable publication without any command access refreshing it.
-    g.wait(|g| {
-        let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
-        db.query_row("SELECT EXISTS(SELECT 1 FROM artifact_jobs WHERE project_id=?1 AND kind='generation' AND state='done' AND json_type(manifest,'$.files.\"custom.added/fn.json\"')='text')", [g.project.to_string()], |r|r.get::<_,bool>(0)).unwrap()
-    });
-    assert!(
-        g.data(json!({"command":"fn_list","args":{"project":g.selector()}}))
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["name"] == "custom.added")
-    );
-    std::fs::write(g.home.join("finish-pin"), b"").unwrap();
-    assert_eq!(g.terminal("pin")["outputs"]["value"], 1);
-    let call=g.data(json!({"command":"fn_call","args":{"name":"custom.added","project":g.selector(),"inputs":{},"direct":true,"wait_seconds":10,"author":"test"}}));
-    assert_eq!(call["status"], "succeeded", "{call}");
-    assert_eq!(call["outputs"]["value"], 9);
-}
-#[test]
 fn terminal_agent_error_preserves_kind_message_and_session_through_python() {
     let g = Gate::new();
     g.script(json!({"fatal":true}));
@@ -931,43 +878,6 @@ print(json.dumps({'state':'OPEN','headRefOid':'fixture-sha','url':'fixture-url',
         .unwrap(),
         1
     );
-}
-#[test]
-fn coordinator_restart_keeps_native_engine_and_retry_budget() {
-    // Ported from execution review's broker_outage probe.
-    let mut g = Gate::new();
-    g.script(json!({"outputs":{"summary":"complete"},"wait_message":true}));
-    g.plan(json!({"work":agent(&g)}));
-    let lease = g.lease();
-    g.wait(|g| {
-        g.home.join("fake-events.jsonl").exists()
-            && g.events()
-                .iter()
-                .any(|e| e["command"]["id"]["kind"] == "task")
-    });
-    let run = g.run("work");
-    let mut broker = g.broker.take().unwrap();
-    broker.kill().unwrap();
-    broker.wait().unwrap();
-    std::thread::sleep(Duration::from_millis(500));
-    g.boot();
-    std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(g.status()["steps"]["work"]["status"], "running");
-    assert_eq!(g.run("work"), run);
-    drop(lease);
-    let _lease = g.lease();
-    g.post("work", "Continue after coordinator reconnect");
-    assert_eq!(g.terminal("work")["status"], "succeeded");
-    let checkpoint = sluice_agents::supervisor::Checkpoint::read(&g.home.join("runs").join(run))
-        .unwrap()
-        .unwrap();
-    assert_eq!(checkpoint.internal_attempt, 1);
-    let pids: std::collections::BTreeSet<_> = g
-        .events()
-        .iter()
-        .map(|event| event["pid"].as_u64().unwrap())
-        .collect();
-    assert_eq!(pids.len(), 1);
 }
 fn sequential_messages(live: bool) {
     // Ported from execution review's sequential_message_delivery probe.

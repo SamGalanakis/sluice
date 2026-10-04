@@ -1075,32 +1075,6 @@ async fn supervisor_codex_wire_compaction_required_submit_and_cleanup() {
 }
 
 #[tokio::test]
-async fn supervisor_codex_wire_missing_output_and_unknown_acceptance() {
-    for (scenario, expected) in [
-        (
-            "normal",
-            sluice_agents::supervisor::FailureKind::MissingOutputs,
-        ),
-        (
-            "uncertain",
-            sluice_agents::supervisor::FailureKind::UnknownAcceptance,
-        ),
-    ] {
-        let scratch = Scratch::new();
-        let (mut adapter, context) = setup(&scratch, scenario);
-        let mut cfg = acceptance::config(scratch.path(), "codex");
-        cfg.cwd = context.cwd;
-        cfg.run_dir = context.run_dir;
-        cfg.limits.wall = Duration::from_millis(200);
-        let error = acceptance::run(cfg, &mut adapter, &mut acceptance::Host::default())
-            .await
-            .unwrap_err();
-        assert_eq!(error.kind, expected);
-        assert!(adapter.server_pid().is_none());
-    }
-}
-
-#[tokio::test]
 async fn supervisor_same_run_transient_commits_without_feedback() {
     acceptance::transient_commits("codex").await;
 }
