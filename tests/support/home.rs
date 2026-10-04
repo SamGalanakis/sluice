@@ -29,6 +29,7 @@ impl ScratchHome {
     pub fn root(&self) -> &Path {
         self.temp.path()
     }
+    #[allow(dead_code)]
     pub fn validate(path: &Path) -> Result<PathBuf, PublicError> {
         guard_scratch_home(path)
     }

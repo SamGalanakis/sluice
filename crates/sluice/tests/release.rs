@@ -114,12 +114,15 @@ fn p7_release_manifest_paths_and_protocol_are_checked_before_use() {
 fn p7_release_release_scripts_refuse_protected_test_paths_before_building() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let gate = support::Gate::new();
+    let account = PathBuf::from(std::env::var_os("HOME").unwrap());
     for script in ["build-release", "deploy"] {
         let mut command = gate.command(&repo.join("scripts").join(script), &[]);
         if script == "build-release" {
-            command.arg("/home/sam/.local/bin");
+            command.arg(account.join(".local/bin"));
         } else {
-            command.args(["HEAD", "--prefix", "/home/sam/.local/share/sluice"]);
+            command
+                .args(["HEAD", "--prefix"])
+                .arg(account.join(".local/share/sluice"));
         }
         let output = command.output().unwrap();
         assert!(!output.status.success());

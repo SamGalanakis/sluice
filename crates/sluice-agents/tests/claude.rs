@@ -686,7 +686,8 @@ async fn cancellation_reaps_private_server_engine_and_background_shell() {
 #[ignore = "g3_claude: one labelled real Opus session in private scratch homes"]
 async fn g3_claude() {
     let mut h = Harness::new(json!({})).await;
-    let owner = Path::new("/home/sam/.claude/.credentials.json");
+    let account = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    let owner = &account.join(".claude/.credentials.json");
     if !owner.is_file() || owner.symlink_metadata().unwrap().file_type().is_symlink() {
         eprintln!("g3_claude PENDING: no privately copyable Claude credential file");
         return;
@@ -695,7 +696,7 @@ async fn g3_claude() {
     fs::copy(owner, &credential).unwrap();
     fs::set_permissions(&credential, fs::Permissions::from_mode(0o600)).unwrap();
     let owner_config: Value =
-        serde_json::from_slice(&fs::read("/home/sam/.claude.json").unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(account.join(".claude.json")).unwrap()).unwrap();
     let mut private_config = json!({"hasCompletedOnboarding":true,"numStartups":1,"theme":"dark","autoUpdates":false,"bypassPermissionsModeAccepted":true});
     for key in [
         "oauthAccount",
@@ -715,7 +716,7 @@ async fn g3_claude() {
     fs::set_permissions(&private_config_path, fs::Permissions::from_mode(0o600)).unwrap();
     let binary = std::env::var_os("SLUICE_G3_CLAUDE_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/home/sam/.local/bin/claude".into());
+        .unwrap_or_else(|| account.join(".local/bin/claude"));
     let fixture = built("fixture").canonicalize().unwrap();
     h.adapter = Claude::new(
         binary,

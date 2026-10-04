@@ -33,7 +33,7 @@ pub fn credentials(root: &Path, engine: &str) -> Result<BTreeMap<String, String>
     let home = root.join("owner");
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
-    let owner = Path::new("/home/sam");
+    let owner = &PathBuf::from(std::env::var_os("HOME").ok_or("HOME is absent")?);
     match engine {
         "codex" => {
             let auth = fs::read(owner.join(".codex/auth.json"))

@@ -119,6 +119,11 @@ impl Installation {
             fence,
         })
     }
+    /// The home this installation selects, read without the lock (selection.json is
+    /// replaced atomically) so naming a default home never creates installation files.
+    pub fn selected_home(&self) -> Result<Option<PathBuf>, PublicError> {
+        Ok(read::<Selection>(&self.dir.join("selection.json"))?.map(|s| s.home_path))
+    }
     pub fn status(&self) -> Result<Status, PublicError> {
         let _lock = self.lock(false)?;
         self.unlocked_status()

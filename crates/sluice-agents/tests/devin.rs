@@ -1388,10 +1388,10 @@ async fn g3_wait_reaped(identity: &sluice_process::identity::ProcessIdentity) ->
 #[ignore = "labelled real engine gate; run separately in a private home"]
 async fn g3_devin() -> io::Result<()> {
     let root = Scratch::new();
-    let owner_data = PathBuf::from(
-        std::env::var_os("SLUICE_G3_DEVIN_OWNER_DATA")
-            .unwrap_or_else(|| "/home/sam/.local/share".into()),
-    );
+    let owner = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    let owner_data = std::env::var_os("SLUICE_G3_DEVIN_OWNER_DATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| owner.join(".local/share"));
     let credentials = owner_data.join("devin/credentials.toml");
     if !credentials.is_file() {
         return Err(io::Error::other(
@@ -1414,10 +1414,9 @@ async fn g3_devin() -> io::Result<()> {
         &fs::read(credentials)?,
     )?;
     // Only authentication/provider configuration is needed. Owner callbacks are not run in G3.
-    let owner_config = PathBuf::from(
-        std::env::var_os("SLUICE_G3_DEVIN_OWNER_CONFIG")
-            .unwrap_or_else(|| "/home/sam/.config/devin/config.json".into()),
-    );
+    let owner_config = std::env::var_os("SLUICE_G3_DEVIN_OWNER_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| owner.join(".config/devin/config.json"));
     let original: Value =
         serde_json::from_str(&protocol::strip_jsonc(&fs::read_to_string(owner_config)?)?)?;
     let mut cfg = json!({});
@@ -1433,8 +1432,8 @@ async fn g3_devin() -> io::Result<()> {
     let fixture = built("fixture");
     let mut adapter = Devin::new(DevinOptions {
         binary: std::env::var_os("SLUICE_G3_DEVIN_BINARY")
-            .unwrap_or_else(|| "/home/sam/.local/bin/devin".into())
-            .into(),
+            .map(PathBuf::from)
+            .unwrap_or_else(|| owner.join(".local/bin/devin")),
         hook_binary: fixture.clone(),
         config: home.join(".config/devin/config.json"),
         data_home: home.join(".local/share"),

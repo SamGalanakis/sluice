@@ -790,7 +790,7 @@ async fn g3_codex() {
     let scratch = Scratch::new();
     let owner = std::env::var_os("SLUICE_CODEX_G3_SOURCE_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/home/sam/.codex"));
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap()).join(".codex"));
     if !owner.join("auth.json").is_file() {
         println!("g3_codex PENDING: no privately copyable auth.json");
         return;

@@ -360,11 +360,10 @@ impl Drop for ProbeUnit {
     }
 }
 
-pub const OWNER_HOME: &str = "/home/sam/.sluice";
-
 /// Whether this process belongs to a test: `SLUICE_TEST=1`, which the repository's
 /// cargo configuration sets for every process cargo runs and which every unit Sluice
-/// starts inherits. Tests name their user units `sluice-test-*`.
+/// starts inherits. Tests name their user units `sluice-test-*` and may only use
+/// scratch homes ([`guard_scratch_home`]).
 pub fn test_mode() -> bool {
     std::env::var_os("SLUICE_TEST").is_some_and(|value| value == "1")
 }
@@ -410,23 +409,69 @@ fn storage(error: std::io::Error) -> PublicError {
 }
 
 /// Reject the protected home and every descendant before creating or opening writable state.
-pub fn guard_home(path: &Path, owner_home: &Path) -> Result<PathBuf, PublicError> {
+pub fn guard_home(path: &Path, protected: &Path) -> Result<PathBuf, PublicError> {
     let resolved = resolve_path(path)?;
-    let protected = resolve_path(owner_home)?;
+    let protected = resolve_path(protected)?;
     if resolved.starts_with(protected) {
         return Err(PublicError::BadRequest {
-            message: "refusing the owner's real SLUICE_HOME or a path under it".into(),
+            message: "refusing the live installation's selected home or a path under it".into(),
         });
     }
     Ok(resolved)
 }
 
+/// Resolve a home or a path in one. In test mode ([`test_mode`]) it must be a
+/// scratch path: the live installation's selected home and everything under it
+/// are refused.
 pub fn guard_scratch_home(path: &Path) -> Result<PathBuf, PublicError> {
-    let resolved = guard_home(path, Path::new(OWNER_HOME))?;
-    if let Some(home) = std::env::var_os("HOME") {
-        guard_home(&resolved, &PathBuf::from(home).join(".sluice"))?;
+    let resolved = resolve_path(path)?;
+    if test_mode() {
+        for live in live_homes()? {
+            guard_home(&resolved, &live)?;
+        }
     }
     Ok(resolved)
+}
+
+/// The homes the account's live installations select. The live installation is
+/// `.local/share/sluice/install` under the account's home, looked up under both
+/// `$HOME` and the passwd entry so a test that points `HOME` elsewhere still sees
+/// the real one. `SLUICE_INSTALL_DIR` is not consulted: tests point it at scratch.
+fn live_homes() -> Result<Vec<PathBuf>, PublicError> {
+    let mut accounts: Vec<PathBuf> = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    accounts.extend(passwd_home());
+    accounts.dedup();
+    let mut homes = Vec::new();
+    for account in accounts {
+        let selection = account.join(".local/share/sluice/install/selection.json");
+        let bytes = match fs::read(&selection) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(storage(e)),
+        };
+        // Fail closed: a selection this guard cannot read could name any home.
+        let home = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|value| value["home_path"].as_str().map(PathBuf::from))
+            .ok_or_else(|| PublicError::Storage {
+                message: format!("unreadable live selection {}", selection.display()),
+            })?;
+        homes.push(home);
+    }
+    Ok(homes)
+}
+fn passwd_home() -> Option<PathBuf> {
+    let uid = rustix::process::getuid().as_raw().to_string();
+    fs::read_to_string("/etc/passwd")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let fields: Vec<&str> = line.split(':').collect();
+            (fields.len() >= 7 && fields[2] == uid).then(|| PathBuf::from(fields[5]))
+        })
 }
 
 #[cfg(test)]

@@ -23,10 +23,14 @@ if (($# > 1)); then
 fi
 # A release artifact must never replace installed tools or touch the live home.
 python3 - "$prefix" <<'PY'
-import os, pathlib, sys
+import json, os, pathlib, sys
 p = pathlib.Path(sys.argv[1]).resolve()
-protected = [pathlib.Path(x) for x in ('/', '/usr', '/bin', '/sbin', '/etc', '/lib', '/lib64', '/boot', '/sys', '/proc', '/dev', '/home/sam/.sluice')]
-protected += [pathlib.Path.home() / '.sluice']
+protected = [pathlib.Path(x) for x in ('/', '/usr', '/bin', '/sbin', '/etc', '/lib', '/lib64', '/boot', '/sys', '/proc', '/dev')]
+# The live home is the one the account's installation selects.
+try:
+    protected.append(pathlib.Path(json.loads((pathlib.Path.home() / '.local/share/sluice/install/selection.json').read_text())['home_path']).resolve())
+except FileNotFoundError:
+    pass
 path_dirs = [pathlib.Path(x).resolve() for x in os.get_exec_path() if x]
 if p == pathlib.Path('/') or (p / 'bin').resolve() in path_dirs or any(p == x or x in p.parents for x in protected[1:] + path_dirs):
     sys.exit('Refusing a system, live-home or PATH output prefix: ' + str(p))

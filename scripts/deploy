@@ -9,12 +9,22 @@ parser.add_argument('--prefix', default=str(pathlib.Path.home() / '.local/share/
 args = parser.parse_args(sys.argv[2:])
 repo = pathlib.Path(sys.argv[1])
 prefix = pathlib.Path(args.prefix).resolve()
-home = pathlib.Path(os.environ.get('SLUICE_HOME', str(pathlib.Path.home() / '.sluice'))).resolve()
 install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(prefix / 'install'))).resolve()
+# The home is SLUICE_HOME, else the one the installation already selects.
+if 'SLUICE_HOME' in os.environ:
+    home = pathlib.Path(os.environ['SLUICE_HOME']).resolve()
+elif (install / 'selection.json').exists():
+    home = pathlib.Path(json.loads((install / 'selection.json').read_text())['home_path']).resolve()
+else:
+    sys.exit('No Sluice home: set SLUICE_HOME (the installation selects none yet)')
 fixture = os.environ.get('SLUICE_DEPLOY_PROCESS_FIXTURE') == '1'
 if os.environ.get('SLUICE_TEST') == '1' or fixture:
+    live = [pathlib.Path.home() / '.local/bin', pathlib.Path.home() / '.local/share/sluice']
+    # The live home is the one the account's installation selects.
+    try: live.append(pathlib.Path(json.loads((pathlib.Path.home() / '.local/share/sluice/install/selection.json').read_text())['home_path']).resolve())
+    except FileNotFoundError: pass
     for p in [prefix, home, install]:
-        for protected in [pathlib.Path.home() / '.sluice', pathlib.Path.home() / '.local/bin', pathlib.Path.home() / '.local/share/sluice']:
+        for protected in live:
             if p == protected or protected in p.parents:
                 sys.exit('Tests refuse live installation paths')
 if install == home or home in install.parents:
