@@ -3,7 +3,7 @@
 use crate::{Result, StoreError, WriteTransaction, schema::RECORD_PAYLOAD_VERSION};
 use rusqlite::{Connection, params, params_from_iter, types::Value};
 use sluice_model::{
-    commands::RecordPage,
+    commands::{LogRead, RecordPage, StepStatus},
     error::PublicError,
     events::Record,
     ids::{ProjectId, RecordSeq},
@@ -39,11 +39,18 @@ const KINDS: &[&str] = &[
 ];
 const GROUPS: &[&str] = &["plan", "step", "project", "run", "unit"];
 
+/// Each filter narrows only the records it speaks of, and an empty one is no filter: `kinds`
+/// every record, `threads` and `recipients` message records, `statuses` step.status records.
+/// `threads` without `kinds` also keeps messages only.
 #[derive(Debug, Clone)]
 pub struct RecordFilter {
     pub since: Option<RecordSeq>,
     pub kinds: Vec<String>,
     pub threads: Vec<String>,
+    /// step.status records whose `to` is one of these.
+    pub statuses: Vec<StepStatus>,
+    /// message records whose `to` is one of these.
+    pub recipients: Vec<String>,
     pub limit: u32,
 }
 impl Default for RecordFilter {
@@ -52,7 +59,21 @@ impl Default for RecordFilter {
             since: None,
             kinds: vec![],
             threads: vec![],
+            statuses: vec![],
+            recipients: vec![],
             limit: 200,
+        }
+    }
+}
+impl From<&LogRead> for RecordFilter {
+    fn from(read: &LogRead) -> Self {
+        Self {
+            since: read.since_seq,
+            kinds: read.kinds.clone().unwrap_or_default(),
+            threads: read.threads.clone().unwrap_or_default(),
+            statuses: read.statuses.clone().unwrap_or_default(),
+            recipients: read.recipients.clone().unwrap_or_default(),
+            limit: read.limit,
         }
     }
 }
@@ -164,6 +185,25 @@ pub fn read_records(
         query.push_str(&vec!["?"; filter.threads.len()].join(","));
         query.push_str("))");
         args.extend(filter.threads.iter().cloned().map(Value::Text));
+    }
+    for (kind, values) in [
+        (
+            "step.status",
+            filter
+                .statuses
+                .iter()
+                .map(|status| crate::plans::status_text(status).to_owned())
+                .collect::<Vec<_>>(),
+        ),
+        ("message", filter.recipients.clone()),
+    ] {
+        if !values.is_empty() {
+            query.push_str(" AND (kind!=? OR json_extract(payload,'$.to') IN (");
+            query.push_str(&vec!["?"; values.len()].join(","));
+            query.push_str("))");
+            args.push(Value::Text(kind.into()));
+            args.extend(values.into_iter().map(Value::Text));
+        }
     }
     if let Some(seq) = filter.since {
         query.push_str(" AND seq>? ORDER BY seq LIMIT ?");

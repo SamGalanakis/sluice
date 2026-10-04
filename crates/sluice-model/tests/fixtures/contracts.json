@@ -935,6 +935,26 @@
         "fixture"
       ],
       "limit": 1
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "since_seq": 1,
+      "kinds": [
+        "step.status",
+        "message"
+      ],
+      "threads": null,
+      "statuses": [
+        "failed",
+        "stale"
+      ],
+      "recipients": [
+        "orchestrator"
+      ],
+      "limit": 200
     }
   ],
   "LogWait": [
@@ -965,6 +985,27 @@
         "limit": 1
       },
       "timeout_seconds": 1,
+      "questions_only": false
+    },
+    {
+      "read": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "since_seq": 1,
+        "kinds": null,
+        "threads": null,
+        "statuses": [
+          "failed"
+        ],
+        "recipients": [
+          "orchestrator",
+          "owner"
+        ],
+        "limit": 200
+      },
+      "timeout_seconds": 300,
       "questions_only": false
     }
   ],
@@ -2891,6 +2932,29 @@
           "value": "work-1"
         }
       }
+    },
+    {
+      "command": "step_wait",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "selection": {
+          "steps": [
+            "build",
+            "test"
+          ],
+          "tags": null
+        },
+        "until": {
+          "any_of": [
+            "failed",
+            "stale"
+          ]
+        },
+        "timeout_seconds": 60
+      }
     }
   ],
   "PlanViewFormat": [
@@ -3303,6 +3367,17 @@
         },
         "rev": 3,
         "program": "root = Units()"
+      }
+    },
+    {
+      "reply": "step_wait",
+      "data": {
+        "met": true,
+        "steps": {
+          "build": "succeeded",
+          "test": "failed"
+        },
+        "seq": 42
       }
     }
   ],
@@ -4001,6 +4076,87 @@
       },
       "rev": 0,
       "program": null
+    }
+  ],
+  "StepWait": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": [
+          "build"
+        ],
+        "tags": null
+      },
+      "until": "succeeded",
+      "timeout_seconds": 300
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": null,
+        "tags": [
+          "unit:lane"
+        ]
+      },
+      "until": "settled",
+      "timeout_seconds": 0
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "selection": {
+        "steps": [
+          "build",
+          "test"
+        ],
+        "tags": null
+      },
+      "until": {
+        "any_of": [
+          "failed",
+          "stale"
+        ]
+      },
+      "timeout_seconds": 60
+    }
+  ],
+  "StepWaitUntil": [
+    "succeeded",
+    "settled",
+    {
+      "any_of": [
+        "failed",
+        "stale"
+      ]
+    }
+  ],
+  "StepWaitTarget": [
+    "succeeded",
+    "settled"
+  ],
+  "StepWaitResult": [
+    {
+      "met": true,
+      "steps": {
+        "build": "succeeded",
+        "test": "failed"
+      },
+      "seq": 42
+    },
+    {
+      "met": false,
+      "steps": {
+        "build": "running"
+      },
+      "seq": 7
     }
   ]
 }

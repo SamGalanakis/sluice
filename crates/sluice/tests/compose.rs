@@ -1340,6 +1340,10 @@ def main(inp, ctx):
     ok = ctx.tool('step_set_output', {'step': 'later', 'outputs': {'value': 5}, 'force': True,
                                       'reason': 'by hand'})
     assert ok == {'ok': True}, ok
+    waited = ctx.tool('step_wait', {'steps': 'later', 'until': 'succeeded', 'timeout': 5})
+    assert waited['met'] is True and waited['steps'] == {'later': 'succeeded'}, waited
+    done = ctx.tool('log_read', {'kinds': ['step.status'], 'statuses': ['succeeded'], 'limit': 50})
+    assert [r['seq'] for r in done['records'] if r['step'] == 'later'][-1] <= waited['seq'], done
     try:
         ctx.tool('say', {'to': 'later', 'body': 'too late'})
         raise AssertionError('a settled step took a message')

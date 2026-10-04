@@ -214,6 +214,9 @@ pub async fn dispatch_ext<H: ExecutionHost>(
             data(value)?
         }
         CommandRequest::LogWait(request) => CommandReply::Records(log_wait(broker, request).await?),
+        CommandRequest::StepWait(request) => {
+            CommandReply::StepWait(step_wait(broker, request).await?)
+        }
         CommandRequest::Docs { topic } => data(crate::docs::docs(topic.as_deref())?)?,
         CommandRequest::PlanSetInput(request) => {
             if request.edit.dry_run {
@@ -415,7 +418,7 @@ async fn log_wait<H: ExecutionHost>(
 ) -> Result<RecordPage, PublicError> {
     let deadline =
         tokio::time::Instant::now() + Duration::from_secs(request.timeout_seconds.min(3600));
-    let project = crate::calls::resolve(broker.reads(), request.read.project).await?;
+    let project = crate::calls::resolve(broker.reads(), request.read.project.clone()).await?;
     // Subscribe to this log's durable version before reading: a commit during a
     // snapshot cannot be missed, and other logs' commits never wake the wait.
     let mut changes = broker
@@ -423,12 +426,8 @@ async fn log_wait<H: ExecutionHost>(
         .subscribe(broker.writer(), vec![ChangeKey::new(project, "log")])
         .await
         .map_err(public)?;
-    let mut filter = records::RecordFilter {
-        since: request.read.since_seq.or(Some(RecordSeq(0))),
-        kinds: request.read.kinds.unwrap_or_default(),
-        threads: request.read.threads.unwrap_or_default(),
-        limit: request.read.limit,
-    };
+    let mut filter = records::RecordFilter::from(&request.read);
+    filter.since = filter.since.or(Some(RecordSeq(0)));
     let mut held = vec![];
     loop {
         let remaining = (request.read.limit as usize).saturating_sub(held.len());
@@ -481,6 +480,118 @@ async fn log_wait<H: ExecutionHost>(
                 });
             }
         }
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => {},
+            changed = changes.wait() => { changed.map_err(public)?; },
+        }
+    }
+}
+
+/// `step_wait`: one reading per commit to the project's log (every status change, pause and
+/// plan edit writes a record there), like `log_wait`; the plan is compiled again only when
+/// its revision moves.
+async fn step_wait<H: ExecutionHost>(
+    broker: &Coordinator<H>,
+    request: StepWait,
+) -> Result<StepWaitResult, PublicError> {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(request.timeout_seconds.min(3600));
+    let invalid = |message: &str, errors: Vec<String>| PublicError::Invalid {
+        message: message.into(),
+        errors,
+    };
+    let until = StepWaitUntil::parse(request.until.as_value())
+        .map_err(|errors| invalid("step_wait: invalid until", errors))?;
+    let steps = request.selection.steps.unwrap_or_default();
+    let tags = request.selection.tags.unwrap_or_default();
+    match (steps.is_empty(), tags.is_empty()) {
+        (true, true) => {
+            return Err(invalid(
+                "step_wait: select steps by steps or by tags",
+                vec!["steps: name at least one step id, or give tags instead".into()],
+            ));
+        }
+        (false, false) => {
+            return Err(invalid(
+                "step_wait: give steps or tags, not both",
+                vec!["tags: leave out when steps is given".into()],
+            ));
+        }
+        _ => {}
+    }
+    let project = crate::calls::resolve(broker.reads(), Some(request.project))
+        .await?
+        .ok_or_else(|| bad("step_wait needs a project"))?;
+    let mut changes = broker
+        .reads()
+        .subscribe(broker.writer(), vec![ChangeKey::new(Some(project), "log")])
+        .await
+        .map_err(public)?;
+    let (steps, tags) = (std::sync::Arc::new(steps), std::sync::Arc::new(tags));
+    let mut compiled: Option<(Revision, std::sync::Arc<sluice_model::plan::Plan>)> = None;
+    loop {
+        let catalog = broker.catalog().clone();
+        let (steps, tags, cached) = (steps.clone(), tags.clone(), compiled.clone());
+        let until = until.clone();
+        let (result, plan) = broker
+            .reads()
+            .snapshot(move |sql| {
+                let rev: i64 = sql.query_row(
+                    "SELECT rev FROM plans WHERE project_id=?1",
+                    [project.to_string()],
+                    |r| r.get(0),
+                )?;
+                let rev = Revision(rev as u64);
+                let plan = match cached {
+                    Some((at, plan)) if at == rev => plan,
+                    _ => std::sync::Arc::new(context(sql, project, &catalog)?.plan),
+                };
+                let mut errors: Vec<String> = steps
+                    .iter()
+                    .filter(|id| !plan.steps().contains_key(*id))
+                    .map(|id| format!("steps: no step {id}"))
+                    .collect();
+                errors.extend(
+                    tags.iter()
+                        .filter(|tag| !plan.steps().values().any(|s| s.tags.contains(*tag)))
+                        .map(|tag| format!("tags: no step is tagged {tag}")),
+                );
+                if !errors.is_empty() {
+                    return Err(
+                        invalid("step_wait: the selection names no such steps", errors).into(),
+                    );
+                }
+                let state = plans::read_state(sql, project)?;
+                let settled = if until == StepWaitUntil::Named(StepWaitTarget::Settled) {
+                    sluice_model::units::settled_steps(&plan, &state)
+                } else {
+                    Default::default()
+                };
+                let mut met = true;
+                let mut statuses = IndexMap::new();
+                for (id, step) in plan.steps() {
+                    if steps.contains(id) || step.tags.iter().any(|tag| tags.contains(tag)) {
+                        let status = state.status(id);
+                        met &= until.met(&status, settled.contains(id));
+                        statuses.insert(id.clone(), status);
+                    }
+                }
+                let seq = records::bounds(sql, Some(project))?.1;
+                Ok((
+                    StepWaitResult {
+                        met,
+                        steps: statuses,
+                        seq,
+                    },
+                    (rev, plan),
+                ))
+            })
+            .await
+            .map_err(public)?;
+        if result.met || tokio::time::Instant::now() >= deadline {
+            return Ok(result);
+        }
+        compiled = Some(plan);
         tokio::select! {
             _ = tokio::time::sleep_until(deadline) => {},
             changed = changes.wait() => { changed.map_err(public)?; },

@@ -916,8 +916,8 @@ fn mcp_mode_serves_the_tools_over_stdio() {
     }
 }
 
-/// `recipe_list`, `fn_list` and `log_wait` answer through the coordinator, so the CLI prints
-/// what MCP returns; `step_set_input` takes the flat `steps`/`tags` selection.
+/// `recipe_list`, `fn_list`, `log_wait` and `step_wait` answer through the coordinator, so the
+/// CLI prints what MCP returns; `step_set_input` takes the flat `steps`/`tags` selection.
 #[test]
 fn tool_results_match_the_mcp_shapes() {
     let home = ScratchHome::new().unwrap();
@@ -987,6 +987,24 @@ fn tool_results_match_the_mcp_shapes() {
     keys.sort();
     assert_eq!(keys, ["last_seq", "records"], "{waited}");
     assert!(!waited["records"].as_array().unwrap().is_empty());
+    // The log filters ride in log_wait's read; only the plan edits pass here.
+    let edits = ok(tool(
+        home.path(),
+        "log_wait",
+        r#"{"project":"demo","since_seq":0,"kinds":["step.status","plan.edit"],"statuses":["failed"],"timeout":5}"#,
+    ));
+    let records = edits["records"].as_array().unwrap();
+    assert!(!records.is_empty(), "{edits}");
+    assert!(records.iter().all(|r| r["kind"] == "plan.edit"), "{edits}");
+    // `a` was added without starting, so it is held: settled at once.
+    let settled = ok(tool(
+        home.path(),
+        "step_wait",
+        r#"{"project":"demo","steps":"a","until":"settled","timeout":5}"#,
+    ));
+    assert_eq!(settled["met"], true, "{settled}");
+    assert_eq!(settled["steps"], json!({"a":"pending"}));
+    assert!(settled["seq"].as_i64().unwrap() > 0, "{settled}");
 }
 
 /// `sluice tool ask/say/reply`: the orchestrator speaks (no run identity), the thread and

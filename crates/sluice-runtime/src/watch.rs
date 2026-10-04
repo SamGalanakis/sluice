@@ -253,6 +253,7 @@ async fn batch(
                         limit: 200,
                         kinds: options.kinds.clone(),
                         threads: options.threads.clone(),
+                        ..RecordFilter::default()
                     },
                 )?
                 .into_page()?;

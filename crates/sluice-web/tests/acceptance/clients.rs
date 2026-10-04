@@ -165,7 +165,7 @@ async fn sdk(url: &str, version: ProtocolVersion) {
         .unwrap();
     assert!(client.peer_info().is_some());
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 43);
+    assert_eq!(tools.len(), 46);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list").with_arguments(Default::default()))
         .await
@@ -404,7 +404,7 @@ async fn stdio_sdk(scratch: &Scratch) {
         .serve((output, input))
         .await
         .unwrap();
-    assert_eq!(client.list_all_tools().await.unwrap().len(), 43);
+    assert_eq!(client.list_all_tools().await.unwrap().len(), 46);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list").with_arguments(Default::default()))
         .await
@@ -492,7 +492,7 @@ async fn json_and_sse(url: &str) {
     let result = response.json::<Value>().await.unwrap();
     assert_eq!(result["result"]["ttlMs"], json!(0));
     assert_eq!(result["result"]["cacheScope"], json!("private"));
-    assert_eq!(result["result"]["tools"].as_array().unwrap().len(), 43);
+    assert_eq!(result["result"]["tools"].as_array().unwrap().len(), 46);
 }
 
 async fn wire_response(response: reqwest::Response, id: i64) -> Value {

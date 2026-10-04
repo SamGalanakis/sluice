@@ -354,8 +354,8 @@ if __name__ == "__main__":
   `Cancelled` or `CallbackError` (`error`, `message`, `errors`, `current_rev`, `retryable`).
 - `ctx.tool(name, args)` calls a named tool for the run's own project (`project` defaults to
   it): the reads `status`, `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get` and
-  `call_status`; `ask`, `say` and `reply`, `message.ask`, `message.say`, `message.reply` and
-  `message.wait` (as the step, with its run); and the project's
+  `call_status`; `step_wait`; `ask`, `say` and `reply`, `message.ask`, `message.say`,
+  `message.reply` and `message.wait` (as the step, with its run); and the project's
   mutations (`project_update`, the edit tools, retry, cancel, manual values). `args` are the
   tool's flat MCP arguments (§12.2) and the result is the tool's MCP result (`{"ok": true}` for
   an acknowledgement); an unspecified author is `step:<step>`. Another project, or any other
@@ -546,6 +546,17 @@ A step is **ready** when it is pending, not paused, its project is not paused, e
 it reads has a value, every handoff source succeeded and every gate is satisfied. A ready step
 starts at once unless it has `needs` (§7.6); a ready `core.external` step only waits.
 
+A step is **settled** when nothing more happens to it until someone edits the plan, retries,
+cancels, sets an input or sets its outputs by hand: its status is `succeeded`, `failed`,
+`stale` or `skipped`, or it is pending and **held**. A pending step is held when it or its
+project is paused, when it is a ready `core.external` step, or when it is not ready and every
+step it depends on (handoff sources and gate steps, a unit gate's exit steps) that has not
+succeeded or been skipped is itself settled; what it waits for is then a failed, stale or held
+step, or a plan input with no value. A running step is not settled, nor is a pending step that
+is ready (queued on resources included), about to be skipped or failed by the scheduler, or
+waiting on a step that is running or can still start. A unit's settling (§6.7, `unit.settled`)
+is looser: it counts every pending step that is not ready, whatever it waits on.
+
 ### 7.2 Admission and launch
 
 While the scheduler lease is held the coordinator, on every relevant change, settles skips,
@@ -681,7 +692,7 @@ tool` do not take).
 - `to`, for `ask` and `say`, is a step id in the project's current plan, `orchestrator` or
   `owner`. Anything else (missing, empty, an unknown or removed step, another name, the sender
   itself) is `invalid` and nothing is stored. A reply's `to` is the original's `from`.
-- A step that is settled (`succeeded`, `failed`, `stale` or `skipped`), or running with every
+- A step whose status is `succeeded`, `failed`, `stale` or `skipped`, or running with every
   run it has already submitted (its agents' sessions are over; the runs are only finishing),
   takes no messages: an `ask` or `say` to it, and a reply whose `to` it is (to a question it
   asked earlier, say), are refused (`conflict`, saying why) and nothing is stored or
@@ -809,19 +820,46 @@ seqs have gaps. Kinds:
 | `unit.settled` | `unit, work, steps: [{id, status, held, outputs, omitted}]` |
 
 `kinds` filters take exact kinds or the groups `plan`, `step`, `project`, `run`, `unit`.
-`threads` keeps only messages on those threads (alone it means messages only). Calls made
-without a project go to the home log (`project` null).
+`threads` keeps only messages on those threads (alone it means messages only). `statuses`
+(step statuses) keeps only the `step.status` records whose `to` is one of them; `recipients`
+(step ids, `orchestrator`, `owner`) keeps only the `message` records whose `to` is one of them.
+Each filter speaks of its own records and lets records of other kinds through: a record is
+returned when its kind passes `kinds` (and, when `threads` is given without `kinds`, is
+`message`) and it passes every other filter that applies to its kind. `threads` and
+`recipients` both apply to a message. An empty list is no filter. So `kinds: ["step.status",
+"message"], statuses: ["failed", "stale"], recipients: ["orchestrator"]` returns failures,
+stale steps and messages to the orchestrator, and nothing else. `next` and `sluice watch`
+take none of these filters. Calls made without a project go to the home log (`project` null).
 
 Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same
 transaction. A `since_seq` older than a log's trim floor, or newer than any seq the home has
 issued, is `cursor_expired`. `plan_edits` is never trimmed, so `plan_history` reaches rev 1.
 
-## 10. Waiting: `log_wait`, `next`, `watch`
+## 10. Waiting: `log_wait`, `step_wait`, `next`, `watch`
 
-`log_wait(project?, since_seq?, kinds?, threads?, limit=200, timeout=300, wake="any")` returns
-`{records, last_seq}` as soon as a matching record exists after `since_seq`, or with no records
-after `timeout` seconds (capped at 3600). `wake: "questions"` holds notes until a record that is
-not a note arrives or the timeout passes.
+Waits block on the log's commits rather than polling: a wait reads once, then again only after
+a record is committed to the log it watches, so a caller that would sleep and re-check holds one
+of these instead.
+
+`log_wait(project?, since_seq?, kinds?, threads?, statuses?, recipients?, limit=200,
+timeout=300, wake="any")` returns `{records, last_seq}` as soon as a matching record (§9) exists
+after `since_seq`, or with no records after `timeout` seconds (capped at 3600). Records that do
+not match never wake it. `wake: "questions"` holds notes until a record that is not a note
+arrives or the timeout passes.
+
+`step_wait(project, steps? | tags?, until, timeout=300)` waits until every selected step meets
+`until`: `"succeeded"` (each succeeded), `"settled"` (each settled, §7.1) or `{"any_of":
+[statuses]}` (each in one of them). Exactly one of `steps` and `tags` selects (a tag selects
+every step carrying it, `unit:<name>` a unit). It reads the selected steps' statuses once, at
+once, and again after each commit to the project's log (every status change, pause and plan
+edit writes a record), until the condition holds or `timeout` seconds pass (capped at 3600; 0
+reads once). The reply is `{met, steps: {id: status}, seq}`: whether the condition held, each
+selected step's status in plan order, and the project log's last seq at that reading, so a
+`log_read` or `log_wait` from `seq` sees what came after. An unknown step, a tag no step
+carries, both or neither of `steps` and `tags`, and an `until` that is not one of the three
+shapes (an unknown status, an empty `any_of`, another field) are `invalid`, `errors` naming
+each (`steps: no step x`, `tags: no step is tagged t`, `until.any_of[1]: …`); a selected step
+removed from the plan during the wait ends it with the same error.
 
 `next(projects=[], since_seq=0, me="orchestrator", timeout=300, all=false, settle=20,
 settle_max=120, settles="short")` waits across projects (all live projects when empty) for what
@@ -1016,8 +1054,9 @@ same graph.
 | `say` | `project`, `to`, `body`, `data?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
 | `reply` | `project`, `to_message`, `body=""`, `answer?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
 | `messages` | `project`, `view`, `thread?`, `since?`, `owner=false` | `{project, messages, last_id}` |
-| `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records |
+| `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `statuses?`, `recipients?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records; filters §9 |
 | `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"` | `{records, last_seq}` |
+| `step_wait` | `project`, `steps?` or `tags?`, `until`, `timeout=300` | `{met, steps, seq}` (§10) |
 | `next` | §10 | `{records, notes, last_seq, timed_out}` |
 | `query` | `sql`, `params=[]`, `limit=200` | `{columns, rows, truncated}` |
 
@@ -1134,8 +1173,8 @@ read them with `sluice query` or `--settles full`), `PROJECT <id> paused by <aut
 
 `sluice tool` takes the wire argument names with these conveniences: `steps`/`tags` (and
 `after`, `projects`, `state`) as plain values or lists, `expected`/`dry_run`/`reason`/`author`
-flat on edit tools, `wait` for `fn_call`, `timeout` and `wake` for `log_wait`, `timeout`,
-`settle` and `settle_max` for `next`, `fn` for `fn_save`, `name` for `project_update` and
+flat on edit tools, `wait` for `fn_call`, `timeout` and `wake` for `log_wait`, `timeout`
+for `step_wait`, `timeout`, `settle` and `settle_max` for `next`, `fn` for `fn_save`, `name` for `project_update` and
 `project_delete` (which also fills `confirm_name` and the current `expected_settings_rev`),
 `params.unit` for `unit_add`, and `step`/`input`/`value` for `step_set_input`.
 

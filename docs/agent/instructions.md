@@ -20,14 +20,22 @@ Workflow:
    any time. To cap how many steps run at once, declare resources on the project
    (`project_update(project, resources={"lane": 4})`) and give steps `needs` (`docs("plans")`,
    Resources). Every edit takes `dry_run: true` to see what would change before it does.
-4. Watch with `status(project)`, or wait for changes with `log_wait(project, since_seq)` or `next(projects)` (every
-   step status change, call and message is a log record). A failed step stays failed until you
+4. Look with `status(project)`; wait for changes with `step_wait(project, steps, until)`,
+   `log_wait(project, since_seq)` or `next(projects)` (every step status change, call and
+   message is a log record). A failed step stays failed until you
    act: fix the plan with `plan_patch` (needs the current `rev`), then `step_retry`; or record
    the result yourself with `step_set_output`. A `stale` step was computed from inputs that have
    changed since: `step_retry` it (or accept it with `step_set_output`). Provide values a plan
    waits on with `plan_set_input`. `plan_prune(project)` removes done units from the plan.
 5. `verify(project)` lists every problem (bad fn.json, name collisions, plan, state) with where
    it is. A project with function problems refuses edits and runs until they are fixed.
+
+Wait, don't poll: never sleep and re-check `status` or the log, and never run your own
+watcher. `step_wait(project, steps or tags, until="succeeded"|"settled"|{"any_of": [...]})`
+blocks until steps get there; `log_wait` with `kinds`, `statuses` and `recipients` blocks until
+a matching record (`log_wait(project, since_seq, kinds=["step.status", "message"],
+statuses=["failed", "stale"], recipients=["orchestrator"])` wakes only on failures, stale steps
+and messages to you); `next` blocks across projects. See `docs("threads")`.
 
 Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.0` to reach
 inside). Every edit is type-checked; errors name the exact path to fix.

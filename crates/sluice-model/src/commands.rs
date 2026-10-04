@@ -414,6 +414,10 @@ pub struct FnCall {
     pub author: Option<String>,
 }
 
+/// A page of the log. Every filter narrows only the records it speaks of (an empty list is no
+/// filter): `kinds` every record, `threads` and `recipients` message records, `statuses`
+/// step.status records; a record is kept when every filter that applies to it keeps it.
+/// `threads` without `kinds` also keeps messages only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LogRead {
@@ -421,6 +425,12 @@ pub struct LogRead {
     pub since_seq: Option<RecordSeq>,
     pub kinds: Option<Vec<String>>,
     pub threads: Option<Vec<String>>,
+    /// Only step.status records whose `to` is one of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statuses: Option<Vec<StepStatus>>,
+    /// Only message records whose `to` is one of these (a step id, `orchestrator`, `owner`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipients: Option<Vec<String>>,
     pub limit: u32,
 }
 
@@ -430,6 +440,105 @@ pub struct LogWait {
     pub read: LogRead,
     pub timeout_seconds: u64,
     pub questions_only: bool,
+}
+
+/// `step_wait`: wait until every selected step's status meets `until`, or `timeout_seconds`
+/// pass. Exactly one of `steps` and `tags` selects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepWait {
+    pub project: ProjectSelector,
+    pub selection: StepSelection,
+    /// `"succeeded"`, `"settled"` or `{"any_of": [statuses]}`. The coordinator checks it and
+    /// refuses a bad one as `invalid`.
+    #[schemars(with = "StepWaitUntil")]
+    pub until: JsonValue,
+    pub timeout_seconds: u64,
+}
+
+/// What `step_wait` waits for: every selected step succeeded, every one settled (§7.1), or
+/// every one in one of the listed statuses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum StepWaitUntil {
+    Named(StepWaitTarget),
+    AnyOf { any_of: Vec<StepStatus> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StepWaitTarget {
+    Succeeded,
+    Settled,
+}
+
+impl StepWaitUntil {
+    /// Check a raw `until`, naming every problem with its path.
+    pub fn parse(value: &serde_json::Value) -> Result<Self, Vec<String>> {
+        const SHAPE: &str = r#"until: must be "succeeded", "settled" or {"any_of": [statuses]}"#;
+        let status =
+            |value: &serde_json::Value| serde_json::from_value::<StepStatus>(value.clone()).ok();
+        match value {
+            serde_json::Value::String(name) => match name.as_str() {
+                "succeeded" => Ok(Self::Named(StepWaitTarget::Succeeded)),
+                "settled" => Ok(Self::Named(StepWaitTarget::Settled)),
+                _ => Err(vec![format!("{SHAPE}, not {value}")]),
+            },
+            serde_json::Value::Object(object) => {
+                let mut errors: Vec<String> = object
+                    .keys()
+                    .filter(|key| *key != "any_of")
+                    .map(|key| format!("until.{key}: unknown field; {SHAPE}"))
+                    .collect();
+                let mut statuses = vec![];
+                match object.get("any_of") {
+                    None => errors.push(format!("until.any_of: missing; {SHAPE}")),
+                    Some(serde_json::Value::Array(items)) if items.is_empty() => {
+                        errors.push("until.any_of: name at least one status".into())
+                    }
+                    Some(serde_json::Value::Array(items)) => {
+                        for (i, item) in items.iter().enumerate() {
+                            match status(item) {
+                                Some(status) => statuses.push(status),
+                                None => errors.push(format!(
+                                    "until.any_of[{i}]: {item} is not a step status (pending, \
+                                     running, succeeded, failed, stale, skipped)"
+                                )),
+                            }
+                        }
+                    }
+                    Some(other) => errors.push(format!(
+                        "until.any_of: must be a list of step statuses, not {other}"
+                    )),
+                }
+                if errors.is_empty() {
+                    Ok(Self::AnyOf { any_of: statuses })
+                } else {
+                    Err(errors)
+                }
+            }
+            _ => Err(vec![format!("{SHAPE}, not {value}")]),
+        }
+    }
+    /// Whether one step meets the condition; `settled` is the step's settledness (§7.1).
+    pub fn met(&self, status: &StepStatus, settled: bool) -> bool {
+        match self {
+            Self::Named(StepWaitTarget::Succeeded) => *status == StepStatus::Succeeded,
+            Self::Named(StepWaitTarget::Settled) => settled,
+            Self::AnyOf { any_of } => any_of.contains(status),
+        }
+    }
+}
+
+/// `step_wait`'s reply: whether the condition held, each selected step's status (plan order)
+/// and the project log's last seq at that reading, for a `log_read` from there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepWaitResult {
+    pub met: bool,
+    #[schemars(with = "std::collections::BTreeMap<String, StepStatus>")]
+    pub steps: indexmap::IndexMap<StepId, StepStatus>,
+    pub seq: RecordSeq,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -847,6 +956,7 @@ pub enum CommandRequest {
     FnCall(FnCall),
     LogRead(LogRead),
     LogWait(LogWait),
+    StepWait(StepWait),
     Next(Next),
     Query(Query),
     AcquireLease(AcquireLease),
@@ -963,6 +1073,7 @@ pub enum CommandReply {
     Messages(MessagePage),
     Records(RecordPage),
     Next(NextResult),
+    StepWait(StepWaitResult),
     Lease {
         lease: LeaseId,
         state: LeaseState,

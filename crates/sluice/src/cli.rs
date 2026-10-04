@@ -375,6 +375,7 @@ const TOOLS: &[(&str, &str)] = &[
     ("recipe_list", "the project's recipes"),
     ("log_read", "read the log after a seq"),
     ("log_wait", "wait for new log records"),
+    ("step_wait", "wait until steps reach a status"),
     ("next", "the next records an orchestrator acts on"),
     ("query", "one read-only SELECT over the home"),
     ("backup", "an online copy of the database"),
@@ -696,7 +697,15 @@ async fn normalize_args(
         "log_wait" => {
             args.entry("limit").or_insert(json!(200));
             let mut read = serde_json::Map::new();
-            for key in ["project", "since_seq", "kinds", "threads", "limit"] {
+            for key in [
+                "project",
+                "since_seq",
+                "kinds",
+                "threads",
+                "statuses",
+                "recipients",
+                "limit",
+            ] {
                 if let Some(value) = args.remove(key) {
                     read.insert(key.into(), value);
                 }
@@ -717,6 +726,14 @@ async fn normalize_args(
                 "questions_only".into(),
                 Value::Bool(wake.as_str() == Some("questions")),
             );
+        }
+        "step_wait" => {
+            selection(args);
+            seconds(args, "timeout", "timeout_seconds");
+            let timeout = args.entry("timeout_seconds").or_insert(json!(300));
+            if timeout.as_u64().is_some_and(|v| v > 3600) {
+                *timeout = json!(3600);
+            }
         }
         "next" => {
             listify(args, "projects");
@@ -942,12 +959,7 @@ async fn log_read_page(
     home: &Path,
     read: &sluice_model::commands::LogRead,
 ) -> Result<sluice_model::commands::RecordPage, PublicError> {
-    let filter = records::RecordFilter {
-        since: read.since_seq,
-        kinds: read.kinds.clone().unwrap_or_default(),
-        threads: read.threads.clone().unwrap_or_default(),
-        limit: read.limit,
-    };
+    let filter = records::RecordFilter::from(read);
     let read = read.clone();
     reads(home)?
         .snapshot(move |sql| {
@@ -1156,6 +1168,7 @@ async fn watch_log(
             kinds: kinds.clone(),
             threads: threads.clone(),
             limit: 1000,
+            ..Default::default()
         };
         let page = reads
             .snapshot(move |sql| {

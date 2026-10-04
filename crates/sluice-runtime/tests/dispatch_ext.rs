@@ -884,6 +884,11 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             json!({"read":log,"timeout_seconds":0,"questions_only":false}),
         ),
         (
+            "StepWait",
+            "step_wait",
+            json!({"selection":sel,"until":"settled","timeout_seconds":0}),
+        ),
+        (
             "Next",
             "next",
             json!({"projects":[f.selector()],"since_seq":0,"me":"test","timeout_seconds":0,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}),
@@ -1002,6 +1007,7 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
                 | "Messages"
                 | "FnCall"
                 | "LogRead"
+                | "StepWait"
                 | "EdgeAdd"
                 | "EdgeRemove"
                 | "PlanGet"
@@ -1101,5 +1107,464 @@ async fn message_records_in_log_read_and_next_over_socket() {
     assert_eq!(page.records[0].seq.0, id.0);
     let CommandReply::Next(next)=f.client.command(request("next",json!({"projects":[f.selector()],"since_seq":id.0-1,"me":"owner","timeout_seconds":0,"all":true,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}))).await.unwrap() else {panic!("next")};
     assert_eq!(next.records[0].seq.0, id.0);
+    f.close().await;
+}
+
+fn waited(reply: CommandReply) -> StepWaitResult {
+    let CommandReply::StepWait(result) = reply else {
+        panic!("expected a step_wait result, got {reply:?}")
+    };
+    result
+}
+fn statuses(result: &StepWaitResult) -> Vec<(String, StepStatus)> {
+    result
+        .steps
+        .iter()
+        .map(|(id, status)| (id.to_string(), status.clone()))
+        .collect()
+}
+/// A `step_wait` or `log_wait` over the socket, answered on its own task.
+fn spawn_call(
+    f: &Fixture,
+    name: &'static str,
+    mut args: Value,
+) -> tokio::task::JoinHandle<Result<CommandReply, PublicError>> {
+    if name == "log_wait" {
+        args["read"]["project"] = f.selector();
+    } else {
+        args["project"] = f.selector();
+    }
+    let client = f.client.clone();
+    tokio::spawn(async move { client.command(request(name, args)).await })
+}
+/// The call is parked: it has not answered by now.
+async fn parked(call: &tokio::task::JoinHandle<Result<CommandReply, PublicError>>) {
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(!call.is_finished(), "answered before anything it waits for");
+}
+async fn answered(
+    call: tokio::task::JoinHandle<Result<CommandReply, PublicError>>,
+) -> CommandReply {
+    tokio::time::timeout(Duration::from_secs(5), call)
+        .await
+        .expect("the wait did not wake")
+        .unwrap()
+        .unwrap()
+}
+async fn latest(f: &Fixture) -> RecordPage {
+    let CommandReply::Records(page) = f.call("log_read", json!({"limit":1})).await.unwrap() else {
+        panic!("records")
+    };
+    page
+}
+fn wait_args(selection: Value, until: Value, timeout: u64) -> Value {
+    json!({"selection":selection,"until":until,"timeout_seconds":timeout})
+}
+fn steps(ids: &[&str]) -> Value {
+    json!({"steps":ids,"tags":null})
+}
+
+#[tokio::test]
+async fn step_wait_answers_at_once_when_the_condition_already_holds() {
+    let f = Fixture::new().await;
+    let seq = latest(&f).await.last_seq;
+    // pre is a ready core.external step and work waits on unset plan inputs: both held.
+    let started = tokio::time::Instant::now();
+    let result = waited(
+        f.call(
+            "step_wait",
+            wait_args(steps(&["work", "pre"]), json!("settled"), 30),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(result.met);
+    assert_eq!(
+        statuses(&result),
+        vec![
+            ("pre".into(), StepStatus::Pending),
+            ("work".into(), StepStatus::Pending)
+        ]
+    );
+    assert_eq!(result.seq, seq);
+    let result = waited(
+        f.call(
+            "step_wait",
+            wait_args(steps(&["pre"]), json!({"any_of":["pending","running"]}), 30),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(result.met);
+    // Not met, and a zero timeout reads once.
+    let result = waited(
+        f.call(
+            "step_wait",
+            wait_args(steps(&["pre"]), json!("succeeded"), 0),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(!result.met);
+    assert_eq!(statuses(&result), vec![("pre".into(), StepStatus::Pending)]);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn step_wait_wakes_when_another_caller_changes_the_status() {
+    let f = Fixture::new().await;
+    let wait = spawn_call(
+        &f,
+        "step_wait",
+        wait_args(steps(&["pre"]), json!("succeeded"), 30),
+    );
+    parked(&wait).await;
+    f.call(
+        "step_set_output",
+        json!({"step":"pre","outputs":{"ok":true},"force":true,"reason":"elsewhere"}),
+    )
+    .await
+    .unwrap();
+    let result = waited(answered(wait).await);
+    assert!(result.met);
+    assert_eq!(
+        statuses(&result),
+        vec![("pre".into(), StepStatus::Succeeded)]
+    );
+    // seq covers the status change: a log_read from before it finds the record.
+    let CommandReply::Records(page) = f
+        .call(
+            "log_read",
+            json!({"kinds":["step.status"],"statuses":["succeeded"],"limit":1}),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("records")
+    };
+    assert!(result.seq >= page.records[0].seq);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn step_wait_times_out_with_met_false() {
+    let f = Fixture::new().await;
+    let started = tokio::time::Instant::now();
+    let result = waited(
+        f.call(
+            "step_wait",
+            wait_args(steps(&["pre"]), json!("succeeded"), 1),
+        )
+        .await
+        .unwrap(),
+    );
+    assert!(started.elapsed() >= Duration::from_millis(900));
+    assert!(!result.met);
+    assert_eq!(statuses(&result), vec![("pre".into(), StepStatus::Pending)]);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn step_wait_any_of_wakes_on_one_of_the_listed_statuses() {
+    let f = Fixture::new().await;
+    let wait = spawn_call(
+        &f,
+        "step_wait",
+        wait_args(steps(&["pre"]), json!({"any_of":["failed","stale"]}), 30),
+    );
+    parked(&wait).await;
+    // Cancelling a pending core.external step fails it at once.
+    f.call(
+        "step_cancel",
+        json!({"selection":steps(&["pre"]),"reason":"no longer needed"}),
+    )
+    .await
+    .unwrap();
+    let result = waited(answered(wait).await);
+    assert!(result.met);
+    assert_eq!(statuses(&result), vec![("pre".into(), StepStatus::Failed)]);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn step_wait_selects_by_tag() {
+    let f = Fixture::new().await;
+    let wait = spawn_call(
+        &f,
+        "step_wait",
+        wait_args(
+            json!({"steps":null,"tags":["unit:pre"]}),
+            json!("succeeded"),
+            30,
+        ),
+    );
+    parked(&wait).await;
+    f.call(
+        "step_set_output",
+        json!({"step":"pre","outputs":{"ok":true},"force":true,"reason":"by hand"}),
+    )
+    .await
+    .unwrap();
+    let result = waited(answered(wait).await);
+    assert!(result.met);
+    assert_eq!(
+        statuses(&result),
+        vec![("pre".into(), StepStatus::Succeeded)]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn step_wait_settled_counts_held_steps_but_not_work_that_can_still_move() {
+    let f = Fixture::new().await;
+    f.broker.acquire_scheduler("test".into()).await.unwrap();
+    // later waits on pre, which waits for its outputs by hand: both are held.
+    f.patch(json!([{"op":"add","path":"/steps/later","value":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["pre"]}}])).await;
+    let settled = |ids: &'static [&'static str]| wait_args(steps(ids), json!("settled"), 0);
+    assert!(waited(f.call("step_wait", settled(&["later"])).await.unwrap()).met);
+    // work starts once its inputs are set, and a step waiting on running work is not settled.
+    f.patch(json!([{"op":"add","path":"/steps/after-work","value":{"run":"fixture.echo","in":{"value":{"default":1}},"after":["work"]}}])).await;
+    let running = spawn_call(
+        &f,
+        "step_wait",
+        wait_args(steps(&["work"]), json!({"any_of":["running"]}), 30),
+    );
+    f.input("value", json!(1), false).await;
+    f.input("enabled", json!(true), false).await;
+    assert!(waited(answered(running).await).met);
+    let result = waited(f.call("step_wait", settled(&["after-work"])).await.unwrap());
+    assert!(!result.met);
+    assert_eq!(
+        statuses(&result),
+        vec![("after-work".into(), StepStatus::Pending)]
+    );
+    // A paused step is held, whatever it waits on.
+    f.call(
+        "step_pause",
+        json!({"selection":steps(&["after-work"]),"paused":true,"edit":options(false)}),
+    )
+    .await
+    .unwrap();
+    assert!(waited(f.call("step_wait", settled(&["after-work"])).await.unwrap()).met);
+    f.close().await;
+}
+
+#[tokio::test]
+async fn step_wait_refuses_bad_selections_and_conditions_as_invalid_naming_each() {
+    let f = Fixture::new().await;
+    let cases = [
+        (
+            wait_args(steps(&["nope", "pre", "ghost"]), json!("succeeded"), 0),
+            vec!["steps: no step nope", "steps: no step ghost"],
+        ),
+        (
+            wait_args(
+                json!({"steps":null,"tags":["missing","unit:pre"]}),
+                json!("succeeded"),
+                0,
+            ),
+            vec!["tags: no step is tagged missing"],
+        ),
+        (
+            wait_args(
+                json!({"steps":["pre"],"tags":["unit:pre"]}),
+                json!("succeeded"),
+                0,
+            ),
+            vec!["tags: leave out"],
+        ),
+        (
+            wait_args(json!({"steps":null,"tags":null}), json!("succeeded"), 0),
+            vec!["steps: name at least one"],
+        ),
+        (
+            wait_args(json!({"steps":[],"tags":[]}), json!("succeeded"), 0),
+            vec!["steps: name at least one"],
+        ),
+        (
+            wait_args(steps(&["pre"]), json!("done"), 0),
+            vec![r#"not "done""#],
+        ),
+        (
+            wait_args(steps(&["pre"]), json!({"any_of":["bogus","failed",3]}), 0),
+            vec!["until.any_of[0]: \"bogus\"", "until.any_of[2]: 3"],
+        ),
+        (
+            wait_args(steps(&["pre"]), json!({"any_of":[]}), 0),
+            vec!["until.any_of: name at least one status"],
+        ),
+        (
+            wait_args(steps(&["pre"]), json!({"all_of":["failed"]}), 0),
+            vec!["until.all_of: unknown field", "until.any_of: missing"],
+        ),
+    ];
+    for (args, expected) in cases {
+        let result = f.call("step_wait", args.clone()).await;
+        let Err(PublicError::Invalid { errors, .. }) = &result else {
+            panic!("{args}: {result:?}")
+        };
+        assert_eq!(errors.len(), expected.len(), "{args}: {errors:?}");
+        for (error, expected) in errors.iter().zip(expected) {
+            assert!(error.contains(expected), "{args}: {error} lacks {expected}");
+        }
+    }
+    f.close().await;
+}
+
+fn page(reply: CommandReply) -> RecordPage {
+    let CommandReply::Records(page) = reply else {
+        panic!("records")
+    };
+    page
+}
+fn kinds(page: &RecordPage) -> BTreeSet<String> {
+    page.records
+        .iter()
+        .map(|r| {
+            serde_json::to_value(r).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+fn field(record: &sluice_model::events::Record, name: &str) -> Value {
+    serde_json::to_value(record).unwrap()[name].clone()
+}
+
+#[tokio::test]
+async fn log_read_filters_step_status_by_status_and_messages_by_recipient() {
+    let f = Fixture::new().await;
+    f.call("say", json!({"to":"pre","body":"for pre"}))
+        .await
+        .unwrap();
+    let note = post(&f, "for the orchestrator", false).await;
+    f.input("value", json!(1), false).await;
+    f.call(
+        "step_set_output",
+        json!({"step":"pre","outputs":{"ok":true},"force":true,"reason":"by hand"}),
+    )
+    .await
+    .unwrap();
+    f.patch(json!([{"op":"add","path":"/steps/extra","value":{"run":"core.external","outputs":{"ok":"boolean"}}}])).await;
+    f.call(
+        "step_cancel",
+        json!({"selection":steps(&["extra"]),"reason":"not needed"}),
+    )
+    .await
+    .unwrap();
+    let read = |args: Value| async {
+        let mut args = args;
+        args["since_seq"] = json!(0);
+        args["limit"] = json!(200);
+        page(f.call("log_read", args).await.unwrap())
+    };
+    // Alone, statuses narrows step.status records and lets every other kind through.
+    let all = read(json!({})).await;
+    let only = read(json!({"statuses":["succeeded"]})).await;
+    let step_status = |page: &RecordPage| -> Vec<Value> {
+        page.records
+            .iter()
+            .filter(|r| field(r, "kind") == "step.status")
+            .map(|r| field(r, "to"))
+            .collect()
+    };
+    assert!(step_status(&all).len() > step_status(&only).len());
+    assert_eq!(step_status(&only), vec![json!("succeeded")]);
+    assert_eq!(
+        only.records.len(),
+        all.records.len() - step_status(&all).len() + 1
+    );
+    assert!(kinds(&only).contains("message") && kinds(&only).contains("plan.input"));
+    // With kinds, only the matching step.status records.
+    let only = read(json!({"kinds":["step.status"],"statuses":["succeeded"]})).await;
+    assert_eq!(kinds(&only), BTreeSet::from(["step.status".to_owned()]));
+    assert_eq!(step_status(&only), vec![json!("succeeded")]);
+    // recipients narrows messages the same way.
+    let only = read(json!({"recipients":["orchestrator"]})).await;
+    let messages: Vec<_> = only
+        .records
+        .iter()
+        .filter(|r| field(r, "kind") == "message")
+        .map(|r| r.seq.0)
+        .collect();
+    assert_eq!(messages, vec![note.0]);
+    assert!(kinds(&only).contains("step.status"));
+    let only = read(json!({"kinds":["message"],"recipients":["orchestrator"]})).await;
+    assert_eq!(
+        only.records.iter().map(|r| r.seq.0).collect::<Vec<_>>(),
+        vec![note.0]
+    );
+    // Both, with kinds: the succeeded status and the message to the orchestrator, in order.
+    let only = read(json!({"kinds":["step.status","message"],"statuses":["succeeded"],"recipients":["orchestrator"]})).await;
+    assert_eq!(only.records.len(), 2);
+    assert_eq!(only.records[0].seq.0, note.0);
+    assert_eq!(field(&only.records[1], "to"), "succeeded");
+    // threads and recipients both apply to a message.
+    assert!(
+        read(json!({"threads":["owner"],"recipients":["pre"]}))
+            .await
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        read(json!({"threads":["owner"],"recipients":["orchestrator"]}))
+            .await
+            .records
+            .iter()
+            .map(|r| r.seq.0)
+            .collect::<Vec<_>>(),
+        vec![note.0]
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_first_match() {
+    let f = Fixture::new().await;
+    let standing = |since: RecordSeq| json!({"read":{"since_seq":since,"kinds":["step.status","message"],"statuses":["failed","stale"],"recipients":["orchestrator"],"limit":200},"timeout_seconds":30,"questions_only":false});
+    let wait = spawn_call(&f, "log_wait", standing(latest(&f).await.last_seq));
+    parked(&wait).await;
+    // A message to a step, a note to the owner, plan inputs, an edit and a running step.
+    f.call("say", json!({"to":"pre","body":"for pre"}))
+        .await
+        .unwrap();
+    f.call("say", json!({"to":"owner","body":"for the owner"}))
+        .await
+        .unwrap();
+    f.input("value", json!(1), false).await;
+    f.patch(json!([{"op":"add","path":"/steps/extra","value":{"run":"core.external","outputs":{"ok":"boolean"}}}])).await;
+    f.call(
+        "step_set_output",
+        json!({"step":"extra","outputs":{"ok":true},"force":true,"reason":"by hand"}),
+    )
+    .await
+    .unwrap();
+    parked(&wait).await;
+    f.call(
+        "step_cancel",
+        json!({"selection":steps(&["pre"]),"reason":"no longer needed"}),
+    )
+    .await
+    .unwrap();
+    let woke = page(answered(wait).await);
+    assert_eq!(woke.records.len(), 1, "{:?}", woke.records);
+    assert_eq!(field(&woke.records[0], "kind"), "step.status");
+    assert_eq!(field(&woke.records[0], "step"), "pre");
+    assert_eq!(field(&woke.records[0], "to"), "failed");
+    // From there, the next standing wait wakes on the message to the orchestrator.
+    let wait = spawn_call(&f, "log_wait", standing(woke.last_seq));
+    parked(&wait).await;
+    f.call("say", json!({"to":"work","body":"for work"}))
+        .await
+        .unwrap();
+    parked(&wait).await;
+    let note = post(&f, "for the orchestrator", false).await;
+    let woke = page(answered(wait).await);
+    assert_eq!(
+        woke.records.iter().map(|r| r.seq.0).collect::<Vec<_>>(),
+        vec![note.0]
+    );
     f.close().await;
 }

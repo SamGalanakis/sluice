@@ -502,7 +502,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             CommandRequest::AcquireLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{let lease=resources::request_lease_keyed(tx,request.run,&request.resource,request.amount,&format!("callback/{}/{}",request.run,request.request_id))?;let state=resources::leases(tx.sql(),run_project(tx.sql(),request.run)?)?.into_iter().find(|l|l.id==lease).ok_or_else(||conflict("lease missing"))?.state;Ok(CommandReply::Lease{lease,state})}).await,
             CommandRequest::ReleaseLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{resources::release_lease(tx,request.lease,request.run)?;Ok(CommandReply::Ack)}).await,
             CommandRequest::RegisterCompletionAction(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{if !attempts::register_completion_action(tx,request,&Hooks)?{return Err(conflict("stale action registration").into());}Ok(CommandReply::Ack)}).await,
-            CommandRequest::LogRead(request)=>self.reads().snapshot(move|sql|{let project=request.project.as_ref().map(|p|messages_project(sql,p)).transpose()?;Ok(CommandReply::Records(records::read_records(sql,project,&records::RecordFilter{since:request.since_seq,kinds:request.kinds.unwrap_or_default(),threads:request.threads.unwrap_or_default(),limit:request.limit})?.into_page()?))}).await.map_err(|e|e.into_public(true)),
+            CommandRequest::LogRead(request)=>self.reads().snapshot(move|sql|{let project=request.project.as_ref().map(|p|messages_project(sql,p)).transpose()?;Ok(CommandReply::Records(records::read_records(sql,project,&records::RecordFilter::from(&request))?.into_page()?))}).await.map_err(|e|e.into_public(true)),
             _ => Err(PublicError::not_implemented("command dispatch extension")),
         }
     }
@@ -1255,6 +1255,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                             | CommandRequest::Status(_)
                             | CommandRequest::Messages(_)
                             | CommandRequest::LogRead(_)
+                            | CommandRequest::StepWait(_)
                             | CommandRequest::FnList { .. }
                             | CommandRequest::FnGet { .. }
                             | CommandRequest::CallStatus { .. }
@@ -1846,6 +1847,7 @@ fn served_while_adopting(command: &CommandRequest) -> bool {
             | CommandRequest::Messages(_)
             | CommandRequest::LogRead(_)
             | CommandRequest::LogWait(_)
+            | CommandRequest::StepWait(_)
             | CommandRequest::Query(_)
             | CommandRequest::Docs { .. }
             | CommandRequest::Submission { .. }

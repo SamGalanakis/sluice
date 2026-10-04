@@ -8,14 +8,16 @@ Messages also live as rows in the project's `messages` table, which is never tri
 log — a question and its answer outlive the records that announced them.
 
 ## Reading the log
-- `log_read(project, since_seq?, kinds?, threads?, limit=200)` → `{records, last_seq}`. Without
+- `log_read(project, since_seq?, kinds?, threads?, statuses?, recipients?, limit=200)` →
+  `{records, last_seq}`. Without
   `since_seq` you get the latest records; with it, the ones after it. Pass `last_seq` back as
   `since_seq` next time. Without `project` it reads the home's own log (calls run without a
   project). A `since_seq` older than the log keeps, or newer than any seq the home has issued,
   is `cursor_expired`: read again without it.
-- `log_wait(project, since_seq, kinds?, threads?, timeout=300, wake="any")` is the same, but
-  waits until at least one matching record exists (or `timeout` seconds pass, at most 3600:
-  then `records` is empty). Call it in a loop to follow a project.
+- `log_wait(project, since_seq, kinds?, threads?, statuses?, recipients?, timeout=300,
+  wake="any")` is the same, but waits until at least one matching record exists (or `timeout`
+  seconds pass, at most 3600: then `records` is empty). Records that do not match never wake
+  it. Call it in a loop to follow a project.
 - `kinds`: `plan.edit`, `plan.input`, `step.output`, `step.retry`, `step.cancel`,
   `step.submit`, `step.status`, `step.lease`, `step.queued`, `call`, `message`,
   `project.pause`, `project.archive`, `project.update`, `project.board`, `project.rename`,
@@ -23,11 +25,46 @@ log — a question and its answer outlive the records that announced them.
   `run.completion_action.register`, `unit.settled`; the groups `plan`, `step`, `project`,
   `run` and `unit` match every kind under them. `threads`: only messages on these threads
   (alone, it means messages only).
+- `statuses`: only `step.status` records whose `to` is one of these statuses. `recipients`:
+  only messages whose `to` is one of these (step ids, `orchestrator`, `owner`). Each narrows
+  its own kind and lets every other kind through, so pair them with `kinds`. One standing wait
+  that wakes only on failures, stale steps and messages to you:
+  `log_wait(project, since_seq, kinds=["step.status", "message"], statuses=["failed",
+  "stale"], recipients=["orchestrator"])`.
 
 A record is `{"seq", "at", "project", "kind", ...}`. A `step.status` record adds `"step",
 "from", "to", "error", "run_ids", "needs"` (`error` is a structured error object or null),
 so `log_wait(project, since_seq, kinds=["step.status"])` wakes you when a step finishes, fails
 or turns stale.
+
+## Waiting on steps
+`step_wait(project, steps? | tags?, until, timeout=300)` blocks until every selected step
+meets `until`, and returns `{met, steps: {id: status}, seq}`:
+
+- `until`: `"succeeded"`; `"settled"`: nothing more happens to the step without an edit, a
+  retry, an input or an output set by hand (it succeeded, failed, turned stale or was skipped,
+  or it is pending and held: paused, a `core.external` step waiting for its outputs, or
+  waiting only on such steps or on a plan input with no value); or `{"any_of": ["failed",
+  "stale"]}`, each step in one of those statuses.
+- Give `steps` (ids) or `tags` (`unit:<name>` selects a unit), not both.
+- It answers at once when the condition already holds; otherwise when a status change makes
+  it hold, or with `met: false` after `timeout` seconds (at most 3600; 0 checks once).
+- `seq` is the project log's last seq at that answer: `log_read(project, since_seq=seq)`
+  shows what happened after it. A step id the plan lacks, a tag no step carries or a bad
+  `until` is `invalid`, each named in `errors`.
+
+```
+step_wait(project="myproj", tags=["unit:lane-3"], until="settled", timeout=1800)
+→ {"met": true, "steps": {"lane-3-work": "succeeded", "lane-3-land": "failed"}, "seq": 812}
+```
+
+## Wait, don't poll
+Never sleep and re-check `status`, `plan_get` or `log_read` in a loop, and never write your
+own watcher: hold one wait instead. To wait for steps (a sibling lane, a merge to main, a
+unit), call `step_wait`; to wait for events (failures, messages to you), call `log_wait` with
+`kinds`, `statuses` and `recipients`; to wait for everything an orchestrator acts on, call
+`next`. Each answers the moment its condition holds and costs nothing while it waits; on a
+timeout, call it again with what it returned.
 
 ## Messages and threads
 Three verbs, each with a required recipient; the thread and the sender are derived, never
@@ -59,11 +96,11 @@ Each of the three returns its receipt, `{id, to, thread, delivery, run?}`:
 - `no_live_run`: the step has no live or upcoming run (it is paused, or its live run does
   not listen). The message is kept and given to the step's next run, if one is ever started.
 
-A step that is settled (succeeded, failed, stale or skipped), or whose runs have all
+A step that succeeded, failed, turned stale or was skipped, or whose runs have all
 submitted (their agents' sessions are over), takes no messages: an `ask` or `say` to it, or a
 reply to a question it asked earlier, is refused (`conflict`, saying why) and nothing is
 stored. Closing such a question still works. To
-give a settled step more work, retry it with a message (below).
+give such a step more work, retry it with a message (below).
 
 A message is a row `{id, verb, from, to, thread, body, title?, ui?, input?, data?, run?, at,
 to_message?, answer?}`: `verb` is `ask`, `say` or `reply`; `to_message` and `answer` are a

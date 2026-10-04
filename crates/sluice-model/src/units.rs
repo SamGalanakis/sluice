@@ -114,6 +114,44 @@ impl Unit {
     }
 }
 
+/// The plan's settled steps (§7.1): those that need an edit, a retry, an input or an output
+/// set by hand before anything more happens to them. Succeeded, failed, stale and skipped
+/// steps are settled; a pending step is settled when it is held: paused (or its project is),
+/// a ready `core.external` step, or waiting while nothing it depends on can still move (each
+/// dependency it waits on is itself settled). Running steps, pending steps about to start or
+/// queued on resources, and pending steps waiting on running or startable work are not.
+pub fn settled_steps(plan: &Plan, state: &StateSnapshot) -> IndexSet<StepId> {
+    let mut settled = IndexSet::new();
+    for id in plan.topological_order() {
+        let held = match state.status(id) {
+            StepStatus::Running => false,
+            StepStatus::Pending => {
+                let step = &plan.steps()[id];
+                match evaluate_step(plan, state, step) {
+                    GateDecision::Ready => step.is_external(),
+                    GateDecision::Wait(_) => {
+                        step.paused.is_paused()
+                            || state.paused.is_paused()
+                            || plan.dependencies(id).iter().all(|dependency| {
+                                matches!(
+                                    state.status(dependency),
+                                    StepStatus::Succeeded | StepStatus::Skipped
+                                ) || settled.contains(dependency)
+                            })
+                    }
+                    // About to be skipped or failed by the next reconcile.
+                    GateDecision::Skip(_) | GateDecision::Invalid(_) => false,
+                }
+            }
+            _ => true,
+        };
+        if held {
+            settled.insert(id.clone());
+        }
+    }
+    settled
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RetryWalk {
     /// Explicit retry targets, in plan order.

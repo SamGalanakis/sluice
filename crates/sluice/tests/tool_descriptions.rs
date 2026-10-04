@@ -325,6 +325,11 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     f.check("log_wait", json!({"project":"p","since_seq":0,"timeout":1}))
         .await;
     f.check(
+        "step_wait",
+        json!({"project":"p","steps":"work","until":{"any_of":["running"]},"timeout":1}),
+    )
+    .await;
+    f.check(
         "next",
         json!({"projects":"p","since_seq":0,"timeout":1,"settle":0}),
     )

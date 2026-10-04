@@ -9,7 +9,7 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{CommandReply, CommandRequest, IconUpload},
+    commands::{CommandReply, CommandRequest, IconUpload, StepStatus},
     error::PublicError,
     ids::Revision,
 };
@@ -85,6 +85,7 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "step_submit",
         "log_read",
         "log_wait",
+        "step_wait",
         "next",
         "drain",
         "release",
@@ -235,12 +236,17 @@ fn waits_are_capped_and_negative_waits_are_refused() {
             json!({"name":"core.echo","inputs":{},"wait":3601}),
         ),
         ("log_wait", json!({"timeout":3601})),
+        (
+            "step_wait",
+            json!({"project":"p","steps":"a","until":"settled","timeout":3601}),
+        ),
         ("next", json!({"timeout":3601})),
     ] {
         let request = decode(tool, args).unwrap();
         match request {
             CommandRequest::FnCall(r) => assert_eq!(r.wait_seconds, Some(3600)),
             CommandRequest::LogWait(r) => assert_eq!(r.timeout_seconds, 3600),
+            CommandRequest::StepWait(r) => assert_eq!(r.timeout_seconds, 3600),
             CommandRequest::Next(r) => assert_eq!(r.timeout_seconds, 3600),
             _ => panic!(),
         };
@@ -256,6 +262,31 @@ fn waits_are_capped_and_negative_waits_are_refused() {
     assert_eq!(wait.timeout_seconds, 3);
     assert_eq!(wait.read.limit, 10);
     assert!(wait.questions_only);
+    let CommandRequest::LogWait(wait) = decode(
+        "log_wait",
+        json!({"project":"p","kinds":["step.status","message"],"statuses":["failed","stale"],"recipients":["orchestrator"]}),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        wait.read.statuses,
+        Some(vec![StepStatus::Failed, StepStatus::Stale])
+    );
+    assert_eq!(wait.read.recipients, Some(vec!["orchestrator".to_owned()]));
+    assert!(decode("log_read", json!({"statuses":["finished"]})).is_err());
+    // step_wait: flat steps (one or a list) or tags, a default timeout, until passed as given.
+    let CommandRequest::StepWait(wait) = decode(
+        "step_wait",
+        json!({"project":"p","steps":"a","until":{"any_of":["failed"]}}),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(wait.timeout_seconds, 300);
+    assert_eq!(wait.selection.steps, Some(vec!["a".parse().unwrap()]));
+    assert_eq!(wait.until.as_value(), &json!({"any_of":["failed"]}));
+    assert!(decode("step_wait", json!({"project":"p","tags":"unit:a"})).is_err());
 }
 #[tokio::test]
 async fn errors_keep_the_common_envelope_and_authorship() {
@@ -342,7 +373,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 45);
+    assert_eq!(tools.len(), 46);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await
@@ -450,7 +481,7 @@ async fn rmcp_client_initializes_lists_and_reads_over_process_stdio() {
             .unwrap()
             .success()
     );
-    eprintln!("stdio fixture PID {pid} reaped; 43 tools");
+    eprintln!("stdio fixture PID {pid} reaped; 46 tools");
 }
 
 #[tokio::test]

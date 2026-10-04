@@ -103,7 +103,8 @@ if __name__ == "__main__":
 - `log(msg)` (or `ctx.log`) writes to stderr; `stream(argv, on_line=...)` runs a command and
   hands each output line to `on_line`; `child_env()` is the environment to give child tools.
 - `ctx.tool(name, args)` calls a sluice tool for the run's own project: reads (`status`,
-  `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get`, `call_status`), `ask`, `say` and
+  `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get`, `call_status`), `step_wait` (to
+  block until other steps reach a status instead of sleeping), `ask`, `say` and
   `reply` (as the step, with its run), `message.ask` / `message.wait`, and the project's edit
   tools. `args` are the tool's MCP arguments
   (`ctx.tool("step_pause", {"steps": "deploy", "reason": "hold"})`; `project` defaults to the

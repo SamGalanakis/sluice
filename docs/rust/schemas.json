@@ -3663,6 +3663,7 @@
   "LogRead": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "LogRead",
+    "description": "A page of the log. Every filter narrows only the records it speaks of (an empty list is no\nfilter): `kinds` every record, `threads` and `recipients` message records, `statuses`\nstep.status records; a record is kept when every filter that applies to it keeps it.\n`threads` without `kinds` also keeps messages only.",
     "type": "object",
     "properties": {
       "project": {
@@ -3692,6 +3693,26 @@
         }
       },
       "threads": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
+      },
+      "statuses": {
+        "description": "Only step.status records whose `to` is one of these.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/StepStatus"
+        }
+      },
+      "recipients": {
+        "description": "Only message records whose `to` is one of these (a step id, `orchestrator`, `owner`).",
         "type": [
           "array",
           "null"
@@ -3757,6 +3778,17 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "stale",
+          "skipped"
+        ]
       }
     }
   },
@@ -3785,6 +3817,7 @@
     ],
     "$defs": {
       "LogRead": {
+        "description": "A page of the log. Every filter narrows only the records it speaks of (an empty list is no\nfilter): `kinds` every record, `threads` and `recipients` message records, `statuses`\nstep.status records; a record is kept when every filter that applies to it keeps it.\n`threads` without `kinds` also keeps messages only.",
         "type": "object",
         "properties": {
           "project": {
@@ -3814,6 +3847,26 @@
             }
           },
           "threads": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "statuses": {
+            "description": "Only step.status records whose `to` is one of these.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepStatus"
+            }
+          },
+          "recipients": {
+            "description": "Only message records whose `to` is one of these (a step id, `orchestrator`, `owner`).",
             "type": [
               "array",
               "null"
@@ -3879,6 +3932,17 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "stale",
+          "skipped"
+        ]
       }
     }
   },
@@ -10692,6 +10756,23 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "step_wait"
+              },
+              "args": {
+                "$ref": "#/$defs/StepWait"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "next"
               },
               "args": {
@@ -12691,6 +12772,7 @@
         ]
       },
       "LogRead": {
+        "description": "A page of the log. Every filter narrows only the records it speaks of (an empty list is no\nfilter): `kinds` every record, `threads` and `recipients` message records, `statuses`\nstep.status records; a record is kept when every filter that applies to it keeps it.\n`threads` without `kinds` also keeps messages only.",
         "type": "object",
         "properties": {
           "project": {
@@ -12728,6 +12810,26 @@
               "type": "string"
             }
           },
+          "statuses": {
+            "description": "Only step.status records whose `to` is one of these.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepStatus"
+            }
+          },
+          "recipients": {
+            "description": "Only message records whose `to` is one of these (a step id, `orchestrator`, `owner`).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
           "limit": {
             "type": "integer",
             "format": "uint32",
@@ -12737,6 +12839,17 @@
         "additionalProperties": false,
         "required": [
           "limit"
+        ]
+      },
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "stale",
+          "skipped"
         ]
       },
       "LogWait": {
@@ -12759,6 +12872,64 @@
           "read",
           "timeout_seconds",
           "questions_only"
+        ]
+      },
+      "StepWait": {
+        "description": "`step_wait`: wait until every selected step's status meets `until`, or `timeout_seconds`\npass. Exactly one of `steps` and `tags` selects.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "selection": {
+            "$ref": "#/$defs/StepSelection"
+          },
+          "until": {
+            "description": "`\"succeeded\"`, `\"settled\"` or `{\"any_of\": [statuses]}`. The coordinator checks it and\nrefuses a bad one as `invalid`.",
+            "$ref": "#/$defs/StepWaitUntil"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "selection",
+          "until",
+          "timeout_seconds"
+        ]
+      },
+      "StepWaitUntil": {
+        "description": "What `step_wait` waits for: every selected step succeeded, every one settled (§7.1), or\nevery one in one of the listed statuses.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StepWaitTarget"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "any_of": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/StepStatus"
+                }
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "any_of"
+            ]
+          }
+        ]
+      },
+      "StepWaitTarget": {
+        "type": "string",
+        "enum": [
+          "succeeded",
+          "settled"
         ]
       },
       "Next": {
@@ -13463,6 +13634,23 @@
               },
               "data": {
                 "$ref": "#/$defs/NextResult"
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "step_wait"
+              },
+              "data": {
+                "$ref": "#/$defs/StepWaitResult"
               }
             },
             "required": [
@@ -15818,6 +16006,31 @@
           "notes",
           "last_seq",
           "timed_out"
+        ]
+      },
+      "StepWaitResult": {
+        "description": "`step_wait`'s reply: whether the condition held, each selected step's status (plan order)\nand the project log's last seq at that reading, for a `log_read` from there.",
+        "type": "object",
+        "properties": {
+          "met": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/StepStatus"
+            }
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "met",
+          "steps",
+          "seq"
         ]
       }
     }
@@ -20381,6 +20594,23 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "step_wait"
+          },
+          "args": {
+            "$ref": "#/$defs/StepWait"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "next"
           },
           "args": {
@@ -22380,6 +22610,7 @@
         ]
       },
       "LogRead": {
+        "description": "A page of the log. Every filter narrows only the records it speaks of (an empty list is no\nfilter): `kinds` every record, `threads` and `recipients` message records, `statuses`\nstep.status records; a record is kept when every filter that applies to it keeps it.\n`threads` without `kinds` also keeps messages only.",
         "type": "object",
         "properties": {
           "project": {
@@ -22417,6 +22648,26 @@
               "type": "string"
             }
           },
+          "statuses": {
+            "description": "Only step.status records whose `to` is one of these.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepStatus"
+            }
+          },
+          "recipients": {
+            "description": "Only message records whose `to` is one of these (a step id, `orchestrator`, `owner`).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
           "limit": {
             "type": "integer",
             "format": "uint32",
@@ -22426,6 +22677,17 @@
         "additionalProperties": false,
         "required": [
           "limit"
+        ]
+      },
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "stale",
+          "skipped"
         ]
       },
       "LogWait": {
@@ -22448,6 +22710,64 @@
           "read",
           "timeout_seconds",
           "questions_only"
+        ]
+      },
+      "StepWait": {
+        "description": "`step_wait`: wait until every selected step's status meets `until`, or `timeout_seconds`\npass. Exactly one of `steps` and `tags` selects.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "selection": {
+            "$ref": "#/$defs/StepSelection"
+          },
+          "until": {
+            "description": "`\"succeeded\"`, `\"settled\"` or `{\"any_of\": [statuses]}`. The coordinator checks it and\nrefuses a bad one as `invalid`.",
+            "$ref": "#/$defs/StepWaitUntil"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "selection",
+          "until",
+          "timeout_seconds"
+        ]
+      },
+      "StepWaitUntil": {
+        "description": "What `step_wait` waits for: every selected step succeeded, every one settled (§7.1), or\nevery one in one of the listed statuses.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StepWaitTarget"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "any_of": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/StepStatus"
+                }
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "any_of"
+            ]
+          }
+        ]
+      },
+      "StepWaitTarget": {
+        "type": "string",
+        "enum": [
+          "succeeded",
+          "settled"
         ]
       },
       "Next": {
@@ -23100,6 +23420,23 @@
           },
           "data": {
             "$ref": "#/$defs/NextResult"
+          }
+        },
+        "required": [
+          "reply",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "reply": {
+            "type": "string",
+            "const": "step_wait"
+          },
+          "data": {
+            "$ref": "#/$defs/StepWaitResult"
           }
         },
         "required": [
@@ -25456,6 +25793,31 @@
           "last_seq",
           "timed_out"
         ]
+      },
+      "StepWaitResult": {
+        "description": "`step_wait`'s reply: whether the condition held, each selected step's status (plan order)\nand the project log's last seq at that reading, for a `log_read` from there.",
+        "type": "object",
+        "properties": {
+          "met": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/StepStatus"
+            }
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "met",
+          "steps",
+          "seq"
+        ]
       }
     }
   },
@@ -25842,6 +26204,23 @@
               },
               "data": {
                 "$ref": "#/$defs/NextResult"
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "step_wait"
+              },
+              "data": {
+                "$ref": "#/$defs/StepWaitResult"
               }
             },
             "required": [
@@ -28197,6 +28576,31 @@
           "notes",
           "last_seq",
           "timed_out"
+        ]
+      },
+      "StepWaitResult": {
+        "description": "`step_wait`'s reply: whether the condition held, each selected step's status (plan order)\nand the project log's last seq at that reading, for a `log_read` from there.",
+        "type": "object",
+        "properties": {
+          "met": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/StepStatus"
+            }
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "met",
+          "steps",
+          "seq"
         ]
       }
     }
@@ -31270,6 +31674,248 @@
       "ProjectName": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      }
+    }
+  },
+  "StepWait": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StepWait",
+    "description": "`step_wait`: wait until every selected step's status meets `until`, or `timeout_seconds`\npass. Exactly one of `steps` and `tags` selects.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "selection": {
+        "$ref": "#/$defs/StepSelection"
+      },
+      "until": {
+        "description": "`\"succeeded\"`, `\"settled\"` or `{\"any_of\": [statuses]}`. The coordinator checks it and\nrefuses a bad one as `invalid`.",
+        "$ref": "#/$defs/StepWaitUntil"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "selection",
+      "until",
+      "timeout_seconds"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepSelection": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/StepId"
+            }
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StepId": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "StepWaitUntil": {
+        "description": "What `step_wait` waits for: every selected step succeeded, every one settled (§7.1), or\nevery one in one of the listed statuses.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StepWaitTarget"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "any_of": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/StepStatus"
+                }
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "any_of"
+            ]
+          }
+        ]
+      },
+      "StepWaitTarget": {
+        "type": "string",
+        "enum": [
+          "succeeded",
+          "settled"
+        ]
+      },
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "stale",
+          "skipped"
+        ]
+      }
+    }
+  },
+  "StepWaitUntil": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StepWaitUntil",
+    "description": "What `step_wait` waits for: every selected step succeeded, every one settled (§7.1), or\nevery one in one of the listed statuses.",
+    "anyOf": [
+      {
+        "$ref": "#/$defs/StepWaitTarget"
+      },
+      {
+        "type": "object",
+        "properties": {
+          "any_of": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/StepStatus"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "any_of"
+        ]
+      }
+    ],
+    "$defs": {
+      "StepWaitTarget": {
+        "type": "string",
+        "enum": [
+          "succeeded",
+          "settled"
+        ]
+      },
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "stale",
+          "skipped"
+        ]
+      }
+    }
+  },
+  "StepWaitTarget": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StepWaitTarget",
+    "type": "string",
+    "enum": [
+      "succeeded",
+      "settled"
+    ]
+  },
+  "StepWaitResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StepWaitResult",
+    "description": "`step_wait`'s reply: whether the condition held, each selected step's status (plan order)\nand the project log's last seq at that reading, for a `log_read` from there.",
+    "type": "object",
+    "properties": {
+      "met": {
+        "type": "boolean"
+      },
+      "steps": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/StepStatus"
+        }
+      },
+      "seq": {
+        "type": "integer",
+        "format": "int64"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "met",
+      "steps",
+      "seq"
+    ],
+    "$defs": {
+      "StepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "stale",
+          "skipped"
+        ]
       }
     }
   }

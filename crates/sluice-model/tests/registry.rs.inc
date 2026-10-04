@@ -105,4 +105,17 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(NotificationOutcome);
         $m!(StreamEvent);
         $m!(PublicError);
+        $m!(Delivery);
+        $m!(MessageVerb);
+        $m!(Say);
+        $m!(MessageReceipt);
+        $m!(QuestionState);
+        $m!(Reply);
+        $m!(Ask);
+        $m!(BoardSet);
+        $m!(BoardView);
+        $m!(StepWait);
+        $m!(StepWaitUntil);
+        $m!(StepWaitTarget);
+        $m!(StepWaitResult);
     }; }

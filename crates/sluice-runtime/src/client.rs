@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::net::UnixStream;
 /// How long a client waits for the coordinator to answer an ordinary request.
-/// Long polls (`log_wait`, `next`), waiting `fn_call`s and `backup` get their own
+/// Long polls (`log_wait`, `step_wait`, `next`), waiting `fn_call`s and `backup` get their own
 /// wait on top ([`reply_limit`]).
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(120);
 /// The longest a `backup` may copy the database before its client gives up.
@@ -31,6 +31,7 @@ pub struct CoordinatorClient {
 pub fn reply_limit(base: Duration, command: &CommandRequest) -> Duration {
     let held = match command {
         CommandRequest::LogWait(wait) => wait.timeout_seconds,
+        CommandRequest::StepWait(wait) => wait.timeout_seconds,
         CommandRequest::Next(next) => next.timeout_seconds.saturating_add(next.settle_max_seconds),
         CommandRequest::FnCall(call) => call
             .wait_seconds

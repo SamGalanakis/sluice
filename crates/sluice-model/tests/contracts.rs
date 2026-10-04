@@ -615,6 +615,26 @@ fn contract_log_wait() {
 }
 
 #[test]
+fn contract_step_wait() {
+    contract::<StepWait>("StepWait");
+}
+
+#[test]
+fn contract_step_wait_until() {
+    contract::<StepWaitUntil>("StepWaitUntil");
+}
+
+#[test]
+fn contract_step_wait_target() {
+    contract::<StepWaitTarget>("StepWaitTarget");
+}
+
+#[test]
+fn contract_step_wait_result() {
+    contract::<StepWaitResult>("StepWaitResult");
+}
+
+#[test]
 fn contract_next() {
     contract::<Next>("Next");
 }

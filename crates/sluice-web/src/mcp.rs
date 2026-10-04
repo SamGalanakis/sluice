@@ -51,6 +51,7 @@ impl McpServer {
             let wait = match &request {
                 CommandRequest::FnCall(r) => r.wait_seconds.unwrap_or(0),
                 CommandRequest::LogWait(r) => r.timeout_seconds,
+                CommandRequest::StepWait(r) => r.timeout_seconds,
                 CommandRequest::Next(r) => r.timeout_seconds.saturating_add(r.settle_max_seconds),
                 _ => 0,
             };
@@ -299,6 +300,7 @@ fn renames(name: &str) -> &'static [(&'static str, &'static str)] {
         "fn_call" => &[("wait", "wait_seconds")],
         "fn_save" => &[("fn", "manifest")],
         "log_wait" => &[("timeout", "timeout_seconds"), ("wake", "questions_only")],
+        "step_wait" => &[("timeout", "timeout_seconds")],
         "next" => &[
             ("timeout", "timeout_seconds"),
             ("settle", "settle_seconds"),
@@ -706,11 +708,15 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "log_read",
-        "Read the log. Returns {records, last_seq}: records are {seq, at, kind, ...}, oldest first\n(seqs increase across the whole home, so one log's have gaps). Kinds: plan.edit,\nplan.input, step.output, step.retry, step.cancel, step.submit, step.status, step.lease,\nstep.queued, call, message, project.pause, project.archive, project.update,\nproject.board, project.rename, project.delete, project.capacity, project.notify, run.adopt, run.orphan,\nrun.completion_action, run.completion_action.register, unit.settled.\n\nArgs:\n    project: the project's log; leave out for the home log (calls without a project).\n    since_seq: only records after this seq (pass the last_seq you got to continue).\n        Without it: the last `limit` matching records.\n    kinds: only these kinds; \"plan\", \"step\", \"project\", \"run\" or \"unit\" match every\n        kind under them.\n    threads: only messages on these threads (and, without kinds, only messages).\n    limit: at most this many records (default 200).",
+        "Read the log. Returns {records, last_seq}: records are {seq, at, kind, ...}, oldest first\n(seqs increase across the whole home, so one log's have gaps). Kinds: plan.edit,\nplan.input, step.output, step.retry, step.cancel, step.submit, step.status, step.lease,\nstep.queued, call, message, project.pause, project.archive, project.update,\nproject.board, project.rename, project.delete, project.capacity, project.notify, run.adopt, run.orphan,\nrun.completion_action, run.completion_action.register, unit.settled.\n\nArgs:\n    project: the project's log; leave out for the home log (calls without a project).\n    since_seq: only records after this seq (pass the last_seq you got to continue).\n        Without it: the last `limit` matching records.\n    kinds: only these kinds; \"plan\", \"step\", \"project\", \"run\" or \"unit\" match every\n        kind under them.\n    threads: only messages on these threads (and, without kinds, only messages).\n    statuses: only step.status records whose `to` is one of these step statuses; records\n        of other kinds pass (narrow them with kinds).\n    recipients: only messages whose `to` is one of these: step ids, \"orchestrator\",\n        \"owner\"; records of other kinds pass (narrow them with kinds).\n    limit: at most this many records (default 200).",
     ),
     (
         "log_wait",
-        "Wait for log records after since_seq. Returns {records, last_seq} as soon as at least\none matching record exists, or with no records once `timeout` seconds pass. Call it\nagain with the last_seq it returned to keep watching.\n\nArgs:\n    since_seq: wait for records after this seq (0 for any; last_seq from log_read).\n    project: the project's log; leave out for the home log.\n    kinds: only these kinds (as in log_read).\n    threads: only messages on these threads (as in log_read).\n    timeout: seconds to wait at most (default 300; capped at 3600).\n    limit: at most this many records (default 200).\n    wake: \"any\" (default) or \"questions\": a note (a message posted with needs_reply\n        false) does not end the wait; it comes back with the next record that does,\n        or once `timeout` passes.",
+        "Wait for log records after since_seq. Returns {records, last_seq} as soon as at least\none matching record exists, or with no records once `timeout` seconds pass. Call it\nagain with the last_seq it returned to keep watching.\n\nArgs:\n    since_seq: wait for records after this seq (0 for any; last_seq from log_read).\n    project: the project's log; leave out for the home log.\n    kinds: only these kinds (as in log_read).\n    threads: only messages on these threads (as in log_read).\n    statuses: only step.status records to these statuses (as in log_read).\n    recipients: only messages to these recipients (as in log_read). One standing wait\n        that wakes on failures and on messages to you: kinds [\"step.status\",\n        \"message\"], statuses [\"failed\", \"stale\"], recipients [\"orchestrator\"].\n    timeout: seconds to wait at most (default 300; capped at 3600).\n    limit: at most this many records (default 200).\n    wake: \"any\" (default) or \"questions\": a note (a message posted with needs_reply\n        false) does not end the wait; it comes back with the next record that does,\n        or once `timeout` passes.",
+    ),
+    (
+        "step_wait",
+        "Wait until steps reach a status, instead of polling status. Returns {met, steps, seq}: met\nis whether every selected step meets `until`, steps maps each selected step id to its\nstatus (plan order), and seq is the project log's last seq at that reading (pass it to\nlog_read or log_wait as since_seq to see what happened next). It returns at once when the\ncondition already holds, else as soon as a status change makes it hold, else with met\nfalse once `timeout` seconds pass. An unknown step, a tag no step carries, both or neither\nof steps and tags, or a bad `until` is `invalid`, naming each.\n\nArgs:\n    project: the project.\n    steps: these steps (ids); give steps or tags, not both.\n    tags: every step carrying any of these tags (`unit:<name>` selects a unit).\n    until: \"succeeded\" (every step succeeded), \"settled\" (every step needs an edit\n        or a retry before anything more happens to it: succeeded, failed, stale or skipped,\n        or pending and held: paused, a core.external step waiting for its outputs, or\n        waiting only on settled steps or unset plan inputs), or {\"any_of\": [statuses]}\n        (every step in one of these statuses).\n    timeout: seconds to wait at most (default 300; capped at 3600; 0 checks once).",
     ),
     (
         "next",
