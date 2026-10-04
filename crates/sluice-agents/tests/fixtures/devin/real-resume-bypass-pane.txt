@@ -1,0 +1,40 @@
+ │  1 file changed, 1 insertion(+)
+ │  create mode 100644 work.txt
+ │ ?? live.txt
+ │ ?? submission.json
+ └ Exited with code 0
+
+ Done. Summary:
+
+   • Submitted  {"word":"blue"}  via the fixture → accepted ( submission.json  written)
+   •  work.txt  contains  first , committed as  First scratch change  (4f77453)
+   •  live.txt  contains  addressed  (left untracked per instructions)
+
+❭ g3_devin same-run continuation after an injected transient, with feedback: keep word blue, replace work.txt with second, git add work.txt
+  && git commit -m 'Second scratch change', and finish briefly. Do not submit the original task again.
+
+
+ Updating  work.txt  to  second  and committing.
+
+ ● Wrote ./work.txt
+ │ 1 -  first
+ └ 1 +  second
+
+ ● Ran command
+ │ $ git add work.txt && git commit -m 'Second scratch change' && git status --short && git log --oneline
+ │ [master 2e57fd9] Second scratch change
+ │  1 file changed, 1 insertion(+), 1 deletion(-)
+ │ ?? live.txt
+ │ ?? submission.json
+ │ 2e57fd9 Second scratch change
+ │ 4f77453 First scratch change
+ │ 50856c4 baseline
+ └ Exited with code 0
+
+ Done.  work.txt  now contains  second , committed as  Second scratch change  (2e57fd9). Dec
+
+⠀⣠ Typing · 5s (esc twice to interrupt)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────── (bypass permissions on) ─
+❭ Guide Devin while it works
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+SWE-2 High                                                                                                   Context: 14k / 262k tokens (5%)

@@ -1051,6 +1051,15 @@ async fn devin_exit_probe_drains_terminal_hooks_before_reporting_exit() {
 #[test]
 fn devin_permission_mode_reads_the_release_indicator_near_the_composer() {
     use protocol::{PermissionMode::*, permission_mode};
+    // Captured from labelled G3 session amusing-learning: the indicator sits in the top rule.
+    for captured in [
+        include_str!("fixtures/devin/real-fresh-bypass-pane.txt"),
+        include_str!("fixtures/devin/real-resume-bypass-pane.txt"),
+    ] {
+        assert_eq!(permission_mode(captured), Bypass);
+        let normal = captured.replace(" (bypass permissions on) ", &"\u{2500}".repeat(25));
+        assert_eq!(permission_mode(&normal), NotBypass);
+    }
     let real = include_str!("fixtures/devin/resume-footer-excerpt.txt");
     assert_eq!(permission_mode(real), Bypass);
     let coloured = real.replace(
@@ -1087,6 +1096,14 @@ fn devin_permission_mode_reads_the_release_indicator_near_the_composer() {
 async fn devin_resume_accepts_reported_real_footer_without_toggling() {
     resumed_bypass(json!({"ready_pane":include_str!("fixtures/devin/resume-footer-excerpt.txt")}))
         .await;
+}
+
+#[tokio::test]
+async fn devin_resume_accepts_captured_real_pane_without_toggling() {
+    resumed_bypass(
+        json!({"ready_pane":include_str!("fixtures/devin/real-resume-bypass-pane.txt")}),
+    )
+    .await;
 }
 
 #[tokio::test]

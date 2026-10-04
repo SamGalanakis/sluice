@@ -23,3 +23,8 @@ g3-real report (the raw captures were not retained). Devin 3000.11.3 shows
 executable fixture now draws that layout. exit-during-probe.py is a scripted tmux client
 whose Devin journals its last hooks and exits during the pane probe or the next client
 command, the window in which an exit used to drop the latest acknowledgement.
+
+real-fresh-bypass-pane.txt and real-resume-bypass-pane.txt were captured by g3_devin
+(SLUICE_G3_DEVIN_EVIDENCE) from labelled scratch session amusing-learning on 2026-10-04, fresh
+and resumed, with scratch paths redacted to /scratch. The real release draws the indicator
+right-aligned inside the composer's top rule: `──── (bypass permissions on) ─`.
