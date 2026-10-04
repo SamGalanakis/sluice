@@ -98,6 +98,22 @@ def build(output: Path) -> None:
             "name": "fixture.worker", "inputs": {"cwd": "string", "spec": "string"},
             "outputs": {"final": "string", "session": "string?"}})
         (staging / "projects/fixture/fns/fixture.worker/main.py").write_text("raise RuntimeError('The importer must never run this')\n")
+        write(staging / "fns/fixture.global/fn.json", {
+            "name": "fixture.global", "inputs": {"value": "string"},
+            "outputs": {"value": "string"}})
+        (staging / "fns/fixture.global/main.py").write_text("raise RuntimeError('The importer must never run this')\n")
+        write(staging / "projects/archived/fns/fixture.worker/fn.json", {
+            "name": "fixture.worker", "inputs": {"value": "boolean"},
+            "outputs": {"value": "boolean"}})
+        (staging / "projects/archived/fns/fixture.worker/main.py").write_text("raise RuntimeError('The importer must never run this')\n")
+        for scope, helper, value in [
+            (staging, "_globallib", "global helper"),
+            (staging / "projects/fixture", "_fixturelib", "project helper"),
+            (staging / "projects/archived", "_archivedlib", "archived project helper"),
+        ]:
+            directory = scope / "fns" / helper
+            directory.mkdir()
+            (directory / "__init__.py").write_text(f"VALUE = '{value}'\n")
         write(staging / "projects/fixture/recipes/sample.json", {"name":"sample","steps": {"work": {"run": "fixture.worker"}}})
         write(staging / "config.json", {"http": {"port": 7420}, "fn_dirs": []})
         (staging / ".env").write_text("FIXTURE_SECRET=synthetic-only\n")

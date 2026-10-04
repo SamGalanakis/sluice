@@ -126,6 +126,213 @@ fn json_query(db: &Connection, sql: &str) -> Value {
     serde_json::from_str(&raw).unwrap()
 }
 
+fn assert_imported_sources(fixture: &Fixture) {
+    let ledger: Value =
+        serde_json::from_slice(&fs::read(fixture.destination.join("import-ledger.json")).unwrap())
+            .unwrap();
+    let mut scopes = vec![(fixture.staging.clone(), fixture.destination.clone())];
+    for (name, project) in ledger["projects"].as_object().unwrap() {
+        scopes.push((
+            fixture.staging.join("projects").join(name),
+            fixture
+                .destination
+                .join("projects")
+                .join(project["id"].as_str().unwrap()),
+        ));
+    }
+    for (source, target) in scopes {
+        for kind in ["fns", "recipes"] {
+            if !source.join(kind).exists() {
+                continue;
+            }
+            for (relative, bytes) in fingerprints(&source.join(kind)) {
+                let path = target.join(kind).join(&relative);
+                let imported = fs::read(&path).unwrap();
+                if kind == "recipes" {
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&imported).unwrap(),
+                        serde_json::from_slice::<Value>(&bytes).unwrap()
+                    );
+                } else {
+                    assert_eq!(imported, bytes, "{}", path.display());
+                    assert_eq!(
+                        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                        fs::metadata(source.join(kind).join(&relative))
+                            .unwrap()
+                            .permissions()
+                            .mode()
+                            & 0o777
+                    );
+                }
+                let relative = format!(
+                    "/{}",
+                    path.strip_prefix(&fixture.destination).unwrap().display()
+                );
+                assert!(
+                    ledger["files"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|entry| entry["path"] == relative),
+                    "source file absent from import manifest: {relative}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn maintenance_boot_resolves_imported_functions_and_every_project_plan() {
+    use sluice_model::commands::{CommandReply, CommandRequest, StepSelection};
+    use sluice_model::ids::ProjectId;
+    use sluice_runtime::{coordinator::Coordinator, dispatch::Catalog, execution::OsHost};
+
+    let fixture = Fixture::new();
+    import(&fixture.options(FailurePoint::None)).unwrap();
+    let projects: Vec<(ProjectId, String)> = fixture
+        .imported()
+        .prepare("SELECT project_id,name FROM projects ORDER BY name")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?.parse().unwrap(),
+                row.get::<_, String>(1)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let broker = Coordinator::open(
+            fixture.destination.clone(),
+            Catalog::core(),
+            OsHost {
+                home: fixture.destination.clone(),
+                program: PathBuf::from(env!("CARGO_BIN_EXE_sluice")),
+            },
+        )
+        .await
+        .unwrap();
+        for (id, name) in projects {
+            let project = sluice_model::ids::ProjectSelector::Id(id);
+            let CommandReply::Data(list) = broker
+                .command(CommandRequest::FnList {
+                    project: Some(project.clone()),
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("expected fn_list data");
+            };
+            let list = list.into_value();
+            for (fn_name, scope, source) in [
+                (
+                    "fixture.global",
+                    "global",
+                    fixture.staging.join("fns/fixture.global/fn.json"),
+                ),
+                (
+                    "fixture.worker",
+                    "project",
+                    fixture
+                        .staging
+                        .join("projects")
+                        .join(&name)
+                        .join("fns/fixture.worker/fn.json"),
+                ),
+            ] {
+                let manifest: Value = serde_json::from_slice(&fs::read(source).unwrap()).unwrap();
+                let entry = list
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["name"] == fn_name)
+                    .unwrap_or_else(|| panic!("missing {fn_name} in project {name}: {list}"));
+                assert_eq!(entry["scope"], scope);
+                assert_eq!(entry["inputs"], manifest["inputs"]);
+                assert_eq!(entry["outputs"], manifest["outputs"]);
+                assert!(entry.get("error").is_none(), "{entry}");
+                let catalog = broker.catalog().for_project(Some(id));
+                let signature = catalog.0.get(fn_name).unwrap();
+                assert_eq!(json!(signature.inputs), manifest["inputs"]);
+                assert_eq!(json!(signature.outputs), manifest["outputs"]);
+                assert_eq!(signature.open, manifest["open"].as_bool().unwrap_or(false));
+                let CommandReply::Data(detail) = broker
+                    .command(CommandRequest::FnGet {
+                        name: fn_name.into(),
+                        project: Some(project.clone()),
+                    })
+                    .await
+                    .unwrap()
+                else {
+                    panic!("expected fn_get data");
+                };
+                let mut detail = detail.into_value();
+                let target = if scope == "project" {
+                    fixture.destination.join("projects").join(id.to_string())
+                } else {
+                    fixture.destination.clone()
+                };
+                assert_eq!(detail["path"], json!(target.join("fns").join(fn_name)));
+                detail.as_object_mut().unwrap().remove("scope");
+                detail.as_object_mut().unwrap().remove("path");
+                assert_eq!(detail, manifest);
+            }
+            for request in [
+                CommandRequest::Status {
+                    project: project.clone(),
+                    selection: StepSelection {
+                        steps: None,
+                        tags: None,
+                    },
+                },
+                CommandRequest::PlanGet { project },
+            ] {
+                assert!(matches!(
+                    broker.command(request).await.unwrap(),
+                    CommandReply::Data(_)
+                ));
+            }
+        }
+        broker.writer().shutdown().await.unwrap();
+    });
+    assert_imported_sources(&fixture);
+    let db = fixture.imported();
+    assert_eq!(
+        db.query_row("SELECT mode FROM maintenance", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "cutover"
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM projects WHERE paused=1", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM artifact_jobs WHERE kind='generation'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        3,
+        "boot should reuse the imported source bundles"
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM runs", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        3,
+        "maintenance reads must retain only the imported predecessors"
+    );
+}
+
 #[test]
 fn imports_the_contract_table_and_preserves_the_source_including_wal() {
     let fixture = Fixture::new();
@@ -140,6 +347,7 @@ fn imports_the_contract_table_and_preserves_the_source_including_wal() {
     );
     let before = fingerprints(&fixture.source);
     let report = import(&fixture.options(FailurePoint::None)).unwrap();
+    assert_imported_sources(&fixture);
     assert_eq!(before, fingerprints(&fixture.source));
     assert_eq!(report["projects"], 2);
     assert_eq!(
@@ -358,6 +566,7 @@ fn crash_recovery_reuses_ids_and_rolls_back_partial_rows() {
             );
         }
         import(&fixture.options(FailurePoint::None)).unwrap();
+        assert_imported_sources(&fixture);
         let committed: Value = serde_json::from_slice(
             &fs::read(fixture.destination.join("import-ledger.json")).unwrap(),
         )
@@ -1098,6 +1307,10 @@ fn missing_published_required_file_prevents_idempotent_success() {
         "codex-native-sessions/fake-session.json",
         "codex-native-homes/fake-session/state_5.sqlite",
         "checkpoint",
+        "global-fn",
+        "project-fn",
+        "helper",
+        "recipe",
     ] {
         let fixture = Fixture::new();
         import(&fixture.options(FailurePoint::None)).unwrap();
@@ -1111,6 +1324,27 @@ fn missing_published_required_file_prevents_idempotent_success() {
                 .join("runs")
                 .join(run)
                 .join("native.json")
+        } else if path == "global-fn" {
+            fixture.destination.join("fns/fixture.global/fn.json")
+        } else if ["project-fn", "helper", "recipe"].contains(&path) {
+            let project: String = fixture
+                .imported()
+                .query_row(
+                    "SELECT project_id FROM projects WHERE name='fixture'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            fixture
+                .destination
+                .join("projects")
+                .join(project)
+                .join(match path {
+                    "project-fn" => "fns/fixture.worker/main.py",
+                    "helper" => "fns/_fixturelib/__init__.py",
+                    "recipe" => "recipes/sample.json",
+                    _ => unreachable!(),
+                })
         } else {
             fixture.destination.join(path)
         };

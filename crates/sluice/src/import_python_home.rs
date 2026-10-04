@@ -176,7 +176,7 @@ pub fn import(options: &Options) -> Result<Value> {
     let mut import_id = ledger::identity(&snapshot, &src, &staging)?;
     let conflict_list = conflicts(&src, &staging)?;
     import_id = artifacts::fingerprint(&sluice_model::hash::canonical_json(
-        &json!({"snapshot":import_id,"conflicts":conflict_list,"native_predecessors":1}),
+        &json!({"snapshot":import_id,"conflicts":conflict_list,"native_predecessors":1,"fn_sources":1}),
     )?);
     if dst.exists() && !files::entries(&dst)?.is_empty() {
         let saved = files::json(&dst.join("import-ledger.json"))
@@ -506,7 +506,7 @@ pub fn import(options: &Options) -> Result<Value> {
     let check_id = ledger::identity(&check, &src, &staging)?;
     ensure!(
         artifacts::fingerprint(&sluice_model::hash::canonical_json(
-            &json!({"snapshot":check_id,"conflicts":conflicts(&src,&staging)?,"native_predecessors":1})
+            &json!({"snapshot":check_id,"conflicts":conflicts(&src,&staging)?,"native_predecessors":1,"fn_sources":1})
         )?) == import_id,
         "source/staging changed while importing"
     );
@@ -614,8 +614,10 @@ fn copy_assets(
     if !fns.exists() {
         return Ok(None);
     }
+    let target = dest.join("fns");
+    files::tree(&fns, &target, &[], 0)?;
     let mut map = BTreeMap::new();
-    collect_bundle(&fns, &fns, &mut map, 0)?;
+    collect_bundle(&target, &target, &mut map, 0)?;
     Ok(Some(Bundle::new(map)?))
 }
 fn collect_bundle(

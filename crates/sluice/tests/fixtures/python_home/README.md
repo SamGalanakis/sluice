@@ -48,6 +48,16 @@ catalog before installing an import. Unknown or incompatible declarations fail
 conversion. Legacy message fns requiring output/cursor migration fail explicitly
 rather than retaining old callbacks or log sequence ids.
 
+Imported custom fns and sibling helpers retain their source files under
+`<dst>/fns/` and `<dst>/projects/<ProjectId>/fns/`. Project recipes live under
+`<dst>/projects/<ProjectId>/recipes/`. The registry reads these ordinary source
+directories; immutable generations use the same complete file bundle as fn_save.
+The import manifest covers source files as well as generations. The import
+identity includes the source-layout version, so an older generation-only import
+cannot satisfy an identical-import check after this change. The fixture includes
+a global fn and helpers, plus project fns with the same name and different types
+to check project isolation on a maintenance boot.
+
 The importer creates .<destination>.python-import beside the destination. Its
 private ledger allocates fresh IDs once. All database rows commit in one writer
 transaction; artifact recovery only publishes files. The home becomes visible by
