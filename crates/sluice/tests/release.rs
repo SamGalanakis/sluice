@@ -238,16 +238,33 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         .unwrap();
     assert!(version.status.success());
     gate.boot(&release.join("bin/sluice"), false);
-    let reply = gate.rpc(json!({"command":"fn_call","args":{"name":"fixture.wait","inputs":{"value":7},"project":null,"direct":true,"wait_seconds":0,"author":"release-test"}})).unwrap();
-    let value = serde_json::to_value(reply).unwrap();
-    // CommandReply::Data carries the call status.
-    let run = value["data"]["call"]
-        .as_str()
-        .or_else(|| value["data"]["call_id"].as_str())
-        .expect("call id")
-        .to_owned();
+    let sluice_model::commands::CommandReply::Project(project) = gate.rpc(json!({"command":"project_create","args":{"name":"release-fixture","description":"","icon":null,"resources":{},"author":"release-test"}})).unwrap() else { panic!("project") };
+    let selector = json!({"kind":"id","value":project.project_id});
+    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"add","path":"/steps/wait","value":{"run":"fixture.wait","in":{"value":{"default":7}}}}],"start":true,"dry_run":false,"reason":"pinned fixture","author":"release-test"}})).unwrap();
+    let scheduler = gate
+        .command(&release.join("bin/sluice"), &["loop"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    gate.children.push(scheduler);
+    let mut run = String::new();
+    support::wait(|| {
+        let sql = rusqlite::Connection::open(gate.home.join("sluice.db")).unwrap();
+        if let Ok(id) = sql.query_row("SELECT run_id FROM runs WHERE step_id='wait'", [], |r| {
+            r.get::<_, String>(0)
+        }) {
+            run = id;
+            gate.home
+                .join("runs")
+                .join(&run)
+                .join("dispatch-count")
+                .exists()
+        } else {
+            false
+        }
+    });
     let run_dir = gate.home.join("runs").join(&run);
-    support::wait(|| run_dir.join("dispatch-count").exists());
     let db = rusqlite::Connection::open(gate.home.join("sluice.db")).unwrap();
     let pid: u32 = db
         .query_row(
@@ -262,18 +279,22 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         release.join("bin/sluice")
     );
     // Register this test-owned broker so deploy stops only its recorded identity.
-    let broker_pid = gate.children[0].id();
-    let stat = std::fs::read_to_string(format!("/proc/{broker_pid}/stat")).unwrap();
-    let start = stat
-        .rsplit(')')
-        .next()
-        .unwrap()
-        .split_whitespace()
-        .nth(19)
-        .unwrap();
+    let mut managed = serde_json::Map::new();
+    for (name, child) in ["coordinator", "loop"].iter().zip(&gate.children) {
+        let pid = child.id();
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let start = stat
+            .rsplit(')')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(19)
+            .unwrap();
+        managed.insert((*name).into(), json!({"pid":pid,"start":start}));
+    }
     std::fs::write(
         gate.install.join("services.json"),
-        serde_json::to_vec(&json!({"coordinator":{"pid":broker_pid,"start":start}})).unwrap(),
+        serde_json::to_vec(&managed).unwrap(),
     )
     .unwrap();
     // Put the pinned release beyond the last three before the next deploy.
@@ -355,12 +376,16 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
     support::wait(|| {
         let db = rusqlite::Connection::open(gate.home.join("sluice.db")).unwrap();
         db.query_row(
-            "SELECT status='succeeded' FROM calls WHERE call_id=?1",
-            [&run],
+            "SELECT status='succeeded' FROM steps WHERE project_id=?1 AND step_id='wait'",
+            [project.project_id.to_string()],
             |r| r.get::<_, bool>(0),
         )
         .unwrap()
     });
+    assert_eq!(
+        std::fs::read_to_string(run_dir.join("dispatch-count")).unwrap(),
+        "dispatch\n"
+    );
     assert!(gate.cli(&["install", "unfence"]).status.success());
     // Stop only the processes that this scratch deploy recorded.
     let services: Value =
