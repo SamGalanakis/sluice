@@ -629,9 +629,9 @@ and fails runs whose guardian and payload are gone without a completion (`lost`,
 completion is journalled by the guardian and acknowledged durably by the coordinator.
 
 A starting coordinator answers at once. Its first adoption pass adopts runs concurrently, at
-most 16 at a time. During that pass it serves reads, `install unfence`, the scheduler lease
-and the runs' own guardians. Every other command, and a run's own plan edits and section-lease
-requests, wait until the pass is done. Past 32 waiting requests, a request is refused with
+most 16 at a time. During that pass it serves reads, the scheduler lease and the runs' own
+guardians; `install` commands never wait for the coordinator. Every other command, and a run's
+own plan edits and section-lease requests, wait until the pass is done. Past 32 waiting requests, a request is refused with
 `busy` (retryable, "the coordinator is still adopting runs"). Nothing is admitted or launched
 before the pass is done. A run whose adoption fails stays as it was and is tried again by the
 next pass, every 30 s.

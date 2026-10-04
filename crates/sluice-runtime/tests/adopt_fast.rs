@@ -259,7 +259,6 @@ async fn reads_and_install_control_answer_while_adoption_is_blocked_and_a_write_
     let release = home.root().join("release");
     std::fs::create_dir_all(release.join("bin")).unwrap();
     std::fs::write(release.join("bin/sluice"), b"").unwrap();
-    std::fs::write(release.join("manifest.json"), b"{}").unwrap();
     installation.select(&release, home.path()).unwrap();
 
     let (stop, server) = serve(&broker, home.path()).await;
@@ -296,13 +295,24 @@ async fn reads_and_install_control_answer_while_adoption_is_blocked_and_a_write_
         ))
         .await
         .unwrap();
-    // install status is local; install unfence reaches the coordinator.
-    assert!(installation.status().unwrap().fence.is_some());
-    let released = sluice_runtime::install::release_cutover(installation.clone())
-        .await
-        .unwrap();
-    assert!(released.fence.is_none());
-    assert!(installation.status().unwrap().fence.is_none());
+    // Install control takes the installation lock, never the coordinator's
+    // adoption: status and unfence complete while the pass is held.
+    let unfence = tokio::task::spawn_blocking({
+        let installation = installation.clone();
+        move || {
+            assert!(installation.status()?.fence.is_some());
+            installation.unfence()
+        }
+    });
+    assert!(
+        within(unfence)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .fence
+            .is_none()
+    );
 
     // Everything above was answered; the write was not.
     assert!(!broker.adopted());
