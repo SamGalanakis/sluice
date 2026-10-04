@@ -754,6 +754,15 @@ async fn project_call_sections_poll_in_drain_and_release_only_their_owner() {
     for value in [1, 2] {
         b.command(request(json!({"command":"fn_call","args":{"name":"fixture.echo","inputs":{"value":value},"project":{"kind":"id","value":p},"wait_seconds":0,"direct":true,"author":"test"}}))).await.unwrap();
     }
+    // fn_call acknowledges admission before its guardian handoff completes.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while f.0.lock().unwrap().len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "direct calls never launched"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let launches = f.0.lock().unwrap().clone();
     let mut callbacks = vec![];
     for (index, l) in launches.iter().enumerate() {
