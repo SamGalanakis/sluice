@@ -392,6 +392,11 @@ impl Gate {
                 .args(["--user", "reset-failed", unit])
                 .output();
         }
+        // An engine's `sluice tool` call while the broker was down auto-starts
+        // the home's coordinator unit.
+        let mut units = self.units.clone();
+        units.push(crate::units::coordinator_unit(&self.home));
+        crate::units::stop_units(&units);
     }
 }
 impl Drop for Gate {

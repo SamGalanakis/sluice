@@ -12,7 +12,7 @@ use sluice_model::{
 };
 use sluice_runtime::{coordinator::Coordinator, dispatch::Catalog, execution::OsHost};
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output, Stdio},
 };
 use support::home::ScratchHome;
@@ -51,24 +51,6 @@ fn stderr(output: &Output) -> Value {
     })
 }
 
-/// Dispatched commands spawn a `sluice-test-coordinator-<digest>` systemd unit;
-/// stop it when the test ends so no process outlives its deleted home.
-struct StopCoordinator(PathBuf);
-impl Drop for StopCoordinator {
-    fn drop(&mut self) {
-        let digest = sluice_store::artifacts::fingerprint(self.0.as_os_str().as_encoded_bytes());
-        let unit = format!("sluice-test-coordinator-{}", &digest[..16]);
-        for operation in ["stop", "reset-failed"] {
-            let _ = Command::new("/usr/bin/systemctl")
-                .args(["--user", operation, &unit])
-                .output();
-        }
-    }
-}
-fn guard(home: &Path) -> StopCoordinator {
-    StopCoordinator(home.to_path_buf())
-}
-
 #[test]
 fn the_first_run_writes_the_default_config_and_lists_the_tools() {
     let home = ScratchHome::new().unwrap();
@@ -97,7 +79,6 @@ fn the_first_run_writes_the_default_config_and_lists_the_tools() {
 #[test]
 fn tool_errors_and_bad_arguments_exit_1() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     let unknown = tool(home.path(), "no_such_tool", "{}");
     assert_eq!(unknown.status.code(), Some(1));
     assert_eq!(stderr(&unknown)["error"], "bad_request");
@@ -166,7 +147,6 @@ fn query_prints_a_table_binds_params_and_lists_the_schema() {
 #[test]
 fn a_project_through_the_tools() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     let created = tool(
         home.path(),
         "project_create",
@@ -224,6 +204,69 @@ fn a_project_through_the_tools() {
         "{}",
         String::from_utf8_lossy(&set.stderr)
     );
+}
+
+#[test]
+fn tool_rpc_sends_one_raw_request_and_prints_the_unshaped_reply() {
+    // Host gates (G1a's direct caller among them) drive the coordinator this way.
+    let home = ScratchHome::new().unwrap();
+    let created = tool(
+        home.path(),
+        "rpc",
+        r#"{"command":"project_create","args":{"name":"raw","description":"","icon":null,"resources":{},"author":"gate"}}"#,
+    );
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let CommandReply::Project(project) = decode_json(&created.stdout).unwrap() else {
+        panic!("{}", String::from_utf8_lossy(&created.stdout))
+    };
+    let listed = tool(home.path(), "rpc", r#"{"command":"projects_list"}"#);
+    assert!(listed.status.success());
+    let listed: CommandReply = decode_json(&listed.stdout).unwrap();
+    assert!(
+        serde_json::to_string(&listed)
+            .unwrap()
+            .contains(&project.project_id.to_string())
+    );
+    let bad = tool(home.path(), "rpc", r#"{"command":"no_such_command"}"#);
+    assert_eq!(bad.status.code(), Some(1));
+    assert_eq!(stderr(&bad)["error"], "bad_request");
+}
+
+#[test]
+fn a_coordinator_exits_once_its_home_is_removed() {
+    let home = ScratchHome::new().unwrap();
+    let mut coordinator = Command::new(env!("CARGO_BIN_EXE_sluice"))
+        .env("SLUICE_HOME", home.path())
+        .arg("coordinator")
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::os::unix::net::UnixStream::connect(home.path().join("coordinator.sock")).is_err() {
+        if coordinator.try_wait().unwrap().is_some() || std::time::Instant::now() > deadline {
+            let _ = coordinator.kill();
+            panic!("coordinator never served");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    std::fs::remove_dir_all(home.path()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = coordinator.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = coordinator.kill();
+            let _ = coordinator.wait();
+            panic!("coordinator outlived its removed home");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status}");
 }
 
 #[tokio::test]
@@ -321,7 +364,6 @@ fn post(home: &Path, thread: &str, body: &str, needs_reply: bool) {
 #[test]
 fn watch_prints_matching_records_from_now_or_since_a_seq() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     tool(
         home.path(),
         "project_create",
@@ -383,7 +425,6 @@ fn watch_prints_matching_records_from_now_or_since_a_seq() {
 #[test]
 fn watch_holds_notes_until_a_question_under_wake_questions() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     tool(
         home.path(),
         "project_create",
@@ -427,7 +468,6 @@ fn watch_holds_notes_until_a_question_under_wake_questions() {
 #[test]
 fn watch_refuses_an_unknown_project_or_kind() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     tool(
         home.path(),
         "project_create",
@@ -448,7 +488,6 @@ fn watch_refuses_an_unknown_project_or_kind() {
 #[test]
 fn next_times_out_and_wakes_on_everything_with_all() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     tool(
         home.path(),
         "project_create",

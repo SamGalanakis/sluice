@@ -1,4 +1,7 @@
 //! G1a uses only this binary, fresh homes and guarded sluice-test services.
+#[allow(dead_code)]
+#[path = "../../../tests/support/units.rs"]
+mod units;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandReply,
@@ -106,26 +109,13 @@ impl Drop for Gate {
             let _ = child.kill();
             let _ = child.wait();
         }
-        // Recover units created before the test could record their returned run IDs.
-        // These UUID directories belong exclusively to this gate's scratch home.
-        if let Ok(runs) = std::fs::read_dir(self.home.join("runs")) {
-            for entry in runs.flatten() {
-                if let Some(run) = entry.file_name().to_str()
-                    && run.parse::<sluice_model::ids::RunId>().is_ok()
-                {
-                    self.track(run);
-                }
-            }
-        }
-        for unit in &self.units {
-            assert!(unit.starts_with("sluice-test-"));
-            let _ = Command::new("/usr/bin/systemctl")
-                .args(["--user", "stop", unit])
-                .output();
-            let _ = Command::new("/usr/bin/systemctl")
-                .args(["--user", "reset-failed", unit])
-                .output();
-        }
+        // Run units recovered from this gate's scratch home cover those created
+        // before the test could record their returned run IDs.
+        let mut owned = units::home_units(&self.home);
+        owned.extend(self.units.iter().cloned());
+        owned.sort();
+        owned.dedup();
+        units::stop_units(&owned);
     }
 }
 fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
@@ -279,9 +269,6 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
     assert_eq!(status.as_value()["outputs"]["value"], 99);
     // A new CLI request activates only the broker after its predecessor dies.
     gate.kill_broker();
-    let digest = sluice_store::artifacts::fingerprint(gate.home.as_os_str().as_encoded_bytes());
-    gate.units
-        .push(format!("sluice-test-coordinator-{}", &digest[..16]));
     let output = Command::new(env!("CARGO_BIN_EXE_sluice"))
         .env("SLUICE_HOME", &gate.home)
         .env("SLUICE_FIXTURE", "1")

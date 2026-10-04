@@ -217,6 +217,8 @@ pub fn read_paths(root: &Path, destination: &Path, report: &Value) -> Value {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
+    // Dropped after `_serve`: the coordinator unit serve auto-starts goes with it.
+    let _units = crate::units::HomeUnits(destination.to_path_buf());
     let _serve = common::Process(
         Command::new(common::binary())
             .args(["serve", "--no-runner", "--port", &port.to_string()])

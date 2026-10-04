@@ -1,8 +1,11 @@
 //! Composition acceptance uses absolute binaries and private scratch service units.
+#[allow(dead_code)]
+#[path = "../../../tests/support/units.rs"]
+mod units;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandReply,
-    ids::{ProjectId, RunId},
+    ids::ProjectId,
     rpc::{RpcReply, RpcResult, decode_json, encode_frame},
 };
 use std::{
@@ -236,21 +239,7 @@ impl Drop for Gate {
             let _ = child.kill();
             let _ = child.wait();
         }
-        if let Ok(runs) = std::fs::read_dir(self.home.join("runs")) {
-            for entry in runs.flatten() {
-                if let Some(id) = entry.file_name().to_str()
-                    && id.parse::<RunId>().is_ok()
-                {
-                    let unit = format!("sluice-test-{id}.service");
-                    let _ = Command::new("/usr/bin/systemctl")
-                        .args(["--user", "stop", &unit])
-                        .output();
-                    let _ = Command::new("/usr/bin/systemctl")
-                        .args(["--user", "reset-failed", &unit])
-                        .output();
-                }
-            }
-        }
+        units::stop_home_units(&self.home);
     }
 }
 fn uv() -> PathBuf {

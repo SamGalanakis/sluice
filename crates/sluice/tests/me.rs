@@ -6,7 +6,7 @@ mod support;
 
 use serde_json::{Value, json};
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output},
 };
 use support::home::ScratchHome;
@@ -44,24 +44,6 @@ fn stderr(output: &Output) -> Value {
             String::from_utf8_lossy(&output.stderr)
         )
     })
-}
-
-/// Dispatched `tool` commands spawn a `sluice-test-coordinator-<digest>` unit;
-/// stop it when the test ends so no process outlives its deleted home.
-struct StopCoordinator(PathBuf);
-impl Drop for StopCoordinator {
-    fn drop(&mut self) {
-        let digest = sluice_store::artifacts::fingerprint(self.0.as_os_str().as_encoded_bytes());
-        let unit = format!("sluice-test-coordinator-{}", &digest[..16]);
-        for operation in ["stop", "reset-failed"] {
-            let _ = Command::new("/usr/bin/systemctl")
-                .args(["--user", operation, &unit])
-                .output();
-        }
-    }
-}
-fn guard(home: &Path) -> StopCoordinator {
-    StopCoordinator(home.to_path_buf())
 }
 
 fn project(home: &Path) {
@@ -112,7 +94,6 @@ fn outside_a_step_it_says_so_and_exits_1() {
 #[test]
 fn me_with_flags_works_outside_a_steps_env() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     project(home.path());
     let out = run(home.path(), &["me", "--project", "demo", "--step", "a"]);
     assert!(
@@ -135,7 +116,6 @@ fn me_with_flags_works_outside_a_steps_env() {
 #[test]
 fn me_from_the_steps_environment() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     project(home.path());
     let project_id = stdout(&tool(home.path(), "projects_list", "{}"))
         .pointer("/0/project_id")
@@ -167,7 +147,6 @@ fn me_from_the_steps_environment() {
 #[test]
 fn the_step_context_tools_shape() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     project(home.path());
     let out = tool(
         home.path(),

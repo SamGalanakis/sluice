@@ -6,5 +6,8 @@ mod import_home;
 mod lane;
 #[path = "rehearsal/rollback.rs"]
 mod rollback;
+#[allow(dead_code)]
+#[path = "../../../tests/support/units.rs"]
+mod units;
 #[path = "rehearsal/window.rs"]
 mod window;

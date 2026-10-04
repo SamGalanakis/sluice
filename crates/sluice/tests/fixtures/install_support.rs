@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+#[path = "../../../../tests/support/units.rs"]
+mod units;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandReply,
@@ -142,22 +145,6 @@ impl Drop for Gate {
                 }
             }
         }
-        if let Ok(runs) = std::fs::read_dir(self.home.join("runs")) {
-            for run in runs.flatten() {
-                if run
-                    .file_name()
-                    .to_str()
-                    .is_some_and(|s| s.parse::<sluice_model::ids::RunId>().is_ok())
-                {
-                    let unit = format!("sluice-test-{}.service", run.file_name().to_string_lossy());
-                    let _ = Command::new("/usr/bin/systemctl")
-                        .args(["--user", "stop", &unit])
-                        .output();
-                    let _ = Command::new("/usr/bin/systemctl")
-                        .args(["--user", "reset-failed", &unit])
-                        .output();
-                }
-            }
-        }
+        units::stop_home_units(&self.home);
     }
 }

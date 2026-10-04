@@ -257,14 +257,7 @@ impl Drop for OwnedHome {
                 let _ = fs::copy(self.0.join(name), dest.join(name));
             }
         }
-        for unit in self.units() {
-            let _ = Command::new("/usr/bin/systemctl")
-                .args(["--user", "stop", &unit])
-                .output();
-            let _ = Command::new("/usr/bin/systemctl")
-                .args(["--user", "reset-failed", &unit])
-                .output();
-        }
+        crate::units::stop_home_units(&self.0);
     }
 }
 

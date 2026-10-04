@@ -1024,7 +1024,12 @@ impl<H: ExecutionHost> Coordinator<H> {
         while clients.join_next().await.is_some() {}
         self.calls().close().await;
         scheduler_task.await.map_err(storage)??;
-        std::fs::remove_file(path).map_err(storage)?;
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            // A removed home took its socket with it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(storage(e)),
+        }
         self.writer()
             .shutdown()
             .await

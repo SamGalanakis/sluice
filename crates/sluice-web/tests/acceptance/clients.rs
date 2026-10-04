@@ -138,28 +138,9 @@ impl Drop for Scratch {
                 evidence.join(format!("child-{index}-{}.log", child.id())),
             );
         }
-        // Only services whose run IDs were created under this scratch home.
-        if let Ok(runs) = std::fs::read_dir(self.home.path().join("runs")) {
-            for entry in runs.flatten() {
-                if entry
-                    .file_name()
-                    .to_string_lossy()
-                    .parse::<sluice_model::ids::RunId>()
-                    .is_ok()
-                {
-                    let unit = format!(
-                        "sluice-test-{}.service",
-                        entry.file_name().to_string_lossy()
-                    );
-                    let _ = Command::new("/usr/bin/systemctl")
-                        .args(["--user", "stop", &unit])
-                        .output();
-                    let _ = Command::new("/usr/bin/systemctl")
-                        .args(["--user", "reset-failed", &unit])
-                        .output();
-                }
-            }
-        }
+        // The coordinator a `tool` call auto-started and the run units created
+        // under this scratch home.
+        crate::units::stop_home_units(self.home.path());
     }
 }
 fn config(version: ProtocolVersion) -> ClientConfig {

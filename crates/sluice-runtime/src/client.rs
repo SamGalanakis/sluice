@@ -214,6 +214,7 @@ pub async fn run_home_maintenance(
     } else {
         crate::dispatch::Catalog::core()
     };
+    let home_root = home.clone();
     let broker = crate::coordinator::Coordinator::open(
         home.clone(),
         catalog,
@@ -233,9 +234,41 @@ pub async fn run_home_maintenance(
         signal_stop.cancel();
         result
     });
+    let watcher = tokio::spawn(stop_when_home_disappears(
+        home_root,
+        stop.clone(),
+        Duration::from_secs(1),
+    ));
     let result = broker.serve(stop.clone()).await;
     stop.cancel();
     signal.abort();
+    watcher.abort();
     let _ = signal.await;
+    let _ = watcher.await;
     result
+}
+/// A broker whose home directory was removed (or replaced by another directory
+/// at the same path) owns nothing any more; it stops instead of outliving it.
+pub async fn stop_when_home_disappears(
+    home: PathBuf,
+    stop: tokio_util::sync::CancellationToken,
+    period: Duration,
+) {
+    use std::os::unix::fs::MetadataExt;
+    let identity = |path: &Path| std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()));
+    let Some(original) = identity(&home) else {
+        stop.cancel();
+        return;
+    };
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = tokio::time::sleep(period) => {}
+        }
+        if identity(&home) != Some(original) {
+            tracing::warn!(home = %home.display(), "home directory disappeared; coordinator stopping");
+            stop.cancel();
+            return;
+        }
+    }
 }
