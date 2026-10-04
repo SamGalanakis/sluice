@@ -1,4 +1,5 @@
 //! Argument-safe transient user services. An attempted start is never retried.
+use crate::host::test_mode;
 use serde::{Deserialize, Serialize};
 use sluice_model::ids::RunId;
 use std::{
@@ -55,12 +56,30 @@ impl ServiceCommand {
         }
     }
 }
+/// The prefix of every user unit this process starts: `sluice-test-` in tests,
+/// `sluice-` otherwise.
+pub fn unit_prefix() -> &'static str {
+    if test_mode() {
+        "sluice-test-"
+    } else {
+        "sluice-"
+    }
+}
 #[derive(Debug)]
 pub struct TransientService {
     name: String,
     attempted: bool,
 }
 impl TransientService {
+    /// The unit a run launched by this process gets: `sluice-run-<run>.service`, or
+    /// `sluice-test-<run>.service` in tests.
+    pub fn for_launch(run: RunId) -> Self {
+        if test_mode() {
+            Self::for_test(run)
+        } else {
+            Self::for_run(run)
+        }
+    }
     pub fn for_run(run: RunId) -> Self {
         Self {
             name: format!("sluice-run-{run}.service"),
@@ -73,17 +92,44 @@ impl TransientService {
             attempted: false,
         }
     }
+    /// Every name a run's unit can have, the launch name first. Releases before
+    /// the production prefix launched production runs as `sluice-test-<run>`, so
+    /// both stay adoptable whatever this process's mode.
+    pub fn names(run: RunId) -> [String; 2] {
+        let launch = Self::for_launch(run).name;
+        let other = if test_mode() {
+            Self::for_run(run).name
+        } else {
+            Self::for_test(run).name
+        };
+        [launch, other]
+    }
     /// Adoption is query/stop only. The durable spawn_attempted claim belongs
     /// to the coordinator; reconstructing a service must preserve that claim.
-    pub fn adopt(run: RunId) -> Self {
-        let mut service = Self::for_run(run);
-        service.attempted = true;
-        service
+    /// `name` must be one of [`Self::names`] for `run`.
+    pub fn adopt(run: RunId, name: &str) -> io::Result<Self> {
+        if !Self::names(run).iter().any(|known| known == name) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unit is not bound to run",
+            ));
+        }
+        Ok(Self {
+            name: name.into(),
+            attempted: true,
+        })
     }
-    pub fn adopt_test(run: RunId) -> Self {
-        let mut service = Self::for_test(run);
-        service.attempted = true;
-        service
+    /// The run's unit as it exists now: the first of [`Self::names`] the user
+    /// manager has loaded, with its state, or `None` when neither is loaded.
+    pub async fn adopt_loaded(run: RunId) -> io::Result<Option<(Self, UnitState)>> {
+        for name in Self::names(run) {
+            let service = Self::adopt(run, &name)?;
+            let state = service.query().await?;
+            if state.load_state != "not-found" {
+                return Ok(Some((service, state)));
+            }
+        }
+        Ok(None)
     }
     pub fn name(&self) -> &str {
         &self.name
@@ -286,5 +332,20 @@ mod tests {
         .unwrap();
         assert!(state.stopped());
         assert!(state.cgroup.is_none());
+        assert_eq!(
+            TransientService::for_run(run).name(),
+            format!("sluice-run-{run}.service")
+        );
+        assert_eq!(
+            TransientService::for_test(run).name(),
+            format!("sluice-test-{run}.service")
+        );
+        let names = TransientService::names(run);
+        assert_eq!(names[0], TransientService::for_launch(run).name());
+        for name in &names {
+            assert!(TransientService::adopt(run, name).is_ok());
+        }
+        assert!(TransientService::adopt(RunId::new(), &names[0]).is_err());
+        assert!(TransientService::adopt(run, &format!("sluice-{run}.service")).is_err());
     }
 }

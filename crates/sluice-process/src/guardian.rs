@@ -1368,14 +1368,20 @@ pub struct OsAdoptionHost {
 impl AdoptionHost for OsAdoptionHost {
     async fn reconcile(&self, attempt: &AdoptionAttempt) -> io::Result<GuardianPresence> {
         use crate::{signals::stop_run, systemd::TransientService};
-        let service = if attempt.unit == TransientService::for_run(attempt.identity.run).name() {
-            TransientService::adopt(attempt.identity.run)
-        } else if attempt.unit == TransientService::for_test(attempt.identity.run).name() {
-            TransientService::adopt_test(attempt.identity.run)
-        } else {
-            return Err(invalid("unit is not bound to run"));
-        };
-        let state = service.query().await?;
+        let run = attempt.identity.run;
+        let mut service = TransientService::adopt(run, &attempt.unit)?;
+        let mut state = service.query().await?;
+        // An unclaimed run has no recorded unit and is looked up under this
+        // release's launch name; an older release may have launched it under the
+        // other one.
+        if attempt.guardian.is_none()
+            && attempt.service_cgroup.is_none()
+            && state.load_state == "not-found"
+            && let Some((loaded, loaded_state)) = TransientService::adopt_loaded(run).await?
+        {
+            service = loaded;
+            state = loaded_state;
+        }
         let group = match attempt
             .service_cgroup
             .as_deref()
@@ -1427,7 +1433,7 @@ impl AdoptionHost for OsAdoptionHost {
             ));
         }
         if let Some(group) = group {
-            if !group.path().ends_with(&format!("/{}", attempt.unit)) {
+            if !group.path().ends_with(&format!("/{}", service.name())) {
                 return Err(invalid("wrong adoption cgroup"));
             }
             let proof = stop_run(&service, &group, self.timeout).await?;
@@ -1437,7 +1443,7 @@ impl AdoptionHost for OsAdoptionHost {
                 cgroup: attempt
                     .service_cgroup
                     .clone()
-                    .unwrap_or_else(|| attempt.unit.clone()),
+                    .unwrap_or_else(|| service.name().to_string()),
                 empty: true,
                 escalated: false,
             }))

@@ -335,8 +335,11 @@ pub async fn reconcile_project<H: ExecutionHost>(
                                 exits: vec![],
                                 cleanup: vec![CleanupEvidence {
                                     cgroup: format!(
-                                        "/unstarted/sluice-test-{}.service",
-                                        identity.run
+                                        "/unstarted/{}",
+                                        sluice_process::systemd::TransientService::for_launch(
+                                            identity.run
+                                        )
+                                        .name()
                                     ),
                                     empty: true,
                                     escalated: false,

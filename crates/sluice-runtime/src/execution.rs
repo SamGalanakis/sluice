@@ -179,9 +179,18 @@ impl ExecutionHost for OsHost {
         &self,
         journal: &sluice_process::journal::CompletionJournal,
     ) -> Result<bool, PublicError> {
-        let service = TransientService::adopt_test(journal.identity.run);
-        let state = service.query().await.map_err(storage)?;
-        if let Some(ref root) = state.cgroup {
+        // The run's unit under whichever name launched it: this release's, or the
+        // one an older release used. Neither loaded means the unit is gone.
+        let (names, state) = match TransientService::adopt_loaded(journal.identity.run)
+            .await
+            .map_err(storage)?
+        {
+            Some((service, state)) => (vec![service.name().to_string()], Some(state)),
+            None => (TransientService::names(journal.identity.run).to_vec(), None),
+        };
+        if let Some(state) = &state
+            && let Some(root) = &state.cgroup
+        {
             let group = sluice_process::cgroup::Cgroup::open_service(root).map_err(storage)?;
             let empty = if state.stopped() {
                 !group.populated().map_err(storage)?
@@ -195,11 +204,13 @@ impl ExecutionHost for OsHost {
                         || p.cgroup.starts_with(&format!("{root}/payload/"))
                 }))
         } else {
-            Ok(state.stopped()
+            Ok(state.is_none_or(|state| state.stopped())
                 && journal.cleanup.iter().all(|p| {
-                    p.cgroup.ends_with(service.name())
-                        || p.cgroup.ends_with(&format!("/{}/payload", service.name()))
-                        || p.cgroup.contains(&format!("/{}/payload/", service.name()))
+                    names.iter().any(|name| {
+                        p.cgroup.ends_with(name.as_str())
+                            || p.cgroup.ends_with(&format!("/{name}/payload"))
+                            || p.cgroup.contains(&format!("/{name}/payload/"))
+                    })
                 }))
         }
     }
@@ -211,7 +222,7 @@ impl ExecutionHost for OsHost {
             Ok(Err(e)) => return Ok(LaunchOutcome::Refused(storage(e))),
             Err(e) => return Ok(LaunchOutcome::Refused(storage(e))),
         }
-        let mut unit = TransientService::for_test(run);
+        let mut unit = TransientService::for_launch(run);
         let mut command = ServiceCommand::new(&self.program);
         command.args = vec![
             "guardian".into(),
@@ -443,6 +454,13 @@ pub async fn guardian_entry(
     let process =
         sluice_process::identity::ProcessIdentity::read(std::process::id()).map_err(storage)?;
     let group = sluice_process::cgroup::Cgroup::open_service(&process.cgroup).map_err(storage)?;
+    // The guardian runs at its service's root, so that cgroup names its unit.
+    let unit = Path::new(&process.cgroup)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| storage("guardian is outside a service"))?
+        .to_string();
+    TransientService::adopt(run, &unit).map_err(storage)?;
     let host = OsFnHost::attach(
         OsHost {
             home: home.clone(),
@@ -466,7 +484,7 @@ pub async fn guardian_entry(
         guardian: GuardianIdentity {
             identity: launch.identity,
             process: host.control_identity().map_err(storage)?,
-            unit: TransientService::for_test(run).name().into(),
+            unit,
             socket_challenge: InvocationId::new().to_string(),
         },
         invocation: launch.invocation,

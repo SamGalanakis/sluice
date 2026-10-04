@@ -1,0 +1,6 @@
+# Every process cargo runs from this repository (tests, and the binaries and
+# units they start) is a test: name its systemd user units sluice-test-*, never
+# the production sluice-run-*/sluice-* names. A deployed release runs outside
+# cargo and keeps the production names.
+[env]
+SLUICE_TEST = "1"

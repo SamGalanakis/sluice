@@ -72,9 +72,12 @@ else:
             subprocess.run(['systemctl', '--user', 'stop', unit], check=True)
     # The automatic coordinator has a deterministic home identity. It must also
     # stop so its pinned execution host cannot keep scheduling the old release.
-    unit = 'sluice-test-coordinator-' + hashlib.sha256(os.fsencode(home)).hexdigest()[:16] + '.service'
-    # Absent when no CLI call auto-started one; stopping an unloaded unit is not an error here.
-    subprocess.run(['systemctl', '--user', 'stop', unit], check=False, stderr=subprocess.DEVNULL)
+    # Releases before the production unit prefix named it sluice-test-coordinator-*;
+    # stop that name too. Either is absent when no CLI call auto-started one, and
+    # stopping an unloaded unit is not an error here.
+    home_digest = hashlib.sha256(os.fsencode(home)).hexdigest()[:16]
+    for unit_prefix in ['sluice-coordinator-', 'sluice-test-coordinator-']:
+        subprocess.run(['systemctl', '--user', 'stop', unit_prefix + home_digest + '.service'], check=False, stderr=subprocess.DEVNULL)
 control('select', str(release), str(home))
 commands = {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
 services = {}
@@ -87,6 +90,8 @@ try:
             unit = ('sluice-test-' if os.environ.get('SLUICE_TEST') == '1' else 'sluice-') + digest + '-' + name
             subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
                 '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install),
+                # Test services name the run units they launch sluice-test-* too.
+                *(['--setenv=SLUICE_TEST=1'] if os.environ.get('SLUICE_TEST') == '1' else []),
                 # The user manager's PATH lacks the engines (codex, claude, devin) and uv.
                 '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(program), *arguments], check=True)
             services[name] = dict(unit=unit + '.service', release=str(release))

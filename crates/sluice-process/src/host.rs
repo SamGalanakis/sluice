@@ -305,7 +305,8 @@ impl ProbeUnit {
             .as_nanos();
         Ok(Self {
             name: format!(
-                "sluice-test-doctor-{}-{time}-{}.service",
+                "{}doctor-{}-{time}-{}.service",
+                crate::systemd::unit_prefix(),
                 std::process::id(),
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ),
@@ -360,6 +361,13 @@ impl Drop for ProbeUnit {
 }
 
 pub const OWNER_HOME: &str = "/home/sam/.sluice";
+
+/// Whether this process belongs to a test: `SLUICE_TEST=1`, which the repository's
+/// cargo configuration sets for every process cargo runs and which every unit Sluice
+/// starts inherits. Tests name their user units `sluice-test-*`.
+pub fn test_mode() -> bool {
+    std::env::var_os("SLUICE_TEST").is_some_and(|value| value == "1")
+}
 
 /// Resolve existing symlinks and normalize a possibly nonexistent suffix, in path order.
 pub fn resolve_path(path: &Path) -> Result<PathBuf, PublicError> {

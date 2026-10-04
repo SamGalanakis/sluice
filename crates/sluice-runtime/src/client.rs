@@ -144,7 +144,11 @@ pub async fn ensure_coordinator(
             "--property=Restart=no",
             "--unit",
         ])
-        .arg(format!("sluice-test-coordinator-{}", &digest[..16]))
+        .arg(format!(
+            "{}coordinator-{}",
+            sluice_process::systemd::unit_prefix(),
+            &digest[..16]
+        ))
         .arg(format!("--setenv=SLUICE_HOME={}", home.display()))
         .arg(format!(
             "--setenv=SLUICE_INSTALL_DIR={}",
@@ -152,6 +156,12 @@ pub async fn ensure_coordinator(
         ))
         .args(if std::env::var_os("SLUICE_FIXTURE").is_some() {
             vec!["--setenv=SLUICE_FIXTURE=1"]
+        } else {
+            vec![]
+        })
+        // The coordinator names the units it launches by the same mode.
+        .args(if sluice_process::host::test_mode() {
+            vec!["--setenv=SLUICE_TEST=1"]
         } else {
             vec![]
         })

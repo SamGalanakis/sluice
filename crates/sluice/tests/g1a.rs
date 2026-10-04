@@ -25,21 +25,29 @@ struct Gate {
 }
 impl Gate {
     fn boot(&mut self) {
+        self.boot_as(true);
+    }
+    /// `test_mode: false` boots a production coordinator: no SLUICE_TEST, so it
+    /// names the run units it launches `sluice-run-<run>`.
+    fn boot_as(&mut self, test_mode: bool) {
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.home.join("broker.log"))
             .unwrap();
-        self.broker = Some(
-            Command::new(env!("CARGO_BIN_EXE_sluice"))
-                .env("SLUICE_HOME", &self.home)
-                .env("SLUICE_FIXTURE", "1")
-                .arg("coordinator")
-                .stdout(Stdio::null())
-                .stderr(log)
-                .spawn()
-                .unwrap(),
-        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_sluice"));
+        command
+            .env("SLUICE_HOME", &self.home)
+            .env("SLUICE_FIXTURE", "1")
+            .arg("coordinator")
+            .stdout(Stdio::null())
+            .stderr(log);
+        if test_mode {
+            command.env("SLUICE_TEST", "1");
+        } else {
+            command.env_remove("SLUICE_TEST");
+        }
+        self.broker = Some(command.spawn().unwrap());
         wait("coordinator socket accepts", || {
             if self.broker.as_mut().unwrap().try_wait().unwrap().is_some() {
                 panic!(
@@ -283,4 +291,110 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
     gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":2,"ops":[{"op":"add","path":"/steps/late","value":{"run":"core.echo","in":{"value":{"default":123}}}}],"start":true,"dry_run":false,"reason":"auto-start has no scheduler","author":"gate"}}));
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(gate.status(project)["steps"]["late"]["status"], "pending");
+}
+
+/// Stops exactly one production-named unit this test caused, panics included.
+struct ProductionUnit(String);
+impl Drop for ProductionUnit {
+    fn drop(&mut self) {
+        assert!(
+            self.0.starts_with("sluice-run-"),
+            "refusing to stop {}",
+            self.0
+        );
+        for operation in ["stop", "reset-failed"] {
+            let _ = Command::new("/usr/bin/systemctl")
+                .args(["--user", operation, &self.0])
+                .output();
+        }
+    }
+}
+fn unit_active(unit: &str) -> bool {
+    Command::new("/usr/bin/systemctl")
+        .args(["--user", "is-active", "--quiet", unit])
+        .status()
+        .unwrap()
+        .success()
+}
+#[test]
+#[ignore = "G1a real binary and delegated user services; scratch home only"]
+fn production_coordinator_adopts_and_cancels_legacy_units_and_launches_production_units() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("h");
+    std::fs::create_dir(&home).unwrap();
+    sluice_process::host::guard_scratch_home(&home).unwrap();
+    let mut gate = Gate {
+        home,
+        broker: None,
+        caller: None,
+        units: vec![],
+    };
+    // Releases before the production prefix launched every run as sluice-test-<run>,
+    // which is what a test-mode coordinator still does.
+    gate.boot_as(true);
+    let CommandReply::Project(p)=gate.rpc(json!({"command":"project_create","args":{"name":"legacy","description":"unit names","icon":null,"resources":{},"author":"gate"}}))else{panic!("create")};
+    let project = p.project_id;
+    let selector = json!({"kind":"id","value":project});
+    gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"steps":{"legacy":{"run":"fixture.wait","in":{"value":{"default":1}}},"fresh":{"run":"fixture.wait","in":{"value":{"default":2}},"paused":true}}}}],"start":true,"dry_run":false,"reason":"fixture","author":"gate"}}));
+    let lease = gate.lease("legacy").unwrap();
+    let mut legacy = String::new();
+    wait("legacy step dispatched", || {
+        let status = gate.status(project);
+        if let Some(run) = status["steps"]["legacy"]["run_ids"][0].as_str() {
+            legacy = run.into();
+            dispatched(&gate.home.join("runs").join(run))
+        } else {
+            false
+        }
+    });
+    gate.track(&legacy);
+    let legacy_unit = format!("sluice-test-{legacy}.service");
+    assert!(unit_active(&legacy_unit));
+    gate.kill_broker();
+    drop(lease);
+
+    // The deployed production coordinator adopts the legacy unit by its recorded name.
+    gate.boot_as(false);
+    let lease = gate.lease("production").unwrap();
+    assert_eq!(gate.status(project)["steps"]["legacy"]["status"], "running");
+    assert!(unit_active(&legacy_unit));
+    // What it launches itself gets the production name.
+    gate.rpc(json!({"command":"step_pause","args":{"project":selector,"selection":{"steps":["fresh"],"tags":null},"paused":false,"edit":{"expected":null,"dry_run":false,"reason":"go","author":"gate"}}}));
+    let mut fresh = String::new();
+    wait("fresh step dispatched", || {
+        let status = gate.status(project);
+        if let Some(run) = status["steps"]["fresh"]["run_ids"][0].as_str() {
+            fresh = run.into();
+            dispatched(&gate.home.join("runs").join(run))
+        } else {
+            false
+        }
+    });
+    let fresh_unit = ProductionUnit(format!("sluice-run-{fresh}.service"));
+    gate.track(&fresh);
+    assert!(unit_active(&fresh_unit.0));
+    assert!(!unit_active(&format!("sluice-test-{fresh}.service")));
+    let control_group = |unit: &str| {
+        let output = Command::new("/usr/bin/systemctl")
+            .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    assert!(control_group(&fresh_unit.0).ends_with(&fresh_unit.0));
+
+    // The legacy run stays cancellable: its unit stops and the step settles.
+    gate.rpc(json!({"command":"step_cancel","args":{"project":selector,"selection":{"steps":["legacy"],"tags":null},"reason":"legacy cancel","author":"gate"}}));
+    wait("legacy unit stopped and step settled", || {
+        !unit_active(&legacy_unit) && gate.status(project)["steps"]["legacy"]["status"] != "running"
+    });
+    let settled = &gate.status(project)["steps"]["legacy"];
+    assert_eq!(settled["status"], "failed", "{settled}");
+    assert_eq!(settled["error"]["error"], "cancelled", "{settled}");
+    std::fs::write(gate.home.join("runs").join(&fresh).join("finish"), b"").unwrap();
+    wait("fresh step succeeded", || {
+        gate.status(project)["steps"]["fresh"]["status"] == "succeeded"
+    });
+    wait("fresh unit stopped", || !unit_active(&fresh_unit.0));
+    drop(lease);
 }

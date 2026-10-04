@@ -96,6 +96,56 @@ fn launcher_timeout_never_dispatches() {
     assert!(!home.path().join("marker").exists());
 }
 
+#[test]
+fn unit_names_follow_test_mode() {
+    let run = RunId::new();
+    assert!(
+        sluice_process::host::test_mode(),
+        "cargo runs every test with SLUICE_TEST=1"
+    );
+    assert_eq!(sluice_process::systemd::unit_prefix(), "sluice-test-");
+    assert_eq!(
+        TransientService::for_launch(run).name(),
+        format!("sluice-test-{run}.service")
+    );
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "production_unit_names", "--ignored"])
+        .env_remove("SLUICE_TEST")
+        .env("SLUICE_TEST_PRODUCTION_NAMES", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "internal: run outside test mode by unit_names_follow_test_mode"]
+fn production_unit_names() {
+    if std::env::var_os("SLUICE_TEST_PRODUCTION_NAMES").is_none() {
+        return;
+    }
+    let run = RunId::new();
+    assert!(!sluice_process::host::test_mode());
+    assert_eq!(sluice_process::systemd::unit_prefix(), "sluice-");
+    let launch = TransientService::for_launch(run);
+    assert_eq!(launch.name(), format!("sluice-run-{run}.service"));
+    // A run an older release launched as sluice-test-<run> stays adoptable.
+    let legacy = format!("sluice-test-{run}.service");
+    assert_eq!(
+        TransientService::names(run),
+        [launch.name().to_string(), legacy.clone()]
+    );
+    assert_eq!(
+        TransientService::adopt(run, &legacy).unwrap().name(),
+        legacy
+    );
+    assert!(TransientService::adopt(run, &format!("sluice-{run}.service")).is_err());
+}
+
 struct UnitGuard(TransientService);
 impl Drop for UnitGuard {
     fn drop(&mut self) {

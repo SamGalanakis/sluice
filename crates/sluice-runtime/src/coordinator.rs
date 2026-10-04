@@ -378,7 +378,8 @@ impl<H: ExecutionHost> Coordinator<H> {
         self.authenticate(&id, capability).await?;
         match command {
             CoordinatorCommand::Claim(g) => {
-                if g.unit != sluice_process::systemd::TransientService::for_test(id.run).name()
+                // Either name: a guardian an older release launched may claim after a deploy.
+                if sluice_process::systemd::TransientService::adopt(id.run, &g.unit).is_err()
                     || g.process.pid == 0
                     || g.socket_challenge.is_empty()
                 {
@@ -1176,7 +1177,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let run:RunId=calls::parse_id(row.get(0)?)?;let id=AttemptKey{home:home_id,run,attempt:calls::parse_id(row.get(1)?)?,project:row.get::<_,Option<String>>(2)?.map(calls::parse_id).transpose()?,step:row.get::<_,Option<String>>(3)?.map(calls::parse_id).transpose()?,generation:StepGeneration(row.get::<_,i64>(4)? as u64),work:WorkGeneration(row.get::<_,i64>(5)? as u64)};
                 let raw:String=row.get(6)?;let frozen:Value=serde_json::from_str(&raw)?;let capability=serde_json::from_value(if id.step.is_some(){frozen["provenance"]["runtime"]["capability"].clone()}else{frozen["function"]["bundle"]["capability"].clone()})?;
                 let guardian=stored_guardian(sql,&id,home_id)?;let cgroup:Option<String>=row.get(8)?;
-                out.push(AdoptionAttempt{identity:id.clone(),guardian,run_dir:home.join("runs").join(run.to_string()),unit:row.get::<_,Option<String>>(7)?.unwrap_or_else(||sluice_process::systemd::TransientService::for_test(run).name().into()),service_cgroup:cgroup.map(|c|c.strip_suffix("/control").unwrap_or(&c).to_string()),capability});
+                out.push(AdoptionAttempt{identity:id.clone(),guardian,run_dir:home.join("runs").join(run.to_string()),unit:row.get::<_,Option<String>>(7)?.unwrap_or_else(||sluice_process::systemd::TransientService::for_launch(run).name().into()),service_cgroup:cgroup.map(|c|c.strip_suffix("/control").unwrap_or(&c).to_string()),capability});
             }Ok(out)
         }).await.map_err(|e|e.into_public(true))?;
         for attempt in attempts {
