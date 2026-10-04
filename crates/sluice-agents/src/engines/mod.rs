@@ -1,12 +1,40 @@
 //! Engine contract v1. Adapters report facts; only the shared supervisor judges success.
 use serde::{Deserialize, Serialize};
 use sluice_model::ids::MessageId;
-use std::{collections::BTreeMap, future::Future, io, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    future::Future,
+    io::{self, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+};
 
 pub mod claude;
 pub mod codex;
 pub mod devin;
 pub mod environment;
+
+/// Writes a private (0600) file through a sibling temp file and a rename, so a concurrent
+/// reader sees the old file or the whole new one, never an empty or partial file.
+pub(crate) fn atomic_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let temp = path.with_extension("sluice-new");
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temp)?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

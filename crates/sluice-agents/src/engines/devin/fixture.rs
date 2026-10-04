@@ -133,7 +133,7 @@ pub fn main(args: &[String]) -> io::Result<()> {
         {
             return Err(io::Error::other("declared output word must be a string"));
         }
-        protocol::private_write(&path, &serde_json::to_vec(&value)?)?;
+        super::super::atomic_private(&path, &serde_json::to_vec(&value)?)?;
         println!("accepted declared word output");
         return Ok(());
     }
@@ -331,7 +331,7 @@ pub fn main(args: &[String]) -> io::Result<()> {
                         std::thread::sleep(Duration::from_millis(ms));
                     }
                     if let Some(submit) = turn.get("submit") {
-                        protocol::private_write(
+                        super::super::atomic_private(
                             &cwd.join("submission.json"),
                             &serde_json::to_vec(submit)?,
                         )?;
@@ -354,7 +354,7 @@ pub fn main(args: &[String]) -> io::Result<()> {
                         &sid,
                         json!({"prompt_id":prompt_id,"last_assistant_message":reply,"error":turn.get("error")}),
                     )?;
-                    protocol::private_write(
+                    super::super::atomic_private(
                         &export,
                         &serde_json::to_vec(
                             &json!({"session_id":sid,"steps":[{"source":"agent","message":reply}]}),

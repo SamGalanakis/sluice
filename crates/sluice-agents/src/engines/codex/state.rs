@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
-    io::{self, Write},
+    io,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
@@ -178,7 +178,7 @@ impl Codex {
             cwd: cwd.into(),
         })
         .map_err(local)?;
-        atomic_private(&path, &bytes).map_err(local)
+        super::super::atomic_private(&path, &bytes).map_err(local)
     }
     /// Return the private home recorded in the native session map.
     pub fn session_home(&self, session: &str) -> Result<Option<PathBuf>, EngineError> {
@@ -536,7 +536,8 @@ impl Codex {
                 let dest = target.join(relative);
                 private_dir(dest.parent().ok_or_else(|| local("invalid rollout"))?)
                     .map_err(local)?;
-                atomic_private(&dest, &fs::read(rollout).map_err(local)?).map_err(local)?;
+                super::super::atomic_private(&dest, &fs::read(rollout).map_err(local)?)
+                    .map_err(local)?;
                 target
             } else {
                 return Err(error(
@@ -555,13 +556,14 @@ impl Codex {
         private_dir(&private).map_err(local)?;
         let auth_source = self.options.source_home.join("auth.json");
         if auth_source.exists() {
-            atomic_private(
+            super::super::atomic_private(
                 &private.join("auth.json"),
                 &fs::read(auth_source).map_err(local)?,
             )
             .map_err(local)?;
         }
-        atomic_private(&private.join("config.toml"), config.as_bytes()).map_err(local)?;
+        super::super::atomic_private(&private.join("config.toml"), config.as_bytes())
+            .map_err(local)?;
         self.private_home = Some(private.clone());
         private_dir(&context.run_dir).map_err(local)?;
         let socket_dir = unique_socket_dir().map_err(local)?;
@@ -831,24 +833,6 @@ fn private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
-fn atomic_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temp = path.with_extension("sluice-new");
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&temp)?;
-    let result = (|| {
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        fs::rename(&temp, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temp);
-    }
-    result
-}
 fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
     if source.is_symlink() {
         return Err(io::Error::other("imported Codex home is a symlink"));
@@ -868,7 +852,10 @@ fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
         if kind.is_dir() {
             copy_tree(&entry.path(), &target.join(entry.file_name()))?;
         } else if kind.is_file() {
-            atomic_private(&target.join(entry.file_name()), &fs::read(entry.path())?)?;
+            super::super::atomic_private(
+                &target.join(entry.file_name()),
+                &fs::read(entry.path())?,
+            )?;
         }
     }
     Ok(())

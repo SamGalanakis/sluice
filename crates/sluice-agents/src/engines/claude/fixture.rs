@@ -238,7 +238,7 @@ impl Fake {
                 }
             }
             if let Some(submit) = turn.get("submit") {
-                private_write(
+                super::super::atomic_private(
                     &self.run.join("fixture-submission.json"),
                     &serde_json::to_vec(submit)?,
                 )?;
@@ -486,7 +486,7 @@ pub fn submit(args: Vec<String>) -> io::Result<()> {
     let run = PathBuf::from(
         std::env::var_os("SLUICE_RUN_DIR").ok_or_else(|| io::Error::other("missing run dir"))?,
     );
-    private_write(
+    super::super::atomic_private(
         &run.join("fixture-submission.json"),
         &serde_json::to_vec(&value)?,
     )?;
