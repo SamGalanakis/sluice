@@ -790,10 +790,7 @@ async fn g3_claude() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     let sid = first.session_id.unwrap();
-    eprintln!(
-        "g3_claude fresh and live message accepted, session prefix {}",
-        sid.chars().take(8).collect::<String>()
-    );
+    eprintln!("g3_claude fresh and live message accepted, session {}", sid);
     assert_eq!(
         fs::read_to_string(h.context.cwd.join("message.txt"))
             .unwrap()

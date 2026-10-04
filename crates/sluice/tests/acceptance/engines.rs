@@ -186,35 +186,6 @@ impl Gate {
                 absolute_tool("devin").to_string_lossy().into(),
             ),
         ]));
-        // Foreground private tmux intentionally starts with a cleared environment.
-        // Pin scratch-only defaults at the real executable boundary as well.
-        for engine in ["codex", "claude", "devin"] {
-            let key = format!("SLUICE_{}_BIN", engine.to_uppercase());
-            let binary = env[&key].clone();
-            let wrapper = root.join(format!("private-{engine}"));
-            let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
-            let mut script = String::from("#!/bin/sh\nset -e\n");
-            for name in [
-                "HOME",
-                "XDG_CONFIG_HOME",
-                "XDG_DATA_HOME",
-                "XDG_CACHE_HOME",
-                "XDG_STATE_HOME",
-                "SLUICE_HOME",
-            ] {
-                if let Some(value) = env.get(name) {
-                    script.push_str(&format!("export {name}=\"${{{name}:-{}}}\"\n", value));
-                }
-            }
-            script.push_str(&format!(
-                "export PATH={}\nexec {} \"$@\"\n",
-                quote(&env["PATH"]),
-                quote(&binary)
-            ));
-            private_write(&wrapper, script.as_bytes());
-            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
-            env.insert(key, wrapper.to_string_lossy().into());
-        }
         Self {
             home,
             broker: None,
@@ -340,6 +311,49 @@ impl Gate {
         }
     }
     pub fn cleanup(&mut self) {
+        if self.broker.is_some() {
+            let evidence = workspace()
+                .join("target/g3-real-evidence")
+                .join(self.home.parent().unwrap().file_name().unwrap());
+            fs::create_dir_all(&evidence).unwrap();
+            fs::set_permissions(&evidence, fs::Permissions::from_mode(0o700)).unwrap();
+            if self.home.join("broker.log").is_file() {
+                fs::copy(self.home.join("broker.log"), evidence.join("broker.log")).unwrap();
+            }
+            if let Ok(runs) = fs::read_dir(self.home.join("runs")) {
+                for run in runs.flatten() {
+                    let dst = evidence.join(run.file_name());
+                    fs::create_dir_all(&dst).unwrap();
+                    for name in ["native.json", "stderr-tail.log", "app-server.log"] {
+                        if run.path().join(name).is_file() {
+                            fs::copy(run.path().join(name), dst.join(name)).unwrap();
+                        }
+                    }
+                    if let Ok(Some(cp)) = sluice_agents::supervisor::Checkpoint::read(&run.path()) {
+                        println!(
+                            "g3 checkpoint run={} session={:?} state={:?} internal_attempt={} live_after={} delivery={:?}",
+                            cp.run,
+                            cp.session,
+                            cp.state,
+                            cp.internal_attempt,
+                            cp.live_after.0,
+                            cp.delivery
+                        );
+                    }
+                    let socket = run.path().join("tmux.sock");
+                    if socket.exists() {
+                        let out = Command::new(workspace().join("target/private-tmux/bin/tmux"))
+                            .arg("-S")
+                            .arg(socket)
+                            .args(["capture-pane", "-p", "-S", "-100", "-t", "%0"])
+                            .output()
+                            .unwrap();
+                        fs::write(dst.join("pane.txt"), out.stdout).unwrap();
+                    }
+                }
+            }
+            println!("g3 evidence: {}", evidence.display());
+        }
         self.lease.take();
         if let Some(mut broker) = self.broker.take() {
             let _ = broker.kill();
@@ -486,6 +500,10 @@ fn g3(engine: &str) {
         }
     });
     let retried = retried.unwrap();
+    println!(
+        "g3_{engine} transient run={run} session={:?} internal_attempt={} state={:?} baseline={:?}",
+        retried.session, retried.internal_attempt, retried.state, retried.head_before
+    );
     assert_eq!(retried.head_before.as_deref(), Some(baseline.as_str()));
     assert_eq!(retried.run.to_string(), run);
     assert_eq!(
@@ -515,6 +533,10 @@ fn g3(engine: &str) {
     let next = step_finished(&mut gate, &selector);
     assert_eq!(next["outputs"]["word"], "green");
     assert_eq!(next["outputs"]["session"], session);
+    println!(
+        "g3_{engine} feedback session={session} run={} word=green",
+        next["run_ids"][0]
+    );
     assert_eq!(retried.session.as_deref(), Some(session.as_str()));
     fs::remove_file(marker.with_extension("injected")).unwrap();
     private_write(&marker, b"cancel the next backoff\n");
@@ -539,6 +561,7 @@ fn g3(engine: &str) {
             .unwrap()
             .is_some_and(|c| c.state == sluice_agents::supervisor::State::Backoff)
     });
+    println!("g3_{engine} cancel observed Backoff run={cancel_run} session={session}");
     gate.rpc(json!({"command":"step_cancel","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"reason":"cancel during fixture backoff","author":"fixture"}}));
     gate.wait(Duration::from_secs(30), |g| {
         g.status(&selector)["steps"]["work"]["status"] == "failed"
@@ -637,12 +660,11 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         private_write(
             &binary,
             format!(
-                "#!/bin/sh\nset -e\nif [ -n \"${{SLUICE_RUN_DIR:-}}\" ]; then export SLUICE_HOME=\"${{SLUICE_RUN_DIR%/runs/*}}\"; fi\nexport HOME='{owner_home}'\nexport XDG_CONFIG_HOME='{owner_home}/.config'\nexport XDG_DATA_HOME='{owner_home}/.local/share'\n{codex_tui}export {env_name}='{}'\ncase \"$1\" in --version|--help) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
+                "#!/bin/sh\nset -e\n{codex_tui}export {env_name}='{}'\ncase \"$1\" in --version|--help) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
                 config.display(),
                 scratch.0.join("committed").display(),
                 scratch.0.join("committed").display(),
-                workspace().join("target/debug/fixture").display(),
-                owner_home = owner.display()
+                workspace().join("target/debug/fixture").display()
             )
             .as_bytes(),
         );

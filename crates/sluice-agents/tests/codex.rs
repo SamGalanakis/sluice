@@ -709,8 +709,17 @@ async fn missing_engine_session_is_typed_and_fresh_fallback_is_left_to_superviso
 
 async fn g3_completed(adapter: &mut Codex, context: &EngineContext) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(180);
+    let mut reported_session = None;
     loop {
         let observation = adapter.observe(context).await.map_err(|e| e.to_string())?;
+        if observation.session_id.is_some() && observation.session_id != reported_session {
+            println!(
+                "g3_codex session={:?} run_dir={}",
+                observation.session_id,
+                context.run_dir.display()
+            );
+            reported_session = observation.session_id.clone();
+        }
         if let Some(e) = observation.error {
             return Err(e.to_string());
         }
@@ -845,7 +854,7 @@ async fn g3_codex() {
     match &result {
         Ok(session) => println!(
             "g3_codex PASS session={} commits=3 submission=blue live=received feedback=resumed transient=recovered cleanup=reaped",
-            &session[..session.len().min(8)]
+            session
         ),
         Err(e) => println!("g3_codex FAILED: {e}"),
     }

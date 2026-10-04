@@ -1172,8 +1172,17 @@ async fn real_poll(
     done: impl Fn(&EngineObservation) -> bool,
 ) -> io::Result<EngineObservation> {
     let deadline = Instant::now() + Duration::from_secs(180);
+    let mut reported_session = None;
     loop {
         let obs = adapter.observe(ctx).await.map_err(io::Error::other)?;
+        if obs.session_id.is_some() && obs.session_id != reported_session {
+            println!(
+                "g3_devin session={:?} run_dir={}",
+                obs.session_id,
+                ctx.run_dir.display()
+            );
+            reported_session = obs.session_id.clone();
+        }
         if done(&obs) {
             return Ok(obs);
         }
@@ -1195,6 +1204,23 @@ fn git(cwd: &Path, args: &[&str]) -> io::Result<String> {
         return Err(io::Error::other("scratch git command failed"));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().into())
+}
+
+async fn g3_wait_reaped(identity: &sluice_process::identity::ProcessIdentity) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while identity.matches_current()? {
+        if Instant::now() >= deadline {
+            return Err(io::Error::other(format!(
+                "g3_devin pane survived shutdown: {identity:?}"
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    println!(
+        "g3_devin cleanup reaped pid={} start={}",
+        identity.pid, identity.start_time
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1294,6 +1320,11 @@ async fn g3_devin() -> io::Result<()> {
         .unwrap();
     let mut pane = Pane::start(&ctx, launch).await;
     let pid = pane.pid();
+    let identity = sluice_process::identity::ProcessIdentity::read(pid)?;
+    println!(
+        "g3_devin owned pane pid={pid} start={}",
+        identity.start_time
+    );
     adapter
         .execute(&ctx, EngineCommand::StartFresh)
         .await
@@ -1354,7 +1385,7 @@ async fn g3_devin() -> io::Result<()> {
     real_poll(&mut adapter, &ctx, |o| o.status == EngineStatus::Exited).await?;
     adapter.close().await?;
     pane.close();
-    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    g3_wait_reaped(&identity).await?;
     let resumed = context(&root, "g3_devin-resume", true);
     let launch = adapter
         .prepare(&resumed, Some(&session))
@@ -1363,6 +1394,11 @@ async fn g3_devin() -> io::Result<()> {
         .unwrap();
     let mut pane = Pane::start(&resumed, launch).await;
     let pid = pane.pid();
+    let identity = sluice_process::identity::ProcessIdentity::read(pid)?;
+    println!(
+        "g3_devin owned pane pid={pid} start={}",
+        identity.start_time
+    );
     adapter
         .execute(
             &resumed,
@@ -1403,10 +1439,10 @@ async fn g3_devin() -> io::Result<()> {
     real_poll(&mut adapter, &resumed, |o| o.status == EngineStatus::Exited).await?;
     adapter.close().await?;
     pane.close();
-    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    g3_wait_reaped(&identity).await?;
     println!(
-        "g3_devin PASS: session {}..., fresh declared word=blue, addressed live message, feedback/transient resume, original baseline has two commits, both pane processes reaped",
-        session.chars().take(8).collect::<String>()
+        "g3_devin PASS: session {}, fresh declared word=blue, addressed live message, feedback/transient resume, original baseline has two commits, both pane processes reaped",
+        session
     );
     Ok(())
 }
