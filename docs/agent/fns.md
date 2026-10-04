@@ -28,10 +28,9 @@ function of its own (`fn_save`).
 
 ## Scopes
 - **builtin**: shipped with sluice (`core.*`, `thread.*`, `inbox.ask`, and `inline.bash` /
-  `inline.python`, which run a script given as a string: see below). Other first-party
-  functions come in packs (`agents`, `git`, `jev` in the repo's `packs/`): install one by copying
-  `packs/<pack>/*` into `$SLUICE_HOME/fns/` or a project's `fns/`, or by adding its path to
-  `fn_dirs`.
+  `inline.python`, which run a script given as a string: see below). The other first-party
+  functions (`agent.*`, `decide.llm`, `git.*`, `gh.*`, `jev.*`) are compiled in as builtins too;
+  there is nothing to install.
 - **global**: `$SLUICE_HOME/fns/` and the dirs in the config's `fn_dirs`; every project sees them.
 - **project**: the project's own `fns/`; only that project sees them.
 

@@ -59,7 +59,7 @@ text box is always there as a fallback. Put prose in `body`; the ui is for the a
 
 Components (the whole vocabulary):
 
-<!-- vocabulary: from src/sluice/static/openui.json, which the renderer uses; a test keeps them in step -->
+<!-- vocabulary: from crates/sluice-web/assets/openui.js, which the renderer uses; keep them in step -->
 - `Stack(children: Component[], direction?: "col" | "row")` — Layout container and the usual root: a column of parts, or a row (e.g. of buttons).
 - `Heading(text: string, level?: number)` — A heading, level 1 to 3.
 - `Text(text: string, tone?: "default" | "muted")` — One paragraph of plain text. Longer prose belongs in the item's markdown body.

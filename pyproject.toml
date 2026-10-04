@@ -1,44 +1,14 @@
+# Not a package. The fn helper lives in python/ and fns run with `uv run --no-project`.
+# This project only gives `uv run --project <repo> --no-sync python|pytest` an environment:
+# the import-python-home fixtures (legacy-python-fixture/) and the offline cutover-staging
+# tests, which crates/sluice-runtime/tests/staging.rs runs with pytest.
 [project]
 name = "sluice"
 version = "0.1.0"
-description = "A controlled firehose: agents edit a typed plan of functions; a runner executes it."
-readme = "README.md"
-license = "MIT"
-license-files = ["LICENSE"]
 requires-python = ">=3.12"
-dependencies = [
-    "mcp>=1.10",
-    "jsonpatch>=1.33",
-    "uvicorn>=0.30",
-    "datastar-py>=1.0.3",
-    "markdown-it-py>=4,<5",
-    "anyio>=4",
-    "starlette>=1",
-    "pydantic>=2",
-    "jsonpointer>=3",
-]
-
-[project.scripts]
-sluice = "sluice.cli:main"
-
-[build-system]
-requires = ["uv_build>=0.8,<0.12"]
-build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
     "pytest>=8",
-    "pytest-asyncio>=0.23",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.6",
 ]
-
-[tool.pytest.ini_options]
-testpaths = ["tests", "packs"]
-asyncio_mode = "auto"
-# tests start real processes: run them across cores (-p no:xdist or -n0 for one process)
-addopts = "-n auto --maxprocesses 16"
-
-[tool.ruff]
-line-length = 100
-target-version = "py312"

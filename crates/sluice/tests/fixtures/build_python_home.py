@@ -9,8 +9,11 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "legacy-python-fixture"))
 
 
 def write(path: Path, value: object) -> None:

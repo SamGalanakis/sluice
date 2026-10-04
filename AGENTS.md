@@ -1,25 +1,32 @@
 # sluice: notes for agents
 
-- Python with uv: `uv sync`, then run anything through `uv run` (e.g. `uv run sluice serve`).
-- Tests: `uv run pytest -q` (check pytest's own exit code, not a pipe's). Lint:
-  `uv run ruff check src tests packs`.
+- Rust workspace under `crates/`: `scripts/check` runs `cargo fmt --check`, Clippy with
+  `-D warnings`, `cargo test --workspace --all-targets --locked` and doctests, all into this
+  checkout's `target/`. Day to day, `cargo test --workspace` is the test command. For a bare
+  cargo invocation pin the same directory with
+  `cargo --config 'build.target-dir="<worktree>/target"' ...`; never set `CARGO_*` variables.
+- The only Python left is the fn helper (`python/`), custom-fn test fixtures,
+  `cutover-staging/` and `legacy-python-fixture/` (the schema-v6 home builder's imports, deleted
+  with `import-python-home`). Run `uv sync --locked` once per checkout: some Rust tests run
+  those fixtures and the staging pytest suite through `uv run --no-sync`.
 - `SPEC.md` is the contract, `DESIGN.md` the dashboard's look; change them with the code.
 - Commits: plain sentences, the user as sole author; no AI co-author trailers or mentions.
-- The live home runs a deployed build, never this working tree: `scripts/deploy [REF]` (default
-  `origin/main`) installs that commit non-editable, refreshes the pack fns the home has, and
-  restarts `serve`/`loop` (running steps are adopted). Deploy after pushing to main.
+- The live home runs a deployed release, never this working tree. After pushing to main,
+  `SLUICE_HOME=<the selected home> scripts/deploy [REF] [--prefix DIR]` builds a pinned release
+  of that commit, selects it under the installation fence and restarts the coordinator, serve
+  and loop units; running steps are adopted. `sluice install status` names the selected home.
 
 ## UI changes
 
-Any change to the dashboard (`src/sluice/views.py`, `src/sluice/static/`) is verified in a real
-headless Chromium before it is called done: screenshots at 390, 1440 and 2560 px wide, in light
-and dark, of every page it touches, and the agent opens and looks at each screenshot itself.
-Check that the content column is centred and shares its left edge with the nav, that nothing is
-clipped, and that the page never scrolls sideways.
+Any change to the dashboard (`crates/sluice-web/`: views, templates, `assets/`) is verified in
+a real headless Chromium before it is called done: screenshots at 390, 1440 and 2560 px wide,
+in light and dark, of every page it touches, and the agent opens and looks at each screenshot
+itself. Check that the content column is centred and shares its left edge with the nav, that
+nothing is clipped, and that the page never scrolls sideways.
 
 - Chromium: `~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome` (or `SLUICE_CHROME`).
-- Driver: `tests/browser.py` (`Chrome`: `open`, `eval`, `wait`, `send` for any DevTools call,
-  e.g. `Emulation.setDeviceMetricsOverride`, `Emulation.setEmulatedMedia` with
+- Driver: `tests/support/chrome.rs` (`Chrome`: `open`, `eval`, `wait`, `send` for any DevTools
+  call, e.g. `Emulation.setDeviceMetricsOverride`, `Emulation.setEmulatedMedia` with
   `prefers-color-scheme`, `Page.captureScreenshot`).
-- Serve a copy, never the live `~/.sluice`:
-  `SLUICE_HOME=<scratch copy> uv run sluice serve --no-runner --port <free port>`.
+- Serve a copy, never the live home:
+  `SLUICE_HOME=<scratch copy> target/debug/sluice serve --no-runner --port <free port>`.

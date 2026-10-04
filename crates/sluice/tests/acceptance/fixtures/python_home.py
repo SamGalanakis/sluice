@@ -6,7 +6,7 @@ import sqlite3
 import sys
 
 REPO = Path(__file__).resolve().parents[5]
-sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "legacy-python-fixture"))
 from sluice import db
 
 
