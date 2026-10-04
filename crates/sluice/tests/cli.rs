@@ -568,7 +568,6 @@ fn next_times_out_and_wakes_on_everything_with_all() {
 #[test]
 fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
     let home = ScratchHome::new().unwrap();
-    let _guard = guard(home.path());
     let created = tool(
         home.path(),
         "project_create",
