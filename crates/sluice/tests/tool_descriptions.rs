@@ -244,8 +244,11 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     .await;
     f.check("edge_add", json!({"project":"p","step":"c","after":["a"]}))
         .await;
-    f.check("edge_remove", json!({"project":"p","step":"c","after":["a"]}))
-        .await;
+    f.check(
+        "edge_remove",
+        json!({"project":"p","step":"c","after":["a"]}),
+    )
+    .await;
     f.check(
         "step_update",
         json!({"project":"p","step":"c","changes":{"doc":"the third"}}),
