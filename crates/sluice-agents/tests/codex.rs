@@ -661,6 +661,41 @@ async fn empty_rollout_subscription_retries_without_repeating_the_task() {
     adapter.close().await.unwrap();
 }
 #[tokio::test]
+async fn a_resumed_long_thread_larger_than_four_mebibytes_is_received() {
+    let scratch = Scratch::new();
+    let socket = scratch.path().join("rpc.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let history = "x".repeat(6 * 1024 * 1024);
+    let reply = history.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let request: Value =
+            serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        let response = json!({"id": request["id"], "result": {"thread": {"history": reply}}});
+        ws.send(tokio_tungstenite::tungstenite::Message::text(
+            response.to_string(),
+        ))
+        .await
+        .unwrap();
+        sleep(Duration::from_secs(60)).await;
+    });
+    let mut rpc = Rpc::connect(
+        &socket,
+        &scratch.path().join("wire.jsonl"),
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap();
+    let result = rpc.request("thread/resume", json!({})).await.unwrap();
+    assert_eq!(
+        result["thread"]["history"].as_str().unwrap().len(),
+        history.len()
+    );
+    rpc.close().await.unwrap();
+    server.abort();
+}
+#[tokio::test]
 async fn cancelled_request_keeps_unknown_acceptance_and_cleanup_reaps_server() {
     let scratch = Scratch::new();
     let socket = scratch.path().join("rpc.sock");

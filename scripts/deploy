@@ -73,7 +73,8 @@ else:
     # The automatic coordinator has a deterministic home identity. It must also
     # stop so its pinned execution host cannot keep scheduling the old release.
     unit = 'sluice-test-coordinator-' + hashlib.sha256(os.fsencode(home)).hexdigest()[:16] + '.service'
-    subprocess.run(['systemctl', '--user', 'stop', unit], check=True)
+    # Absent when no CLI call auto-started one; stopping an unloaded unit is not an error here.
+    subprocess.run(['systemctl', '--user', 'stop', unit], check=False, stderr=subprocess.DEVNULL)
 control('select', str(release), str(home))
 commands = {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
 services = {}
@@ -85,7 +86,9 @@ try:
             digest = hashlib.sha256(os.fsencode(install)).hexdigest()[:16]
             unit = ('sluice-test-' if os.environ.get('SLUICE_TEST') == '1' else 'sluice-') + digest + '-' + name
             subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
-                '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install), '--', str(program), *arguments], check=True)
+                '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install),
+                # The user manager's PATH lacks the engines (codex, claude, devin) and uv.
+                '--setenv=PATH=' + os.environ['PATH'], '--setenv=HOME=' + str(pathlib.Path.home()), '--', str(program), *arguments], check=True)
             services[name] = dict(unit=unit + '.service', release=str(release))
         publish('services.json', services)
         if name == 'coordinator':

@@ -20,7 +20,8 @@ use tokio::{
 };
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 
-pub const MAX_WIRE_BYTES: usize = 4 * 1024 * 1024;
+/// Resuming a long thread returns its whole history in one message (5 MB seen live).
+pub const MAX_WIRE_BYTES: usize = 256 * 1024 * 1024;
 type Socket = WebSocketStream<UnixStream>;
 
 pub struct Rpc {
