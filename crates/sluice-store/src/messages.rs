@@ -864,6 +864,94 @@ pub fn notify_attempt(
     })
 }
 
+/// An owner question whose notification is reserved and not yet claimed for dispatch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingNotify {
+    pub project: ProjectId,
+    pub project_name: String,
+    pub attempt: AttemptId,
+    pub message: Message,
+    /// The question is still open; an answered or closed one is not sent.
+    pub open: bool,
+}
+/// Reserved notifications, oldest first.
+pub fn notify_pending(sql: &Connection) -> Result<Vec<PendingNotify>> {
+    let mut stmt = sql.prepare("SELECT n.project_id,p.name,n.attempt_id,n.message_id FROM notification_attempts n JOIN projects p ON p.project_id=n.project_id WHERE n.outcome='reserved' AND p.deleted_at IS NULL ORDER BY n.reserved_at,n.message_id")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(stmt);
+    let invalid_row = |e: String| StoreError::InvalidDatabase(format!("invalid notify row: {e}"));
+    rows.into_iter()
+        .map(|(project, project_name, attempt, id)| {
+            let project: ProjectId = project.parse().map_err(|e| invalid_row(format!("{e}")))?;
+            let message = message(sql, project, MessageId(id))?;
+            let open: bool = sql.query_row(
+                "SELECT resolved_by IS NULL AND closed_at IS NULL FROM messages WHERE project_id=?1 AND id=?2",
+                params![project.to_string(), id],
+                |r| r.get(0),
+            )?;
+            Ok(PendingNotify {
+                project,
+                project_name,
+                attempt: attempt.parse().map_err(|e| invalid_row(format!("{e}")))?,
+                message,
+                open,
+            })
+        })
+        .collect()
+}
+/// Claim a reservation for dispatch before the command starts: it becomes `uncertain` with no
+/// finish time until its result is recorded, so a crash in between is never replayed.
+/// False when it was already claimed or settled.
+pub fn notify_claim(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    id: MessageId,
+    attempt: AttemptId,
+) -> Result<bool> {
+    let claimed = tx.sql().execute("UPDATE notification_attempts SET outcome='uncertain' WHERE project_id=?1 AND message_id=?2 AND attempt_id=?3 AND outcome='reserved'",params![project.to_string(),id.0,attempt.to_string()])?;
+    if claimed == 1 {
+        tx.changed(Some(project), "messages");
+    }
+    Ok(claimed == 1)
+}
+/// Claims an earlier coordinator left unfinished, settled as `uncertain` with `error`.
+pub fn notify_abandoned(tx: &mut WriteTransaction<'_>, error: PublicError) -> Result<usize> {
+    let mut stmt = tx.sql().prepare("SELECT project_id,message_id,attempt_id FROM notification_attempts WHERE outcome='uncertain' AND finished_at IS NULL")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(stmt);
+    let count = rows.len();
+    for (project, id, attempt) in rows {
+        let invalid_row =
+            |e: String| StoreError::InvalidDatabase(format!("invalid notify row: {e}"));
+        notify_result(
+            tx,
+            project.parse().map_err(|e| invalid_row(format!("{e}")))?,
+            MessageId(id),
+            attempt.parse().map_err(|e| invalid_row(format!("{e}")))?,
+            NotificationOutcome::Uncertain,
+            None,
+            Some(error.clone()),
+        )?;
+    }
+    Ok(count)
+}
 /// A reservation is the sole dispatch permit. Results never reset it for replay.
 pub fn notify_result(
     tx: &mut WriteTransaction<'_>,
@@ -881,7 +969,13 @@ pub fn notify_result(
     if before.attempt != attempt {
         return Err(conflict("notification attempt identity differs"));
     }
-    if before.outcome != NotificationOutcome::Reserved {
+    // A claim (notify_claim) is uncertain without a finish time until its result lands.
+    let claimed: bool = tx.sql().query_row(
+        "SELECT outcome='uncertain' AND finished_at IS NULL FROM notification_attempts WHERE project_id=?1 AND message_id=?2",
+        params![project.to_string(), id.0],
+        |r| r.get(0),
+    )?;
+    if before.outcome != NotificationOutcome::Reserved && !claimed {
         if before.outcome == outcome && before.stderr == stderr && before.error == error {
             tx.changed(Some(project), "messages");
             return Ok(before);

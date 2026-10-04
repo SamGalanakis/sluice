@@ -29,7 +29,7 @@ fn fixture() -> DashboardSnapshot {
             failed_steps: vec!["broken".into()],
         }],
         inbox: 2,
-        runner_stale: true,
+        runner_stopped: true,
         functions: FunctionCatalog {
             version: "one".into(),
             entries: vec![FunctionView {
@@ -208,31 +208,40 @@ async fn display_preferences_validate_cookies_and_empty_scope_stays_global() {
     assert_eq!(response.status(), 400);
 }
 #[tokio::test]
-async fn iso_heartbeat_liveness_is_versioned_and_absence_does_not_claim_stopped() {
+async fn runner_line_follows_the_scheduler_lease_and_is_versioned() {
     let home = tempfile::tempdir().unwrap();
-    let _writer = Writer::open(home.path()).unwrap();
+    let writer = Writer::open(home.path()).unwrap();
     let state = DashboardState::new(
         ReadPool::open(home.path(), 1).unwrap(),
         Arc::new(EmptyCatalog),
     );
-    let absent = state.snapshot(None).await.unwrap().unwrap();
-    assert!(!absent.runner_stale);
-    std::fs::write(
-        home.path().join("runner.json"),
-        r#"{"beat":"2020-01-01T00:00:00Z"}"#,
-    )
-    .unwrap();
-    let stale = state.snapshot(None).await.unwrap().unwrap();
-    assert!(stale.runner_stale);
-    assert_ne!(absent.version(), stale.version());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    std::fs::write(
-        home.path().join("runner.json"),
-        format!("{{\"beat\":{now}}}"),
-    )
-    .unwrap();
-    assert!(!state.snapshot(None).await.unwrap().unwrap().runner_stale);
+    let lease = |owner: Option<&'static str>| {
+        writer.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE maintenance SET scheduler_owner=?1 WHERE singleton=1",
+                [owner],
+            )?;
+            tx.changed(None, "scheduler");
+            Ok(())
+        })
+    };
+    let render = |snapshot: &DashboardSnapshot| {
+        HomeView::new(snapshot)
+            .render(snapshot, &Viewer::default())
+            .unwrap()
+            .as_str()
+            .to_owned()
+    };
+    // No loop holds the lease: nothing new starts, and the home page says so.
+    let stopped = state.snapshot(None).await.unwrap().unwrap();
+    assert!(stopped.runner_stopped);
+    assert!(render(&stopped).contains("Runner stopped"));
+    lease(Some("loop")).await.unwrap();
+    let running = state.snapshot(None).await.unwrap().unwrap();
+    assert!(!running.runner_stopped);
+    assert!(!render(&running).contains("Runner stopped"));
+    assert_ne!(stopped.version(), running.version());
+    // The holder's connection closing releases the lease.
+    lease(None).await.unwrap();
+    assert!(state.snapshot(None).await.unwrap().unwrap().runner_stopped);
 }

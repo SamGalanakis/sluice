@@ -351,7 +351,9 @@ last changed; for one with failures a sentence in ink, "Stopped: a, b failed · 
 step a link; "Stopped:" only while nothing runs); its description's opening; a progress bar with
 "n of m"; then either its running steps (glyph, title, live time, a gold "quiet" tag once a run
 has written nothing for 15 minutes) or one line on what stops it ("Paused.", "Stopped: nothing
-is running."). The archived projects fold under "Archived (n)".
+is running."). The archived projects fold under "Archived (n)". While nothing holds the
+scheduler lease, one attention line heads the list: "Runner stopped · nothing new starts until
+`sluice loop` runs".
 
 ### Board (`/projects/id/<p>`)
 Top down:

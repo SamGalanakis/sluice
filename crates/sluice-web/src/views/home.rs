@@ -9,7 +9,7 @@ use axum::{
 pub struct HomeView {
     pub active: Vec<ProjectView>,
     pub archived: Vec<ProjectView>,
-    pub runner_stale: bool,
+    pub runner_stopped: bool,
 }
 impl HomeView {
     pub fn new(snapshot: &DashboardSnapshot) -> Self {
@@ -26,7 +26,7 @@ impl HomeView {
                 .filter(|p| p.archived)
                 .cloned()
                 .collect(),
-            runner_stale: snapshot.runner_stale,
+            runner_stopped: snapshot.runner_stopped,
         }
     }
     pub fn title(&self) -> String {

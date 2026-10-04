@@ -113,7 +113,7 @@ impl SettingsState {
         self.dashboard
             .reads
             .snapshot(move |c| {
-                let shared = views::load_snapshot(c, functions, false)?;
+                let shared = views::load_snapshot(c, functions)?;
                 let project = projects::resolve(c, &ProjectSelector::Id(id))?;
                 let blocker =
                     projects::deletion_blocker(c, &ProjectSelector::Id(id))?.or_else(|| {

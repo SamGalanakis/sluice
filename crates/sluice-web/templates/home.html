@@ -7,7 +7,7 @@
 {% if project.running.is_empty() %}<p class="now">{{ project.now() }}</p>{% else %}<ul class="now">{% for run in project.running %}<li><a href="{{ project.href() }}#step:{{ run.step }}">{{ crate::views::home::glyph("running")|safe }}<span class="ttl">{{ run.title }}</span></a><span class="dur" data-started="{{ run.started }}"></span>{% if let Some(activity) = run.activity %}<span class="tag attn" data-quiet-since="{{ activity }}"{% if !run.quiet %} hidden{% endif %}>quiet</span>{% endif %}</li>{% endfor %}</ul>{% endif %}</li>
 {% endmacro %}
 <div id="projects"><h1 class="vh">Projects</h1>
-{% if view.runner_stale %}<p class="attn">Runner stopped · last seen more than 15 seconds ago</p>{% endif %}
+{% if view.runner_stopped %}<p class="attn">Runner stopped · nothing new starts until <code>sluice loop</code> runs</p>{% endif %}
 {% if view.active.is_empty() %}<p class="empty">{% if view.archived.is_empty() %}No projects yet. An orchestrator creates one with <code>project_create</code>.{% else %}Every project is archived.{% endif %}</p>{% endif %}
 <ul class="projects">{% for project in view.active %}{% call project_row(project) %}{% endcall %}{% endfor %}</ul>
 {% if !view.archived.is_empty() %}<details class="archived" data-preserve-attr="open"><summary>Archived ({{ view.archived.len() }})</summary><ul class="projects">{% for project in view.archived %}{% call project_row(project) %}{% endcall %}{% endfor %}</ul></details>{% endif %}

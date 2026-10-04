@@ -454,3 +454,90 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
     assert!(verify(&release).is_err());
     gate.root.disable_cleanup(false);
 }
+#[test]
+fn doctor_probes_engines_on_path_without_their_homes() {
+    use std::os::unix::fs::PermissionsExt;
+    let gate = support::Gate::new();
+    let release = synthetic_release(gate.root.path());
+    let install = Installation::at(gate.install.clone()).unwrap();
+    install.fence("test".into()).unwrap();
+    install.select(&release, &gate.home).unwrap();
+    let bin = gate.root.path().join("engines");
+    std::fs::create_dir(&bin).unwrap();
+    let seen = gate.root.path().join("probe-homes");
+    // codex is supported, claude is too new, devin is not installed.
+    for (name, version) in [
+        ("codex", "codex-cli 0.160.0"),
+        ("claude", "2.2.0 (Claude Code)"),
+    ] {
+        let path = bin.join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\necho \"{name} $* $HOME $CODEX_HOME $CLAUDE_CONFIG_DIR\" >> '{}'\necho '{version}'\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let doctor = gate
+        .command(
+            Path::new(env!("CARGO_BIN_EXE_sluice")),
+            &["doctor", "--json"],
+        )
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .unwrap();
+    assert!(doctor.status.success(), "{doctor:?}");
+    let report: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let engine = |name: &str| {
+        report["engines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["engine"] == name)
+            .unwrap_or_else(|| panic!("{name}: {report}"))
+            .clone()
+    };
+    let codex = engine("codex");
+    assert_eq!(codex["executable"], json!(bin.join("codex")));
+    assert_eq!(codex["version"], "codex-cli 0.160.0");
+    assert_eq!(codex["supported"], true, "{codex}");
+    let claude = engine("claude");
+    assert_eq!(claude["version"], "2.2.0 (Claude Code)");
+    assert_eq!(claude["supported"], false);
+    assert!(claude["error"].is_string());
+    let devin = engine("devin");
+    assert_eq!(devin["executable"], Value::Null);
+    assert_eq!(devin["version"], Value::Null);
+    assert_eq!(devin["error"], "executable not found on PATH");
+    // Only `--version` ran, in a scratch home that is gone afterwards: no session started and
+    // the owner's engine homes were never pointed at.
+    let probes = std::fs::read_to_string(&seen).unwrap();
+    assert_eq!(probes.lines().count(), 2, "{probes}");
+    for line in probes.lines() {
+        let fields: Vec<&str> = line.split(' ').collect();
+        assert_eq!(fields[1], "--version", "{line}");
+        let probe_home = Path::new(fields[2]);
+        assert!(probe_home.starts_with(std::env::temp_dir()), "{line}");
+        assert!(
+            fields[3..].iter().all(|f| Path::new(f) == probe_home),
+            "{line}"
+        );
+        assert!(!probe_home.exists());
+    }
+    let text = gate
+        .command(Path::new(env!("CARGO_BIN_EXE_sluice")), &["doctor"])
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("ok  engine codex"), "{text}");
+    assert!(text.contains("warn engine claude"), "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("warn engine devin") && l.contains("not found on PATH")),
+        "{text}"
+    );
+}

@@ -529,13 +529,12 @@ pub async fn snapshot(
 ) -> Result<Option<(DashboardSnapshot, ProjectView)>, PublicError> {
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
     let exact_before = exact.clone();
-    let stopped = super::runner_stale(state.reads.home());
     let catalog = state.catalog.catalog(Some(project))?;
     let before = catalog.clone();
     let (mut shared, mut board) = state
         .reads
         .snapshot(move |c| {
-            let shared = super::load_snapshot(c, catalog, stopped)?;
+            let shared = super::load_snapshot(c, catalog)?;
             let board = if let Some(exact) = exact {
                 load_board(c, &shared, project, &exact)?
             } else {
@@ -578,7 +577,6 @@ pub async fn snapshot(
         }
     }
     Ok((stable
-        && stopped == super::runner_stale(state.reads.home())
         && before == state.catalog.catalog(Some(project))?
         && exact_before == registry.map(|r| r.0.signatures(project)).transpose()?)
     .then_some((shared, board)))

@@ -194,7 +194,9 @@ impl CatalogSource for EmptyCatalog {
 pub struct DashboardSnapshot {
     pub projects: Vec<ProjectView>,
     pub inbox: usize,
-    pub runner_stale: bool,
+    /// Nothing holds the scheduler lease (no `sluice loop`, no `serve` without --no-runner):
+    /// nothing new starts.
+    pub runner_stopped: bool,
     pub functions: FunctionCatalog,
 }
 impl DashboardSnapshot {
@@ -223,19 +225,15 @@ impl DashboardState {
         project: Option<ProjectId>,
     ) -> Result<Option<DashboardSnapshot>, PublicError> {
         let catalog = self.catalog.clone();
-        let home = self.reads.home().to_owned();
-        let before = tokio::task::spawn_blocking(move || {
-            Ok::<_, PublicError>((catalog.catalog(project)?, runner_stale(&home)))
-        })
-        .await
-        .map_err(|e| PublicError::Storage {
-            message: e.to_string(),
-        })??;
-        let functions = before.0.clone();
-        let stopped = before.1;
+        let before = tokio::task::spawn_blocking(move || catalog.catalog(project))
+            .await
+            .map_err(|e| PublicError::Storage {
+                message: e.to_string(),
+            })??;
+        let functions = before.clone();
         let mut observed = self
             .reads
-            .snapshot(move |c| load_snapshot(c, functions, stopped))
+            .snapshot(move |c| load_snapshot(c, functions))
             .await
             .map_err(|e| e.into_public(true))?;
         let home_for_activity = self.reads.home().to_owned();
@@ -251,34 +249,13 @@ impl DashboardState {
             message: e.to_string(),
         })?;
         let catalog = self.catalog.clone();
-        let home = self.reads.home().to_owned();
-        let after = tokio::task::spawn_blocking(move || {
-            Ok::<_, PublicError>((catalog.catalog(project)?, runner_stale(&home)))
-        })
-        .await
-        .map_err(|e| PublicError::Storage {
-            message: e.to_string(),
-        })??;
+        let after = tokio::task::spawn_blocking(move || catalog.catalog(project))
+            .await
+            .map_err(|e| PublicError::Storage {
+                message: e.to_string(),
+            })??;
         Ok((before == after && stable_activity).then_some(updated))
     }
-}
-fn runner_stale(home: &std::path::Path) -> bool {
-    // P6-02 supplies coordinator liveness; legacy scratch heartbeat is optional.
-    let Ok(bytes) = std::fs::read(home.join("runner.json")) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return false;
-    };
-    let Some(beat) = value
-        .get("beat")
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(timestamp)))
-    else {
-        return false;
-    };
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .is_ok_and(|now| now.as_secs().saturating_sub(beat) > 15)
 }
 #[derive(Clone, Debug)]
 pub struct NavLink {
@@ -575,7 +552,6 @@ pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot
 pub fn load_snapshot(
     c: &rusqlite::Connection,
     functions: FunctionCatalog,
-    runner_stale: bool,
 ) -> sluice_store::Result<DashboardSnapshot> {
     let mut statement = c.prepare("SELECT project_id,name,description,icon_text,icon_type,icon_generation,paused,archived,coalesce(changed_at,created_at) FROM projects WHERE deleted_at IS NULL ORDER BY archived,name")?;
     let mut projects = Vec::new();
@@ -651,10 +627,16 @@ pub fn load_snapshot(
         projects.push(view);
     }
     let inbox: i64 = c.query_row("SELECT count(*) FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND m.\"to\"='owner' AND needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL",[],|r|r.get(0))?;
+    // The scheduler lease lives as long as its holder's connection to the coordinator.
+    let runner_stopped: bool = c.query_row(
+        "SELECT scheduler_owner IS NULL FROM maintenance WHERE singleton=1",
+        [],
+        |r| r.get(0),
+    )?;
     Ok(DashboardSnapshot {
         projects,
         inbox: inbox as usize,
-        runner_stale,
+        runner_stopped,
         functions,
     })
 }

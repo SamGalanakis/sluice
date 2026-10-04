@@ -61,7 +61,7 @@ fn the_first_run_writes_the_default_config_and_lists_the_tools() {
             .unwrap();
     assert_eq!(
         config,
-        json!({"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420}, "log_max": 10000})
+        json!({"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 3065}, "log_max": 10000})
     );
     let names: Vec<String> = String::from_utf8(listing.stdout)
         .unwrap()
@@ -641,4 +641,100 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
         &json!({"name": unknown.to_string(), "description": ""}).to_string(),
     );
     assert_eq!(stderr(&refused)["error"], "bad_request");
+}
+
+/// A `sluice serve --no-runner` child, killed on drop.
+struct Served(std::process::Child);
+impl Drop for Served {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn serve(home: &Path, args: &[&str]) -> Served {
+    Served(
+        Command::new(env!("CARGO_BIN_EXE_sluice"))
+            .env("SLUICE_HOME", home)
+            .arg("serve")
+            .arg("--no-runner")
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    )
+}
+/// The dashboard answers on `port` while `served` keeps running.
+fn answers(served: &mut Served, port: u16) {
+    use std::io::{Read, Write};
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(status) = served.0.try_wait().unwrap() {
+            let mut text = String::new();
+            let _ = served.0.stderr.take().unwrap().read_to_string(&mut text);
+            panic!("serve exited {status}: {text}");
+        }
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            stream
+                .write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+            let mut reply = String::new();
+            let _ = stream.read_to_string(&mut reply);
+            assert!(
+                reply.starts_with("HTTP/1.0 200") || reply.starts_with("HTTP/1.1 200"),
+                "{reply}"
+            );
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "serve never bound {port}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn serve_binds_config_http_unless_the_command_line_names_host_and_port() {
+    let home = ScratchHome::new().unwrap();
+    let mut coordinator = Command::new(env!("CARGO_BIN_EXE_sluice"))
+        .env("SLUICE_HOME", home.path())
+        .arg("coordinator")
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::os::unix::net::UnixStream::connect(home.path().join("coordinator.sock")).is_err() {
+        assert!(coordinator.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let config = |http: Value| {
+        std::fs::write(
+            home.path().join("config.json"),
+            json!({"fn_dirs": [], "http": http, "log_max": 10000}).to_string(),
+        )
+        .unwrap()
+    };
+    let port = |listener: std::net::TcpListener| listener.local_addr().unwrap().port();
+    let from_config = port(support::free_port::free_port().unwrap());
+    config(json!({"host": "127.0.0.1", "port": from_config}));
+    {
+        let mut served = serve(home.path(), &[]);
+        answers(&mut served, from_config);
+    }
+    // A non-loopback host from config.json is refused like one from --host...
+    config(json!({"host": "192.0.2.1", "port": from_config}));
+    let refused = run(home.path(), &["serve", "--no-runner"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("loopback"));
+    // ...and the command line wins over it.
+    let given = port(support::free_port::free_port().unwrap());
+    let mut served = serve(
+        home.path(),
+        &["--host", "127.0.0.1", "--port", &given.to_string()],
+    );
+    answers(&mut served, given);
+    drop(served);
+    let _ = coordinator.kill();
+    let _ = coordinator.wait();
 }

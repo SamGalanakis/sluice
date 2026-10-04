@@ -114,9 +114,19 @@ deploy: each run's guardian stays pinned to its own release, and the new coordin
 ### 2.3 Home layout
 
 ```
-config.json                 {"fn_dirs": [], "http": {...}, "log_max": 10000}; written when
-                            missing. Only fn_dirs is read: directories (relative to the home)
-                            whose fn dirs join the global scope
+config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 3065},
+                            "log_max": 10000}; written when missing, read on each use; a key
+                            of the wrong shape is ignored (with a warning) for its default:
+                            fn_dirs    directories (relative to the home) whose fn dirs join
+                                       the global scope
+                            http       serve's host and port when the command line gives none
+                            log_max    records each log keeps; past it the coordinator trims
+                                       the oldest down to 90% of it (every 30 s)
+                            unread_alert_min  minutes; when set, the "nobody reading" owner
+                                       question (§8)
+                            notify     {command: [argv…], timeout_s: 30}: owner notification
+                                       (§8)
+.env                        secrets for every run in the home (§5.4)
 sluice.db                   the database (§3)
 coordinator.sock            the coordinator's Unix socket (owner only)
 coordinator.lock            flock held by the running coordinator
@@ -131,7 +141,7 @@ projects/<project id>/
   fns/                      the project's fns
   generations/<n>/          immutable published copies of the project's fns
   recipes/<name>.json       the project's recipes
-  .env                      checked for syntax by verify; never loaded (§5.4)
+  .env                      secrets for this project's runs, over the home's (§5.4)
   icons/<generation>        the project's image icon
 ```
 
@@ -287,8 +297,12 @@ runs in the run's payload cgroup, in the fn's published directory, with:
   `SLUICE_RUN_DIR`, `SLUICE_PROJECT_DIR`, `SLUICE_FN_DIR`, `SLUICE_PREV_RUN`,
   `SLUICE_CONTROL_SOCKET`, `SLUICE_RUN_CAPABILITY`, and `SLUICE_HOST_PATH`,
   `SLUICE_HOST_PYTHONPATH`, `SLUICE_HOST_VIRTUAL_ENV` (the values before sluice changed them).
-  `.env` files are not loaded; secrets come from the environment the coordinator was started
-  with.
+  Secrets come from `.env` files, loaded at each run's launch: `<home>/.env`, then
+  `<home>/projects/<id>/.env`, each over what came before, then the `SLUICE_*` variables above
+  over both. A line is `KEY=value` (`export ` prefix, `#` comments and one pair of quotes
+  allowed); other lines are skipped and reported by `verify`. Built-in fns and agent sessions
+  get the same values (an agent session over its engine's allowlisted environment). Values are
+  never logged or recorded.
 - stdin: one JSON envelope `{"protocol": 1, "inputs": {...}, "context": {...}}`. `context`
   holds `home`, `run_dir`, `project_dir`, `project`, `project_id`, `step`, `run_id`,
   `attempt_id`, `invocation_id`, `fn_dir`, `bin`, `prev_run`, `extra_inputs` (an open fn's
@@ -649,7 +663,24 @@ input?, data?, from?, run?)` → `{id}`:
   that is itself a question answers nothing. `answer.action == "close"` closes the question
   without setting anything.
 - An open question to `owner` reserves a notification attempt and writes a `project.notify`
-  record.
+  record (`outcome: reserved`). Notes and questions to anyone else never notify.
+
+**Notify.** With `notify: {command, timeout_s}` in config.json, the coordinator runs `command`
+(argv, no shell; cwd the home; its environment plus the home's and the project's `.env`) once
+for each reserved notification, whether or not anything holds the scheduler lease, outside any
+transaction and in a task of its own. stdin is the message's JSON plus `project` (its name) and
+`project_id`; stdout is ignored; the last 2 KiB of stderr are kept. The attempt is claimed
+durably before the command starts, so it never runs twice: exit 0 is `dispatched`; a non-zero
+exit or a failure to start is retried twice more (after 1 s and 2 s) and then `failed`; a
+timeout (`timeout_s`, default 30) is `uncertain` and not retried; a claim a stopped coordinator
+left is `uncertain` (`process_lost`). Each result is a `project.notify` record and stays on the
+attempt (`notification_attempts`). A reservation whose question is answered or closed before it
+goes out is `failed` (`cancelled`) without running anything. Without `notify` reservations wait.
+
+**Nobody reading.** With `unread_alert_min` in config.json, every 30 s the coordinator asks the
+owner (a question from `sluice`) about each `unit.settled` record at least that many minutes
+old in a project whose orchestrator readers (`next`) have all been silent that long and none has
+read past it: once per record, whatever the threshold later becomes.
 
 Question state is derived: `open`, `answered` or `closed`. A question posted by a step's run
 is `waiting` while that run is live; otherwise it reports why nobody waits: `asking run is
@@ -930,7 +961,7 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 
 | route | page |
 |---|---|
-| `/` | projects: each with its status glyph, progress and what stops it; archived ones folded |
+| `/` | projects: each with its status glyph, progress and what stops it; archived ones folded. "Runner stopped" heads it while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
 | `/projects/id/<p>` | the board; query `order=live\|plan`, `show=all\|active\|attention\|done`, `tag=`, `format=mermaid` (with `all=true`) |
 | `/projects/id/<p>/units/<u>` | one unit's board |
@@ -966,7 +997,7 @@ remains. A Button answers `{action, params, values}`; the text box answers with 
 
 | mode | |
 |---|---|
-| `serve [--no-runner] [--port 3065] [--host 127.0.0.1]` | dashboard, MCP and HTTP tools; takes the scheduler lease unless `--no-runner`; loopback only |
+| `serve [--no-runner] [--port P] [--host H]` | dashboard, MCP and HTTP tools; takes the scheduler lease unless `--no-runner`; loopback only. Host and port default to config.json's `http`, else 127.0.0.1:3065 |
 | `loop` | takes the scheduler lease and holds it until SIGINT/SIGTERM |
 | `coordinator [--maintenance]` | runs the home's coordinator in the foreground |
 | `install fence <reason> \| unfence \| select <release_dir> <home> \| status` | §2.2 |
@@ -976,7 +1007,7 @@ remains. A Button answers `{action, params, values}`; the text box answers with 
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |
 | `me [--project P] [--step S] [--json]` | `step_context` for the current step (from `SLUICE_PROJECT_ID`/`SLUICE_PROJECT` and `SLUICE_STEP`) |
-| `doctor [--json]` | host prerequisites, engine profiles and the selected release's manifest check |
+| `doctor [--json]` | host prerequisites, each engine (`codex`, `claude`, `devin`): its executable on PATH, `--version` and whether its profile supports it, and the selected release's manifest check. The engine probes run with HOME and the engines' config dirs in a private scratch directory, so no session starts and no credential is read; a missing or unsupported engine is a warning, not a failure |
 | `query [SQL [PARAM…]] [--limit N] [--table [--width 60]]` | the `query` tool, read directly from the database; without SQL, every public table and view with its columns |
 | `backup PATH [--force]` | an online copy of `sluice.db` |
 | `docs [topic]` | the agent docs |

@@ -779,16 +779,26 @@ pub fn render(
     Ok(lines.join("\n") + "\n")
 }
 
-/// Once per unread settlement, across reader identities, with durable deduplication.
+/// Once per unread settlement, across reader identities, with durable deduplication: a
+/// settlement at least `minutes` old in a project whose orchestrator readers have all been
+/// silent that long and have not read past it (config.json `unread_alert_min`).
 /// Notify reservations follow the ordinary owner-question posting transaction.
 pub async fn unread_alerts(
     writer: &Writer,
+    minutes: f64,
 ) -> Result<Vec<sluice_model::commands::Message>, PublicError> {
-    writer.write(RetrySafety::Idempotent,|tx|{
-        let mut stmt=tx.sql().prepare("SELECT r.project_id,r.seq,r.payload,p.name,min(rd.unread_alert_min),max(rd.cursor) FROM records r JOIN projects p ON p.project_id=r.project_id JOIN readers rd ON rd.project_id=p.project_id AND rd.stream='orchestrator' AND rd.thread='' WHERE r.kind='unit.settled' AND p.archived=0 AND p.deleted_at IS NULL GROUP BY r.seq HAVING min(rd.unread_alert_min)>0 AND max(rd.cursor)<r.seq AND (julianday('now')-julianday(max(rd.heartbeat_at)))*1440>=min(rd.unread_alert_min) AND (julianday('now')-julianday(r.at))*1440>=min(rd.unread_alert_min) ORDER BY r.seq")?;
-        let rows=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,i64>(5)?)))?.collect::<Result<Vec<_>,_>>()?;drop(stmt);
+    if !minutes.is_finite() || minutes <= 0.0 {
+        return Err(PublicError::BadRequest {
+            message: "unread_alert_min must be a positive number of minutes".into(),
+        });
+    }
+    let label = format!("{minutes}");
+    writer.write(RetrySafety::Idempotent,move|tx|{
+        let mut stmt=tx.sql().prepare("SELECT r.project_id,r.seq,r.payload,p.name,max(rd.cursor) FROM records r JOIN projects p ON p.project_id=r.project_id JOIN readers rd ON rd.project_id=p.project_id AND rd.stream='orchestrator' AND rd.thread='' WHERE r.kind='unit.settled' AND p.archived=0 AND p.deleted_at IS NULL GROUP BY r.seq HAVING max(rd.cursor)<r.seq AND (julianday('now')-julianday(max(rd.heartbeat_at)))*1440>=?1 AND (julianday('now')-julianday(r.at))*1440>=?1 ORDER BY r.seq")?;
+        let rows=stmt.query_map([minutes],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?)))?.collect::<Result<Vec<_>,_>>()?;drop(stmt);
         let mut posted=vec![];
-        for (project,seq,payload,name,minutes,cursor)in rows{
+        for (project,seq,payload,name,cursor)in rows{
+            let minutes=&label;
             let project:ProjectId=parse_id(project)?;
             let alerted:bool=tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.unread_record')=?2)",(project.to_string(),seq),|r|r.get(0))?;
             if alerted{continue;}

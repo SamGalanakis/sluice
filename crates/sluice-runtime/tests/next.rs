@@ -462,8 +462,8 @@ async fn read_progress_is_monotonic_separate_from_owner_and_alerts_deduplicate_e
     })
     .await
     .unwrap();
-    assert_eq!(unread_alerts(&w).await.unwrap().len(), 2);
-    assert!(unread_alerts(&w).await.unwrap().is_empty());
+    assert_eq!(unread_alerts(&w, 1.0).await.unwrap().len(), 2);
+    assert!(unread_alerts(&w, 1.0).await.unwrap().is_empty());
     let position = r
         .snapshot(move |sql| {
             let orchestrator =
@@ -697,5 +697,67 @@ async fn timeout_starts_from_now_and_all_includes_own_notes_and_nonwaking_record
     .await
     .unwrap();
     assert_eq!(all.records.len(), 2);
+    w.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn upkeep_asks_about_unread_settlements_only_with_unread_alert_min_and_trims_to_log_max() {
+    let (h, w, r, p) = setup().await;
+    next(&w, &r, options(p)).await.unwrap();
+    let one = settled(&w, p, "one").await;
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute(
+            "UPDATE readers SET heartbeat_at='2000-01-01T00:00:00Z' WHERE project_id=?1",
+            [p.to_string()],
+        )?;
+        tx.sql().execute(
+            "UPDATE records SET at='2000-01-01T00:00:00Z' WHERE seq=?1",
+            [one.seq.0],
+        )?;
+        tx.changed(Some(p), "readers");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let alerts = || {
+        r.snapshot(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM messages WHERE \"from\"='sluice' AND \"to\"='owner'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+    };
+    let config = |value: serde_json::Value| {
+        std::fs::write(h.0.join("config.json"), value.to_string()).unwrap()
+    };
+    sluice_runtime::scheduler::upkeep(&w, &h.0, vec![p])
+        .await
+        .unwrap();
+    assert_eq!(alerts().await.unwrap(), 0, "no unread_alert_min, no alert");
+    config(json!({"unread_alert_min": 1}));
+    for _ in 0..2 {
+        sluice_runtime::scheduler::upkeep(&w, &h.0, vec![p])
+            .await
+            .unwrap();
+        assert_eq!(alerts().await.unwrap(), 1);
+    }
+    config(json!({"log_max": 20}));
+    for i in 0..40 {
+        post(&w, p, &format!("note {i}"), "worker", None, false, None).await;
+    }
+    let count = || {
+        r.snapshot(move |c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM records WHERE project_id=?1",
+                [p.to_string()],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+    };
+    assert!(count().await.unwrap() > 40);
+    sluice_runtime::scheduler::upkeep(&w, &h.0, vec![p])
+        .await
+        .unwrap();
+    assert_eq!(count().await.unwrap(), 18, "trimmed to 90% of log_max");
     w.shutdown().await.unwrap();
 }

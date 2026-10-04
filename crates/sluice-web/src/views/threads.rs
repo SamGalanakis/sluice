@@ -169,7 +169,7 @@ pub async fn load(
 ) -> Result<InboxView, PublicError> {
     reads
         .snapshot(move |sql| {
-            let nav = load_snapshot(sql, FunctionCatalog::default(), false)?;
+            let nav = load_snapshot(sql, FunctionCatalog::default())?;
             if let Some(id) = project {
                 messages::resolve_project(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
             }

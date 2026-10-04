@@ -2,10 +2,12 @@
 
 pub mod builtins;
 pub mod calls;
+pub mod config;
 mod contain;
 pub mod coordinator;
 pub mod drain;
 pub mod inline;
+pub mod notify;
 pub mod python;
 pub mod registry;
 pub mod scheduler;
@@ -25,4 +27,5 @@ mod sidecar;
 
 pub mod dispatch_ext;
 pub mod docs;
+pub mod dotenv;
 pub mod install;

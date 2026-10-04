@@ -117,6 +117,8 @@ if __name__ == "__main__":
   capacity as steps' `needs`. An undeclared resource or an amount over a fixed capacity raises
   `CallbackError` (`bad_request`) at once; `timeout=` seconds raises `TimeoutError` instead of
   waiting on. It needs a run in a project.
-- Secrets come from the environment the runner was started with; sluice does not load `.env`
-  files into runs (`verify` only checks their syntax). Never put secrets in plans.
+- Secrets come from `.env` files: `$SLUICE_HOME/.env`, then the project's
+  `$SLUICE_HOME/projects/<id>/.env` (project values win), loaded into every run (fns, built-ins
+  and agent sessions) at launch; the run's own `SLUICE_*` variables win over both. `verify`
+  checks their syntax. Never put secrets in plans.
 - Output types are checked after the function exits; a mismatch fails the step.

@@ -5,7 +5,9 @@ user manager, delegated user services, `pidfd_open` and a readable
 `/proc/sys/kernel/random/boot_id`. `HostCheck::run` returns a serializable
 report with one actionable result for each prerequisite. Any failed result
 blocks execution. `sluice doctor` prints the report (`--json` for the full
-object, with the engine profiles and the selected release's manifest check).
+object), each engine's executable on PATH and `--version` against its profile
+(probed with HOME in a private scratch directory: no session, no credentials;
+a missing engine is a warning), and the selected release's manifest check.
 
 The delegation check creates a unique `sluice-test-doctor-*.service` through
 argument-safe `systemd-run --user` argv with `Delegate=yes` and

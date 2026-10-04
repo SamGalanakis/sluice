@@ -377,6 +377,15 @@ fn native_factory(engine: &str) {
         )
         .unwrap();
     });
+    // .env secrets reach the engine's pane: the project's over the home's.
+    std::fs::write(
+        g.home.join(".env"),
+        "DOTENV_AGENT=home\nDOTENV_AGENT_HOME=home\n",
+    )
+    .unwrap();
+    let project_dir = g.home.join("projects").join(g.project.to_string());
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(project_dir.join(".env"), "DOTENV_AGENT=project\n").unwrap();
     let cwd = g.temp.path().join("work");
     let baseline = String::from_utf8(
         Command::new("/usr/bin/git")
@@ -515,6 +524,8 @@ fn native_factory(engine: &str) {
         ] {
             assert_eq!(env[key], value, "{engine}: {key}");
         }
+        assert_eq!(env["DOTENV_AGENT"], "project", "{engine}");
+        assert_eq!(env["DOTENV_AGENT_HOME"], "home", "{engine}");
         assert_eq!(env["callback_capability"], true);
         assert_eq!(env["unrelated"], false);
         assert_eq!(env["contaminated"], false);
@@ -580,7 +591,7 @@ fn native_factory(engine: &str) {
 }
 const NATIVE_ENV_PROBE: &str = r#"import json, os, pathlib, subprocess
 run = pathlib.Path(os.environ['SLUICE_RUN_DIR'])
-keys = ['HOME','PATH','XDG_CONFIG_HOME','XDG_DATA_HOME','XDG_CACHE_HOME','XDG_STATE_HOME','LANG','TERM','SLUICE_HOME','SLUICE_BIN','SLUICE_PROJECT_ID','SLUICE_PROJECT','SLUICE_STEP','SLUICE_RUN_ID','SLUICE_RUN_DIR','SLUICE_PROJECT_DIR','SLUICE_CONTROL_SOCKET','SLUICE_FN_DIR','SLUICE_PREV_RUN','CODEX_HOME','CLAUDE_CONFIG_DIR']
+keys = ['HOME','PATH','XDG_CONFIG_HOME','XDG_DATA_HOME','XDG_CACHE_HOME','XDG_STATE_HOME','LANG','TERM','SLUICE_HOME','SLUICE_BIN','SLUICE_PROJECT_ID','SLUICE_PROJECT','SLUICE_STEP','SLUICE_RUN_ID','SLUICE_RUN_DIR','SLUICE_PROJECT_DIR','SLUICE_CONTROL_SOCKET','SLUICE_FN_DIR','SLUICE_PREV_RUN','CODEX_HOME','CLAUDE_CONFIG_DIR','DOTENV_AGENT','DOTENV_AGENT_HOME']
 snapshot = {key: os.environ.get(key) for key in keys}
 snapshot['callback_capability'] = bool(os.environ.get('SLUICE_RUN_CAPABILITY'))
 snapshot['unrelated'] = 'COMPOSITION_ENV_FIXTURE' in os.environ
@@ -986,3 +997,132 @@ for line in sys.stdin:
             state['error']=None;state['status']='idle';state['turns_completed']=state['turns_started'];state['progress']+=1
     print(json.dumps({'observation':state,'outcome':'acknowledged','error':error,'hook':None}),flush=True)
 "#;
+#[test]
+fn dotenv_secrets_reach_fn_runs_but_never_records_or_logs() {
+    const SECRET: &str = "s3cr3t-dotenv-value-7f1c";
+    let g = Gate::configured(|g| {
+        std::fs::write(
+            g.home.join(".env"),
+            "# home secrets\nDOTENV_SHARED=home\nDOTENV_HOME_ONLY='from home'\n",
+        )
+        .unwrap();
+        g.env.insert("DOTENV_SHARED".into(), "coordinator".into());
+        g.env.insert("DOTENV_INHERITED".into(), "inherited".into());
+    });
+    let project_dir = g.home.join("projects").join(g.project.to_string());
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join(".env"),
+        format!("export DOTENV_SHARED=project\nDOTENV_TOKEN=\"{SECRET}\"\n"),
+    )
+    .unwrap();
+    g.function(
+        "custom.env",
+        json!({}),
+        json!({"shared":"string","home_only":"string","inherited":"string","token":"string","step":"string"}),
+        r#"from sluice_fn import run
+import hashlib, os
+
+def main(inp, ctx):
+    return {
+        'shared': os.environ['DOTENV_SHARED'],
+        'home_only': os.environ['DOTENV_HOME_ONLY'],
+        'inherited': os.environ['DOTENV_INHERITED'],
+        'token': hashlib.sha256(os.environ['DOTENV_TOKEN'].encode()).hexdigest(),
+        'step': os.environ['SLUICE_STEP'],
+    }
+run(main)
+"#,
+    );
+    g.plan(json!({
+        "python":{"run":"custom.env"},
+        "inline":{"run":"inline.python","in":{"code":{"default":"import hashlib, os\nout = hashlib.sha256(os.environ['DOTENV_TOKEN'].encode()).hexdigest()"}}}
+    }));
+    let _lease = g.lease();
+    let digest = {
+        use std::fmt::Write;
+        let output = Command::new("/usr/bin/python3")
+            .args([
+                "-c",
+                &format!("import hashlib; print(hashlib.sha256(b'{SECRET}').hexdigest())"),
+            ])
+            .output()
+            .unwrap();
+        let mut text = String::new();
+        write!(text, "{}", String::from_utf8(output.stdout).unwrap().trim()).unwrap();
+        text
+    };
+    let python = g.terminal("python");
+    assert_eq!(python["status"], "succeeded", "{python}");
+    let outputs = &python["outputs"];
+    // The project's .env wins over the home's, which wins over the inherited environment.
+    assert_eq!(outputs["shared"], "project");
+    assert_eq!(outputs["home_only"], "from home");
+    assert_eq!(outputs["inherited"], "inherited");
+    assert_eq!(outputs["token"], digest.as_str());
+    // A .env never overrides the run's own SLUICE_* variables.
+    assert_eq!(outputs["step"], "python");
+    let inline = g.terminal("inline");
+    assert_eq!(inline["status"], "succeeded", "{inline}");
+    assert_eq!(inline["outputs"]["value"], digest.as_str());
+    // The value itself is in no record, row, log or run file.
+    let mut checked = 0;
+    let mut scan = vec![g.home.clone()];
+    while let Some(path) = scan.pop() {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(&path).unwrap().flatten() {
+                scan.push(entry.path());
+            }
+            continue;
+        }
+        if path.file_name().is_some_and(|n| n == ".env") || !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        assert!(
+            !bytes.windows(SECRET.len()).any(|w| w == SECRET.as_bytes()),
+            "secret leaked into {}",
+            path.display()
+        );
+        checked += 1;
+    }
+    assert!(checked > 3, "scanned {checked} files");
+}
+#[test]
+fn owner_question_runs_the_configured_notify_command_once() {
+    let g = Gate::configured(|g| {
+        let out = g.home.join("notified.jsonl");
+        std::fs::write(
+            g.home.join("config.json"),
+            json!({"fn_dirs":[],"notify":{"command":["/bin/sh","-c","/usr/bin/cat >> \"$1\" && echo >> \"$1\"","notify",out],"timeout_s":10}}).to_string(),
+        )
+        .unwrap();
+    });
+    let CommandReply::Posted{id}=g.rpc(json!({"command":"message_post","args":{"project":g.selector(),"body":"Merge the release branch?","title":"Release","to":"owner","needs_reply":true,"from":"orchestrator","author":"test"}})) else {panic!("post")};
+    g.rpc(json!({"command":"message_post","args":{"project":g.selector(),"body":"just a note","to":"owner","needs_reply":false,"from":"orchestrator","author":"test"}}));
+    let read = |g: &Gate| -> Vec<Value> {
+        std::fs::read_to_string(g.home.join("notified.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    };
+    // No scheduler lease is held: notification does not wait for one.
+    g.wait(|g| !read(g).is_empty());
+    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
+    g.wait(|_| {
+        db.query_row(
+            "SELECT outcome FROM notification_attempts WHERE message_id=?1",
+            [id.0],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap()
+            == "dispatched"
+    });
+    let sent = read(&g);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["id"], id.0);
+    assert_eq!(sent[0]["title"], "Release");
+    assert_eq!(sent[0]["project"], "compose");
+    assert_eq!(sent[0]["project_id"], json!(g.project));
+}

@@ -459,6 +459,30 @@ async fn registry_changed<H: ExecutionHost>(
     Ok(())
 }
 
+/// The full tick's upkeep, read from config.json each time: the "nobody reading" owner
+/// question once `unread_alert_min` is set, then each log trimmed to 90% of `log_max` once it
+/// holds more.
+pub async fn upkeep(
+    writer: &sluice_store::Writer,
+    home: &std::path::Path,
+    projects: Vec<ProjectId>,
+) -> Result<(), PublicError> {
+    let config = crate::config::HomeConfig::load(home);
+    if let Some(minutes) = config.unread_alert_min {
+        crate::watch::unread_alerts(writer, minutes).await?;
+    }
+    let (most, keep) = (config.log_max, config.log_keep());
+    writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            sluice_store::records::trim_to(tx, None, most, keep)?;
+            for project in &projects {
+                sluice_store::records::trim_to(tx, Some(*project), most, keep)?;
+            }
+            Ok(())
+        })
+        .await
+}
+
 /// Durable versions recover coalesced notifications; timers recover dropped wakes.
 pub async fn run<H: ExecutionHost>(
     broker: Coordinator<H>,
@@ -477,7 +501,16 @@ pub async fn run<H: ExecutionHost>(
     let mut full = tokio::time::interval(FULL_INTERVAL);
     let mut capacity = tokio::time::interval(CAPACITY_INTERVAL);
     let mut dirty = BTreeSet::new();
+    let mut notifier = crate::notify::Notifier::new(
+        broker.home().to_owned(),
+        broker.writer().clone(),
+        broker.reads().clone(),
+    );
     loop {
+        // Owner notifications go out whether or not anything holds the scheduler lease.
+        if let Err(error) = notifier.tick().await {
+            tracing::warn!(%error, "owner notification deferred");
+        }
         {
             let current = broker.project_versions().await?;
             for (project, version) in &current {
@@ -509,14 +542,7 @@ pub async fn run<H: ExecutionHost>(
                 let projects = broker.projects().await?;
                 dirty.extend(projects.iter().copied());
                 broker.adopt().await?;
-                crate::watch::unread_alerts(broker.writer()).await?;
-                broker.writer().write(RetrySafety::Idempotent, move |tx| {
-                    sluice_store::records::trim_records(tx, None)?;
-                    for project in &projects {
-                        sluice_store::records::trim_records(tx, Some(*project))?;
-                    }
-                    Ok(())
-                }).await?;
+                upkeep(broker.writer(), broker.home(), projects).await?;
                 crate::calls::retain_calls(broker.writer()).await?;
             },
             _=capacity.tick()=>{

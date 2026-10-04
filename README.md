@@ -38,7 +38,7 @@ Put the launcher on your `PATH`:
 ```sh
 export PATH="$HOME/.local/share/sluice/bin:$PATH"
 sluice install status    # the selected release and home, and any fence
-sluice doctor            # host prerequisites and the release manifest
+sluice doctor            # host prerequisites, engine versions and the release manifest
 ```
 
 The launcher runs the selected release with its home. Every command uses `SLUICE_HOME` when it

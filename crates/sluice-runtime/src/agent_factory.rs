@@ -326,6 +326,11 @@ impl AgentFactory for Factory {
         )?;
         let bin = std::env::current_exe().map_err(invalid)?;
         let mut environment = environment::host_environment();
+        // .env secrets go over the host allowlist; the SLUICE_* run variables still win.
+        environment.extend(crate::dotenv::run_environment(
+            &self.home,
+            Some(invocation.project),
+        ));
         for (name, value) in [
             ("SLUICE_HOME", self.home.to_string_lossy().into_owned()),
             ("SLUICE_BIN", bin.to_string_lossy().into_owned()),

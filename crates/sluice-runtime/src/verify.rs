@@ -512,21 +512,8 @@ fn check_env(path: &Path, at: &str, problems: &mut Vec<Problem>) {
             return;
         }
     };
-    for (i, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let valid = line.split_once('=').is_some_and(|(k, _)| {
-            !k.is_empty()
-                && k.bytes().enumerate().all(|(i, b)| {
-                    b == b'_' || b.is_ascii_alphabetic() || (i > 0 && b.is_ascii_digit())
-                })
-        });
-        if !valid {
-            add(problems, format!("{at}:{}", i + 1), "not a KEY=value line");
-        }
+    for line in crate::dotenv::parse(&text).1 {
+        add(problems, format!("{at}:{line}"), "not a KEY=value line");
     }
 }
 

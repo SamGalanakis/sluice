@@ -3,7 +3,8 @@
 When you need a person (a decision, an approval, a value only they know), post a question to
 them. A question is a message addressed `to="owner"` with `needs_reply` true (the default for a
 new thread). The dashboard's Inbox (`/inbox`) shows every open question with a red count in its
-nav; the person answers there, and you read the answering reply.
+nav; the person answers there, and you read the answering reply. When the home's config sets a
+`notify` command, each new open question to `owner` also runs it once (a note never does).
 
 ## Posting and waiting
 - `message_post(project, body, to="owner", title=..., ui=..., input=..., thread=..., from=...)`

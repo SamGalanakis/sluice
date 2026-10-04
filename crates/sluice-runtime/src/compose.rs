@@ -9,6 +9,7 @@ use serde_json::json;
 use sluice_model::{commands::*, error::PublicError, ids::*, rpc::*};
 use sluice_process::socket;
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -185,6 +186,12 @@ impl Dispatcher {
             .map(PathBuf::from)
             .unwrap_or_else(|| bin.parent().unwrap_or(Path::new(".")).join("python"));
         let mut config = PythonConfig::new(helper, bin);
+        // The run's .env secrets layer over the inherited environment (SPEC §5.4).
+        config.environment.extend(
+            crate::dotenv::run_environment(&self.home, Some(invocation.project))
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into())),
+        );
         if let Some(uv) = std::env::var_os("SLUICE_UV_BIN") {
             config.uv = uv.into();
         }
@@ -314,7 +321,13 @@ async fn builtin_once(
     invocation: FnInvocation,
 ) -> Result<JsonMap, PublicError> {
     let name = invocation.name.as_str();
-    let environment = std::env::vars().collect::<Vec<_>>();
+    let mut environment = std::env::vars().collect::<BTreeMap<_, _>>();
+    // .env secrets over the inherited environment, never over the run's own SLUICE_* values.
+    for (key, value) in crate::dotenv::run_environment(&dispatcher.home, Some(invocation.project)) {
+        if !(key.starts_with("SLUICE_") && environment.contains_key(&key)) {
+            environment.insert(key, value);
+        }
+    }
     let context = crate::builtins::BuiltinCtx::new(environment.clone());
     if name.starts_with("core.") {
         return crate::builtins::core::dispatch(name, &invocation.inputs, &context)

@@ -191,7 +191,7 @@ pub async fn load(
 ) -> Result<LogView, PublicError> {
     reads.snapshot(move |sql| {
         if let Some(project) = project { sluice_store::messages::resolve_project(sql, &sluice_model::ids::ProjectSelector::Id(project))?; }
-        let nav = super::load_snapshot(sql, FunctionCatalog::default(), false)?;
+        let nav = super::load_snapshot(sql, FunctionCatalog::default())?;
         // The store owns the closed set of valid event kinds.
         records::read_records(sql, project, &RecordFilter { kinds: query.kinds.clone(), threads: query.threads.clone(), limit: 1, ..Default::default() })?;
         let mut condition = "project_id IS ?".to_owned();

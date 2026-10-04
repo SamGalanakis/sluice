@@ -34,10 +34,12 @@ pub enum Mode {
     Serve {
         #[arg(long)]
         no_runner: bool,
-        #[arg(long, default_value_t = 3065)]
-        port: u16,
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
+        /// Default: config.json's http.port, else 3065.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Default: config.json's http.host, else 127.0.0.1.
+        #[arg(long)]
+        host: Option<String>,
     },
     Install {
         #[command(subcommand)]
@@ -275,7 +277,7 @@ pub fn ensure_home(home: &Path) -> Result<(), PublicError> {
     if !config.exists() {
         let text = json!({
             "fn_dirs": [],
-            "http": {"host": "127.0.0.1", "port": 7420},
+            "http": {"host": "127.0.0.1", "port": 3065},
             "log_max": 10000,
         });
         std::fs::write(&config, format!("{text}\n")).map_err(storage)?;
