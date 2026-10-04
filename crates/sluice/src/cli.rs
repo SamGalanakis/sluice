@@ -731,6 +731,9 @@ async fn tool(home: &Path, name: Option<String>, args: Option<String>) -> Result
         }
         return Ok(());
     };
+    if name == "rpc" {
+        return rpc(home, args).await;
+    }
     if !TOOLS.iter().any(|(tool, _)| *tool == name) {
         return Err(bad_request(format!(
             "unknown tool {name:?} (sluice tool lists them)"
@@ -800,6 +803,29 @@ async fn tool(home: &Path, name: Option<String>, args: Option<String>) -> Result
         &name,
         CommandReply::Data(JsonValue::try_from(data).map_err(storage)?),
     )
+}
+
+/// `sluice tool rpc '<request>'`: one raw coordinator request, its reply printed
+/// unshaped. Host gates and diagnostics drive the coordinator through it with no
+/// argument normalisation or author defaulting.
+async fn rpc(home: &Path, request: Option<String>) -> Result<(), PublicError> {
+    let text = match request {
+        Some(text) => text,
+        None => {
+            let mut text = String::new();
+            std::io::stdin()
+                .read_to_string(&mut text)
+                .map_err(storage)?;
+            text
+        }
+    };
+    let request: CommandRequest =
+        decode_json(text.trim().as_bytes()).map_err(|e| bad_request(format!("request: {e}")))?;
+    let program = std::env::current_exe().map_err(storage)?;
+    let client = ensure_coordinator(home, &program).await?;
+    let reply = client.command(request).await?;
+    println!("{}", serde_json::to_string(&reply).map_err(storage)?);
+    Ok(())
 }
 
 /// A tool result prints pretty JSON (text for docs/plan_view). A result object

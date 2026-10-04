@@ -1449,6 +1449,8 @@ sluice serve [--host H] [--port P] [--no-runner] [--kill-runs]
 sluice loop [--kill-runs]             runner only
 sluice tool                           list the MCP tools with one-line descriptions
 sluice tool <name> '<json args>'      call that tool in-process and print its result
+sluice tool rpc '<request json>'      send one raw coordinator request and print its reply
+                                      unshaped (host gates and diagnostics)
 sluice watch [-p P] [--kinds k1,k2] [--threads a,b] [--since-seq N]
                                       print new log records as JSON lines (§10)
 sluice next [-p P …] [--since-seq N | --cursor FILE] [--me NAME] [--timeout S]
