@@ -1,6 +1,6 @@
 const runtimeUrl = document.querySelector("script[data-datastar-runtime]")?.src;
 const datastar = runtimeUrl ? await import(runtimeUrl) : null;
-// The nav's two menus, the project switcher and the settings cog, are <details>: they open and
+// The nav's two menus, the project switcher and display preferences, are <details>: they open and
 // work without this. This closes them on a click elsewhere or Escape, as a menu does, and makes
 // a setting apply at once, without the menu's Save: the theme (its id as `data-theme` on
 // <html>; until one is picked the attribute is absent, the page follows the OS and the menu

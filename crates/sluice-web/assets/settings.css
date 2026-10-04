@@ -1,4 +1,5 @@
-.project-settings[aria-current] { color:var(--nav-ink); background:color-mix(in srgb,var(--nav-ink) 12%,transparent); }
+.project-settings[aria-current] { color:var(--nav-ink); }
+.project-settings[aria-current]::before { background:color-mix(in srgb,var(--nav-ink) 18%,transparent); }
 .settings-page { min-width:0; }
 .settings-page h1 { overflow-wrap:anywhere; margin-bottom:8px; }
 .settings-page .settings-lead { color:var(--muted-foreground); margin:0 0 28px; }

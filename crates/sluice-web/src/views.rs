@@ -9,6 +9,7 @@ macro_rules! register_pages {
     };
 }
 register_pages! { home, board, inbox, log, project_settings }
+pub mod icons;
 pub mod step;
 pub mod threads;
 

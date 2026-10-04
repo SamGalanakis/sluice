@@ -288,10 +288,13 @@ Every preset keeps these, measured when it is added:
 menu) and a block `[data-theme="<id>"] { color-scheme: light|dark; … }` in `style.css` that sets
 every token above. Then measure it.
 
-**The Shape Carries It Rule.** Every status has its own drawn glyph (dashed ring pending,
-spinning ring running, check succeeded, ring and dot set by hand, circular arrow stale, cross
-failed, ring with two bars paused, dashed ring with a slash skipped, an arrow leaving a box
-external) plus a visually hidden word; colour only repeats what the shape says.
+**The Shape Carries It Rule.** Every status has its own glyph, a Lucide icon at 16px (dashed
+ring `circle-dashed` pending, the turning arc `loader-circle` running, a check in a filled disc
+`circle-check` succeeded, ring and dot `circle-dot` set by hand, circular arrow `rotate-cw`
+stale, a cross in a filled disc `circle-x` failed, ring with two bars `circle-pause` paused,
+ring with a slash `circle-slash` skipped, an arrow leaving a box `square-arrow-out-up-right`
+external) plus a visually hidden word; colour only repeats what the shape says. Succeeded and
+failed fill Lucide's ring with the status colour and cut the mark in the card colour.
 
 ## Typography
 
@@ -312,7 +315,7 @@ meta in muted ink, sentence case. Nothing is uppercase; no kickers or eyebrows.
 ### Named Rules
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at least
 a 24px gutter, 16px at 720px and below). The top nav's content aligns to the same edges (the
-mark on the left edge, the display preferences cog ending on the right), so nav, titles, lists
+mark on the left edge, the display preferences icon ending on the right), so nav, titles, lists
 and cards share one left edge at every width. Nothing makes the page scroll sideways.
 
 **The One Click Rule.** The board is names and states. Everything else (inputs, outputs,
@@ -323,8 +326,8 @@ whole.
 - **One bar** (the band, `nav-bg`, full width with its content on the column, its three
   stripes under it): the brand (the owner's mark, `/static/logo.svg` at 27×26, and the wordmark
   "sluice" as live text; one link to the index, named "sluice: all projects"); the **project
-  switcher**; in a project, the **project settings** cog; the sections; **Inbox**; and the
-  **display preferences** cog at the right edge. Every page links `/static/favicon.svg`, the
+  switcher**; in a project, the **project settings** gear; the sections; **Inbox**; and the
+  **display preferences** sliders at the right edge. Every page links `/static/favicon.svg`, the
   same mark.
 - **Project switcher**: a `<details>` whose summary is the chosen project's name ("All
   projects" when none) and a chevron; its menu lists All projects, then every live project with
@@ -333,12 +336,14 @@ whole.
 - **Sections**: in a project Plan, Inbox, Questions, Log, History, Functions; without one Log
   and Functions (the index is the switcher's "All projects"). The current one is `nav-ink` with
   a bar on the band's bottom edge and `aria-current`; the rest `nav-muted`.
-- **Inbox**: a tray icon, the word "Inbox" and the coral badge with the number of open
+- **Inbox**: the tray (Lucide `inbox`), the word "Inbox" and the coral badge with the number of open
   questions to the owner across every project (none when nothing waits). It always leads to the
   home-wide inbox.
-- **Project settings**: a drawn cog linking `/projects/id/<id>/settings`, shown only in a
-  project.
-- **Display preferences**: a cog opening a `<details>` menu: "Theme", a radio list of the seven
+- **Project settings**: the gear (Lucide `settings`) linking `/projects/id/<id>/settings`,
+  shown only in a project. Its hover and its current state (on the settings page) are the same
+  36px rounded fill as display preferences', its focus ring drawn on that fill.
+- **Display preferences**: horizontal sliders (Lucide `sliders-horizontal`, so it never reads
+  as a second settings gear) opening a `<details>` menu: "Theme", a radio list of the seven
   themes (each its name and a swatch: "Aa" on the theme's canvas cut by its band and stripes,
   a tick on the chosen one), then "Show value types". It is a form posting to `/settings`
   (cookies `sluice_theme`, `sluice_types`); without script its Save button sends it.
@@ -467,6 +472,13 @@ since they are ends, not work.
 - **Tag** (`.tag`): a small fact set apart: 12px text at 500, a strong hairline and the 5px
   corner; gold (`attn`) for "quiet" and "n awaiting reply", muted for a closed or answered
   state.
+- **Icons**: every icon is Lucide (lucide-static 1.52.0, ISC), the published SVG unmodified in
+  `crates/sluice-web/assets/icons/` and inlined by `views::icons::icon`: Lucide's 24-unit grid
+  and 2-unit round stroke, in `currentColor` so it takes its control's ink, hover and focus, and
+  `aria-hidden` (the control carries the name). 20px in the nav (the inbox tray, project
+  settings, display preferences), 16px for status glyphs, chevrons and the theme tick. A new
+  icon is fetched from Lucide at that version, never drawn; the mark and favicon are the
+  owner's, and a project's own icon is the user's.
 - **Tracing**: hovering or focusing a card lights its edges; the other cards lose their border
   and fill and their text turns muted ink.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input
@@ -494,6 +506,7 @@ its facts and its thread link; the Types switch keeps its size on a 44px target.
 - Don't spend coral on anything but the open-question count (and the logo); never draw failure
   in coral or red.
 - Don't restyle or redraw the mark; it is the owner's SVG, served as is.
+- Don't draw an icon by hand; take it from Lucide (see Icons).
 - Don't repeat on the page what another part of it already says.
 - Don't use uppercase labels, kickers or decorative motion; motion is the drawer's slide, the
   running spinner and short fades.
