@@ -116,8 +116,8 @@ installs one commit:
    unfinished run in the home records.
 
 **`scripts/ship [REF] [--dry-run]`** takes a gated branch to a verified live deploy: it refuses a
-dirty tree, rebases onto `origin/main` (re-running `scripts/check` only when main changed a file
-the branch changed, else building), pushes with a bounded retry, deploys `origin/main` to the
+dirty tree, rebases onto `origin/main` (re-running `scripts/check` only when main changed a non-`*.md`
+file the branch changed, else building), pushes with a bounded retry, deploys `origin/main` to the
 selected home, checks that every run live before the deploy is still running or finished with a
 result, that the three units are active and that the dashboard answers, and prints one line.
 

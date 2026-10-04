@@ -40,8 +40,9 @@
   200 on `/` and a project page. It ends with one line: `shipped <sha> <subject> · deploy ok ·
   compat N releases ok · adopted M runs`. `--dry-run` prints each step and changes nothing.
 - Re-test rule: after a rebase, re-run `scripts/check` only when main's new commits changed a
-  file the branch also changed; otherwise a build (`cargo build --workspace --all-targets
-  --locked` into the worktree's `target/`) is enough. A rebase conflict stops the ship: resolve
+  file other than prose (`*.md`) that the branch also changed; otherwise a build (`cargo build
+  --workspace --all-targets --locked`, into cargo's configured target dir) is enough. A re-gate in
+  ship's temporary checkout borrows this checkout's `.venv` and `target/private-tmux`. A rebase conflict stops the ship: resolve
   it, gate again and ship again.
 - `scripts/compat-check [--release DIR]` proves a candidate release (default: the newest under
   the prefix, i.e. the one `scripts/build-release` just built) can serve every release a live

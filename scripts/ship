@@ -91,7 +91,8 @@ try:
         since = gated_upstream or base
         ours = set(git('diff', '--name-only', base, head, cwd=work).split())
         theirs = set(git('diff', '--name-only', since, upstream, cwd=work).split()) if since != upstream else set()
-        overlap = sorted(ours & theirs)
+        # Prose (*.md) cannot change what the tests see, so overlapping docs alone do not re-gate.
+        overlap = sorted(f for f in ours & theirs if not f.endswith('.md'))
         if base != upstream:
             say('rebase %d commit(s) onto origin/main %s (main changed %d file(s) since %s)' % (
                 int(git('rev-list', '--count', base + '..' + head, cwd=work)), upstream[:12], len(theirs), since[:12]))
@@ -103,10 +104,18 @@ try:
                 head = git('rev-parse', 'HEAD', cwd=work)
         if overlap:
             say('main changed %d file(s) this branch also touched (%s): re-running the gate' % (len(overlap), ', '.join(overlap[:5]) + (' ...' if len(overlap) > 5 else '')))
+            if temporary is not None and not dry:
+                # A temporary checkout lacks the per-checkout setup the engine gates use; share
+                # this repository's (AGENTS.md: uv sync and build-private-tmux once per checkout).
+                for setup in ('.venv', 'target/private-tmux'):
+                    source, link = script_repo / setup, work / setup
+                    if source.exists() and not link.exists():
+                        link.parent.mkdir(parents=True, exist_ok=True)
+                        link.symlink_to(source)
             run([work / 'scripts/check'], cwd=work)
         else:
             say('no overlap with main\'s changes: build only')
-            run(['cargo', '--config', 'build.target-dir=%s' % json.dumps(str(work / 'target')), 'build', '--workspace', '--all-targets', '--locked'], cwd=work)
+            run(['cargo', 'build', '--workspace', '--all-targets', '--locked'], cwd=work)
         gated_upstream = upstream
         say('$ git push origin HEAD:refs/heads/main  (%s)' % (head[:12] if not dry else 'the rebased ' + args.ref))
         if dry: break
