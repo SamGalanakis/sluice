@@ -933,6 +933,36 @@ async fn simultaneous_ui_answers_set_input_only_once() {
 }
 
 #[tokio::test]
+async fn acknowledgement_recorded_after_a_cancel_still_claims_the_delivered_answer() {
+    let f = Fixture::new().await;
+    let run = f.run("work", -1, 1, None).await;
+    let q = waiting(f.ask(run, "Title").await);
+    let a = f.post(reply(f.project, q.id, "yes")).await.unwrap();
+    let p = f.project;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            assign_run_range(tx, p, run, 0, None)?;
+            tx.sql().execute(
+                "UPDATE runs SET started_at='now' WHERE run_id=?1",
+                [run.to_string()],
+            )?;
+            advance_cursor(tx, p, run)?;
+            // The run was cancelled after it was handed the answer; its completion
+            // journal records the acknowledgement afterwards.
+            tx.sql().execute(
+                "UPDATE attempts SET cancel_requested=1 WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?1)",
+                [run.to_string()],
+            )?;
+            acknowledge_delivery(tx, p, run, a.id)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let answer = f.question(q.id).await.reply.unwrap();
+    assert_eq!(f.claimed(answer.id).await, Some(run.to_string()));
+}
+
+#[tokio::test]
 async fn delivery_acknowledgement_claims_answer_and_claim_outlives_log_trimming() {
     let f = Fixture::new().await;
     let run = f.run("work", -1, 1, None).await;

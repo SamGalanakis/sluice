@@ -828,6 +828,18 @@ pub fn claim_answer(
     if !info.live {
         return Err(conflict("claiming run has stopped"));
     }
+    claim_attached_answer(tx, project, id, run)
+}
+
+/// The claim behind `claim_answer`, without the liveness check: an acknowledged
+/// delivery proves the run was handed the answer, even when the acknowledgement is
+/// only recorded as the run completes after a cancel.
+fn claim_attached_answer(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    id: MessageId,
+    run: RunId,
+) -> Result<Message> {
     let q = question(tx.sql(), project, id)?;
     if q.state != QuestionState::Answered {
         return Err(conflict("question has no answer"));
@@ -1049,7 +1061,7 @@ pub fn acknowledge_delivery(
         "SELECT q.message_id FROM question_attachments q JOIN messages m ON m.project_id=q.project_id AND m.id=q.message_id WHERE q.project_id=?1 AND q.run_id=?2 AND q.detached_at IS NULL AND m.resolved_by=?3 AND m.closed_at IS NULL",
         params![project.to_string(),run.to_string(),id.0],|r|r.get(0)).optional()?;
     if let Some(question_id) = owns_answer {
-        claim_answer(tx, project, MessageId(question_id), run)?;
+        claim_attached_answer(tx, project, MessageId(question_id), run)?;
     }
     changed(tx, project);
     Ok(())
