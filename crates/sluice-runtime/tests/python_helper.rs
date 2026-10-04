@@ -1,4 +1,6 @@
 //! Real uv, isolated scratch PEP 723 bundles, and minimal framed callback servers.
+#[path = "../../../tests/support/executable.rs"]
+mod executable;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::CommandRequest,
@@ -930,11 +932,12 @@ async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_compl
 
 #[tokio::test]
 async fn pinned_binary_fallback_reads_rpc_json_from_stdin() {
-    use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new();
     let (host,invocation)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    return ctx.tool('status',{})\nrun(main)\n",json!({"called":"boolean"}));
-    std::fs::write(&host.config.bin,"#!/usr/bin/python3\nimport json,sys\nassert sys.argv[1:]==['internal','callback']\nr=json.load(sys.stdin)\nassert r['command']['command']=='tool'\nassert r['run_capability']=='scratch-capability'\njson.dump({'protocol':1,'request_id':r['request_id'],'result':{'status':'ok','value':{'reply':'data','data':{'called':True}}}},sys.stdout)\n").unwrap();
-    std::fs::set_permissions(&host.config.bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    executable::write(
+        &host.config.bin,
+        "#!/usr/bin/python3\nimport json,sys\nassert sys.argv[1:]==['internal','callback']\nr=json.load(sys.stdin)\nassert r['command']['command']=='tool'\nassert r['run_capability']=='scratch-capability'\njson.dump({'protocol':1,'request_id':r['request_id'],'result':{'status':'ok','value':{'reply':'data','data':{'called':True}}}},sys.stdout)\n",
+    );
     assert_eq!(
         value(&execute(&host, &invocation).await.unwrap()),
         json!({"called":true})
@@ -1103,7 +1106,6 @@ run(main)
 
 #[tokio::test]
 async fn rust_checks_submissions_from_the_pinned_binary_callback() {
-    use std::os::unix::fs::PermissionsExt;
     for valid in [false, true] {
         let scratch = Scratch::new();
         let (mut host, invocation) =
@@ -1118,8 +1120,7 @@ async fn rust_checks_submissions_from_the_pinned_binary_callback() {
             "#!/usr/bin/python3\nimport json,sys\nr=json.load(sys.stdin)\nassert r['command']['command']=='submission'\njson.dump({{'protocol':1,'request_id':r['request_id'],'result':{{'status':'ok','value':{{'reply':'data','data':json.loads({:?})}}}}}},sys.stdout)\n",
             submission.to_string()
         );
-        std::fs::write(&host.config.bin, code).unwrap();
-        std::fs::set_permissions(&host.config.bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        executable::write(&host.config.bin, code);
         assert_eq!(execute(&host, &invocation).await.is_ok(), valid);
     }
 }

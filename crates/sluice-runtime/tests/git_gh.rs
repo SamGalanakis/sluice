@@ -3,6 +3,8 @@
 //! nothing touches this repository's own git state, and the fakes mean real GitHub is
 //! never contacted.
 
+#[path = "../../../tests/support/executable.rs"]
+mod executable;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use sluice_model::rpc::JsonMap;
@@ -12,7 +14,6 @@ use sluice_runtime::builtins::{
 };
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -135,8 +136,7 @@ fn fake_bin(tmp: &TempDir, name: &str, body: &str) -> PathBuf {
     let bin = tmp.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let file = bin.join(name);
-    fs::write(&file, body).unwrap();
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+    executable::write(&file, body);
     bin
 }
 

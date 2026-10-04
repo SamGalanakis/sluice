@@ -1,4 +1,6 @@
 //! Composition acceptance uses absolute binaries and private scratch service units.
+#[path = "../../../tests/support/executable.rs"]
+mod executable;
 #[allow(dead_code)]
 #[path = "../../../tests/support/units.rs"]
 mod units;
@@ -11,10 +13,7 @@ use sluice_model::{
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
-    os::unix::{
-        fs::{PermissionsExt, symlink},
-        net::UnixStream,
-    },
+    os::unix::{fs::symlink, net::UnixStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -48,8 +47,7 @@ impl Gate {
             symlink(path, bin.join(name)).unwrap();
         }
         let fake = bin.join("fake-engine");
-        std::fs::write(&fake, FAKE).unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+        executable::write(&fake, FAKE);
         let script = home.join("fake-script.json");
         std::fs::write(&script, b"{}").unwrap();
         let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -368,8 +366,7 @@ fn native_factory(engine: &str) {
             },
             Path::new(env!("CARGO_BIN_EXE_fixture")).display()
         );
-        std::fs::write(&executable, script).unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        executable::write(&executable, script);
         g.env.insert(
             format!("SLUICE_{}_BIN", engine.to_uppercase()),
             executable.to_string_lossy().into_owned(),
@@ -854,7 +851,9 @@ run(main)
 fn compiled_builtin_retries_transient_within_one_reserved_run() {
     let g = Gate::new();
     let fake = g.temp.path().join("bin/gh");
-    std::fs::write(&fake, r#"#!/usr/bin/python3
+    executable::write(
+        &fake,
+        r#"#!/usr/bin/python3
 import os, pathlib, sys, json
 assert os.environ['COMPOSITION_ENV_FIXTURE'] == 'frozen-launch'
 p = pathlib.Path(os.environ['SLUICE_HOME']) / 'gh-ran'
@@ -862,8 +861,8 @@ n = int(p.read_text()) + 1 if p.exists() else 1
 p.write_text(str(n))
 if n == 1: sys.exit(1)
 print(json.dumps({'state':'OPEN','headRefOid':'fixture-sha','url':'fixture-url','statusCheckRollup':[]}))
-"#).unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+"#,
+    );
     g.plan(json!({"wait":{"run":"gh.pr_wait","in":bindings(json!({"path":g.temp.path(),"pr":"1","until":"checks"}))}}));
     let _lease = g.lease();
     let result = g.terminal("wait");

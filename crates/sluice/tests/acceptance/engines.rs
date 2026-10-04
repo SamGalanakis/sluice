@@ -665,7 +665,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         } else {
             ""
         };
-        private_write(
+        crate::executable::write(
             &binary,
             format!(
                 "#!/bin/sh\nset -e\n{codex_tui}export {env_name}='{}'\ncase \"$1\" in --version|--help) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
@@ -676,7 +676,6 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
             )
             .as_bytes(),
         );
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
         let env = BTreeMap::from([
             ("HOME".into(), owner.to_string_lossy().into()),
             (

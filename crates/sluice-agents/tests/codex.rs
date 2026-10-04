@@ -19,7 +19,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 
-#[path = "fixtures/executable.rs"]
+#[path = "../../../tests/support/executable.rs"]
 mod executable;
 
 struct Scratch(PathBuf);

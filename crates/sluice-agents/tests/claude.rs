@@ -22,7 +22,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[path = "fixtures/executable.rs"]
+#[path = "../../../tests/support/executable.rs"]
 mod executable;
 
 struct Scratch(PathBuf);
