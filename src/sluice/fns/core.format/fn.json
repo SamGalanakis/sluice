@@ -1,6 +1,6 @@
 {
   "name": "core.format",
-  "doc": "Python str.format: an array fills {0}, {1}...; a record fills {name}. Non-strings are rendered as JSON. Built in: runs inline, no process.",
+  "doc": "Fill a template: {name} from a record, {0}, {1}... from an array ({0} from a single value); {{ and }} are literal braces. Non-strings are rendered as JSON. Attribute or item access, conversions and format specifications are refused. Built in: runs inline, no process.",
   "inputs": {
     "template": "string",
     "values": "Any"

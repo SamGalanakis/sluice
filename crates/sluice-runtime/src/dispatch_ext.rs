@@ -188,12 +188,7 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                 .snapshot(move |sql| {
                     let id = messages::resolve_project(sql, &project)?;
                     let ctx = context(sql, id, &catalog)?;
-                    let state = plans::read_state(sql, id)?;
-                    let name = projects::resolve(sql, &ProjectSelector::Id(id))?.name;
-                    let mut stmt = sql.prepare("SELECT step_id,manual,done,total FROM steps WHERE project_id=?1 ORDER BY position")?;
-                    let metadata = stmt.query_map([id.to_string()], |row| Ok((row.get::<_, String>(0)?, StepViewState { manual: row.get(1)?, done: row.get(2)?, total: row.get(3)? })))?
-                        .map(|row| { let (id, metadata) = row?; Ok((crate::calls::parse_id(id)?, metadata)) }).collect::<sluice_store::Result<IndexMap<StepId, StepViewState>>>()?;
-                    Ok(plan_view(&name, &ctx.plan, &state, format, all, &metadata))
+                    render_plan_view(sql, id, &ctx.plan, format, all)
                 })
                 .await
                 .map_err(public)?,
@@ -675,6 +670,38 @@ struct StepViewState {
     done: i64,
     total: Option<i64>,
 }
+/// `plan_view`'s Mermaid (`flowchart TD`) or HTML page for a project's compiled plan, read in
+/// the caller's snapshot. The board's `?format=mermaid` serves the same text.
+pub fn render_plan_view(
+    sql: &Connection,
+    id: ProjectId,
+    plan: &sluice_model::plan::Plan,
+    format: PlanViewFormat,
+    all: bool,
+) -> sluice_store::Result<String> {
+    let state = plans::read_state(sql, id)?;
+    let name = projects::resolve(sql, &ProjectSelector::Id(id))?.name;
+    let mut stmt = sql.prepare(
+        "SELECT step_id,manual,done,total FROM steps WHERE project_id=?1 ORDER BY position",
+    )?;
+    let metadata = stmt
+        .query_map([id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                StepViewState {
+                    manual: row.get(1)?,
+                    done: row.get(2)?,
+                    total: row.get(3)?,
+                },
+            ))
+        })?
+        .map(|row| {
+            let (id, metadata) = row?;
+            Ok((crate::calls::parse_id(id)?, metadata))
+        })
+        .collect::<sluice_store::Result<IndexMap<StepId, StepViewState>>>()?;
+    Ok(plan_view(&name, plan, &state, format, all, &metadata))
+}
 fn plan_view(
     name: &ProjectName,
     plan: &sluice_model::plan::Plan,
@@ -711,7 +738,7 @@ fn plan_view(
         .enumerate()
         .map(|(i, name)| (name.clone(), format!("i{i}")))
         .collect();
-    let mut diagram = String::from("flowchart LR\n");
+    let mut diagram = String::from("flowchart TD\n");
     let mut boxes = vec![];
     for (name, node) in &inputs {
         diagram.push_str(&format!("  {node}([\"{}\"])\n", label(name)));

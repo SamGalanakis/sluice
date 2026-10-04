@@ -128,7 +128,7 @@ fn relation_forms_and_unit_identity_survive_cross_unit_dependencies() {
     );
 }
 #[test]
-fn mermaid_and_html_escape_values_and_fold_all_skipped_units() {
+fn html_escapes_values_and_folds_all_skipped_units() {
     let (plan, state, project) = fixture();
     let view = ProjectView::new(project, &plan, &state, 1);
     let html = view.body().unwrap();
@@ -138,14 +138,6 @@ fn mermaid_and_html_escape_values_and_fold_all_skipped_units() {
     assert!(html.contains("data-preserve-attr=\"open\""));
     assert!(!html.contains("<script>failure"));
     assert!(html.contains("&lt;script&gt;"));
-    let partial = view.mermaid(false);
-    assert!(!partial.contains("subgraph u6[\"finished\"]"));
-    assert!(partial.contains("done units omitted"));
-    let all = view.mermaid(true);
-    assert!(all.contains("[\"finished\"]"));
-    assert!(all.contains("-.->|?|"));
-    assert!(all.contains("-->|not ok|"));
-    assert!(all.contains("-->|unit:build|"));
     let region = view.region().unwrap();
     assert!(!region.as_str().contains("sluice-drawer"));
     assert!(!region.as_str().contains("data-init"));

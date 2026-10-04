@@ -1,8 +1,9 @@
-/* sluice dashboard: inlined into every page by views.py. The world is the logo's: navy ink on
-   a cream canvas (cream on deep navy in the dark), the logo's blue as the one accent (links,
-   focus, selection) and the colour of running, a named status ramp beside it. Coral is spent
+/* sluice dashboard: linked from every page as /static/style.css. The world is the logo's:
+   navy ink on a cream canvas (cream on deep navy in the dark), the logo's blue as the one
+   accent (links, focus, selection) and the colour of running, a named status ramp beside it. Coral is spent
    once: the open-inbox badge. The colours are a theme's: the settings menu picks one of the
-   presets below (views.THEMES lists them), which the server renders on <html> as data-theme. */
+   presets below (THEMES in src/views.rs lists them), which the server renders on <html> as
+   data-theme. */
 :root {
   --radius: 14px;     /* regions: boxes, lists, items; the mark's own corner at a smaller scale */
   --radius-md: 10px;  /* controls and code */

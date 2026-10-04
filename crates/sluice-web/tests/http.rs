@@ -533,3 +533,32 @@ async fn owner_actions_send_the_displayed_revision_and_author_through_the_socket
     };
     assert_eq!(cancel.expected_rev, Some(sluice_model::ids::Revision(7)));
 }
+#[tokio::test]
+async fn the_board_mermaid_is_the_plan_view_text() {
+    let fixture = Fixture::new().await;
+    let response = fixture
+        .request(
+            "GET",
+            &format!("/projects/id/{}?format=mermaid&all=true", fixture.id),
+            "localhost",
+            None,
+            None,
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    let text = String::from_utf8(
+        to_bytes(response.into_body(), http::MAX_BODY)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(text.starts_with("flowchart TD\n"), "{text}");
+    assert!(text.contains("classDef succeeded"), "{text}");
+    fixture.stop.cancel();
+}

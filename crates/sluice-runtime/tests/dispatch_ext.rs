@@ -384,7 +384,7 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
             .await
             .unwrap(),
     );
-    assert!(mermaid.as_str().unwrap().starts_with("flowchart LR"));
+    assert!(mermaid.as_str().unwrap().starts_with("flowchart TD"));
     assert!(
         mermaid
             .as_str()

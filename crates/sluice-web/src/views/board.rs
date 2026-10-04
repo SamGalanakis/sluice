@@ -345,61 +345,6 @@ impl ProjectView {
         )
         .map_err(render_error)
     }
-    /// Mermaid consumes the same typed relations as the browser. Stable synthetic
-    /// node ids keep user labels out of Mermaid syntax.
-    pub fn mermaid(&self, all: bool) -> String {
-        let mut out = String::from("flowchart TD\n");
-        let mut ids = BTreeMap::new();
-        for unit in &self.units {
-            if unit.done && !all {
-                continue;
-            }
-            let uid = format!("u{}", ids.len());
-            ids.insert(unit.key(), uid.clone());
-            out.push_str(&format!(
-                "  subgraph {uid}[\"{}\"]\n",
-                mermaid_text(unit.id.as_str())
-            ));
-            for step in &unit.steps {
-                let sid = format!("n{}", ids.len());
-                ids.insert(format!("s:{}", step.id), sid.clone());
-                out.push_str(&format!(
-                    "    {sid}[\"{} · {}\"]\n",
-                    mermaid_text(step.id.as_str()),
-                    step.mark
-                ));
-            }
-            out.push_str("  end\n");
-        }
-        for (prefix, fields) in [("i", &self.inputs), ("o", &self.outputs)] {
-            for field in fields {
-                let id = format!("n{}", ids.len());
-                ids.insert(format!("{prefix}:{}", field.name), id.clone());
-                out.push_str(&format!("  {id}([\"{}\"])\n", mermaid_text(&field.name)));
-            }
-        }
-        for edge in &self.relations {
-            if let (Some(a), Some(b)) = (ids.get(&edge.from.key()), ids.get(&edge.to.key())) {
-                out.push_str(&format!(
-                    "  {a} {}|{}| {b}\n",
-                    if edge.tolerant { "-.->" } else { "-->" },
-                    mermaid_text(&edge.label)
-                ));
-            }
-        }
-        let folded = self.units.iter().filter(|u| u.done).count();
-        if !all && folded > 0 {
-            out.push_str(&format!(
-                "  %% {folded} done units omitted; all=true shows them\n"
-            ));
-        }
-        out
-    }
-}
-fn mermaid_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace(['\n', '\r', '|', '<', '>'], " ")
 }
 #[derive(Template)]
 #[template(path = "project.html")]
@@ -639,6 +584,42 @@ pub(crate) fn error_response(e: PublicError) -> Response {
     };
     (code, e.to_string()).into_response()
 }
+/// The board's `?format=mermaid`: the `plan_view` tool's Mermaid for the project.
+async fn plan_mermaid(
+    state: &DashboardState,
+    project: ProjectId,
+    registry: Option<&Registry>,
+    all: bool,
+) -> Result<String, PublicError> {
+    let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
+    let catalog = state.catalog.catalog(Some(project))?;
+    state
+        .reads
+        .snapshot(move |c| {
+            let doc: String = c.query_row(
+                "SELECT doc FROM plans WHERE project_id=?1",
+                [project.to_string()],
+                |r| r.get(0),
+            )?;
+            let plan = match &exact {
+                Some(exact) => Plan::parse_json(doc.as_bytes(), exact),
+                None => Plan::parse_json(doc.as_bytes(), &CatalogSignatures(&catalog)),
+            }
+            .map_err(|e| PublicError::Invalid {
+                message: "stored plan cannot be compiled".into(),
+                errors: e.into_iter().map(|e| e.to_string()).collect(),
+            })?;
+            sluice_runtime::dispatch_ext::render_plan_view(
+                c,
+                project,
+                &plan,
+                sluice_model::commands::PlanViewFormat::Mermaid,
+                all,
+            )
+        })
+        .await
+        .map_err(|e| e.into_public(true))
+}
 pub async fn project_page(
     State(state): State<DashboardState>,
     registry: Option<Extension<Registry>>,
@@ -652,14 +633,24 @@ pub async fn project_page(
                 return error_response(e);
             }
             if query.format.as_deref() == Some("mermaid") {
-                return (
-                    [(
-                        axum::http::header::CONTENT_TYPE,
-                        "text/plain; charset=utf-8",
-                    )],
-                    view.mermaid(query.all.unwrap_or(false)),
+                return match plan_mermaid(
+                    &state,
+                    project,
+                    registry.as_ref().map(|r| &r.0),
+                    query.all.unwrap_or(false),
                 )
-                    .into_response();
+                .await
+                {
+                    Ok(text) => (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "text/plain; charset=utf-8",
+                        )],
+                        text,
+                    )
+                        .into_response(),
+                    Err(e) => error_response(e),
+                };
             }
             match view.render(&shared, &Viewer::from_headers(&headers)) {
                 Ok(html) => Html(html.as_str().to_owned()).into_response(),

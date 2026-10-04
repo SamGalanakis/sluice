@@ -362,8 +362,8 @@ Top down:
    "Archived: listed apart from other projects." when so; then the project's description as
    markdown.
 2. **Board tools**: a GET form, Order (Live first, Plan order) and Show (All, Active,
-   Attention, Done) selects with an Apply button, and a Mermaid link (the board as a Mermaid
-   `flowchart TD` with a subgraph per unit). Live first orders units by attention (a failed or
+   Attention, Done) selects with an Apply button, and a Mermaid link (the plan as `plan_view`
+   draws it: a Mermaid `flowchart TD` with a subgraph per unit). Live first orders units by attention (a failed or
    stale step), running, ready, held, done; Plan order keeps the plan's.
 3. **The board**: the plan inputs as dashed chips, one box per unit, the plan outputs as dashed
    chips. A box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no
