@@ -277,6 +277,105 @@ fn bindings(values: Value) -> Value {
 fn agent(g: &Gate) -> Value {
     json!({"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":g.temp.path(),"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}})
 }
+/// Point `g` at the fake `engine` CLI, run through a wrapper that records its environment
+/// and commits once per internal attempt; `native-fixture.json` is its script.
+fn native_engine(g: &mut Gate, engine: &str) {
+    let root = g.temp.path().to_path_buf();
+    let owner = root.join("owner");
+    for suffix in [
+        ".codex",
+        ".claude",
+        ".config/devin",
+        ".local/share",
+        ".cache",
+        ".local/state",
+    ] {
+        std::fs::create_dir_all(owner.join(suffix)).unwrap();
+    }
+    std::fs::write(owner.join(".codex/config.toml"), "").unwrap();
+    std::fs::write(owner.join(".codex/auth.json"), "fake credential").unwrap();
+    std::fs::write(owner.join(".config/devin/config.json"), "{}").unwrap();
+    let cwd = root.join("work");
+    std::fs::create_dir(&cwd).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "Scratch"],
+        vec!["config", "user.email", "scratch@example.invalid"],
+        vec!["commit", "-q", "--allow-empty", "-m", "Initialize scratch"],
+    ] {
+        assert!(
+            Command::new("/usr/bin/git")
+                .args(args)
+                .current_dir(&cwd)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let bin = root.join("bin");
+    symlink("/usr/bin/stty", bin.join("stty")).unwrap();
+    let path = bin.to_string_lossy().into_owned();
+    // Deliberately contaminate PATH. Engines must restore the explicitly pinned host PATH.
+    g.env
+        .insert("PATH".into(), format!("/missing-virtualenv/bin:{path}"));
+    g.env.insert("SLUICE_HOST_PATH".into(), path);
+    for (key, suffix) in [
+        ("HOME", ""),
+        ("CODEX_HOME", ".codex"),
+        ("CLAUDE_CONFIG_DIR", ".claude"),
+        ("XDG_CONFIG_HOME", ".config"),
+        ("XDG_DATA_HOME", ".local/share"),
+        ("XDG_CACHE_HOME", ".cache"),
+        ("XDG_STATE_HOME", ".local/state"),
+    ] {
+        g.env.insert(
+            key.into(),
+            owner.join(suffix).to_string_lossy().into_owned(),
+        );
+    }
+    g.env.insert("PYTHONHOME".into(), "/missing-python".into());
+    g.env.insert("CLAUDECODE".into(), "parent".into());
+    g.env.insert("SLUICE_BACKOFF".into(), "1".into());
+    g.env.insert("SLUICE_AGENT_POLL_S".into(), "0.02".into());
+    g.env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.1".into());
+    g.env
+        .insert("SLUICE_AGENT_GRACE_MIN".into(), "0.003".into());
+    g.env.insert("LANG".into(), "C.UTF-8".into());
+    g.env.insert("TERM".into(), "xterm-256color".into());
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    g.env.insert(
+        "SLUICE_TMUX_PREFIX".into(),
+        workspace
+            .join("target/private-tmux")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let config = root.join("native-fixture.json");
+    std::fs::write(&config, json!({"prompts":root.join("devin-prompts.jsonl"),"turns":[{"busy_s":0.05,"busy_ms":50,"reply":"first"},{"busy_s":0.05,"busy_ms":50,"reply":"continued"}]}).to_string()).unwrap();
+    g.env.insert(
+        "SLUICE_FAKE_CLAUDE".into(),
+        config.to_string_lossy().into_owned(),
+    );
+    g.env
+        .insert("FAKE_DEVIN".into(), config.to_string_lossy().into_owned());
+    g.env.insert("SLUICE_CODEX_FIXTURE".into(), "tui".into());
+    let executable = bin.join(engine);
+    let script = format!(
+        "#!/bin/sh\nset -e\ncase \"$1\" in --version|--help) exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
+        Path::new(env!("CARGO_BIN_EXE_fixture")).display(),
+        if engine == "codex" {
+            "case \"$1\" in -c) exec /usr/bin/sleep 600 ;; esac"
+        } else {
+            ""
+        },
+        Path::new(env!("CARGO_BIN_EXE_fixture")).display()
+    );
+    executable::write(&executable, script);
+    g.env.insert(
+        format!("SLUICE_{}_BIN", engine.to_uppercase()),
+        executable.to_string_lossy().into_owned(),
+    );
+}
 fn native_factory(engine: &str) {
     use sluice_agents::{
         delivery::DeliveryState,
@@ -284,101 +383,7 @@ fn native_factory(engine: &str) {
         supervisor::{Checkpoint, State},
     };
     let g = Gate::configured(|g| {
-        let root = g.temp.path();
-        let owner = root.join("owner");
-        for suffix in [
-            ".codex",
-            ".claude",
-            ".config/devin",
-            ".local/share",
-            ".cache",
-            ".local/state",
-        ] {
-            std::fs::create_dir_all(owner.join(suffix)).unwrap();
-        }
-        std::fs::write(owner.join(".codex/config.toml"), "").unwrap();
-        std::fs::write(owner.join(".codex/auth.json"), "fake credential").unwrap();
-        std::fs::write(owner.join(".config/devin/config.json"), "{}").unwrap();
-        let cwd = root.join("work");
-        std::fs::create_dir(&cwd).unwrap();
-        for args in [
-            vec!["init", "-q"],
-            vec!["config", "user.name", "Scratch"],
-            vec!["config", "user.email", "scratch@example.invalid"],
-            vec!["commit", "-q", "--allow-empty", "-m", "Initialize scratch"],
-        ] {
-            assert!(
-                Command::new("/usr/bin/git")
-                    .args(args)
-                    .current_dir(&cwd)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-        }
-        let bin = root.join("bin");
-        symlink("/usr/bin/stty", bin.join("stty")).unwrap();
-        let path = bin.to_string_lossy().into_owned();
-        // Deliberately contaminate PATH. Engines must restore the explicitly pinned host PATH.
-        g.env
-            .insert("PATH".into(), format!("/missing-virtualenv/bin:{path}"));
-        g.env.insert("SLUICE_HOST_PATH".into(), path);
-        for (key, suffix) in [
-            ("HOME", ""),
-            ("CODEX_HOME", ".codex"),
-            ("CLAUDE_CONFIG_DIR", ".claude"),
-            ("XDG_CONFIG_HOME", ".config"),
-            ("XDG_DATA_HOME", ".local/share"),
-            ("XDG_CACHE_HOME", ".cache"),
-            ("XDG_STATE_HOME", ".local/state"),
-        ] {
-            g.env.insert(
-                key.into(),
-                owner.join(suffix).to_string_lossy().into_owned(),
-            );
-        }
-        g.env.insert("PYTHONHOME".into(), "/missing-python".into());
-        g.env.insert("CLAUDECODE".into(), "parent".into());
-        g.env.insert("SLUICE_BACKOFF".into(), "1".into());
-        g.env.insert("SLUICE_AGENT_POLL_S".into(), "0.02".into());
-        g.env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.1".into());
-        g.env
-            .insert("SLUICE_AGENT_GRACE_MIN".into(), "0.003".into());
-        g.env.insert("LANG".into(), "C.UTF-8".into());
-        g.env.insert("TERM".into(), "xterm-256color".into());
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        g.env.insert(
-            "SLUICE_TMUX_PREFIX".into(),
-            workspace
-                .join("target/private-tmux")
-                .to_string_lossy()
-                .into_owned(),
-        );
-        let config = root.join("native-fixture.json");
-        std::fs::write(&config, json!({"prompts":root.join("devin-prompts.jsonl"),"turns":[{"busy_s":0.05,"busy_ms":50,"reply":"first"},{"busy_s":0.05,"busy_ms":50,"reply":"continued"}]}).to_string()).unwrap();
-        g.env.insert(
-            "SLUICE_FAKE_CLAUDE".into(),
-            config.to_string_lossy().into_owned(),
-        );
-        g.env
-            .insert("FAKE_DEVIN".into(), config.to_string_lossy().into_owned());
-        g.env.insert("SLUICE_CODEX_FIXTURE".into(), "tui".into());
-        let executable = bin.join(engine);
-        let script = format!(
-            "#!/bin/sh\nset -e\ncase \"$1\" in --version|--help) exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
-            Path::new(env!("CARGO_BIN_EXE_fixture")).display(),
-            if engine == "codex" {
-                "case \"$1\" in -c) exec /usr/bin/sleep 600 ;; esac"
-            } else {
-                ""
-            },
-            Path::new(env!("CARGO_BIN_EXE_fixture")).display()
-        );
-        executable::write(&executable, script);
-        g.env.insert(
-            format!("SLUICE_{}_BIN", engine.to_uppercase()),
-            executable.to_string_lossy().into_owned(),
-        );
+        native_engine(g, engine);
         std::fs::write(
             g.home.join("turn-committed"),
             "inject after a completed turn",
@@ -629,6 +634,54 @@ fn composed_claude_environment_and_stale_shutdown_retry() {
 #[test]
 fn composed_devin_environment_and_resumed_permission_mode() {
     native_factory("devin");
+}
+/// A Python fn that runs a Devin agent (as lash.worker does) gives it the invocation
+/// directory `runs/<run>/invocations/<invocation>`, where the control socket's absolute path
+/// is longer than a Unix socket address holds. Devin's hooks must still reach the guardian,
+/// or its task is never acknowledged ("Devin prompt acceptance unknown"). The fixture, like
+/// the real CLI, carries on past a hook command that fails.
+#[test]
+fn composed_devin_hooks_reach_the_guardian_from_a_python_fn() {
+    let g = Gate::configured(|g| native_engine(g, "devin"));
+    let root = g.temp.path();
+    std::fs::write(
+        root.join("native-fixture.json"),
+        json!({"prompts":root.join("devin-prompts.jsonl"),"hook_failures":"continue","turns":[{"busy_ms":50,"reply":"fixture done"}]}).to_string(),
+    )
+    .unwrap();
+    g.function(
+        "custom.devin",
+        json!({"cwd":"string"}),
+        json!({"session":"string","final":"string"}),
+        r#"from sluice_fn import run
+
+def main(inp, ctx):
+    out = ctx.builtin('agent.run', {'engine':'devin', 'cwd':inp['cwd'], 'spec':'Complete a fake turn'})
+    return {'session': out['session'], 'final': out['final']}
+run(main)
+"#,
+    );
+    g.plan(json!({"work":{"run":"custom.devin","in":bindings(json!({"cwd":root.join("work")}))}}));
+    let _lease = g.lease();
+    let done = g.terminal("work");
+    let invocations = g.home.join("runs").join(g.run("work")).join("invocations");
+    let invocation = std::fs::read_dir(&invocations)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let errors = std::fs::read_to_string(invocation.join("fixture-errors.log")).unwrap_or_default();
+    assert_eq!(done["status"], "succeeded", "{done}\n{errors}");
+    assert_eq!(done["outputs"]["final"], "fixture done", "{done}");
+    // The condition the live home hit: a path no Unix socket address can hold.
+    let socket = invocation.join("control.sock");
+    assert!(socket.as_os_str().len() >= 108, "{}", socket.display());
+    assert!(!errors.contains("hook command exited"), "{errors}");
+    let hooks = std::fs::read_to_string(invocation.join("devin-hooks.jsonl")).unwrap();
+    for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        assert!(hooks.contains(&format!("\"{event}\"")), "{event}: {hooks}");
+    }
 }
 #[test]
 fn builtin_python_tools_sections_and_inline_execute_through_guardian() {

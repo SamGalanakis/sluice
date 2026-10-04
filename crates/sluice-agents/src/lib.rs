@@ -673,8 +673,13 @@ pub fn engine_hook_cli(
         command,
     };
     let body = serde_json::to_vec(&request).map_err(|e| invalid(e.to_string()))?;
-    let mut stream = std::os::unix::net::UnixStream::connect(directory.join("control.sock"))
-        .map_err(|e| invalid(e.to_string()))?;
+    // A composed agent's run directory (`runs/<run>/invocations/<invocation>`) makes the
+    // socket's absolute path longer than the 108 bytes a Unix socket address holds, so
+    // connect relative to the directory, as the private tmux does with its socket. This
+    // process is short-lived and has no other threads to see the working directory change.
+    std::env::set_current_dir(&directory).map_err(|e| invalid(e.to_string()))?;
+    let mut stream = std::os::unix::net::UnixStream::connect("control.sock")
+        .map_err(|e| invalid(format!("cannot reach the run's control socket: {e}")))?;
     let timeout = Some(std::time::Duration::from_secs(5));
     stream
         .set_read_timeout(timeout)

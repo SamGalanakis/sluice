@@ -6,8 +6,13 @@ use std::{
     io::{self, Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
+
+/// The `hook_failures: "continue"` setting: like CLI 3000.11.3, log a hook command that
+/// exits nonzero and carry on, instead of failing the fixture.
+static CONTINUE_PAST_HOOK_FAILURES: AtomicBool = AtomicBool::new(false);
 
 struct Raw(String);
 impl Raw {
@@ -58,8 +63,12 @@ fn hook(config: &Value, event: &str, sid: &str, data: Value) -> io::Result<()> {
                         .take()
                         .unwrap()
                         .write_all(&serde_json::to_vec(&payload)?)?;
-                    if !child.wait()?.success() {
-                        return Err(io::Error::other("fixture hook failed"));
+                    let status = child.wait()?;
+                    if !status.success() {
+                        if !CONTINUE_PAST_HOOK_FAILURES.load(Ordering::Relaxed) {
+                            return Err(io::Error::other("fixture hook failed"));
+                        }
+                        eprintln!("fixture {event} hook command exited {status}; continuing");
                     }
                 }
             }
@@ -151,6 +160,10 @@ pub fn main(args: &[String]) -> io::Result<()> {
         println!("--config --export --model --resume --respect-workspace-trust");
         return Ok(());
     }
+    CONTINUE_PAST_HOOK_FAILURES.store(
+        settings["hook_failures"].as_str() == Some("continue"),
+        Ordering::Relaxed,
+    );
     let config: Value = serde_json::from_slice(&fs::read(
         arg(args, "--config").ok_or_else(|| io::Error::other("missing config"))?,
     )?)?;
