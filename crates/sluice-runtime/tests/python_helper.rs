@@ -930,20 +930,6 @@ async fn helper_rejection_applies_or_conflicts_in_real_store_and_duplicate_compl
     }
 }
 
-#[tokio::test]
-async fn pinned_binary_fallback_reads_rpc_json_from_stdin() {
-    let scratch = Scratch::new();
-    let (host,invocation)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    return ctx.tool('status',{})\nrun(main)\n",json!({"called":"boolean"}));
-    executable::write(
-        &host.config.bin,
-        "#!/usr/bin/python3\nimport json,sys\nassert sys.argv[1:]==['internal','callback']\nr=json.load(sys.stdin)\nassert r['command']['command']=='tool'\nassert r['run_capability']=='scratch-capability'\njson.dump({'protocol':1,'request_id':r['request_id'],'result':{'status':'ok','value':{'reply':'data','data':{'called':True}}}},sys.stdout)\n",
-    );
-    assert_eq!(
-        value(&execute(&host, &invocation).await.unwrap()),
-        json!({"called":true})
-    );
-}
-
 struct OwnedChildGuard(sluice_process::identity::OwnedProcess);
 impl Drop for OwnedChildGuard {
     fn drop(&mut self) {
@@ -1102,25 +1088,4 @@ run(main)
             .unwrap()
             .contains("secret prompt")
     );
-}
-
-#[tokio::test]
-async fn rust_checks_submissions_from_the_pinned_binary_callback() {
-    for valid in [false, true] {
-        let scratch = Scratch::new();
-        let (mut host, invocation) =
-            scratch.host("print('{\"ok\":true,\"outputs\":{}}')\n", json!({}));
-        host.context.outputs = map(json!({"summary":"string"}));
-        let submission = if valid {
-            json!({"summary":"submitted"})
-        } else {
-            json!({"summary":5})
-        };
-        let code = format!(
-            "#!/usr/bin/python3\nimport json,sys\nr=json.load(sys.stdin)\nassert r['command']['command']=='submission'\njson.dump({{'protocol':1,'request_id':r['request_id'],'result':{{'status':'ok','value':{{'reply':'data','data':json.loads({:?})}}}}}},sys.stdout)\n",
-            submission.to_string()
-        );
-        executable::write(&host.config.bin, code);
-        assert_eq!(execute(&host, &invocation).await.is_ok(), valid);
-    }
 }

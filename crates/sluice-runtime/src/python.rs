@@ -341,7 +341,6 @@ impl PythonHost {
             serde_json::json!(invocation.invocation),
         );
         fields.insert("fn_dir".into(), serde_json::json!(self.bundle.bundle_dir));
-        fields.insert("bin".into(), serde_json::json!(self.config.bin));
         let envelope = serde_json::to_vec(&serde_json::json!({"protocol": PROTOCOL_VERSION, "inputs": invocation.inputs, "context": context}))
             .map_err(|e| PythonError::Protocol(tail(&e.to_string())))?;
         let _: serde_json::Value = decode_json(&envelope)?;
@@ -383,23 +382,17 @@ impl PythonHost {
             }
         }
         validate_outputs(&schemas, &returned, false)?;
-        let mut merged = if self.context.control_socket.is_some()
-            || (!self.context.outputs.0.is_empty() && self.config.bin.is_file())
-        {
+        let mut merged = if let Some(path) = &self.context.control_socket {
             let command = CommandRequest::Submission {
                 run: invocation.run,
             };
-            let reply = if let Some(path) = &self.context.control_socket {
-                runtime_callback(
-                    path,
-                    self.context.run_capability.clone(),
-                    command,
-                    &self.cancellation,
-                )
-                .await?
-            } else {
-                binary_callback(&self.config, &self.context, command, &self.cancellation).await?
-            };
+            let reply = runtime_callback(
+                path,
+                self.context.run_capability.clone(),
+                command,
+                &self.cancellation,
+            )
+            .await?;
             match reply {
                 CommandReply::Data(value) => decode_json::<JsonMap>(
                     &serde_json::to_vec(value.as_value()).expect("JSON value"),
@@ -683,49 +676,5 @@ async fn runtime_callback(
             if reply.protocol != PROTOCOL_VERSION || reply.request_id != request_id { return Err(PythonError::Protocol("callback identity mismatch".into())); }
             match reply.result { RpcResult::Ok(reply) => Ok(*reply), RpcResult::Error(error) => Err(error.into()) }
         } => result,
-    }
-}
-
-async fn binary_callback(
-    config: &PythonConfig,
-    context: &PythonContext,
-    command: CommandRequest,
-    cancellation: &CancellationToken,
-) -> Result<CommandReply, PythonError> {
-    let request_id = RequestId(sluice_model::ids::InvocationId::new().to_string());
-    let request = RpcRequest {
-        protocol: PROTOCOL_VERSION,
-        request_id: request_id.clone(),
-        run_capability: context.run_capability.clone(),
-        command,
-    };
-    let raw = serde_json::to_vec(&request).expect("RPC request");
-    let _: RpcRequest = decode_json(&raw)?;
-    let mut command = Command::new(&config.bin);
-    command
-        .args(["internal", "callback"])
-        .env_clear()
-        .envs(&config.environment);
-    let result = run_command(
-        command,
-        raw,
-        &context.run_dir.join("callback-stderr.log"),
-        cancellation,
-        false,
-    )
-    .await?;
-    if !result.status.success() {
-        return Err(PythonError::Exit(tail(&format!(
-            "callback exited {}: {}",
-            result.status, result.stderr_tail
-        ))));
-    }
-    let reply: RpcReply = decode_json(&result.stdout)?;
-    if reply.protocol != PROTOCOL_VERSION || reply.request_id != request_id {
-        return Err(PythonError::Protocol("callback identity mismatch".into()));
-    }
-    match reply.result {
-        RpcResult::Ok(reply) => Ok(*reply),
-        RpcResult::Error(error) => Err(error.into()),
     }
 }

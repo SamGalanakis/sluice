@@ -302,7 +302,7 @@ runs in the run's payload cgroup, in the fn's published directory, with:
   never logged or recorded.
 - stdin: one JSON envelope `{"protocol": 1, "inputs": {...}, "context": {...}}`. `context`
   holds `home`, `run_dir`, `project_dir`, `project`, `project_id`, `step`, `run_id`,
-  `attempt_id`, `invocation_id`, `fn_dir`, `bin`, `prev_run`, `extra_inputs` (an open fn's
+  `attempt_id`, `invocation_id`, `fn_dir`, `prev_run`, `extra_inputs` (an open fn's
   step: `{name: {"type"}}`), `outputs` (the outputs the step declares: `{name: {"type",
   "doc"}}`), `returns`, `control_socket` and `run_capability`.
 - stdout: exactly one JSON document, `{"ok": true, "outputs": {...}}` or `{"ok": false,

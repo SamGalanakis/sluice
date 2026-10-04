@@ -121,7 +121,6 @@ class Context:
         self.attempt = 1
         self._endpoint = data.get("control_socket")
         self._capability = data.get("run_capability")
-        self._bin = data.get("bin") or os.environ.get("SLUICE_BIN")
         self._cancel = threading.Event()
         self._action = None
 
@@ -160,25 +159,8 @@ class Context:
                 if size > MAX_BYTES:
                     raise ValueError("callback frame exceeds 16 MiB")
                 reply = _loads(read_exact(size))
-        elif self._bin:
-            # Internal Rust CLI mode consumes/produces an unframed RPC JSON document.
-            with subprocess.Popen([self._bin, "internal", "callback"], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=sys.stderr,
-                                  env=child_env()) as process:
-                feeder = threading.Thread(target=lambda: _feed(process.stdin, raw), daemon=True)
-                feeder.start()
-                answer = process.stdout.read(MAX_BYTES + 1)
-                if len(answer) > MAX_BYTES:
-                    process.kill()
-                    process.wait()
-                    raise ValueError("callback result exceeds 16 MiB")
-                code = process.wait()
-                feeder.join()
-                if code:
-                    raise RuntimeError(f"callback command exited {code}")
-                reply = _loads(answer)
         else:
-            raise RuntimeError("run has no control socket or pinned SLUICE_BIN")
+            raise RuntimeError("run has no control socket")
         if type(reply.get("protocol")) is not int or reply["protocol"] != 1 or reply.get("request_id") != request_id:
             raise ValueError("callback reply identity mismatch")
         result = reply["result"]

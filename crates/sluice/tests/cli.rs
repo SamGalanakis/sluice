@@ -767,7 +767,9 @@ fn mcp_mode_serves_the_tools_over_stdio() {
             }
         }
     });
-    let mut send = |message: Value| writeln!(input, "{message}").unwrap();
+    let send = |input: &mut std::process::ChildStdin, message: Value| {
+        writeln!(input, "{message}").unwrap();
+    };
     let reply = |id: u64| loop {
         let message = received
             .recv_timeout(std::time::Duration::from_secs(30))
@@ -777,6 +779,7 @@ fn mcp_mode_serves_the_tools_over_stdio() {
         }
     };
     send(
+        &mut input,
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
         "protocolVersion":"2025-06-18","capabilities":{},
         "clientInfo":{"name":"stdio-test","version":"0"}}}),
@@ -784,8 +787,14 @@ fn mcp_mode_serves_the_tools_over_stdio() {
     let init = reply(1);
     assert_eq!(init["result"]["serverInfo"]["name"], "sluice", "{init}");
     assert!(init["result"]["instructions"].is_string());
-    send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
-    send(json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
+    send(
+        &mut input,
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+    );
+    send(
+        &mut input,
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    );
     let listed = reply(2);
     let names: Vec<&str> = listed["result"]["tools"]
         .as_array()
@@ -797,6 +806,7 @@ fn mcp_mode_serves_the_tools_over_stdio() {
         assert!(names.contains(&name), "{name} missing from {names:?}");
     }
     send(
+        &mut input,
         json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
         "name":"project_create","arguments":{"name":"demo"}}}),
     );
@@ -806,6 +816,7 @@ fn mcp_mode_serves_the_tools_over_stdio() {
         "{created}"
     );
     send(
+        &mut input,
         json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{
         "name":"projects_list","arguments":{}}}),
     );
@@ -814,7 +825,6 @@ fn mcp_mode_serves_the_tools_over_stdio() {
         listed["result"]["structuredContent"]["result"][0]["name"], "demo",
         "{listed}"
     );
-    drop(send);
     drop(input);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
