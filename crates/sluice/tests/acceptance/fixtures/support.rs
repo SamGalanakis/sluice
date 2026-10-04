@@ -47,6 +47,17 @@ impl Drop for Scratch {
                 }
             }
             eprintln!("p5-05 failure evidence: {}", evidence.display());
+            // Optionally retain the whole scratch tree; symlinks are copied as links.
+            if let Some(keep) = std::env::var_os("SLUICE_KEEP_FAILED_SCRATCH") {
+                let keep = PathBuf::from(keep).join(self.0.file_name().unwrap());
+                let _ = fs::create_dir_all(keep.parent().unwrap());
+                let _ = Command::new("/usr/bin/cp")
+                    .args(["-a", "--no-dereference", "--"])
+                    .arg(&self.0)
+                    .arg(&keep)
+                    .output();
+                eprintln!("retained failed scratch: {}", keep.display());
+            }
         }
         let _ = fs::remove_dir_all(&self.0);
     }
