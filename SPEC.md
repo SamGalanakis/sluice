@@ -834,8 +834,8 @@ else `step:<SLUICE_STEP>` when set; else the MCP client's name; else `mcp` (MCP)
 
 ### 12.4 Tool reference
 
-Edit tools share `rev?` (`plan_patch`: required), `dry_run=false`, `reason=""` and `author?`
-and return the edit result (§6.10) or, with `dry_run`, the preview. Selection tools take
+Edit tools share `rev?`, `dry_run=false`, `reason=""` and `author?` (`plan_patch` requires
+`rev` and `reason`) and return the edit result (§6.10) or, with `dry_run`, the preview. Selection tools take
 `steps?` and/or `tags?` (a `unit:` tag selects the unit); naming neither is `bad_request`, an
 unknown step `not_found`.
 
