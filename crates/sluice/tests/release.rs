@@ -261,6 +261,15 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         serde_json::to_vec(&json!({"coordinator":{"pid":broker_pid,"start":start}})).unwrap(),
     )
     .unwrap();
+    // Put the pinned release beyond the last three before the next deploy.
+    for i in 0..4 {
+        std::fs::create_dir(
+            prefix
+                .join("releases")
+                .join(format!("retention-fixture-{i}")),
+        )
+        .unwrap();
+    }
     // Commit an identical tree in an isolated repository with a new commit id.
     let source = gate.root.path().join("source");
     assert!(
@@ -317,6 +326,10 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         release.join("bin/sluice")
     );
     assert!(release.exists());
+    assert!(!prefix.join("releases/retention-fixture-0").exists());
+    assert!(!prefix.join("releases/retention-fixture-1").exists());
+    assert!(prefix.join("releases/retention-fixture-2").exists());
+    assert!(prefix.join("releases/retention-fixture-3").exists());
     assert!(selected.release_path.exists());
     assert!(
         gate.cli(&["install", "fence", "completion during maintenance"])
