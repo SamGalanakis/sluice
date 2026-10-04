@@ -1347,6 +1347,11 @@ resolved author), and
 | `inbox_answer` | `project, id, answer, author?` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
 | `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
 
+**Addressing a post.** A post without `to` goes to the sender of the message it replies to, or,
+when it is not a reply and its thread is `step-<id>` naming a step in the current plan (and it is
+not from that step), to that step, so the step's runs are given it (§6); otherwise `to` stays
+unset.
+
 **The units view.** `status(project, view="units")` answers "what is running, blocked or
 failed, and for how long" in one call: `{project, rev, paused, resources?, units: [{unit, state,
 age, engine, steps, blocked, last, line}], done_units?}` (`resources` as in the steps view, here

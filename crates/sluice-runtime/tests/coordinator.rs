@@ -217,6 +217,84 @@ async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once() {
         .is_err()
     );
 }
+async fn post(b: &Coordinator<Fake>, p: ProjectId, args: Value) -> MessageId {
+    let mut args = args;
+    args["project"] = json!({"kind":"id","value":p});
+    let CommandReply::Posted { id } = b
+        .command(request(json!({"command":"message_post","args":args})))
+        .await
+        .unwrap()
+    else {
+        panic!("posted")
+    };
+    id
+}
+#[tokio::test]
+async fn a_root_post_on_a_step_thread_is_addressed_to_that_step() {
+    let (_home, b, f, p) = setup().await;
+    let steered = post(
+        &b,
+        p,
+        json!({"body":"steer","thread":"step-work","from":"orchestrator"}),
+    )
+    .await;
+    let explicit = post(&b, p, json!({"body":"fyi","thread":"step-work","from":"orchestrator","to":"owner","needs_reply":false})).await;
+    let reply = post(
+        &b,
+        p,
+        json!({"body":"answer","reply_to":steered.0,"from":"owner","needs_reply":false}),
+    )
+    .await;
+    let missing = post(
+        &b,
+        p,
+        json!({"body":"lost","thread":"step-nosuch","from":"orchestrator"}),
+    )
+    .await;
+    let own = post(
+        &b,
+        p,
+        json!({"body":"note","thread":"step-work","from":"work","needs_reply":false}),
+    )
+    .await;
+    let to = |id: MessageId| {
+        let b = &b;
+        async move {
+            b.reads()
+                .snapshot(move |sql| {
+                    Ok(sql.query_row(
+                        "SELECT \"to\" FROM messages WHERE project_id=?1 AND id=?2",
+                        (p.to_string(), id.0),
+                        |r| r.get::<_, Option<String>>(0),
+                    )?)
+                })
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(to(steered).await.as_deref(), Some("work"));
+    assert_eq!(to(explicit).await.as_deref(), Some("owner"));
+    assert_eq!(to(reply).await.as_deref(), Some("orchestrator"));
+    assert_eq!(to(missing).await, None);
+    assert_eq!(to(own).await, None);
+    b.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&b, p, "s").await.unwrap();
+    let l = f.0.lock().unwrap()[0].clone();
+    assert_eq!(l.assigned.through, steered);
+    let run = l.identity.run;
+    let assigned = b
+        .reads()
+        .snapshot(move |sql| {
+            let mut q = sql.prepare(
+                "SELECT message_id FROM message_deliveries WHERE run_id=?1 ORDER BY message_id",
+            )?;
+            Ok(q.query_map([run.to_string()], |r| r.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(assigned, vec![steered.0]);
+}
 #[tokio::test]
 async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedback() {
     let (_home, b, f, p) = setup().await;

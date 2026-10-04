@@ -201,7 +201,9 @@ fn changed(tx: &mut WriteTransaction<'_>, project: ProjectId) {
 
 /// Posting and its record, first-answer resolution, optional plan input and notify
 /// reservation all commit together. Root messages default to questions; replies
-/// default to notes. Propagate errors out of Writer::write.
+/// default to notes. Replies default `to` to the parent's sender; a root post on a
+/// current step's `step-<id>` thread defaults it to that step. Propagate errors out
+/// of Writer::write.
 pub fn message_post(
     tx: &mut WriteTransaction<'_>,
     post: MessagePost,
@@ -303,21 +305,27 @@ pub fn message_post(
             },
         )?;
     }
+    let thread = parent
+        .as_ref()
+        .map(|p| p.thread.clone())
+        .or(post.thread)
+        .or_else(|| {
+            posting_run
+                .as_ref()
+                .and_then(|r| r.step.as_ref())
+                .map(|step| format!("step-{step}"))
+        })
+        .unwrap_or_default();
+    let to = match (post.to, &parent) {
+        (Some(to), _) => Some(to),
+        (None, Some(parent)) => Some(parent.from.clone()),
+        (None, None) => thread_step(tx.sql(), project, &thread, &from, posting_run.as_ref())?,
+    };
     let mut msg = Message {
         id: MessageId(0),
-        thread: parent
-            .as_ref()
-            .map(|p| p.thread.clone())
-            .or(post.thread)
-            .or_else(|| {
-                posting_run
-                    .as_ref()
-                    .and_then(|r| r.step.as_ref())
-                    .map(|step| format!("step-{step}"))
-            })
-            .unwrap_or_default(),
+        thread,
         from,
-        to: post.to.or_else(|| parent.as_ref().map(|p| p.from.clone())),
+        to,
         title: post.title,
         body: post.body,
         needs_reply,
@@ -381,6 +389,29 @@ pub fn message_post(
     }
     changed(tx, project);
     Ok(msg)
+}
+
+/// The step a root post without `to` addresses: the current plan step its `step-<id>`
+/// thread names, unless the post comes from that step itself.
+fn thread_step(
+    sql: &Connection,
+    project: ProjectId,
+    thread: &str,
+    from: &str,
+    posting_run: Option<&RunInfo>,
+) -> Result<Option<String>> {
+    let Some(step) = thread.strip_prefix("step-") else {
+        return Ok(None);
+    };
+    if step == from || posting_run.is_some_and(|r| r.step.as_deref() == Some(step)) {
+        return Ok(None);
+    }
+    let exists: bool = sql.query_row(
+        "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+        params![project.to_string(), step],
+        |r| r.get(0),
+    )?;
+    Ok(exists.then(|| step.to_owned()))
 }
 
 #[derive(Debug)]

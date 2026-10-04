@@ -64,7 +64,8 @@ asked through a thread: when the orchestrator needs one, it posts to the inbox
 
 - To steer a running step, post on its thread with `to` set to the step id:
   `thread_post(project="myproj", thread="step-work", to="work", from="orchestrator",
-  body="skip the Windows build")`.
+  body="skip the Windows build")`. A post on `step-<id>` without `to` (not a
+  reply) is addressed to that step when it is in the current plan.
 - To read what the step asks back, watch the same thread:
   `log_wait(project="myproj", since_seq=<last>, threads=["step-work"], wake="questions")`,
   or wait on everything you act on with `next(projects, since_seq)`: questions and notes come
