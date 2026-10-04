@@ -92,21 +92,34 @@ tmux (built once by `scripts/build-private-tmux` and cached under `<prefix>/.bui
 release id must have identical metadata), compiles the launcher into `<prefix>/bin/sluice` and
 prints the release path. It refuses a prefix on `PATH`, `/`, or `~/.local/bin`.
 
-**`scripts/deploy [REF] [--prefix DIR]`** (REF defaults to `origin/main`) installs one commit:
+**`scripts/deploy [REF] [--prefix DIR] [--skip-compat REASON]`** (REF defaults to `origin/main`)
+installs one commit:
 
 1. `git archive` the commit into a temporary source tree and run `build-release` there;
-2. `install fence "deploy <sha>"`;
-3. stop the services recorded in `services.json` and the home's auto-started coordinator unit;
-4. `install select <release> <home>`;
-5. start three transient user units, `sluice-<sha16(install dir)>-coordinator`
+2. `scripts/compat-check` the new release: on a scratch copy of the home's database, with its
+   coordinator cut off from systemd, every release an unfinished run is pinned to (plus the
+   selected one and the candidate) runs `log_read`, `status`, `say`, a stale `step_submit` and
+   `step_context`; a storage or schema error, a crash, a timeout or a submit not refused as
+   stale stops the deploy unless `--skip-compat` gives a reason. Each deploy's outcome and any
+   skip reason are appended to `<install>/deploy.log`;
+3. `install fence "deploy <sha>"`;
+4. stop the services recorded in `services.json` and the home's auto-started coordinator unit;
+5. `install select <release> <home>`;
+6. start three transient user units, `sluice-<sha16(install dir)>-coordinator`
    (`coordinator --maintenance`), `-serve` (`serve --no-runner --port 3065`, or
    `SLUICE_DEPLOY_PORT`) and `-loop` (`loop`), each with `SLUICE_HOME`, `SLUICE_INSTALL_DIR`,
    `PATH` and `HOME` set, recording them in `services.json`; after the coordinator it waits
    until the coordinator is ready to serve its socket;
-6. check that every unit is active and run `sluice doctor --json`;
-7. `install unfence`;
-8. prune releases: keep the newest three plus every release a live process runs from or an
+7. check that every unit is active and run `sluice doctor --json`;
+8. `install unfence`;
+9. prune releases: keep the newest three plus every release a live process runs from or an
    unfinished run in the home records.
+
+**`scripts/ship [REF] [--dry-run]`** takes a gated branch to a verified live deploy: it refuses a
+dirty tree, rebases onto `origin/main` (re-running `scripts/check` only when main changed a file
+the branch changed, else building), pushes with a bounded retry, deploys `origin/main` to the
+selected home, checks that every run live before the deploy is still running or finished with a
+result, that the three units are active and that the dashboard answers, and prints one line.
 
 Any failure after the fence leaves the installation fenced and says so. Running steps survive a
 deploy: each run's guardian stays pinned to its own release, and the new coordinator adopts it
