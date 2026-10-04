@@ -5,6 +5,7 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
         let Mode::Coordinator { maintenance } = mode else {
             unreachable!()
         };
+        sluice_runtime::compose::install_tool_decoder(sluice_web::mcp::decode_tool);
         sluice_runtime::client::run_home_maintenance(home, false, maintenance).await
     })
 }

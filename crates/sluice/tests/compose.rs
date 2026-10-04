@@ -1126,3 +1126,56 @@ fn owner_question_runs_the_configured_notify_command_once() {
     assert_eq!(sent[0]["project"], "compose");
     assert_eq!(sent[0]["project_id"], json!(g.project));
 }
+
+/// `ctx.tool` takes the flat arguments MCP takes and returns the plain result MCP returns,
+/// authored as the step.
+#[test]
+fn python_ctx_tool_takes_flat_mcp_arguments_and_returns_plain_results() {
+    let g = Gate::new();
+    g.function(
+        "custom.tools",
+        json!({}),
+        json!({"done":"boolean"}),
+        r#"from sluice_fn import run, CallbackError
+
+def main(inp, ctx):
+    status = ctx.tool('status', {'steps': 'later'})
+    assert list(status['steps']) == ['later'] and 'reply' not in status, status
+    plan = ctx.tool('plan_get', {})
+    assert 'later' in plan['plan']['steps'], plan
+    paused = ctx.tool('step_pause', {'steps': 'later', 'reason': 'hold'})
+    assert paused['rev'] == plan['rev'] + 1 and 'preview' in paused, paused
+    ok = ctx.tool('step_set_output', {'step': 'later', 'outputs': {'value': 5}, 'force': True,
+                                      'reason': 'by hand'})
+    assert ok == {'ok': True}, ok
+    log = ctx.tool('log_read', {'limit': 3})
+    assert sorted(log) == ['last_seq', 'records'], log
+    fns = ctx.tool('fn_list', {})
+    assert any(f['name'] == 'custom.tools' for f in fns), fns
+    try:
+        ctx.tool('status', {'selection': {'steps': ['later'], 'tags': None}})
+        raise AssertionError('the wire shape was accepted')
+    except CallbackError as error:
+        assert error.error == 'bad_request' and 'selection' in error.message, error.message
+    return {'done': True}
+run(main)
+"#,
+    );
+    g.plan(json!({"tools":{"run":"custom.tools","in":{}},
+                  "later":{"run":"core.echo","after":["tools"],"in":{"value":{"default":1}}}}));
+    let _lease = g.lease();
+    let value = g.terminal("tools");
+    assert_eq!(value["status"], "succeeded", "{value}");
+    let later = &g.status()["steps"]["later"];
+    assert_eq!(later["status"], "succeeded", "{later}");
+    assert_eq!(later["outputs"]["value"], 5);
+    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
+    let (author, reason): (String, String) = db
+        .query_row(
+            "SELECT author, reason FROM plan_edits WHERE project_id=?1 ORDER BY rev DESC LIMIT 1",
+            [g.project.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((author.as_str(), reason.as_str()), ("step:tools", "hold"));
+}

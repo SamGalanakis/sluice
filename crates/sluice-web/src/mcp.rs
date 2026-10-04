@@ -271,11 +271,7 @@ pub fn author_of(given: Option<&str>, client: Option<&str>, fallback: &str) -> S
     .into()
 }
 pub fn reply_value(reply: CommandReply) -> Result<Value, PublicError> {
-    if let CommandReply::Ack = reply {
-        return Ok(json!({"ok":true}));
-    }
-    let value = serde_json::to_value(reply).map_err(|e| bad(e.to_string()))?;
-    Ok(value.get("data").cloned().unwrap_or(Value::Null))
+    sluice_runtime::compose::reply_value(reply)
 }
 fn bad(message: impl Into<String>) -> PublicError {
     PublicError::BadRequest {

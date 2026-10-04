@@ -996,7 +996,8 @@ impl<H: ExecutionHost> Coordinator<H> {
                         }
                     }
                 }
-                let mut command = crate::compose::decode_tool(tool)?;
+                let author = id.step.as_ref().map(|step| format!("step:{step}"));
+                let mut command = crate::compose::decode_tool(tool, author.as_deref())?;
                 // Named callbacks use the same command adapters with the run's
                 // immutable project and submission identity.
                 if let CommandRequest::MessagePost(m) = &mut command {
@@ -1051,10 +1052,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     }
                     self.command(command).await?
                 };
-                match reply {
-                    CommandReply::Data(v) => Ok(CommandReply::Data(v)),
-                    other => data(other),
-                }
+                data(crate::compose::reply_value(reply)?)
             }
         }
     }

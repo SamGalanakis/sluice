@@ -184,16 +184,17 @@ class Context:
             raise ValueError(f"{command} did not return data")
         return reply["data"]
 
-    def tool(self, name: str, args: dict) -> dict:
-        """Call a named Rust tool with the same request/result JSON as MCP and CLI."""
+    def tool(self, name: str, args: dict):
+        """Call a tool with the flat arguments MCP and `sluice tool` take; return its result.
+
+        `project` defaults to the run's own. The result is what MCP returns: the tool's JSON,
+        `{"ok": True}` for an acknowledgement.
+        """
         if not isinstance(name, str) or not name or not isinstance(args, dict):
             raise ValueError("tool requires a name and an argument object")
         args = dict(args)
         args.setdefault("project", os.environ.get("SLUICE_PROJECT_ID", self.project_id))
-        result = self._data("tool", {"name": name, "args": args})
-        if not isinstance(result, dict):
-            raise ValueError("tool result must be an object")
-        return result
+        return self._data("tool", {"name": name, "args": args})
 
     def builtin(self, name, request):
         return self._data("builtin", {"invocation": {

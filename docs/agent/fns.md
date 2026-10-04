@@ -99,8 +99,10 @@ if __name__ == "__main__":
   hands each output line to `on_line`; `child_env()` is the environment to give child tools.
 - `ctx.tool(name, args)` calls a sluice tool for the run's own project: reads (`status`,
   `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get`, `call_status`), `message.post` /
-  `message.wait`, and the project's edit tools. `args` take the command's wire form (the
-  `CommandRequest` shapes in `docs/rust/schemas.json`), not the flat MCP arguments.
+  `message.wait`, and the project's edit tools. `args` are the tool's MCP arguments
+  (`ctx.tool("step_pause", {"steps": "deploy", "reason": "hold"})`; `project` defaults to the
+  run's), and it returns what the MCP tool returns (`{"ok": True}` for an acknowledgement).
+  Edits it makes are authored `step:<step>`.
   `ctx.builtin(name, inputs)` runs a built-in function (an agent, say) inside this run.
 - `ctx.retry_on_failure(step, message)` registers a send-back: if this run then ends rejected,
   `step` is retried with `message` posted to it first.

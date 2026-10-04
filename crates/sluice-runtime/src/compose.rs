@@ -71,30 +71,43 @@ pub struct HelperWire {
     pub helper: ForwardHelper,
 }
 
-/// The named tool decoder is shared by helper callbacks and public command adapters.
-pub fn decode_tool(tool: ToolRequest) -> Result<CommandRequest, PublicError> {
-    let mut args = serde_json::to_value(tool.args).map_err(failure)?;
-    if tool.name == "status" && args.get("selection").is_none() {
-        args["selection"] = json!({"steps":null,"tags":null});
+/// Decodes a tool's flat public arguments (MCP's `decode_tool`: name, arguments, client name
+/// for the author) into its command.
+pub type ToolDecoder = fn(
+    &str,
+    serde_json::Map<String, serde_json::Value>,
+    Option<&str>,
+) -> Result<CommandRequest, PublicError>;
+static TOOL_DECODER: std::sync::OnceLock<ToolDecoder> = std::sync::OnceLock::new();
+/// The MCP adapter lives above this crate, so the coordinator mode installs it at start;
+/// `ctx.tool` then takes exactly the arguments MCP and `sluice tool` take.
+pub fn install_tool_decoder(decoder: ToolDecoder) {
+    let _ = TOOL_DECODER.set(decoder);
+}
+/// A helper's `ctx.tool(name, args)`: the flat MCP arguments, authored as `author` unless
+/// they name one.
+pub fn decode_tool(tool: ToolRequest, author: Option<&str>) -> Result<CommandRequest, PublicError> {
+    let decode = TOOL_DECODER
+        .get()
+        .ok_or_else(|| failure("this process has no tool decoder"))?;
+    let args = match serde_json::to_value(tool.args).map_err(failure)? {
+        serde_json::Value::Object(args) => args,
+        _ => return Err(failure("tool arguments must be an object")),
+    };
+    decode(&tool.name, args, author)
+}
+/// A command reply as MCP returns it: the reply's data, `{"ok": true}` for an acknowledgement.
+pub fn reply_value(reply: CommandReply) -> Result<serde_json::Value, PublicError> {
+    if let CommandReply::Ack = reply {
+        return Ok(json!({"ok":true}));
     }
-    if !["step_submit", "register_completion_action"].contains(&tool.name.as_str())
-        && let Some(project) = args.get_mut("project")
-        && let Some(name) = project.as_str()
-    {
-        *project = serde_json::to_value(match name.parse::<ProjectId>() {
-            Ok(id) => ProjectSelector::Id(id),
-            Err(_) => ProjectSelector::Name(
-                name.parse()
-                    .map_err(|e| failure(format!("invalid project: {e}")))?,
-            ),
-        })
-        .map_err(failure)?;
-    }
-    let mut command = json!({"command": tool.name});
-    if args != json!({}) {
-        command["args"] = args;
-    }
-    decode_json(&serde_json::to_vec(&command).map_err(failure)?)
+    let value = serde_json::to_value(reply).map_err(|e| PublicError::Storage {
+        message: e.to_string(),
+    })?;
+    Ok(value
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
 }
 
 pub struct Dispatcher {

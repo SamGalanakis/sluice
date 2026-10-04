@@ -349,8 +349,10 @@ if __name__ == "__main__":
 - `ctx.tool(name, args)` calls a named tool for the run's own project (`project` defaults to
   it): the reads `status`, `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get` and
   `call_status`; `message.post` and `message.wait` (run as the step); and the project's
-  mutations (`project_update`, the edit tools, retry, cancel, manual values). `args` use the command's wire shape (§12.1),
-  not the flat MCP arguments. Another project, or any other tool, is refused (`conflict`).
+  mutations (`project_update`, the edit tools, retry, cancel, manual values). `args` are the
+  tool's flat MCP arguments (§12.2) and the result is the tool's MCP result (`{"ok": true}` for
+  an acknowledgement); an unspecified author is `step:<step>`. Another project, or any other
+  tool, is refused (`conflict`).
 - `ctx.builtin(name, inputs)` runs a builtin fn inside this run (same run and attempt, a new
   invocation) and returns its outputs.
 - `ctx.submission()` returns the outputs submitted so far; `ctx.submit(outputs)` submits the
