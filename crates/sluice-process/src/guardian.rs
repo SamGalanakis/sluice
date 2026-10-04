@@ -458,19 +458,6 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
     atomic_json(&args.run_dir, "collected.json", &journal)?;
     freeze_submissions(&mut journal, link, args.poll_interval).await?;
     journal.write(&args.run_dir)?;
-    // Persist/replay start before complete even if the executor already finished.
-    for (invocation, executor) in started {
-        retry_request(
-            link,
-            CoordinatorCommand::Started {
-                identity: id.clone(),
-                invocation,
-                executor,
-            },
-            args.poll_interval,
-        )
-        .await?;
-    }
     let ack = replay_completion(&args.run_dir, &journal, link, args.poll_interval).await?;
     Ok(GuardianOutcome::Completed(ack))
 }
@@ -648,7 +635,7 @@ pub async fn replay_completion<L: CoordinatorLink>(
     journal.validate(&journal.identity)?;
     loop {
         for start in &journal.starts {
-            retry_request(
+            historical_start(
                 link,
                 CoordinatorCommand::Started {
                     identity: journal.identity.clone(),
@@ -825,7 +812,7 @@ impl<H: FnHost> PayloadHost for OsFnHost<H> {
         });
         Ok(OsInvocation {
             id: invocation,
-            group,
+            groups: self.groups.clone(),
             payload,
             output: Some(output),
             errors: Some(errors),
@@ -849,7 +836,7 @@ impl<H: FnHost> PayloadHost for OsFnHost<H> {
 }
 pub struct OsInvocation {
     id: InvocationId,
-    group: Arc<Cgroup>,
+    groups: Arc<RunCgroups>,
     payload: RunningPayload,
     output: Option<JoinHandle<io::Result<Vec<u8>>>>,
     errors: Option<JoinHandle<io::Result<Vec<u8>>>>,
@@ -1022,9 +1009,9 @@ impl PayloadInvocation for OsInvocation {
             executor: Some(self.executor().clone()),
         });
         // Descendants may still hold stdout open. Cleanup precedes joining pipes.
-        let proof = stop_invocation(&self.group, StopPolicy::default()).await?;
-        if !proof.cgroup().ends_with(&self.id.to_string()) {
-            return Err(invalid("wrong cleanup leaf"));
+        let proof = stop_invocation(self.groups.payload(), StopPolicy::default()).await?;
+        if proof.cgroup() != self.groups.payload().path() {
+            return Err(invalid("wrong cleanup subtree"));
         }
         self.cleanup_evidence = Some(proof.into());
         if let Some(task) = self.output.take() {
@@ -1063,7 +1050,7 @@ impl PayloadInvocation for OsInvocation {
     async fn cleanup(&mut self) -> io::Result<CleanupEvidence> {
         let proof = match self.cleanup_evidence.take() {
             Some(proof) => proof,
-            None => stop_invocation(&self.group, StopPolicy::default())
+            None => stop_invocation(self.groups.payload(), StopPolicy::default())
                 .await?
                 .into(),
         };
@@ -1236,7 +1223,7 @@ async fn import_once<L: CoordinatorLink>(
             })
             .await
         {
-            Ok(CoordinatorReply::Started) => {}
+            Ok(CoordinatorReply::Started) | Err(PublicError::Cancelled { .. }) => {}
             Err(PublicError::Busy { .. }) => return Ok(None),
             other => return Err(io::Error::other(format!("start import refused: {other:?}"))),
         }
@@ -1355,6 +1342,25 @@ impl AdoptionHost for OsAdoptionHost {
             Ok(GuardianPresence::Ambiguous(
                 "unit absence not proven".into(),
             ))
+        }
+    }
+}
+
+/// A cleanup journal records history; it never grants another dispatch.
+async fn historical_start<L: CoordinatorLink>(
+    link: &L,
+    command: CoordinatorCommand,
+    delay: Duration,
+) -> io::Result<()> {
+    loop {
+        match link.request(command.clone()).await {
+            Ok(CoordinatorReply::Started) | Err(PublicError::Cancelled { .. }) => return Ok(()),
+            Err(PublicError::Busy { .. }) => tokio::time::sleep(delay).await,
+            other => {
+                return Err(io::Error::other(format!(
+                    "historical start refused: {other:?}"
+                )));
+            }
         }
     }
 }

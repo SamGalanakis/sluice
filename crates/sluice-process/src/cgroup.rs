@@ -45,6 +45,10 @@ impl RunCgroups {
             payload,
         })
     }
+    /// The guardian retains terminal authority over every payload leaf.
+    pub fn payload(&self) -> &Cgroup {
+        &self.payload
+    }
     pub fn payload_empty(&self) -> io::Result<bool> {
         Ok(!self.payload.populated()?)
     }

@@ -300,7 +300,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
                     if count.is_some() && keep && instances.get(index.to_string()).is_some_and(|v|v["status"]=="succeeded"){continue;}
                     let mut inputs=inputs.clone();if let Some(name)=&step.scatter {inputs.0.insert(name.clone(),inputs.0[name].as_value().as_array().expect("checked scatter")[index].clone().try_into()?);}
                     let capability=new_capability();let attempt=AttemptId::new();let run=RunId::new();
-                    let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution},"files":fingerprints}))?;
+                    let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution,"completion":crate::execution::FrozenPlan::from_context(&copy)},"files":fingerprints}))?;
                     let reservation=attempts::reserve(tx,&copy,Reserve{step:step.id.clone(),attempt,run,item_index:if count.is_some(){index as i64}else{-1},item_count:count.map(|n|n as u64),inputs:inputs.clone(),inputs_hash:hash,provenance,release_id:"runtime-v1".into(),protocol_major:1},&mut Hooks)?;
                     if let Some(job) = execution.as_ref().and_then(|e| e.job) { crate::registry::pin_run(tx,job,run)?; }
                     let id=&reservation.identity;

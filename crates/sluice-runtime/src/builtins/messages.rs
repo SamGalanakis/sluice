@@ -47,6 +47,7 @@ const ENVELOPE: BuiltinIcon = BuiltinIcon {
 /// What a message fn sees of its run: the durable home it posts and waits in.
 /// `run`/`step` are the executing run's identity — `message.post` needs them to own
 /// its question (attachments, take-up and claims); `message.wait` needs neither.
+pub type MutationGuard = Arc<dyn Fn(&WriteTransaction<'_>) -> StoreResult<()> + Send + Sync>;
 #[derive(Clone)]
 pub struct MessageCtx {
     pub project: ProjectId,
@@ -57,6 +58,7 @@ pub struct MessageCtx {
     pub plan_inputs: Arc<dyn PlanInputSetter + Send + Sync>,
     /// Fires when the run is cancelled; every wait polls it alongside the subscription.
     pub cancel: CancellationToken,
+    pub mutation_guard: Option<MutationGuard>,
 }
 
 /// Adapts the context's trait object to the store's `&impl PlanInputSetter` generics.
@@ -157,9 +159,13 @@ async fn post(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> 
     };
     if !waiting {
         let inputs_setter = ArcPlanInputs(Arc::clone(&ctx.plan_inputs));
+        let guard = ctx.mutation_guard.clone();
         let posted = ctx
             .writer
             .write(RetrySafety::NonIdempotent, move |tx| {
+                if let Some(guard) = guard {
+                    guard(tx)?;
+                }
                 message_post(tx, post, &inputs_setter)
             })
             .await
@@ -170,9 +176,13 @@ async fn post(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> 
         .run
         .ok_or_else(|| terminal("waiting ask requires a run"))?;
     let inputs_setter = ArcPlanInputs(Arc::clone(&ctx.plan_inputs));
+    let guard = ctx.mutation_guard.clone();
     let result = ctx
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
+            if let Some(guard) = guard {
+                guard(tx)?;
+            }
             ask(tx, post, &inputs_setter)
         })
         .await
@@ -223,9 +233,13 @@ async fn wait_for_answer(
             .map_err(read_failure)?;
         match question.state {
             QuestionState::Answered => {
+                let guard = ctx.mutation_guard.clone();
                 return ctx
                     .writer
                     .write(RetrySafety::Idempotent, move |tx| {
+                        if let Some(guard) = guard {
+                            guard(tx)?;
+                        }
                         claim_answer(tx, project, id, run)
                     })
                     .await

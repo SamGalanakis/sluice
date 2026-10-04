@@ -23,6 +23,106 @@ use std::{
     time::Duration,
 };
 
+/// Validated admission context, independent of later registry publications.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrozenPlan {
+    pub revision: Revision,
+    pub document: JsonMap,
+    pub signatures: indexmap::IndexMap<String, FrozenSignature>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrozenSignature {
+    pub inputs: indexmap::IndexMap<String, sluice_model::types::Type>,
+    pub outputs: indexmap::IndexMap<String, sluice_model::types::Type>,
+    pub submits: indexmap::IndexMap<String, FrozenDeclaration>,
+    pub open: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrozenDeclaration {
+    pub ty: sluice_model::types::Type,
+    pub doc: Option<String>,
+}
+impl FrozenPlan {
+    pub fn from_context(context: &sluice_store::plans::PlanContext) -> Self {
+        Self {
+            revision: context.revision,
+            document: context.plan.document().clone(),
+            signatures: context
+                .plan
+                .steps()
+                .values()
+                .map(|step| {
+                    let sig = &step.signature;
+                    (
+                        step.run.clone(),
+                        FrozenSignature {
+                            inputs: sig.inputs.clone(),
+                            outputs: sig.outputs.clone(),
+                            open: sig.open,
+                            submits: sig
+                                .submits
+                                .iter()
+                                .map(|(n, d)| {
+                                    (
+                                        n.clone(),
+                                        FrozenDeclaration {
+                                            ty: d.ty.clone(),
+                                            doc: d.doc.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+    pub fn context(
+        self,
+        project: ProjectId,
+    ) -> Result<sluice_store::plans::PlanContext, PublicError> {
+        let signatures = self
+            .signatures
+            .into_iter()
+            .map(|(n, s)| {
+                (
+                    n,
+                    sluice_model::plan::FnSignature {
+                        inputs: s.inputs,
+                        outputs: s.outputs,
+                        open: s.open,
+                        submits: s
+                            .submits
+                            .into_iter()
+                            .map(|(n, d)| {
+                                (
+                                    n,
+                                    sluice_model::plan::Declaration {
+                                        ty: d.ty,
+                                        doc: d.doc,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    },
+                )
+            })
+            .collect::<indexmap::IndexMap<_, _>>();
+        let plan =
+            sluice_model::plan::Plan::parse(&self.document, &signatures).map_err(|errors| {
+                PublicError::Invalid {
+                    message: "invalid frozen completion plan".into(),
+                    errors: errors.into_iter().map(|e| e.to_string()).collect(),
+                }
+            })?;
+        Ok(sluice_store::plans::PlanContext {
+            project,
+            revision: self.revision,
+            plan,
+        })
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Launch {
     pub identity: AttemptKey,
@@ -90,12 +190,15 @@ impl ExecutionHost for OsHost {
             };
             Ok(empty
                 && journal.cleanup.iter().all(|p| {
-                    p.cgroup == *root || p.cgroup.starts_with(&format!("{root}/payload/"))
+                    p.cgroup == *root
+                        || p.cgroup == format!("{root}/payload")
+                        || p.cgroup.starts_with(&format!("{root}/payload/"))
                 }))
         } else {
             Ok(state.stopped()
                 && journal.cleanup.iter().all(|p| {
                     p.cgroup.ends_with(service.name())
+                        || p.cgroup.ends_with(&format!("/{}/payload", service.name()))
                         || p.cgroup.contains(&format!("/{}/payload/", service.name()))
                 }))
         }

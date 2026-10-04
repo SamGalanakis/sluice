@@ -811,12 +811,35 @@ fn parse_completion(value: &str) -> Result<CompletionResult> {
     })
 }
 
+/// Terminal settlement uses admission data; reconciliation uses current data.
+/// A registry/plan error cannot undo the result or cleanup-backed hold release.
+pub struct CompletionContext<'a> {
+    pub admitted: &'a PlanContext,
+    pub current: std::result::Result<&'a PlanContext, &'a str>,
+}
 pub fn complete(
     tx: &mut WriteTransaction<'_>,
     context: &PlanContext,
     request: Complete,
     hooks: &mut impl ExecutionHooks,
 ) -> Result<Option<CompletionResult>> {
+    complete_frozen(
+        tx,
+        CompletionContext {
+            admitted: context,
+            current: Ok(context),
+        },
+        request,
+        hooks,
+    )
+}
+pub fn complete_frozen(
+    tx: &mut WriteTransaction<'_>,
+    completion: CompletionContext<'_>,
+    request: Complete,
+    hooks: &mut impl ExecutionHooks,
+) -> Result<Option<CompletionResult>> {
+    let context = completion.admitted;
     let id = &request.identity;
     let prior: Option<(Option<String>,Option<String>)> = tx.sql().query_row("SELECT completion_id,result FROM runs WHERE run_id=?1 AND attempt_id=?2 AND project_id=?3 AND step_id=?4 AND generation=?5 AND work_generation=?6",params![id.run.to_string(),id.attempt.to_string(),id.project.to_string(),id.step.as_str(),plans::sql_counter(id.generation.0)?,plans::sql_counter(id.work.0)?],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
     if let Some((Some(completion), Some(result))) = prior {
@@ -831,7 +854,12 @@ pub fn complete(
     if context.project != id.project {
         return Err(plans::invalid("completion project mismatch"));
     }
-    plans::check_context(tx, context)?;
+    if let Ok(current) = completion.current {
+        if current.project != id.project {
+            return Err(plans::invalid("reconciliation project mismatch"));
+        }
+        plans::check_context(tx, current)?;
+    }
     if request.completion_id.is_empty() || request.completion_id.len() > 256 {
         return Err(plans::invalid("completion id must contain 1 to 256 bytes"));
     }
@@ -1021,7 +1049,14 @@ pub fn complete(
             .as_str()
             .ok_or_else(|| plans::invalid("action message missing"))?;
         let outcome = if rejected {
-            apply_action(tx, context, &target, body, author, hooks)?
+            match completion.current {
+                Ok(current) => apply_action(tx, current, &target, body, author, hooks)?,
+                Err(message) => CompletionActionOutcome::Conflict(CompletionActionConflict {
+                    current: completion_target(tx, id.project, &target.step)?,
+                    expected: target,
+                    message: format!("current plan reconciliation failed: {message}"),
+                }),
+            }
         } else {
             CompletionActionOutcome::Discarded
         };
@@ -1037,7 +1072,9 @@ pub fn complete(
     } else {
         None
     };
-    plans::reconcile(tx, context)?;
+    if let Ok(current) = completion.current {
+        plans::reconcile(tx, current)?;
+    }
     let outcome = CompletionResult {
         status,
         outputs,

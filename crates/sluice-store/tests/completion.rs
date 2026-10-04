@@ -855,3 +855,44 @@ async fn identical_registration_replays_without_revalidating_policy_or_changing_
         .unwrap();
     assert_eq!(author, "sam");
 }
+
+#[tokio::test]
+async fn frozen_completion_persists_action_conflict_when_current_plan_is_invalid() {
+    let (f, land, target) = setup(true).await;
+    let admitted = f.context.clone();
+    let identity = land.identity.clone();
+    let outcome = f
+        .writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            complete_frozen(
+                tx,
+                CompletionContext {
+                    admitted: &admitted,
+                    current: Err("sibling signature no longer declares its consumed output"),
+                },
+                Complete {
+                    completion_id: identity.run.to_string(),
+                    identity,
+                    kind: rejected(),
+                    outputs: map(json!({})),
+                    processes_gone: true,
+                    submission_version: None,
+                },
+                &mut Hooks::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome.status, StepStatus::Failed);
+    let Some(CompletionActionOutcome::Conflict(conflict)) = &outcome.action else {
+        panic!("missing persisted conflict")
+    };
+    assert_eq!(conflict.expected, target);
+    assert!(conflict.message.contains("sibling signature"));
+    let counts = f.counts().await;
+    assert_eq!(f.finish(&land, rejected(), json!({})).await, outcome);
+    assert_eq!(f.counts().await, counts);
+    assert_eq!(f.state().await.status(&id("work")), StepStatus::Succeeded);
+    assert_eq!(f.state().await.status(&id("land")), StepStatus::Failed);
+}

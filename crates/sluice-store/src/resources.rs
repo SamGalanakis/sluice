@@ -363,7 +363,7 @@ pub fn fits(conn: &Connection, project: ProjectId, needs: &Needs) -> Result<Fit>
 
 struct Run {
     project: ProjectId,
-    step: StepId,
+    step: Option<StepId>,
     group: String,
     generation: i64,
     work: i64,
@@ -376,22 +376,32 @@ struct Run {
 fn run(conn: &Connection, run_id: RunId) -> Result<Run> {
     let raw = conn.query_row("SELECT r.project_id,r.step_id,r.generation,r.work_generation,r.item_index,r.finished_at IS NOT NULL,a.phase,a.cancel_requested,a.inputs_hash FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.run_id=?", [run_id.to_string()], |r| Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?,r.get::<_,bool>(5)?,r.get::<_,String>(6)?,r.get::<_,bool>(7)?,r.get::<_,String>(8)?))).optional()?.ok_or_else(|| bad("no such run"))?;
     let (project, step, generation, work, item, finished, phase, cancelled, hash) = raw;
-    let project: ProjectId =
-        id(project.ok_or_else(|| bad("needs and section leases require a project step run"))?)?;
-    let step: StepId =
-        id(step.ok_or_else(|| bad("needs and section leases require a project step run"))?)?;
-    let current = conn.query_row("SELECT generation,work_generation,declaration FROM steps WHERE project_id=?1 AND step_id=?2", params![project.to_string(), step.to_string()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?))).optional()?;
-    let (priority, current) = if let Some((g, w, decl)) = current {
-        let decl: Value = serde_json::from_str(&decl)?;
-        (
-            decl.get("priority").and_then(Value::as_i64).unwrap_or(0),
-            g == generation && w == work,
-        )
+    let project: ProjectId = id(project.ok_or_else(|| bad("leases require a project run"))?)?;
+    let step: Option<StepId> = step.map(id).transpose()?;
+    let (priority, current) = if let Some(step) = &step {
+        let current = conn.query_row("SELECT generation,work_generation,declaration FROM steps WHERE project_id=?1 AND step_id=?2", params![project.to_string(), step.as_str()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?))).optional()?;
+        if let Some((g, w, decl)) = current {
+            let decl: Value = serde_json::from_str(&decl)?;
+            (
+                decl.get("priority").and_then(Value::as_i64).unwrap_or(0),
+                g == generation && w == work,
+            )
+        } else {
+            (0, false)
+        }
     } else {
-        (0, false)
+        let current = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM calls c JOIN runs r ON r.run_id=c.run_id WHERE r.run_id=?1 AND c.call_id=r.run_id AND c.project_id=r.project_id AND c.status='running')",
+            [run_id.to_string()], |r| r.get(0),
+        )?;
+        (0, current)
     };
     let group = if item >= 0 {
-        format!("{project}/{step}/{generation}/{work}/{hash}")
+        format!(
+            "{project}/{}/{generation}/{work}/{hash}",
+            step.as_ref()
+                .ok_or_else(|| bad("scatter run needs a step"))?
+        )
     } else {
         run_id.to_string()
     };
@@ -471,7 +481,7 @@ pub fn release_needs(tx: &mut WriteTransaction<'_>, run_id: RunId) -> Result<boo
         return Ok(false);
     }
     if run.group != run_id.to_string() {
-        let live: bool = tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM attempts a LEFT JOIN runs r ON r.attempt_id=a.attempt_id WHERE a.project_id=?1 AND a.step_id=?2 AND a.generation=?3 AND a.work_generation=?4 AND a.inputs_hash=(SELECT inputs_hash FROM attempts WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?5)) AND (a.phase<>'terminal' OR (r.run_id IS NOT NULL AND r.finished_at IS NULL)))", params![run.project.to_string(),run.step.to_string(),run.generation,run.work,run_id.to_string()], |r| r.get(0))?;
+        let live: bool = tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM attempts a LEFT JOIN runs r ON r.attempt_id=a.attempt_id WHERE a.project_id=?1 AND a.step_id=?2 AND a.generation=?3 AND a.work_generation=?4 AND a.inputs_hash=(SELECT inputs_hash FROM attempts WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?5)) AND (a.phase<>'terminal' OR (r.run_id IS NOT NULL AND r.finished_at IS NULL)))", params![run.project.to_string(),run.step.as_ref().ok_or_else(|| bad("needs group requires a step"))?.to_string(),run.generation,run.work,run_id.to_string()], |r| r.get(0))?;
         if live {
             return Ok(false);
         }
@@ -528,7 +538,7 @@ pub fn request_lease_keyed(
     }
     let run = run(tx.sql(), run_id)?;
     if run.finished || run.cancelled || !run.current || run.phase != "executing" {
-        return Err(bad("lease request requires an executing step run"));
+        return Err(bad("lease request requires an executing project run"));
     }
     let resources = declarations(tx.sql(), run.project)?;
     let declared = resources

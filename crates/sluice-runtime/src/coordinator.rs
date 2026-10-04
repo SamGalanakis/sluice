@@ -271,9 +271,6 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let project=self.writer().write(RetrySafety::NonIdempotent,move|tx|projects::project_create(tx,projects::CreateProject{name,description,icon:icon.map(|s|projects::Icon::text(&s)).transpose()?,resources:Some(serde_json::to_value(resources)?),author:author.unwrap_or_else(||"cli".into())},&projects::EmptyPlanInitializer,&ResourceSettings((*catalog).clone()))).await?;
                 artifacts::recover(self.writer(),self.home()).await.map_err(|e|e.into_public(false))?; Ok(CommandReply::Project(ProjectIdentity{project_id:project.project_id,name:project.name}))
             },
-            CommandRequest::ProjectUpdate(update)=>{
-                let project=self.writer().write(RetrySafety::NonIdempotent,move|tx|projects::project_update(tx,&update.project,projects::UpdateProject{new_name:update.new_name,description:update.description,icon:update.icon.map(projects::Icon::try_from).transpose()?,resources:update.resources.map(serde_json::to_value).transpose()?,paused:update.paused,archived:update.archived,expected_settings_rev:update.expected_settings_rev,reason:update.reason,author:update.author.unwrap_or_else(||"cli".into())},&ResourceSettings((*catalog).clone()))).await?;artifacts::recover(self.writer(),self.home()).await.map_err(|e|e.into_public(false))?; Ok(CommandReply::Project(ProjectIdentity{project_id:project.project_id,name:project.name}))
-            },
             CommandRequest::PlanGet{project}=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"plan":ctx.plan.document()}))}).await.map_err(|e|e.into_public(true)).and_then(data),
             CommandRequest::Status{project,selection:_}=>self.reads().snapshot(move|sql|{
                 let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;let state=plans::read_state(sql,id)?;
@@ -290,39 +287,20 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let outputs=JsonMap(ctx.plan.outputs().iter().filter_map(|(n,r)|match sluice_model::gates::resolve_reference(&ctx.plan,&state,r){sluice_model::types::BoundValue::Ready(v)=>Some((n.clone(),v)),_=>None}).collect::<indexmap::IndexMap<_,_>>());
                 Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"inputs":state.inputs,"steps":steps,"outputs":outputs,"resources":resources::status(sql,id,&ctx.plan)?.into_iter().map(|(n,r)|(n,json!({"capacity":r.resource.capacity,"held":r.held,"queued":r.queued,"error":r.resource.error}))).collect::<BTreeMap<_,_>>()}))
             }).await.map_err(|e|e.into_public(true)).and_then(data),
-            CommandRequest::StepRetry(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{crate::drain::ensure_admission(tx,&crate::drain::Admission::Plan)?;let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;check_expected_revision(&request,ctx.revision)?;Ok(CommandReply::Retry(plans::step_retry(tx,&ctx,request,&mut Hooks)?))}).await,
-            CommandRequest::StepCancel(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;check_expected_revision(&request,ctx.revision)?;plans::step_cancel(tx,&ctx,request)?;Ok(CommandReply::Ack)}).await,
+            command if project_mutation(&command) => {
+                let reply = self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, command)).await?;
+                if matches!(reply, CommandReply::Project(_)) { artifacts::recover(self.writer(), self.home()).await.map_err(|e|e.into_public(false))?; }
+                Ok(reply)
+            },
             CommandRequest::StepSubmit(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let version=attempts::step_submit(tx,request)?;if version.is_none(){return Err(conflict("stale submission").into());}Ok(CommandReply::Ack)}).await,
             CommandRequest::Submission{run}=>data(self.submissions(run).await?),
-            CommandRequest::StepSetOutput(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;plans::step_set_output(tx,&ctx,request)?;Ok(CommandReply::Ack)}).await,
-            CommandRequest::PlanSetInput(request) => self.writer().write(RetrySafety::NonIdempotent, move |tx| {
-                crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
-                let id = messages_project(tx.sql(), &request.project)?;
-                let ctx = context(tx.sql(), id, &catalog)?;
-                if request.edit.dry_run {
-                    return Err(PublicError::not_implemented("input dry run").into());
-                }
-                if request.edit.expected.is_some_and(|r| r != ctx.revision) {
-                    return Err(conflict("plan revision changed").into());
-                }
-                plans::set_input(tx, &ctx, &request.name, request.value, request.edit.author.unwrap_or_default(), request.edit.reason)?;
-                Ok(CommandReply::Ack)
-            }).await,
             CommandRequest::MessagePost(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;let m=sluice_store::messages::message_post(tx,request,&InputSetter(ctx))?;Ok(CommandReply::Posted{id:m.id})}).await,
             CommandRequest::Messages(request)=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&request.project)?;let messages=sluice_store::messages::messages(sql,id,request.view,request.thread.as_deref(),request.since,"cli")?;Ok(CommandReply::Messages(MessagePage{project:projects_identity(sql,id)?,last_id:messages.last().map(|m|m.id),messages}))}).await.map_err(|e|e.into_public(true)),
             CommandRequest::AcquireLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{let lease=resources::request_lease_keyed(tx,request.run,&request.resource,request.amount,&format!("callback/{}/{}",request.run,request.request_id))?;let state=resources::leases(tx.sql(),run_project(tx.sql(),request.run)?)?.into_iter().find(|l|l.id==lease).ok_or_else(||conflict("lease missing"))?.state;Ok(CommandReply::Lease{lease,state})}).await,
             CommandRequest::ReleaseLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{resources::release_lease(tx,request.lease,request.run)?;Ok(CommandReply::Ack)}).await,
             CommandRequest::RegisterCompletionAction(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{if !attempts::register_completion_action(tx,request,&Hooks)?{return Err(conflict("stale action registration").into());}Ok(CommandReply::Ack)}).await,
             CommandRequest::LogRead(request)=>self.reads().snapshot(move|sql|{let project=request.project.as_ref().map(|p|messages_project(sql,p)).transpose()?;Ok(CommandReply::Records(records::read_records(sql,project,&records::RecordFilter{since:request.since_seq,kinds:request.kinds.unwrap_or_default(),threads:request.threads.unwrap_or_default(),limit:request.limit})?.into_page()?))}).await.map_err(|e|e.into_public(true)),
-            other=>{
-                let project=edit_project(&other).ok_or_else(||PublicError::not_implemented("command dispatch extension"))?;
-                let edit=PlanEdit::try_from(other)?;
-                let (id,prepared)=self.reads().snapshot(move|sql|{
-                    let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;let state=plans::read_state(sql,id)?;let snapshot=Snapshot{revision:ctx.revision,document:ctx.plan.document().clone()};
-                    let prepared=edit::prepare_edit(&EditSnapshot{snapshot:&snapshot,state:&state,signatures:&catalog.for_project(Some(id)),recipes:&Default::default(),resources:&CachedResources::default(),limits:&resource_limits(sql,id)?,prune_eligible:None},edit)?;Ok((id,prepared))
-                }).await.map_err(|e|e.into_public(true))?;
-                self.writer().write(RetrySafety::NonIdempotent,move|tx|{crate::drain::ensure_admission(tx,&crate::drain::Admission::Plan)?;if prepared.dry_run{return Ok(CommandReply::Preview(prepared.preview));}Ok(CommandReply::Edit(plans::apply_edit(tx,id,prepared)?))}).await
-            }
+            _ => Err(PublicError::not_implemented("command dispatch extension")),
         }
     }
     pub async fn submissions(&self, run: RunId) -> Result<SubmissionSnapshot, PublicError> {
@@ -428,6 +406,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     return Err(conflict("invalid delivery window"));
                 }
                 let messages=self.writer().write(RetrySafety::Idempotent,move|tx|{
+                    ensure_current(tx.sql(), &id)?;
                     let Some(project)=id.project else{return Ok(vec![]);};let Some(step)=id.step else{return Ok(vec![]);};
                     let mut q=tx.sql().prepare("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND id>?3 AND (?4 IS NULL OR id<=?4) ORDER BY id LIMIT ?5")?;
                     let ids=q.query_map((project.to_string(),step.as_str(),after.0,through.map(|m|m.0),limit),|r|r.get::<_,i64>(0))?.collect::<Result<Vec<_>,_>>()?;drop(q);
@@ -444,6 +423,12 @@ impl<H: ExecutionHost> Coordinator<H> {
                     .write(RetrySafety::Idempotent, move |tx| {
                         require_invocation(tx.sql(), &id, ack.invocation)?;
                         if let Some(project) = id.project {
+                            let recorded: bool = tx.sql().query_row(
+                                "SELECT EXISTS(SELECT 1 FROM message_deliveries WHERE project_id=?1 AND run_id=?2 AND message_id=?3 AND acknowledged_at IS NOT NULL)",
+                                (project.to_string(), id.run.to_string(), ack.message.0), |r| r.get(0),
+                            )?;
+                            if recorded { return Ok(()); }
+                            ensure_current(tx.sql(), &id)?;
                             sluice_store::messages::acknowledge_delivery(
                                 tx,
                                 project,
@@ -474,24 +459,65 @@ impl<H: ExecutionHost> Coordinator<H> {
             }
         }
     }
+    async fn record_start(
+        &self,
+        id: AttemptKey,
+        invocation: InvocationId,
+        executor: ProcessIdentity,
+    ) -> Result<bool, PublicError> {
+        self.writer().write(RetrySafety::Idempotent, move |tx| {
+            let (phase, cancelled, raw): (String, bool, String) = tx.sql().query_row(
+                "SELECT a.phase,a.cancel_requested,a.request FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1 AND a.attempt_id=?2 AND r.project_id IS ?3 AND r.step_id IS ?4 AND r.generation=?5 AND r.work_generation=?6",
+                (id.run.to_string(), id.attempt.to_string(), id.project.map(|p|p.to_string()), id.step.as_ref().map(ToString::to_string), i64::try_from(id.generation.0).map_err(|_| conflict("generation overflow"))?, i64::try_from(id.work.0).map_err(|_| conflict("work generation overflow"))?),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            let mut request: Value = serde_json::from_str(&raw)?;
+            let evidence = json!({"invocation":invocation,"executor":executor});
+            let starts = request.as_object_mut().ok_or_else(|| conflict("frozen request shape"))?
+                .entry("runtime_starts").or_insert(json!([])).as_array_mut()
+                .ok_or_else(|| conflict("start evidence shape"))?;
+            if let Some(old) = starts.iter().find(|v| v["invocation"] == json!(invocation)) {
+                if *old != evidence { return Err(conflict("start evidence changed").into()); }
+                return Ok(phase != "terminal" && !cancelled && current_run(tx.sql(), &id)?);
+            }
+            ensure_current(tx.sql(), &id)?;
+            if starts.len() >= 1024 { return Err(conflict("too many invocation starts").into()); }
+            if phase == "claimed" {
+                // Start evidence describes an executor already granted by the OS.
+                // Cancellation closes dispatch, but cannot erase that history.
+                if id.step.is_some() && !cancelled {
+                    if !attempts::started(tx, &step_identity(&id)?, &mut Hooks)? {
+                        return Err(conflict("start refused").into());
+                    }
+                } else {
+                    tx.sql().execute("UPDATE attempts SET phase='executing' WHERE attempt_id=?1 AND phase='claimed'", [id.attempt.to_string()])?;
+                    tx.sql().execute("UPDATE runs SET started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE run_id=?1", [id.run.to_string()])?;
+                    if let Some(project) = id.project.filter(|_| id.step.is_some()) {
+                        sluice_store::messages::advance_cursor(tx, project, id.run)?;
+                    }
+                }
+            } else if phase != "executing" {
+                return Err(conflict("attempt cannot acknowledge start").into());
+            }
+            starts.push(evidence);
+            tx.sql().execute("UPDATE attempts SET request=?2 WHERE attempt_id=?1", (id.attempt.to_string(), request.to_string()))?;
+            tx.changed(id.project, "status");
+            Ok(!cancelled)
+        }).await
+    }
     async fn started(
         &self,
         id: AttemptKey,
         invocation: InvocationId,
         executor: ProcessIdentity,
     ) -> Result<(), PublicError> {
-        self.writer().write(RetrySafety::Idempotent,move|tx|{
-            let (phase,request):(String,String)=tx.sql().query_row("SELECT phase,request FROM attempts WHERE attempt_id=?1",[id.attempt.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
-            let mut request:Value=serde_json::from_str(&request)?;let evidence=json!({"invocation":invocation,"executor":executor});
-            let starts=request.as_object_mut().ok_or_else(||conflict("frozen request shape"))?.entry("runtime_starts").or_insert(json!([])).as_array_mut().ok_or_else(||conflict("start evidence shape"))?;
-            if let Some(old)=starts.iter().find(|v|v["invocation"]==json!(invocation)){if *old!=evidence{return Err(conflict("start evidence changed").into());}return Ok(());}
-            if starts.len()>=1024{return Err(conflict("too many invocation starts").into());}starts.push(evidence);
-            if phase=="claimed" {
-                if id.step.is_some(){if !attempts::started(tx,&step_identity(&id)?,&mut Hooks)?{return Err(conflict("start refused").into());}}
-                else{let n=tx.sql().execute("UPDATE attempts SET phase='executing' WHERE attempt_id=?1 AND cancel_requested=0",[id.attempt.to_string()])?;if n==0{return Err(conflict("start cancelled").into());}tx.sql().execute("UPDATE runs SET started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE run_id=?1",[id.run.to_string()])?;}
-            }else if phase!="executing"{return Err(conflict("attempt cannot acknowledge start").into());}
-            tx.sql().execute("UPDATE attempts SET request=?2 WHERE attempt_id=?1",(id.attempt.to_string(),request.to_string()))?;tx.changed(id.project,"status");Ok(())
-        }).await
+        if self.record_start(id, invocation, executor).await? {
+            Ok(())
+        } else {
+            Err(PublicError::Cancelled {
+                message: "start recorded; dispatch closed".into(),
+            })
+        }
     }
     pub(crate) async fn callback(
         &self,
@@ -518,39 +544,16 @@ impl<H: ExecutionHost> Coordinator<H> {
             CommandRequest::ReleaseLease(l) if l.run == id.run => {}
             CommandRequest::RegisterCompletionAction(a)
                 if a.run == id.run && Some(a.project) == id.project => {}
+            command if project_mutation(command) => {}
             _ => return Err(conflict("callback command is outside the run authority")),
         }
         let key = request.request_id.0;
         let command = request.command;
-        // Callback mutations and their reply cache share one transaction. Dispatch
-        // through the same adapters while keeping the immutable request for replay.
+        let encoded = serde_json::to_value(&command).map_err(storage)?;
+        let refresh = matches!(command, CommandRequest::AcquireLease(_));
         let catalog = self.inner.catalog.clone();
-        self.writer()
-            .write(RetrySafety::Idempotent, move |tx| {
-                let raw: String = tx.sql().query_row(
-                    "SELECT request FROM attempts WHERE attempt_id=?1",
-                    [id.attempt.to_string()],
-                    |r| r.get(0),
-                )?;
-                let mut frozen: Value = serde_json::from_str(&raw)?;
-                let cache = frozen
-                    .as_object_mut()
-                    .ok_or_else(|| conflict("attempt request shape"))?
-                    .entry("runtime_callbacks")
-                    .or_insert(json!({}))
-                    .as_object_mut()
-                    .ok_or_else(|| conflict("callback cache shape"))?;
-                if let Some(saved) = cache.get(&key) {
-                    if saved["command"] != serde_json::to_value(&command)? {
-                        return Err(conflict("callback request ID reused").into());
-                    }
-                    if !matches!(command, CommandRequest::AcquireLease(_)) {
-                        return Ok(serde_json::from_value(saved["reply"].clone())?);
-                    }
-                }
-                if cache.len() >= 16384 {
-                    return Err(conflict("callback cache limit").into());
-                }
+        let reply = self
+            .callback_transaction(id.clone(), key, encoded, refresh, move |tx| {
                 let reply = match command.clone() {
                     CommandRequest::StepSubmit(s) => {
                         if attempts::step_submit(tx, s)?.is_none() {
@@ -602,8 +605,68 @@ impl<H: ExecutionHost> Coordinator<H> {
                         }
                         CommandReply::Ack
                     }
+                    command if project_mutation(&command) => {
+                        let encoded = serde_json::to_value(&command)?;
+                        let selector: ProjectSelector =
+                            serde_json::from_value(encoded["args"]["project"].clone())?;
+                        if Some(messages_project(tx.sql(), &selector)?) != id.project {
+                            return Err(conflict("tool project differs from run").into());
+                        }
+                        mutate_project(tx, &catalog, command)?
+                    }
                     _ => return Err(conflict("unsupported callback").into()),
                 };
+                Ok(reply)
+            })
+            .await?;
+        if matches!(reply, CommandReply::Project(_)) {
+            artifacts::recover(self.writer(), self.home())
+                .await
+                .map_err(|e| e.into_public(false))?;
+        }
+        Ok(reply)
+    }
+    async fn callback_transaction<F>(
+        &self,
+        id: AttemptKey,
+        key: String,
+        command: Value,
+        refresh: bool,
+        mutate: F,
+    ) -> Result<CommandReply, PublicError>
+    where
+        F: FnOnce(&mut sluice_store::WriteTransaction<'_>) -> sluice_store::Result<CommandReply>
+            + Send
+            + 'static,
+    {
+        self.writer()
+            .write(RetrySafety::Idempotent, move |tx| {
+                let raw: String = tx.sql().query_row(
+                    "SELECT request FROM attempts WHERE attempt_id=?1",
+                    [id.attempt.to_string()],
+                    |r| r.get(0),
+                )?;
+                let mut frozen: Value = serde_json::from_str(&raw)?;
+                let cache = frozen
+                    .as_object_mut()
+                    .ok_or_else(|| conflict("attempt request shape"))?
+                    .entry("runtime_callbacks")
+                    .or_insert(json!({}))
+                    .as_object_mut()
+                    .ok_or_else(|| conflict("callback cache shape"))?;
+                if let Some(saved) = cache.get(&key) {
+                    if saved["command"] != command {
+                        return Err(conflict("callback request ID reused").into());
+                    }
+                    if !refresh || !current_run(tx.sql(), &id)? {
+                        return Ok(serde_json::from_value(saved["reply"].clone())?);
+                    }
+                }
+                ensure_current(tx.sql(), &id)?;
+                if cache.len() >= 16384 {
+                    return Err(conflict("callback cache limit").into());
+                }
+                let reply = mutate(tx)?;
                 cache.insert(key, json!({"command":command,"reply":reply}));
                 tx.sql().execute(
                     "UPDATE attempts SET request=?2 WHERE attempt_id=?1",
@@ -649,8 +712,13 @@ impl<H: ExecutionHost> Coordinator<H> {
                 {
                     return Err(conflict("retry action outside run authority"));
                 }
-                self.writer()
-                    .write(RetrySafety::Idempotent, move |tx| {
+                let encoded = json!({"retry_on_failure":action});
+                self.callback_transaction(
+                    id.clone(),
+                    request.request_id.0,
+                    encoded,
+                    false,
+                    move |tx| {
                         let saved: Option<String> = tx.sql().query_row(
                             "SELECT completion_action FROM runs WHERE run_id=?1",
                             [id.run.to_string()],
@@ -682,8 +750,9 @@ impl<H: ExecutionHost> Coordinator<H> {
                             return Err(conflict("stale completion registration").into());
                         }
                         Ok(CommandReply::Ack)
-                    })
-                    .await
+                    },
+                )
+                .await
             }
             HelperCommand::Extension(HelperExtension::Tool(tool)) => {
                 if tool.name.starts_with("message.") {
@@ -699,6 +768,10 @@ impl<H: ExecutionHost> Coordinator<H> {
                         reads: self.reads().clone(),
                         plan_inputs: Arc::new(InputSetter(context)),
                         cancel: CancellationToken::new(),
+                        mutation_guard: Some(Arc::new({
+                            let id = id.clone();
+                            move |tx| ensure_current(tx.sql(), &id)
+                        })),
                     };
                     let operation =
                         crate::builtins::messages::dispatch(&tool.name, &tool.args, &ctx);
@@ -731,7 +804,8 @@ impl<H: ExecutionHost> Coordinator<H> {
                         | CommandRequest::AcquireLease(_)
                         | CommandRequest::ReleaseLease(_)
                         | CommandRequest::RegisterCompletionAction(_)
-                ) {
+                ) || project_mutation(&command)
+                {
                     self.callback(
                         id,
                         RpcRequest {
@@ -756,6 +830,18 @@ impl<H: ExecutionHost> Coordinator<H> {
                     if project != id.project {
                         return Err(conflict("tool project differs from run"));
                     }
+                    if !matches!(
+                        command,
+                        CommandRequest::PlanGet { .. }
+                            | CommandRequest::Status { .. }
+                            | CommandRequest::Messages(_)
+                            | CommandRequest::LogRead(_)
+                            | CommandRequest::FnList { .. }
+                            | CommandRequest::FnGet { .. }
+                            | CommandRequest::CallStatus { .. }
+                    ) {
+                        return Err(conflict("tool mutation is outside the run authority"));
+                    }
                     self.command(command).await?
                 };
                 match reply {
@@ -776,7 +862,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             return Err(conflict("payload cleanup is not proven"));
         }
         for start in &journal.starts {
-            self.started(id.clone(), start.invocation, start.executor.clone())
+            self.record_start(id.clone(), start.invocation, start.executor.clone())
                 .await?;
         }
         let snapshot = self.submissions(id.run).await?;
@@ -791,8 +877,34 @@ impl<H: ExecutionHost> Coordinator<H> {
             self.writer()
                 .write(RetrySafety::Idempotent, move |tx| {
                     let id = step_identity(&journal.identity)?;
-                    let catalog = frozen_catalog(tx.sql(), &journal.identity, &catalog)?;
-                    let ctx = context(tx.sql(), id.project, &catalog)?;
+                    let prior: Option<String> = tx.sql().query_row(
+                        "SELECT completion_id FROM runs WHERE run_id=?1 AND attempt_id=?2 AND project_id=?3 AND step_id=?4 AND generation=?5 AND work_generation=?6",
+                        (id.run.to_string(), id.attempt.to_string(), id.project.to_string(), id.step.as_str(), i64::try_from(id.generation.0).map_err(|_| conflict("generation overflow"))?, i64::try_from(id.work.0).map_err(|_| conflict("work generation overflow"))?), |r| r.get(0),
+                    )?;
+                    if let Some(prior) = prior {
+                        return if prior == journal.completion_id { Ok(()) } else { Err(conflict("stale completion").into()) };
+                    }
+                    let raw: String = tx.sql().query_row(
+                        "SELECT request FROM attempts WHERE attempt_id=?1",
+                        [id.attempt.to_string()],
+                        |r| r.get(0),
+                    )?;
+                    let mut frozen: Value = serde_json::from_str(&raw)?;
+                    let admitted: crate::execution::FrozenPlan = serde_json::from_value(
+                        frozen["provenance"]["runtime"]["completion"].clone(),
+                    )?;
+                    let admitted = admitted.context(id.project)?;
+                    let current = match context(tx.sql(), id.project, &catalog) {
+                        Ok(ctx) => Ok(ctx),
+                        Err(StoreError::Public(error)) => Err(error.to_string()),
+                        Err(error) => return Err(error),
+                    };
+                    frozen["runtime_reconciliation_error"] =
+                        current.as_ref().err().map_or(Value::Null, |e| json!(e));
+                    tx.sql().execute(
+                        "UPDATE attempts SET request=?2 WHERE attempt_id=?1",
+                        (id.attempt.to_string(), frozen.to_string()),
+                    )?;
                     for ack in &journal.delivery_acks {
                         require_invocation(tx.sql(), &journal.identity, ack.invocation)?;
                         sluice_store::messages::acknowledge_delivery(
@@ -803,9 +915,12 @@ impl<H: ExecutionHost> Coordinator<H> {
                         )?;
                     }
                     let (kind, outputs) = completion_kind(journal.result);
-                    if attempts::complete(
+                    if attempts::complete_frozen(
                         tx,
-                        &ctx,
+                        attempts::CompletionContext {
+                            admitted: &admitted,
+                            current: current.as_ref().map_err(String::as_str),
+                        },
                         attempts::Complete {
                             identity: id,
                             completion_id: journal.completion_id,
@@ -1281,42 +1396,137 @@ fn check_expected_revision(
     Ok(())
 }
 
-fn frozen_catalog(
-    sql: &Connection,
-    id: &AttemptKey,
-    catalog: &Catalog,
-) -> sluice_store::Result<Catalog> {
-    let mut catalog = catalog.for_project(id.project);
-    let raw: String = sql.query_row(
-        "SELECT request FROM attempts WHERE attempt_id=?1",
-        [id.attempt.to_string()],
+/// Callback lifetime is checked by the writer alongside every new mutation.
+fn current_run(sql: &Connection, id: &AttemptKey) -> sluice_store::Result<bool> {
+    let current: bool = sql.query_row(
+        "SELECT EXISTS(SELECT 1 FROM runs r JOIN attempts a USING(attempt_id)
+         LEFT JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id
+         LEFT JOIN calls c ON c.run_id=r.run_id
+         WHERE r.run_id=?1 AND r.attempt_id=?2 AND r.project_id IS ?3 AND r.step_id IS ?4
+         AND r.generation=?5 AND r.work_generation=?6 AND a.phase<>'terminal' AND r.finished_at IS NULL
+         AND ((r.step_id IS NOT NULL AND s.generation=r.generation AND s.work_generation=r.work_generation
+               AND EXISTS(SELECT 1 FROM json_each(s.run_ids) WHERE value=r.run_id))
+              OR (r.step_id IS NULL AND c.call_id=r.run_id AND c.status='running')))",
+        (id.run.to_string(), id.attempt.to_string(), id.project.map(|p| p.to_string()),
+         id.step.as_ref().map(ToString::to_string), i64::try_from(id.generation.0).map_err(|_| conflict("generation overflow"))?, i64::try_from(id.work.0).map_err(|_| conflict("work generation overflow"))?),
         |r| r.get(0),
     )?;
-    let frozen: Value = serde_json::from_str(&raw)?;
-    if !frozen["provenance"]["runtime"]["execution"].is_null() {
-        let execution: crate::publication::FrozenExecution =
-            serde_json::from_value(frozen["provenance"]["runtime"]["execution"].clone())?;
-        catalog.0.insert(
-            execution.name,
-            sluice_model::plan::FnSignature {
-                inputs: execution.inputs,
-                outputs: execution.outputs,
-                open: execution.open,
-                submits: execution
-                    .submits
-                    .into_iter()
-                    .map(|(n, p)| {
-                        (
-                            n,
-                            sluice_model::plan::Declaration {
-                                ty: p.r#type,
-                                doc: Some(p.doc),
-                            },
-                        )
-                    })
-                    .collect(),
-            },
-        );
+    Ok(current)
+}
+fn ensure_current(sql: &Connection, id: &AttemptKey) -> sluice_store::Result<()> {
+    if !current_run(sql, id)? {
+        return Err(conflict("callback run is no longer current").into());
     }
-    Ok(catalog)
+    Ok(())
+}
+
+fn project_mutation(command: &CommandRequest) -> bool {
+    matches!(
+        command,
+        CommandRequest::ProjectUpdate(_)
+            | CommandRequest::StepRetry(_)
+            | CommandRequest::StepCancel(_)
+            | CommandRequest::StepSetOutput(_)
+            | CommandRequest::PlanSetInput(_)
+    ) || edit_project(command).is_some()
+}
+fn mutate_project(
+    tx: &mut sluice_store::WriteTransaction<'_>,
+    catalog: &Catalog,
+    command: CommandRequest,
+) -> sluice_store::Result<CommandReply> {
+    match command {
+        CommandRequest::ProjectUpdate(update) => {
+            let project = projects::project_update(
+                tx,
+                &update.project,
+                projects::UpdateProject {
+                    new_name: update.new_name,
+                    description: update.description,
+                    icon: update.icon.map(projects::Icon::try_from).transpose()?,
+                    resources: update.resources.map(serde_json::to_value).transpose()?,
+                    paused: update.paused,
+                    archived: update.archived,
+                    expected_settings_rev: update.expected_settings_rev,
+                    reason: update.reason,
+                    author: update.author.unwrap_or_else(|| "cli".into()),
+                },
+                &ResourceSettings(catalog.clone()),
+            )?;
+            Ok(CommandReply::Project(ProjectIdentity {
+                project_id: project.project_id,
+                name: project.name,
+            }))
+        }
+        CommandRequest::StepRetry(request) => {
+            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+            let id = messages_project(tx.sql(), &request.project)?;
+            let ctx = context(tx.sql(), id, catalog)?;
+            check_expected_revision(&request, ctx.revision)?;
+            Ok(CommandReply::Retry(plans::step_retry(
+                tx, &ctx, request, &mut Hooks,
+            )?))
+        }
+        CommandRequest::StepCancel(request) => {
+            let id = messages_project(tx.sql(), &request.project)?;
+            let ctx = context(tx.sql(), id, catalog)?;
+            check_expected_revision(&request, ctx.revision)?;
+            plans::step_cancel(tx, &ctx, request)?;
+            Ok(CommandReply::Ack)
+        }
+        CommandRequest::StepSetOutput(request) => {
+            let id = messages_project(tx.sql(), &request.project)?;
+            let ctx = context(tx.sql(), id, catalog)?;
+            plans::step_set_output(tx, &ctx, request)?;
+            Ok(CommandReply::Ack)
+        }
+        CommandRequest::PlanSetInput(request) => {
+            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+            let id = messages_project(tx.sql(), &request.project)?;
+            let ctx = context(tx.sql(), id, catalog)?;
+            if request.edit.dry_run {
+                return Err(PublicError::not_implemented("input dry run").into());
+            }
+            if request.edit.expected.is_some_and(|r| r != ctx.revision) {
+                return Err(conflict("plan revision changed").into());
+            }
+            plans::set_input(
+                tx,
+                &ctx,
+                &request.name,
+                request.value,
+                request.edit.author.unwrap_or_default(),
+                request.edit.reason,
+            )?;
+            Ok(CommandReply::Ack)
+        }
+        other => {
+            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+            let project =
+                edit_project(&other).ok_or_else(|| conflict("unsupported project mutation"))?;
+            let id = messages_project(tx.sql(), &project)?;
+            let ctx = context(tx.sql(), id, catalog)?;
+            let state = plans::read_state(tx.sql(), id)?;
+            let snapshot = Snapshot {
+                revision: ctx.revision,
+                document: ctx.plan.document().clone(),
+            };
+            let prepared = edit::prepare_edit(
+                &EditSnapshot {
+                    snapshot: &snapshot,
+                    state: &state,
+                    signatures: &catalog.for_project(Some(id)),
+                    recipes: &Default::default(),
+                    resources: &CachedResources::default(),
+                    limits: &resource_limits(tx.sql(), id)?,
+                    prune_eligible: None,
+                },
+                PlanEdit::try_from(other)?,
+            )?;
+            if prepared.dry_run {
+                return Ok(CommandReply::Preview(prepared.preview));
+            }
+            Ok(CommandReply::Edit(plans::apply_edit(tx, id, prepared)?))
+        }
+    }
 }

@@ -98,6 +98,7 @@ impl Fixture {
             reads: self.reads.clone(),
             plan_inputs: Arc::new(NoPlanInputs),
             cancel,
+            mutation_guard: None,
         }
     }
     /// A live executing attempt+run pair, like the scheduler would have started.

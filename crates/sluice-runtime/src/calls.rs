@@ -495,7 +495,7 @@ pub async fn complete(writer: &Writer, request: CallCompletion) -> Result<bool, 
         tx.sql().execute("UPDATE attempts SET phase='terminal',finished_at=?2 WHERE attempt_id=?1",(request.attempt.to_string(),&at))?;
         tx.sql().execute("UPDATE runs SET result=?2,completion_id=?3,completion_ack=1,finished_at=?4 WHERE run_id=?1",(request.call.to_string(),result.to_string(),request.completion_id,&at))?;
         tx.sql().execute("UPDATE calls SET status=?2,outputs=?3,error=?4,finished_at=?5 WHERE call_id=?1",(request.call.to_string(),if error.is_some(){"failed"}else{"succeeded"},serde_json::to_string(&request.outputs)?,error.as_ref().map(serde_json::to_string).transpose()?,&at))?;
-        tx.sql().execute("UPDATE leases SET state=CASE WHEN state='waiting' THEN 'cancelled' ELSE 'released' END,released_at=?2,release_id='call/'||lease_id WHERE run_id=?1 AND state IN ('held','waiting')",(request.call.to_string(),at))?;
+        if request.project.is_some() { resources::release_stopped_run(tx, request.call)?; }
         let (direct,author):(bool,Option<String>)=tx.sql().query_row("SELECT direct,author FROM calls WHERE call_id=?1",[request.call.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
         tx.append_record(request.project,Event::Call{call:request.call,name:function.name,status,inputs:None,outputs:Some(request.outputs.clone()),error:error.clone(),direct,author})?;
         if let (Some(project), Some(capacity)) = (request.project, frozen.get("capacity")) {
