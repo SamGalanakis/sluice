@@ -528,6 +528,24 @@ async fn running_step_is_guarded_again_at_apply_but_pause_and_tags_are_allowed()
     assert_eq!(result.status, StepStatus::Succeeded);
 }
 #[tokio::test]
+async fn a_paused_step_can_be_given_its_result_without_force_and_downstream_starts() {
+    let f = Fixture::new(json!({"steps":{
+        "work":{"run":"echo","in":{"value":{"default":7}},"paused":"orchestrator made the commit"},
+        "land":{"run":"echo","in":{"value":{"source":"work/value"}}}
+    }}))
+    .await;
+    f.manual("work", json!({"value":7}), false).await;
+    let state = f.state().await;
+    assert_eq!(state.status(&id("work")), StepStatus::Succeeded);
+    assert!(state.steps[&id("work")].inputs_hash.is_some());
+    assert_eq!(state.status(&id("land")), StepStatus::Pending);
+    assert_eq!(
+        f.counts().await.2,
+        0,
+        "no attempt was launched for the paused step"
+    );
+}
+#[tokio::test]
 async fn force_only_bypasses_gate_without_losing_data_hash() {
     let f=Fixture::new(json!({"inputs":{"enabled":"boolean"},"steps":{"a":{"run":"echo","in":{"value":{"default":7}},"after":["enabled"]}}})).await;
     let context = f.context.clone();

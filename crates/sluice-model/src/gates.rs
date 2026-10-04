@@ -413,7 +413,9 @@ pub fn wait_reasons(plan: &Plan, state: &StateSnapshot, step: &Step) -> Vec<Stri
     reasons
 }
 /// Handoffs and gates only, with no holds applied.
-fn evaluate_inputs(plan: &Plan, state: &StateSnapshot, step: &Step) -> GateDecision {
+/// The step's handoffs and gate entries alone, ignoring its own and its project's pause:
+/// a pause holds back a launch, not a result recorded by hand.
+pub fn evaluate_inputs(plan: &Plan, state: &StateSnapshot, step: &Step) -> GateDecision {
     let handoffs =
         step.bindings.values().flat_map(Binding::references).map(
             |reference| match resolve_reference(plan, state, reference) {

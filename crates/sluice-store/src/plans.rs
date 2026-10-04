@@ -867,7 +867,8 @@ pub fn step_set_output(
     }
     validate_outputs(step, &request.outputs, false, false)?;
     if !request.force {
-        let errors = match gates::evaluate_step(&context.plan, &state, step) {
+        // Pauses hold back launches only; a paused step can still be given its result.
+        let errors = match gates::evaluate_inputs(&context.plan, &state, step) {
             GateDecision::Ready => vec![],
             GateDecision::Wait(reasons) => reasons,
             GateDecision::Skip(reasons) => reasons.into_iter().map(|r| r.to_string()).collect(),

@@ -606,7 +606,9 @@ the same totals as `needs`. A run that ends releases its leases. Grants and rele
 - `step_set_output(project, step, outputs, force?, reason?)`: marks a non-running step
   `succeeded` with `manual: true`, outputs checked against the step's outputs (arrays for a
   scattered step). Without `force`, refused (`invalid`, "step gates or inputs are not ready")
-  while a gate is unsatisfied or something it reads is not ready. A `step.output` record.
+  while a gate is unsatisfied or something it reads is not ready. A pause, the step's or its
+  project's, does not block it: pausing holds back a launch, so a paused step can be given its
+  result without ever starting. A `step.output` record.
 
 ### 7.8 Message delivery and `prev_run`
 
