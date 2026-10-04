@@ -651,7 +651,7 @@ fn check_schema(schema: &Value, outputs: &JsonMap) -> Result<()> {
     }
 }
 pub fn step_submit(tx: &mut WriteTransaction<'_>, request: StepSubmit) -> Result<Option<u64>> {
-    let row: Option<(String,i64,i64,String)> = tx.sql().query_row("SELECT r.attempt_id,r.generation,r.work_generation,a.request FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1 AND r.project_id=?2 AND r.step_id=?3",params![request.run.to_string(),request.project.to_string(),request.step.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+    let row: Option<(String,i64,i64,String)> = tx.sql().query_row("SELECT r.attempt_id,r.generation,r.work_generation,a.request FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1 AND r.project_id=?2 AND r.step_id=?3 AND r.finished_at IS NULL",params![request.run.to_string(),request.project.to_string(),request.step.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
     let Some((attempt, generation, work, frozen)) = row else {
         return Ok(None);
     };
@@ -668,7 +668,7 @@ pub fn step_submit(tx: &mut WriteTransaction<'_>, request: StepSubmit) -> Result
     );
     if !matches!(
         current_callback(tx, &id)?.as_deref(),
-        Some("claimed" | "executing")
+        Some("reserved" | "claimed" | "executing")
     ) {
         return Ok(None);
     }

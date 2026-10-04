@@ -218,6 +218,145 @@ async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once() {
     );
 }
 #[tokio::test]
+async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedback() {
+    let (_home, b, f, p) = setup().await;
+    b.acquire_scheduler("s".into()).await.unwrap();
+    for round in 0..2 {
+        reconcile_project(&b, p, "s").await.unwrap();
+        let l = f.0.lock().unwrap()[round].clone();
+        let run = l.identity.run;
+        let phase: String = b
+            .reads()
+            .snapshot(move |sql| {
+                Ok(sql.query_row(
+                    "SELECT a.phase FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1",
+                    [run.to_string()],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(phase, "reserved");
+        let submit = request(
+            json!({"command":"step_submit","args":{"project":p,"step":"work","run":run,"outputs":{"submitted":true},"author":"fixture"}}),
+        );
+        assert!(matches!(
+            b.command(submit.clone()).await.unwrap(),
+            CommandReply::Ack
+        ));
+        let callback = RpcRequest {
+            protocol: 1,
+            request_id: RequestId("reserved-submit".into()),
+            run_capability: Some(l.capability.clone()),
+            command: submit.clone(),
+        };
+        for _ in 0..2 {
+            b.guardian(
+                C::Callback {
+                    identity: l.identity.clone(),
+                    request: Box::new(callback.clone()),
+                },
+                Some(&l.capability),
+            )
+            .await
+            .unwrap();
+        }
+        let submitted = b.submissions(run).await.unwrap();
+        assert_eq!(submitted.version, Some(2));
+        b.guardian(C::Claim(guardian(&l)), Some(&l.capability))
+            .await
+            .unwrap();
+        b.complete(CompletionJournal {
+            protocol: 1,
+            identity: l.identity.clone(),
+            completion_id: format!("reserved-submit-{round}"),
+            result: PayloadResult::Succeeded(decode_json(br#"{"value":1}"#).unwrap()),
+            starts: vec![],
+            exits: vec![],
+            cleanup: vec![CleanupEvidence {
+                cgroup: "fake".into(),
+                empty: true,
+                escalated: false,
+            }],
+            submissions: submitted.fields,
+            submission_version: submitted.version,
+            delivery_acks: vec![],
+        })
+        .await
+        .unwrap();
+        assert!(b.command(submit).await.is_err());
+        let mut fresh = callback;
+        fresh.request_id = RequestId("terminal-submit".into());
+        assert!(
+            b.guardian(
+                C::Callback {
+                    identity: l.identity.clone(),
+                    request: Box::new(fresh),
+                },
+                Some(&l.capability),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(b.submissions(run).await.unwrap().version, Some(2));
+        if round == 0 {
+            b.command(request(json!({"command":"step_retry","args":{"project":{"kind":"id","value":p},"selection":{"steps":["work"],"tags":null},"message":"Continue with feedback","reason":"fixture","author":"fixture"}}))).await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn superseded_nonterminal_run_refuses_new_submissions() {
+    for ownership in ["generation", "work_generation", "run_ids"] {
+        let (_home, b, f, p) = setup().await;
+        b.acquire_scheduler("s".into()).await.unwrap();
+        reconcile_project(&b, p, "s").await.unwrap();
+        let l = f.0.lock().unwrap()[0].clone();
+        b.guardian(C::Claim(guardian(&l)), Some(&l.capability))
+            .await
+            .unwrap();
+        b.writer()
+            .write(sluice_store::RetrySafety::Idempotent, move |tx| {
+                let update = match ownership {
+                    "generation" => "UPDATE steps SET generation=generation+1 WHERE project_id=?1",
+                    "work_generation" => {
+                        "UPDATE steps SET work_generation=work_generation+1 WHERE project_id=?1"
+                    }
+                    "run_ids" => "UPDATE steps SET run_ids='[]' WHERE project_id=?1",
+                    _ => unreachable!(),
+                };
+                tx.sql().execute(update, [p.to_string()])?;
+                tx.changed(Some(p), "status");
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let submit = request(
+            json!({"command":"step_submit","args":{"project":p,"step":"work","run":l.identity.run,"outputs":{"submitted":true},"author":"fixture"}}),
+        );
+        assert!(b.command(submit.clone()).await.is_err(), "{ownership}");
+        assert!(
+            b.guardian(
+                C::Callback {
+                    identity: l.identity.clone(),
+                    request: Box::new(RpcRequest {
+                        protocol: 1,
+                        request_id: RequestId("superseded-submit".into()),
+                        run_capability: Some(l.capability.clone()),
+                        command: submit,
+                    }),
+                },
+                Some(&l.capability),
+            )
+            .await
+            .is_err(),
+            "{ownership}"
+        );
+        assert_eq!(b.submissions(l.identity.run).await.unwrap().version, None);
+    }
+}
+
+#[tokio::test]
 async fn callbacks_deduplicate_atomically_and_completion_replay_does_not_release_replacement() {
     let (_home, b, f, p) = setup().await;
     b.acquire_scheduler("s".into()).await.unwrap();
