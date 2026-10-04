@@ -1305,25 +1305,6 @@ impl<H: ExecutionHost> Coordinator<H> {
                         self.release_scheduler(owner).await?;
                     }
                 }
-                RuntimeCommand::ReleaseCutover { generation } => {
-                    let home = self.home().to_path_buf();
-                    let result = self.writer().write(RetrySafety::Idempotent, move |tx| {
-                        crate::install::verify_cutover_release(&home, generation)?;
-                        tx.sql().execute("UPDATE maintenance SET mode='normal',owner=NULL,paused_projects='[]',revision=revision+1,changed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton=1 AND mode='cutover'", [])?;
-                        tx.changed(None, "maintenance");
-                        Ok(CommandReply::Ack)
-                    }).await;
-                    write_reply(
-                        &mut stream,
-                        &Reply {
-                            protocol: 1,
-                            request_id,
-                            result,
-                        },
-                    )
-                    .await
-                    .map_err(storage)?;
-                }
                 RuntimeCommand::Changes(cursor) => {
                     let result = self.changes(cursor).await;
                     write_reply(
@@ -1528,7 +1509,6 @@ impl<H: ExecutionHost> RuntimeApi for Coordinator<H> {
 pub enum RuntimeCommand {
     AcquireScheduler { owner: String },
     Changes(ChangeCursor),
-    ReleaseCutover { generation: u64 },
 }
 pub use crate::client::CoordinatorClient;
 
@@ -1788,7 +1768,7 @@ fn mutate_project(
             }))
         }
         CommandRequest::StepRetry(request) => {
-            crate::drain::ensure_edit(tx)?;
+            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
             let id = messages_project(tx.sql(), &request.project)?;
             let ctx = context(tx.sql(), id, catalog)?;
             check_expected_revision(&request, ctx.revision)?;
@@ -1810,7 +1790,7 @@ fn mutate_project(
             Ok(CommandReply::Ack)
         }
         CommandRequest::PlanSetInput(request) => {
-            crate::drain::ensure_edit(tx)?;
+            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
             let id = messages_project(tx.sql(), &request.project)?;
             let ctx = context(tx.sql(), id, catalog)?;
             if request.edit.dry_run {
@@ -1830,7 +1810,7 @@ fn mutate_project(
             Ok(CommandReply::Ack)
         }
         other => {
-            crate::drain::ensure_edit(tx)?;
+            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
             let project =
                 edit_project(&other).ok_or_else(|| conflict("unsupported project mutation"))?;
             let id = messages_project(tx.sql(), &project)?;

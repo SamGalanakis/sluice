@@ -46,19 +46,6 @@ pub fn ensure_admission(
     }
     Err(busy(format!("{mode} rejects new work")).into())
 }
-/// Maintenance commands can edit/retry while cutover holds admission closed.
-pub fn ensure_edit(tx: &WriteTransaction<'_>) -> sluice_store::Result<()> {
-    let mode: String =
-        tx.sql()
-            .query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
-                r.get(0)
-            })?;
-    if mode == "cutover" {
-        Ok(())
-    } else {
-        ensure_admission(tx, &Admission::Plan)
-    }
-}
 /// Register before the dispatch table. Resource observations use ensure_admission
 /// with a coordinator-created Capacity request, never user-provided privilege.
 pub async fn check_command(reads: &ReadPool, request: &CommandRequest) -> Result<(), PublicError> {
@@ -82,14 +69,13 @@ pub async fn check_command(reads: &ReadPool, request: &CommandRequest) -> Result
     if !fenced {
         return Ok(());
     }
-    let user_call = matches!(request, CommandRequest::FnCall(_));
     reads
         .snapshot(move |sql| {
             let mode: String =
                 sql.query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
                     r.get(0)
                 })?;
-            if mode != "normal" && (mode != "cutover" || user_call) {
+            if mode != "normal" {
                 return Err(busy(format!("{mode} rejects new plan work and user calls")).into());
             }
             Ok(())
@@ -127,7 +113,6 @@ pub async fn drain(
     }
     writer.write(RetrySafety::NonIdempotent,move|tx|{
         let (mode,owner,ledger):(String,Option<String>,String)=tx.sql().query_row("SELECT mode,owner,paused_projects FROM maintenance WHERE singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-        if mode=="cutover"{return Err(busy("cutover fence cannot be drained").into());}
         if mode=="drain" && owner.as_deref()!=Some(&author){return Err(PublicError::Conflict{message:format!("drain belongs to {}",owner.as_deref().unwrap_or("unknown")),current_rev:None}.into());}
         let targets=if let Some(selectors)=projects.filter(|s|!s.is_empty()){
             selectors.iter().map(|s|messages::resolve_project(tx.sql(),s)).collect::<sluice_store::Result<Vec<_>>>()?
@@ -152,11 +137,10 @@ pub async fn drain(
         tx.changed(None,"maintenance");Ok(added)
     }).await
 }
-/// Explicit release may recover an absent owner's drain. Cutover is a distinct fence.
+/// Explicit release may recover an absent owner's drain.
 pub async fn release(writer: &Writer, author: String) -> Result<Vec<ProjectId>, PublicError> {
     writer.write(RetrySafety::NonIdempotent,move|tx|{
         let (mode,ledger):(String,String)=tx.sql().query_row("SELECT mode,paused_projects FROM maintenance WHERE singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        if mode=="cutover"{return Err(busy("release cannot clear the cutover fence").into());}
         if mode=="normal"{return Ok(vec![]);}
         let ledger:Vec<ProjectId>=serde_json::from_str(&ledger)?;
         let mut released=vec![];

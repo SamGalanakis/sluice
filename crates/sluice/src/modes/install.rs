@@ -6,23 +6,16 @@ pub fn run(mode: Mode, _home: PathBuf) -> ModeFuture {
         let Mode::Install { command } = mode else {
             unreachable!()
         };
-        if matches!(command, InstallCommand::Unfence) {
-            let install = Installation::configured()?;
-            let result = sluice_runtime::install::release_cutover_checked(install, |release| {
-                if release.join("manifest.json").is_file() {
-                    crate::release::verify(release)?;
-                }
-                Ok(())
-            })
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&result).expect("status"));
-            return Ok(());
-        }
         let result = tokio::task::spawn_blocking(move || {
             let install = Installation::configured()?;
             match command {
                 InstallCommand::Fence { reason } => install.fence(reason),
-                InstallCommand::Unfence => install.unfence(),
+                InstallCommand::Unfence => install.unfence_checked(|release| {
+                    if release.join("manifest.json").is_file() {
+                        crate::release::verify(release)?;
+                    }
+                    Ok(())
+                }),
                 InstallCommand::Select { release_dir, home } => {
                     if release_dir.join("manifest.json").is_file() {
                         crate::release::verify(&release_dir)?;

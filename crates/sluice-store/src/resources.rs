@@ -294,9 +294,6 @@ pub fn capacity_observations(conn: &Connection, project: ProjectId) -> Result<Ve
         conn.query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
             r.get(0)
         })?;
-    if mode == "cutover" {
-        return Ok(vec![]);
-    }
     let mut out = vec![];
     for resource in declarations(conn, project)?.into_values() {
         if !matches!(resource.declaration, Capacity::Function(_)) {
@@ -613,16 +610,8 @@ fn lease_record(
     Ok(())
 }
 /// Run before new step admission. Each grant becomes visible to the next fit.
-/// Drain permits existing sections; cutover fences new grants.
+/// Drain permits existing sections.
 pub fn grant_leases(tx: &mut WriteTransaction<'_>, project: ProjectId) -> Result<Vec<LeaseId>> {
-    let mode: String =
-        tx.sql()
-            .query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
-                r.get(0)
-            })?;
-    if mode == "cutover" {
-        return Ok(vec![]);
-    }
     let mut granted = vec![];
     for lease in leases(tx.sql(), project)? {
         if lease.state != LeaseState::Waiting {

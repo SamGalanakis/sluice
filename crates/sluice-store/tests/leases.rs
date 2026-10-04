@@ -513,17 +513,6 @@ async fn dynamic_requests_wait_above_capacity_and_zero_grows_during_drain() {
     // New section callbacks remain allowed for already admitted work in drain.
     let next = f.request(a, "land", 1).await.unwrap();
     assert_eq!(f.grant().await, [next]);
-    f.mode("cutover").await;
-    let queued = f.request(a, "land", 1).await.unwrap();
-    assert!(f.grant().await.is_empty());
-    assert!(
-        f.reads
-            .snapshot(move |c| r::capacity_observations(c, p))
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(f.release(queued, a).await);
     assert!(f.release(next, a).await);
 }
 

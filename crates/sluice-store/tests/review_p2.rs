@@ -632,7 +632,7 @@ async fn real_start_hook_accepts_first_run_started() {
 #[tokio::test]
 async fn reservation_rechecks_durable_maintenance_fence() {
     let mut admitted = vec![];
-    for mode in ["drain", "cutover"] {
+    for mode in ["drain"] {
         let f = Fixture::new(json!({"steps":{"a":{"run":"empty"}}})).await;
         let request = f.request("a", json!({}), -1, None).await;
         f.writer
@@ -1337,7 +1337,7 @@ async fn start_hook_failure_rolls_back_evidence_cursor_and_versions() {
 
 #[tokio::test]
 async fn maintenance_preserves_empty_reservation_replay_and_completion() {
-    for mode in ["drain", "cutover"] {
+    for mode in ["drain"] {
         let f = Fixture::new(json!({"steps":{"a":{"run":"empty"}}})).await;
         let request = f.request("a", json!({}), -1, None).await;
         let original = real_reserve(&f, request.clone(), RealHooks::default()).await;

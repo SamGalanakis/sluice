@@ -78,7 +78,7 @@ assets are compiled into the binary.
 | `install status` | read only |
 | `install fence <reason>` | writes `fence.json` under the exclusive lock; while fenced, every coordinator activation and admission write is refused (`maintenance: <reason> (generation n)`), except a coordinator started with `--maintenance` |
 | `install select <release_dir> <home>` | verifies the release's manifest (when it has one) and records the selection |
-| `install unfence` | verifies the selected release, clears the selected home's `cutover` maintenance mode through its coordinator when one is set, and removes the fence |
+| `install unfence` | verifies the selected release and removes the fence |
 
 A home that is not the installation's selected home refuses admission (`maintenance: stale
 selected home`). Without a release and without `SLUICE_INSTALL_DIR` (a source build), the
@@ -154,8 +154,7 @@ and, while some client holds the **scheduler lease**, admits and launches work.
 - Any CLI command that needs it, `serve` and `loop` connect to the socket and, when nothing
   answers, start the coordinator as the transient user unit `sluice-coordinator-<sha16(home)>`
   (`systemd-run --user --collect --service-type=exec -p Restart=no`) and wait up to 10 s for
-  its socket. Activation is refused while the installation is fenced and while the home's
-  maintenance mode is `cutover`.
+  its socket. Activation is refused while the installation is fenced.
 - `coordinator --maintenance` may start while the installation is fenced; `scripts/deploy` uses
   it.
 - The scheduler lease is one per home: `serve` takes it unless `--no-runner`, `loop` takes it,
@@ -185,7 +184,7 @@ are checked by `sluice doctor`; see `docs/rust/host-prerequisites.md`.
 
 ### 2.6 Maintenance modes
 
-The home has one maintenance mode: `normal`, `drain` or `cutover`.
+The home has one maintenance mode: `normal` or `drain`.
 
 - **drain** (`drain` tool, `sluice drain`): pauses the selected projects (default every
   project not archived) that are not paused already, records them and the drain's author as
@@ -193,8 +192,6 @@ The home has one maintenance mode: `normal`, `drain` or `cutover`.
   work and user calls"): plan edits, retries, input sets and `fn_call`. Running steps and calls
   finish. Draining again with another author is a `conflict`. `release` unpauses exactly the
   recorded projects and returns to `normal`.
-- **cutover**: admission closed and coordinator activation refused. Nothing in this build
-  enters it; `install unfence` clears it.
 
 ## 3. Storage
 

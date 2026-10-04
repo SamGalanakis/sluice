@@ -180,20 +180,17 @@ fn p7_install_paused_and_old_socket_clients_refuse_fenced_admission_and_dead_bro
 #[test]
 fn p7_install_maintenance_boot_serves_edits_retry_and_status_without_admission() {
     let mut gate = support::Gate::new();
-    assert!(gate.cli(&["install", "fence", "cutover"]).status.success());
+    assert!(
+        gate.cli(&["install", "fence", "maintenance"])
+            .status
+            .success()
+    );
     gate.boot(Path::new(env!("CARGO_BIN_EXE_sluice")), true);
     let CommandReply::Project(project) = gate.rpc(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}})).unwrap() else { panic!("project") };
     let selector = json!({"kind":"id","value":project.project_id});
-    // Set the importer's durable home mode through the writer while stopped.
-    gate.stop();
-    let db = rusqlite::Connection::open(gate.home.join("sluice.db")).unwrap();
-    db.execute("UPDATE maintenance SET mode='cutover'", [])
-        .unwrap();
-    drop(db);
-    gate.boot(Path::new(env!("CARGO_BIN_EXE_sluice")), true);
     gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"add","path":"/steps/work","value":{"run":"fixture.echo","in":{"value":{"default":1}}}}],"start":true,"dry_run":false,"author":"test","reason":"maintenance edit"}})).unwrap();
     gate.rpc(json!({"command":"step_set_output","args":{"project":selector,"step":"work","outputs":{"value":1},"force":true,"reason":"fixture terminal result","author":"test"}})).unwrap();
-    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"maintenance feedback","author":"test","reason":"cutover"}})).unwrap();
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"maintenance feedback","author":"test","reason":"maintenance"}})).unwrap();
     assert!(gate.rpc(json!({"command":"status","args":{"project":selector,"selection":{"steps":null,"tags":null}}})).is_ok());
     assert!(matches!(gate.rpc(call()), Err(PublicError::Busy { .. })));
     // A manifest marker makes this a Rust selection for the ordered release API.
@@ -203,20 +200,14 @@ fn p7_install_maintenance_boot_serves_edits_retry_and_status_without_admission()
         .unwrap()
         .select(&release, &gate.home)
         .unwrap();
-    let runtime = sluice_runtime::coordinator::executor().unwrap();
-    let status = runtime
-        .block_on(sluice::install::release_cutover(
-            Installation::at(gate.install.clone()).unwrap(),
-        ))
+    let status = Installation::at(gate.install.clone())
+        .unwrap()
+        .unfence_checked(|selected| {
+            assert_eq!(selected, std::fs::canonicalize(&release).unwrap());
+            Ok(())
+        })
         .unwrap();
     assert!(status.fence.is_none());
-    let db = rusqlite::Connection::open(gate.home.join("sluice.db")).unwrap();
-    assert_eq!(
-        db.query_row("SELECT mode FROM maintenance", [], |r| r
-            .get::<_, String>(0))
-            .unwrap(),
-        "normal"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

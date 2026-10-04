@@ -297,7 +297,7 @@ async fn zero_capacity_drain_growth_grants_admitted_section_then_completion_stop
     w.shutdown().await.unwrap();
 }
 #[tokio::test]
-async fn pending_calls_are_reported_without_relaunching_and_cutover_is_distinct() {
+async fn pending_calls_are_reported_without_relaunching() {
     let (_h, w, r) = setup().await;
     let p = project(&w).await;
     let g = Arc::new(Guardian::default());
@@ -321,18 +321,6 @@ async fn pending_calls_are_reported_without_relaunching_and_cutover_is_distinct(
             .await
             .is_ok()
     );
-    w.write(RetrySafety::NonIdempotent, |tx| {
-        tx.sql().execute(
-            "UPDATE maintenance SET mode='cutover' WHERE singleton=1",
-            [],
-        )?;
-        tx.changed(None, "maintenance");
-        Ok(())
-    })
-    .await
-    .unwrap();
-    assert!(drain::release(&w, "owner".into()).await.is_err());
-    assert!(drain::observations(&r, p).await.unwrap().is_empty());
     s.close().await;
     w.shutdown().await.unwrap();
 }

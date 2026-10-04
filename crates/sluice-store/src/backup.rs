@@ -36,9 +36,8 @@ pub struct BackupInfo {
 }
 
 /// An assertion that the caller holds this durable admission fence and freezes
-/// filesystem publication, writes and cleanup until export returns. Both mode
-/// `drain` and `cutover` qualify, but mode `normal`, absent/stale ownership and
-/// a changed revision do not. This function does not acquire the caller's fence.
+/// filesystem publication, writes and cleanup until export returns. Mode `drain`
+/// qualifies, but mode `normal`, absent/stale ownership and a changed revision do not. This function does not acquire the caller's fence.
 #[derive(Debug, Clone)]
 pub struct AdmissionPaused {
     pub owner: String,
@@ -196,7 +195,7 @@ fn check_paused(connection: &Connection, paused: &AdmissionPaused) -> Result<()>
         [],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-    if !matches!(mode.as_str(), "drain" | "cutover")
+    if mode != "drain"
         || paused.owner.is_empty()
         || owner.as_deref() != Some(paused.owner.as_str())
         || revision != paused.revision

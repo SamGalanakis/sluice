@@ -181,7 +181,18 @@ impl Installation {
         self.unlocked_status()
     }
     pub fn unfence(&self) -> Result<Status, PublicError> {
+        self.unfence_checked(|_| Ok(()))
+    }
+    /// Remove the fence after `verify` accepts the selected release, both under the
+    /// exclusive lock, so the release that admission will run is the one checked.
+    pub fn unfence_checked<F>(&self, verify: F) -> Result<Status, PublicError>
+    where
+        F: FnOnce(&Path) -> Result<(), PublicError>,
+    {
         let _lock = self.lock(true)?;
+        if let Some(selection) = self.unlocked_status()?.selection {
+            verify(&selection.release_path)?;
+        }
         let generation = self.next()?;
         self.publish("generation.json", &generation)?;
         match fs::remove_file(self.dir.join("fence.json")) {
@@ -310,94 +321,6 @@ where
         })
         .await?;
     Ok(value)
-}
-
-/// The release client owns the exclusive installation guard. This actor-side
-/// check reads that generation without attempting a conflicting shared lock.
-pub fn verify_cutover_release(home: &Path, generation: u64) -> Result<(), PublicError> {
-    let status = Installation::for_home(home)?.unlocked_status()?;
-    if status.generation != generation
-        || status.fence.is_none()
-        || status.selection.as_ref().map(|s| &s.home_path)
-            != Some(&sluice_process::host::resolve_path(home).map_err(storage)?)
-    {
-        return Err(maintenance(
-            "cutover release has a stale installation generation",
-        ));
-    }
-    Ok(())
-}
-/// Clear the selected Rust home's cutover flag through its writer, then remove
-/// the installation fence. Any failed callback leaves the installation fenced.
-pub async fn release_cutover(installation: Installation) -> Result<Status, PublicError> {
-    release_cutover_checked(installation, |_| Ok(())).await
-}
-/// Verify the exact selected artifact while the exclusive publication guard is held.
-pub async fn release_cutover_checked<F>(
-    installation: Installation,
-    verify: F,
-) -> Result<Status, PublicError>
-where
-    F: FnOnce(&Path) -> Result<(), PublicError> + Send,
-{
-    use sluice_model::{
-        commands::CommandReply,
-        ids::InvocationId,
-        rpc::{PROTOCOL_VERSION, RequestId},
-    };
-    use sluice_process::socket::{self, Reply, Request};
-    let copy = installation.clone();
-    let _exclusive = tokio::task::spawn_blocking(move || copy.lock(true))
-        .await
-        .map_err(storage)??;
-    let status = installation.unlocked_status()?;
-    if status.fence.is_none() {
-        return Ok(status);
-    }
-    let selection = status
-        .selection
-        .as_ref()
-        .ok_or_else(|| maintenance("cannot release an installation without a selection"))?;
-    verify(&selection.release_path)?;
-    if selection.release_path.join("manifest.json").is_file()
-        && selection.home_path.join("sluice.db").is_file()
-    {
-        let mut stream =
-            tokio::net::UnixStream::connect(selection.home_path.join("coordinator.sock"))
-                .await
-                .map_err(storage)?;
-        let id = RequestId(InvocationId::new().to_string());
-        socket::write_frame(
-            &mut stream,
-            &Request {
-                protocol: PROTOCOL_VERSION,
-                request_id: id.clone(),
-                run_capability: None,
-                command: crate::coordinator::RuntimeCommand::ReleaseCutover {
-                    generation: status.generation,
-                },
-            },
-        )
-        .await
-        .map_err(storage)?;
-        let reply: Reply<CommandReply> = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            socket::read_frame(&mut stream),
-        )
-        .await
-        .map_err(storage)?
-        .map_err(storage)?;
-        if reply.protocol != PROTOCOL_VERSION || reply.request_id != id {
-            return Err(storage("cutover release reply mismatch"));
-        }
-        reply.result?;
-    }
-    installation.publish("generation.json", &installation.next()?)?;
-    fs::remove_file(installation.dir.join("fence.json")).map_err(storage)?;
-    File::open(&installation.dir)
-        .and_then(|f| f.sync_all())
-        .map_err(storage)?;
-    installation.unlocked_status()
 }
 
 /// Guardian executable identity is independent of the function bundle identity.

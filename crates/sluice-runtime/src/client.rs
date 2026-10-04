@@ -167,25 +167,6 @@ pub async fn ensure_coordinator(
         tokio::task::spawn_blocking(move || installation.admission_guard(&activation_home, false))
             .await
             .map_err(storage)??;
-    if home.join("sluice.db").exists() {
-        let reads = sluice_store::ReadPool::open(home, 1).map_err(|e| e.into_public(true))?;
-        let fenced = reads
-            .snapshot(|sql| {
-                Ok(sql.query_row(
-                    "SELECT mode='cutover' FROM maintenance WHERE singleton=1",
-                    [],
-                    |r| r.get::<_, bool>(0),
-                )?)
-            })
-            .await
-            .map_err(|e| e.into_public(true))?;
-        if fenced {
-            return Err(PublicError::Busy {
-                message: "cutover forbids coordinator activation".into(),
-                retryable: false,
-            });
-        }
-    }
     let digest = sluice_store::artifacts::fingerprint(home.as_os_str().as_encoded_bytes());
     let mut command = tokio::process::Command::new("/usr/bin/systemd-run");
     command
