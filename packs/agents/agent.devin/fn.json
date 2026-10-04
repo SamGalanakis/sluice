@@ -1,11 +1,11 @@
 {
   "name": "agent.devin",
-  "doc": "Run a supervised interactive Devin session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. Devin defaults to swe-2-high; model \"fusion\" runs Fusion (Claude Opus 5.5 High + SWE-2 Medium).",
+  "doc": "Run a supervised interactive Devin session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. model is a JSON object, by default {\"type\":\"normal\",\"model\":\"swe-2\",\"effort\":\"high\"}: normal {\"type\":\"normal\",\"model\":M,\"effort\":E?,\"fast\":bool?} runs M[-E][-fast]; fusion {\"type\":\"fusion\",\"main\":{\"model\":M,\"effort\":E?,\"fast\":bool?},\"sidekick\":{\"model\":S,\"effort\":F?,\"priority\":bool?}} runs fusion-M[-E][-fast]-sidekick-S[-F][-priority]. The id must be one `devin models list` shows. The result's model names what ran (docs(\"plans\"), Choosing a model).",
   "open": true,
   "inputs": {
     "cwd": "string",
     "spec": "string",
-    "model": "string?",
+    "model": "Any?",
     "log": "string?",
     "session": "string?",
     "report_path": "string?",
@@ -14,6 +14,7 @@
   "outputs": {
     "log": "string",
     "final": "string",
+    "model": "string",
     "report": "string?",
     "session": "string",
     "git": [

@@ -266,8 +266,8 @@ pub struct SupervisorConfig {
     pub previous: Option<PreviousSession>,
     pub assigned: AssignedRange,
     pub messages: Vec<DeliveryMessage>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
+    /// The `model` input; `None` runs the engine default.
+    pub model: Option<crate::model::ModelChoice>,
     pub limits: Limits,
     pub retry: RetryPolicy,
     pub internal_attempt: u32,
@@ -332,6 +332,9 @@ pub struct AgentResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<GitFacts>,
     pub notes: Vec<String>,
+    /// The model id the run resolved and launched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 #[derive(Debug, Clone, Default)]
 pub struct HostSnapshot {
@@ -804,9 +807,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             "adapter engine differs from request",
         ));
     }
-    profile
-        .validate_selection(config.model.as_deref(), config.effort.as_deref())
-        .map_err(AgentFailure::from)?;
+    let model = launch_model(engine, &profile, config.model.as_ref()).await?;
     let existing = Checkpoint::read(&config.run_dir).map_err(invalid)?;
     let mut checkpoint = if let Some(mut previous) = existing {
         if previous.version != 1
@@ -909,8 +910,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
     let context = EngineContext {
         run_dir: config.run_dir.clone(),
         cwd: config.cwd.clone(),
-        model: config.model.clone(),
-        effort: config.effort.clone(),
+        model: model.clone(),
         tmux_binary: tmux.map(|artifact| artifact.binary().into()),
     };
     let mut server: Option<PrivateTmux> = None;
@@ -1029,7 +1029,23 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             .await
             .map_err(invalid)?,
         notes: machine.checkpoint.notes,
+        model: model.map(|m| m.id),
     })
+}
+/// The model this launch runs: the requested object or the engine's default, composed and
+/// checked against the engine's listing. An unknown id fails here, before anything starts.
+async fn launch_model<E: EngineAdapter>(
+    engine: &mut E,
+    profile: &EngineProfile,
+    requested: Option<&crate::model::ModelChoice>,
+) -> Result<Option<crate::model::ResolvedModel>, AgentFailure> {
+    let Some(choice) = requested.or(profile.default_model.as_ref()) else {
+        return Ok(None);
+    };
+    let catalog = engine.models().await.map_err(AgentFailure::from)?;
+    crate::model::resolve(&profile.engine, choice, &catalog)
+        .map(Some)
+        .map_err(invalid)
 }
 fn enqueue_message(
     checkpoint: &mut Checkpoint,

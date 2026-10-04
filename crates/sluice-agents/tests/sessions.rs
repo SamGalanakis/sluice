@@ -66,7 +66,6 @@ fn config(scratch: &Scratch) -> SupervisorConfig {
         },
         messages: vec![],
         model: None,
-        effort: None,
         limits: Limits::test_profile(),
         retry: RetryPolicy {
             backoff: Duration::from_millis(2),
@@ -139,6 +138,9 @@ struct CommitEngine {
 impl EngineAdapter for CommitEngine {
     fn profile(&self) -> EngineProfile {
         self.fake.profile()
+    }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        self.fake.models().await
     }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         self.fake.session(session).await
@@ -525,6 +527,9 @@ struct SubmitEngine {
 impl EngineAdapter for SubmitEngine {
     fn profile(&self) -> EngineProfile {
         self.fake.profile()
+    }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        self.fake.models().await
     }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         self.fake.session(session).await

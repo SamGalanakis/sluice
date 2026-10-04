@@ -127,14 +127,13 @@ fn fn_launched(engine: &str, real: bool) {
         "name":"g3.worker",
         "doc":"Run an agent through ctx.builtin('agent.run') as lash.worker does (labelled G3 scratch fixture).",
         "open":true,
-        "inputs":{"engine":{"type":"enum","symbols":["codex","claude","devin"]},"cwd":"string","spec":"string","model":"string?","effort":"string?","session":"string?","listen":"boolean?"},
+        "inputs":{"engine":{"type":"enum","symbols":["codex","claude","devin"]},"cwd":"string","spec":"string","model":"Any?","session":"string?","listen":"boolean?"},
         "outputs":{"summary":"string?","final":"string","session":"string"}
     }}}));
     let spec = "Do exactly this, in order. 1) Create ready.txt in the working directory containing the single word ready. 2) Run `sleep 30` in the foreground and wait for it to finish: while it runs the harness sends you one addressed live message. 3) Follow that message; it names the file to write and the word to submit. If no message has arrived when the sleep ends, finish your turn WITHOUT submitting anything; the message then arrives as your next turn. Do no other work.";
     let mut inputs = json!({"engine":{"default":engine},"cwd":{"default":cwd},"spec":{"default":spec},"listen":{"default":true}});
     if engine == "codex" && real {
-        inputs["model"] = json!({"default":"sol"});
-        inputs["effort"] = json!({"default":"low"});
+        inputs["model"] = json!({"default":{"type":"normal","model":"sol","effort":"low"}});
     }
     gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{},"steps":{"work":{"run":"g3.worker","in":inputs,"outputs":{"word":"string"}},"next":{"run":"core.echo","in":{"value":{"source":"work/word"}}}}}}],"start":true,"dry_run":false,"reason":"scratch fn-launched engine gate","author":"fixture"}}));
     gate.scheduling();

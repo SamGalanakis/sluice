@@ -24,6 +24,17 @@ use std::time::Duration;
 use support::home::ScratchHome;
 use tokio_util::sync::CancellationToken;
 
+/// The model a unit's agent step binds: the retired string for most, a model object for two,
+/// so the units view shows both.
+fn model(unit: &str) -> Value {
+    match unit {
+        "later" => json!({"type":"normal","model":"gpt-6-luna","effort":"max"}),
+        "held" => {
+            json!({"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2"}})
+        }
+        _ => json!("sol"),
+    }
+}
 /// Accepts every launch and never completes it: a launched step stays running.
 #[derive(Clone)]
 struct Fake;
@@ -76,7 +87,7 @@ impl Fixture {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("lane.json"),
-            json!({"name":"lane","params":{"model":"string"},"steps":{
+            json!({"name":"lane","params":{"model":"Any"},"steps":{
                 "{unit}-work":{"run":"fixture.submit","needs":{"lane":1},"in":{
                     "value":{"default":"{unit}"},"engine":{"default":"codex"},
                     "model":{"default":"{model}"},"effort":{"default":"xhigh"}}},
@@ -114,7 +125,7 @@ impl Fixture {
     async fn unit(&self, unit: &str, start: bool, after: Value) {
         self.ok(
             "unit_add",
-            json!({"project":"p","recipe":"lane","unit":unit,"params":{"model":"sol"},
+            json!({"project":"p","recipe":"lane","unit":unit,"params":{"model":model(unit)},
                    "start":start,"after":after,"reason":"test"}),
         )
         .await;
@@ -267,6 +278,8 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     assert_eq!(row("flow")["state"], "running");
     assert_eq!(row("flow")["steps"], "work▶ land· rm·");
     assert_eq!(row("flow")["engine"], "codex·sol·xhigh");
+    assert_eq!(row("later")["engine"], "codex·gpt-6-luna·max");
+    assert_eq!(row("held")["engine"], "codex·fusion·high");
     assert_eq!(row("flow")["blocked"], "");
     assert_eq!(row("flow")["last"], "Q: Which crate owns the parser?");
     assert!(row("flow")["age"].as_i64().unwrap() >= 0);

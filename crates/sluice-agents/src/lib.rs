@@ -4,6 +4,7 @@ pub mod doctor;
 pub use doctor::engine_diagnostics;
 pub mod engines;
 pub mod git;
+pub mod model;
 pub mod prompt;
 pub mod quiet;
 pub mod reprime;
@@ -38,6 +39,8 @@ pub const AGENT_BUILTINS: [&str; 6] = [
     "agent.claude",
     "agent.devin",
 ];
+/// The agent builtins with a `model` input, whose result names the model the run resolved.
+pub const MODEL_BUILTINS: [&str; 4] = ["agent.run", "agent.codex", "agent.devin", "agent.claude"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentDispatchError {
     EngineNotBuilt { engine: String },
@@ -127,7 +130,6 @@ impl<F: AgentFactory> AgentFnHost<F> {
         environment.config.cwd.clone_from(&request.cwd);
         environment.config.session.clone_from(&request.session);
         environment.config.model.clone_from(&request.model);
-        environment.config.effort.clone_from(&request.effort);
         environment.config.required = request.required.clone();
         environment.config.retry = request.retry;
         environment.config.retry.owner = owner;
@@ -208,8 +210,8 @@ pub struct AgentBuiltinRequest {
     pub cwd: PathBuf,
     pub task: String,
     pub session: Option<String>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
+    /// The `model` input; `None` runs the engine default.
+    pub model: Option<model::ModelChoice>,
     pub required: Vec<String>,
     pub report_path: Option<PathBuf>,
     pub retry: RetryPolicy,
@@ -242,14 +244,12 @@ impl AgentBuiltinRequest {
         if !["claude", "codex", "devin", "fake"].contains(&engine.as_str()) {
             return Err(bad(format!("unknown engine {engine}")));
         }
-        let model = string("model")?;
-        let effort = string("effort")?;
-        if engine != "codex" && effort.is_some() {
-            return Err(bad("effort is for the codex engine"));
-        }
-        if engine == "claude" && name != "decide.llm" && model.is_some() {
-            return Err(bad("the claude engine always runs Opus"));
-        }
+        let model = model::from_inputs(
+            &engine,
+            inputs.0.get("model").map(JsonValue::as_value),
+            inputs.0.get("effort").map(JsonValue::as_value),
+        )
+        .map_err(bad)?;
         let listen = match inputs.0.get("listen").map(JsonValue::as_value) {
             None | Some(Value::Null) => true,
             Some(Value::Bool(b)) => *b,
@@ -335,7 +335,6 @@ impl AgentBuiltinRequest {
             task: prompt::build(&text, &values, &ctx),
             session: string("session")?,
             model,
-            effort,
             required: prompt::required_outputs(&ctx),
             report_path: string("report_path")?.map(PathBuf::from),
             retry,
@@ -406,6 +405,11 @@ impl AgentBuiltinRequest {
                 );
             }
         }
+        if MODEL_BUILTINS.contains(&self.name.as_str())
+            && let Some(model) = result.model
+        {
+            fields.insert("model".into(), Value::String(model));
+        }
         if self.name != "decide.llm" {
             fields.insert("session".into(), Value::String(result.session));
             if let Some(facts) = result.git {
@@ -427,6 +431,8 @@ impl AgentBuiltinRequest {
     }
 }
 
+/// The one model the fixture engines list and run.
+pub const FIXTURE_MODEL: &str = "fixture";
 /// A deterministic adapter for pure policy tests and scripted fixture processes.
 pub struct ScriptedEngine {
     pub profile: EngineProfile,
@@ -445,8 +451,7 @@ impl ScriptedEngine {
                 engine: "fake".into(),
                 version_range: "fixture-v1".into(),
                 required_capabilities: vec![],
-                models: BTreeMap::new(),
-                efforts: vec![],
+                default_model: Some(model::ModelChoice::normal(FIXTURE_MODEL, None)),
                 reports_waiting: true,
             },
             frames: frames.into(),
@@ -471,6 +476,17 @@ impl ScriptedEngine {
 impl EngineAdapter for ScriptedEngine {
     fn profile(&self) -> EngineProfile {
         self.profile.clone()
+    }
+    /// Lists exactly its profile's default model, so a test may give it a real engine's
+    /// profile.
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        Ok(self
+            .profile
+            .default_model
+            .iter()
+            .filter_map(|m| model::compose(&self.profile.engine, m).ok())
+            .map(|m| m.id)
+            .collect())
     }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         Ok(self.sessions.get(session).cloned())
@@ -786,6 +802,9 @@ impl FixtureEngine {
 impl EngineAdapter for FixtureEngine {
     fn profile(&self) -> EngineProfile {
         ScriptedEngine::new(vec![]).profile
+    }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        Ok(vec![FIXTURE_MODEL.into()])
     }
     async fn session(&mut self, _session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         Ok(None)

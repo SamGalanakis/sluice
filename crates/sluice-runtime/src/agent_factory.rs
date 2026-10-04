@@ -43,6 +43,14 @@ impl EngineAdapter for Adapter {
     fn on_hook(&mut self, hook: HookEvent) -> Result<HookReply, EngineError> {
         adapter_call!(self, on_hook, hook)
     }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        match self {
+            Self::Codex(e) => e.models().await,
+            Self::Claude(e) => e.models().await,
+            Self::Devin(e) => e.models().await,
+            Self::Fake(e) => e.models().await,
+        }
+    }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         match self {
             Self::Codex(e) => e.session(session).await,
@@ -138,6 +146,9 @@ impl EngineAdapter for FixtureFaultEngine {
     }
     fn on_hook(&mut self, hook: HookEvent) -> Result<HookReply, EngineError> {
         self.inner.on_hook(hook)
+    }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        self.inner.models().await
     }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         self.inner.session(session).await
@@ -566,7 +577,6 @@ impl AgentFactory for Factory {
                 assigned: self.launch.assigned,
                 messages,
                 model: request.model,
-                effort: request.effort,
                 limits,
                 retry: request.retry,
                 internal_attempt: existing

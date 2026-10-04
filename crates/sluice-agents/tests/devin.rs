@@ -114,7 +114,6 @@ fn context(root: &Scratch, name: &str, tmux: bool) -> EngineContext {
         run_dir: run,
         cwd,
         model: None,
-        effort: None,
         tmux_binary: tmux.then(|| workspace().join("target/private-tmux/bin/tmux")),
     }
 }
@@ -427,7 +426,6 @@ fn supervisor_config(root: &Scratch) -> SupervisorConfig {
         },
         messages: vec![],
         model: None,
-        effort: None,
         limits: Limits {
             wall: Duration::from_secs(15),
             ready: Duration::from_secs(5),
@@ -514,18 +512,15 @@ async fn supervisor_devin_fresh_task_delivered_once_submission_and_finish() {
 #[test]
 fn devin_model_profile_and_composer_match_the_python_contract() {
     let profile = profile::profile();
-    for name in ["high", "swe-2-high"] {
-        assert_eq!(profile.models[name], "swe-2-high");
-    }
-    for name in ["fusion", profile::FUSION] {
-        assert_eq!(profile.models[name], profile::FUSION);
-    }
-    assert!(
-        profile
-            .validate_selection(Some("swe-2-medium"), None)
-            .is_err()
+    let default = profile.default_model.clone().unwrap();
+    assert_eq!(
+        default.to_value(),
+        json!({"type":"normal","model":"swe-2","effort":"high"})
     );
-    assert!(profile.validate_selection(None, Some("high")).is_err());
+    assert_eq!(
+        sluice_agents::model::compose("devin", &default).unwrap().id,
+        "swe-2-high"
+    );
     assert!(!profile.reports_waiting);
     let pane = include_str!("fixtures/devin/composer.txt");
     assert!(protocol::composer_ready(pane));
@@ -545,11 +540,13 @@ async fn devin_private_jsonc_config_preserves_settings_and_pins_fusion() {
     fs::write(&opts.config, raw).unwrap();
     let mut adapter = Devin::new(opts.clone());
     let mut ctx = context(&root, "run", false);
-    ctx.model = Some("fusion".into());
+    let fusion = sluice_agents::model::ModelChoice::parse(&json!({"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}})).unwrap();
+    ctx.model = Some(sluice_agents::model::compose("devin", &fusion).unwrap());
+    let fusion = "fusion-claude-opus-5-5-high-sidekick-swe-2-high";
     let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
     let cfg: Value =
         serde_json::from_slice(&fs::read(ctx.run_dir.join("devin-config.json")).unwrap()).unwrap();
-    assert_eq!(cfg["agent"]["model"], profile::FUSION);
+    assert_eq!(cfg["agent"]["model"], fusion);
     assert_eq!(cfg["theme_mode"], "dark");
     assert_eq!(cfg["permissions"], json!({"allow":["read"]}));
     assert_eq!(cfg["link"], "https://example.org/a//b");
@@ -563,12 +560,7 @@ async fn devin_private_jsonc_config_preserves_settings_and_pins_fusion() {
             & 0o777,
         0o600
     );
-    assert!(
-        launch
-            .argv
-            .windows(2)
-            .any(|w| w == ["--model", profile::FUSION])
-    );
+    assert!(launch.argv.windows(2).any(|w| w == ["--model", fusion]));
     assert_eq!(
         &launch.argv[launch.argv.len() - 4..],
         [

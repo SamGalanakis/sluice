@@ -619,6 +619,17 @@ impl EngineAdapter for Devin {
     fn profile(&self) -> EngineProfile {
         profile::profile()
     }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        let mut command = Command::new(&self.options.binary);
+        command
+            .args(["models", "list", "--format", "json"])
+            .env_clear()
+            .envs(&self.options.environment);
+        crate::model::cached("devin", &self.options.binary, async move {
+            profile::parse_models(&crate::model::listing(command, "Devin models").await?)
+        })
+        .await
+    }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         let alias = PathBuf::from(format!("{session}.session"));
         let session = if alias.is_file() {
@@ -675,8 +686,7 @@ impl EngineAdapter for Devin {
         context: &EngineContext,
         session: Option<&str>,
     ) -> Result<Option<EngineLaunch>, EngineError> {
-        self.profile()
-            .validate_selection(context.model.as_deref(), context.effort.as_deref())?;
+        let model = crate::model::launch_model("devin", context.model.as_ref())?.id;
         let mut version = Command::new(&self.options.binary);
         version
             .arg("--version")
@@ -752,7 +762,6 @@ impl EngineAdapter for Devin {
             Err(e) if e.kind() == io::ErrorKind::NotFound => "{}".into(),
             Err(e) => return Err(fatal(e)),
         };
-        let model = self.profile().models[context.model.as_deref().unwrap_or("swe-2-high")].clone();
         let cfg = protocol::config(
             &raw,
             &model,

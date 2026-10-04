@@ -399,9 +399,17 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// `codex debug models` as the real CLI printed it (each model's slug and reasoning efforts),
+/// for launch validation against the fixture.
+pub const FIXTURE_MODELS: &str = include_str!("models.json");
+
 pub fn fixture_main(args: &[String]) -> io::Result<()> {
     if args == ["--version"] {
         println!("codex-cli 0.160.0");
+        return Ok(());
+    }
+    if args == ["debug", "models"] {
+        print!("{FIXTURE_MODELS}");
         return Ok(());
     }
     if args.first().map(String::as_str) != Some("app-server") {

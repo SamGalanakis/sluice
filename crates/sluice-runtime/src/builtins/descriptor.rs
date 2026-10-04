@@ -323,16 +323,22 @@ gets them from `out`, a dict. `stdout` is what it printed.",
             BuiltinDescriptor {
                 name: "agent.claude",
                 doc: "Run a supervised interactive Claude session on a prompt in a \
-working directory. Always runs Opus. Submit declared step outputs before the \
-session ends; pass session to resume in the same directory.",
+working directory. Submit declared step outputs before the session ends; pass \
+session to resume in the same directory. Runs Opus: model is a JSON object, by \
+default {\"type\":\"normal\",\"model\":\"opus\",\"effort\":\"high\"}: \
+{\"type\":\"normal\",\"model\":M,\"effort\":E?} with M opus or claude-opus-5-5 and E \
+low, medium, high, xhigh or max. The result's model names what ran (docs(\"plans\"), \
+Choosing a model).",
                 inputs: ports(&[
                     ("cwd", "string"),
                     ("prompt", "string"),
+                    ("model", "Any?"),
                     ("session", "string?"),
                     ("listen", "boolean?"),
                 ]),
                 outputs: vec![
                     ("result", ty("string")),
+                    ("model", ty("string")),
                     ("session", ty("string")),
                     ("git", git_facts()),
                 ],
@@ -345,18 +351,15 @@ session ends; pass session to resume in the same directory.",
                 name: "agent.codex",
                 doc: "Run a supervised interactive Codex session on a spec in a working \
 directory. Submit declared step outputs before the session ends; pass session to \
-resume in the same directory. Models: sol (default) and astra; effort defaults to \
-high.",
+resume in the same directory. model is a JSON object, by default \
+{\"type\":\"normal\",\"model\":\"sol\",\"effort\":\"high\"}: \
+{\"type\":\"normal\",\"model\":M,\"effort\":E?}, a model `codex debug models` lists \
+(sol and astra name gpt-6.1-sol and gpt-6-astra) at an effort it supports. The result's \
+model names what ran (docs(\"plans\"), Choosing a model).",
                 inputs: vec![
                     ("cwd", ty("string")),
                     ("spec", ty("string")),
-                    ("model", optional(enumerated(&["sol", "astra"]))),
-                    (
-                        "effort",
-                        optional(enumerated(&[
-                            "minimal", "low", "medium", "high", "xhigh", "max",
-                        ])),
-                    ),
+                    ("model", ty("Any?")),
                     ("log", ty("string?")),
                     ("session", ty("string?")),
                     ("report_path", ty("string?")),
@@ -365,6 +368,7 @@ high.",
                 outputs: vec![
                     ("log", ty("string")),
                     ("final", ty("string")),
+                    ("model", ty("string")),
                     ("report", ty("string?")),
                     ("session", ty("string")),
                     ("git", git_facts()),
@@ -378,12 +382,17 @@ high.",
                 name: "agent.devin",
                 doc: "Run a supervised interactive Devin session on a spec in a working \
 directory. Submit declared step outputs before the session ends; pass session to \
-resume in the same directory. Devin defaults to swe-2-high; model \"fusion\" runs \
-Fusion (Claude Opus 5.5 High + SWE-2 Medium).",
+resume in the same directory. model is a JSON object, by default \
+{\"type\":\"normal\",\"model\":\"swe-2\",\"effort\":\"high\"}: normal \
+{\"type\":\"normal\",\"model\":M,\"effort\":E?,\"fast\":bool?} runs M[-E][-fast]; \
+fusion {\"type\":\"fusion\",\"main\":{\"model\":M,\"effort\":E?,\"fast\":bool?},\
+\"sidekick\":{\"model\":S,\"effort\":F?,\"priority\":bool?}} runs \
+fusion-M[-E][-fast]-sidekick-S[-F][-priority]. The id must be one `devin models list` \
+shows. The result's model names what ran (docs(\"plans\"), Choosing a model).",
                 inputs: ports(&[
                     ("cwd", "string"),
                     ("spec", "string"),
-                    ("model", "string?"),
+                    ("model", "Any?"),
                     ("log", "string?"),
                     ("session", "string?"),
                     ("report_path", "string?"),
@@ -392,6 +401,7 @@ Fusion (Claude Opus 5.5 High + SWE-2 Medium).",
                 outputs: vec![
                     ("log", ty("string")),
                     ("final", ty("string")),
+                    ("model", ty("string")),
                     ("report", ty("string?")),
                     ("session", ty("string")),
                     ("git", git_facts()),
@@ -430,26 +440,25 @@ directory.",
                 name: "agent.run",
                 doc: "Run a spec in a supervised interactive session on the named \
 engine. Submit declared step outputs before the session ends; pass session to \
-resume in the same directory. Codex model is sol (default) or astra and effort \
-defaults to high; Claude always runs Opus; Devin defaults to swe-2-high and model \
-\"fusion\" runs Fusion (Claude Opus 5.5 High + SWE-2 Medium).",
+resume in the same directory. model is a JSON object: \
+{\"type\":\"normal\",\"model\":M,\"effort\":E?,\"fast\":bool?} (defaults: devin swe-2 \
+high, codex sol high, claude opus high; fast only on devin), or on devin \
+{\"type\":\"fusion\",\"main\":{\"model\":M,\"effort\":E?,\"fast\":bool?},\
+\"sidekick\":{\"model\":S,\"effort\":F?,\"priority\":bool?}}. It is checked against \
+the engine's models before the session starts; the result's model names what ran \
+(docs(\"plans\"), Choosing a model).",
                 inputs: vec![
                     ("engine", enumerated(&["devin", "codex", "claude"])),
                     ("cwd", ty("string")),
                     ("spec", ty("string")),
-                    ("model", ty("string?")),
-                    (
-                        "effort",
-                        optional(enumerated(&[
-                            "minimal", "low", "medium", "high", "xhigh", "max",
-                        ])),
-                    ),
+                    ("model", ty("Any?")),
                     ("session", ty("string?")),
                     ("report_path", ty("string?")),
                     ("listen", ty("boolean?")),
                 ],
                 outputs: vec![
                     ("final", ty("string")),
+                    ("model", ty("string")),
                     ("report", ty("string?")),
                     ("session", ty("string")),
                     ("git", git_facts()),

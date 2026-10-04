@@ -401,8 +401,14 @@ impl Codex {
                 Err(e) => return Err(e),
             }
         }
-        let model = self.profile().models[context.model.as_deref().unwrap_or("sol")].clone();
-        let reply = self.rpc()?.request("turn/start", json!({"threadId":session,"input":input,"model":model,"effort":context.effort.as_deref().unwrap_or("high")})).await?;
+        let model = crate::model::launch_model("codex", context.model.as_ref())?;
+        let reply = self
+            .rpc()?
+            .request(
+                "turn/start",
+                json!({"threadId":session,"input":input,"model":model.model,"effort":model.effort}),
+            )
+            .await?;
         let turn = reply["turn"]["id"].as_str().ok_or_else(|| {
             error(
                 EngineErrorKind::UnknownAcceptance,
@@ -438,8 +444,7 @@ impl Codex {
         context: &EngineContext,
         session: Option<&str>,
     ) -> Result<Option<EngineLaunch>, EngineError> {
-        self.profile()
-            .validate_selection(context.model.as_deref(), context.effort.as_deref())?;
+        let model = crate::model::launch_model("codex", context.model.as_ref())?;
         if self.server.is_some() {
             return Err(local("Codex already prepared; close before reentry"));
         }
@@ -480,11 +485,10 @@ impl Codex {
             Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(local(e)),
         };
-        let selected = self.profile();
         let config = profile::private_config(
             &source,
-            &selected.models[context.model.as_deref().unwrap_or("sol")],
-            context.effort.as_deref().unwrap_or("high"),
+            &model.model,
+            model.effort.as_deref(),
             self.options.search,
         )?;
         let homes = self.options.sluice_home.join("codex-native-homes");
@@ -651,6 +655,19 @@ impl Codex {
 impl EngineAdapter for Codex {
     fn profile(&self) -> EngineProfile {
         profile::profile()
+    }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        // The account's catalog, as the CLI refreshes it with the owner's Codex home.
+        let mut command = Command::new(&self.options.binary);
+        command
+            .args(["debug", "models"])
+            .env_clear()
+            .envs(&self.options.environment)
+            .env("CODEX_HOME", &self.options.source_home);
+        crate::model::cached("codex", &self.options.binary, async move {
+            profile::parse_models(&crate::model::listing(command, "Codex models").await?)
+        })
+        .await
     }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         if let Some(saved) = self.saved(session)? {

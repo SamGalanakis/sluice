@@ -1,34 +1,11 @@
 {
   "name": "agent.codex",
-  "doc": "Run a supervised interactive Codex session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. Models: sol (default) and astra; effort defaults to high.",
+  "doc": "Run a supervised interactive Codex session on a spec in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. model is a JSON object, by default {\"type\":\"normal\",\"model\":\"sol\",\"effort\":\"high\"}: {\"type\":\"normal\",\"model\":M,\"effort\":E?}, a model `codex debug models` lists (sol and astra name gpt-6.1-sol and gpt-6-astra) at an effort it supports. The result's model names what ran (docs(\"plans\"), Choosing a model).",
   "open": true,
   "inputs": {
     "cwd": "string",
     "spec": "string",
-    "model": [
-      "null",
-      {
-        "type": "enum",
-        "symbols": [
-          "sol",
-          "astra"
-        ]
-      }
-    ],
-    "effort": [
-      "null",
-      {
-        "type": "enum",
-        "symbols": [
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ]
-      }
-    ],
+    "model": "Any?",
     "log": "string?",
     "session": "string?",
     "report_path": "string?",
@@ -37,6 +14,7 @@
   "outputs": {
     "log": "string",
     "final": "string",
+    "model": "string",
     "report": "string?",
     "session": "string",
     "git": [

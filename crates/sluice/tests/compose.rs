@@ -367,7 +367,7 @@ fn native_engine(g: &mut Gate, engine: &str) {
     g.env.insert("SLUICE_CODEX_FIXTURE".into(), "tui".into());
     let executable = bin.join(engine);
     let script = format!(
-        "#!/bin/sh\nset -e\ncase \"$1\" in --version|--help) exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
+        "#!/bin/sh\nset -e\ncase \"$1\" in --version|--help|models|debug) exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
         Path::new(env!("CARGO_BIN_EXE_fixture")).display(),
         if engine == "codex" {
             "case \"$1\" in -c) exec /usr/bin/sleep 600 ;; esac"
@@ -417,7 +417,17 @@ fn native_factory(engine: &str) {
     .unwrap()
     .trim()
     .to_owned();
-    g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":engine,"cwd":cwd,"spec":"Complete a fake turn"})),"outputs":{"word":"string"}}}));
+    // Devin runs a fusion object; Codex and Claude their defaults. Each id is checked against
+    // the fixture CLI's listing and lands in the result's model.
+    let (model, resolved) = match engine {
+        "devin" => (
+            json!({"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high","fast":true},"sidekick":{"model":"swe-2","effort":"high"}}),
+            "fusion-claude-opus-5-5-high-fast-sidekick-swe-2-high",
+        ),
+        "codex" => (Value::Null, "gpt-6.1-sol@high"),
+        _ => (Value::Null, "opus@high"),
+    };
+    g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":engine,"cwd":cwd,"spec":"Complete a fake turn","model":model})),"outputs":{"word":"string"}}}));
     let _lease = g.lease();
     g.wait(|g| g.status()["steps"]["work"]["run_ids"][0].is_string());
     let run = g.run("work");
@@ -467,6 +477,13 @@ fn native_factory(engine: &str) {
     let done = g.terminal("work");
     assert_eq!(done["status"], "succeeded", "{engine}: {done}");
     assert_eq!(done["outputs"]["word"], "blue", "{engine}: {done}");
+    assert_eq!(done["outputs"]["model"], resolved, "{engine}: {done}");
+    if engine == "devin" {
+        let config: Value =
+            serde_json::from_slice(&std::fs::read(directory.join("devin-config.json")).unwrap())
+                .unwrap();
+        assert_eq!(config["agent"]["model"], resolved);
+    }
     assert_eq!(
         done["outputs"]["session"],
         session.as_str(),
@@ -698,6 +715,71 @@ run(main)
     for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
         assert!(hooks.contains(&format!("\"{event}\"")), "{event}: {hooks}");
     }
+}
+/// A stored plan still holding the retired forms (a string `model`, an `effort` input) keeps
+/// validating; each such step fails at launch with kind `Invalid` and the object to use. An
+/// object whose id the engine does not list fails the same way, naming the nearest ids.
+#[test]
+fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
+    let g = Gate::configured(|g| native_engine(g, "devin"));
+    let cwd = g.temp.path().join("work");
+    let step = |run: &str, extra: Value| {
+        let mut inputs = json!({"cwd":cwd,"spec":"Never runs"});
+        inputs
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        json!({"run":run,"in":bindings(inputs)})
+    };
+    g.plan(json!({
+        "run-sol": step("agent.run", json!({"engine":"codex","model":"sol","effort":"xhigh"})),
+        "codex-sol": step("agent.codex", json!({"model":"sol","effort":"high"})),
+        "devin-fusion": step("agent.devin", json!({"model":"fusion"})),
+        "devin-effort": step("agent.devin", json!({"model":{"type":"normal","model":"swe-2","effort":"high"},"effort":"max"})),
+        "devin-unknown": step("agent.devin", json!({"model":{"type":"normal","model":"swe-2","effort":"hgh"}})),
+    }));
+    let problems = g.data(json!({"command":"verify","args":{"project":g.selector()}}));
+    assert_eq!(problems, json!([]), "{problems}");
+    let _lease = g.lease();
+    for (step, message) in [
+        (
+            "run-sol",
+            r#"model must be a JSON object, not "sol", and effort is no longer an input: drop effort and set model to {"type":"normal","model":"sol","effort":"xhigh"}"#,
+        ),
+        (
+            "codex-sol",
+            r#"set model to {"type":"normal","model":"sol","effort":"high"}"#,
+        ),
+        (
+            "devin-fusion",
+            r#"model must be a JSON object, not "fusion"; use {"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}}"#,
+        ),
+        (
+            "devin-effort",
+            r#"effort is no longer an input: drop it and set model to {"type":"normal","model":"swe-2","effort":"max"}"#,
+        ),
+        (
+            "devin-unknown",
+            "devin has no model swe-2-hgh (composed from model",
+        ),
+    ] {
+        let result = g.terminal(step);
+        assert_eq!(result["status"], "failed", "{step}: {result}");
+        assert_eq!(
+            result["error"]["error"], "agent_failure",
+            "{step}: {result}"
+        );
+        assert_eq!(result["error"]["kind"], "Invalid", "{step}: {result}");
+        let text = result["error"]["message"].as_str().unwrap();
+        assert!(text.contains(message), "{step}: {text}");
+    }
+    let unknown = g.status()["steps"]["devin-unknown"]["error"]["message"].clone();
+    assert!(
+        unknown.as_str().unwrap().contains("nearest: swe-2-high"),
+        "{unknown}"
+    );
+    // Nothing reached the engine: no session started for any of them.
+    assert!(!g.temp.path().join("devin-prompts.jsonl").exists());
 }
 #[test]
 fn builtin_python_tools_sections_and_inline_execute_through_guardian() {

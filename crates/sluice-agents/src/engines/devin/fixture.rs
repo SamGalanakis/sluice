@@ -116,6 +116,10 @@ fn draw(draft: &str, collapsed: bool, wrap: usize, dialog: bool, bypass: bool) -
     io::stdout().flush()
 }
 
+/// `devin models list --format json` as the real CLI printed it (each family's slug and
+/// variants' ids), for launch validation against the fixture.
+pub const MODELS: &str = include_str!("models.json");
+
 pub fn main(args: &[String]) -> io::Result<()> {
     if args.first().map(String::as_str) == Some("devin-submit") {
         let path = PathBuf::from(
@@ -143,6 +147,10 @@ pub fn main(args: &[String]) -> io::Result<()> {
             args.get(2)
                 .ok_or_else(|| io::Error::other("missing hook event"))?,
         );
+    }
+    if args.starts_with(&["models".into(), "list".into()]) {
+        print!("{}", MODELS);
+        return Ok(());
     }
     let settings: Value = serde_json::from_slice(&fs::read(
         std::env::var_os("FAKE_DEVIN").ok_or_else(|| io::Error::other("missing fixture script"))?,

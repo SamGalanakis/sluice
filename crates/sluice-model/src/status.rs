@@ -304,8 +304,10 @@ fn reference_step(reference: &ValueRef) -> Option<StepId> {
     reference.parts().ok()?.step
 }
 
-/// engine·model·effort from the unit's agent step (its first step whose fn is open): the
-/// string values its `engine`, `model` and `effort` inputs are bound to now, each cut to 12.
+/// engine·model·effort from the unit's agent step (its first step whose fn is open): the values
+/// its `engine` and `model` inputs are bound to now, each part cut to 12. A model object gives
+/// its model and effort (`fusion` and the main model's effort for a fusion); a stored step's
+/// retired string `model` and `effort` show as they are.
 fn engine(plan: &Plan, state: &StateSnapshot, unit: &Unit) -> String {
     let Some(step) = unit
         .steps
@@ -315,19 +317,39 @@ fn engine(plan: &Plan, state: &StateSnapshot, unit: &Unit) -> String {
     else {
         return String::new();
     };
-    ["engine", "model", "effort"]
+    let bound = |name: &str| -> Option<Value> {
+        match step.bindings.get(name)? {
+            Binding::Default(v) => Some(v.as_value().clone()),
+            Binding::Source(reference) => match resolve_reference(plan, state, reference) {
+                BoundValue::Ready(v) => Some(v.as_value().clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_owned);
+    let mut parts = vec![text(bound("engine").as_ref())];
+    match bound("model") {
+        Some(Value::Object(model))
+            if model.get("type").and_then(Value::as_str) == Some("fusion") =>
+        {
+            parts.push(Some("fusion".into()));
+            parts.push(text(model.get("main").and_then(|m| m.get("effort"))));
+        }
+        Some(Value::Object(model)) => {
+            parts.push(text(model.get("model")));
+            parts.push(text(model.get("effort")));
+        }
+        model => {
+            parts.push(text(model.as_ref()));
+            parts.push(text(bound("effort").as_ref()));
+        }
+    }
+    parts
         .into_iter()
-        .filter_map(|name| {
-            let value = match step.bindings.get(name)? {
-                Binding::Default(v) => v.as_value().clone(),
-                Binding::Source(reference) => match resolve_reference(plan, state, reference) {
-                    BoundValue::Ready(v) => v.as_value().clone(),
-                    _ => return None,
-                },
-                _ => return None,
-            };
-            value.as_str().filter(|s| !s.is_empty()).map(|s| cut(s, 12))
-        })
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .map(|s| cut(&s, 12))
         .collect::<Vec<_>>()
         .join("·")
 }

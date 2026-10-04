@@ -1,9 +1,9 @@
 //! Tested Devin CLI profile. Updating this requires new wire and real-session evidence.
 use super::super::{EngineError, EngineErrorKind, EngineProfile};
-use std::collections::BTreeMap;
+use crate::model::ModelChoice;
+use serde_json::Value;
 
 pub const VERSION: &str = "3000.11.3";
-pub const FUSION: &str = "fusion-claude-opus-5-5-high-sidekick-swe-2-medium";
 pub const HOOKS: [&str; 7] = [
     "SessionStart",
     "UserPromptSubmit",
@@ -26,15 +26,27 @@ pub fn profile() -> EngineProfile {
         engine: "devin".into(),
         version_range: format!("={VERSION}; session SQLite user_version=0"),
         required_capabilities: HOOKS.iter().map(|s| (*s).into()).collect(),
-        models: BTreeMap::from([
-            ("swe-2-high".into(), "swe-2-high".into()),
-            ("high".into(), "swe-2-high".into()),
-            ("fusion".into(), FUSION.into()),
-            (FUSION.into(), FUSION.into()),
-        ]),
-        efforts: vec![],
+        default_model: Some(ModelChoice::normal("swe-2", Some("high"))),
         reports_waiting: false,
     }
+}
+
+/// The model ids in `devin models list --format json`: every family's variants' `model_uid`.
+pub fn parse_models(listing: &[u8]) -> Result<Vec<String>, EngineError> {
+    let bad = || {
+        error(
+            EngineErrorKind::Fatal,
+            "could not list Devin models: unexpected `devin models list --format json` output",
+        )
+    };
+    let listing: Value = serde_json::from_slice(listing).map_err(|_| bad())?;
+    let mut ids = Vec::new();
+    for family in listing["families"].as_array().ok_or_else(bad)? {
+        for variant in family["variants"].as_array().ok_or_else(bad)? {
+            ids.push(variant["model_uid"].as_str().ok_or_else(bad)?.to_owned());
+        }
+    }
+    Ok(ids)
 }
 
 pub fn validate_cli(version: &str, help: &str) -> Result<(), EngineError> {

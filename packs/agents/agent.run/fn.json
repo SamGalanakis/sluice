@@ -1,6 +1,6 @@
 {
   "name": "agent.run",
-  "doc": "Run a spec in a supervised interactive session on the named engine. Submit declared step outputs before the session ends; pass session to resume in the same directory. Codex model is sol (default) or astra and effort defaults to high; Claude always runs Opus; Devin defaults to swe-2-high and model \"fusion\" runs Fusion (Claude Opus 5.5 High + SWE-2 Medium).",
+  "doc": "Run a spec in a supervised interactive session on the named engine. Submit declared step outputs before the session ends; pass session to resume in the same directory. model is a JSON object: {\"type\":\"normal\",\"model\":M,\"effort\":E?,\"fast\":bool?} (defaults: devin swe-2 high, codex sol high, claude opus high; fast only on devin), or on devin {\"type\":\"fusion\",\"main\":{\"model\":M,\"effort\":E?,\"fast\":bool?},\"sidekick\":{\"model\":S,\"effort\":F?,\"priority\":bool?}}. It is checked against the engine's models before the session starts; the result's model names what ran (docs(\"plans\"), Choosing a model).",
   "open": true,
   "inputs": {
     "engine": {
@@ -13,27 +13,14 @@
     },
     "cwd": "string",
     "spec": "string",
-    "model": "string?",
-    "effort": [
-      "null",
-      {
-        "type": "enum",
-        "symbols": [
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ]
-      }
-    ],
+    "model": "Any?",
     "session": "string?",
     "report_path": "string?",
     "listen": "boolean?"
   },
   "outputs": {
     "final": "string",
+    "model": "string",
     "report": "string?",
     "session": "string",
     "git": [

@@ -1,0 +1,2432 @@
+{
+ "families": [
+  {
+   "slug": "adaptive",
+   "variants": [
+    {
+     "model_uid": "adaptive"
+    }
+   ]
+  },
+  {
+   "slug": "swe-2",
+   "variants": [
+    {
+     "model_uid": "swe-2-high"
+    },
+    {
+     "model_uid": "swe-2-medium"
+    },
+    {
+     "model_uid": "swe-2-max"
+    }
+   ]
+  },
+  {
+   "slug": "swe-1.7-lightning",
+   "variants": [
+    {
+     "model_uid": "swe-1-7-lightning"
+    },
+    {
+     "model_uid": "swe-1-7-lightning-medium"
+    }
+   ]
+  },
+  {
+   "slug": "claude-fable-5.1",
+   "variants": [
+    {
+     "model_uid": "claude-fable-5-1-medium"
+    },
+    {
+     "model_uid": "claude-fable-5-1-low"
+    },
+    {
+     "model_uid": "claude-fable-5-1-high"
+    },
+    {
+     "model_uid": "claude-fable-5-1-xhigh"
+    },
+    {
+     "model_uid": "claude-fable-5-1-max"
+    }
+   ]
+  },
+  {
+   "slug": "claude-opus-5.5",
+   "variants": [
+    {
+     "model_uid": "claude-opus-5-5-medium"
+    },
+    {
+     "model_uid": "claude-opus-5-5-low"
+    },
+    {
+     "model_uid": "claude-opus-5-5-high"
+    },
+    {
+     "model_uid": "claude-opus-5-5-xhigh"
+    },
+    {
+     "model_uid": "claude-opus-5-5-max"
+    },
+    {
+     "model_uid": "claude-opus-5-5-low-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-5-medium-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-5-high-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-5-xhigh-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-5-max-fast"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-6-astra",
+   "variants": [
+    {
+     "model_uid": "gpt-6-astra-medium"
+    },
+    {
+     "model_uid": "gpt-6-astra-low"
+    },
+    {
+     "model_uid": "gpt-6-astra-high"
+    },
+    {
+     "model_uid": "gpt-6-astra-xhigh"
+    },
+    {
+     "model_uid": "gpt-6-astra-max"
+    },
+    {
+     "model_uid": "gpt-6-astra-low-priority"
+    },
+    {
+     "model_uid": "gpt-6-astra-medium-priority"
+    },
+    {
+     "model_uid": "gpt-6-astra-high-priority"
+    },
+    {
+     "model_uid": "gpt-6-astra-xhigh-priority"
+    },
+    {
+     "model_uid": "gpt-6-astra-max-priority"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-6-sol",
+   "variants": [
+    {
+     "model_uid": "gpt-6-sol-medium"
+    },
+    {
+     "model_uid": "gpt-6-sol-none"
+    },
+    {
+     "model_uid": "gpt-6-sol-low"
+    },
+    {
+     "model_uid": "gpt-6-sol-high"
+    },
+    {
+     "model_uid": "gpt-6-sol-xhigh"
+    },
+    {
+     "model_uid": "gpt-6-sol-max"
+    },
+    {
+     "model_uid": "gpt-6-sol-none-priority"
+    },
+    {
+     "model_uid": "gpt-6-sol-low-priority"
+    },
+    {
+     "model_uid": "gpt-6-sol-medium-priority"
+    },
+    {
+     "model_uid": "gpt-6-sol-high-priority"
+    },
+    {
+     "model_uid": "gpt-6-sol-xhigh-priority"
+    },
+    {
+     "model_uid": "gpt-6-sol-max-priority"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-6-luna",
+   "variants": [
+    {
+     "model_uid": "gpt-6-luna-medium"
+    },
+    {
+     "model_uid": "gpt-6-luna-none"
+    },
+    {
+     "model_uid": "gpt-6-luna-low"
+    },
+    {
+     "model_uid": "gpt-6-luna-high"
+    },
+    {
+     "model_uid": "gpt-6-luna-xhigh"
+    },
+    {
+     "model_uid": "gpt-6-luna-max"
+    },
+    {
+     "model_uid": "gpt-6-luna-none-priority"
+    },
+    {
+     "model_uid": "gpt-6-luna-low-priority"
+    },
+    {
+     "model_uid": "gpt-6-luna-medium-priority"
+    },
+    {
+     "model_uid": "gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "gpt-6-luna-xhigh-priority"
+    },
+    {
+     "model_uid": "gpt-6-luna-max-priority"
+    }
+   ]
+  },
+  {
+   "slug": "kimi-k3",
+   "variants": [
+    {
+     "model_uid": "kimi-k3-high"
+    },
+    {
+     "model_uid": "kimi-k3-low"
+    },
+    {
+     "model_uid": "kimi-k3-max"
+    }
+   ]
+  },
+  {
+   "slug": "glm-5.2",
+   "variants": [
+    {
+     "model_uid": "glm-5-2"
+    },
+    {
+     "model_uid": "glm-5-2-max"
+    },
+    {
+     "model_uid": "glm-5-2-1m"
+    },
+    {
+     "model_uid": "glm-5-2-max-1m"
+    },
+    {
+     "model_uid": "glm-5-2-none"
+    },
+    {
+     "model_uid": "glm-5-2-none-1m"
+    }
+   ]
+  },
+  {
+   "slug": "glm-5.3",
+   "variants": [
+    {
+     "model_uid": "glm-5-3-low"
+    },
+    {
+     "model_uid": "glm-5-3-high"
+    },
+    {
+     "model_uid": "glm-5-3-max"
+    }
+   ]
+  },
+  {
+   "slug": "claude-sonnet-5.5",
+   "variants": [
+    {
+     "model_uid": "claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "claude-sonnet-5-5-low"
+    },
+    {
+     "model_uid": "claude-sonnet-5-5-high"
+    },
+    {
+     "model_uid": "claude-sonnet-5-5-xhigh"
+    },
+    {
+     "model_uid": "claude-sonnet-5-5-max"
+    }
+   ]
+  },
+  {
+   "slug": "gemini-3.8-flash",
+   "variants": [
+    {
+     "model_uid": "gemini-3-8-flash-medium"
+    },
+    {
+     "model_uid": "gemini-3-8-flash-low"
+    },
+    {
+     "model_uid": "gemini-3-8-flash-high"
+    }
+   ]
+  },
+  {
+   "slug": "claude-opus-4.7",
+   "variants": [
+    {
+     "model_uid": "claude-opus-4-7-medium"
+    },
+    {
+     "model_uid": "claude-opus-4-7-low"
+    },
+    {
+     "model_uid": "claude-opus-4-7-high"
+    },
+    {
+     "model_uid": "claude-opus-4-7-xhigh"
+    },
+    {
+     "model_uid": "claude-opus-4-7-max"
+    }
+   ]
+  },
+  {
+   "slug": "claude-opus-4.8",
+   "variants": [
+    {
+     "model_uid": "claude-opus-4-8-medium"
+    },
+    {
+     "model_uid": "claude-opus-4-8-low"
+    },
+    {
+     "model_uid": "claude-opus-4-8-high"
+    },
+    {
+     "model_uid": "claude-opus-4-8-xhigh"
+    },
+    {
+     "model_uid": "claude-opus-4-8-max"
+    },
+    {
+     "model_uid": "claude-opus-4-8-low-fast"
+    },
+    {
+     "model_uid": "claude-opus-4-8-medium-fast"
+    },
+    {
+     "model_uid": "claude-opus-4-8-high-fast"
+    },
+    {
+     "model_uid": "claude-opus-4-8-xhigh-fast"
+    },
+    {
+     "model_uid": "claude-opus-4-8-max-fast"
+    }
+   ]
+  },
+  {
+   "slug": "claude-opus-5",
+   "variants": [
+    {
+     "model_uid": "claude-opus-5-medium"
+    },
+    {
+     "model_uid": "claude-opus-5-low"
+    },
+    {
+     "model_uid": "claude-opus-5-high"
+    },
+    {
+     "model_uid": "claude-opus-5-xhigh"
+    },
+    {
+     "model_uid": "claude-opus-5-max"
+    },
+    {
+     "model_uid": "claude-opus-5-low-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-medium-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-high-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-xhigh-fast"
+    },
+    {
+     "model_uid": "claude-opus-5-max-fast"
+    }
+   ]
+  },
+  {
+   "slug": "claude-fable-5",
+   "variants": [
+    {
+     "model_uid": "claude-5-fable-low"
+    },
+    {
+     "model_uid": "claude-5-fable-medium"
+    },
+    {
+     "model_uid": "claude-5-fable-high"
+    },
+    {
+     "model_uid": "claude-5-fable-xhigh"
+    },
+    {
+     "model_uid": "claude-5-fable-max"
+    }
+   ]
+  },
+  {
+   "slug": "claude-sonnet-5",
+   "variants": [
+    {
+     "model_uid": "claude-sonnet-5-low"
+    },
+    {
+     "model_uid": "claude-sonnet-5-medium"
+    },
+    {
+     "model_uid": "claude-sonnet-5-high"
+    },
+    {
+     "model_uid": "claude-sonnet-5-xhigh"
+    },
+    {
+     "model_uid": "claude-sonnet-5-max"
+    }
+   ]
+  },
+  {
+   "slug": "gemini-3.5-flash",
+   "variants": [
+    {
+     "model_uid": "gemini-3-5-flash-minimal"
+    },
+    {
+     "model_uid": "gemini-3-5-flash-low"
+    },
+    {
+     "model_uid": "gemini-3-5-flash-medium"
+    },
+    {
+     "model_uid": "gemini-3-5-flash-high"
+    }
+   ]
+  },
+  {
+   "slug": "gemini-3.6-flash",
+   "variants": [
+    {
+     "model_uid": "gemini-3-6-flash-minimal"
+    },
+    {
+     "model_uid": "gemini-3-6-flash-low"
+    },
+    {
+     "model_uid": "gemini-3-6-flash-medium"
+    },
+    {
+     "model_uid": "gemini-3-6-flash-high"
+    }
+   ]
+  },
+  {
+   "slug": "gemini-3.7-flash",
+   "variants": [
+    {
+     "model_uid": "gemini-3-7-flash-low"
+    },
+    {
+     "model_uid": "gemini-3-7-flash-medium"
+    },
+    {
+     "model_uid": "gemini-3-7-flash-high"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.6-sol",
+   "variants": [
+    {
+     "model_uid": "gpt-5-6-sol-none"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-low"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-medium"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-xhigh"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-max"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-none-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-low-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-medium-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-xhigh-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-sol-max-priority"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.6-terra",
+   "variants": [
+    {
+     "model_uid": "gpt-5-6-terra-none"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-low"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-medium"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-high"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-xhigh"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-max"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-none-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-low-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-medium-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-high-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-xhigh-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-terra-max-priority"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.6-luna",
+   "variants": [
+    {
+     "model_uid": "gpt-5-6-luna-none"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-low"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-medium"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-xhigh"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-max"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-none-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-low-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-medium-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-xhigh-priority"
+    },
+    {
+     "model_uid": "gpt-5-6-luna-max-priority"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-6.1-sol",
+   "variants": [
+    {
+     "model_uid": "gpt-6-1-sol-low"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-medium"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-high"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-xhigh"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-max"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-low-priority"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-medium-priority"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-high-priority"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-xhigh-priority"
+    },
+    {
+     "model_uid": "gpt-6-1-sol-max-priority"
+    }
+   ]
+  },
+  {
+   "slug": "grok-4.5",
+   "variants": [
+    {
+     "model_uid": "grok-4-5-low"
+    },
+    {
+     "model_uid": "grok-4-5-medium"
+    },
+    {
+     "model_uid": "grok-4-5-high"
+    }
+   ]
+  },
+  {
+   "slug": "grok-4.6",
+   "variants": [
+    {
+     "model_uid": "grok-4-6-low"
+    },
+    {
+     "model_uid": "grok-4-6-medium"
+    },
+    {
+     "model_uid": "grok-4-6-high"
+    },
+    {
+     "model_uid": "grok-4-6-xhigh"
+    }
+   ]
+  },
+  {
+   "slug": "grok-4.7",
+   "variants": [
+    {
+     "model_uid": "grok-4-7-low"
+    },
+    {
+     "model_uid": "grok-4-7-medium"
+    },
+    {
+     "model_uid": "grok-4-7-high"
+    },
+    {
+     "model_uid": "grok-4-7-xhigh"
+    }
+   ]
+  },
+  {
+   "slug": "inkling",
+   "variants": [
+    {
+     "model_uid": "inkling-none"
+    },
+    {
+     "model_uid": "inkling-low"
+    },
+    {
+     "model_uid": "inkling-medium"
+    },
+    {
+     "model_uid": "inkling-high"
+    },
+    {
+     "model_uid": "inkling-xhigh"
+    },
+    {
+     "model_uid": "inkling-max"
+    }
+   ]
+  },
+  {
+   "slug": "glm-5.3-flash",
+   "variants": [
+    {
+     "model_uid": "glm-5-3-flash-low"
+    },
+    {
+     "model_uid": "glm-5-3-flash-high"
+    },
+    {
+     "model_uid": "glm-5-3-flash-max"
+    }
+   ]
+  },
+  {
+   "slug": "deepseek-v4-flash",
+   "variants": [
+    {
+     "model_uid": "deepseek-v4-flash-high"
+    },
+    {
+     "model_uid": "deepseek-v4-flash-max"
+    }
+   ]
+  },
+  {
+   "slug": "deepseek-v4.1-flash",
+   "variants": [
+    {
+     "model_uid": "deepseek-v4-1-flash-high"
+    },
+    {
+     "model_uid": "deepseek-v4-1-flash-max"
+    }
+   ]
+  },
+  {
+   "slug": "swe-1.7",
+   "variants": [
+    {
+     "model_uid": "swe-1-7"
+    },
+    {
+     "model_uid": "swe-1-7-medium"
+    }
+   ]
+  },
+  {
+   "slug": "fusion",
+   "variants": [
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-fast-sidekick-swe-2-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-sidekick-gpt-5-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-fast-sidekick-gpt-5-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-sidekick-gpt-6-luna-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-fast-sidekick-gpt-6-luna-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-fast-sidekick-glm-5-2"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-sidekick-gpt-5-6-sol-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-fast-sidekick-gpt-5-6-sol-high-priority"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-fast-sidekick-swe-2-high"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-medium-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-high-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-high-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-high-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-high-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-high-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-high-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-high-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-medium-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-medium-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-medium-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-medium-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-medium-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-medium-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-xhigh-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-xhigh-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-xhigh-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-xhigh-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-xhigh-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-xhigh-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-xhigh-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-low-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-low-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-low-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-low-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-low-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-low-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-low-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-fable-5-1-max-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-astra-max-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-sol-max-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-6-1-sol-max-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-gpt-5-6-sol-max-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-max-fast-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-sidekick-claude-sonnet-5-5-medium"
+    },
+    {
+     "model_uid": "fusion-claude-opus-5-5-max-fast-sidekick-claude-sonnet-5-5-medium"
+    }
+   ]
+  },
+  {
+   "slug": "claude-opus-4.6",
+   "variants": [
+    {
+     "model_uid": "claude-opus-4-6"
+    },
+    {
+     "model_uid": "claude-opus-4-6-thinking"
+    },
+    {
+     "model_uid": "claude-opus-4-6-1m"
+    },
+    {
+     "model_uid": "claude-opus-4-6-thinking-1m"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.4",
+   "variants": [
+    {
+     "model_uid": "gpt-5-4-none"
+    },
+    {
+     "model_uid": "gpt-5-4-low"
+    },
+    {
+     "model_uid": "gpt-5-4-medium"
+    },
+    {
+     "model_uid": "gpt-5-4-high"
+    },
+    {
+     "model_uid": "gpt-5-4-xhigh"
+    },
+    {
+     "model_uid": "gpt-5-4-none-priority"
+    },
+    {
+     "model_uid": "gpt-5-4-low-priority"
+    },
+    {
+     "model_uid": "gpt-5-4-medium-priority"
+    },
+    {
+     "model_uid": "gpt-5-4-high-priority"
+    },
+    {
+     "model_uid": "gpt-5-4-xhigh-priority"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.5",
+   "variants": [
+    {
+     "model_uid": "gpt-5-5-none"
+    },
+    {
+     "model_uid": "gpt-5-5-low"
+    },
+    {
+     "model_uid": "gpt-5-5-medium"
+    },
+    {
+     "model_uid": "gpt-5-5-high"
+    },
+    {
+     "model_uid": "gpt-5-5-xhigh"
+    },
+    {
+     "model_uid": "gpt-5-5-none-priority"
+    },
+    {
+     "model_uid": "gpt-5-5-low-priority"
+    },
+    {
+     "model_uid": "gpt-5-5-medium-priority"
+    },
+    {
+     "model_uid": "gpt-5-5-high-priority"
+    },
+    {
+     "model_uid": "gpt-5-5-xhigh-priority"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.4-mini",
+   "variants": [
+    {
+     "model_uid": "gpt-5-4-mini-low"
+    },
+    {
+     "model_uid": "gpt-5-4-mini-medium"
+    },
+    {
+     "model_uid": "gpt-5-4-mini-high"
+    },
+    {
+     "model_uid": "gpt-5-4-mini-xhigh"
+    }
+   ]
+  },
+  {
+   "slug": "claude-sonnet-4.6",
+   "variants": [
+    {
+     "model_uid": "claude-sonnet-4-6"
+    },
+    {
+     "model_uid": "claude-sonnet-4-6-thinking"
+    },
+    {
+     "model_uid": "claude-sonnet-4-6-1m"
+    },
+    {
+     "model_uid": "claude-sonnet-4-6-thinking-1m"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.2",
+   "variants": [
+    {
+     "model_uid": "MODEL_GPT_5_2_LOW"
+    },
+    {
+     "model_uid": "MODEL_GPT_5_2_MEDIUM"
+    },
+    {
+     "model_uid": "MODEL_GPT_5_2_NONE"
+    },
+    {
+     "model_uid": "MODEL_GPT_5_2_HIGH"
+    },
+    {
+     "model_uid": "MODEL_GPT_5_2_XHIGH"
+    }
+   ]
+  },
+  {
+   "slug": "claude-opus-4.5",
+   "variants": [
+    {
+     "model_uid": "MODEL_CLAUDE_4_5_OPUS"
+    },
+    {
+     "model_uid": "MODEL_CLAUDE_4_5_OPUS_THINKING"
+    }
+   ]
+  },
+  {
+   "slug": "claude-haiku-4.5",
+   "variants": [
+    {
+     "model_uid": "MODEL_PRIVATE_11"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-4.1",
+   "variants": [
+    {
+     "model_uid": "MODEL_CHAT_GPT_4_1_2025_04_14"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.1",
+   "variants": [
+    {
+     "model_uid": "MODEL_PRIVATE_12"
+    },
+    {
+     "model_uid": "MODEL_PRIVATE_13"
+    },
+    {
+     "model_uid": "MODEL_PRIVATE_14"
+    },
+    {
+     "model_uid": "MODEL_PRIVATE_15"
+    }
+   ]
+  },
+  {
+   "slug": "gpt-5.3-codex",
+   "variants": [
+    {
+     "model_uid": "gpt-5-3-codex-low"
+    },
+    {
+     "model_uid": "gpt-5-3-codex-medium"
+    },
+    {
+     "model_uid": "gpt-5-3-codex-high"
+    },
+    {
+     "model_uid": "gpt-5-3-codex-xhigh"
+    },
+    {
+     "model_uid": "gpt-5-3-codex-low-priority"
+    },
+    {
+     "model_uid": "gpt-5-3-codex-medium-priority"
+    },
+    {
+     "model_uid": "gpt-5-3-codex-high-priority"
+    },
+    {
+     "model_uid": "gpt-5-3-codex-xhigh-priority"
+    }
+   ]
+  },
+  {
+   "slug": "kimi-k2.6",
+   "variants": [
+    {
+     "model_uid": "kimi-k2-6"
+    }
+   ]
+  },
+  {
+   "slug": "kimi-k2.7",
+   "variants": [
+    {
+     "model_uid": "kimi-k2-7"
+    }
+   ]
+  },
+  {
+   "slug": "nemotron-3-ultra",
+   "variants": [
+    {
+     "model_uid": "nemotron-3-ultra-none"
+    },
+    {
+     "model_uid": "nemotron-3-ultra-medium"
+    },
+    {
+     "model_uid": "nemotron-3-ultra-high"
+    }
+   ]
+  },
+  {
+   "slug": "swe-1.6",
+   "variants": [
+    {
+     "model_uid": "swe-1-6"
+    }
+   ]
+  },
+  {
+   "slug": "swe-1.6-fast",
+   "variants": [
+    {
+     "model_uid": "swe-1-6-fast"
+    }
+   ]
+  },
+  {
+   "slug": "gemini-3.1-pro",
+   "variants": [
+    {
+     "model_uid": "gemini-3-1-pro-low"
+    },
+    {
+     "model_uid": "gemini-3-1-pro-high"
+    }
+   ]
+  },
+  {
+   "slug": "gemini-3-flash",
+   "variants": [
+    {
+     "model_uid": "MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL"
+    },
+    {
+     "model_uid": "MODEL_GOOGLE_GEMINI_3_0_FLASH_LOW"
+    },
+    {
+     "model_uid": "MODEL_GOOGLE_GEMINI_3_0_FLASH_MEDIUM"
+    },
+    {
+     "model_uid": "MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH"
+    }
+   ]
+  },
+  {
+   "slug": "deepseek-v4-pro",
+   "variants": [
+    {
+     "model_uid": "deepseek-v4-pro-high"
+    },
+    {
+     "model_uid": "deepseek-v4-pro-max"
+    }
+   ]
+  }
+ ]
+}

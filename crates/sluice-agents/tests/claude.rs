@@ -265,7 +265,6 @@ impl Harness {
             run_dir: scratch.0.join("run"),
             cwd: scratch.0.join("work"),
             model: None,
-            effort: None,
             tmux_binary: Some(tmux.binary().into()),
         };
         let run = RunId::new();
@@ -473,10 +472,12 @@ async fn fake_fresh_required_submit_live_message_compaction_and_opus_mcp_profile
             .unwrap();
     assert!(!argv.contains(&"the-secret-prompt".into()));
     assert_eq!(
-        &argv[..5],
+        &argv[..7],
         [
             "--model",
             "opus",
+            "--effort",
+            "high",
             "--dangerously-skip-permissions",
             "--disallowedTools",
             "AskUserQuestion"
@@ -606,15 +607,6 @@ async fn unknown_version_and_model_rejected_before_task_or_launch() {
         EngineErrorKind::CapabilityMismatch
     );
     assert!(!h.context.run_dir.join("claude-settings.json").exists());
-    h.context.model = Some("sonnet".into());
-    assert!(
-        h.adapter
-            .prepare(&h.context, None)
-            .await
-            .unwrap_err()
-            .message
-            .contains("always runs Opus")
-    );
 }
 #[tokio::test]
 async fn fake_transient_and_fatal_error_classification() {

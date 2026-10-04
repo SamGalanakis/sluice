@@ -137,34 +137,18 @@ pub struct EngineProfile {
     pub engine: String,
     pub version_range: String,
     pub required_capabilities: Vec<String>,
-    pub models: BTreeMap<String, String>,
-    pub efforts: Vec<String>,
+    /// What an agent fn runs when its `model` input is left out.
+    pub default_model: Option<crate::model::ModelChoice>,
     pub reports_waiting: bool,
-}
-impl EngineProfile {
-    pub fn validate_selection(
-        &self,
-        model: Option<&str>,
-        effort: Option<&str>,
-    ) -> Result<(), EngineError> {
-        if model.is_some_and(|m| !self.models.contains_key(m))
-            || effort.is_some_and(|e| !self.efforts.iter().any(|v| v == e))
-        {
-            return Err(EngineError {
-                kind: EngineErrorKind::CapabilityMismatch,
-                message: format!("{}: unsupported model or effort", self.engine),
-            });
-        }
-        Ok(())
-    }
 }
 /// Immutable paths belong to the current invocation. No prompt appears on argv.
 #[derive(Debug, Clone)]
 pub struct EngineContext {
     pub run_dir: PathBuf,
     pub cwd: PathBuf,
-    pub model: Option<String>,
-    pub effort: Option<String>,
+    /// The launch's model, composed and checked against the engine's listing; `None` runs
+    /// the engine's default.
+    pub model: Option<crate::model::ResolvedModel>,
     pub tmux_binary: Option<PathBuf>,
 }
 #[derive(Debug, Clone)]
@@ -183,6 +167,10 @@ pub trait EngineAdapter: Send {
         })
     }
     fn profile(&self) -> EngineProfile;
+    /// Every model id this engine accepts, in the form `model::compose` gives (Devin's model
+    /// id, `<model>@<effort>` for Codex and Claude). It may run the engine CLI, so adapters
+    /// reuse it per process (`model::cached`).
+    fn models(&mut self) -> impl Future<Output = Result<Vec<String>, EngineError>> + Send;
     fn session(
         &mut self,
         session: &str,

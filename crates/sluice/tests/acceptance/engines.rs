@@ -479,8 +479,7 @@ fn g3(engine: &str) {
     let spec = "Labelled G3 scratch fixture. On the FIRST task turn, create original.txt containing original and make exactly one commit with message 'Record the engine fixture turn.' Finish that turn with G3_WAITING, WITHOUT submitting word: the harness intentionally injects one transient after the completed turn. On AUTOMATIC CONTINUATION after the transient, continue this same session, never recreate or commit original.txt. Run sleep 8 to allow an addressed live message to arrive, then submit word=blue to the current run and finish. For later feedback retries, follow their new addressed message instead. Do no other work.";
     let mut inputs = json!({"engine":{"default":engine},"cwd":{"default":cwd},"spec":{"default":spec},"listen":{"default":true}});
     if engine == "codex" {
-        inputs["model"] = json!({"default":"sol"});
-        inputs["effort"] = json!({"default":"low"});
+        inputs["model"] = json!({"default":{"type":"normal","model":"sol","effort":"low"}});
     }
     gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{},"steps":{"work":{"run":"agent.run","in":inputs,"outputs":{"word":"string"}}}}}],"start":true,"dry_run":false,"reason":"scratch engine gate","author":"fixture"}}));
     gate.scheduling();
@@ -674,7 +673,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         crate::executable::write(
             &binary,
             format!(
-                "#!/bin/sh\nset -e\n{codex_tui}export {env_name}='{}'\ncase \"$1\" in --version|--help) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
+                "#!/bin/sh\nset -e\n{codex_tui}export {env_name}='{}'\ncase \"$1\" in --version|--help|models|debug) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
                 config.display(),
                 scratch.0.join("committed").display(),
                 scratch.0.join("committed").display(),

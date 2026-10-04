@@ -1,15 +1,17 @@
 {
   "name": "agent.claude",
-  "doc": "Run a supervised interactive Claude session on a prompt in a working directory. Always runs Opus. Submit declared step outputs before the session ends; pass session to resume in the same directory.",
+  "doc": "Run a supervised interactive Claude session on a prompt in a working directory. Submit declared step outputs before the session ends; pass session to resume in the same directory. Runs Opus: model is a JSON object, by default {\"type\":\"normal\",\"model\":\"opus\",\"effort\":\"high\"}: {\"type\":\"normal\",\"model\":M,\"effort\":E?} with M opus or claude-opus-5-5 and E low, medium, high, xhigh or max. The result's model names what ran (docs(\"plans\"), Choosing a model).",
   "open": true,
   "inputs": {
     "cwd": "string",
     "prompt": "string",
+    "model": "Any?",
     "session": "string?",
     "listen": "boolean?"
   },
   "outputs": {
     "result": "string",
+    "model": "string",
     "session": "string",
     "git": [
       "null",

@@ -136,7 +136,6 @@ fn config(scratch: &Scratch) -> SupervisorConfig {
         },
         messages: vec![],
         model: None,
-        effort: None,
         limits: Limits::test_profile(),
         retry: RetryPolicy {
             backoff: Duration::from_millis(5),
@@ -633,6 +632,9 @@ struct PaneEngine {
 impl EngineAdapter for PaneEngine {
     fn profile(&self) -> EngineProfile {
         self.scripted.profile()
+    }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        self.scripted.models().await
     }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         self.scripted.session(session).await

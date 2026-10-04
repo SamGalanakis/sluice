@@ -837,6 +837,9 @@ impl EngineAdapter for Claude {
     fn profile(&self) -> EngineProfile {
         profile::profile()
     }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        Ok(profile::models())
+    }
     async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
         Ok(self.find_session(session)?.map(|(_, meta)| meta))
     }
@@ -845,12 +848,7 @@ impl EngineAdapter for Claude {
         context: &EngineContext,
         session: Option<&str>,
     ) -> Result<Option<EngineLaunch>, EngineError> {
-        if context.model.is_some() || context.effort.is_some() {
-            return Err(failure(
-                EngineErrorKind::CapabilityMismatch,
-                "claude always runs Opus; remove model and effort inputs",
-            ));
-        }
+        let model = crate::model::launch_model("claude", context.model.as_ref())?;
         let mut command = Command::new(&self.binary);
         command.env_clear().envs(&self.environment);
         for name in profile::SCRUB_ENV {
@@ -920,7 +918,13 @@ impl EngineAdapter for Claude {
                 .map_err(|e| failure(EngineErrorKind::Fatal, e.to_string()))?,
         )
         .map_err(io_error)?;
-        let argv = profile::argv(&self.binary, &settings, session, self.mcp.as_deref());
+        let argv = profile::argv(
+            &self.binary,
+            &model,
+            &settings,
+            session,
+            self.mcp.as_deref(),
+        );
         self.context = Some(context);
         let mut env = self.environment.clone();
         env.extend(BTreeMap::from([

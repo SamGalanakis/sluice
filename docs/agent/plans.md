@@ -95,6 +95,45 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   session to follow up by hand). An unbound `session` may still resume the previous attempt's
   session after a retry — the agent fns decide from the assigned messages and `prev_run`.
 
+## Choosing a model
+`agent.run`, `agent.devin`, `agent.codex` and `agent.claude` take `model`, a JSON object. Leave
+it out for the engine's default (devin swe-2 high, codex sol high, claude opus high). There is
+no separate `effort` input: the effort is in the object.
+
+```json
+{"inputs": {"repo": "string"},
+ "steps": {
+   "build": {"run": "agent.devin",
+     "in": {"cwd": {"source": "repo"},
+            "model": {"default": {"type": "fusion",
+                                  "main": {"model": "claude-opus-5-5", "effort": "high", "fast": false},
+                                  "sidekick": {"model": "swe-2", "effort": "high"}}},
+            "spec": {"default": "Build the feature on a branch of your own and commit there."}},
+     "outputs": {"branch": "string"}},
+   "check": {"run": "agent.codex",
+     "in": {"cwd": {"source": "repo"}, "branch": {"source": "build/branch"},
+            "model": {"default": {"type": "normal", "model": "sol", "effort": "xhigh"}},
+            "spec": {"default": "Check out the branch under Inputs and review it."}}}}}
+```
+
+- **Normal**, any engine: `{"type": "normal", "model": M, "effort": E?, "fast": bool?}`.
+  Devin runs `M[-E][-fast]` (`swe-2-high`, `claude-opus-5-5-high-fast`; leave `effort` out for
+  a model without one, such as `adaptive`). Codex runs `M` at reasoning effort `E` (`sol` and
+  `astra` name `gpt-6.1-sol` and `gpt-6-astra`; other names are `codex debug models` slugs).
+  Claude runs Opus (`opus` or `claude-opus-5-5`) at `low`, `medium`, `high`, `xhigh` or `max`.
+  Codex and Claude cannot run fast.
+- **Fusion**, Devin only: `{"type": "fusion", "main": {"model": M, "effort": E?, "fast":
+  bool?}, "sidekick": {"model": S, "effort": F?, "priority": bool?}}` runs
+  `fusion-M[-E][-fast]-sidekick-S[-F][-priority]`, so the object above runs
+  `fusion-claude-opus-5-5-high-sidekick-swe-2-high`; `"fast": true` on main runs
+  `fusion-claude-opus-5-5-high-fast-sidekick-swe-2-high`.
+- Unknown keys, empty strings and non-boolean `fast` or `priority` are refused. The id is
+  checked against the engine's own list (`devin models list`, `codex debug models`) before
+  the session starts. An unknown id fails the run (`agent_failure`, kind `Invalid`) with the
+  nearest ids it lists; nothing else runs instead. The result's `model` is the id that ran.
+- A string `model` (`"sol"`, `"fusion"`) or an `effort` input is the retired form: the run
+  fails at launch with the object to use instead.
+
 ## Units: the tag is the unit
 Steps tagged `unit:<name>` form **unit** `<name>`; a step carries at most one `unit:` tag. An
 untagged step is a unit of one, addressed by its step id. Edges may cross units freely. A unit
@@ -142,7 +181,8 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 
   ```
   unit_add(project, "lane", "fix-login", {...},
-           after={"*": ["unit:auth"]}, inputs={"work": {"effort": "xhigh"}},
+           after={"*": ["unit:auth"]},
+           inputs={"work": {"model": {"type": "normal", "model": "swe-2", "effort": "max"}}},
            tags=["arc:auth"])
   ```
 

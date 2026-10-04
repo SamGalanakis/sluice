@@ -1,7 +1,8 @@
 //! Claude Code 2.1.283 and 2.1.284 hook/status/TUI profile.
 use super::protocol::failure;
 use crate::engines::{EngineError, EngineErrorKind, EngineProfile};
-use std::{collections::BTreeMap, path::Path};
+use crate::model::{ModelChoice, ResolvedModel};
+use std::path::Path;
 
 pub const VERSION_RANGE: &str = ">=2.1.283 <=2.1.284";
 pub const SCRUB_ENV: &[&str] = &[
@@ -30,6 +31,23 @@ pub const HOOKS: &[&str] = &[
     "SubagentStop",
     "SessionEnd",
 ];
+/// Claude has no model listing, so its models are pinned: Opus by the CLI's alias (the latest
+/// Opus) or by its full name, at each effort `claude --effort` takes.
+pub const MODELS: [&str; 2] = ["opus", "claude-opus-5-5"];
+pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// Each pinned model alone (the effort Claude's settings give) and `<model>@<effort>`.
+pub fn models() -> Vec<String> {
+    MODELS
+        .iter()
+        .flat_map(|model| {
+            std::iter::once(model.to_string()).chain(
+                EFFORTS
+                    .iter()
+                    .map(move |effort| format!("{model}@{effort}")),
+            )
+        })
+        .collect()
+}
 pub fn profile() -> EngineProfile {
     EngineProfile {
         engine: "claude".into(),
@@ -40,8 +58,7 @@ pub fn profile() -> EngineProfile {
             "transcript-jsonl".into(),
             crate::engines::INLINE_COMPACTION_CONTEXT.into(),
         ],
-        models: BTreeMap::from([("opus".into(), "opus".into())]),
-        efforts: vec![],
+        default_model: Some(ModelChoice::normal("opus", Some("high"))),
         reports_waiting: true,
     }
 }
@@ -59,6 +76,7 @@ pub fn validate_version(text: &str) -> Result<String, EngineError> {
 }
 pub fn argv(
     binary: &Path,
+    model: &ResolvedModel,
     settings: &Path,
     session: Option<&str>,
     mcp: Option<&str>,
@@ -72,7 +90,12 @@ pub fn argv(
     args.extend([
         binary.to_string_lossy().into_owned(),
         "--model".into(),
-        "opus".into(),
+        model.model.clone(),
+    ]);
+    if let Some(effort) = &model.effort {
+        args.extend(["--effort".into(), effort.clone()]);
+    }
+    args.extend([
         "--dangerously-skip-permissions".into(),
         "--disallowedTools".into(),
         "AskUserQuestion".into(),

@@ -2,7 +2,6 @@
 use crate::engines::{EngineProfile, claude, codex, devin};
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
     io,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -20,8 +19,8 @@ pub struct EngineDiagnostic {
     pub supported_range: String,
     /// These are profile requirements, not a claim that a session negotiated them.
     pub required_capabilities: Vec<String>,
-    pub models: BTreeMap<String, String>,
-    pub efforts: Vec<String>,
+    /// What an agent fn runs on this engine when its `model` input is left out.
+    pub default_model: Option<crate::model::ModelChoice>,
     pub reports_waiting: bool,
     pub private_home: PathBuf,
     pub private_home_status: String,
@@ -138,8 +137,7 @@ async fn diagnose(
         private_home,
         supported_range: profile.version_range,
         required_capabilities: profile.required_capabilities,
-        models: profile.models,
-        efforts: profile.efforts,
+        default_model: profile.default_model,
         reports_waiting: profile.reports_waiting,
         engine: profile.engine,
         error: None,
@@ -210,7 +208,7 @@ mod tests {
             assert_eq!(report.version.as_deref(), Some(version));
             assert_eq!(report.error.is_none(), supported);
             assert_eq!(report.required_capabilities, expected.required_capabilities);
-            assert_eq!(report.models, expected.models);
+            assert_eq!(report.default_model, expected.default_model);
             assert_eq!(report.private_home_status, "not created");
         }
         let absent = diagnose(

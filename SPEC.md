@@ -1167,6 +1167,37 @@ Limits (minutes unless noted), overridable through environment variables: `SLUIC
 `SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_WAIT_MIN` (90), `SLUICE_AGENT_DIALOG_S` (60),
 `SLUICE_AGENT_QUIET_MIN` (45), `SLUICE_AGENT_WORK_MIN` (10), `SLUICE_AGENT_NUDGES`.
 
+### 15.1 Choosing a model
+
+The `model` input of `agent.claude`, `agent.codex`, `agent.devin` and `agent.run` is one of two
+JSON objects; left out, the engine's default runs, which is the same object filled in: Devin
+`{"type":"normal","model":"swe-2","effort":"high"}`, Codex
+`{"type":"normal","model":"sol","effort":"high"}`, Claude
+`{"type":"normal","model":"opus","effort":"high"}`.
+
+| shape | composes |
+|---|---|
+| normal `{"type":"normal","model":M,"effort":E?,"fast":bool?}`, any engine | Devin `M[-E][-fast]`: `swe-2-high`, `claude-opus-5-5-high-fast`, `adaptive`. Codex: model `M` (`sol` and `astra` name `gpt-6.1-sol` and `gpt-6-astra`; any other name is a `codex debug models` slug) at reasoning effort `E`, recorded `gpt-6.1-sol@high` (no `E`: the model's own default, recorded `gpt-6.1-sol`). Claude: `--model M --effort E` (`M` is `opus` or `claude-opus-5-5`, `E` `low`…`max`; no `E`: Claude's settings), recorded `opus@high`. Codex and Claude cannot run fast: `"fast": true` is refused there |
+| fusion `{"type":"fusion","main":{"model":M,"effort":E?,"fast":bool?},"sidekick":{"model":S,"effort":F?,"priority":bool?}}`, Devin only | `fusion-M[-E][-fast]-sidekick-S[-F][-priority]`: `fusion-claude-opus-5-5-high-sidekick-swe-2-high`, `fusion-claude-opus-5-5-high-fast-sidekick-gpt-5-6-luna-high-priority`, `fusion-claude-opus-5-5-high-sidekick-glm-5-2` |
+
+The objects are strict: an unknown key anywhere, a string that is not a non-empty string, or a
+`fast` or `priority` that is not a boolean is refused; `effort` is left out for a model that
+has none. At launch, before the session starts, the composed id is checked against what the
+engine lists: `devin models list --format json` (each variant's `model_uid`), `codex debug
+models` (each slug, and `<slug>@<effort>` for each reasoning effort it supports), and for
+Claude, which has no listing, the pinned models and efforts above. A listing is reused for 10
+minutes per process. An id the engine does not list fails the run with `agent_failure` kind
+`Invalid` naming the composed id and up to 5 nearest listed ids (those it begins first, then by
+edit distance); nothing else runs in its place. A fusion on Codex or Claude, `fast` there, or a
+malformed object is refused the same way. The plan types `model` as `Any?`, so a stored plan
+still holding a retired form (a string such as `"sol"` or `"fusion"`, or a separate `effort`
+input) keeps validating; such a step fails at launch with kind `Invalid` and a message giving
+the object to use instead (`"sol"` with effort `xhigh` →
+`{"type":"normal","model":"sol","effort":"xhigh"}`, `"fusion"` →
+`{"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}}`).
+The result's `model` is the id the run resolved and launched. `agent.review` and `decide.llm`
+run Claude's default.
+
 ## 16. Built-in fns
 
 | fn | inputs | outputs | notes |
@@ -1182,11 +1213,11 @@ Limits (minutes unless noted), overridable through environment variables: `SLUIC
 | `message.reply` | `to_message: int`, `body?`, `answer?` | `id: int`, `receipt: Any` | §8 |
 | `message.wait` | `thread`, `since: int?`, `to?`, `timeout: int?` (300), `wake?` | `messages: Any[]`, `last_seq: int` | waits for messages on a thread after `since`; `wake: "questions"` holds the rest |
 | `message.post` | `body`, `thread?`, `to?`, `needs_reply?`, `reply_to?`, `answer?`, `title?`, `ui?`, `input?`, `data?`, `from?`, `wait?` | `id: int`, `reply: Any?` | retired; plans that name it run through the `message_post` translation (§8), only in a run |
-| `agent.claude` | `cwd`, `prompt`, `session?`, `listen?` | `result`, `session`, `git` | open; Opus |
-| `agent.codex` | `cwd`, `spec`, `model?` (`sol` default, `astra`), `effort?` (`minimal`…`max`, default `high`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `report?`, `session`, `git` | open |
-| `agent.devin` | `cwd`, `spec`, `model?` (default `swe-2-high`; `fusion`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `report?`, `session`, `git` | open |
+| `agent.claude` | `cwd`, `prompt`, `model: Any?` (Opus, default `{"type":"normal","model":"opus","effort":"high"}`), `session?`, `listen?` | `result`, `model`, `session`, `git` | open |
+| `agent.codex` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"sol","effort":"high"}`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `model`, `report?`, `session`, `git` | open |
+| `agent.devin` | `cwd`, `spec`, `model: Any?` (default `{"type":"normal","model":"swe-2","effort":"high"}`; or a fusion), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `model`, `report?`, `session`, `git` | open |
 | `agent.review` | `cwd`, `base`, `standards`, `notes?`, `session?`, `listen?` | `summary`, `sha`, `commits: int`, `session`, `git` | open; reviews and fixes a branch diff with Claude |
-| `agent.run` | `engine` (`devin`, `codex`, `claude`), `cwd`, `spec`, `model?`, `effort?`, `session?`, `report_path?`, `listen?` | `final`, `report?`, `session`, `git` | open |
+| `agent.run` | `engine` (`devin`, `codex`, `claude`), `cwd`, `spec`, `model: Any?`, `session?`, `report_path?`, `listen?` | `final`, `model`, `report?`, `session`, `git` | open |
 | `decide.llm` | `question`, `context: Any?`, `options: string[]`, `threshold: float?` | `choice`, `p: float`, `confident: boolean` | 2 retries, 30 s apart |
 | `git.head` | `path` | `branch`, `sha` | |
 | `git.merge` | `repo`, `source`, `target`, `message?`, `push: boolean?` | `merged: boolean`, `sha?`, `conflicts: string[]` | in a temporary worktree; conflicts are data |

@@ -80,7 +80,10 @@ fn setup(scratch: &Scratch, scenario: &str) -> (Codex, EngineContext) {
     executable::write(
         &binary,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.160.0'; exit; fi\nexport SLUICE_CODEX_TEST_SOCKET=\"${{3#unix://}}\"\nexport SLUICE_CODEX_TEST_SCENARIO='{scenario}'\nexec {} --ignored --exact fake_codex_executable --nocapture\n",
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.160.0'; exit; fi\nif [ \"$1\" = debug ]; then cat {}; exit; fi\nexport SLUICE_CODEX_TEST_SOCKET=\"${{3#unix://}}\"\nexport SLUICE_CODEX_TEST_SCENARIO='{scenario}'\nexec {} --ignored --exact fake_codex_executable --nocapture\n",
+            shell_quote(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engines/codex/models.json")
+            ),
             shell_quote(&executable)
         ),
     );
@@ -90,7 +93,6 @@ fn setup(scratch: &Scratch, scenario: &str) -> (Codex, EngineContext) {
         run_dir: scratch.path().join("run"),
         cwd,
         model: None,
-        effort: None,
         tmux_binary: None,
     };
     let options = CodexOptions {
@@ -167,7 +169,7 @@ fn private_config_disables_all_mcp_forms_and_preserves_toml_types() {
         let source = format!(
             "model='old'\nweb_search='cached'\ncount=23\nratio=1.25\nflag=true\nwhen=2026-09-29T12:34:56Z\nitems=[1,'two',{{ nested=[true,false] }}]\n{servers}\n[profiles.work]\nmodel='profile'\n[[profiles.work.tools]]\nname='first'\n[[profiles.work.tools]]\nname='second'\n"
         );
-        let output = profile::private_config(&source, "gpt-6-astra", "max", false).unwrap();
+        let output = profile::private_config(&source, "gpt-6-astra", Some("max"), false).unwrap();
         let doc = output.parse::<toml_edit::DocumentMut>().unwrap();
         assert_eq!(doc["model"].as_str(), Some("gpt-6-astra"));
         assert_eq!(doc["mcp_servers"]["a.b"]["enabled"].as_bool(), Some(false));
@@ -190,7 +192,7 @@ fn private_config_disables_all_mcp_forms_and_preserves_toml_types() {
 #[test]
 fn private_config_keeps_difficult_values() {
     let source = "'key with space'=1\n'é'='ünï'\nbig=1e300\nneg=-inf\nodd=nan\nlocal=2026-09-29T12:34:56.5\noff=2026-09-29T12:34:56+02:00\nempty={}\nnone=[]\ndeep=[[{a={'b.c'=[1.5,'x']}}]]\n";
-    let output = profile::private_config(source, "sol", "max", true).unwrap();
+    let output = profile::private_config(source, "sol", Some("max"), true).unwrap();
     assert!(output.starts_with(source));
     assert!(
         output.parse::<toml_edit::DocumentMut>().unwrap()["odd"]
@@ -207,7 +209,7 @@ fn malformed_config_and_invalid_mcp_tables_fail() {
         "mcp_servers=1",
         "mcp_servers.x='server'",
     ] {
-        assert!(profile::private_config(source, "sol", "high", false).is_err());
+        assert!(profile::private_config(source, "sol", Some("high"), false).is_err());
     }
 }
 #[tokio::test]
@@ -523,21 +525,9 @@ async fn corrupt_rollout_line_does_not_hide_session_cwd() {
     assert!(adapter.session("../owner").await.is_err());
 }
 #[tokio::test]
-async fn unknown_version_and_model_effort_fail_before_launch() {
+async fn unknown_version_fails_before_launch() {
     let scratch = Scratch::new();
-    let (mut adapter, mut context) = setup(&scratch, "normal");
-    context.model = Some("unknown".into());
-    assert_eq!(
-        adapter.prepare(&context, None).await.unwrap_err().kind,
-        EngineErrorKind::CapabilityMismatch
-    );
-    context.model = None;
-    context.effort = Some("ultra".into());
-    assert_eq!(
-        adapter.prepare(&context, None).await.unwrap_err().kind,
-        EngineErrorKind::CapabilityMismatch
-    );
-    context.effort = None;
+    let (mut adapter, context) = setup(&scratch, "normal");
     fs::write(
         scratch.path().join("fake-codex"),
         "#!/bin/sh\necho 'codex-cli 999.0.0'\n",
@@ -742,8 +732,11 @@ async fn g3_codex() {
     let mut context = EngineContext {
         run_dir: scratch.path().join("fresh"),
         cwd: cwd.clone(),
-        model: Some("sol".into()),
-        effort: Some("low".into()),
+        model: Some(sluice_agents::model::ResolvedModel {
+            id: "gpt-6.1-sol@low".into(),
+            model: "gpt-6.1-sol".into(),
+            effort: Some("low".into()),
+        }),
         tmux_binary: None,
     };
     let options = CodexOptions::new(

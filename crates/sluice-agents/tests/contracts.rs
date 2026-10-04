@@ -208,12 +208,13 @@ fn every_agent_builtin_builds_prompt_and_validates_engine_specific_inputs() {
                 .is_err()
         );
     }
-    let engine = ScriptedEngine::new(vec![]);
     assert!(
-        engine
-            .profile()
-            .validate_selection(Some("unapproved"), None)
-            .is_err()
+        sluice_agents::model::resolve(
+            "fake",
+            &sluice_agents::model::ModelChoice::normal("unapproved", None),
+            &["fixture".into()]
+        )
+        .is_err()
     );
     assert_eq!(
         adapter_not_built("codex"),
@@ -229,6 +230,7 @@ fn result() -> AgentResult {
         session: "s".into(),
         git: None,
         notes: vec![],
+        model: None,
     }
 }
 #[test]
@@ -708,7 +710,6 @@ fn composition(scratch: &Scratch, transient_first: bool) -> (CompositionFactory,
             },
             messages: vec![],
             model: None,
-            effort: None,
             limits: Limits::test_profile(),
             retry: RetryPolicy::agent(),
             internal_attempt: 1,
@@ -720,6 +721,58 @@ fn composition(scratch: &Scratch, transient_first: bool) -> (CompositionFactory,
         release: None,
     };
     (factory, invocation)
+}
+#[tokio::test]
+async fn the_result_names_the_model_the_run_resolved() {
+    let scratch = Scratch::new();
+    let (factory, invocation) = composition(&scratch, false);
+    let host = AgentFnHost::new(factory);
+    let output = host.compose(invocation).await.unwrap();
+    assert_eq!(
+        output.0["model"].as_value(),
+        &serde_json::json!(FIXTURE_MODEL)
+    );
+    // An id the engine does not list fails before anything starts: no checkpoint, no session.
+    let scratch = Scratch::new();
+    let (factory, _) = composition(&scratch, false);
+    let directory = factory.config.run_dir.clone();
+    let mut config = factory.config.clone();
+    config.model = Some(model::ModelChoice::normal("fixtur", Some("max")));
+    let mut engine = ScriptedEngine::new(vec![]);
+    let failure = supervise(
+        config,
+        &mut engine,
+        &mut CompositionHost(Arc::default(), false),
+        &mut SessionGuard::default(),
+        None,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.kind, FailureKind::Invalid);
+    assert_eq!(
+        failure.message,
+        r#"fake has no model fixtur-max (composed from model {"type":"normal","model":"fixtur","effort":"max"}); nearest: fixture"#
+    );
+    assert!(engine.commands.is_empty());
+    assert!(Checkpoint::read(&directory).unwrap().is_none());
+    // The request refuses a retired string before the session starts.
+    let (factory, mut invocation) = composition(&scratch, false);
+    invocation.inputs = inputs(
+        serde_json::json!({"engine":"fake", "cwd":scratch.0, "spec":"task", "model":"fixture"}),
+    );
+    let failure = AgentFnHost::new(factory)
+        .compose(invocation)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, FailureKind::Invalid);
+    assert!(
+        failure
+            .message
+            .contains(r#"use {"type":"normal","model":"fixture"}"#),
+        "{}",
+        failure.message
+    );
 }
 #[tokio::test]
 async fn composed_transient_returns_to_outer_budget_and_reenters_same_checkpoint_without_task_replay()

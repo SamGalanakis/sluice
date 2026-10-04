@@ -1,6 +1,18 @@
 use super::super::{EngineError, EngineErrorKind, EngineProfile};
-use std::{collections::BTreeMap, path::Path};
+use crate::model::ModelChoice;
+use serde_json::Value;
+use std::path::Path;
 use toml_edit::{DocumentMut, value};
+
+/// Codex's short model names: `{"type":"normal","model":"sol",...}` runs `gpt-6.1-sol`. Any
+/// other name is a slug from `codex debug models` as it is.
+pub const MODEL_NAMES: [(&str, &str); 2] = [("sol", "gpt-6.1-sol"), ("astra", "gpt-6-astra")];
+pub fn model_name(name: &str) -> &str {
+    MODEL_NAMES
+        .iter()
+        .find(|(short, _)| *short == name)
+        .map_or(name, |(_, slug)| slug)
+}
 
 pub fn profile() -> EngineProfile {
     EngineProfile {
@@ -14,15 +26,36 @@ pub fn profile() -> EngineProfile {
         ]
         .map(String::from)
         .to_vec(),
-        models: BTreeMap::from([
-            ("sol".into(), "gpt-6.1-sol".into()),
-            ("astra".into(), "gpt-6-astra".into()),
-        ]),
-        efforts: ["minimal", "low", "medium", "high", "xhigh", "max"]
-            .map(String::from)
-            .to_vec(),
+        default_model: Some(ModelChoice::normal("sol", Some("high"))),
         reports_waiting: false,
     }
+}
+
+/// Every model's slug (its default effort) and `<slug>@<effort>` for each reasoning effort it
+/// supports, from `codex debug models`.
+pub fn parse_models(listing: &[u8]) -> Result<Vec<String>, EngineError> {
+    let bad = || {
+        error(
+            EngineErrorKind::Fatal,
+            "could not list Codex models: unexpected `codex debug models` output",
+        )
+    };
+    let listing: Value = serde_json::from_slice(listing).map_err(|_| bad())?;
+    let mut ids = Vec::new();
+    for model in listing["models"].as_array().ok_or_else(bad)? {
+        let slug = model["slug"].as_str().ok_or_else(bad)?;
+        ids.push(slug.to_owned());
+        for level in model["supported_reasoning_levels"]
+            .as_array()
+            .ok_or_else(bad)?
+        {
+            ids.push(format!(
+                "{slug}@{}",
+                level["effort"].as_str().ok_or_else(bad)?
+            ));
+        }
+    }
+    Ok(ids)
 }
 
 pub fn check_version(version: &str) -> Result<(), EngineError> {
@@ -45,7 +78,7 @@ pub(crate) fn error(kind: EngineErrorKind, message: impl Into<String>) -> Engine
 pub fn private_config(
     source: &str,
     model: &str,
-    effort: &str,
+    effort: Option<&str>,
     search: bool,
 ) -> Result<String, EngineError> {
     let mut doc = source
@@ -65,7 +98,12 @@ pub fn private_config(
         }
     }
     doc["model"] = value(model);
-    doc["model_reasoning_effort"] = value(effort);
+    match effort {
+        Some(effort) => doc["model_reasoning_effort"] = value(effort),
+        None => {
+            doc.remove("model_reasoning_effort");
+        }
+    }
     doc["check_for_update_on_startup"] = value(false);
     if search {
         doc["web_search"] = value("live");

@@ -148,7 +148,6 @@ pub fn config(root: &Path, engine: &str) -> SupervisorConfig {
         },
         messages: vec![],
         model: None,
-        effort: None,
         limits: Limits::test_profile(),
         retry: RetryPolicy {
             backoff: Duration::from_millis(5),
@@ -558,6 +557,9 @@ struct CommitEngine {
 impl EngineAdapter for CommitEngine {
     fn profile(&self) -> EngineProfile {
         self.fake.profile()
+    }
+    async fn models(&mut self) -> Result<Vec<String>, EngineError> {
+        self.fake.models().await
     }
     async fn session(&mut self, s: &str) -> Result<Option<SessionMetadata>, EngineError> {
         self.fake.session(s).await
