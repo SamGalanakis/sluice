@@ -22,6 +22,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "fixtures/executable.rs"]
+mod executable;
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
@@ -239,16 +242,14 @@ impl Harness {
             .canonicalize()
             .expect("build workspace binaries first");
         let wrapper = scratch.0.join("fake-claude");
-        fs::write(
+        executable::write(
             &wrapper,
             format!(
                 "#!/bin/sh\nexport SLUICE_HOME={}\nexec {} claude \"$@\"\n",
                 protocol::shell_quote(&scratch.0.to_string_lossy()),
                 protocol::shell_quote(&fixture.to_string_lossy())
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         fs::write(
             scratch.0.join("config.json"),
             serde_json::to_vec(&config).unwrap(),
@@ -629,8 +630,7 @@ async fn private_compaction_context_refresh_and_ask_user_denial() {
 async fn unknown_version_and_model_rejected_before_task_or_launch() {
     let mut h = Harness::new(json!({})).await;
     let bin = h.scratch.0.join("unknown");
-    fs::write(&bin, "#!/bin/sh\nprintf '9.0.0 (Claude Code)\\n'\n").unwrap();
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::write(&bin, "#!/bin/sh\nprintf '9.0.0 (Claude Code)\\n'\n");
     h.adapter = Claude::new(
         bin,
         h.scratch.0.join("claude"),
@@ -1076,15 +1076,22 @@ async fn supervisor_engine_mismatch() {
 async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     let mut h = Harness::new(json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
     let hook = h.scratch.0.join("journal-hook");
-    fs::write(&hook, include_str!("acceptance/hook.py")).unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::write(&hook, include_str!("acceptance/hook.py"));
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/debug/fixture")
         .canonicalize()
         .unwrap();
     let wrapper = h.scratch.0.join("supervised-claude");
-    fs::write(&wrapper, format!("#!/bin/sh\nexport SLUICE_HOME={}\nexport HOME={}\nexport SLUICE_FAKE_CLAUDE={}\nexec {} claude \"$@\"\n", protocol::shell_quote(&h.scratch.0.to_string_lossy()), protocol::shell_quote(&h.scratch.0.join("home").to_string_lossy()), protocol::shell_quote(&h.scratch.0.join("config.json").to_string_lossy()), protocol::shell_quote(&fixture.to_string_lossy()))).unwrap();
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexport SLUICE_HOME={}\nexport HOME={}\nexport SLUICE_FAKE_CLAUDE={}\nexec {} claude \"$@\"\n",
+            protocol::shell_quote(&h.scratch.0.to_string_lossy()),
+            protocol::shell_quote(&h.scratch.0.join("home").to_string_lossy()),
+            protocol::shell_quote(&h.scratch.0.join("config.json").to_string_lossy()),
+            protocol::shell_quote(&fixture.to_string_lossy())
+        ),
+    );
     let mut cfg = acceptance::config(&h.scratch.0, "claude");
     cfg.limits.wall = Duration::from_secs(15);
     cfg.limits.ready = Duration::from_secs(5);

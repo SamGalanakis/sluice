@@ -19,6 +19,9 @@ use tokio::{
     time::{Instant, sleep},
 };
 
+#[path = "fixtures/executable.rs"]
+mod executable;
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
@@ -74,8 +77,13 @@ fn setup(scratch: &Scratch, scenario: &str) -> (Codex, EngineContext) {
     fs::write(source.join("auth.json"), "private credential fixture").unwrap();
     let binary = scratch.path().join("fake-codex");
     let executable = std::env::current_exe().unwrap();
-    fs::write(&binary, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.160.0'; exit; fi\nexport SLUICE_CODEX_TEST_SOCKET=\"${{3#unix://}}\"\nexport SLUICE_CODEX_TEST_SCENARIO='{scenario}'\nexec {} --ignored --exact fake_codex_executable --nocapture\n", shell_quote(&executable))).unwrap();
-    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.160.0'; exit; fi\nexport SLUICE_CODEX_TEST_SOCKET=\"${{3#unix://}}\"\nexport SLUICE_CODEX_TEST_SCENARIO='{scenario}'\nexec {} --ignored --exact fake_codex_executable --nocapture\n",
+            shell_quote(&executable)
+        ),
+    );
     let cwd = scratch.path().join("work");
     fs::create_dir(&cwd).unwrap();
     let context = EngineContext {
@@ -782,12 +790,10 @@ async fn g3_codex() {
     git(&cwd, &["add", "."]);
     git(&cwd, &["commit", "-qm", "Create the gate baseline."]);
     let baseline = git(&cwd, &["rev-parse", "HEAD"]);
-    fs::write(
+    executable::write(
         cwd.join("submit.sh"),
         "#!/bin/sh\nset -eu\nprintf '%s\\n' '{\"word\":\"blue\"}' > submitted.json\n",
-    )
-    .unwrap();
-    fs::set_permissions(cwd.join("submit.sh"), fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let mut context = EngineContext {
         run_dir: scratch.path().join("fresh"),
         cwd: cwd.clone(),

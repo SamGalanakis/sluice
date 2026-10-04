@@ -19,6 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "fixtures/executable.rs"]
+mod executable;
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
@@ -54,15 +57,13 @@ fn options(root: &Scratch, script: Value) -> DevinOptions {
         "build the workspace binaries before the Devin executable tests"
     );
     let wrapper = root.join("devin");
-    fs::write(
+    executable::write(
         &wrapper,
         format!(
             "#!/bin/sh\nexec {} devin \"$@\"\n",
             protocol::shell_quote(&fixture.to_string_lossy())
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+    );
     let mut script = script;
     script["prompts"] = root
         .join("prompts.jsonl")
@@ -1009,8 +1010,7 @@ async fn devin_exit_probe_drains_terminal_hooks_before_reporting_exit() {
         let opts = options(&root, json!({}));
         let mut ctx = context(&root, "exit-probe", false);
         let tmux = root.join("probe-tmux");
-        fs::write(&tmux, include_str!("fixtures/devin/exit-during-probe.py")).unwrap();
-        fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).unwrap();
+        executable::write(&tmux, include_str!("fixtures/devin/exit-during-probe.py"));
         ctx.tmux_binary = Some(tmux);
         let mut adapter = Devin::new(opts);
         adapter.prepare(&ctx, None).await.unwrap();
@@ -1617,8 +1617,7 @@ async fn supervised_devin(synchronous: bool) {
         json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"busy_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]}),
     );
     let hook = root.join("journal-hook");
-    fs::write(&hook, include_str!("fixtures/devin/supervisor-hook.py")).unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::write(&hook, include_str!("fixtures/devin/supervisor-hook.py"));
     if synchronous {
         opts.hook_binary = hook;
     }
