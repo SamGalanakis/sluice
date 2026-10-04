@@ -1,12 +1,6 @@
 #[test]
-#[ignore = "G7 private installation rollback; requires p7-02 install contract"]
+#[ignore = "G7 private installation rollback through a scratch release"]
 fn g7_rollback() {
-    if !crate::common::install_available() {
-        println!(
-            "G7_UNRESOLVED p7-02: installation contract is not integrated; rollback harness retained, old-side continuation verified separately"
-        );
-        return;
-    }
     rehearse();
 }
 
@@ -200,6 +194,9 @@ fn rehearse() {
         root.join("bin").to_string_lossy().into(),
     );
     let lease = common::scheduler(&rust_home);
+    // Submit once per run: a later submission changes the version the guardian's
+    // completion journal recorded, and the coordinator refuses that completion.
+    let mut submitted = std::collections::BTreeSet::new();
     common::wait(|| {
         let status = common::data(
             &rust_home,
@@ -207,10 +204,15 @@ fn rehearse() {
         );
         if status["steps"]["work"]["status"] == "running" {
             let run = status["steps"]["work"]["run_ids"][0].as_str().unwrap();
-            let _ = common::rpc(
-                &rust_home,
-                json!({"command":"step_submit","args":{"project":status["project"]["project_id"],"step":"work","run":run,"outputs":{"word":"resumed"},"author":"fixture"}}),
-            );
+            if !submitted.contains(run) {
+                let reply = common::rpc(
+                    &rust_home,
+                    json!({"command":"step_submit","args":{"project":status["project"]["project_id"],"step":"work","run":run,"outputs":{"word":"resumed"},"author":"fixture"}}),
+                );
+                if reply["result"]["status"] == "ok" {
+                    submitted.insert(run.to_string());
+                }
+            }
         }
         status["steps"]["push"]["status"] == "succeeded"
     });
@@ -360,12 +362,14 @@ fn rehearse() {
     );
     // The committed push survives SQLite restoration. Record that known result
     // through the old owner tool before releasing the original active project.
+    // Its upstream was just retried, so old Python requires force; the push then
+    // turns stale rather than running again.
     old_command(
         &old_bin,
         &restored,
         &env,
         "step_set_output",
-        json!({"project":"rollback-fixture","step":"push","outputs":{"sha":sha},"reason":"reconciled Rust push; never repeat"}),
+        json!({"project":"rollback-fixture","step":"push","outputs":{"sha":sha},"force":true,"reason":"reconciled Rust push; never repeat"}),
     );
     selected(root, &["unfence"]);
     old_command(

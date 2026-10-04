@@ -31,8 +31,8 @@ if mode == 'start':
     store.create_project('rollback-fixture', 'Private rollback rehearsal', 'fixture', 'fixture')
     store.create_project('already-paused', 'Keep the owner pause', 'fixture', 'fixture')
     store.update_project('already-paused', paused=True)
-    fn = home / 'projects/rollback-fixture/fns/fixture.push'
-    write(fn / 'fn.json', {'name':'fixture.push','inputs':{'cwd':'string'},'outputs':{'sha':'string'}})
+    fn = home / 'projects/rollback-fixture/fns/rollback.push'
+    write(fn / 'fn.json', {'name':'rollback.push','inputs':{'cwd':'string'},'outputs':{'sha':'string'}})
     code = '''from sluice.fn import run, sh
 def main(inp, ctx):
     sh(['git','-C',inp['cwd'],'push','-q','origin','HEAD:main'])
@@ -45,12 +45,12 @@ run(main)
             k:{'default':v} for k,v in {'engine':'codex','model':'sol','cwd':str(root / 'repo'),
                 'spec':'Labelled rollback fixture. Continue this same session with the current full run header and callback instructions.',
                 'listen':False}.items()}},
-        'push':{'run':'fixture.push','after':['work'],'in':{'cwd':{'default':str(root / 'repo')}}}}}
+        'push':{'run':'rollback.push','after':['work'],'in':{'cwd':{'default':str(root / 'repo')}}}}}
     store.patch('rollback-fixture',1,[{'op':'replace','path':f'/{k}','value':v} for k,v in plan.items()],'fixture','fixture')
     staging = root / 'staging'
     write(staging / 'config.json', {'fn_dirs':[]})
     write(staging / 'plan-conversion.json', {'pause_states':{'rollback-fixture':False,'already-paused':True}})
-    converted = staging / 'projects/rollback-fixture/fns/fixture.push'
+    converted = staging / 'projects/rollback-fixture/fns/rollback.push'
     write(converted / 'fn.json', json.loads((fn / 'fn.json').read_text()))
     (converted / 'main.py').write_text((fn / 'main.py').read_text().replace('from sluice.fn import','from sluice_fn import'))
 else:

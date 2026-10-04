@@ -10,16 +10,13 @@ fn g7_window() {
     let root = scratch.path();
     let snapshot = common::snapshot(root);
     // The online backup and release build belong to preflight, outside the pause.
-    let has_install = common::install_available();
-    let release = has_install.then(|| common::release_fixture(root));
-    if has_install {
-        let out = common::install(root, &["fence", "scratch measured window"]);
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    let release = common::release_fixture(root);
+    let out = common::install(root, &["fence", "scratch measured window"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let mut timings = BTreeMap::new();
     let start = Instant::now();
     let step = Instant::now();
@@ -34,30 +31,26 @@ fn g7_window() {
     let counts = import_home::assert_table(&root.join("source"), &destination, &report);
     timings.insert("import_validation", step.elapsed().as_secs_f64());
     let step = Instant::now();
-    if let Some(release) = release.as_ref() {
-        let out = common::install(
-            root,
-            &[
-                "select",
-                release.to_str().unwrap(),
-                destination.to_str().unwrap(),
-            ],
-        );
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    let out = common::install(
+        root,
+        &[
+            "select",
+            release.to_str().unwrap(),
+            destination.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     timings.insert("select_release_home", step.elapsed().as_secs_f64());
     let step = Instant::now();
     let env = BTreeMap::from([(
         "SLUICE_INSTALL_DIR".into(),
         root.join("install").to_string_lossy().into(),
     )]);
-    let executable = release
-        .as_ref()
-        .map_or_else(common::binary, |r| r.join("bin/sluice"));
+    let executable = release.join("bin/sluice");
     let _coordinator = common::boot(&executable, &destination, &env);
     timings.insert("boot_to_maintenance", step.elapsed().as_secs_f64());
     let mut retry_count = 0;
@@ -102,11 +95,8 @@ fn g7_window() {
     }
     timings.insert("retry_interrupted_agents", step.elapsed().as_secs_f64());
     let step = Instant::now();
-    let unfenced = if has_install {
-        common::install(root, &["unfence"]).status.success()
-    } else {
-        false
-    };
+    let unfence = common::install(root, &["unfence"]);
+    let unfenced = unfence.status.success();
     timings.insert("unfence", step.elapsed().as_secs_f64());
     let total = start.elapsed().as_secs_f64();
     let dominant = timings.iter().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
@@ -130,19 +120,17 @@ fn g7_window() {
     assert_eq!(stamp, common::live_stamp());
     common::evidence(
         "g7_window",
-        &json!({"snapshot":snapshot,"counts":counts,"seconds":timings,"total_seconds":total,"target_seconds":300,"dominant":dominant,"retry_count":retry_count,"retry_refusals":refused,"install_available":has_install,"unfenced":unfenced,"complete_window":has_install && refused.is_empty() && unfenced,"copied_projects_executed":0}),
+        &json!({"snapshot":snapshot,"counts":counts,"seconds":timings,"total_seconds":total,"target_seconds":300,"dominant":dominant,"retry_count":retry_count,"retry_refusals":refused,"unfenced":unfenced,"complete_window":refused.is_empty() && unfenced,"copied_projects_executed":0}),
     );
     assert!(
         total < 300.0,
         "window exceeds five minutes: stage immutable session homes before pausing"
     );
-    // p7-02 owns the installation fence and maintenance retry contract. Missing
-    // prerequisites are reported explicitly; a partial timing is never acceptance.
-    if has_install {
-        assert!(
-            refused.is_empty(),
-            "p7-02: maintenance retry refused: {refused:?}"
-        );
-        assert!(unfenced, "p7-02: unfence refused");
-    }
+    // A partial timing is never acceptance: every retry and the unfence must succeed.
+    assert!(refused.is_empty(), "maintenance retry refused: {refused:?}");
+    assert!(
+        unfenced,
+        "unfence refused: {}",
+        String::from_utf8_lossy(&unfence.stderr)
+    );
 }

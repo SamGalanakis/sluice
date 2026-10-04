@@ -184,45 +184,27 @@ pub fn read_paths(root: &Path, destination: &Path, report: &Value) -> Value {
         root.join("install").to_string_lossy().into(),
     )]);
     let _coordinator = common::boot(&common::binary(), destination, &env);
-    let reply = common::rpc(destination, json!({"command":"docs","args":{"topic":null}}));
-    let docs_verified = reply["result"]["status"] == "ok";
-    if !docs_verified {
-        assert_eq!(reply["result"]["value"]["error"], "bad_request", "{reply}");
-        assert!(
-            reply["result"]["value"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("not implemented"),
-            "{reply}"
-        );
-        println!("G7_UNRESOLVED dispatch-gaps: docs read path is not integrated: {reply}");
-    }
+    let docs = common::data(destination, json!({"command":"docs","args":{"topic":null}}));
+    assert!(!docs.is_null(), "empty docs reply");
     let ledger: Value =
         serde_json::from_slice(&fs::read(destination.join("import-ledger.json")).unwrap()).unwrap();
-    // The importer owner publishes converted fns into the registry's normal
-    // source layout. Keep the status assertions below for its integrated change.
-    let missing: Vec<_> = ledger["projects"]
-        .as_object()
-        .unwrap()
-        .iter()
-        .filter(|(name, project)| {
-            root.join("staging/projects")
-                .join(name)
-                .join("fns")
-                .is_dir()
-                && !destination
+    // Converted fns are published into the registry's normal source layout.
+    for (name, project) in ledger["projects"].as_object().unwrap() {
+        if root
+            .join("staging/projects")
+            .join(name)
+            .join("fns")
+            .is_dir()
+        {
+            assert!(
+                destination
                     .join("projects")
                     .join(project["id"].as_str().unwrap())
                     .join("fns")
-                    .is_dir()
-        })
-        .map(|(name, _)| name.clone())
-        .collect();
-    if !missing.is_empty() {
-        println!(
-            "G7_UNRESOLVED import-fns: registry sources are not published for {missing:?}; retained status/dashboard assertions await integration"
-        );
-        return json!({"docs_verified":docs_verified,"status_dashboard_verified":false,"unresolved":["import-fns"]});
+                    .is_dir(),
+                "registry sources are not published for {name}"
+            );
+        }
     }
     for (name, project) in ledger["projects"].as_object().unwrap() {
         let status = common::data(
@@ -277,7 +259,7 @@ pub fn read_paths(root: &Path, destination: &Path, report: &Value) -> Value {
                 .and_then(Value::as_i64)
                 .unwrap_or(0)
     );
-    json!({"docs_verified":docs_verified,"status_dashboard_verified":true,"unresolved":[]})
+    json!({"docs_verified":true,"status_dashboard_verified":true})
 }
 
 #[test]

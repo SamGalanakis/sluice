@@ -22,19 +22,14 @@ pub fn scratch() -> tempfile::TempDir {
         .unwrap()
 }
 pub fn binary() -> PathBuf {
-    let path = match std::env::var_os("SLUICE_G7_RELEASE") {
-        Some(release) => {
-            let release = PathBuf::from(release).canonicalize().unwrap();
-            assert!(release.starts_with(workspace().join("target")));
-            assert!(release.join("manifest.json").is_file());
-            release.join("bin/sluice")
-        }
-        None => workspace().join("target/release/sluice"),
-    };
-    assert!(
-        path.is_file(),
-        "build the release before the ignored G7 tests"
-    );
+    // G7 always exercises a packaged scratch release built by scripts/build-release.
+    let release = std::env::var_os("SLUICE_G7_RELEASE")
+        .expect("set SLUICE_G7_RELEASE to a scratch release under this workspace's target");
+    let release = PathBuf::from(release).canonicalize().unwrap();
+    assert!(release.starts_with(workspace().join("target")));
+    assert!(release.join("manifest.json").is_file());
+    let path = release.join("bin/sluice");
+    assert!(path.is_file(), "release has no bin/sluice");
     path
 }
 pub fn evidence(name: &str, value: &Value) {
@@ -181,17 +176,6 @@ pub fn install(root: &Path, args: &[&str]) -> std::process::Output {
         .output()
         .unwrap()
 }
-pub fn install_available() -> bool {
-    let scratch = scratch();
-    let out = Command::new(binary())
-        .args(["install", "--help"])
-        .env("SLUICE_HOME", scratch.path().join("home"))
-        .env("SLUICE_INSTALL_DIR", scratch.path().join("install"))
-        .output()
-        .unwrap();
-    out.status.success()
-}
-
 pub fn ok(home: &Path, command: Value) -> Value {
     let reply = rpc(home, command);
     assert_eq!(reply["result"]["status"], "ok", "{reply}");
@@ -268,7 +252,10 @@ impl Drop for OwnedHome {
                     }
                 }
             }
-            let _ = fs::copy(self.0.join("sluice.db"), dest.join("sluice.db"));
+            // Committed rows may still be in the WAL.
+            for name in ["sluice.db", "sluice.db-wal", "sluice.db-shm"] {
+                let _ = fs::copy(self.0.join(name), dest.join(name));
+            }
         }
         for unit in self.units() {
             let _ = Command::new("/usr/bin/systemctl")
@@ -284,10 +271,6 @@ impl Drop for OwnedHome {
 pub fn release_fixture(root: &Path) -> PathBuf {
     let binary = binary();
     let source = binary.parent().unwrap().parent().unwrap();
-    assert!(
-        source.join("manifest.json").is_file(),
-        "p7-02: build a scratch package and set SLUICE_G7_RELEASE before exercising selection"
-    );
     let release = root.join("releases").join(source.file_name().unwrap());
     tree(source, &release);
     release

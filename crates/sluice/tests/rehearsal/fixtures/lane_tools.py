@@ -40,6 +40,10 @@ elif name == 'kiln':
         # Keep cleanup away from the real evidence archive by keeping the fork clean.
         git('config', 'core.excludesFile', str(root / 'ignore'), cwd=dest)
         print(dest)
+    elif args == ['clippy']:
+        # lash.land gates the first push on workspace clippy of the rebased tree.
+        assert Path.cwd().resolve().is_relative_to(root)
+        print('scratch clippy clean')
     elif args[:2] == ['rm', 'lash']:
         assert args[2] == 'g7'
         shutil.rmtree(root / 'fork')
@@ -61,8 +65,9 @@ elif name == 'codex':
     if args and args[0] == 'app-server':
         private = Path(os.environ['CODEX_HOME'])
         private.mkdir(parents=True, exist_ok=True)
-        rollout = private / 'sessions/g7.jsonl'
-        rollout.parent.mkdir(exist_ok=True)
+        # Codex's own layout: the importer matches rollouts by their -<session>.jsonl suffix.
+        rollout = private / 'sessions/2026/10/04/rollout-2026-10-04T00-00-00-fixture-thread.jsonl'
+        rollout.parent.mkdir(parents=True, exist_ok=True)
         rollout.write_text(json.dumps({'type':'session_meta','payload':{'id':'fixture-thread','cwd':os.getcwd()}})+'\n')
         con = sqlite3.connect(private / 'state_5.sqlite')
         con.execute('CREATE TABLE IF NOT EXISTS threads(id TEXT PRIMARY KEY,cwd TEXT,rollout_path TEXT)')
