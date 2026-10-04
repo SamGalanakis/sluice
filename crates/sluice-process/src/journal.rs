@@ -125,7 +125,13 @@ impl CompletionJournal {
             if existing != *self {
                 return Err(invalid("completion changed before acknowledgement"));
             }
-            fs::remove_file(dir.join("completion.json"))?;
+            // The guardian and an adopter may both hold an acknowledgement
+            // for the same journal; whichever removes it second finds it gone.
+            match fs::remove_file(dir.join("completion.json")) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
             match fs::remove_file(dir.join("collected.json")) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}

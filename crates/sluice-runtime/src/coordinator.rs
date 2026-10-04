@@ -55,6 +55,27 @@ fn storage(e: impl std::fmt::Display) -> PublicError {
         message: e.to_string(),
     }
 }
+/// A request refused while it waited for the startup adoption pass: it never ran.
+fn not_executed(why: &str) -> PublicError {
+    PublicError::Busy {
+        message: format!(
+            "the coordinator is adopting runs and {why}; this request was not executed, so it is safe to retry"
+        ),
+        retryable: true,
+    }
+}
+/// A request still unanswered when the coordinator stops.
+fn stopping(scope: &RequestScope) -> PublicError {
+    if scope.parked.load(std::sync::atomic::Ordering::SeqCst) {
+        return not_executed("it stopped");
+    }
+    PublicError::Busy {
+        message:
+            "the coordinator stopped before answering; the request may still have taken effect"
+                .into(),
+        retryable: true,
+    }
+}
 fn conflict(message: impl Into<String>) -> PublicError {
     PublicError::Conflict {
         message: message.into(),
@@ -76,14 +97,41 @@ struct Inner<H: ExecutionHost> {
     host: Arc<H>,
     calls: Calls<Catalog, CallLauncher<H>>,
     frozen: std::sync::Mutex<FrozenFacts>,
-    /// False while `serve`'s startup adoption pass runs; see [`Coordinator::ready`].
-    ready: tokio::sync::watch::Sender<bool>,
+    /// Whether `serve`'s startup adoption pass is done; see [`Coordinator::ready`].
+    gate: tokio::sync::watch::Sender<Gate>,
     /// Slots for requests waiting on `ready`, so waiting writes never take
     /// the connection permits reads need.
     waiting: tokio::sync::Semaphore,
     /// Runs an adoption task is working on: one adopter per run.
     adopting: Arc<std::sync::Mutex<std::collections::HashSet<RunId>>>,
+    /// Connection permits; a held watch gives its permit back (see `watches`).
+    connections: Arc<tokio::sync::Semaphore>,
+    /// Held watches that gave their connection permit back, per run.
+    watches: Arc<std::sync::Mutex<std::collections::HashMap<RunId, usize>>>,
 }
+/// Where the startup adoption pass stands, for requests that wait on it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Gate {
+    /// `serve`'s startup pass is running.
+    Adopting,
+    /// The pass is done, or the coordinator is not serving.
+    Ready,
+    /// `serve` stopped, or its startup pass failed, before the pass was done.
+    Stopped,
+}
+/// One request's link to its connection, seen by `ready` through a task-local:
+/// a request that is still waiting when its client hangs up is dropped unrun,
+/// and a stop tells the client whether it ran.
+#[derive(Default)]
+struct RequestScope {
+    gone: CancellationToken,
+    parked: std::sync::atomic::AtomicBool,
+}
+tokio::task_local! {
+    static REQUEST: Arc<RequestScope>;
+}
+/// Held watches per run that leave the connection pool; more count against it.
+const WATCHES_PER_RUN: usize = 2;
 /// Per-run adoptions in flight at once during an adoption pass.
 pub const ADOPTION_PARALLELISM: usize = 16;
 /// Connections the coordinator serves at once.
@@ -206,9 +254,11 @@ impl<H: ExecutionHost> Coordinator<H> {
                 host,
                 calls,
                 frozen: Default::default(),
-                ready: tokio::sync::watch::Sender::new(true),
+                gate: tokio::sync::watch::Sender::new(Gate::Ready),
                 waiting: tokio::sync::Semaphore::new(WAITING_FOR_ADOPTION),
                 adopting: Default::default(),
+                connections: Arc::new(tokio::sync::Semaphore::new(CONNECTIONS)),
+                watches: Default::default(),
             }),
         };
         artifacts::recover(broker.writer(), broker.home())
@@ -238,29 +288,61 @@ impl<H: ExecutionHost> Coordinator<H> {
     /// Whether the startup adoption pass is done (always, for a coordinator
     /// that is not serving).
     pub fn adopted(&self) -> bool {
-        *self.inner.ready.borrow()
+        *self.inner.gate.borrow() == Gate::Ready
     }
     /// Requests now waiting for the startup adoption pass, for diagnostics.
     pub fn waiting_for_adoption(&self) -> usize {
         WAITING_FOR_ADOPTION - self.inner.waiting.available_permits()
     }
+    /// Connection permits in use, for diagnostics.
+    pub fn connections_in_use(&self) -> usize {
+        CONNECTIONS - self.inner.connections.available_permits()
+    }
+    /// Held watches that gave their connection permit back, for diagnostics.
+    pub fn released_watches(&self) -> usize {
+        self.inner
+            .watches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .sum()
+    }
     /// Wait until the startup adoption pass is done: writes are decided
-    /// against reconciled runs, and nothing is admitted before it.
+    /// against reconciled runs, and nothing is admitted before it. A request
+    /// that cannot wait (too many waiting, its client hung up, or the
+    /// coordinator stopped first) is refused with a retryable `busy` and was
+    /// not executed.
     async fn ready(&self) -> Result<(), PublicError> {
-        let mut ready = self.inner.ready.subscribe();
-        if *ready.borrow_and_update() {
-            return Ok(());
+        let mut gate = self.inner.gate.subscribe();
+        match *gate.borrow_and_update() {
+            Gate::Ready => return Ok(()),
+            Gate::Stopped => return Err(not_executed("it stopped")),
+            Gate::Adopting => {}
         }
         let _slot = self
             .inner
             .waiting
             .try_acquire()
-            .map_err(|_| PublicError::Busy {
-                message: "the coordinator is still adopting runs; retry shortly".into(),
-                retryable: true,
-            })?;
-        ready.wait_for(|ready| *ready).await.map_err(storage)?;
-        Ok(())
+            .map_err(|_| not_executed("too many requests are waiting for it"))?;
+        let scope = REQUEST.try_with(Arc::clone).unwrap_or_default();
+        scope
+            .parked
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let outcome = tokio::select! {
+            gate = gate.wait_for(|gate| *gate != Gate::Adopting) => gate.map(|gate| *gate).unwrap_or(Gate::Stopped),
+            _ = scope.gone.cancelled() => Gate::Stopped,
+        };
+        if outcome == Gate::Ready {
+            scope
+                .parked
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            return Ok(());
+        }
+        Err(not_executed(if scope.gone.is_cancelled() {
+            "its client hung up"
+        } else {
+            "it stopped"
+        }))
     }
     pub fn writer(&self) -> &Writer {
         &self.inner.writer
@@ -1368,7 +1450,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         // runs' own guardians are answered during the startup pass; other
         // commands wait for it (`ready`), and the scheduler, which does all
         // admission, starts only after it.
-        self.inner.ready.send_replace(false);
+        self.inner.gate.send_replace(Gate::Adopting);
         let serving = stop.child_token();
         let mut startup = tokio::spawn({
             let broker = self.clone();
@@ -1379,7 +1461,6 @@ impl<H: ExecutionHost> Coordinator<H> {
         let mut scheduler_task = None;
         let mut failure = None;
         let mut clients = JoinSet::new();
-        let permits = Arc::new(tokio::sync::Semaphore::new(CONNECTIONS));
         loop {
             tokio::select! {
                 _=serving.cancelled()=>break,
@@ -1387,16 +1468,24 @@ impl<H: ExecutionHost> Coordinator<H> {
                     adopting=false;
                     match adopted.map_err(storage).and_then(|r| r) {
                         Ok(())=>{
-                            self.inner.ready.send_replace(true);
+                            self.inner.gate.send_replace(Gate::Ready);
                             scheduler_task=Some(tokio::spawn(scheduler::run(self.clone(),serving.child_token())));
                         }
                         Err(e)=>{failure=Some(e);break;}
                     }
                 },
                 Some(result)=clients.join_next()=>{if let Err(e)=result{tracing::error!(error=%e,"coordinator client task failed");}},
-                accepted=listener.accept()=>{let (stream,_)=accepted.map_err(storage)?;let Ok(permit)=permits.clone().try_acquire_owned()else{drop(stream);continue;};let broker=self.clone();let stop=serving.child_token();clients.spawn(async move{if let Err(e)=broker.connection(stream,stop,permit).await{tracing::debug!(error=%e,"socket client closed");}});}
+                accepted=listener.accept()=>{let (stream,_)=accepted.map_err(storage)?;let Ok(permit)=self.inner.connections.clone().try_acquire_owned()else{drop(stream);continue;};let broker=self.clone();let stop=serving.child_token();clients.spawn(async move{if let Err(e)=broker.connection(stream,stop,permit).await{tracing::debug!(error=%e,"socket client closed");}});}
             }
         }
+        // Requests still waiting for the pass are refused, not left waiting.
+        self.inner.gate.send_if_modified(|gate| {
+            let adopting = *gate == Gate::Adopting;
+            if adopting {
+                *gate = Gate::Stopped;
+            }
+            adopting
+        });
         serving.cancel();
         drop(listener);
         if adopting {
@@ -1450,10 +1539,14 @@ impl<H: ExecutionHost> Coordinator<H> {
         match incoming {
             Incoming::Helper(forwarded) => {
                 let broker = self.clone();
-                let result = crate::contain::contained("helper", async move {
-                    broker.helper(forwarded.helper, capability.as_ref()).await
-                })
-                .await;
+                let scope = Arc::new(RequestScope::default());
+                let work = crate::contain::contained(
+                    "helper",
+                    REQUEST.scope(scope.clone(), async move {
+                        broker.helper(forwarded.helper, capability.as_ref()).await
+                    }),
+                );
+                let result = answer(&mut stream, &stop, scope, work).await;
                 write_reply(
                     &mut stream,
                     &RpcReply {
@@ -1507,20 +1600,29 @@ impl<H: ExecutionHost> Coordinator<H> {
             Incoming::Guardian(command) => {
                 let held = matches!(command, CoordinatorCommand::Watch { .. });
                 // A held watch idles for up to a minute, one per live guardian:
-                // once authenticated it gives its connection permit back, so
-                // the number of live runs never decides whether reads are served.
+                // once authenticated it gives its connection permit back (at
+                // most `WATCHES_PER_RUN` per run), so the number of live runs
+                // never decides whether reads are served.
+                let mut _released = None;
                 if held
                     && self
                         .authenticate(guardian_key(&command), capability.as_ref())
                         .await
                         .is_ok()
                 {
-                    drop(permit);
+                    _released = WatchSlot::take(&self.inner.watches, guardian_key(&command).run);
+                    if _released.is_some() {
+                        drop(permit);
+                    }
                 }
                 let broker = self.clone();
-                let handler = crate::contain::contained("guardian callback", async move {
-                    broker.guardian(command, capability.as_ref()).await
-                });
+                let scope = Arc::new(RequestScope::default());
+                let handler = crate::contain::contained(
+                    "guardian callback",
+                    REQUEST.scope(scope.clone(), async move {
+                        broker.guardian(command, capability.as_ref()).await
+                    }),
+                );
                 let result = if held {
                     // A held watch ends when its guardian hangs up or the
                     // coordinator stops; it changes nothing, so dropping it is safe.
@@ -1532,7 +1634,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                         _ = stop.cancelled() => return Ok(()),
                     }
                 } else {
-                    handler.await
+                    answer(&mut stream, &stop, scope, handler).await
                 };
                 write_reply(
                     &mut stream,
@@ -1547,10 +1649,12 @@ impl<H: ExecutionHost> Coordinator<H> {
             }
             Incoming::Command(command) => {
                 let broker = self.clone();
-                let reply = tokio::select! {
-                    result=crate::contain::contained("command", async move { broker.command(command).await })=>result,
-                    _=stop.cancelled()=>return Ok(()),
-                };
+                let scope = Arc::new(RequestScope::default());
+                let work = crate::contain::contained(
+                    "command",
+                    REQUEST.scope(scope.clone(), async move { broker.command(command).await }),
+                );
+                let reply = answer(&mut stream, &stop, scope, work).await;
                 let result = match reply {
                     Ok(reply) => RpcResult::Ok(Box::new(reply)),
                     Err(e) => RpcResult::Error(e),
@@ -1648,6 +1752,66 @@ impl Incoming {
     }
 }
 
+/// Run one request for a connected client. Its scope learns when the client
+/// hangs up (a request still waiting for the startup pass is then dropped
+/// unrun; one already running finishes as before), and a stop answers with an
+/// error that says whether the request ran.
+async fn answer<T>(
+    stream: &mut UnixStream,
+    stop: &CancellationToken,
+    scope: Arc<RequestScope>,
+    work: impl std::future::Future<Output = Result<T, PublicError>>,
+) -> Result<T, PublicError> {
+    use tokio::io::AsyncReadExt;
+    tokio::pin!(work);
+    let mut byte = [0; 1];
+    let mut watching = true;
+    loop {
+        tokio::select! {
+            result = &mut work => return result,
+            read = stream.read(&mut byte), if watching => {
+                watching = false;
+                if matches!(read, Ok(0) | Err(_)) {
+                    scope.gone.cancel();
+                }
+            }
+            _ = stop.cancelled() => return Err(stopping(&scope)),
+        }
+    }
+}
+/// A held watch that gave its connection permit back, counted per run.
+struct WatchSlot {
+    watches: Arc<std::sync::Mutex<std::collections::HashMap<RunId, usize>>>,
+    run: RunId,
+}
+impl WatchSlot {
+    fn take(
+        watches: &Arc<std::sync::Mutex<std::collections::HashMap<RunId, usize>>>,
+        run: RunId,
+    ) -> Option<Self> {
+        let mut held = watches.lock().unwrap_or_else(|e| e.into_inner());
+        let count = held.entry(run).or_default();
+        if *count >= WATCHES_PER_RUN {
+            return None;
+        }
+        *count += 1;
+        Some(Self {
+            watches: watches.clone(),
+            run,
+        })
+    }
+}
+impl Drop for WatchSlot {
+    fn drop(&mut self) {
+        let mut held = self.watches.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = held.get_mut(&self.run) {
+            *count -= 1;
+            if *count == 0 {
+                held.remove(&self.run);
+            }
+        }
+    }
+}
 fn adoption_ended(ended: Option<Result<(), tokio::task::JoinError>>) {
     if let Some(Err(e)) = ended {
         tracing::warn!(error=%e, "adoption task failed; deferred to the next pass");

@@ -12,11 +12,16 @@ use sluice_model::{
     commands::{CommandReply, CommandRequest},
     error::PublicError,
     ids::*,
-    rpc::{FnInvocation, JsonMap, decode_json},
+    rpc::{FnInvocation, JsonMap, PROTOCOL_VERSION, RequestId, RpcRequest, decode_json},
 };
 use sluice_process::{
     guardian::{AdoptionAttempt, AdoptionHost, FnHost, GuardianPresence},
-    journal::{CleanupEvidence, CompletionJournal},
+    identity::ProcessIdentity,
+    journal::{CleanupEvidence, CompletionJournal, PayloadResult, StartEvidence},
+    socket::{
+        self, CoordinatorCommand as C, CoordinatorLink, CoordinatorReply as R, GuardianIdentity,
+        UnixCoordinatorLink,
+    },
 };
 use sluice_runtime::{
     client::CoordinatorClient,
@@ -244,7 +249,7 @@ async fn attempt(broker: &Coordinator<Fake>, run: RunId) -> (String, bool) {
 }
 fn status(project: ProjectId) -> CommandRequest {
     request(
-        json!({"command":"status","args":{"project":selector(project),"selection":{"steps":null,"tags":null}}}),
+        json!({"command":"status","args":{"project":selector(project),"selection":{"steps":null,"tags":null},"all":true}}),
     )
 }
 
@@ -411,12 +416,7 @@ async fn a_failed_adoption_is_deferred_while_the_others_adopt_and_the_coordinato
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn nothing_is_admitted_or_launched_before_the_startup_pass_completes() {
     let host = Fake::gated();
-    // The lease is held in-process before `serve`, as `run_home` does.
-    let (home, broker, runs) = home_with_runs(host.clone(), &["adopted"], true).await;
-    assert_eq!(
-        broker.scheduler_owner().await.unwrap().as_deref(),
-        Some("s")
-    );
+    let (home, broker, runs) = home_with_runs(host.clone(), &["adopted"], false).await;
     // A second project whose step is ready but was never admitted.
     let waiting = project(&broker, "ready").await;
     assert_eq!(host.launches(), 1);
@@ -424,6 +424,10 @@ async fn nothing_is_admitted_or_launched_before_the_startup_pass_completes() {
     let (stop, server) = serve(&broker, home.path()).await;
     host.until_entered(1).await;
     let client = CoordinatorClient::new(home.path());
+    // `loop` takes the scheduler lease over the socket during the pass: it is
+    // granted, and admits nothing by itself.
+    let lease = within(client.acquire_scheduler()).await.unwrap().unwrap();
+    assert!(broker.scheduler_owner().await.unwrap().is_some());
     // A direct call is admission: it waits for the pass.
     let call = tokio::spawn({
         let client = client.clone();
@@ -452,12 +456,13 @@ async fn nothing_is_admitted_or_launched_before_the_startup_pass_completes() {
     assert!(launched.contains(&(Some(waiting), true)));
     assert!(launched.contains(&(Some(waiting), false)));
     assert_eq!(attempt(&broker, runs[0].1.identity.run).await.0, "reserved");
+    drop(lease);
     stop.cancel();
     within(server).await.unwrap().unwrap().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_read_does_not_refresh_a_current_registry() {
+async fn a_read_refreshes_a_stale_registry_once_and_never_a_current_one() {
     let host = Fake::composed();
     let home = home::ScratchHome::new().unwrap();
     let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host)
@@ -465,10 +470,6 @@ async fn a_read_does_not_refresh_a_current_registry() {
         .unwrap();
     let publication = broker.catalog().1.clone().expect("composition publishes");
     let id = project(&broker, "p").await;
-    // The project list changed after the write's own refresh: one read
-    // republishes, and from then on the registry is current.
-    broker.command(CommandRequest::ProjectsList).await.unwrap();
-    let current = publication.refreshes();
     let reads = [
         CommandRequest::ProjectsList,
         status(id),
@@ -481,15 +482,472 @@ async fn a_read_does_not_refresh_a_current_registry() {
             json!({"command":"messages","args":{"project":selector(id),"view":"history","thread":null,"since":null}}),
         ),
     ];
-    for _ in 0..3 {
+    let read_all = || async {
         for read in reads.clone() {
             broker.command(read).await.unwrap();
         }
+    };
+    read_all().await;
+    let (scans, published) = (publication.scans(), publication.publications());
+
+    // A current registry: reads neither scan nor republish.
+    for _ in 0..3 {
+        read_all().await;
     }
-    assert_eq!(publication.refreshes(), current);
-    // A write still refreshes before it runs.
+    assert_eq!(
+        (publication.scans(), publication.publications()),
+        (scans, published)
+    );
+
+    // A new project makes it stale after the creating write's own refresh:
+    // the next read republishes once, later reads do not.
+    broker.command(request(json!({"command":"project_create","args":{"name":"q","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap();
+    assert_eq!(publication.publications(), published);
+    broker.command(CommandRequest::ProjectsList).await.unwrap();
+    assert_eq!(publication.publications(), published + 1);
+    read_all().await;
+    assert_eq!(publication.publications(), published + 1);
+
+    // A change the watcher reports makes it stale too: a read republishes.
+    // (The republishing scan itself sees the fingerprint move and bumps the
+    // version, and the publication keeps the version read before its scans,
+    // so one later read republishes once more; then it is current again.)
+    std::fs::create_dir_all(home.path().join("fns")).unwrap();
+    let mut watcher = publication.registry.watch().unwrap();
+    std::fs::write(home.root().join("notes.txt"), b"not a fn").unwrap();
+    std::fs::rename(
+        home.root().join("notes.txt"),
+        home.path().join("fns/notes.txt"),
+    )
+    .unwrap();
+    within(watcher.changed()).await.unwrap().unwrap();
+    let scans = publication.scans();
+    broker.command(CommandRequest::ProjectsList).await.unwrap();
+    assert_eq!(publication.scans(), scans + 1);
+    assert_eq!(publication.publications(), published + 2);
+    read_all().await;
+    let (settled, published) = (publication.scans(), publication.publications());
+    read_all().await;
+    assert_eq!(
+        (publication.scans(), publication.publications()),
+        (settled, published)
+    );
+
+    // A write still scans before it runs.
     broker.command(request(json!({"command":"project_update","args":{"project":selector(id),"new_name":null,"description":"changed","icon":null,"resources":null,"paused":null,"archived":null,"expected_settings_rev":null,"reason":null,"author":"test"}}))).await.unwrap();
-    assert_eq!(publication.refreshes(), current + 1);
-    broker.command(status(id)).await.unwrap();
-    assert_eq!(publication.refreshes(), current + 1);
+    assert_eq!(publication.scans(), settled + 1);
+}
+
+/// The run's own guardian, talking to the coordinator over its socket.
+fn link(home: &std::path::Path, launch: &Launch) -> UnixCoordinatorLink {
+    UnixCoordinatorLink {
+        path: home.join("coordinator.sock"),
+        capability: launch.capability.clone(),
+    }
+}
+fn guardian(launch: &Launch) -> GuardianIdentity {
+    GuardianIdentity {
+        identity: launch.identity.clone(),
+        process: ProcessIdentity {
+            pid: 123,
+            start_time: 42,
+            boot_id: "fixture-boot".into(),
+            cgroup: format!("/fake/sluice-test-{}.service/control", launch.identity.run),
+        },
+        unit: format!("sluice-test-{}.service", launch.identity.run),
+        socket_challenge: "challenge".into(),
+    }
+}
+/// A run's callback that edits its own project: it waits for the pass.
+fn cancel_callback(launch: &Launch, project: ProjectId, id: &str) -> C {
+    C::Callback {
+        identity: launch.identity.clone(),
+        request: Box::new(RpcRequest {
+            protocol: PROTOCOL_VERSION,
+            request_id: RequestId(id.into()),
+            run_capability: Some(launch.capability.clone()),
+            command: request(
+                json!({"command":"step_cancel","args":{"project":selector(project),"selection":{"steps":["work"],"tags":null},"reason":"from the run","author":"test"}}),
+            ),
+        }),
+    }
+}
+fn step_cancel(project: ProjectId) -> CommandRequest {
+    request(
+        json!({"command":"step_cancel","args":{"project":selector(project),"selection":{"steps":["work"],"tags":null},"reason":"user","author":"test"}}),
+    )
+}
+fn refused_unrun(error: &PublicError) -> bool {
+    matches!(error, PublicError::Busy { message, retryable: true } if message.contains("was not executed"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_runs_guardian_is_served_during_the_pass_and_wins_the_race_with_its_adopter() {
+    let host = Fake::gated();
+    let (home, broker, runs) = home_with_runs(host.clone(), &["g"], false).await;
+    let (project, l) = runs[0].clone();
+    // The adopter will find the unit gone and try to import the run as lost.
+    host.0
+        .presence
+        .lock()
+        .unwrap()
+        .insert(l.identity.run, Presence::Gone);
+    let (stop, server) = serve(&broker, home.path()).await;
+    host.until_entered(1).await;
+    let guardian_link = link(home.path(), &l);
+
+    // Its plan edit waits for the pass while its other requests are served.
+    let edit = tokio::spawn({
+        let (link, command) = (link(home.path(), &l), cancel_callback(&l, project, "edit"));
+        async move { link.request(command).await }
+    });
+    until(|| broker.waiting_for_adoption() == 1).await;
+    let send = |command| async { within(guardian_link.request(command)).await.unwrap() };
+    assert!(matches!(
+        send(C::Claim(guardian(&l))).await,
+        Ok(R::Claimed(true))
+    ));
+    let executor = ProcessIdentity {
+        pid: 124,
+        start_time: 43,
+        boot_id: "fixture-boot".into(),
+        cgroup: "/fake/payload".into(),
+    };
+    assert!(matches!(
+        send(C::Started {
+            identity: l.identity.clone(),
+            invocation: l.invocation.invocation,
+            executor: executor.clone(),
+        })
+        .await,
+        Ok(R::Started)
+    ));
+    assert!(matches!(
+        send(C::Watch {
+            identity: l.identity.clone(),
+            after: MessageId(0),
+            wait_ms: 0,
+        })
+        .await,
+        Ok(R::Watched {
+            cancelled: false,
+            ..
+        })
+    ));
+    let journal = CompletionJournal {
+        protocol: 1,
+        identity: l.identity.clone(),
+        completion_id: "guardian".into(),
+        result: PayloadResult::Succeeded(decode_json(br#"{"value":1,"submitted":true}"#).unwrap()),
+        starts: vec![StartEvidence {
+            invocation: l.invocation.invocation,
+            executor,
+        }],
+        exits: vec![],
+        cleanup: vec![CleanupEvidence {
+            cgroup: "fake".into(),
+            empty: true,
+            escalated: false,
+        }],
+        submissions: JsonMap::default(),
+        submission_version: None,
+        delivery_acks: vec![],
+    };
+    assert!(matches!(
+        send(C::Complete(Box::new(journal))).await,
+        Ok(R::Completed(_))
+    ));
+    assert!(!broker.adopted());
+    assert!(!edit.is_finished());
+    assert_eq!(attempt(&broker, l.identity.run).await.0, "terminal");
+
+    // The adopter then imports its lost journal against the finished run: the
+    // guardian's result stands and the pass still completes.
+    host.release(1);
+    until(|| broker.adopted()).await;
+    let CommandReply::Data(view) = broker.command(status(project)).await.unwrap() else {
+        panic!("status")
+    };
+    assert_eq!(view.as_value()["steps"]["work"]["status"], "succeeded");
+    // The parked edit ran after the pass, against the finished run.
+    let edited = within(edit).await.unwrap().unwrap();
+    assert!(!matches!(&edited, Err(e) if refused_unrun(e)), "{edited:?}");
+    stop.cancel();
+    within(server).await.unwrap().unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_lost_runs_in_one_project_release_every_hold() {
+    let host = Fake::gated();
+    let home = home::ScratchHome::new().unwrap();
+    let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone())
+        .await
+        .unwrap();
+    let CommandReply::Project(created) = broker.command(request(json!({"command":"project_create","args":{"name":"lanes","description":"","icon":null,"resources":{"lane":4},"author":"test"}}))).await.unwrap() else {
+        panic!("project")
+    };
+    let id = created.project_id;
+    let ops: Vec<Value> = (0..4)
+        .map(|n| json!({"op":"add","path":format!("/steps/w{n}"),"value":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"},"needs":{"lane":1}}}))
+        .collect();
+    broker.command(request(json!({"command":"plan_patch","args":{"project":selector(id),"rev":1,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    broker.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&broker, id, "s").await.unwrap();
+    broker.release_scheduler("s".into()).await.unwrap();
+    let launches = host.0.launches.lock().unwrap().clone();
+    assert_eq!(launches.len(), 4);
+    for launch in &launches {
+        host.0
+            .presence
+            .lock()
+            .unwrap()
+            .insert(launch.identity.run, Presence::Gone);
+    }
+    let held = || {
+        let broker = broker.clone();
+        async move {
+            broker
+                .reads()
+                .snapshot(move |sql| {
+                    Ok(sql.query_row(
+                        "SELECT coalesce(sum(amount),0) FROM leases WHERE project_id=?1 AND state='held'",
+                        [id.to_string()],
+                        |r| r.get::<_, i64>(0),
+                    )?)
+                })
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(held().await, 4);
+    let pass = tokio::spawn({
+        let broker = broker.clone();
+        async move { broker.adopt().await }
+    });
+    // All four are in flight before any imports, then import together.
+    host.until_entered(4).await;
+    host.release(4);
+    within(pass).await.unwrap().unwrap().unwrap();
+    for launch in &launches {
+        assert_eq!(attempt(&broker, launch.identity.run).await.0, "terminal");
+    }
+    assert_eq!(held().await, 0);
+    let CommandReply::Data(view) = broker.command(status(id)).await.unwrap() else {
+        panic!("status")
+    };
+    for n in 0..4 {
+        assert_eq!(
+            view.as_value()["steps"][format!("w{n}")]["status"],
+            "failed"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn past_32_waiting_requests_a_request_is_refused_retryably_and_unrun() {
+    let host = Fake::gated();
+    let (home, broker, runs) = home_with_runs(host.clone(), &["p"], false).await;
+    let (project, l) = runs[0].clone();
+    let (stop, server) = serve(&broker, home.path()).await;
+    host.until_entered(1).await;
+    let client = CoordinatorClient::new(home.path());
+    let waiting: Vec<_> = (0..32)
+        .map(|n| {
+            let client = client.clone();
+            tokio::spawn(async move {
+                client.command(request(json!({"command":"project_update","args":{"project":selector(project),"new_name":null,"description":format!("w{n}"),"icon":null,"resources":null,"paused":null,"archived":null,"expected_settings_rev":null,"reason":null,"author":"test"}}))).await
+            })
+        })
+        .collect();
+    until(|| broker.waiting_for_adoption() == 32).await;
+
+    // The CLI (and the dashboard, through the same client) sees it.
+    let cli = within(client.command(step_cancel(project)))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(refused_unrun(&cli), "{cli:?}");
+    // MCP and HTTP return the error as it is serialized here.
+    let wire = serde_json::to_value(&cli).unwrap();
+    assert_eq!(
+        (wire["error"].as_str(), wire["retryable"].as_bool()),
+        (Some("busy"), Some(true))
+    );
+    // A run's guardian gets the same retryable refusal for its gated callback.
+    let run = within(link(home.path(), &l).request(cancel_callback(&l, project, "over")))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(refused_unrun(&run), "{run:?}");
+    assert!(!attempt(&broker, l.identity.run).await.1);
+
+    host.release(1);
+    for request in waiting {
+        within(request).await.unwrap().unwrap().unwrap();
+    }
+    assert_eq!(broker.waiting_for_adoption(), 0);
+    stop.cancel();
+    within(server).await.unwrap().unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_during_the_pass_refuses_waiting_requests_and_serve_returns() {
+    let host = Fake::gated();
+    let (home, broker, runs) = home_with_runs(host.clone(), &["p"], false).await;
+    let (project, l) = runs[0].clone();
+    let (stop, server) = serve(&broker, home.path()).await;
+    host.until_entered(1).await;
+    let client = CoordinatorClient::new(home.path());
+    let user = tokio::spawn({
+        let client = client.clone();
+        async move { client.command(step_cancel(project)).await }
+    });
+    let run = tokio::spawn({
+        let (link, command) = (link(home.path(), &l), cancel_callback(&l, project, "stop"));
+        async move { link.request(command).await }
+    });
+    until(|| broker.waiting_for_adoption() == 2).await;
+
+    stop.cancel();
+    // Both are told at once that they did not run, while the run being
+    // adopted still holds the pass.
+    let user = within(user).await.unwrap().unwrap().unwrap_err();
+    assert!(refused_unrun(&user), "{user:?}");
+    let run = within(run).await.unwrap().unwrap().unwrap_err();
+    assert!(refused_unrun(&run), "{run:?}");
+    assert!(!server.is_finished());
+    // The adoption in flight finishes, and serve returns.
+    host.release(1);
+    within(server).await.unwrap().unwrap().unwrap();
+    assert!(!broker.adopted());
+    assert!(!attempt(&broker, l.identity.run).await.1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_startup_pass_refuses_waiting_requests_and_serve_returns_its_error() {
+    let host = Fake::open();
+    let (home, broker, runs) = home_with_runs(host.clone(), &["p"], false).await;
+    let (project, l) = runs[0].clone();
+    // The pass cannot read this attempt's frozen request.
+    let attempt_id = l.identity.attempt;
+    broker
+        .writer()
+        .write(sluice_store::RetrySafety::Idempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE attempts SET request=json_remove(request,'$.provenance.runtime.capability') WHERE attempt_id=?1",
+                [attempt_id.to_string()],
+            )?;
+            tx.changed(None, "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    // Hold every read connection so the pass cannot start before a request waits.
+    let (release_reads, blocked) = std::sync::mpsc::channel::<()>();
+    let blocked = Arc::new(Mutex::new(blocked));
+    let (entered_read, reads_held) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let mut holders = Vec::new();
+    for _ in 0..4 {
+        let (blocked, entered_read, reads) = (
+            blocked.clone(),
+            entered_read.clone(),
+            broker.reads().clone(),
+        );
+        holders.push(tokio::spawn(async move {
+            reads
+                .snapshot(move |_| {
+                    entered_read.send(()).unwrap();
+                    let _ = blocked.lock().unwrap().recv();
+                    Ok(())
+                })
+                .await
+        }));
+    }
+    let mut reads_held = reads_held;
+    for _ in 0..4 {
+        within(reads_held.recv()).await.unwrap().unwrap();
+    }
+    let (_stop, server) = serve(&broker, home.path()).await;
+    let client = CoordinatorClient::new(home.path());
+    let user = tokio::spawn({
+        let client = client.clone();
+        async move { client.command(step_cancel(project)).await }
+    });
+    until(|| broker.waiting_for_adoption() == 1).await;
+    drop(release_reads);
+    for holder in holders {
+        within(holder).await.unwrap().unwrap().unwrap();
+    }
+    let user = within(user).await.unwrap().unwrap().unwrap_err();
+    assert!(refused_unrun(&user), "{user:?}");
+    assert!(within(server).await.unwrap().unwrap().is_err());
+    assert!(!broker.adopted());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn held_watches_leave_the_connection_pool_two_per_run() {
+    let host = Fake::open();
+    let home = home::ScratchHome::new().unwrap();
+    let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), host.clone())
+        .await
+        .unwrap();
+    let id = project(&broker, "many").await;
+    let ops: Vec<Value> = (0..35)
+        .map(|n| json!({"op":"add","path":format!("/steps/w{n}"),"value":{"run":"fixture.submit","in":{"value":{"default":n}},"outputs":{"submitted":"boolean"}}}))
+        .collect();
+    broker.command(request(json!({"command":"plan_patch","args":{"project":selector(id),"rev":2,"ops":ops,"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    broker.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&broker, id, "s").await.unwrap();
+    broker.release_scheduler("s".into()).await.unwrap();
+    let launches = host.0.launches.lock().unwrap().clone();
+    assert_eq!(launches.len(), 36);
+    let (stop, server) = serve(&broker, home.path()).await;
+    until(|| broker.adopted()).await;
+    let watch = |l: &Launch| {
+        let (path, l) = (home.path().join("coordinator.sock"), l.clone());
+        async move {
+            let mut stream = tokio::net::UnixStream::connect(path).await.unwrap();
+            socket::write_frame(
+                &mut stream,
+                &socket::Request {
+                    protocol: PROTOCOL_VERSION,
+                    request_id: RequestId(InvocationId::new().to_string()),
+                    run_capability: Some(l.capability.clone()),
+                    command: C::Watch {
+                        identity: l.identity.clone(),
+                        after: MessageId(0),
+                        wait_ms: 60_000,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            stream
+        }
+    };
+    // 70 held watches, two for each of 35 runs: more than the 64 connections.
+    let mut held = Vec::new();
+    for l in &launches[..35] {
+        for _ in 0..2 {
+            held.push(watch(l).await);
+        }
+    }
+    until(|| broker.released_watches() == 70 && broker.connections_in_use() == 0).await;
+    let client = CoordinatorClient::new(home.path());
+    assert!(matches!(
+        within(client.command(CommandRequest::ProjectsList))
+            .await
+            .unwrap()
+            .unwrap(),
+        CommandReply::Projects(_)
+    ));
+    // A third watch for one run keeps its connection permit.
+    held.push(watch(&launches[0]).await);
+    until(|| broker.connections_in_use() == 1).await;
+    assert_eq!(broker.released_watches(), 70);
+    // Hanging up ends them.
+    drop(held);
+    until(|| broker.released_watches() == 0 && broker.connections_in_use() == 0).await;
+    stop.cancel();
+    within(server).await.unwrap().unwrap().unwrap();
 }

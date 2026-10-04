@@ -73,8 +73,8 @@ def alive(record):
     if fixture: return start_time(record['pid']) == record['start']
     return subprocess.run(['systemctl', '--user', 'is-active', '--quiet', record['unit']]).returncode == 0
 def wait_for_coordinator(record):
-    # The socket exists before the coordinator serves: it adopts the runs it finds
-    # first and queues requests meanwhile. Ready means it answered a cheap read.
+    # Ready means the coordinator answered a cheap read. It answers reads while
+    # its startup pass still adopts the runs it found; writes wait for that pass.
     deadline = time.monotonic() + READY_SECONDS
     while True:
         if not alive(record): raise RuntimeError('maintenance coordinator exited during startup')

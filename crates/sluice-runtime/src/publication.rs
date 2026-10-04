@@ -43,8 +43,10 @@ pub struct Publication {
     /// The registry version and projects the current views were published
     /// from, read before their scans; guarded by the refresh lock.
     refresh: tokio::sync::Mutex<Option<(u64, Vec<ProjectId>)>>,
-    /// Refreshes that got past the lock and scanned, for diagnostics.
-    refreshes: AtomicU64,
+    /// Refreshes that scanned the fn scopes, and those that then republished,
+    /// for diagnostics.
+    scans: AtomicU64,
+    publications: AtomicU64,
 }
 type Published<'a> = tokio::sync::MutexGuard<'a, Option<(u64, Vec<ProjectId>)>>;
 impl Publication {
@@ -54,7 +56,8 @@ impl Publication {
             base,
             views: RwLock::new(BTreeMap::new()),
             refresh: tokio::sync::Mutex::new(None),
-            refreshes: AtomicU64::new(0),
+            scans: AtomicU64::new(0),
+            publications: AtomicU64::new(0),
         })
     }
     /// Scan every scope and republish what changed, waiting for any refresh
@@ -87,8 +90,12 @@ impl Publication {
         self.publish_locked(published, writer, projects).await
     }
     /// How many refreshes have scanned the fn scopes.
-    pub fn refreshes(&self) -> u64 {
-        self.refreshes.load(Ordering::Relaxed)
+    pub fn scans(&self) -> u64 {
+        self.scans.load(Ordering::Relaxed)
+    }
+    /// How many refreshes found a change and republished the views.
+    pub fn publications(&self) -> u64 {
+        self.publications.load(Ordering::Relaxed)
     }
     async fn publish_locked(
         &self,
@@ -96,7 +103,7 @@ impl Publication {
         writer: &Writer,
         projects: Vec<ProjectId>,
     ) -> Result<(), PublicError> {
-        self.refreshes.fetch_add(1, Ordering::Relaxed);
+        self.scans.fetch_add(1, Ordering::Relaxed);
         // Every scope is re-fingerprinted by its scan, and any change to a scope
         // (a scan's or the watcher's) bumps the version. Unchanged since the last
         // publication, the views stand: republishing reads and digests every fn
@@ -112,6 +119,7 @@ impl Publication {
         }) {
             return Ok(());
         }
+        self.publications.fetch_add(1, Ordering::Relaxed);
         let mut views = BTreeMap::new();
         let mut jobs: BTreeMap<Option<ProjectId>, ArtifactJob> = BTreeMap::new();
         for (project, registry) in registries {
