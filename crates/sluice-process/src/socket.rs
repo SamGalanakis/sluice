@@ -86,6 +86,14 @@ pub enum CoordinatorCommand {
         through: Option<MessageId>,
         limit: u16,
     },
+    /// Long poll: replies as soon as cancellation is requested or a message
+    /// after `after` is addressed to the step (offering up to 128 of them, as
+    /// `Messages` would), else after `wait_ms` (capped by the coordinator).
+    Watch {
+        identity: AttemptKey,
+        after: MessageId,
+        wait_ms: u64,
+    },
     DeliverAck {
         identity: AttemptKey,
         ack: DeliveryAck,
@@ -109,6 +117,10 @@ pub enum CoordinatorReply {
     Started,
     CancelIntent(bool),
     Messages(Vec<DeliveryMessage>),
+    Watched {
+        cancelled: bool,
+        messages: Vec<DeliveryMessage>,
+    },
     Ack,
     Submissions(SubmissionSnapshot),
     Completed(DurableAck),
@@ -172,6 +184,17 @@ pub async fn call<T: Serialize, R: DeserializeOwned>(
     capability: &RunCapability,
     command: T,
 ) -> Result<R, PublicError> {
+    call_within(path, capability, command, RPC_TIMEOUT).await
+}
+/// The longest a coordinator holds a `Watch` before it answers anyway.
+pub const MAX_WATCH: Duration = Duration::from_secs(60);
+/// `call` with its own limit, for a request the peer may hold (a long poll).
+pub async fn call_within<T: Serialize, R: DeserializeOwned>(
+    path: &Path,
+    capability: &RunCapability,
+    command: T,
+    limit: Duration,
+) -> Result<R, PublicError> {
     let request_id = RequestId(InvocationId::new().to_string());
     let exchange = async {
         let mut stream = UnixStream::connect(path).await?;
@@ -194,7 +217,7 @@ pub async fn call<T: Serialize, R: DeserializeOwned>(
         }
         Ok(reply.result)
     };
-    match tokio::time::timeout(RPC_TIMEOUT, exchange).await {
+    match tokio::time::timeout(limit, exchange).await {
         Ok(Ok(reply)) => reply,
         _ => Err(PublicError::Busy {
             message: "coordinator unavailable; acceptance may be unknown".into(),
@@ -209,7 +232,13 @@ pub struct UnixCoordinatorLink {
 }
 impl CoordinatorLink for UnixCoordinatorLink {
     async fn request(&self, command: CoordinatorCommand) -> Result<CoordinatorReply, PublicError> {
-        call(&self.path, &self.capability, command).await
+        let limit = match &command {
+            CoordinatorCommand::Watch { wait_ms, .. } => {
+                RPC_TIMEOUT + Duration::from_millis(*wait_ms).min(MAX_WATCH)
+            }
+            _ => RPC_TIMEOUT,
+        };
+        call_within(&self.path, &self.capability, command, limit).await
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,10 +370,13 @@ impl Drop for ControlServer {
 #[derive(Clone, Default)]
 pub struct MemoryCoordinator {
     state: Arc<Mutex<MemoryState>>,
+    changed: Arc<tokio::sync::Notify>,
 }
 #[derive(Default)]
 pub struct MemoryState {
     pub offline: bool,
+    /// Every request received, by method, in order.
+    pub requests: Vec<&'static str>,
     pub busy_completions: usize,
     pub attempts: BTreeMap<RunId, MemoryAttempt>,
 }
@@ -362,8 +394,37 @@ pub struct MemoryAttempt {
     pub releases: usize,
 }
 impl MemoryCoordinator {
+    /// Changes made here wake held `Watch` requests, as a commit would.
     pub fn with_state<T>(&self, f: impl FnOnce(&mut MemoryState) -> T) -> T {
-        f(&mut self.state.lock().expect("fake state poisoned"))
+        let result = f(&mut self.state.lock().expect("fake state poisoned"));
+        self.changed.notify_waiters();
+        result
+    }
+    async fn watch(
+        &self,
+        command: CoordinatorCommand,
+        wait_ms: u64,
+    ) -> Result<CoordinatorReply, PublicError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms).min(MAX_WATCH);
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            // Reading must not notify, or the watch would wake itself.
+            let reply = self
+                .state
+                .lock()
+                .expect("fake state poisoned")
+                .reply(command.clone())?;
+            if matches!(&reply, CoordinatorReply::Watched { cancelled, messages } if *cancelled || !messages.is_empty())
+            {
+                return Ok(reply);
+            }
+            tokio::select! {
+                _ = changed => {}
+                _ = tokio::time::sleep_until(deadline) => return Ok(reply),
+            }
+        }
     }
     pub fn reserve(
         &self,
@@ -393,7 +454,32 @@ impl MemoryCoordinator {
 }
 impl CoordinatorLink for MemoryCoordinator {
     async fn request(&self, command: CoordinatorCommand) -> Result<CoordinatorReply, PublicError> {
-        self.with_state(|s| {
+        let method = match &command {
+            CoordinatorCommand::Claim(_) => "claim",
+            CoordinatorCommand::Started { .. } => "started",
+            CoordinatorCommand::CancelIntent(_) => "cancel_intent",
+            CoordinatorCommand::Messages { .. } => "messages",
+            CoordinatorCommand::Watch { .. } => "watch",
+            CoordinatorCommand::DeliverAck { .. } => "deliver_ack",
+            CoordinatorCommand::Submissions(_) => "submissions",
+            CoordinatorCommand::Complete(_) => "complete",
+            CoordinatorCommand::Callback { .. } => "callback",
+        };
+        self.state
+            .lock()
+            .expect("fake state poisoned")
+            .requests
+            .push(method);
+        match command {
+            CoordinatorCommand::Watch { wait_ms, .. } => self.watch(command, wait_ms).await,
+            command => self.with_state(|s| s.reply(command)),
+        }
+    }
+}
+impl MemoryState {
+    fn reply(&mut self, command: CoordinatorCommand) -> Result<CoordinatorReply, PublicError> {
+        let s = self;
+        {
             if s.offline {
                 return Err(unavailable());
             }
@@ -405,6 +491,7 @@ impl CoordinatorLink for MemoryCoordinator {
                 CoordinatorCommand::Claim(g) => &g.identity,
                 CoordinatorCommand::Started { identity, .. }
                 | CoordinatorCommand::Messages { identity, .. }
+                | CoordinatorCommand::Watch { identity, .. }
                 | CoordinatorCommand::DeliverAck { identity, .. }
                 | CoordinatorCommand::Callback { identity, .. } => identity,
                 CoordinatorCommand::CancelIntent(id) | CoordinatorCommand::Submissions(id) => id,
@@ -448,6 +535,19 @@ impl CoordinatorLink for MemoryCoordinator {
                         .cloned()
                         .collect(),
                 )),
+                CoordinatorCommand::Watch { after, .. } => Ok(CoordinatorReply::Watched {
+                    cancelled: a.cancelled,
+                    messages: if a.cancelled {
+                        Vec::new()
+                    } else {
+                        a.messages
+                            .iter()
+                            .filter(|m| m.id > after)
+                            .take(128)
+                            .cloned()
+                            .collect()
+                    },
+                }),
                 CoordinatorCommand::DeliverAck { ack, .. } => {
                     if !a.acknowledgements.contains(&ack) {
                         a.acknowledgements.push(ack);
@@ -491,7 +591,7 @@ impl CoordinatorLink for MemoryCoordinator {
                     Err(PublicError::not_implemented("fake callback"))
                 }
             }
-        })
+        }
     }
 }
 fn unavailable() -> PublicError {

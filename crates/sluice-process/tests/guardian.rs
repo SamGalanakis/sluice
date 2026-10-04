@@ -18,6 +18,7 @@ struct FixtureHost {
 #[derive(Default)]
 struct FixtureState {
     starts: AtomicUsize,
+    polls: AtomicUsize,
     cleaned: AtomicUsize,
     done: AtomicBool,
     delay_spawn: AtomicBool,
@@ -78,6 +79,7 @@ impl PayloadInvocation for FixtureInvocation {
         &self.identity
     }
     async fn poll(&mut self) -> io::Result<Option<(PayloadResult, ExitEvidence)>> {
+        self.host.state.polls.fetch_add(1, Ordering::SeqCst);
         if !self.host.state.done.load(Ordering::SeqCst) {
             return Ok(None);
         }
@@ -495,8 +497,51 @@ async fn unknown_or_undelivered_acknowledgements_and_wrong_capabilities_are_refu
     );
     assert!(control(&args, ControlCommand::Cancel).await.is_err());
     link.with_state(|s| s.attempts.get_mut(&args.invocation.run).unwrap().cancelled = true);
-    control(&args, ControlCommand::Cancel).await.unwrap();
+    // The guardian's watch sees the committed intent at once, so it may have
+    // closed its control socket before this request arrives.
+    match control(&args, ControlCommand::Cancel).await {
+        Ok(_) | Err(PublicError::Busy { .. }) => {}
+        Err(e) => panic!("cancel after intent: {e:?}"),
+    }
     task.await.unwrap().unwrap();
+}
+#[tokio::test]
+async fn a_running_payload_costs_the_coordinator_one_held_watch_not_requests_per_tick() {
+    let home = tempfile::tempdir().unwrap();
+    let (args, link, host) = setup(home.path());
+    let task = launch(&args, &link, &host);
+    until(|| host.state.starts.load(Ordering::SeqCst) == 1).await;
+    until(|| link.with_state(|s| s.requests.contains(&"started"))).await;
+    let before = link.with_state(|s| s.requests.len());
+    let polls = host.state.polls.load(Ordering::SeqCst);
+    // A hundred local ticks of a payload that is still running cost at most
+    // the one watch the coordinator holds (it may have been sent already).
+    until(|| host.state.polls.load(Ordering::SeqCst) >= polls + 100).await;
+    let during = link.with_state(|s| s.requests[before..].to_vec());
+    assert!(
+        during.iter().all(|m| *m == "watch") && during.len() <= 1,
+        "requests while idle: {during:?}"
+    );
+    let starts = link.with_state(|s| s.requests.iter().filter(|m| **m == "started").count());
+    assert_eq!(starts, 1, "a taken start is not reported again");
+    // The held watch still brings a new message and the cancellation at once.
+    link.with_state(|s| {
+        s.attempts
+            .get_mut(&args.invocation.run)
+            .unwrap()
+            .messages
+            .push(message(4))
+    });
+    until(|| host.state.delivered.lock().unwrap().contains(&MessageId(4))).await;
+    link.with_state(|s| s.attempts.get_mut(&args.invocation.run).unwrap().cancelled = true);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(outcome, GuardianOutcome::Completed(_)));
+    let journal = link.with_state(|s| s.attempts[&args.invocation.run].completion.clone().unwrap());
+    assert!(matches!(journal.result, PayloadResult::Cancelled(_)));
 }
 #[test]
 fn result_envelope_rejects_raw_exit_75_trailing_json_and_duplicate_keys() {

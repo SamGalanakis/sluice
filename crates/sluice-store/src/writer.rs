@@ -179,6 +179,7 @@ enum Command {
 }
 struct Inner {
     sender: mpsc::Sender<Command>,
+    admitted: std::sync::atomic::AtomicU64,
     changes: watch::Receiver<ChangeNotification>,
     thread: Mutex<Option<JoinHandle<()>>>,
     home: PathBuf,
@@ -247,6 +248,7 @@ impl Writer {
             Ok(Ok(())) => Ok(Self {
                 inner: Arc::new(Inner {
                     sender,
+                    admitted: Default::default(),
                     changes: change_receiver,
                     thread: Mutex::new(Some(thread)),
                     home,
@@ -264,6 +266,13 @@ impl Writer {
     }
     pub fn home(&self) -> &Path {
         &self.inner.home
+    }
+    /// How many write requests this actor has admitted: what callers cost the
+    /// one writer, for diagnostics and tests.
+    pub fn transactions(&self) -> u64 {
+        self.inner
+            .admitted
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
     pub fn subscribe(&self) -> watch::Receiver<ChangeNotification> {
         let mut receiver = self.inner.changes.clone();
@@ -288,6 +297,9 @@ impl Writer {
             .await
             .map_err(|_| StoreError::Closed.into_public(false))?;
         let (reply, result) = oneshot::channel();
+        self.inner
+            .admitted
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         permit.send(Command::Write(Box::new(Request {
             operation: Box::new(operation),
             reply,

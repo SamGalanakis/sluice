@@ -214,6 +214,67 @@ async fn cancelled<L: CoordinatorLink>(
         }),
     }
 }
+/// How long a guardian asks the coordinator to hold a `Watch`.
+const WATCH_WAIT: Duration = Duration::from_secs(30);
+/// One wait for cancellation or messages after `after`: a held `Watch`, or on
+/// a coordinator without it (`legacy`) one cancel check and one message read.
+async fn watch_once<L: CoordinatorLink>(
+    link: &L,
+    identity: &AttemptKey,
+    after: MessageId,
+    delay: Duration,
+    legacy: bool,
+) -> Result<CoordinatorReply, PublicError> {
+    tokio::time::sleep(delay).await;
+    if !legacy {
+        return link
+            .request(CoordinatorCommand::Watch {
+                identity: identity.clone(),
+                after,
+                wait_ms: u64::try_from(WATCH_WAIT.as_millis()).unwrap_or(u64::MAX),
+            })
+            .await;
+    }
+    if cancelled(link, identity).await? {
+        return Ok(CoordinatorReply::Watched {
+            cancelled: true,
+            messages: Vec::new(),
+        });
+    }
+    match link
+        .request(CoordinatorCommand::Messages {
+            identity: identity.clone(),
+            after,
+            through: None,
+            limit: 128,
+        })
+        .await
+    {
+        Ok(CoordinatorReply::Messages(messages)) => Ok(CoordinatorReply::Watched {
+            cancelled: false,
+            messages,
+        }),
+        // Refusals left the last messages unread before; keep watching cancel.
+        Ok(_) | Err(PublicError::Conflict { .. }) => Ok(CoordinatorReply::Watched {
+            cancelled: false,
+            messages: Vec::new(),
+        }),
+        Err(e) => Err(e),
+    }
+}
+/// Start and ack reports the coordinator has taken. Each is idempotent, so it
+/// is repeated only while the coordinator was unreachable; any answer (even a
+/// refusal) settles it, and the completion journal carries them all anyway.
+#[derive(Default)]
+struct Reported {
+    starts: std::collections::BTreeSet<InvocationId>,
+    acks: Vec<DeliveryAck>,
+}
+impl Reported {
+    fn taken(&self, reply: Result<CoordinatorReply, PublicError>) -> bool {
+        !matches!(reply, Err(PublicError::Busy { .. }))
+    }
+}
 async fn messages<L: CoordinatorLink>(
     link: &L,
     id: &AttemptKey,
@@ -293,6 +354,8 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
     let cursor = args.assigned.through;
     let mut result;
     let mut started = Vec::new();
+    let mut reported = Reported::default();
+    let mut legacy = false;
     'invocations: loop {
         // Before spawning, an unavailable coordinator delays admission. Once a
         // payload exists, outages only delay notifications, never its execution.
@@ -356,6 +419,12 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         started.push((payload.id(), payload.executor().clone()));
         let mut retry = None;
         let mut offered = cursor;
+        // Cancellation and new messages arrive through one request the
+        // coordinator holds until either exists; the tick only polls the local
+        // payload and retries start and ack reports the coordinator has not
+        // taken yet. Polling the coordinator itself every tick cost it several
+        // requests per tick per run.
+        let mut watch = Box::pin(watch_once(link, id, offered, Duration::ZERO, legacy));
         loop {
             if cancel.is_cancelled() {
                 result = PayloadResult::Cancelled("cancel intent".into());
@@ -365,22 +434,42 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                 event = control.recv() => {
                     if let Some(event) = event { handle_control(event, args, link, &cancel, &mut delivery, payload.id(), Some(&mut retry), Some(&mut payload)).await; }
                 },
-                _ = tokio::time::sleep(args.poll_interval) => {
-                    if matches!(cancelled(link, id).await, Ok(true)) { cancel.cancel(); }
-                    for (invocation, executor) in &started {
-                        let _ = link.request(CoordinatorCommand::Started { identity: id.clone(), invocation: *invocation, executor: executor.clone() }).await;
-                    }
-                    for ack in &delivery.acks { let _ = link.request(CoordinatorCommand::DeliverAck { identity: id.clone(), ack: ack.clone() }).await; }
-                    if let Ok(CoordinatorReply::Messages(batch)) = link.request(CoordinatorCommand::Messages { identity: id.clone(), after: offered, through: None, limit: 128 }).await {
-                        if let Err(e) = validate_messages(&batch, offered, None) { result = PayloadResult::Unknown(e.to_string()); break; }
-                        if !batch.is_empty() {
-                            let pending: Vec<_> = batch.iter().filter(|m| !delivery.acks.iter().any(|ack| ack.message == m.id)).cloned().collect();
-                            if delivery.offered.len().saturating_add(pending.len()) > MAX_DELIVERIES {
-                                result = PayloadResult::Unknown("delivery count exceeds guardian limit".into()); break;
+                reply = &mut watch => {
+                    // After a failure the next round checks once the old way, so an
+                    // outage or an older coordinator that drops the connection
+                    // still delivers cancellation and messages.
+                    let mut once = false;
+                    let mut delay = if legacy { args.poll_interval } else { Duration::ZERO };
+                    match reply {
+                        Ok(CoordinatorReply::Watched { cancelled, messages: batch }) => {
+                            if cancelled { cancel.cancel(); }
+                            if let Err(e) = validate_messages(&batch, offered, None) { result = PayloadResult::Unknown(e.to_string()); break; }
+                            if !batch.is_empty() {
+                                let pending: Vec<_> = batch.iter().filter(|m| !delivery.acks.iter().any(|ack| ack.message == m.id)).cloned().collect();
+                                if delivery.offered.len().saturating_add(pending.len()) > MAX_DELIVERIES {
+                                    result = PayloadResult::Unknown("delivery count exceeds guardian limit".into()); break;
+                                }
+                                delivery.offered.extend(pending.iter().map(|m| m.id));
+                                if let Err(e) = payload.deliver(&pending).await { result = PayloadResult::Unknown(e.to_string()); break; }
+                                offered = batch.last().expect("nonempty batch").id;
                             }
-                            delivery.offered.extend(pending.iter().map(|m| m.id));
-                            if let Err(e) = payload.deliver(&pending).await { result = PayloadResult::Unknown(e.to_string()); break; }
-                            offered = batch.last().expect("nonempty batch").id;
+                        }
+                        // A coordinator that does not know the watch: poll it every
+                        // tick, as before.
+                        Ok(_) | Err(PublicError::BadRequest { .. }) => { legacy = true; delay = args.poll_interval; }
+                        Err(_) => { once = true; delay = args.poll_interval; }
+                    }
+                    watch = Box::pin(watch_once(link, id, offered, delay, legacy || once));
+                },
+                _ = tokio::time::sleep(args.poll_interval) => {
+                    for (invocation, executor) in &started {
+                        if !reported.starts.contains(invocation) && reported.taken(link.request(CoordinatorCommand::Started { identity: id.clone(), invocation: *invocation, executor: executor.clone() }).await) {
+                            reported.starts.insert(*invocation);
+                        }
+                    }
+                    for ack in &delivery.acks {
+                        if !reported.acks.contains(ack) && reported.taken(link.request(CoordinatorCommand::DeliverAck { identity: id.clone(), ack: ack.clone() }).await) {
+                            reported.acks.push(ack.clone());
                         }
                     }
                     match payload.poll().await {

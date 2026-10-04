@@ -489,3 +489,126 @@ async fn missing_file_is_typed_failure_and_unrelated_work_progresses() {
     assert_eq!(status["steps"]["plain"]["outputs"]["value"], "ok");
     assert!(f.launches().is_empty());
 }
+#[tokio::test]
+async fn a_guardian_watch_is_held_until_its_message_or_cancel_and_repeated_reports_do_not_write() {
+    use sluice_process::socket::CoordinatorReply;
+    let f = Fixture::new(json!({"steps":{"active":step(json!(1))}}), json!({})).await;
+    f.tick().await;
+    let launch = f.launches()[0].clone();
+    let run = launch.identity.run;
+    let cap = Some(&launch.capability);
+    let process = |pid, cgroup: &str| sluice_process::identity::ProcessIdentity {
+        pid,
+        start_time: 42,
+        boot_id: "fake".into(),
+        cgroup: cgroup.into(),
+    };
+    let g = sluice_process::socket::GuardianIdentity {
+        identity: launch.identity.clone(),
+        process: process(123, "/fake/control"),
+        unit: format!("sluice-test-{run}.service"),
+        socket_challenge: "fake".into(),
+    };
+    f.broker
+        .guardian(CoordinatorCommand::Claim(g), cap)
+        .await
+        .unwrap();
+    let started = || CoordinatorCommand::Started {
+        identity: launch.identity.clone(),
+        invocation: launch.invocation.invocation,
+        executor: process(124, "/fake/payload"),
+    };
+    f.broker.guardian(started(), cap).await.unwrap();
+    // What an older guardian repeats every 50 ms: none of it writes.
+    let writes = f.broker.writer().transactions();
+    for _ in 0..20 {
+        f.broker.guardian(started(), cap).await.unwrap();
+        f.broker
+            .guardian(
+                CoordinatorCommand::CancelIntent(launch.identity.clone()),
+                cap,
+            )
+            .await
+            .unwrap();
+        f.broker
+            .guardian(
+                CoordinatorCommand::Messages {
+                    identity: launch.identity.clone(),
+                    after: MessageId(0),
+                    through: None,
+                    limit: 128,
+                },
+                cap,
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(f.broker.writer().transactions(), writes);
+    let watch = |after| {
+        f.broker.guardian(
+            CoordinatorCommand::Watch {
+                identity: launch.identity.clone(),
+                after,
+                wait_ms: 30_000,
+            },
+            cap,
+        )
+    };
+    let held = watch(MessageId(0));
+    tokio::pin!(held);
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("nothing to report yet"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+    }
+    // Commits elsewhere neither wake nor cost the held watch a read.
+    let reads = f.broker.reads().snapshots();
+    for _ in 0..20 {
+        tokio::select! {
+            biased;
+            _ = &mut held => panic!("woke for an unrelated commit"),
+            written = f.broker.writer().write(sluice_store::RetrySafety::NonIdempotent, |tx| {
+                tx.changed(None, "unrelated");
+                Ok(())
+            }) => written.unwrap(),
+        }
+    }
+    assert_eq!(f.broker.reads().snapshots(), reads);
+    let project = json!({"kind":"id","value":f.project});
+    let CommandReply::Posted { id } = command(&f.broker, json!({"command":"message_post","args":{"project":project,"thread":"t","body":"hello","from":"owner","to":"active"}})).await else {
+        panic!("post")
+    };
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), held)
+        .await
+        .unwrap()
+        .unwrap();
+    let CoordinatorReply::Watched {
+        cancelled,
+        messages,
+    } = reply
+    else {
+        panic!("watched")
+    };
+    assert!(!cancelled);
+    assert_eq!(messages.iter().map(|m| m.id).collect::<Vec<_>>(), vec![id]);
+    // The next watch holds again until the step is cancelled.
+    let held = watch(id);
+    tokio::pin!(held);
+    tokio::select! {
+        biased;
+        _ = &mut held => panic!("nothing new yet"),
+        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+    }
+    command(&f.broker, json!({"command":"step_cancel","args":{"project":project,"selection":{"steps":["active"],"tags":null},"reason":"stop","author":"test"}})).await;
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), held)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        reply,
+        CoordinatorReply::Watched {
+            cancelled: true,
+            ..
+        }
+    ));
+}

@@ -29,7 +29,7 @@ use sluice_process::{
     },
 };
 use sluice_store::{
-    ReadPool, RetrySafety, StoreError, Writer, artifacts, attempts,
+    ChangeKey, ReadPool, RetrySafety, StoreError, Writer, artifacts, attempts,
     plans::{self, PlanContext},
     projects, records, resources,
 };
@@ -75,8 +75,28 @@ struct Inner<H: ExecutionHost> {
     catalog: Arc<Catalog>,
     host: Arc<H>,
     calls: Calls<Catalog, CallLauncher<H>>,
+    frozen: std::sync::Mutex<FrozenFacts>,
 }
-type StoredAttempt = (Option<String>, Option<String>, i64, i64, String);
+type StoredAttempt = (Option<String>, Option<String>, i64, i64, Option<String>);
+/// Facts read out of attempts' frozen requests, which never change once
+/// written: each run's capability and each recorded start's evidence. A
+/// request can be hundreds of kilobytes; guardians that poll (older ones still
+/// do, every 50 ms) would otherwise have it parsed on each request.
+#[derive(Default)]
+struct FrozenFacts {
+    capabilities: std::collections::HashMap<AttemptId, RunCapability>,
+    starts: std::collections::HashMap<(AttemptId, InvocationId), Value>,
+}
+impl FrozenFacts {
+    /// Bounded: a coordinator sees few live attempts; past this it forgets.
+    const LIMIT: usize = 4096;
+    fn trim(&mut self) {
+        if self.capabilities.len() + self.starts.len() > Self::LIMIT {
+            self.capabilities.clear();
+            self.starts.clear();
+        }
+    }
+}
 pub struct Coordinator<H: ExecutionHost> {
     inner: Arc<Inner<H>>,
 }
@@ -143,6 +163,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 catalog,
                 host,
                 calls,
+                frozen: Default::default(),
             }),
         };
         artifacts::recover(broker.writer(), broker.home())
@@ -327,13 +348,26 @@ impl<H: ExecutionHost> Coordinator<H> {
         }
         let id = id.clone();
         let capability = capability.cloned();
-        self.reads().snapshot(move|sql|{
-            let row:Option<StoredAttempt>=sql.query_row("SELECT r.project_id,r.step_id,r.generation,r.work_generation,a.request FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1 AND r.attempt_id=?2",(id.run.to_string(),id.attempt.to_string()),|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
-            let Some((project,step,generation,work,request))=row else{return Err(conflict("unknown attempt").into());};
-            let request:Value=serde_json::from_str(&request)?;let saved=if step.is_some(){&request["provenance"]["runtime"]["capability"]}else{&request["function"]["bundle"]["capability"]};
-            let expected:RunCapability=serde_json::from_value(saved.clone())?;
-            if project!=id.project.map(|p|p.to_string()) || step!=id.step.as_ref().map(ToString::to_string) || generation as u64!=id.generation.0 || work as u64!=id.work.0 || capability.as_ref()!=Some(&expected){return Err(conflict("attempt identity or capability mismatch").into());}Ok(())
-        }).await.map_err(|e|e.into_public(false))
+        let known = self.frozen().capabilities.get(&id.attempt).cloned();
+        let cached = known.is_some();
+        let attempt = id.attempt;
+        let expected = self.reads().snapshot(move|sql|{
+            // Only the capability is read out of the frozen request, and only
+            // once per attempt: every guardian request authenticates.
+            let row:Option<StoredAttempt>=sql.query_row("SELECT r.project_id,r.step_id,r.generation,r.work_generation,CASE WHEN ?3 THEN NULL WHEN r.step_id IS NULL THEN a.request->'$.function.bundle.capability' ELSE a.request->'$.provenance.runtime.capability' END FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1 AND r.attempt_id=?2",(id.run.to_string(),id.attempt.to_string(),cached),|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+            let Some((project,step,generation,work,saved))=row else{return Err(conflict("unknown attempt").into());};
+            let expected:RunCapability=match known{Some(known)=>known,None=>serde_json::from_str(saved.as_deref().unwrap_or("null"))?};
+            if project!=id.project.map(|p|p.to_string()) || step!=id.step.as_ref().map(ToString::to_string) || generation as u64!=id.generation.0 || work as u64!=id.work.0 || capability.as_ref()!=Some(&expected){return Err(conflict("attempt identity or capability mismatch").into());}Ok(expected)
+        }).await.map_err(|e|e.into_public(false))?;
+        if !cached {
+            let mut frozen = self.frozen();
+            frozen.trim();
+            frozen.capabilities.insert(attempt, expected);
+        }
+        Ok(())
+    }
+    fn frozen(&self) -> std::sync::MutexGuard<'_, FrozenFacts> {
+        self.inner.frozen.lock().unwrap_or_else(|e| e.into_inner())
     }
     pub async fn guardian(
         &self,
@@ -395,20 +429,36 @@ impl<H: ExecutionHost> Coordinator<H> {
                 if limit == 0 || limit > 128 || after.0 < 0 {
                     return Err(conflict("invalid delivery window"));
                 }
-                let messages=self.writer().write(RetrySafety::Idempotent,move|tx|{
-                    ensure_current(tx.sql(), &id)?;
-                    let Some(project)=id.project else{return Ok(vec![]);};let Some(step)=id.step else{return Ok(vec![]);};
-                    let mut q=tx.sql().prepare("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND id>?3 AND (?4 IS NULL OR id<=?4) ORDER BY id LIMIT ?5")?;
-                    let ids=q.query_map((project.to_string(),step.as_str(),after.0,through.map(|m|m.0),limit),|r|r.get::<_,i64>(0))?.collect::<Result<Vec<_>,_>>()?;drop(q);
-                    let mut out=vec![];for message in ids{
-                        tx.sql().execute("INSERT INTO message_deliveries(project_id,run_id,message_id,assigned_at) VALUES (?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT DO NOTHING",(project.to_string(),id.run.to_string(),message))?;
-                        out.push(socket::DeliveryMessage{id:MessageId(message),body:serde_json::to_value(sluice_store::messages::message(tx.sql(),project,MessageId(message))?)?.try_into()?});
-                    }
-                    if !out.is_empty(){tx.changed(Some(project),"messages");}Ok(out)
-                }).await?;
-                Ok(CoordinatorReply::Messages(messages))
+                Ok(CoordinatorReply::Messages(
+                    self.offer_messages(id, after, through, limit).await?,
+                ))
+            }
+            CoordinatorCommand::Watch { after, wait_ms, .. } => {
+                if after.0 < 0 {
+                    return Err(conflict("invalid delivery window"));
+                }
+                self.watch(id, after, Duration::from_millis(wait_ms)).await
             }
             CoordinatorCommand::DeliverAck { ack, .. } => {
+                // A guardian repeats an ack only while unsure it was taken.
+                let check = id.clone();
+                let message = ack.message;
+                let recorded = self.reads().snapshot(move |sql| {
+                    let Some(project) = check.project else { return Ok(true) };
+                    Ok(sql.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM message_deliveries WHERE project_id=?1 AND run_id=?2 AND message_id=?3 AND acknowledged_at IS NOT NULL)",
+                        (project.to_string(), check.run.to_string(), message.0), |r| r.get::<_, bool>(0),
+                    )?)
+                }).await.map_err(|e| e.into_public(true))?;
+                if recorded {
+                    let invocation = ack.invocation;
+                    let check = id.clone();
+                    self.reads()
+                        .snapshot(move |sql| require_invocation(sql, &check, invocation))
+                        .await
+                        .map_err(|e| e.into_public(false))?;
+                    return Ok(CoordinatorReply::Ack);
+                }
                 self.writer()
                     .write(RetrySafety::Idempotent, move |tx| {
                         require_invocation(tx.sql(), &id, ack.invocation)?;
@@ -449,12 +499,158 @@ impl<H: ExecutionHost> Coordinator<H> {
             }
         }
     }
+    /// Hold a guardian's watch until cancellation is requested or a message
+    /// after `after` is addressed to its step (offered as `Messages` would),
+    /// or until `wait` (at most `MAX_WATCH`) passes. It reads only when the
+    /// project's log or messages commit: a cancel and a message both append to
+    /// the log. A run that is no longer current is offered nothing, as before.
+    async fn watch(
+        &self,
+        id: AttemptKey,
+        after: MessageId,
+        wait: Duration,
+    ) -> Result<CoordinatorReply, PublicError> {
+        let deadline = tokio::time::Instant::now() + wait.min(socket::MAX_WATCH);
+        let keys = vec![
+            ChangeKey::new(id.project, "log"),
+            ChangeKey::new(id.project, "messages"),
+        ];
+        let mut changes = self
+            .reads()
+            .subscribe(self.writer(), keys)
+            .await
+            .map_err(|e| e.into_public(true))?;
+        loop {
+            let check = id.clone();
+            let (cancelled, pending) = self
+                .reads()
+                .snapshot(move |sql| {
+                    let cancelled: bool = sql.query_row(
+                        "SELECT cancel_requested FROM attempts WHERE attempt_id=?1",
+                        [check.attempt.to_string()],
+                        |r| r.get(0),
+                    )?;
+                    let (Some(project), Some(step)) = (check.project, &check.step) else {
+                        return Ok((cancelled, false));
+                    };
+                    let pending = !cancelled
+                        && current_run(sql, &check)?
+                        && sql.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"to\"=?2 AND id>?3)",
+                            (project.to_string(), step.as_str(), after.0),
+                            |r| r.get::<_, bool>(0),
+                        )?;
+                    Ok((cancelled, pending))
+                })
+                .await
+                .map_err(|e| e.into_public(true))?;
+            if cancelled || pending {
+                let messages = if pending {
+                    match self.offer_messages(id.clone(), after, None, 128).await {
+                        Ok(messages) => messages,
+                        Err(PublicError::Conflict { .. }) => Vec::new(),
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    Vec::new()
+                };
+                if cancelled || !messages.is_empty() {
+                    return Ok(CoordinatorReply::Watched {
+                        cancelled,
+                        messages,
+                    });
+                }
+            }
+            tokio::select! {
+                changed = changes.wait() => { changed.map_err(|e| e.into_public(true))?; }
+                _ = tokio::time::sleep_until(deadline) => {
+                    return Ok(CoordinatorReply::Watched { cancelled: false, messages: Vec::new() });
+                }
+            }
+        }
+    }
+    /// Offer the messages after `after` addressed to the attempt's step,
+    /// recording each delivery. Reads first: the write runs only for new ones.
+    async fn offer_messages(
+        &self,
+        id: AttemptKey,
+        after: MessageId,
+        through: Option<MessageId>,
+        limit: u16,
+    ) -> Result<Vec<socket::DeliveryMessage>, PublicError> {
+        let check = id.clone();
+        let pending = self
+            .reads()
+            .snapshot(move |sql| {
+                ensure_current(sql, &check)?;
+                let (Some(project), Some(step)) = (check.project, check.step) else {
+                    return Ok(false);
+                };
+                Ok(sql.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"to\"=?2 AND id>?3 AND (?4 IS NULL OR id<=?4))",
+                    (project.to_string(), step.as_str(), after.0, through.map(|m| m.0)),
+                    |r| r.get::<_, bool>(0),
+                )?)
+            })
+            .await
+            .map_err(|e| e.into_public(false))?;
+        if !pending {
+            return Ok(Vec::new());
+        }
+        let messages = self.writer().write(RetrySafety::Idempotent,move|tx|{
+                    ensure_current(tx.sql(), &id)?;
+                    let Some(project)=id.project else{return Ok(vec![]);};let Some(step)=id.step else{return Ok(vec![]);};
+                    let mut q=tx.sql().prepare("SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 AND id>?3 AND (?4 IS NULL OR id<=?4) ORDER BY id LIMIT ?5")?;
+                    let ids=q.query_map((project.to_string(),step.as_str(),after.0,through.map(|m|m.0),limit),|r|r.get::<_,i64>(0))?.collect::<Result<Vec<_>,_>>()?;drop(q);
+                    let mut out=vec![];for message in ids{
+                        tx.sql().execute("INSERT INTO message_deliveries(project_id,run_id,message_id,assigned_at) VALUES (?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%fZ','now')) ON CONFLICT DO NOTHING",(project.to_string(),id.run.to_string(),message))?;
+                        out.push(socket::DeliveryMessage{id:MessageId(message),body:serde_json::to_value(sluice_store::messages::message(tx.sql(),project,MessageId(message))?)?.try_into()?});
+                    }
+                    if !out.is_empty(){tx.changed(Some(project),"messages");}Ok(out)
+                }).await?;
+        Ok(messages)
+    }
     async fn record_start(
         &self,
         id: AttemptKey,
         invocation: InvocationId,
         executor: ProcessIdentity,
     ) -> Result<bool, PublicError> {
+        // A guardian repeats a start only while unsure it was taken. A start
+        // already recorded is answered from a read of that one entry, not by
+        // parsing the whole frozen request inside the writer.
+        let check = id.clone();
+        let evidence = json!({"invocation":invocation,"executor":executor});
+        let key = (id.attempt, invocation);
+        let known = self.frozen().starts.get(&key).cloned();
+        if known.as_ref().is_some_and(|old| *old != evidence) {
+            return Err(conflict("start evidence changed"));
+        }
+        let cached = known.is_some();
+        let compare = evidence.clone();
+        let recorded = self.reads().snapshot(move |sql| {
+            let row: Option<(String, bool, Option<String>)> = sql.query_row(
+                "SELECT a.phase,a.cancel_requested,CASE WHEN ?8 THEN NULL ELSE (SELECT value FROM json_each(a.request,'$.runtime_starts') WHERE json_extract(value,'$.invocation')=json_extract(?7,'$')) END FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1 AND a.attempt_id=?2 AND r.project_id IS ?3 AND r.step_id IS ?4 AND r.generation=?5 AND r.work_generation=?6",
+                (check.run.to_string(), check.attempt.to_string(), check.project.map(|p|p.to_string()), check.step.as_ref().map(ToString::to_string), i64::try_from(check.generation.0).map_err(|_| conflict("generation overflow"))?, i64::try_from(check.work.0).map_err(|_| conflict("work generation overflow"))?, serde_json::to_string(&compare["invocation"])?, cached),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            ).optional()?;
+            let Some((phase, cancelled, old)) = row else { return Ok(None) };
+            if !cached {
+                let Some(old) = old else { return Ok(None) };
+                if serde_json::from_str::<Value>(&old)? != compare {
+                    return Err(conflict("start evidence changed").into());
+                }
+            }
+            Ok(Some(phase != "terminal" && !cancelled && current_run(sql, &check)?))
+        }).await.map_err(|e| e.into_public(false))?;
+        if let Some(open) = recorded {
+            if !cached {
+                let mut frozen = self.frozen();
+                frozen.trim();
+                frozen.starts.insert(key, evidence);
+            }
+            return Ok(open);
+        }
         self.writer().write(RetrySafety::Idempotent, move |tx| {
             let (phase, cancelled, raw): (String, bool, String) = tx.sql().query_row(
                 "SELECT a.phase,a.cancel_requested,a.request FROM attempts a JOIN runs r USING(attempt_id) WHERE r.run_id=?1 AND a.attempt_id=?2 AND r.project_id IS ?3 AND r.step_id IS ?4 AND r.generation=?5 AND r.work_generation=?6",
@@ -764,19 +960,30 @@ impl<H: ExecutionHost> Coordinator<H> {
                             move |tx| ensure_current(tx.sql(), &id)
                         })),
                     };
+                    // A cancel appends to the project's log: recheck it on log
+                    // commits instead of every 100 ms.
+                    let mut changes = self
+                        .reads()
+                        .subscribe(self.writer(), vec![ChangeKey::new(Some(project), "log")])
+                        .await
+                        .map_err(|e| e.into_public(true))?;
                     let operation =
                         crate::builtins::messages::dispatch(&tool.name, &tool.args, &ctx);
                     tokio::pin!(operation);
-                    let mut poll = tokio::time::interval(std::time::Duration::from_millis(100));
                     loop {
+                        if matches!(
+                            self.guardian(CoordinatorCommand::CancelIntent(id.clone()), capability)
+                                .await?,
+                            CoordinatorReply::CancelIntent(true)
+                        ) {
+                            ctx.cancel.cancel();
+                            return Err(PublicError::Cancelled {
+                                message: "message wait cancelled".into(),
+                            });
+                        }
                         tokio::select! {
                             result = &mut operation => return result.map_err(storage).and_then(data),
-                            _ = poll.tick() => {
-                                if matches!(self.guardian(CoordinatorCommand::CancelIntent(id.clone()), capability).await?, CoordinatorReply::CancelIntent(true)) {
-                                    ctx.cancel.cancel();
-                                    return Err(PublicError::Cancelled { message: "message wait cancelled".into() });
-                                }
-                            }
+                            changed = changes.wait() => { changed.map_err(|e| e.into_public(true))?; }
                         }
                     }
                 }
@@ -1123,11 +1330,24 @@ impl<H: ExecutionHost> Coordinator<H> {
                 }
             },
             Incoming::Guardian(command) => {
+                let held = matches!(command, CoordinatorCommand::Watch { .. });
                 let broker = self.clone();
-                let result = crate::contain::contained("guardian callback", async move {
+                let handler = crate::contain::contained("guardian callback", async move {
                     broker.guardian(command, capability.as_ref()).await
-                })
-                .await;
+                });
+                let result = if held {
+                    // A held watch ends when its guardian hangs up or the
+                    // coordinator stops; it changes nothing, so dropping it is safe.
+                    use tokio::io::AsyncReadExt;
+                    let mut byte = [0; 1];
+                    tokio::select! {
+                        result = handler => result,
+                        _ = stream.read(&mut byte) => return Ok(()),
+                        _ = stop.cancelled() => return Ok(()),
+                    }
+                } else {
+                    handler.await
+                };
                 write_reply(
                     &mut stream,
                     &Reply {
@@ -1409,6 +1629,7 @@ fn guardian_key(command: &CoordinatorCommand) -> &AttemptKey {
         CoordinatorCommand::Claim(g) => &g.identity,
         CoordinatorCommand::Started { identity, .. }
         | CoordinatorCommand::Messages { identity, .. }
+        | CoordinatorCommand::Watch { identity, .. }
         | CoordinatorCommand::DeliverAck { identity, .. }
         | CoordinatorCommand::Callback { identity, .. } => identity,
         CoordinatorCommand::CancelIntent(id) | CoordinatorCommand::Submissions(id) => id,
