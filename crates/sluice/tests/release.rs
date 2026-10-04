@@ -215,6 +215,21 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         selected["selection"]["home_path"],
         gate.home.to_string_lossy().as_ref()
     );
+    // A prebuilt entry can be copied to the public bin directory. Its default
+    // control path belongs to the runtime HOME, not the build machine prefix.
+    let owner = gate.root.path().join("fake-owner");
+    std::fs::create_dir_all(owner.join(".local/bin")).unwrap();
+    std::fs::create_dir_all(owner.join(".local/share/sluice")).unwrap();
+    std::os::unix::fs::symlink(&gate.install, owner.join(".local/share/sluice/install")).unwrap();
+    let relocated = owner.join(".local/bin/sluice");
+    std::fs::copy(prefix.join("bin/sluice"), &relocated).unwrap();
+    let relocated_status = gate
+        .command(&relocated, &["install", "status"])
+        .env_remove("SLUICE_INSTALL_DIR")
+        .env("HOME", &owner)
+        .output()
+        .unwrap();
+    assert!(relocated_status.status.success(), "{:?}", relocated_status);
     let version = gate
         .command(&release.join("bin/sluice"), &["--version"])
         .env_remove("PYTHONPATH")

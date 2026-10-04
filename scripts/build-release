@@ -72,12 +72,12 @@ with tempfile.TemporaryDirectory(prefix='.launcher-', dir=prefix) as work:
     source.write_text('''use std::{os::unix::process::CommandExt, path::PathBuf, process::Command};
 fn main() {
     let dir = std::env::var_os("SLUICE_INSTALL_DIR").map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_INSTALL));
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME is absent")).join(".local/share/sluice/install"));
     let error = Command::new(dir.join("entry")).arg("--installation-entry").arg(&dir)
         .args(std::env::args_os().skip(1)).exec();
     eprintln!("sluice installation entry: {error}"); std::process::exit(1);
 }
-'''.replace('DEFAULT_INSTALL', json.dumps(str(prefix / 'install'))))
+''')
     binary = pathlib.Path(work) / 'sluice'
     subprocess.run(['rustc', '--edition=2024', '-C', 'opt-level=s', '-C', 'strip=symbols', str(source), '-o', str(binary)], check=True)
     with binary.open('rb') as f: os.fsync(f.fileno())
