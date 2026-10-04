@@ -2299,6 +2299,7 @@ dependencies = [
  "sluice-web",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

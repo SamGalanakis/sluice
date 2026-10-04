@@ -8,6 +8,7 @@ pub mod inline;
 pub mod python;
 pub mod registry;
 pub mod scheduler;
+mod status;
 pub mod verify;
 pub mod watch;
 

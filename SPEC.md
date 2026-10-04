@@ -1344,10 +1344,10 @@ resolved author), and
 | `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
 
 **The units view.** `status(project, view="units")` answers "what is running, blocked or
-failed, and for how long" in one call: `{rev, paused, resources?, units: [{unit, state, age,
-engine, steps, blocked, last, line}], done_units?}` (`resources` as in the steps view), one row per unit as `sluice next` sees units (§9: the
-steps sharing a `unit:<name>` tag, else an untagged step's component among the untagged steps,
-named by its first step; a standalone step is a unit of one), sorted by `age`, oldest first
+failed, and for how long" in one call: `{project, rev, paused, resources?, units: [{unit, state,
+age, engine, steps, blocked, last, line}], done_units?}` (`resources` as in the steps view, here
+only when the project declares any), one row per unit as the plan's units are (the steps sharing
+a `unit:<name>` tag; an untagged step is a unit of one, named by its id), sorted by `age`, oldest first
 (unknown last). `state` is `running` (a step running), else `failed` (a step failed or stale),
 else `settled` (every step succeeded or skipped), else `blocked` (nothing running or startable
 and something pending and held, by `sluice next`'s held rule), else `queued` (a step queued on

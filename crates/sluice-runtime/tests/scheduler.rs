@@ -107,7 +107,7 @@ impl Fixture {
         self.host.launches.lock().unwrap().clone()
     }
     async fn status(&self) -> Value {
-        let CommandReply::Data(v)=command(&self.broker,json!({"command":"status","args":{"project":json!({"kind":"id","value":self.project}),"selection":{"steps":null,"tags":null}}})).await else{panic!("status")};
+        let CommandReply::Data(v)=command(&self.broker,json!({"command":"status","args":{"project":json!({"kind":"id","value":self.project}),"selection":{"steps":null,"tags":null},"all":true}})).await else{panic!("status")};
         v.into_value()
     }
     async fn finish(&self, launch: &Launch, result: PayloadResult) {

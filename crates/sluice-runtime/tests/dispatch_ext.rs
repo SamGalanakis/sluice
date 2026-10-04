@@ -253,9 +253,12 @@ async fn input_preview_validates_without_changing_inputs_history_revisions_or_ve
     assert_eq!(versions, f.broker.project_versions().await.unwrap());
     assert_eq!(rev, f.rev().await);
     let status = data(
-        f.call("status", json!({"selection":{"steps":null,"tags":null}}))
-            .await
-            .unwrap(),
+        f.call(
+            "status",
+            json!({"selection":{"steps":null,"tags":null},"all":true}),
+        )
+        .await
+        .unwrap(),
     );
     assert!(status["inputs"]["enabled"].is_null());
     assert!(matches!(
@@ -943,9 +946,12 @@ async fn input_preview_reports_cached_resource_queue_and_stale_work() {
     };
     assert_eq!(preview.would_stale, vec![StepId::new("work").unwrap()]);
     let state = data(
-        f.call("status", json!({"selection":{"steps":null,"tags":null}}))
-            .await
-            .unwrap(),
+        f.call(
+            "status",
+            json!({"selection":{"steps":null,"tags":null},"all":true}),
+        )
+        .await
+        .unwrap(),
     );
     assert_eq!(state["steps"]["work"]["status"], "succeeded");
     assert_eq!(state["inputs"]["value"], 3);

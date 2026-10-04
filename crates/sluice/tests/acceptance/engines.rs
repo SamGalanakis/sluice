@@ -244,7 +244,7 @@ impl Gate {
         self.lease = Some(stream);
     }
     pub fn status(&self, selector: &Value) -> Value {
-        let CommandReply::Data(v)=self.rpc(json!({"command":"status","args":{"project":selector,"selection":{"steps":null,"tags":null}}})) else {panic!("status reply")};
+        let CommandReply::Data(v)=self.rpc(json!({"command":"status","args":{"project":selector,"selection":{"steps":null,"tags":null},"all":true}})) else {panic!("status reply")};
         v.into_value()
     }
     #[track_caller]

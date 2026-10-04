@@ -10,6 +10,7 @@ pub mod ids;
 pub mod plan;
 pub mod recipe;
 pub mod rpc;
+pub mod status;
 pub mod types;
 pub mod units;
 

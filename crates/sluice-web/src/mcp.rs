@@ -136,7 +136,7 @@ pub fn decode_tool(
             _ => return Err(bad("wake must be any or questions")),
         };
     }
-    for field in ["steps", "tags", "projects"] {
+    for field in ["steps", "tags", "projects", "state"] {
         if let Some(value) = args.get_mut(field)
             && value.is_string()
         {
@@ -330,7 +330,8 @@ fn default_value(name: &str, key: &str) -> Option<Value> {
     }
     match key {
         "reason" | "description" => Some(json!("")),
-        "dry_run" | "force" | "direct" | "all" => Some(json!(false)),
+        "dry_run" | "force" | "direct" | "all" | "brief" => Some(json!(false)),
+        "view" if name == "status" => Some(json!("steps")),
         "start" | "paused" if name == "step_pause" || key == "start" => Some(json!(true)),
         "params" if name == "query" => Some(json!([])),
         "questions_only" => Some(json!("any")),
@@ -420,7 +421,7 @@ fn schema_fields(
         if key == "questions_only" {
             value = json!({"type":"string","enum":["any","questions"],"default":"any"});
         }
-        if matches!(key.as_str(), "steps" | "tags" | "projects") {
+        if matches!(key.as_str(), "steps" | "tags" | "projects" | "state") {
             let default = value.get("default").cloned();
             value = json!({"anyOf":[value,{"type":"string"}]});
             if let Some(default) = default {
@@ -733,7 +734,7 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "status",
-        "Read project status, outputs, resources and step state. steps and tags select targets.",
+        "A project's state at a glance: {project, rev, paused, inputs, outputs, resources,\nsteps: {id: {status, outputs, error, run_ids, done, total, instances, manual,\nqueued?, waiting?}}, done_units?}. Without steps or tags, the done units (every step\nsucceeded or skipped) are left out and counted in done_units {units, steps}, unless all\nis true.\n\nArgs:\n    project: the project.\n    steps: only these steps (ids).\n    tags: only steps carrying any of these tags (with steps: either).\n    brief: cut every string over 200 characters in inputs and outputs to its first 200\n        and `… [n more characters]`.\n    all: include the done units too (steps or tags always return what they select).\n    view: \"steps\" (default) as above, or \"units\": one compact row per unit (the steps\n        sharing a `unit:<name>` tag, else a step on its own) instead: {project, rev,\n        paused, resources?, units: [{unit, state, age, engine, steps, blocked, last,\n        line}], done_units?}, oldest first. state is running, failed (a step failed or\n        stale), settled (every step succeeded or skipped), blocked (nothing running or\n        startable, something held), queued (a step waits for resources) or pending; age\n        the seconds its running step has run, else since its last change; engine\n        engine·model·effort of its agent step; steps each step's mark (✓ succeeded,\n        ▶ running, · pending, ✗ failed, ~ stale, – skipped, ‖ paused, ≡ queued); blocked\n        why a blocked unit's first held step is held, or a queued unit's first queued\n        step's reason; last its steps' threads' last message (\"Q: \" for a question);\n        line all of it in at most 80 characters.\n    state: with view \"units\", only units in this state (one or a list).",
     ),
     (
         "plan_prune",

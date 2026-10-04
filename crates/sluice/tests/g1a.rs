@@ -76,7 +76,7 @@ impl Gate {
         }
     }
     fn status(&self, p: ProjectId) -> Value {
-        let CommandReply::Data(value)=self.rpc(json!({"command":"status","args":{"project":{"kind":"id","value":p},"selection":{"steps":null,"tags":null}}}))else{panic!("status")};
+        let CommandReply::Data(value)=self.rpc(json!({"command":"status","args":{"project":{"kind":"id","value":p},"selection":{"steps":null,"tags":null},"all":true}}))else{panic!("status")};
         value.into_value()
     }
     fn lease(&self, owner: &str) -> Result<UnixStream, Value> {

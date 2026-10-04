@@ -607,6 +607,9 @@ async fn normalize_args(
         }
         "step_cancel" | "step_retry" | "status" => {
             selection(args);
+            if name == "status" {
+                listify(args, "state");
+            }
             if name == "step_cancel" {
                 args.entry("reason").or_insert(Value::String(String::new()));
             }

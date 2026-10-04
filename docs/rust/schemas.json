@@ -10267,20 +10267,7 @@
                 "const": "status"
               },
               "args": {
-                "type": "object",
-                "properties": {
-                  "project": {
-                    "$ref": "#/$defs/ProjectSelector"
-                  },
-                  "selection": {
-                    "$ref": "#/$defs/StepSelection"
-                  }
-                },
-                "additionalProperties": false,
-                "required": [
-                  "project",
-                  "selection"
-                ]
+                "$ref": "#/$defs/StatusQuery"
               }
             },
             "required": [
@@ -11933,6 +11920,63 @@
           "step",
           "after",
           "edit"
+        ]
+      },
+      "StatusQuery": {
+        "description": "`status` (SPEC §8): the steps view, or with `view: units` one compact row per unit.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "selection": {
+            "$ref": "#/$defs/StepSelection"
+          },
+          "brief": {
+            "description": "Cut every string over 200 characters in inputs and outputs (steps view only).",
+            "type": "boolean"
+          },
+          "all": {
+            "description": "Include the done units, which are otherwise left out and counted in `done_units`.",
+            "type": "boolean"
+          },
+          "view": {
+            "$ref": "#/$defs/StatusView"
+          },
+          "state": {
+            "description": "Keep only the units in these states (units view only).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/UnitState"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "selection"
+        ]
+      },
+      "StatusView": {
+        "type": "string",
+        "enum": [
+          "steps",
+          "units"
+        ]
+      },
+      "UnitState": {
+        "description": "A unit's state in the units view, checked in this order: a step running, a step failed\nor stale, every step succeeded or skipped, nothing startable and something held, a step\nqueued on resources, else pending.",
+        "type": "string",
+        "enum": [
+          "running",
+          "failed",
+          "settled",
+          "blocked",
+          "queued",
+          "pending"
         ]
       },
       "PlanViewFormat": {
@@ -19035,20 +19079,7 @@
             "const": "status"
           },
           "args": {
-            "type": "object",
-            "properties": {
-              "project": {
-                "$ref": "#/$defs/ProjectSelector"
-              },
-              "selection": {
-                "$ref": "#/$defs/StepSelection"
-              }
-            },
-            "additionalProperties": false,
-            "required": [
-              "project",
-              "selection"
-            ]
+            "$ref": "#/$defs/StatusQuery"
           }
         },
         "required": [
@@ -20701,6 +20732,63 @@
           "step",
           "after",
           "edit"
+        ]
+      },
+      "StatusQuery": {
+        "description": "`status` (SPEC §8): the steps view, or with `view: units` one compact row per unit.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "selection": {
+            "$ref": "#/$defs/StepSelection"
+          },
+          "brief": {
+            "description": "Cut every string over 200 characters in inputs and outputs (steps view only).",
+            "type": "boolean"
+          },
+          "all": {
+            "description": "Include the done units, which are otherwise left out and counted in `done_units`.",
+            "type": "boolean"
+          },
+          "view": {
+            "$ref": "#/$defs/StatusView"
+          },
+          "state": {
+            "description": "Keep only the units in these states (units view only).",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/UnitState"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "selection"
+        ]
+      },
+      "StatusView": {
+        "type": "string",
+        "enum": [
+          "steps",
+          "units"
+        ]
+      },
+      "UnitState": {
+        "description": "A unit's state in the units view, checked in this order: a step running, a step failed\nor stale, every step succeeded or skipped, nothing startable and something held, a step\nqueued on resources, else pending.",
+        "type": "string",
+        "enum": [
+          "running",
+          "failed",
+          "settled",
+          "blocked",
+          "queued",
+          "pending"
         ]
       },
       "PlanViewFormat": {

@@ -325,6 +325,52 @@ pub struct Next {
     pub settles: Settles,
 }
 
+/// `status` (SPEC §8): the steps view, or with `view: units` one compact row per unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatusQuery {
+    pub project: ProjectSelector,
+    pub selection: StepSelection,
+    /// Cut every string over 200 characters in inputs and outputs (steps view only).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub brief: bool,
+    /// Include the done units, which are otherwise left out and counted in `done_units`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all: bool,
+    #[serde(default, skip_serializing_if = "StatusView::is_steps")]
+    pub view: StatusView,
+    /// Keep only the units in these states (units view only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<Vec<UnitState>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusView {
+    #[default]
+    Steps,
+    Units,
+}
+impl StatusView {
+    fn is_steps(&self) -> bool {
+        *self == Self::Steps
+    }
+}
+
+/// A unit's state in the units view, checked in this order: a step running, a step failed
+/// or stale, every step succeeded or skipped, nothing startable and something held, a step
+/// queued on resources, else pending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitState {
+    Running,
+    Failed,
+    Settled,
+    Blocked,
+    Queued,
+    Pending,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Query {
@@ -629,10 +675,7 @@ pub enum CommandRequest {
         project: ProjectSelector,
         step: StepId,
     },
-    Status {
-        project: ProjectSelector,
-        selection: StepSelection,
-    },
+    Status(StatusQuery),
     PlanView {
         project: ProjectSelector,
         format: PlanViewFormat,

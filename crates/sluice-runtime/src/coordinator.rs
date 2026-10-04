@@ -275,21 +275,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 artifacts::recover(self.writer(),self.home()).await.map_err(|e|e.into_public(false))?; Ok(CommandReply::Project(ProjectIdentity{project_id:project.project_id,name:project.name}))
             },
             CommandRequest::PlanGet{project}=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"plan":ctx.plan.document()}))}).await.map_err(|e|e.into_public(true)).and_then(data),
-            CommandRequest::Status{project,selection:_}=>self.reads().snapshot(move|sql|{
-                let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;let state=plans::read_state(sql,id)?;
-                let mut q=sql.prepare("SELECT step_id,json_object('status',status,'outputs',json(outputs),'error',json(error),'run_ids',json(run_ids),'done',done,'total',total,'instances',json(instances),'manual',manual) FROM steps WHERE project_id=?1 ORDER BY position")?;
-                let rows=q.query_map([id.to_string()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
-                let mut steps=serde_json::Map::new();for (id,row) in rows{steps.insert(id,serde_json::from_str(&row)?);}
-                for candidate in resources::admit_order(sql,id,&ctx.plan)? {
-                    let fit=resources::fits(sql,id,&candidate.needs)?;
-                    if !fit.fits() && let Some(Value::Object(step))=steps.get_mut(candidate.step.as_str()) {
-                            step.insert("queued".into(),json!(fit.blocked));
-                            step.insert("waiting".into(),json!([format!("queued: {}",fit.reason)]));
-                    }
-                }
-                let outputs=JsonMap(ctx.plan.outputs().iter().filter_map(|(n,r)|match sluice_model::gates::resolve_reference(&ctx.plan,&state,r){sluice_model::types::BoundValue::Ready(v)=>Some((n.clone(),v)),_=>None}).collect::<indexmap::IndexMap<_,_>>());
-                Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"inputs":state.inputs,"steps":steps,"outputs":outputs,"resources":resources::status(sql,id,&ctx.plan)?.into_iter().map(|(n,r)|(n,json!({"capacity":r.resource.capacity,"held":r.held,"queued":r.queued,"error":r.resource.error}))).collect::<BTreeMap<_,_>>()}))
-            }).await.map_err(|e|e.into_public(true)).and_then(data),
+            CommandRequest::Status(query)=>self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,query)).await.map_err(|e|e.into_public(true)).and_then(data),
             command if project_mutation(&command) => {
                 let home = self.home().to_owned();
                 let reply = self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, &home, command)).await?;
@@ -838,7 +824,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     if !matches!(
                         command,
                         CommandRequest::PlanGet { .. }
-                            | CommandRequest::Status { .. }
+                            | CommandRequest::Status(_)
                             | CommandRequest::Messages(_)
                             | CommandRequest::LogRead(_)
                             | CommandRequest::FnList { .. }
