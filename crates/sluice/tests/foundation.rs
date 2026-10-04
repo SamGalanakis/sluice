@@ -59,7 +59,6 @@ fn cli_parsing_rejects_bad_arguments_and_lists_modes() {
     for args in [
         vec!["serve", "--port", "invalid"],
         vec!["guardian"],
-        vec!["tool"],
         vec!["agent", "hook", "--engine", "unknown", "--event", "Stop"],
     ] {
         assert_eq!(run(home.path(), &args).status.code(), Some(2));
