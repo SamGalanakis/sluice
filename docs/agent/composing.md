@@ -27,8 +27,8 @@ it stays easy to read and to change.
   agent that works next to others to use a worktree and branch of its own.
 - **Declare the outputs someone downstream needs**, with a `doc` when the name alone is not
   enough (`"interface": {"type": "string", "doc": "Path of the interface file"}`). The agent
-  submits them once it is finished, which ends its session and settles the step; the next
-  step starts with them as inputs at once. A step with nothing to hand on declares nothing.
+  submits them once it is finished, which ends its session; the step completes with them at
+  once and the next step gets them as inputs. A step with nothing to hand on declares nothing.
 - **People decide in the inbox.** When a choice is theirs, a `message.ask` step with
   `wait: true` (or `ask` from you, `to="owner"`) waits for it (`docs("inbox")`).
 - **Finish with a check.** A last block verifies the result as a whole (tests pass, the

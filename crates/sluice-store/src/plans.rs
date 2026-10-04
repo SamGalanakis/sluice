@@ -547,7 +547,7 @@ pub(crate) fn snapshot_result(
     tx.sql().execute("INSERT INTO step_results(result_id,project_id,step_id,generation,work_generation,attempt_id,unit,declaration,inputs,inputs_hash,status,outputs,error,manual,run_ids,recorded_at)
         SELECT ?3,s.project_id,s.step_id,s.generation,s.work_generation,coalesce(?4,r.attempt_id),
             CASE WHEN ?4 IS NOT NULL THEN a.unit WHEN s.manual=1 AND r.result_id IS NULL THEN s.unit ELSE coalesce(r.unit,s.unit) END,
-            CASE WHEN ?4 IS NOT NULL THEN coalesce(json_extract(a.request,'$.declaration'),s.declaration) WHEN s.manual=1 AND r.result_id IS NULL THEN s.declaration ELSE coalesce(r.declaration,s.declaration) END,
+            CASE WHEN ?4 IS NOT NULL THEN json_extract(a.request,'$.declaration') WHEN s.manual=1 AND r.result_id IS NULL THEN s.declaration ELSE coalesce(r.declaration,s.declaration) END,
             coalesce(?5,r.inputs),s.inputs_hash,s.status,s.outputs,coalesce(s.error,CASE WHEN s.skipped IS NOT NULL THEN json_object('skipped',json(s.skipped)) END),s.manual,s.run_ids,?6
         FROM steps s LEFT JOIN step_results r ON s.result_id=r.result_id LEFT JOIN attempts a ON a.attempt_id=?4 AND a.project_id=s.project_id WHERE s.project_id=?1 AND s.step_id=?2",
         params![project.to_string(),id.as_str(),result.to_string(),attempt.map(|a|a.to_string()),inputs.map(serde_json::to_string).transpose()?,at])?;

@@ -1222,6 +1222,29 @@ async fn receipts_read_listening_from_the_runs_reservation() {
         .await
         .unwrap();
     assert_eq!(receipt().await, (Delivery::Delivered, Some(run)));
+    // Submitted: the run's agent is gone, and the step takes no more messages while the
+    // run finishes.
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET run_ids=json_array(?2) WHERE project_id=?1 AND step_id='work'",
+                params![p.to_string(), run.to_string()],
+            )?;
+            tx.sql().execute(
+                "INSERT INTO submissions(run_id,project_id,step_id,outputs,at) VALUES (?1,?2,'work','{}','now')",
+                params![run.to_string(), p.to_string()],
+            )?;
+            tx.changed(Some(p), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let before = f.count("messages").await;
+    assert!(matches!(
+        f.posted(draft(p, "hi").to("work")).await,
+        Err(PublicError::Conflict { message, .. }) if message.contains("has submitted its outputs")
+    ));
+    assert_eq!(f.count("messages").await, before);
     // Finished: a settled step takes no messages.
     f.stop(run).await;
     set("UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='work'").await;

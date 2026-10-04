@@ -3,7 +3,7 @@
 # dependencies = []
 # ///
 """Submit through the Rust run capability, including invalid and repeated submissions (a
-repeated one is refused once the first has settled the step)."""
+repeated one is refused: a run submits once)."""
 from sluice_fn import CallbackError, run
 
 

@@ -505,7 +505,8 @@ impl Machine {
         self.checkpoint.state = State::Delivering;
         Ok(())
     }
-    /// A valid submission ends the session at once: the store settled the step with it.
+    /// A valid submission ends the session at once; the run (and the fn composing the agent,
+    /// if any) then completes the step with the result.
     pub fn update(
         &mut self,
         now: Duration,

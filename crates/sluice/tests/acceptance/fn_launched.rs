@@ -3,7 +3,7 @@
 //! `runs/<run>/invocations/<invocation>` directory whose control-socket path is longer than a
 //! Unix socket address holds. The real gates are labelled and ignored; the fixture-engine
 //! test runs the same sequence on every `cargo test`.
-use crate::engines::{Gate, credentials, private_write, step_finished};
+use crate::engines::{Gate, credentials, private_write, step_finished_within};
 use crate::support::{Scratch, repo};
 use serde_json::{Value, json};
 use sluice_agents::{delivery::DeliveryState, engines::InputId, supervisor::Checkpoint};
@@ -219,28 +219,50 @@ fn fn_launched(engine: &str, real: bool) {
         message.0
     );
     let acknowledged = std::time::Instant::now();
-    let submit = |word: Value| json!({"command":"step_submit","args":{"project":p.project_id,"step":"work","run":run,"outputs":{"word":word},"author":"fixture"}});
     // An invalid submission is refused with what is wrong, and the step keeps running.
-    let Err(PublicError::Invalid { errors, .. }) = gate.try_rpc(submit(json!(7))) else {
+    let Err(PublicError::Invalid { errors, .. }) =
+        gate.try_rpc(submit(&p.project_id, &run, json!(7)))
+    else {
         panic!("an invalid submission is refused")
     };
     assert_eq!(errors.len(), 1, "{errors:?}");
     if !real {
         assert_eq!(gate.status(&selector)["steps"]["work"]["status"], "running");
-        // A valid one settles the step at once, with exactly what was submitted.
-        gate.rpc(submit(json!(STEER_WORD)));
-        let work = &gate.status(&selector)["steps"]["work"];
-        assert_eq!(work["status"], "succeeded", "{work}");
+        gate.rpc(submit(&p.project_id, &run, json!(STEER_WORD)));
     }
-    let done = step_finished(&mut gate, &selector);
+    // The valid submission ends the agent invocation at once: the fn gets agent.run's
+    // result back, post-processes it and returns, and the step completes with the fn's
+    // outputs, the submission joined in. Nothing waits out the idle grace (10 minutes).
+    let done = step_finished_within(
+        &mut gate,
+        &selector,
+        Duration::from_secs(if real { 240 } else { 30 }),
+    );
     let settled = std::time::Instant::now();
     println!(
         "g3_fn_launched_{engine} settled {:.1} s after the steer was acknowledged",
         acknowledged.elapsed().as_secs_f64()
     );
+    assert_eq!(done["status"], "succeeded", "{done}");
     assert_eq!(done["run_ids"][0], run.as_str(), "{done}");
-    assert_eq!(done["outputs"], json!({"word": STEER_WORD}), "{done}");
-    // Its dependent starts on it at once.
+    // The fn's declared outputs and the submitted one, nothing dropped.
+    let mut keys = done["outputs"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(keys, ["final", "session", "summary", "word"], "{done}");
+    assert_eq!(done["outputs"]["word"], STEER_WORD, "{done}");
+    assert!(done["outputs"]["final"].is_string(), "{done}");
+    let session = done["outputs"]["session"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!session.is_empty(), "{done}");
+    assert_eq!(Some(session.as_str()), accepted.session.as_deref());
+    // Its dependent starts on it.
     gate.wait(Duration::from_secs(30), |g| {
         g.status(&selector)["steps"]["next"]["status"] == "succeeded"
     });
@@ -248,7 +270,7 @@ fn fn_launched(engine: &str, real: bool) {
         gate.status(&selector)["steps"]["next"]["outputs"]["value"],
         STEER_WORD
     );
-    // A settled step takes no more messages, and no second submission.
+    // A settled step takes no more messages, and its run no second submission.
     let refused = gate.try_rpc(
         json!({"command":"say","args":{"project":selector,"body":"too late","to":"work"}}),
     );
@@ -256,8 +278,11 @@ fn fn_launched(engine: &str, real: bool) {
         matches!(&refused, Err(PublicError::Conflict { message, .. }) if message.contains("settled")),
         "{refused:?}"
     );
-    assert!(gate.try_rpc(submit(json!("again"))).is_err());
-    // The submission stopped the agent's session; its run then finishes on its own.
+    assert!(
+        gate.try_rpc(submit(&p.project_id, &run, json!("again")))
+            .is_err()
+    );
+    // The submission stopped the agent's session.
     gate.wait(Duration::from_secs(60), |_| {
         checkpoint(&invocation).is_some_and(|c| c.state == sluice_agents::supervisor::State::Done)
     });
@@ -274,9 +299,7 @@ fn fn_launched(engine: &str, real: bool) {
     }
     let last = checkpoint(&invocation).unwrap();
     assert_eq!(last.submissions.get("word"), Some(&json!(STEER_WORD)));
-    let session = last.session.clone().unwrap_or_default();
-    assert!(!session.is_empty());
-    assert_eq!(Some(session.as_str()), accepted.session.as_deref());
+    assert_eq!(last.session.as_deref(), Some(session.as_str()));
     assert_eq!(task_tries(&last), 1, "{:?}", last.delivery);
     let tries: u32 = last
         .delivery
@@ -304,21 +327,25 @@ fn fn_launched(engine: &str, real: bool) {
         }
     }
     if !real {
-        // A send-back reopens the step as a new run, which gets the message. This time the
-        // agent stops after its nudges without submitting: a typed failure, not a hang.
-        gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Send-back: try again","reason":"fixture send-back","author":"fixture"}}));
-        let mut again = String::new();
-        gate.wait(
-            Duration::from_secs(60),
-            |g| match g.status(&selector)["steps"]["work"]["run_ids"][0].as_str() {
-                Some(r) if r != run => {
-                    again = r.into();
-                    g.track(r);
-                    true
-                }
-                _ => false,
-            },
+        // A send-back reopens the step as a new run that resumes the same session: the
+        // message reaches it, its submission ends it at once, and the fn returns that session.
+        let (again, resumed) = send_back(&mut gate, &selector, &run, "Send-back: submit olive");
+        gate.rpc(submit(&p.project_id, &again, json!("olive")));
+        let done = step_finished_within(&mut gate, &selector, Duration::from_secs(30));
+        assert_eq!(done["status"], "succeeded", "{done}");
+        assert_eq!(done["run_ids"][0], again.as_str(), "{done}");
+        assert_eq!(done["outputs"]["word"], "olive", "{done}");
+        assert_eq!(done["outputs"]["session"], session.as_str(), "{done}");
+        gate.wait(Duration::from_secs(60), |_| {
+            checkpoint(&resumed).is_some_and(|c| c.state == sluice_agents::supervisor::State::Done)
+        });
+        assert_eq!(
+            checkpoint(&resumed).unwrap().session.as_deref(),
+            Some(session.as_str())
         );
+        // Sent back again, the agent stops after its nudges without submitting: a typed
+        // failure carrying the session, not a hang.
+        let (last_run, _) = send_back(&mut gate, &selector, &again, "Send-back: think again");
         let mut failed = Value::Null;
         gate.wait(Duration::from_secs(120), |g| {
             failed = g.status(&selector)["steps"]["work"].clone();
@@ -328,17 +355,8 @@ fn fn_launched(engine: &str, real: bool) {
             failed["error"]["error"], "exited_without_submit",
             "{failed}"
         );
-        assert_eq!(failed["run_ids"][0], again.as_str(), "{failed}");
-        let invocations = gate.home.join("runs").join(&again).join("invocations");
-        let resent = fs::read_dir(&invocations)
-            .unwrap()
-            .filter_map(|entry| checkpoint(&entry.unwrap().path()))
-            .any(|c| {
-                c.delivery.entries.iter().any(|e| {
-                    matches!(e.id, InputId::Message { .. }) && e.text.contains("Send-back")
-                })
-            });
-        assert!(resent, "the send-back's message did not reach the new run");
+        assert_eq!(failed["error"]["session"], session.as_str(), "{failed}");
+        assert_eq!(failed["run_ids"][0], last_run.as_str(), "{failed}");
     }
     // Cleanup: the run's units are empty and no private tmux server survives, including
     // the invocation's own.
@@ -355,6 +373,46 @@ fn fn_launched(engine: &str, real: bool) {
     );
 }
 
+fn submit(project: &impl serde::Serialize, run: &str, word: Value) -> Value {
+    json!({"command":"step_submit","args":{"project":project,"step":"work","run":run,"outputs":{"word":word},"author":"fixture"}})
+}
+/// Retry `work` with `message`; returns its new run and that run's agent invocation once
+/// the message has reached the agent.
+fn send_back(gate: &mut Gate, selector: &Value, prior: &str, message: &str) -> (String, PathBuf) {
+    gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":message,"reason":"fixture send-back","author":"fixture"}}));
+    let mut run = String::new();
+    gate.wait(
+        Duration::from_secs(60),
+        |g| match g.status(selector)["steps"]["work"]["run_ids"][0].as_str() {
+            Some(r) if r != prior => {
+                run = r.into();
+                g.track(r);
+                true
+            }
+            _ => false,
+        },
+    );
+    let invocations = gate.home.join("runs").join(&run).join("invocations");
+    let mut invocation = PathBuf::new();
+    gate.wait(Duration::from_secs(60), |_| {
+        fs::read_dir(&invocations).ok().is_some_and(|entries| {
+            entries.filter_map(Result::ok).any(|entry| {
+                let delivered = checkpoint(&entry.path()).is_some_and(|c| {
+                    c.delivery.entries.iter().any(|e| {
+                        matches!(e.id, InputId::Message { .. })
+                            && e.text.contains(message)
+                            && e.state == DeliveryState::Acknowledged
+                    })
+                });
+                if delivered {
+                    invocation = entry.path();
+                }
+                delivered
+            })
+        })
+    });
+    (run, invocation)
+}
 /// Stop waiting as soon as the step has failed, with its status as the reason.
 #[track_caller]
 fn live(gate: &Gate, selector: &Value) {

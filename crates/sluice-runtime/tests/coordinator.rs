@@ -908,19 +908,7 @@ async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedbac
             b.command(submit.clone()).await.unwrap(),
             CommandReply::Ack
         ));
-        // The submission settled the step; the run's own second one is refused, replayed or not.
-        let status: String = b
-            .reads()
-            .snapshot(move |sql| {
-                Ok(sql.query_row(
-                    "SELECT status FROM steps WHERE project_id=?1 AND step_id='work'",
-                    [p.to_string()],
-                    |r| r.get(0),
-                )?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(status, "succeeded");
+        // A run submits once: its own second submission is refused, replayed or not.
         let callback = RpcRequest {
             protocol: 1,
             request_id: RequestId("reserved-submit".into()),
@@ -937,7 +925,7 @@ async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedbac
                     Some(&l.capability),
                 )
                 .await,
-                Err(PublicError::Conflict { message, .. }) if message.contains("settled")
+                Err(PublicError::Conflict { message, .. }) if message.contains("already submitted")
             ));
         }
         let submitted = b.submissions(run).await.unwrap();

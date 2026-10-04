@@ -431,7 +431,7 @@ fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
 pub fn step_finished(gate: &mut Gate, selector: &Value) -> Value {
     step_finished_within(gate, selector, Duration::from_secs(240))
 }
-fn step_finished_within(gate: &mut Gate, selector: &Value, timeout: Duration) -> Value {
+pub fn step_finished_within(gate: &mut Gate, selector: &Value, timeout: Duration) -> Value {
     let mut terminal = Value::Null;
     gate.wait(timeout, |g| {
         let status = g.status(selector);
@@ -541,29 +541,12 @@ fn g3(engine: &str) {
         fs::read_to_string(cwd.join("live.txt")).unwrap().trim(),
         "received"
     );
-    // The step's result is exactly its submission; the session is its run's,
-    // read once the run has stopped the session it ended by submitting.
-    let stopped = |gate: &mut Gate, run: &str| {
-        let directory = gate.home.join("runs").join(run);
-        let mut done = None;
-        gate.wait(Duration::from_secs(60), |_| {
-            done = sluice_agents::supervisor::Checkpoint::read(&directory)
-                .unwrap()
-                .filter(|c| c.state == sluice_agents::supervisor::State::Done);
-            done.is_some()
-        });
-        done.unwrap()
-    };
-    let session = stopped(&mut gate, &run).session.unwrap();
+    let session = first["outputs"]["session"].as_str().unwrap().to_string();
     println!("g3_{engine}_fresh_submit_live_feedback_cleanup fresh session={session} run={run}");
     gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Feedback resume: continue this same session, do not create or commit original.txt again. Submit word=green to the new current RunId using its current step_submit instructions; finish.","reason":"scratch feedback","author":"fixture"}}));
     let next = step_finished(&mut gate, &selector);
     assert_eq!(next["outputs"]["word"], "green");
-    let next_run = next["run_ids"][0].as_str().unwrap().to_string();
-    assert_eq!(
-        stopped(&mut gate, &next_run).session.as_deref(),
-        Some(session.as_str())
-    );
+    assert_eq!(next["outputs"]["session"], session);
     println!(
         "g3_{engine} feedback session={session} run={} word=green",
         next["run_ids"][0]
@@ -737,14 +720,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         gate.rpc(json!({"command":"plan_patch","args":{"project":selector,"rev":1,"ops":[{"op":"replace","path":"","value":{"inputs":{},"outputs":{},"steps":{"work":{"run":"agent.run","in":{"engine":{"default":engine},"cwd":{"default":cwd},"spec":{"default":"Complete the labelled fixture turn"},"listen":{"default":true}},"outputs":{"word":"string"}}}}}],"start":true,"dry_run":false,"reason":"public fixture","author":"fixture"}}));
         gate.scheduling();
         let mut prior = String::new();
-        let mut first_session = None;
-        // The step's result is exactly its submission; the session is its run's.
-        let session = |home: &Path, run: &str| {
-            sluice_agents::supervisor::Checkpoint::read(&home.join("runs").join(run))
-                .unwrap()
-                .unwrap()
-                .session
-        };
+        let mut first_session = Value::Null;
         for word in ["blue", "green"] {
             let mut run = String::new();
             gate.wait(Duration::from_secs(30), |g| {
@@ -807,21 +783,13 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
             }
             gate.rpc(json!({"command":"step_submit","args":{"project":project.project_id,"step":"work","run":run,"outputs":{"word":word},"author":"fixture"}}));
             let done = step_finished_within(&mut gate, &selector, Duration::from_secs(45));
-            assert_eq!(done["outputs"], json!({"word": word}));
-            // The step settles at submit; its run then stops its session.
-            let directory = gate.home.join("runs").join(&run);
-            gate.wait(Duration::from_secs(30), |_| {
-                sluice_agents::supervisor::Checkpoint::read(&directory)
-                    .unwrap()
-                    .is_some_and(|c| c.state == sluice_agents::supervisor::State::Done)
-            });
+            assert_eq!(done["outputs"]["word"], word);
             if word == "blue" {
-                first_session = session(&gate.home, &run);
-                assert!(first_session.is_some());
+                first_session = done["outputs"]["session"].clone();
                 prior = run;
                 gate.rpc(json!({"command":"step_retry","args":{"project":selector,"selection":{"steps":["work"],"tags":null},"message":"Resume the same fixture session","reason":"fixture feedback","author":"fixture"}}));
             } else {
-                assert_eq!(session(&gate.home, &run), first_session);
+                assert_eq!(done["outputs"]["session"], first_session);
                 prior = run;
             }
         }
@@ -854,7 +822,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
             .unwrap()
             .unwrap();
         assert_eq!(cp.internal_attempt, 1);
-        assert_eq!(cp.session, first_session);
+        assert_eq!(cp.session.as_deref(), first_session.as_str());
         assert_eq!(
             git(&cwd, &["rev-list", "--count", &format!("{baseline}..HEAD")]),
             "1"

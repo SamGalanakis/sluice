@@ -245,6 +245,16 @@ mod support {
             kind: CompletionKind,
             outputs: Value,
         ) -> CompletionResult {
+            self.finish_seen(reservation, kind, outputs, None).await
+        }
+        /// Complete a run that saw its submission (`Some(version)`) or none.
+        pub async fn finish_seen(
+            &self,
+            reservation: &Reservation,
+            kind: CompletionKind,
+            outputs: Value,
+            submission_version: Option<u64>,
+        ) -> CompletionResult {
             let context = self.context.clone();
             let identity = reservation.identity.clone();
             self.writer
@@ -258,30 +268,7 @@ mod support {
                             kind,
                             outputs: map(outputs),
                             processes_gone: true,
-                            submission_version: None,
-                        },
-                        &mut Hooks::default(),
-                    )
-                })
-                .await
-                .unwrap()
-                .unwrap()
-        }
-        pub async fn finish_submitted(&self, reservation: &Reservation) -> CompletionResult {
-            let context = self.context.clone();
-            let identity = reservation.identity.clone();
-            self.writer
-                .write(RetrySafety::Idempotent, move |tx| {
-                    complete(
-                        tx,
-                        &context,
-                        Complete {
-                            completion_id: identity.run.to_string(),
-                            identity,
-                            kind: CompletionKind::Succeeded,
-                            outputs: map(json!({})),
-                            processes_gone: true,
-                            submission_version: Some(1),
+                            submission_version,
                         },
                         &mut Hooks::default(),
                     )
@@ -432,7 +419,6 @@ mod support {
         }
     }
 }
-use rusqlite::params;
 use serde_json::{Value, json};
 use sluice_model::{commands::*, error::PublicError, ids::*};
 use sluice_store::{
@@ -767,34 +753,8 @@ async fn submit(f: &Fixture, run: RunId, outputs: Value) -> Result<Option<u64>, 
         .write(RetrySafety::Idempotent, move |tx| step_submit(tx, request))
         .await
 }
-async fn result_row(f: &Fixture) -> (String, Value, Option<String>) {
-    let project = f.context.project;
-    f.reads
-        .snapshot(move |c| {
-            let (status, outputs, result): (String, String, Option<String>) = c.query_row(
-                "SELECT status,outputs,result_id FROM steps WHERE project_id=?1 AND step_id='a'",
-                [project.to_string()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?;
-            Ok((status, serde_json::from_str(&outputs)?, result))
-        })
-        .await
-        .unwrap()
-}
-async fn phase(f: &Fixture, attempt: AttemptId) -> String {
-    f.reads
-        .snapshot(move |c| {
-            Ok(c.query_row(
-                "SELECT phase FROM attempts WHERE attempt_id=?1",
-                [attempt.to_string()],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap()
-}
 #[tokio::test]
-async fn a_valid_submission_settles_the_step_at_once_and_its_run_finishes_alone() {
+async fn a_submission_is_checked_taken_once_and_joins_the_returned_outputs() {
     let f = Fixture::new(
         json!({"steps":{"a":{"run":"open","outputs":{"ready":"boolean","note":"string?"}},"b":{"run":"echo","in":{"value":{"source":"a/ready"}}}}}),
     )
@@ -811,16 +771,34 @@ async fn a_valid_submission_settles_the_step_at_once_and_its_run_finishes_alone(
     assert_eq!(errors.len(), 2, "{errors:?}");
     assert_eq!(f.counts().await, before);
     assert_eq!(f.state().await.status(&id("a")), StepStatus::Running);
-    // A valid one settles it in the same transaction, with exactly what was submitted.
     assert_eq!(
         submit(&f, r.identity.run, json!({"ready":true}))
             .await
             .unwrap(),
         Some(1)
     );
-    let (status, outputs, result) = result_row(&f).await;
-    assert_eq!(status, "succeeded");
-    assert_eq!(outputs, json!({"ready":true,"note":null}));
+    // Submitting ended the run's agent: there is no second submission.
+    let Err(PublicError::Conflict { message, .. }) =
+        submit(&f, r.identity.run, json!({"ready":false})).await
+    else {
+        panic!("a second submission is refused")
+    };
+    assert!(message.contains("already submitted"), "{message}");
+    // The run's completion is the step's result: what the fn returned, the submission
+    // joined in.
+    let outcome = f
+        .finish_seen(
+            &r,
+            CompletionKind::Succeeded,
+            json!({"report":"hello"}),
+            Some(1),
+        )
+        .await;
+    assert_eq!(outcome.status, StepStatus::Succeeded);
+    assert_eq!(
+        outcome.outputs,
+        map(json!({"ready":true,"report":"hello","note":null}))
+    );
     let state = f.state().await;
     assert!(matches!(
         sluice_model::gates::evaluate_step(
@@ -830,76 +808,30 @@ async fn a_valid_submission_settles_the_step_at_once_and_its_run_finishes_alone(
         ),
         sluice_model::gates::GateDecision::Ready
     ));
-    assert_eq!(phase(&f, r.identity.attempt).await, "executing");
-    // There is no second submission.
-    let Err(PublicError::Conflict { message, .. }) =
-        submit(&f, r.identity.run, json!({"ready":false})).await
-    else {
-        panic!("a second submission is refused")
-    };
-    assert!(message.contains("settled"), "{message}");
-    // The run finishes later on its own and leaves the step's result alone.
-    let context = f.context.clone();
-    let identity = r.identity.clone();
-    let outcome = f
-        .writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            complete(
-                tx,
-                &context,
-                Complete {
-                    identity,
-                    completion_id: "done".into(),
-                    kind: CompletionKind::Succeeded,
-                    outputs: map(json!({"report":"hello"})),
-                    processes_gone: true,
-                    submission_version: Some(1),
-                },
-                &mut Hooks::default(),
-            )
-        })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        outcome.outputs,
-        map(json!({"ready":true,"report":"hello","note":null}))
-    );
-    assert_eq!(outcome.result, None);
-    assert_eq!(result_row(&f).await, (status, outputs, result));
-    assert_eq!(phase(&f, r.identity.attempt).await, "terminal");
 }
 #[tokio::test]
-async fn a_send_back_reopens_a_settled_step_once_its_run_has_finished() {
+async fn a_send_back_reopens_a_submitted_step_as_a_new_run() {
     let f = Fixture::new(json!({"steps":{"a":{"run":"open","outputs":{"ready":"boolean"}}}})).await;
     let r = f.reserve("a", json!({})).await;
     f.start(&r).await;
     submit(&f, r.identity.run, json!({"ready":true}))
         .await
         .unwrap();
-    // Sent back while its run is still stopping: pending, but its next run waits.
+    f.finish_seen(&r, CompletionKind::Succeeded, json!({}), Some(1))
+        .await;
     f.retry(&["a"], Some("fix the thing")).await;
     assert_eq!(f.state().await.status(&id("a")), StepStatus::Pending);
-    let request = f.request("a", json!({}), -1, None).await;
-    let context = f.context.clone();
-    let Err(PublicError::Conflict { message, .. }) = f
-        .writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            reserve(tx, &context, request, &mut Hooks::default())
-        })
-        .await
-    else {
-        panic!("a new run waits for the stopping one")
-    };
-    assert!(message.contains("stopping"), "{message}");
-    // The old run's completion is not stale: it finishes and leaves the step pending.
-    let finished = f.finish_submitted(&r).await;
-    assert_eq!(finished.result, None);
-    assert_eq!(f.state().await.status(&id("a")), StepStatus::Pending);
-    assert_eq!(phase(&f, r.identity.attempt).await, "terminal");
     let again = f.reserve("a", json!({})).await;
     assert_ne!(again.identity.run, r.identity.run);
     assert_eq!(again.prev_run, Some(r.identity.run));
+    f.start(&again).await;
+    // The new run submits afresh.
+    assert_eq!(
+        submit(&f, again.identity.run, json!({"ready":false}))
+            .await
+            .unwrap(),
+        Some(1)
+    );
 }
 #[tokio::test]
 async fn a_run_that_ends_without_submitting_fails_its_step_typed() {
@@ -940,43 +872,6 @@ async fn a_run_that_ends_without_submitting_fails_its_step_typed() {
             message: "stopped after 3 nudges".into(),
             session: Some("s-2".into()),
         })
-    );
-}
-#[tokio::test]
-async fn adoption_settles_a_live_run_that_submitted_before_submissions_settled() {
-    let f = Fixture::new(json!({"steps":{"a":{"run":"open","outputs":{"ready":"boolean"}}}})).await;
-    let r = f.reserve("a", json!({})).await;
-    f.start(&r).await;
-    // As an earlier release stored it: a submission whose step still runs.
-    let run = r.identity.run;
-    let project = f.context.project;
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute(
-                "INSERT INTO submissions(run_id,project_id,step_id,outputs,at) VALUES (?1,?2,'a','{\"ready\":true}','now')",
-                params![run.to_string(), project.to_string()],
-            )?;
-            tx.changed(Some(project), "status");
-            Ok(())
-        })
-        .await
-        .unwrap();
-    assert_eq!(f.state().await.status(&id("a")), StepStatus::Running);
-    let settled = f
-        .writer
-        .write(RetrySafety::Idempotent, settle_submitted)
-        .await
-        .unwrap();
-    assert_eq!(settled, 1);
-    assert_eq!(result_row(&f).await.0, "succeeded");
-    assert_eq!(result_row(&f).await.1, json!({"ready":true}));
-    // Once settled, a second pass changes nothing.
-    assert_eq!(
-        f.writer
-            .write(RetrySafety::Idempotent, settle_submitted)
-            .await
-            .unwrap(),
-        0
     );
 }
 #[tokio::test]

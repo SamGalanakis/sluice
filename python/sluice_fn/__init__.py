@@ -206,8 +206,8 @@ class Context:
         return self._data("submission", {"run": self.run_id})
 
     def submit(self, outputs):
-        """Submit the step's declared outputs. A valid submission settles the step at once
-        with exactly these outputs; there is no second one."""
+        """Submit the step's declared outputs, once: a valid submission is the run's
+        done signal (it ends an agent's session), and a second one is refused."""
         return self.callback("step_submit", {"project": self.project_id, "step": self.step,
                                              "run": self.run_id, "outputs": outputs,
                                              "author": self.step})

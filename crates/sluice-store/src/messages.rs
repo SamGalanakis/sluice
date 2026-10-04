@@ -362,7 +362,8 @@ const LISTENING_FNS: &[&str] = &[
 /// listens is offered it by its guardian, whether that guardian holds a watch or polls;
 /// a step that will run (pending, or a run not yet started) gets it with its next run;
 /// anything else (a paused step, a run that does not listen) keeps it for a run started
-/// later. A settled step never gets here: post refuses messages to it. Whether a run
+/// later. A settled step, or one whose runs have all submitted, never gets here: post
+/// refuses messages to it. Whether a run
 /// listens is frozen in its reservation from its fn's contract (it takes `listen`) and
 /// its inputs, so a custom fn that runs an agent counts as one.
 pub fn delivery(
@@ -447,11 +448,17 @@ fn recipient(sql: &Connection, project: ProjectId, to: &str) -> Result<()> {
     Ok(())
 }
 
-/// A step's status when it is settled: it has its result and no run waits for messages.
-fn settled(sql: &Connection, project: ProjectId, step: &str) -> Result<Option<String>> {
+/// Why a step takes no more messages, if it does not: it is settled (it has its result),
+/// or every run it has submitted its outputs, which ended its agent's session, and is
+/// only finishing.
+fn closed(sql: &Connection, project: ProjectId, step: &str) -> Result<Option<String>> {
     Ok(sql
         .query_row(
-            "SELECT status FROM steps WHERE project_id=?1 AND step_id=?2 AND status IN ('succeeded','failed','stale','skipped')",
+            "SELECT CASE WHEN s.status IN ('succeeded','failed','stale','skipped') THEN 'is settled ('||s.status||')'
+                ELSE 'has submitted its outputs and is finishing' END
+             FROM steps s WHERE s.project_id=?1 AND s.step_id=?2 AND (s.status IN ('succeeded','failed','stale','skipped')
+                OR (s.status='running' AND json_array_length(s.run_ids)>0
+                    AND NOT EXISTS (SELECT 1 FROM json_each(s.run_ids) j WHERE NOT EXISTS (SELECT 1 FROM submissions m WHERE m.run_id=j.value))))",
             params![project.to_string(), step],
             |r| r.get(0),
         )
@@ -561,12 +568,13 @@ pub fn post(
     if to == from {
         return Err(invalid(format!("{from} cannot address itself")));
     }
-    // A settled step has nobody left to read a message: refuse it rather than keep it.
+    // A settled or submitted step has nobody left to read a message: refuse it rather
+    // than keep it.
     // Closing a question it asked is still allowed; that reaches nobody.
     let closing = matches!(&verb, Verb::Reply { answer: Some(a), .. } if a.action == "close");
-    if !closing && let Some(status) = settled(tx.sql(), project, &to)? {
+    if !closing && let Some(why) = closed(tx.sql(), project, &to)? {
         return Err(conflict(format!(
-            "step {to} is settled ({status}), so it takes no more messages; to send it work, retry it with step_retry and a message"
+            "step {to} {why}, so it takes no more messages; to send it work, retry it with step_retry and a message"
         )));
     }
     let resolving = parent

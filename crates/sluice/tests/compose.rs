@@ -466,14 +466,12 @@ fn native_factory(engine: &str) {
     g.rpc(json!({"command":"step_submit","args":{"project":g.project,"step":"work","run":run,"outputs":{"word":"blue"},"author":"fixture"}}));
     let done = g.terminal("work");
     assert_eq!(done["status"], "succeeded", "{engine}: {done}");
-    assert_eq!(done["outputs"], json!({"word":"blue"}), "{engine}: {done}");
-    // The submission settled the step; its run stops the session and finishes on its own.
-    g.wait(|_| {
-        Checkpoint::read(&directory)
-            .ok()
-            .flatten()
-            .is_some_and(|c| c.state == State::Done)
-    });
+    assert_eq!(done["outputs"]["word"], "blue", "{engine}: {done}");
+    assert_eq!(
+        done["outputs"]["session"],
+        session.as_str(),
+        "{engine}: {done}"
+    );
     let checkpoint = Checkpoint::read(&directory).unwrap().unwrap();
     assert_eq!(checkpoint.internal_attempt, 2);
     assert_eq!(checkpoint.session.as_deref(), Some(session.as_str()));
@@ -793,21 +791,8 @@ fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {
     g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first);
     let second = g.terminal("work");
     assert_eq!(second["status"], "succeeded", "{second}");
-    assert_eq!(second["outputs"], json!({"summary":"resumed output"}));
-    let session = |run: &str| {
-        let directory = g.home.join("runs").join(run);
-        g.wait(|_| {
-            sluice_agents::supervisor::Checkpoint::read(&directory)
-                .ok()
-                .flatten()
-                .is_some_and(|c| c.state == sluice_agents::supervisor::State::Done)
-        });
-        sluice_agents::supervisor::Checkpoint::read(&directory)
-            .unwrap()
-            .unwrap()
-            .session
-    };
-    assert_eq!(session(&g.run("work")), session(&first));
+    assert_eq!(second["outputs"]["summary"], "resumed output");
+    assert_eq!(second["outputs"]["session"], value["outputs"]["session"]);
     assert!(
         g.events()
             .iter()
@@ -1004,8 +989,9 @@ fn sequential_messages(live: bool) {
         g.env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.1".into());
         g.env.insert("SLUICE_AGENT_NUDGES".into(), "1".into());
     });
-    // The first agent stops without submitting (submitting would settle the step); the fn
-    // continues its session with a second one, as a wrapper continues after a wall cap.
+    // The first agent stops without submitting (a run submits once, and submitting ends
+    // the agent); the fn continues its session with a second one, as a wrapper continues
+    // after a wall cap.
     g.script(json!({"outputs":{"summary":"done"},"wait_message":live,"no_submit":true}));
     g.function("custom.sequential", json!({"cwd":"string"}), json!({"session":"string"}), r#"from sluice_fn import run, AgentFailure
 import json, os, pathlib

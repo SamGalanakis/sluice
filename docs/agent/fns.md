@@ -79,8 +79,9 @@ if __name__ == "__main__":
 - `"open": true` makes it an agent block (`docs("plans")`): a step may bind extra inputs and
   declare outputs, which whoever does the work submits with `step_submit` while the step runs
   (`ctx.extra_inputs` and `ctx.outputs` below describe them; `ctx.submit(outputs)` submits from
-  the fn itself). A valid submission settles the step at once with exactly those outputs, so
-  submit last. Tell the agent both, the command, and "Submit only when you are finished:
+  the fn itself). A run submits once, and an agent's valid submission ends its session at once:
+  `ctx.builtin('agent.run', ...)` then returns its result (`session`, `final`, `git`) to the
+  fn, and the step completes with what the fn returns, the submission joined in. Tell the agent both, the command, and "Submit only when you are finished:
   submitting ends your session."; the `agent.*` builtins (and `ctx.header`) show how.
 - An open function can require outputs of its agent on every step: `"submits": {"summary":
   {"type": "string", "doc": "What it did"}}` in fn.json. Each step running it declares them
