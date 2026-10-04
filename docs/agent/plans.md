@@ -2,9 +2,8 @@
 
 Each project has exactly one plan: JSON with typed `inputs`, named `outputs` and `steps`. A new
 project starts with `{"inputs": {}, "outputs": {}, "steps": {}}`. Each step runs one function
-(`run`) and binds each of the function's inputs (`in`). The `agent.*` functions below come from
-the `agents` pack and `git.head` from the `git` pack — install a pack before using it (see
-`docs("fns")`).
+(`run`) and binds each of the function's inputs (`in`). `agent.*` and `git.*` are built in like
+`core.*` — every first-party function is compiled into sluice (see `docs("fns")`).
 
 ```json
 {
@@ -30,15 +29,11 @@ Say what an input or a step is for with an optional `doc`. A plan input takes th
 {"inputs": {"repo": {"type": "string", "doc": "Absolute path of the checkout to work in"},
             "approved": {"type": "boolean", "doc": "Whether the owner accepts the change"}},
  "outputs": {},
- "steps": {"head": {"run": "core.echo", "doc": "Pass the repo on once approved",
-                    "in": {"value": {"source": "repo"}}},
-           "gate": {"run": "core.echo", "in": {"value": {"source": "approved"}}}}}
+ "steps": {"head": {"run": "git.head", "doc": "Pass the repo on once approved",
+                    "after": ["approved"], "in": {"path": {"source": "repo"}}}}}
 ```
 
-`status` returns them (`input_docs`, and `doc` on a step), the diagram and the dashboard show
-them, and an inbox item that asks for an input (`inbox_post(..., input="approved")`) without a
-body shows that input's doc. The dashboard's Inbox also lists every required input that holds up
-a step and has no value yet, with its doc.
+`plan_get` returns them with the plan, and the dashboard and `plan_view` show them.
 
 ## Binding a step input
 - `{"default": <json>}`: a literal value.
@@ -52,6 +47,9 @@ a step and has no value yet, with its doc.
   it; `verify` warns about one missing now. Editing the file after the step succeeded does not
   make it stale (only the path counts); the new text runs the next time the step starts.
 - Optional function inputs (`T?`) may be left out.
+
+A source binding is a **handoff**: the step waits for its sources to succeed, and is skipped
+when a source step is skipped.
 
 ## Agent blocks: typed inputs and outputs
 An agent function (`agent.claude`, `agent.codex`, `agent.devin`, `agent.run`, `agent.review`)
@@ -82,14 +80,28 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   type-checked where it is read.
 - The agent is told the outputs under `## Outputs you must submit`, with the exact command:
   `sluice tool step_submit '{"project": ..., "step": ..., "run": ..., "outputs": {...}}'`
-  (the MCP tool `step_submit`). A submission that does not fit returns `invalid` listing every
+  (the `step_submit` tool). A submission that does not fit returns `invalid` listing every
   problem, and the agent submits again; the last one counts. Each accepted one is a
   `step.submit` log record.
 - When the agent's process ends, the submitted outputs join the step's outputs. A required
   declared output that was never submitted fails the step, naming it.
 - Every agent function takes `session` and returns `session`: bind a later step's `session` to
   an earlier step's `session` output to continue that same agent (or `fn_call` it with the
-  session to follow up by hand).
+  session to follow up by hand). An unbound `session` may still resume the previous attempt's
+  session after a retry — the agent fns decide from the assigned messages and `prev_run`.
+
+## Units: the tag is the unit
+Steps tagged `unit:<name>` form **unit** `<name>`; a step carries at most one `unit:` tag. An
+untagged step is a unit of one, addressed by its step id. Edges may cross units freely. A unit
+is **done** when every step in it succeeded or was skipped.
+
+A unit's **exit steps** are its steps tagged `exit` (the tag is reserved); when none is tagged,
+they are its sinks over the unit's own edges. Exits mark delivery — what `unit:<name>` gate
+entries and `next` settling look at — not the definition of done. A unit may not depend on its
+own exits.
+
+`unit_add` tags every step it adds `unit:<unit>`; recipes tag their delivery step `exit` so
+cleanup stays out of the dependency.
 
 ## Recipes: the same unit again and again
 When every unit of work has the same shape (a worktree, an agent working in it, the worktree
@@ -105,32 +117,33 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
  "steps": {
    "{unit}-fork": {"run": "git.worktree", "in": {"repo": {"default": "{repo}"},
                    "base": {"default": "{base}"}, "branch": {"default": "work/{unit}"}}},
-   "{unit}-work": {"run": "agent.run", "in": {"engine": {"default": "{engine}"},
-                   "cwd": {"source": "{unit}-fork/path"}, "spec": {"file": "{spec}"}},
+   "{unit}-work": {"run": "agent.run", "tags": ["exit"],
+                   "in": {"engine": {"default": "{engine}"},
+                          "cwd": {"source": "{unit}-fork/path"}, "spec": {"file": "{spec}"}},
                    "outputs": {"landed": "boolean"}},
-   "{unit}-cleanup": {"run": "git.worktree_rm", "after": ["{unit}-work"],
+   "{unit}-cleanup": {"run": "git.worktree_rm", "after": ["{unit}-work?"],
                       "in": {"repo": {"default": "{repo}"}, "path": {"source": "{unit}-fork/path"}}}}}
 ```
 
-- `recipe_list(project)` lists the recipes the project sees with their params; a broken file
-  is listed with its `error`.
-- `unit_add(project, "lane", {"unit": "fix-login", "repo": "/src/app", "base": "origin/main",
+- `unit_add(project, "lane", "fix-login", {"repo": "/src/app", "base": "origin/main",
   "spec": "/specs/fix-login.md", "engine": "devin"})` adds `fix-login-fork`, `fix-login-work`
   and `fix-login-cleanup` in one edit at the current rev (no rev to fetch), each tagged
-  `unit:fix-login`; they start when ready (`start=false` adds them paused). It returns
-  `{rev, steps}` and refuses an id the plan already has.
-- The same call stages the whole lane, in that one edit. `after`, `when` and `inputs` are
-  keyed by the recipe step's suffix (its id without `<unit>-`: `fork`, `work`, `cleanup`):
+  `unit:fix-login`; they start when ready (`start=false` adds them paused). It returns the
+  edit result `{project, rev, preview}` (the added steps are in `preview.ops`) and refuses an
+  id the plan already has.
+- The same call stages the whole lane, in that one edit. `after` and `inputs` are keyed by the
+  recipe step's suffix (its id without `<unit>-`: `fork`, `work`, `cleanup`); `"*"` means the
+  unit's entry steps:
 
   ```
-  unit_add(project, "lane", {"unit": "fix-login", ...},
-           after={"fork": ["fix-signup-cleanup"]}, when={"fork": "fix-signup-work/landed"},
-           inputs={"work": {"effort": "xhigh"}}, tags=["arc:auth"])
+  unit_add(project, "lane", "fix-login", {...},
+           after={"*": ["unit:auth"]}, inputs={"work": {"effort": "xhigh"}},
+           tags=["arc:auth"])
   ```
 
-  `after` ids are added to the step's own, `when` replaces the recipe's, and each input is
-  bound to `{"default": value}`. An unknown suffix, or an input the step's fn does not declare
-  and the recipe does not bind, is refused before anything is written.
+  `after` entries are added to the step's own, and each input is bound to
+  `{"default": value}`. An unknown suffix, or an input the step's fn does not declare and the
+  recipe does not bind, is refused before anything is written.
 - `unit_add` takes `tags` too, for every step of the unit next to `unit:<unit>`: group units
   into an **arc** (`arc:auth`) and act on it with `status`, `step_pause`, `step_cancel`,
   `step_retry`, `step_remove` or `plan_prune` by `tags=["arc:auth"]`. `unit_tag(project, unit,
@@ -138,7 +151,8 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
 - Substitution is tiny on purpose: `{param}` in step ids and in every string is replaced by the
   param's value; a string that is exactly `{param}` becomes the value with its type. `{{` and
   `}}` are literal braces; an unknown `{x}` is an error. `unit` (a valid step id) is always a
-  param. There are no loops or conditionals: use `when` and `scatter` in the steps.
+  param. There are no loops or conditionals: use `after` gate entries and `scatter` in the
+  steps.
 
 ## Shapes
 - **Chain:** B reads A's output.
@@ -149,135 +163,71 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
   output becomes an array in item order. Use it when the number of items is only known at run
   time. An extra input can be the scattered one; each run's agent submits its own outputs.
 
-A step starts once every plan input and step it reads has a value / has succeeded. A failed step
-blocks everything downstream until you act.
+A step starts once every plan input and step it reads has a value / has succeeded and every
+`after` entry is satisfied. A failed step blocks everything downstream until you act.
 
-## Stale results
-A result holds only for the inputs it was computed from. When those change (an upstream re-ran
-with a different result, you changed a plan input or a step's binding, or an upstream you
-bypassed with `force` finished), the step turns `stale`, and so does every succeeded step
-downstream of it. A stale step keeps its outputs so you can look at them, but it never re-runs
-by itself, and steps reading it wait. You decide:
-- `step_retry(project, steps=[...])` runs it again with the current inputs (then retry its stale
-  dependents, or they come back by themselves if its new result is the same as before);
-- `step_set_output(project, step, outputs)` accepts a result by hand.
-If the inputs change back to what the step was computed from, it is `succeeded` again.
+## Gates: `after`
+`"after": [...]` is a list of **gate entries**: the step waits until every entry is satisfied,
+and is skipped when one says so.
 
-## Names
-Project names, step ids, plan input and output names: lowercase letters, digits, `-`, `_`;
-start with a letter or digit.
+| entry | satisfied when | skips the step when |
+|---|---|---|
+| `"a"` (a step id) | `a` succeeded | `a` was skipped |
+| `"a?"` | `a` succeeded or was skipped | never |
+| `"check/ok"` (a boolean ref) | the value is `true` | the value is `false` or `null`, or `check` was skipped |
+| `"!check/ok"` | the value is `false` | the value is `true` or `null`, or `check` was skipped |
+| `"enabled"` (a boolean plan input) | the value is `true` | the value is `false` or `null` |
+| `"unit:up"` | every exit step of unit `up` succeeded | any exit step was skipped |
+| `"unit:up?"` | every exit step succeeded or was skipped | never |
 
-## Editing
-Every edit carries the plan's current `rev` (from `plan_get` or `status`). If someone edited in
-between you get `conflict` with `current_rev`: re-read and retry. `plan_patch` takes RFC 6902
-JSON Patch ops against the plan without `rev`:
+Rules:
+- A step is skipped when any handoff source or any gate entry says so, and it is decided again
+  whenever its reasons change — a value turning true, an upstream retried and succeeding, a
+  gate edited — going back to `pending`.
+- An entry whose step is pending, running, failed or stale is unsatisfied: the step waits.
+  Cleanup that must run behind a skipped step uses the `?` form.
+- A ref entry must be typed `boolean`, `boolean?` or `Any`; `?` may not go on a ref, `!` may
+  not go on a step or unit.
+- Gates decide starts only. They never stop running work, they are not evaluated for paused
+  steps, and a gate's producer never makes a step stale — only handoff bindings feed the
+  inputs hash.
+- A bare entry names a step or a boolean plan input; the two share one namespace.
 
-```json
-[{"op": "add", "path": "/inputs/repo", "value": "string"},
- {"op": "add", "path": "/steps/head", "value": {"run": "git.head", "in": {"path": {"source": "repo"}}}},
- {"op": "replace", "path": "/steps/notes/in/engine", "value": {"default": "codex"}},
- {"op": "remove", "path": "/steps/old-step"}]
-```
-
-Without a `rev`: `step_add(project, step, spec)`, `step_update(project, step, changes)` (each
-key replaces that field, null removes it) and `step_remove(project, steps=[...])`. They are the
-same edit, validated the same way. `edge_add(project, step, after=[...])` and
-`edge_remove(project, step, after=[...])` add ids to a step's `after` or take them out, at
-the current rev: no rev to read, and edges someone else added are never dropped (a `plan_patch`
-of `/steps/<id>/after` replaces the whole list). Adding an edge that is there already, or
-removing one that is not, changes nothing.
-
-Tools that change one step's contents take `step` (`step_add`, `step_update`, `step_set_input`,
-`step_set_output`, `step_submit`); tools that act on a selection take `steps` (ids; one id is
-fine too) and/or `tags`: `step_pause`, `step_retry`, `step_cancel`, `step_remove` and the
-`status` filter (`plan_prune` takes `tags` too). A tool refuses an argument it does not take,
-naming the ones it does.
-
-You cannot remove or change a running step (only pause or tag it). Every edit needs a short
-`reason`; it goes into the plan's history (`plan_history`).
-
-## Pausing
-Steps you add start as soon as they are ready. To draft first, pass `start=false` to
-`plan_patch`, `step_add` or `unit_add`: the steps it adds come in **paused** (unless a step sets
-`paused` itself) and start nothing until you release them. To cap how many run at once, use
-resources and `needs` (Resources, below), not pauses.
-
-`step_pause(project, steps=[...], tags=[...], subtree=false, paused=true, reason="")` holds
-or releases steps in one edit, by id and/or tag; `subtree=true` takes everything downstream
-too, including steps that only become ready later. A paused step does not start, however
-ready its inputs; pausing never stops a running one (it finishes, and its next start is
-held). The step keeps `"paused": "<reason>"` (or `true`), and `status` lists, for each pending
-step, why it is `waiting`. `project_update(name, paused=true)` holds the whole project.
-`step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with
-`cancelled: <reason>` and `step_retry` runs it again.
-
-## Resources: limiting what runs at once
-Every ready step starts at once, unless it asks for a project's **resources**. Declare them on
-the project, each with a fixed capacity or a function that reports one:
-
-```json
-{"lane": 56, "codex": {"capacity": 12}, "cpu": {"capacity_fn": "ops.cpu-free"}}
-```
-
-`project_create(name, description, resources={...})` or `project_update(name,
-resources={...})` (each key set, null removes one; one a step needs cannot be removed). A
-`capacity_fn` is a fn the project sees that takes no required input and returns
-`{"capacity": <int>}`; the runner calls it about every 10 s, keeps the last good value when a
-call fails or times out, and admits nothing on it until the first value comes.
-
-A step asks with `needs` and, among the queued steps, `priority` (default 0, higher first; ties
-in plan order):
-
-```json
-{"run": "agent.run", "needs": {"lane": 1, "codex": 1}, "priority": 5,
- "in": {"engine": {"default": "codex"}, "cwd": {"default": "/src/app"},
-        "spec": {"default": "Fix the flaky login test"}}}
-```
-
-It starts only when every resource it names has room (`capacity - held >= need`); while it
-runs it holds those amounts (a scattered step once, whatever its item count), and they free
-when it succeeds, fails or is cancelled. Until then it stays `pending`, queued — not paused —
-and `status` says why in its `waiting`: `queued: needs lane 1 (56/56 held)`. `status` (and
-`view="units"`, where such a unit is `queued`) also returns `resources`: each one's
-`capacity`, `held` and how many steps are `queued` on it. Pausing is still the hold you put on
-by hand; a step without `needs` is never held back. An edit naming a resource the project
-does not declare, or asking for more than a fixed capacity, is refused. In a recipe, a
-whole-string `{param}` keeps its type: `"needs": {"lane": "{lanes}"}`, `"priority":
-"{prio}"`.
-
-## Conditions
-`"when": "check/ok"` runs a step only if that value is true: a gate without a gate step. The
-ref is read like an input (the step waits for it) and must be a `boolean`. False (or null)
-makes the step `skipped`, with the reason (`check/ok is false`), and every step reading from
-it is skipped too; steps ordered `after` it still run. If the value changes later (you
-retry `check` and it passes), skipped steps go back to pending and run. `status` shows
-`when` and `skipped` on each step.
+`edge_add(project, step, after=[...])` and `edge_remove(project, step, after=[...])` edit a
+step's gate list at the current rev. Entries keep their order and are deduplicated; a unit
+entry counts as edges to the unit's exit steps for cycles.
 
 ## Ordering and tags
-`"after": ["a"]` makes a step wait for `a` to succeed (or be skipped) without reading anything from it: for
-two steps that must not overlap (both edit one file) or must happen in order. It is not a
-data edge, so `a` turning stale does not make it stale. `"tags": ["e2e", "heavy"]` label
-steps so you can pause or release them together. To add an ordering edge to a step that is
-already in the plan, use `edge_add`.
+`"after": ["a"]` makes a step wait for `a` without reading anything from it: for two steps
+that must not overlap (both edit one file) or must happen in order. It is not a data edge, so
+`a` re-running with a different result does not make the step stale. `"tags": ["e2e", "heavy"]`
+label steps so you can pause, cancel, retry or select them together; `unit:<name>` and `exit`
+are the tags the model itself reads.
 
 ## Manual values
 - `plan_set_input(project, name, value)`: provide a plan input the plan is waiting on. Changing
   it later makes the steps that already read it stale.
-- `step_set_input(project, step, input, value)`: pin a literal on one step input (an edit; a
-  succeeded step turns stale).
+- `step_set_input(project, steps=[...], tags=[...], inputs={name: value})`: pin literals on
+  step inputs, across a selection in one edit. Only steps that have the inputs are changed
+  (running steps are left alone), and a succeeded step turns stale. It returns the edit result
+  `{project, rev, preview}`; an edit that would change no step is refused (`bad_request`).
 - `step_set_output(project, step, outputs)`: mark a step succeeded with outputs you supply (you
   did the work, or you know the result). Type-checked against the step's outputs (its
   function's and those it declares); for a
   scattered step, each output is an array. Refused while a step it reads has not succeeded or a
-  plan input it reads has no value (the error names them); `force: true` sets it anyway, and the
-  step turns stale once those values are all there.
-- `step_retry(project, steps=[...])`: run failed, stale or manually set steps again.
+  plan input or gate it waits on is unsatisfied (the error names them); `force: true` sets it
+  anyway, and the step turns stale once those values are all there.
+- `step_retry(project, steps=[...])`: run failed, stale, succeeded or manually set steps again.
+  Retrying also re-arms the failed and stale steps directly blocked behind it (`{steps,
+  rearmed, stopped_at}`); a skipped step is decided by its gates, never retried. Pass
+  `message="..."` to post that message to each retried step — the send-back: its next run
+  starts with the message first.
 
 ## Work done outside sluice
 A step whose work happens elsewhere (a person, another orchestrator's workers, a CI run) runs
-the built-in `core.external`. The runner never starts it: once ready it waits (`status` says
-`external: set its outputs with step_set_output`) until you set its outputs with
-`step_set_output`, or `step_cancel` it (it fails `cancelled: <reason>`). Declare the outputs it
+the built-in `core.external`. The runner never starts it: once ready it waits (its wait reason
+reads `external: set its outputs with step_set_output`) until you set its outputs with
+`step_set_output`, or `step_cancel` it (it fails with the error `{"error": "cancelled", "message": <reason>}`). Declare the outputs it
 will get, bind extra inputs to order it after their sources, and say in its `doc` who is doing
 the work and where; the dashboard shows it as live outside work, and the steps behind it wait
 for it. It does not scatter.
@@ -301,25 +251,126 @@ Every edit, manual value and step status change is a record in the project's log
 has, `log_read(project)` everything (`docs("threads")`).
 
 ## Keeping the plan short
-A **unit** is an independent piece of work: the steps joined by any edge (a handoff, a `when`,
-an `after`). It is **done** once every step in it succeeded or was skipped (at least one
-succeeded). `status(project)` and `plan_view(project)` leave the done units out, saying how many
+`status(project)` and `plan_view(project)` leave the done units out, saying how many
 (`done_units: {units, steps}` in `status`, one line in the view), so they show what is still
-going on; `all=true` shows everything, and `status(steps=[...])` or `tags=[...]` returns what
-you ask for, done or not. The dashboard folds a done unit's box instead.
+going on; `status(steps=[...])` or `tags=[...]` returns what you ask for, done or not. The
+dashboard folds a done unit's box instead.
 
-`plan_prune(project, older_than_hours=0)` removes every done unit whose last step finished at
-least that long ago, in one edit: nothing else reads from them, and `plan_history` keeps the
-removed steps. A unit a plan output reads stays. It returns `{rev, units, steps, outcomes}`.
+`plan_prune(project, units?, tags?, older_than=0)` removes done units — every unit by
+default, or the ones you name or tag — whose last step finished at least `older_than` seconds
+ago, in one edit. A unit that any surviving step or plan output still references — a handoff, a
+gate, a `unit:` entry — is kept. Naming a unit that is not done is `invalid`. It returns the
+edit result `{project, rev, preview}`; the removed steps are the `remove` ops in
+`preview.ops`.
 
 Removing a step that finished (by `plan_prune`, `step_remove` or any `plan_patch`) keeps what it
-ended with in the `outcomes` table: its status, typed outputs, error, times, run ids, unit (its
-`unit:` tag, else its unit's first step) and who removed it. Nothing trims it; read it with
-`query`, e.g. `SELECT step, status, outputs FROM outcomes WHERE project = 'p' AND unit = 'x'`.
+ended with in the `outcomes` view: its status, outputs, error, run ids, unit, when it was
+recorded and when it was removed. Nothing trims it; read it with `query`, e.g.
+`SELECT step_id, status, outputs FROM outcomes WHERE project_id = ?1 AND unit = 'x'` with the
+project's id as the parameter.
+
+## Editing
+`plan_patch` takes the plan's current `rev` (from `plan_get` or `status`) and RFC 6902 JSON
+Patch ops against the plan document. If someone edited in between you get `conflict` with
+`current_rev`: re-read and retry.
+
+```json
+[{"op": "add", "path": "/inputs/repo", "value": "string"},
+ {"op": "add", "path": "/steps/head", "value": {"run": "git.head", "in": {"path": {"source": "repo"}}}},
+ {"op": "replace", "path": "/steps/notes/in/engine", "value": {"default": "codex"}},
+ {"op": "remove", "path": "/steps/old-step"}]
+```
+
+The other edit tools take an optional `rev`: leave it out to edit the current plan, or pass it
+to be refused with `conflict` if the plan moved on.
+
+Small edits: `step_add(project, step, spec)`, `step_update(project, step, changes)` (each
+key replaces that field, null removes it) and `step_remove(project, steps=[...])`. They are the
+same edit, validated the same way. `edge_add` and `edge_remove` are the only verbs for gates:
+no rev to read, and edges someone else added are never dropped (a `plan_patch` of
+`/steps/<id>/after` replaces the whole list). Adding an edge that is there already, or
+removing one that is not, leaves the plan as it was (the edit still takes a new `rev`). `step`
+may also be `unit:<name>`: the entries then go on every entry step of that unit.
+
+Tools that change one step's contents take `step` (`step_add`, `step_update`, `step_set_output`,
+`step_submit`); tools that act on a selection take `steps` (ids; one id is fine too) and/or
+`tags`: `step_pause`, `step_retry`, `step_cancel`, `step_remove`, `step_set_input` and the
+`status` filter (`plan_prune` takes `units` and `tags`). A tool refuses an argument it does not
+take, naming the ones it does.
+
+Every edit tool takes `dry_run: true`, which returns `{ops, would_start, would_queue,
+would_skip, would_stale, errors}` from one simulation without changing anything.
+
+You cannot remove or change a running step (only pause or tag it). Every edit needs a short
+`reason`; it goes into the plan's history (`plan_history`).
+
+## Pausing
+Steps you add start as soon as they are ready. To draft first, pass `start=false` to
+`plan_patch`, `step_add` or `unit_add`: the steps it adds come in **paused** (unless a step sets
+`paused` itself) and start nothing until you release them. To cap how many run at once, use
+resources and `needs` (Resources, below), not pauses.
+
+`step_pause(project, steps=[...], tags=[...], paused=true, reason="")` holds or releases steps
+in one edit, by id and/or tag — a `unit:` tag selects the whole unit. A paused step does not
+start, however ready its inputs; pausing never stops a running one (it finishes, and its next
+start is held). The step gets `"paused": true` (the reason goes into the plan's history), and
+the dashboard shows why each pending step waits. A plan may also set `"paused":
+"<reason>"` on a step directly. `project_update(project, paused=true)` holds the whole project.
+`step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with the error
+`{"error": "cancelled", "message": <reason>}` and `step_retry` runs it again.
+
+## Resources: limiting what runs at once
+Every ready step starts at once, unless it asks for a project's **resources**. Declare them on
+the project, each with a fixed capacity or a function that reports one:
+
+```json
+{"lane": 56, "codex": {"capacity": 12}, "cpu": {"capacity_fn": "ops.cpu-free"}}
+```
+
+`project_create(name, description, resources={...})` or `project_update(project,
+resources={...})` (each key set, null removes one; one a step needs cannot be removed). A
+`capacity_fn` is a fn the project sees that takes no required input and returns
+`{"capacity": <int>}`; the runner calls it about every 10 s, keeps the last good value when a
+call fails or times out, and admits nothing on it until the first value comes.
+
+A step asks with `needs` and, among the queued steps, `priority` (default 0, higher first; ties
+in plan order):
+
+```json
+{"run": "agent.run", "needs": {"lane": 1, "codex": 1}, "priority": 5,
+ "in": {"engine": {"default": "codex"}, "cwd": {"default": "/src/app"},
+        "spec": {"default": "Fix the flaky login test"}}}
+```
+
+It starts only when every resource it names has room (`capacity - held >= need`); while it
+runs it holds those amounts (a scattered step once, whatever its item count), and they free
+when it succeeds, fails or is cancelled. Until then it stays `pending`, queued — not paused —
+and `status` says why in its `waiting`: `queued: needs lane 1 (56/56 held)`. `status` also
+returns `resources`: each one's `capacity`, `held` and how many steps are `queued` on it.
+Pausing is still the hold you put on by hand; a step without `needs` is never held back. An
+edit naming a resource the project does not declare, or asking for more than a fixed capacity,
+is refused. In a recipe, a whole-string `{param}` keeps its type: `"needs": {"lane":
+"{lanes}"}`, `"priority": "{prio}"`.
+
+## Stale results
+A result holds only for the inputs it was computed from. When those change (an upstream re-ran
+with a different result, you changed a plan input or a step's binding, or an upstream you
+bypassed with `force` finished), the step turns `stale`, and so does every succeeded step
+downstream of it. A stale step keeps its outputs so you can look at them, but it never re-runs
+by itself, and steps reading it wait. You decide:
+- `step_retry(project, steps=[...])` runs it again with the current inputs — and re-arms the
+  failed and stale steps blocked behind it, so a chain comes back in one call;
+- `step_set_output(project, step, outputs)` accepts a result by hand.
+If the inputs change back to what the step was computed from, it is `succeeded` again.
+
+## Names
+Project names, step ids, plan input and output names: lowercase letters, digits, `-`, `_`;
+start with a letter or digit. Thread names use the same alphabet.
 
 ## Validation errors
 Every edit is checked: functions exist (as the project sees them), required inputs are bound,
 extra inputs and declared outputs only on an open function's step, refs point at real inputs
-or outputs, types fit, no cycles. Errors are a list with paths, e.g.
+or outputs, gate entries name a step, a boolean ref or a unit, types fit, no cycles. Errors are
+a list with paths, e.g.
 `steps.notes.in.cwd: repo is int, which does not fit string: int is not string`. Fix each path
 and resend. `verify(project)` runs the same checks plus function and state checks.

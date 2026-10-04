@@ -1,101 +1,58 @@
-# Rust foundation
+# Rust workspace notes
 
-Python remains the live implementation. Phase 0 adds seven compiling Rust
-crates and wire contracts alongside it. Executable modes deliberately fail
-with the shared `bad_request` envelope and start no service or payload.
+The workspace has seven crates:
 
-Run `scripts/check` for the complete G0 gate. Its commands are the named
-formatting, Clippy, workspace-test and doctest recipes. They use the installed
-Cargo shim and explicitly select this worktree's `target/`, because that shim
-otherwise selects a shared directory. This unit's task requires its supplied
-`rw/p0` worktree, rather than a new kiln fork. No CARGO variables are set or
-job budgets changed. Later kiln integration can register these recipes once
-Sluice has a build driver.
+| crate | owns |
+|---|---|
+| `sluice-model` | ids, commands and replies, events and records, the error envelope, RPC framing, plan parsing, types, gates, units, recipes, edits, status views, input hashing |
+| `sluice-store` | the SQLite schema (`migrations/0001.sql`), the single writer and read pool, projects, plans, attempts, resources, messages, records, backup, the `query` reader |
+| `sluice-process` | the run guardian, transient systemd units, cgroups, the payload launcher, the private tmux, file locks, the host prerequisite check |
+| `sluice-agents` | the engine supervisor and the Claude, Codex and Devin engines |
+| `sluice-runtime` | the coordinator, scheduler, calls, drain, verify, `next`/`watch`, the fn registry, the Python fn host, the builtins, the installation, the agent docs topics |
+| `sluice-web` | the HTTP server, MCP, the dashboard views and streams |
+| `sluice` | the binary: CLI modes, `me`, `doctor`, release checks, the installation entry |
 
-Use a scratch `SLUICE_HOME` even for `--help`. An absent home defaults to the
-protected owner home and is refused. A home inside the owner's `.sluice`,
-including a symlink alias or a nonexistent descendant, is refused before clap
-parsing. The only current process creation is the test harness invoking the
-inert build-path binaries. The guard resolves paths read-only; it creates no
-home, lock, socket or configuration.
+`SPEC.md` is the behavioural contract; this page covers the wire contracts and build chores.
 
-## Contract ownership
+## Wire contracts
 
-`sluice-model` owns commands, replies, ids, events, error envelopes and RPC.
-`sluice-process::FnHost` accepts a `FnInvocation` and returns ordered outputs or
-a typed error. The binary injects the host, so process never depends on agents.
-`RuntimeApi` and the local coordinator-client stub require Send futures. The
-web crate calls that client; only store will own SQLite connections.
+Commands are `{"command": name, "args": payload}`; replies are `{"reply": name, "data":
+payload}`. Events carry a `kind` field, and a record flattens its event next to `seq`, `at` and
+`project`. Errors are `{"error", "message"}` plus the variant's `errors`, `current_rev`,
+`retryable`, `kind` or `session`.
 
-Commands use `{"command": name, "args": payload}`. Replies use
-`{"reply": name, "data": payload}`. Events use the `kind` field and records
-flatten their event next to `seq`, `at` and immutable project id. Error JSON
-uses `error`, `message` and variant-specific `errors`, `current_rev`,
-`retryable` or `session`. Diagnostics remain the baseline's path-bearing
-strings. No legacy inbox or thread-post aliases are provided.
+Every external JSON boundary (CLI, MCP, sockets, stored JSON) decodes through
+`rpc::decode_json`: documents up to 16 MiB, integers within signed i64, no duplicate keys at any
+depth, no non-finite numbers, no trailing data, then the closed typed shape. Frames are a
+four-byte big-endian length followed by one UTF-8 document. A request carries protocol 1, a
+request id and, for run callbacks, the run capability.
 
-Every plan editor carries `EditOptions` with dry_run, expected revision,
-reason and author. PlanPatch retains its explicit rev field. Step retry
-includes feedback and returns steps/rearmed/stopped_at. Set-input uses one
-ordered inputs map and reports changed/running/unsupported. Rename and delete
-carry immutable selectors/settings revision and deletion confirmation.
-Needs-reply remains optional in message-post so the runtime can distinguish
-an omitted value from an explicit false and apply the reply-specific default.
-
-Plan documents and fn specifications are ordered raw maps until P1/P4 add
-validation. `ValidatedPlan` is an opaque serialization placeholder for P1;
-no validation or prepared edit can succeed in this build. `Type` and `Gate`
-encode the target domain vocabulary; CWL forms and gate-string parsing belong
-to P1. The six RFC 6902 patch variants have closed shared wire shapes; P1
-will parse their pointer strings using jsonptr and adapt to json-patch.
-
-## JSON and framing
-
-Every external CLI/MCP/socket/database JSON boundary must call
-`rpc::decode_json` before decoding a command. It limits documents to 16 MiB,
-checks integer spellings against signed i64, rejects duplicate keys at every
-nesting level, rejects non-finite numbers and trailing data, then converts to
-the typed closed shape. `JsonValue` has private validated storage, and its
-TryFrom also validates already parsed values. Calling serde_json directly on
-maps bypasses the envelope's duplicate-key and integer-token checks.
-
-`JsonMap` is an IndexMap wrapper; order is retained, while the generated schema
-uses the ordinary object vocabulary without extra dependency features.
-`rpc::encode_frame` and `decode_frame` use a four-byte big-endian byte length
-followed by one UTF-8 document. The request carries protocol 1, request id and
-an optional opaque capability. A run callback supplies the capability;
-unauthenticated public command clients can omit it. Authentication enforcement
-belongs to P3. Capability Debug output is redacted.
-
-Generate the dependency inventory with `uv run python docs/rust/generate_dependencies.py`.
-
-Generate `docs/rust/schemas.json` with:
+`docs/rust/schemas.json` snapshots the JSON Schema of every public contract.
+`crates/sluice-model/tests/contracts.rs` checks round trips, schema snapshots and unknown-field
+rejection against it. Regenerate it after changing a contract:
 
 ```sh
-cargo --config "build.target-dir=\"$PWD/target\"" run --locked --example schemas > docs/rust/schemas.json
+cargo --config "build.target-dir=\"$PWD/target\"" run --locked -p sluice-model --example schemas > docs/rust/schemas.json
 ```
 
-The registry covers every public serializable contract. Its fixture tests
-check round trips, generated-schema snapshots, positive schema instances and
-unknown-field rejection for closed objects. The schema checker in tests only
-implements the vocabulary emitted here. A separate web test uses rmcp's own
-schemars re-export. JSON Schema cannot describe duplicate keys or distinguish
-`1e20` from an integer token with the same numeric value. JsonValue therefore
-records these lexical constraints as schema annotations, and decoder fixtures
-prove enforcement. Schema validation cannot replace strict decoding.
+JSON Schema cannot express duplicate keys or tell `1e20` from an integer token, so those rules
+are schema annotations and the decoder tests enforce them.
 
-## Shared test support
+## Dependencies
 
-`tests/support/{home,clock,chrome,free_port}.rs` is shared by path modules in
-Rust integration tests. ScratchHome owns a tempdir without changing global
-environment. Clock exposes monotonic elapsed Duration with injectable manual
-advancement. The port helper returns a bound listener, preserving the
-reservation until the caller transfers it. Chrome returns a typed not
-implemented error until P6 provides the driver.
+`docs/rust/dependencies.md` lists the locked dependency tree. Regenerate it with
+`uv run python docs/rust/generate_dependencies.py`.
 
-`crates/sluice/src/bin/fixture.rs` builds the `fixture` binary for later fake
-fn/Codex/Claude/Devin protocols. It is inert and requires a scratch home.
-`crates/sluice-model/tests/fixtures/corrected.json` records same-run Transient
-identity, path-only file binding, release/reacquire, all HTML patches before
-the version marker, and Applied/Conflict/Discarded outcomes. These establish
-wire contracts, not scheduler, process or stream behavior acceptance.
+## Checks
+
+`scripts/check` runs formatting, Clippy, the workspace tests and the doctests against this
+worktree's `target/` (it passes the target dir with `--config` and sets no `CARGO_*`
+variables). Host prerequisites and the containment gates are in
+[host-prerequisites.md](host-prerequisites.md).
+
+`tests/support/` holds the helpers shared by the integration tests (scratch homes, a manual
+clock, free ports, systemd unit names, the headless Chromium driver) and `tests/browser.py` the
+Python DevTools driver used for dashboard screenshots. `crates/sluice/src/bin/fixture.rs` builds
+the `fixture` binary that stands in for engines and fns in tests, and
+`crates/sluice-web/examples/dashboard_fixture.rs` serves the dashboard over a seeded scratch
+home.

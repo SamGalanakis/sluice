@@ -1,1762 +1,1031 @@
-# sluice: specification (v0, minimal)
+# sluice: specification
 
-sluice runs a plan: a graph of typed function calls. Orchestrators (agents or humans) edit the
-plan through typed tools; a runner executes it. Deliberately small: features get added when real
-use asks for them. The document shapes borrow from CWL (Common Workflow Language) where that
-helps: `inputs`/`outputs`/`steps`, `run`, `source`/`default`, `scatter`, CWL type spellings. We do
-not aim for CWL compliance. When the code and this file disagree, fix one of them in the same
-change.
+sluice runs plans: graphs of typed function calls. Orchestrators (agents over MCP, people at a
+shell or the dashboard) edit a project's plan through typed tools; a per-home coordinator
+validates every edit, schedules ready steps and runs each one inside a supervised systemd unit.
+The plan document borrows CWL's shapes (`inputs`/`outputs`/`steps`, `run`, `source`/`default`,
+`scatter`, CWL type spellings) without aiming for CWL compliance.
+
+This file is the contract of the shipped build. When the code and this file disagree, fix one
+of them in the same change. `DESIGN.md` covers how the dashboard looks; `docs/agent/*.md` are
+the agent-facing topics the `docs` tool serves.
 
 ## 1. Concepts
 
-- **Function (fn):** a reusable unit with a name, an optional `doc`, typed named `inputs`, typed
-  named `outputs`, and a Python implementation (`main.py`, run with `uv`). An **open** fn (an
-  agent) also takes whatever extra inputs a step binds and declares, per step, outputs that
-  its agent submits (§5).
-- **Project:** a name, an optional description and an optional icon (§2), nothing else (no
-  code directory: put whatever context matters in the description). Each project has exactly
-  one plan, its own functions and its own `.env`. Every call names the project it acts on.
-- **Plan:** typed plan `inputs`, named plan `outputs`, and `steps`. Each step runs one fn; each of
-  its inputs comes from a plan input, other steps' outputs, or a literal. Edited only through
-  typed edits, every edit logged.
-- **Log:** each project has one append-only log of what happened (edits, manual values, step
-  status changes, calls, thread messages). It is history; the plan and the state are the
-  current truth.
-- **Runner:** starts a step once everything it reads is available, records its outputs or its
-  failure. A failed step shows up in `status`; an orchestrator decides what next. Runs survive
-  a runner restart: the next one adopts them (§6).
-- **Inbox:** each project's items waiting on a person (a question, optionally with an OpenUI
-  form, optionally setting a plan input). A person answers in the dashboard; agents post, wait
-  on the log and read the answer (§8a).
+- **Home:** one directory holding a database and everything a set of projects needs (§2.3). One
+  coordinator process owns each home's writes.
+- **Project:** a name (renameable), an immutable UUIDv7 id, a description, an optional icon,
+  named resources, paused and archived flags. Each project has exactly one plan and its own
+  functions and recipes.
+- **Function (fn):** a named unit with typed `inputs` and `outputs`. Built-in fns are compiled
+  into sluice (§16); user fns are Python (`fn.json` plus `main.py`, §5). An **open** fn (every
+  agent fn) also takes extra inputs a step binds and outputs a step declares.
+- **Plan:** typed plan `inputs`, named plan `outputs`, and `steps`. Each step runs one fn and
+  binds its inputs to plan inputs, other steps' outputs, literals or files. Edited only through
+  typed edits; each edit gets a new revision (`rev`) and a history entry.
+- **Unit:** the steps sharing one `unit:<name>` tag; an untagged step is a unit of one (§6.7).
+- **Run:** one execution of a step (one per scattered item) or of a call, in its own transient
+  systemd unit under a guardian (§2.5, §7).
+- **Message:** a row on a project thread: a question (`needs_reply`) or a note. Open questions
+  to `owner` are the inbox (§8).
+- **Log:** each project's ordered records of what happened (edits, manual values, status
+  changes, calls, messages, …), each with a home-wide `seq` (§9). History, not truth: `status`
+  and `plan_get` are the current state.
 
-## 2. Workspace layout
+## 2. Installation, home and processes
 
-`SLUICE_HOME` (default `~/.sluice`):
+### 2.1 Home resolution
+
+Every mode resolves its home once, at startup: `SLUICE_HOME` when it is set, else the home the
+installation has selected (§2.2; installation directory `SLUICE_INSTALL_DIR`, default
+`~/.local/share/sluice/install`). When neither exists the command fails with an error saying
+so. The installation control directory must lie outside the home.
+
+### 2.2 Installation and releases
+
+An installation lives under a prefix (default `~/.local/share/sluice`):
 
 ```
-config.json                 {"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 7420},
-                             "log_max": 10000}; optional "unread_alert_min" (§9, off by default)
-sluice.db                   the home's database (SQLite, WAL): every project, plan, edit, state,
-                            call, submission, inbox item, log record, the outcome of every
-                            finished step removed from a plan and how far `next` has read each
-                            project's log (below)
-runner.lock                 flock held by the one runner of this home (a second one refuses to start)
-runner.json                 the runner's heartbeat {pid, started, beat}, refreshed about once
-                            a second; stale means the runner is down
-.env                        global secrets (KEY=value lines)
-fns/                        global user functions
-recipes/<name>.json         global recipes (§5)
-runs/<call_id>/             input.json, output.json, stderr.log, shim.json, child.json,
-                            shim.lock and exit.json of the calls without a project (§4)
-trash/                      a deleted project's directory on its way out (<name>-<token>)
-projects/<name>/            made when something needs it (runs/, fns/); may be prepared with
-                            fns/ and .env before the project is created
-  fns/                      project-local functions
-  recipes/<name>.json       project recipes (§5): a project sees the global ones and its own,
-                            and its own wins on a name clash
-  .env                      project secrets (override global ones)
-  runs/<run_id>/            input.json, output.json, stderr.log for one fn execution (a step run,
-                            or a call: then run_id is the call id); shim.json, child.json,
-                            shim.lock and exit.json, the supervising shim's identity, the fn
-                            child's pid + start time, liveness lock and exit record (§4)
+bin/sluice                  the launcher: a small native program (built by build-release)
+install/                    the control directory (SLUICE_INSTALL_DIR overrides it)
+  install.lock              flock: shared for admission decisions, exclusive for fence/select/unfence
+  selection.json            {generation, release_path, home_path}: the selected release and home
+  fence.json                {generation, reason, since} while the installation is fenced
+  generation.json           the installation generation, advanced by every fence/select
+  entry                     symlink to the selected release's bin/sluice
+  services.json             what scripts/deploy started: {name: {unit, release}}
+releases/<git-sha>-<sha256>/
+  bin/sluice                the release binary
+  python/                   sluice_fn (the fn helper, §5.4) and inline_python.py
+  tmux/                     the private tmux 3.7c build and its tmux-manifest.json
+  assets/                   the dashboard assets (the binary also embeds them)
+  manifest.json             release_id, git_sha, guardian protocol, sha256 of every file,
+                            the private tmux manifest, the build toolchain
 ```
 
-**The database** (`src/sluice/db.py`, standard library only; SQLite 3.37 or later, on a local
-filesystem) holds, in STRICT tables: `projects` (name, description, `archived`, `paused`,
-`resources` (a JSON object, §6 "Resources"), the icon, `created`, and `ver`, a counter every
-change to the project's rows moves — kept by triggers, rolled back with them — plus `changed`,
-the time of its last state write); `plans`
-(the project's plan document and its `rev`, the one authoritative rev); `plan_edits` (every
-edit's rev, ops, author, reason, time and the seq of its `plan.edit` record; never trimmed);
-`states` (the project's state document, §6); `calls` (§8 `fn_call`); `submissions` (§5);
-`inbox` (§8a); `records` (the log, §6b); `outcomes` (what each finished step a plan edit
-removed ended with, §6; never trimmed); `drain` and `drain_projects` (maintenance metadata and pause ownership, §9); `readers` (how far
-`next` has read each project's log, §9: `project` (the key), `seq`, `at`, `me`; one upsert per
-project in a short write transaction, `seq` never going back; no trigger moves `ver` for it,
-since the dashboard does not show it); `leases` (section leases, §6 "Resources": `id`,
-`project`, `resource`, `amount`, `step`, `run`, `granted` — the time, null while waiting —
-and `created`; no trigger moves `ver` for them either); and `deletions` (a deleted project
-whose directory is not gone yet: name, token, time). Deleting a project deletes all of its rows and adds its
-`deletions` row in one transaction; once that commits (the outermost transaction, when it is
-nested in another), its `projects/<name>/` moves to `trash/<name>-<token>` (in a write
-transaction that still finds the row) and is removed, and then the row goes. Until then a
-project of that name cannot be created, so the removal never touches a replacement; a removal
-that failed or was cut short (a crash after the commit) is finished by the runner's GC. Every
-logical change is one write transaction (`BEGIN IMMEDIATE`): a plan edit writes the plan, its
-`plan_edits` row and its record; a manual value the state and its record; an inbox answer that
-sets a plan input both of those and the item; a submission its row and its record; a runner
-state change the state and its `step.status` records; a call's status change its row and its
-record. A write that cannot get the database within 5 s fails with `busy` ("the store is busy,
-try again"), having written nothing. Reads that must agree (a status, a log page and its
-cursor) come from one snapshot. `user_version` is the schema's version, now 6. A new file gets
-the whole schema; version-1 through version-5 files are upgraded in place on first open,
-in one `BEGIN IMMEDIATE` transaction that checks the version again under the lock. Version 1
-adds `outcomes` and its index (`IF NOT EXISTS`: a file may have them already); version 2 adds
-the inbox's separate `run` column and the maintenance ledger; version 3 adds `readers`
-(`IF NOT EXISTS`); version 4 adds resource limits and section leases; version 5 adds indexed
-log revisions, initialized from existing records. Insert, update and delete triggers advance
-those revisions for the global or project scope and each kind, including writes through
-connections opened before the migration. Existing inbox sender strings
-are decoded exactly as the old reader did, including ambiguous literal names that matched
-`<from>#<run>`; their original intent cannot be recovered. The version advances only when
-all migration work commits; a database of any other version is refused, and so is a home
-from before this database — one with a `log.jsonl` or a
-`projects/<name>/project.json` and no `sluice.db` — which is never read or treated as empty: it
-must be imported into a new home first. The database also defines views for agents'
-queries: `steps` (one row per plan step with its state, absent meaning `pending`), `messages`,
-`step_changes`, `edits` and `log` (each record as `log_read` returns it).
+The **launcher** execs `<install>/entry --installation-entry <install> <args…>`; the release
+binary reads `selection.json` and execs the selected release's `bin/sluice` with `SLUICE_HOME`
+set to the selected home and `SLUICE_INSTALL_DIR` to the control directory. A release binary
+re-execs itself once with `SLUICE_PYTHON_DIR=<release>/python`,
+`SLUICE_TMUX_PREFIX=<release>/tmux` and `PYTHONDONTWRITEBYTECODE=1`. Agent docs and dashboard
+assets are compiled into the binary.
 
-A project's optional **icon** is either an image (SVG, PNG, WebP, JPEG or GIF, at most 256 KB)
-read by `project_create`/`project_update`'s `icon` argument from a file, its type sniffed from
-the content, and kept in the project's row with its sha256 — or a short text icon (at most 16
-characters, no control characters, typically one emoji). A project has at most one of the two:
-setting one clears the other; `icon: ""` removes it. A value that looks like a path (starts
-with `/` or `~`) but is not a readable image file is an error, never a text icon.
-`projects_list` reports it as `{"kind": "image", "type": <content type>}` or `{"kind": "text",
-"text": ...}`, absent when none; the dashboard shows it by the project's name and serves an
-image icon at `/projects/<name>/icon` (§8).
+`sluice install <command>` prints the installation status as JSON
+`{generation, selection, fence}`:
 
-**Function scopes:** built-in (shipped in the package, `src/sluice/fns/`), global
-(`SLUICE_HOME/fns/` and every dir in `config.fn_dirs`), and project (`projects/<name>/fns/`). A
-project sees built-in + global + its own functions. **Names never collide:** a global function may
-not reuse a built-in name, and a project function may not reuse a built-in or global name (or
-another name in the same scope). A collision is an error of the later scope: the offending
-project (or global dir) reports it from `verify` and `fn_list` (an entry with `error`), and
-`fn_save` refuses to create one. Lookup still resolves a colliding name to the earlier scope's
-function. Two projects may each have a function of the same name. A fn dir is any immediate
-subdirectory containing `fn.json` whose `name` matches the directory; anything else (e.g.
-`_lib/`) is ignored.
+| command | effect |
+|---|---|
+| `install status` | read only |
+| `install fence <reason>` | writes `fence.json` under the exclusive lock; while fenced, every coordinator activation and admission write is refused (`maintenance: <reason> (generation n)`), except a coordinator started with `--maintenance` |
+| `install select <release_dir> <home>` | verifies the release's manifest (when it has one) and records the selection |
+| `install unfence` | verifies the selected release, clears the selected home's `cutover` maintenance mode through its coordinator when one is set, and removes the fence |
 
-**Only project problems block.** While one of the project's own functions has a problem (a
-collision, or a fn.json that fails the §6a checks), that project refuses plan edits, manual values,
-`fn_call` and new runs (`invalid`, listing the problems); steps already running finish. Problems
-in the global or built-in scope never block anything: the broken or colliding function is left
-out of lookup and reported by `verify` and `fn_list`, and a plan step that uses it fails
-validation like any unknown function. Reads (`status`, `plan_get`, `plan_history`, views,
-`fn_list`, `verify`) always work. Functions are rescanned when a `fn.json`, `main.py` or
-icon file changes, so a fix (or `fn_save`) needs no restart.
+A home that is not the installation's selected home refuses admission (`maintenance: stale
+selected home`). Without a release and without `SLUICE_INSTALL_DIR` (a source build), the
+installation is the sibling directory `<home>.sluice-install`.
 
-Files outside the database (`config.json`, `runner.json`, a fn's files, a run's files) are
-written atomically (`<file>.tmp` then `os.replace`).
+**`scripts/build-release <prefix>`** runs `cargo build --workspace --bins --release --locked`
+with its target dir under `<prefix>/.build/target`, stages `bin/sluice`, `python/`, the private
+tmux (built once by `scripts/build-private-tmux` and cached under `<prefix>/.build`) and
+`assets/`, writes `manifest.json`, moves the stage to `releases/<release_id>` (an existing
+release id must have identical metadata), compiles the launcher into `<prefix>/bin/sluice` and
+prints the release path. It refuses a prefix on `PATH`, `/`, or `~/.local/bin`.
 
-## 3. Types
+**`scripts/deploy [REF] [--prefix DIR]`** (REF defaults to `origin/main`) installs one commit:
 
-Written inline, compared structurally, no shared registry. CWL spellings:
+1. `git archive` the commit into a temporary source tree and run `build-release` there;
+2. `install fence "deploy <sha>"`;
+3. stop the services recorded in `services.json` and the home's auto-started coordinator unit;
+4. `install select <release> <home>`;
+5. start three transient user units, `sluice-<sha16(install dir)>-coordinator`
+   (`coordinator --maintenance`), `-serve` (`serve --no-runner --port 3065`, or
+   `SLUICE_DEPLOY_PORT`) and `-loop` (`loop`), each with `SLUICE_HOME`, `SLUICE_INSTALL_DIR`,
+   `PATH` and `HOME` set, recording them in `services.json`; after the coordinator it waits
+   until the coordinator is ready to serve its socket;
+6. check that every unit is active and run `sluice doctor --json`;
+7. `install unfence`;
+8. prune releases: keep the newest three plus every release a live process runs from or an
+   unfinished run in the home records.
 
-| Form | Meaning |
+Any failure after the fence leaves the installation fenced and says so. Running steps survive a
+deploy: each run's guardian stays pinned to its own release, and the new coordinator adopts it
+(§7.9).
+
+### 2.3 Home layout
+
+```
+config.json                 {"fn_dirs": [], "http": {...}, "log_max": 10000}; written when
+                            missing. Only fn_dirs is read: directories (relative to the home)
+                            whose fn dirs join the global scope
+sluice.db                   the database (§3)
+coordinator.sock            the coordinator's Unix socket (owner only)
+coordinator.lock            flock held by the running coordinator
+fns/                        global user fns; fns/generations/ holds immutable published
+                            copies that runs are pinned to
+recipes/<name>.json         global recipes (§6.8)
+runs/<run id>/              one run's directory: its control socket, invocation and delivery
+                            records, messages.json (the messages assigned to it), stderr and
+                            the engine's own files
+locks/session-<key>.lock    agent session locks
+projects/<project id>/
+  fns/                      the project's fns
+  generations/<n>/          immutable published copies of the project's fns
+  recipes/<name>.json       the project's recipes
+  .env                      checked for syntax by verify; never loaded (§5.4)
+  icons/<generation>        the project's image icon
+```
+
+### 2.4 Coordinator
+
+The coordinator (`sluice coordinator`) owns the home: it holds `coordinator.lock`, opens the
+single SQLite writer, serves `coordinator.sock`, publishes the fn registry, runs reconciliation
+and, while some client holds the **scheduler lease**, admits and launches work.
+
+- Any CLI command that needs it, `serve` and `loop` connect to the socket and, when nothing
+  answers, start the coordinator as the transient user unit `sluice-coordinator-<sha16(home)>`
+  (`systemd-run --user --collect --service-type=exec -p Restart=no`) and wait up to 10 s for
+  its socket. Activation is refused while the installation is fenced and while the home's
+  maintenance mode is `cutover`.
+- `coordinator --maintenance` may start while the installation is fenced; `scripts/deploy` uses
+  it.
+- The scheduler lease is one per home: `serve` takes it unless `--no-runner`, `loop` takes it,
+  and a second holder is refused (`conflict`, "scheduler lease already held"). The lease lasts
+  as long as the holder's connection. Without a holder nothing new starts; running work goes
+  on.
+- Every request on the socket is one length-prefixed JSON frame (§12.1). A request it cannot
+  decode, or one whose handler panics, gets a logged error reply; the connection stays usable.
+
+### 2.5 Runs and the guardian
+
+Each run is a transient systemd user unit, `sluice-run-<run id>.service`, started with
+`Delegate=yes`, `KillMode=control-group` and `Restart=no`. Inside it the **guardian**
+(`sluice guardian --run --attempt --socket`) proves its identity to the coordinator, splits the
+unit's cgroup into `control` (itself) and `payload/<invocation>` leaves, starts the payload
+through the `payload-exec` launcher, serves the run's control socket (callbacks, engine hooks,
+delivery acknowledgements), holds one watch on the coordinator for cancellation and messages,
+and reports the start and the completion until the coordinator acknowledges them. A payload is
+a Python fn (§5.4), an agent session in the private tmux, or a built-in fn.
+
+Stopping a run sends TERM to its processes, waits five seconds, then kills the payload cgroup
+recursively and proves it empty before any resource it held is released. The guardian, not the
+coordinator, owns the payload: a coordinator restart or a deploy leaves running payloads alone.
+
+Host prerequisites (cgroup v2, a systemd user manager with delegation, `pidfd_open`, a boot id)
+are checked by `sluice doctor`; see `docs/rust/host-prerequisites.md`.
+
+### 2.6 Maintenance modes
+
+The home has one maintenance mode: `normal`, `drain` or `cutover`.
+
+- **drain** (`drain` tool, `sluice drain`): pauses the selected projects (default every
+  project not archived) that are not paused already, records them and the drain's author as
+  owner, and rejects new plan work and user calls home-wide (`busy`, "drain rejects new plan
+  work and user calls"): plan edits, retries, input sets and `fn_call`. Running steps and calls
+  finish. Draining again with another author is a `conflict`. `release` unpauses exactly the
+  recorded projects and returns to `normal`.
+- **cutover**: admission closed and coordinator activation refused. Nothing in this build
+  enters it; `install unfence` clears it.
+
+## 3. Storage
+
+`sluice.db` is SQLite in WAL mode, created from `migrations/0001.sql` (23 STRICT tables). Only
+the coordinator writes, through one writer task; reads use a pool of read-only connections and
+one snapshot per answer. Every logical change (an edit and its records, a status change and
+its records, a message and its record) commits in one transaction.
+
+Tables: `home_meta`, `projects`, `plans`, `plan_edits`, `inputs`, `steps`, `attempts`, `runs`,
+`submissions`, `calls`, `step_results`, `resources`, `leases`, `messages`,
+`question_attachments`, `message_deliveries`, `readers`, `records`, `change_versions`,
+`maintenance`, `artifact_jobs`, `sessions`, `notification_attempts`.
+
+Views for agents' queries (§12.4 `query`): `outcomes` (removed steps' results), `log` (each
+record as the log tools return it), `step_changes` (`step.status` records as rows), `edits`
+(`plan_edits`) and `questions` (messages with `needs_reply`, plus derived `state`
+open|answered|closed and `waiting`). Public tables are keyed by the immutable `project_id`,
+never by name.
+
+Ids: projects, runs, attempts, results and invocations are UUIDv7; message ids and record
+seqs share one increasing integer sequence.
+
+## 4. Types
+
+Written inline, compared structurally:
+
+| form | meaning |
 |---|---|
 | `"string"`, `"int"`, `"float"`, `"boolean"`, `"Any"` | primitives; `Any` accepts anything |
-| `"T?"` e.g. `"string?"`, `"string[]?"` | optional: T or null; an optional input may be left unbound |
-| `["null", T]` | optional form for any T, e.g. an optional enum |
-| `"T[]"` e.g. `"string[]"` | array of T (shorthand) |
+| `"T?"`, e.g. `"string?"`, `"string[]?"` | optional: T or null; an optional input may be left unbound |
+| `["null", T]` | optional form for any T |
+| `"T[]"` | array of T |
 | `{"type": "array", "items": T}` | array of T |
-| `{"type": "enum", "symbols": ["a", "b"]}` | enum of strings |
-| `{"type": "record", "fields": {"f": T, ...}}` | record |
+| `{"type": "enum", "symbols": ["a", "b"]}` | one of these strings |
+| `{"type": "record", "fields": {"f": T}}` | object with these fields |
 
-`fits(out, inp)`: `Any` on either side fits; optional into non-optional does not; same primitive,
-or `int` into `float`; enum subset, or enum into `string`; arrays covariant; records: every
-required field of `inp` exists in `out` and fits, extra fields in `out` are fine.
+An output **fits** an input when either is `Any`; same primitive, or `int` into `float`; an
+enum into `string` or into an enum with every symbol; arrays of fitting items; a record that
+has every required field of the input record with fitting types (extra fields are fine). An
+optional value does not fit a required input. Runtime values are checked against types with
+path-bearing errors (`report.outcome: expected one of [done, blocked], got "ok"`).
 
-`check_value(type, value) -> list[str]` validates a runtime value, returning path-bearing errors
-(`report.outcome: expected one of [done, blocked], got "ok"`).
+Plan inputs and step-declared outputs may be written `{"type": T, "doc": "..."}`. An extra
+input of an open fn's step takes its source's type: a ref's type; for a list source, an array
+of the refs' type (`Any[]` when they differ); `Any` for a `default`; `string` for a `file`; the
+item type for the scatter input.
 
-Types are written on fn inputs and outputs, plan inputs and the outputs a step of an open fn
-declares (§5). An extra input of such a step has no written type: it takes its source's (a
-ref's type; for a list source an array of the refs' type, `Any[]` when they differ; `Any` for a
-`default`; `string` for a `file`; the item type when it is the scatter input). Where a type is handed on (the env of
-an open fn, §4) it is spelled back in the forms above, a string where one exists.
+## 5. Functions
 
-## 4. Functions
+### 5.1 Scopes
 
-`<fn_dir>/fn.json` plus `<fn_dir>/main.py`:
+- **builtin:** compiled into the binary (§16).
+- **global:** `<home>/fns/` and every directory in `config.json`'s `fn_dirs`.
+- **project:** `projects/<id>/fns/`.
 
-```json
-{
-  "name": "git.head",
-  "doc": "Current branch and commit of a working tree.",
-  "inputs":  {"path": "string"},
-  "outputs": {"branch": "string", "sha": "string"}
-}
-```
+A project sees builtin, global and its own fns. Names never collide: a global fn may not reuse
+a builtin name, and a project fn may not reuse a builtin or global one. A fn dir is an
+immediate subdirectory holding `fn.json` whose `name` matches the directory. The registry is
+rescanned when fn files change (a watcher on the fn scopes) and republished only when it
+changed; each publication is an immutable generation that runs are pinned to.
 
-`name` (dotted lowercase), `inputs` and `outputs` are required; `doc` is optional, and so is
-`"open": true`: a step running an open fn may bind extra inputs and declare outputs of its own
-(§5). Agent fns are open; nothing else needs to be. An open fn may also say what its agent
-submits on every step: `"submits": {name: type or {"type", "doc"}}`, names apart from its
-`outputs`. Every step running it declares those outputs as if it listed them itself (a step
-may not declare one again): they are typed for refs, required unless optional, told to the
-agent in `SLUICE_STEP_OUTPUTS`, and submitted with `step_submit`.
+A project whose own scope has a problem (a collision, a bad `fn.json`) is **blocked**: plan
+edits, manual values and new runs of that project fail with `invalid` ("project registry
+blocked", listing the problems). Problems elsewhere leave the broken fn out of lookup.
+`verify` reports every problem.
 
-**Icon.** A fn may have an icon, so the dashboard can tell kinds of work apart at a glance
-(§8): a file `icon.svg`, `icon.png` or `icon.webp` in its own dir (at most 256 KB, its
-content the type its name says), picked up with no key; or `"icon": "<text>"` in fn.json, a
-short text icon (at most 16 characters once stripped, no control characters, typically one
-emoji). When both are there the file wins. More than one icon file, a file too big or not
-of its type, or a bad text is a problem of the fn.json like any other (§6a): the fn is left
-out, or, for a project's own fn, blocks the project (§2). The icon belongs to the fn, never
-to a step, and follows the scope rule: the fn lookup finds brings its own icon or none. It
-is read from the fn dir with the rest of the fn (nothing is stored in the database). An SVG
-icon is drawn in `currentColor` on a 16×16 grid, single colour: the dashboard paints it in
-the theme's ink (§8), so colours of its own are lost; a PNG or WebP keeps its colours.
-`fn_list` reports it as `{"kind": "image", "type": <content type>}` or `{"kind": "text",
-"text": ...}`.
-
-**Process contract.** The runner runs each fn under a shim,
-`python -m sluice.exec <run_dir> -- uv run --quiet --script <fn_dir>/main.py` — every run
-carries this small supervising Python process for its whole life. The shim takes an
-exclusive flock on the run dir's `shim.lock` — retrying briefly, so a liveness probe
-landing in the gap never makes it refuse — and holds it for its whole life (that lock is
-the run's liveness — a pid is never trusted, pids get reused), writes `shim.json`
-`{pid, started, argv}` before starting the fn and `child.json` `{pid, pid_start}` right
-after (so a fn that outlives its shim can still be found and stopped), and once the fn
-exits writes `exit.json` `{code, signal, finished}` — `code` 127 with an `error` when the
-fn could not even be started — the only evidence a run is done (`output.json` alone never
-is) — then exits as the fn did.
-Agent fns also record their tmux server, engine and app-server pids with `/proc` start times
-in `native-processes.json`, so the runner can reap them after a fn is killed without cleanup.
-The fn runs with stdin = an object keyed by input name (unbound optional inputs are `null`),
-stdout to `output.json`, stderr to `stderr.log`; env `SLUICE_HOME`,
-`SLUICE_PROJECT`, `SLUICE_STEP`, `SLUICE_RUN_ID`, `SLUICE_RUN_DIR`, `SLUICE_FN_DIR`, and
-`PYTHONPATH` containing sluice's `src` dir, plus every `KEY=value` line of `SLUICE_HOME/.env` and
-then the project's `.env` (project values win). A step of an open fn also gets, when it has
-any, `SLUICE_STEP_INPUTS`, JSON `{name: {"type": T}}` of its extra inputs (their values are in
-stdin under their names), and `SLUICE_STEP_OUTPUTS`, JSON `{name: {"type": T, "doc": "..."}}`
-of the outputs it declares (`doc` empty when there is none). Secrets live there, never in plans. cwd = the run
-dir. `SLUICE_PROJECT` names the project (empty for a call without one); for a call,
-`SLUICE_STEP` is empty and `SLUICE_RUN_ID` is the call id. The fn writes one JSON object keyed
-by output name to stdout (logs go to stderr) and exits 0. Any other exit code, or outputs that
-fail `check_value`, is a failure. Retries and timeouts, if a fn needs them, happen inside the fn
-(`run(main, retries=N)`, §7). Each run is its own session, led by the shim: signals sent to the
-group reach the fn (the shim ignores SIGINT, SIGTERM and SIGHUP itself and still records how the
-fn went). When the runner stops a run (a cancelled step, a removed step, a scattered run whose
-supervisor died leaving a live fn behind, or shutdown with `--kill-runs`) it sends the whole process group SIGTERM, then
-SIGKILL to whatever is left after 5 s, so nothing started under `uv run` outlives it (SIGTERM
-first lets an agent CLI stop tool processes it started in sessions of their own). `sluice
-serve` and `sluice loop` exit 0 on SIGINT, SIGTERM and SIGHUP (a closed terminal or `tmux
-kill-session`), leaving their runs going for the next runner to adopt (§6); with `--kill-runs`
-they stop them first.
-
-## 5. Plans
+### 5.2 fn.json
 
 ```json
-{
-  "inputs":  {"repo": "string", "tasks": "string[]"},
-  "outputs": {"notes": {"source": "notes/final"}},
-  "steps": {
-    "work":  {"run": "agent.run", "scatter": "spec",
-              "in": {"engine": {"default": "devin"}, "cwd": {"source": "repo"},
-                     "spec": {"source": "tasks"}}},
-    "check": {"run": "agent.run",
-              "in": {"engine": {"default": "claude"}, "cwd": {"source": "repo"},
-                     "spec": {"default": "Run the test suite and summarise failures"}}},
-    "gate":  {"run": "core.collect", "in": {"items": {"source": ["work/final", "check/final"]}}},
-    "notes": {"run": "agent.run",
-              "in": {"engine": {"default": "claude"}, "cwd": {"source": "repo"},
-                     "spec": {"source": "gate/items.0"}}}
-  }
-}
+{"name": "text.upper", "doc": "Upper-case a string.",
+ "inputs": {"text": "string"}, "outputs": {"text": "string"}}
 ```
 
-A new project starts with the empty plan `{"inputs": {}, "outputs": {}, "steps": {}}`.
+Keys: `name` (dotted lowercase: two or more `[a-z][a-z0-9_]*` parts), `doc`, `inputs`,
+`outputs`, `open` (boolean), `submits`, `icon`; any other key is a problem. `submits` (only
+with `open: true`) names outputs every step of the fn declares as if it listed them itself,
+each a type or `{"type", "doc"}`, none named like a fn output.
 
-- Project names, step ids, plan input and output names match `^[a-z0-9][a-z0-9_-]*$`. The plan's
-  `rev` is store-maintained and returned by `plan_get`/`status`.
-- **Holding and ordering.** A step may carry `"paused": true` or `"paused": "<reason>"` to
-  hold it (§6); `"after": ["<step>", ...]` to wait for steps it reads nothing from (an
-  ordering edge: it is ready only once they have succeeded or been skipped, it is never stale
-  because of them, and it counts for cycles); `"tags": ["<tag>", ...]` (tags match the id
-  pattern, optionally after one `<prefix>:`, as in `unit:lane-1`) to select steps by; and `"when": "<ref>"` to run it only if that value is true.
-  `edge_add(project, step, after)` and `edge_remove(project, step, after)` (`after` a step id
-  or a list of them) change one step's `after` without a rev: inside one write transaction
-  they read the current plan, append the ids (deduplicated, in order, the existing ones kept)
-  or remove them, and make one edit whose one op adds, replaces or removes
-  `/steps/<step>/after`, validated like any edit (a cycle is refused). An unknown step, the
-  one that waits or one it names, is refused (`invalid`, naming them). Both are idempotent:
-  nothing to change is no edit, and the current rev comes back. Two callers adding edges to
-  one step at once both keep theirs. There is no such verb for `when`: a step has one, and
-  `step_update` sets it.
-- **Conditions.** `when` names a step output or plan input of type `boolean` (or `boolean?`;
-  `Any` is checked when it runs), read like an input: the step waits for it. Once it is known,
-  `true` lets the step run; `false` or null makes it `skipped` (state `skipped: "<ref> is
-  false"`) instead of running; any other value fails it (`when: <ref> is 3, not a boolean`).
-  A step that reads from a skipped step is skipped too (`step a was skipped`); an `after` edge
-  counts a skipped step as settled. A skipped step never ran, so it is decided afresh whenever
-  its reason changes: if the value turns true, it goes back to `pending`. A paused step is
-  held, not skipped. A step that `plan_patch`, `step_add` or `unit_add` adds starts as soon
-  as it is ready (`start` defaults to true); when the call passes `start: false`, each step
-  it adds that does not set `paused` itself comes in with `"paused": true` (a draft), and
-  that pause is one more op in the edit's history. Resources (`needs`, below), not pauses,
-  are what cap how many steps run at once.
-- **Resources.** A step may carry `"needs": {"<resource>": <n>, ...}` (each amount an integer
-  >= 0) and `"priority": <integer>` (default 0). `needs` names resources its project declares
-  (§6 "Resources"); while it runs the step holds those amounts, and it starts only when every
-  one has room. `priority` orders the queued steps: higher is admitted first, ties in plan
-  order. An edit that adds a step with `needs`, or changes a step's `needs`, is refused
-  (`invalid`) when a need names a resource the project does not declare
-  (`steps.a.needs.gpu: the project declares no resource gpu (its resources: lane; project_update
-  sets them)`) or asks for more than a fixed capacity (`steps.a.needs.lane: asks for 3, more
-  than lane's capacity 2`); steps whose `needs` the edit leaves alone are not checked again, so
-  a capacity lowered later never blocks unrelated edits (that step just waits). A recipe sets
-  both like any other field (`"needs": {"{pool}": "{n}"}`, `"priority": "{prio}"`: a whole-string
-  `{param}` keeps its type).
-- **Docs.** A plan input is declared by its type, or, as in CWL, by `{"type": <type>, "doc":
-  "..."}` (both keys only; no type form has just these keys, so the two never clash). A step
-  may carry `"doc": "..."` next to `run`, `in` and `scatter`. Docs are optional strings that say
-  what a value or a step is for; `status` returns them (`input_docs`, a step's `doc`), the
-  Mermaid view puts a step's doc on a second line of its label, the dashboard shows a step's doc
-  as its card's title and an input's doc on its node, and an
-  inbox item posted for an input without a body takes that input's doc as its body (§8a).
-- **Step inputs** (`in`): `{"default": <json>}` a literal; `{"source": "<ref>"}` one value;
-  `{"source": ["<ref>", ...]}` fan-in: an array of the values, in order; `{"file": "<absolute
-  path>"}` the file's text (UTF-8), a `string` (an input declared otherwise refuses it at
-  validation), read when the step **starts** — each start, a retry's too, so a spec edited
-  before the step starts is what runs. A file missing or unreadable then fails the step
-  (`input spec: cannot read the file /abs/spec.md: No such file or directory`) without
-  starting it; `verify` warns about one missing now. The run's `input.json` holds the text;
-  anywhere else the binding shows its path. A ref is a plan input
-  name (`repo`) or `<step>/<output>`, optionally followed by `.<field or index>...` to reach
-  inside a value. Optional fn inputs may be omitted.
-- **Fan-out:** several steps read the same output. **Fan-in:** a list `source`, or several inputs
-  from different steps (`core.collect` gathers into one array).
-- **Scatter** (dynamic fan-out): `"scatter": "<input name>"`. That input must receive an array
-  whose items fit the fn's input type; the step runs once per item (the other inputs are the same
-  for every run) and each of its outputs becomes an array, in item order. The step succeeds when
-  every run succeeds and fails if any fails; a failed scattered step re-runs only its failed
-  items when retried with unchanged inputs (§6).
-- **Plan outputs** name the plan's results: `{"source": "<ref>"}`. `fn_call` and `status`
-  report them.
-- **Typed agent blocks.** A step whose fn is open (§4) may bind **extra inputs** in `in`
-  besides the fn's own (`{"source": ...}` or `{"default": ...}`; names follow the id pattern;
-  their types come from their sources, §3), and may declare its own **`outputs`**: `{"name":
-  <type> or {"type": <type>, "doc": "..."}}`, which join the fn's outputs (a name the fn
-  already has is an error). Refs to them validate like any output (field paths included; arrays
-  for a scattered step). A non-open fn given either is a validation error. While the step
-  runs, its agent submits the declared outputs with `step_submit(project, step, outputs,
-  run?)`: checked against the declared outputs (every required one, types fitting, no others;
-  `invalid` lists every mismatch with its path), refused unless the step is `running`; `run`
-  (a run id) is needed only when the step has several runs (scatter). Accepted outputs are
-  kept as the run's submission (a resubmit replaces it), in the same transaction as their
-  `step.submit` record. When the fn exits 0, the runner merges them into the step's outputs (the
-  fn's returned values win on a name they share); a required declared output never submitted
-  fails the step with `declared outputs not submitted: <names> (the agent must call
-  step_submit ...)`. An unsubmitted optional one is null.
-- **Work done outside sluice.** A step running the built-in `core.external` (open, no
-  inputs or outputs of its own) stands for work that happens elsewhere: a person, another
-  orchestrator's workers, a CI pipeline. The runner never starts it: once ready it stays
-  `pending` (`waiting`: `external: set its outputs with step_set_output`, §8) until its
-  outputs are set by hand (`step_set_output`, §6) or it is cancelled (`step_cancel` fails a
-  pending `core.external` step at once). It declares the outputs it will get and may bind
-  extra inputs, which order it after their sources (as any open fn's step). It does not
-  scatter (a validation error: it is one piece of outside work), and `fn_call` refuses it.
-  Its doc says who is doing the work and where; the dashboard shows it as live outside work
-  (§8). **Moving a step's work out** needs no tool of its own: patch the step's `run` to
-  `core.external` and retry it. Its bindings stay valid (the old fn's own inputs, now unknown
-  to `core.external`, become extra inputs, typed by their sources: a default is `Any`), and so
-  do its declared outputs; a step that reads an output of the old fn needs that output
-  declared too (`steps.b.in.x: step w (fn core.external) has no output results` otherwise),
-  and a scattered step drops its `scatter`. For a failed `agent.run` step `w` whose
-  dependents read `w/final`:
+**Icon:** one file `icon.svg`, `icon.png` or `icon.webp` in the fn dir (at most 256 KiB, its
+content the type its name says), or `"icon": "<text>"` (at most 16 characters, no control
+characters). The file wins. Two icon files, a bad file or a bad text is a problem. An SVG
+icon is drawn single-colour in `currentColor` on a 16×16 grid.
 
-  ```json
-  [{"op": "replace", "path": "/steps/w/run", "value": "core.external"},
-   {"op": "add", "path": "/steps/w/outputs/final", "value": "string"},
-   {"op": "replace", "path": "/steps/w/doc", "value": "Fanned out to five workers; the orchestrator sets final when they land"}]
-  ```
+### 5.3 Saving
 
-  then `step_retry(project, ["w"])`: `w` is pending again and waits, and
-  `step_set_output(project, "w", {"final": ...})` settles it once the work lands, so its
-  dependents run.
-- A step is **ready** when every plan input and step it reads has a value / has `succeeded`.
-- **Units.** The plan's units are the connected components of its steps over every edge
-  (handoffs, `when`, `after`; a plan input shared by two steps is no edge), in plan order (by
-  their first step), each its steps in plan order (`plan.units`): the independent pieces of
-  work. No edge joins two units. A unit is **done** when every step in it succeeded (set by
-  hand too) or was skipped, with at least one success. `status` and `plan_view` leave the done
-  units out by default (§8), the dashboard groups its board's boxes by unit and folds a done
-  one, and `plan_prune` removes them (their outcomes stay, §6).
+`fn_save(fn, main_py, project?)` validates the manifest, refuses a name that collides, writes
+`fns/<name>/fn.json` and `main.py` into the project's (or the global) scope, republishes the
+registry and returns `{name, scope, path, generation}`.
 
-**Recipes.** A step shape used again and again (a lane: a worktree, an agent working in it,
-the worktree removed) is a recipe: `recipes/<name>.json` in `SLUICE_HOME` or in the project's
-directory (§2; the project's wins on a name clash), shaped `{"name", "doc"?, "params"?: {<name>:
-<type or {"type", "doc"}>}, "steps": {<step id>: <step>}}` with `name` the file's name. Params
-are typed like plan inputs (§3); `unit` (a string matching the id pattern) is always a param,
-implicit. Substitution is deliberately tiny: in every step id and every string anywhere in the
-steps (object keys too), `{param}` is replaced by the param's value (a non-string as its JSON);
-a string that is exactly `{param}` becomes the value itself, so a non-string param keeps its type
-(an optional param left out is null). `{{` and `}}` are literal braces. An unknown `{x}` or a
-lone brace is an error naming where it is. Nothing else: no loops and no conditionals (`when`
-and `scatter` already exist in steps). `unit_add(project, recipe, params, start?)` checks the
-params against their types (every required one, no others), expands the recipe, tags every new
-step `unit:<unit>` before its own tags, refuses ids the plan already has, and adds the steps in
-one edit at the current rev (no rev argument: it is an add, like `step_add`); they start when
-ready, or come in paused when `start` is false. It also stages the unit in that same edit, so one call does what would
-otherwise take `unit_add`, `plan_get`, `plan_patch` and `step_set_input`:
+### 5.4 Python fn contract
 
-- `tags: [..]` go on every step of the unit after `unit:<unit>` and the recipe's own tags
-  (deduplicated): an **arc** of units (`arc:auth`) that `status`, `step_pause`, `step_cancel`,
-  `step_retry`, `step_remove` and `plan_prune` select by tag. `unit:` tags are reserved:
-  given one, it is refused. `unit_tag(project, unit, add?, remove?)` adds and removes tags on
-  every step tagged `unit:<unit>` later, in one edit at the current rev (refusing `unit:`
-  tags and an unknown unit; nothing to change is no edit).
-- `after: {<suffix>: [<step id>, ...]}` appends to that step's `after` (the recipe's kept,
-  deduplicated); `when: {<suffix>: "<ref>"}` sets its `when` (replacing the recipe's);
-  `inputs: {<suffix>: {<input>: <value>}}` binds each input to `{"default": <value>}`
-  (replacing the recipe's binding). A **suffix** is a recipe step's expanded id without the
-  leading `<unit>-` (`fork` for `{unit}-fork`); a step whose id does not start so is keyed by
-  its whole id. An unknown suffix, or an input the step's fn does not declare and the recipe
-  does not bind (an open fn's extra input only when the recipe binds it already), is refused
-  (`invalid`, naming each) before anything is written; the result is validated like any edit.
+A user fn runs as `uv run --no-project --quiet <bundle>/main.py`, where the bundle is the fn's
+published generation. `main.py` declares any dependencies in a PEP 723 block. The process
+runs in the run's payload cgroup, in the fn's published directory, with:
 
-`recipe_list(project)` lists the recipes the project sees; a broken recipe
-file (bad JSON or shape, a name that is not the file's, a bad param type, an unknown `{x}`) is
-listed with its `error` and never stops the others. For example, `recipes/lane.json`:
+- `PYTHONPATH`: the release's `python/` directory (the `sluice_fn` helper) plus the published
+  scope directory holding the fn, so it can import modules kept beside it (e.g. `_lib/`);
+- environment: the coordinator's environment plus `SLUICE_HOME`, `SLUICE_BIN`,
+  `SLUICE_PROJECT_ID`, `SLUICE_PROJECT` (the name at launch), `SLUICE_STEP`, `SLUICE_RUN_ID`,
+  `SLUICE_RUN_DIR`, `SLUICE_PROJECT_DIR`, `SLUICE_FN_DIR`, `SLUICE_PREV_RUN`,
+  `SLUICE_CONTROL_SOCKET`, `SLUICE_RUN_CAPABILITY`, and `SLUICE_HOST_PATH`,
+  `SLUICE_HOST_PYTHONPATH`, `SLUICE_HOST_VIRTUAL_ENV` (the values before sluice changed them).
+  `.env` files are not loaded; secrets come from the environment the coordinator was started
+  with.
+- stdin: one JSON envelope `{"protocol": 1, "inputs": {...}, "context": {...}}`. `context`
+  holds `home`, `run_dir`, `project_dir`, `project`, `project_id`, `step`, `run_id`,
+  `attempt_id`, `invocation_id`, `fn_dir`, `bin`, `prev_run`, `extra_inputs` (an open fn's
+  step: `{name: {"type"}}`), `outputs` (the outputs the step declares: `{name: {"type",
+  "doc"}}`), `returns`, `control_socket` and `run_capability`.
+- stdout: exactly one JSON document, `{"ok": true, "outputs": {...}}` or `{"ok": false,
+  "error": {"kind", "message"}}` (or an `agent_failure` error object), at most 16 MiB. Anything
+  else, a non-zero exit without a result, or outputs that fail their types fails the step;
+  the error carries the stderr tail (2 KiB).
 
-```json
-{"name": "lane",
- "doc": "One unit of work: a worktree, an agent working in it on a spec read from a file, then the worktree removed",
- "params": {"repo": "string", "base": "string", "spec": {"type": "string", "doc": "Absolute path of the spec file"},
-            "engine": {"type": "enum", "symbols": ["devin", "codex", "claude"]}},
- "steps": {
-   "{unit}-fork": {"run": "git.worktree", "doc": "Cut a worktree for {unit}",
-                   "in": {"repo": {"default": "{repo}"}, "base": {"default": "{base}"},
-                          "branch": {"default": "work/{unit}"}}},
-   "{unit}-work": {"run": "agent.run", "doc": "Do {unit} in its worktree",
-                   "in": {"engine": {"default": "{engine}"}, "cwd": {"source": "{unit}-fork/path"},
-                          "spec": {"file": "{spec}"}},
-                   "outputs": {"landed": {"type": "boolean", "doc": "Whether the change landed"}}},
-   "{unit}-cleanup": {"run": "git.worktree_rm", "doc": "Remove {unit}'s worktree",
-                      "in": {"repo": {"default": "{repo}"}, "path": {"source": "{unit}-fork/path"}},
-                      "after": ["{unit}-work"]}}}
-```
-
-`unit_add("p", "lane", {"unit": "fix-login", "repo": "/src/app", "base": "origin/main", "spec":
-"/specs/fix-login.md", "engine": "devin"})` adds `fix-login-fork`, `fix-login-work` and
-`fix-login-cleanup`, tagged `unit:fix-login`, each starting once it is ready.
-
-**Validation** (every edit must pass; all errors returned with paths): ids valid; docs are
-strings and an input's object form has a `type`; every `run`
-exists (in the project's lookup order); every required fn input bound, no unknown inputs (extra
-inputs and declared outputs only on an open fn's step, no declared output named like one of
-the fn's); every ref names a declared plan input
-or an existing step and one of its outputs (its fn's or those it declares; fields navigated
-through record types, anything under `Any` allowed; a scattered step's outputs are arrays); `fits` holds for each source (for a
-list source, the target must be an array or `Any` and each element must fit its item type; for
-the scatter input, each item must fit the fn's input type); defaults and plan input values pass
-`check_value`; the graph is acyclic.
-
-**Edits.** `patch(rev, ops, reason, author)`: `ops` is RFC 6902 JSON Patch against the plan
-without `rev`. A stale `rev` fails with `conflict` (and the current rev). A valid edit bumps
-`rev`, replaces the plan, and appends a `plan.edit` record `{"rev", "author", "reason",
-"ops"}` to the project's log, also kept (with the record's seq) in the edit history,
-`plan_edits` (creation is rev 1, one `add` of the whole plan). Removing or changing a running
-step is refused, except its `paused` and `tags` (labels: they change nothing it does). An
-edit that removes steps (`plan_patch`, `step_remove`, `plan_prune`: any
-edit whose plan no longer has them) keeps the outcome of each one that finished in `outcomes`
-(§6), in its own transaction.
-
-## 6. Runner and state
-
-A project's state (its `states` row):
-`{"inputs": {"<name>": <value>}, "steps": {"<id>": {"status", "run_ids", "started", "finished",
-"outputs", "error", "manual", "inputs_hash", "skipped", "results", "kept", "queued"}}, "resources"?:
-{"<name>": {"fn", "capacity", "error"?}}}` with status `pending`, `running`,
-`succeeded`, `failed`, `stale`, `skipped` (`skipped` holds why; `queued`, on a pending step,
-the resources it waits for; `resources` the capacity fns' last values, below). A
-scattered step also records `done` (the runs that have ended) and `total` runs. Only resources
-limit how many run at once (below): every other ready step starts, and a scattered step
-starts all its runs; a scattered run that
-fails does not stop the others — the step ends once every run has ended: `succeeded` if all
-did, else `failed` with `run <i>: <err>` for one failed run, `<n> of <total> runs failed:
-run <i>: <err>; ...` for several (each `<err>` cut to one line of at most 200 characters),
-and keeps `run_ids` (index-aligned: `run_ids[i]` is item i's run) plus `results` — a list
-holding each item's outputs where it succeeded and null where it failed — so a retry can
-re-run only what failed.
-
-**Resources.** A project declares named resources (`project_create` / `project_update`, §8;
-the `projects.resources` column): `{"<name>": {"capacity": <n>}}` (a fixed integer >= 0; a bare
-integer stands for it) or `{"<name>": {"capacity_fn": "<fn>"}}`, a fn the project sees that
-takes no required input and returns `{"capacity": <int>}` (its `capacity` output declared `int`
-or `Any`). The runner calls a capacity fn with no inputs (unbound optional ones null) in a
-thread of its own, never inside a tick: a process fn runs in `projects/<p>/capacity/<resource>/`
-(outside `runs/`: no GC or orphan sweep touches it), killed after 20 s; the next call is due
-10 s after the last one ended. A good value (an integer >= 0) replaces the cached one; a
-failure (an error, a time-out, a value that is no such integer) keeps the last good value and
-records why. The cache lives in the state's `resources` (`{"fn", "capacity", "error"?}` per
-capacity-fn resource, written only when it changes, with a `project.capacity` record, §6b), so a
-restarted runner starts from the last value; with none yet, `capacity` is null and the resource
-admits nothing that asks for more than 0. One failing or slow capacity fn holds up nothing but
-its own resource. `update_project` sets the resources it names and removes those it maps to
-null; removing one that a step's `needs` names (or a lease holds or waits for) is refused,
-while any capacity may be lowered
-(running steps keep what they hold; less is admitted). A capacity fn must be visible to the
-project when it is set.
-
-A step's `needs` (§5) is held while the step is `running` — a scattered step holds it once,
-however many runs it starts; an adopted run (a restart) holds like any other, since `held` is
-the sum of the `needs` of the steps whose state is `running` (plus the granted section leases,
-below). Each tick, after the steps without `needs` start as before, the ready, unpaused steps
-with `needs` are taken in priority
-order (higher first, ties in the plan's dependency order); each starts if, for every resource
-it names, `capacity - held >= need` (a need of 0 always fits), and its needs then count as held
-for the steps after it in the same tick. One that does not fit stays `pending` — queued, not
-paused — and its entry gets `queued: ["<resource>", ...]`, the resources it is short of (it
-waits behind nothing: a smaller request later in the order that fits starts). A queued step's
-`waiting` (in `status`) and `queued` (in `step_context` and `sluice me`) read `queued: needs
-lane 1 (56/56 held)` — each resource it is short of with its need and `held/capacity` now,
-`(capacity unknown)` for a capacity fn with no value yet. Pausing (the step's or the project's)
-is a separate hold: a paused or not-ready step is never queued, and a queued step that is paused
-loses `queued`. What a step holds is free once it leaves `running` (succeeded, failed,
-cancelled, killed); the next tick admits the waiters, as many as fit. A `step.queued` record
-(§6b) is written when a step's `queued` resources change, not on every tick, and the
-`step.status` record of a step with `needs` going `running` carries them (its admission).
-`status` returns `resources: {"<name>": {capacity, held, queued, capacity_fn?, error?, holders?,
-waiting?}}` when the project declares any (`queued`: how many steps are queued on it; `error`:
-the capacity fn's last failure, its last good value still standing; `holders` and `waiting`:
-its section leases, below). Steps without `needs` are never held back.
-
-**Section leases.** A running step's fn can hold an amount of a resource for part of its work:
-`with ctx.acquire("land", 1):` (§7). It inserts a `leases` row (waiting) for its run and polls
-it; the runner grants it — sets `granted` — and the fn holds it until the block exits, however
-it exits (its `finally` deletes the row). Granted leases count in the same `held` totals as the
-steps' `needs`, so admission and leases share one accounting. Each tick, inside its
-transaction and before any step is admitted, the runner deletes every lease whose run is no
-longer running (the step left `running`, or a scattered item ended) — so a crash, a kill or a
-cancel never leaks a hold — then grants the waiting leases that fit, their step's `priority`
-first, ties first come (the row's `id`), each counting as held for the ones after it; then the
-steps' admission sees what the leases hold. Leases go before queued steps: a running step
-waiting for a section is further along than a step not started. A lease on a resource the
-project does not declare, or for more than a fixed capacity, raises `ValueError` at once (a
-capacity fn's resource may grow: it waits), and `acquire` outside a running step's run raises
-`RuntimeError`; `timeout=` seconds without the grant raises `TimeoutError` (the row goes). A
-grant comes on the runner's next tick (about a second). Every grant and every release of a
-granted lease is a `step.lease` record (§6b). `status` lists, per resource, `holders` (the
-granted leases: `{step, run, amount, since}`) and `waiting` (the waiting leases in grant order:
-`{step, run, amount, priority, since}`), each only when there are some, and on each step the
-leases its fn holds or waits for (`leases: [{resource, amount, held}]`, also in `step_context`).
-A resource some lease holds or waits for cannot be removed. Leases are an advisory section
-lock for steps of one project; nested acquires by one run each take their own amount, so a
-run can deadlock itself on a capacity it already holds.
-
-**Outcomes.** A step's entry leaves the state once the step leaves the plan (the runner drops
-it at its next tick). If a later committed edit reintroduces that step ID before the tick,
-the edit clears its retained state so the new step starts pending. Newly reintroduced plan
-inputs likewise lose retained values. IDs present both before and after a single patch retain
-their state, including a remove/add within that patch. Run dirs go once nothing refers to
-them (§6b). So the plan edit
-that removes a step whose status is `succeeded`, `failed`, `skipped` or `stale` writes, in the
-same transaction, one `outcomes` row: `project, step, rev` (the rev that edit made; the key),
-`unit`, `fn` (its `run`), `status`, `outputs` (JSON), `error` (a failure's error, or why it was
-skipped), `started`, `finished`, `run_ids` (JSON), `manual` (0 or 1), `removed` (when), and the
-edit's `author` and `reason`. `unit` is the name in the step's `unit:<name>` tag when it has
-one, else the first step of its unit (§5 `plan.units`) in the plan before the edit when that
-unit has more than one step, else null. A step still pending (it never ran) leaves no row, and
-a running one cannot be removed. The rows are never trimmed; deleting the project deletes
-them. Read them with `query` (§8).
-
-**Staleness.** A result is only valid for the inputs it was computed from. When a step starts
-(and so when it succeeds) or is set by hand, its state records `inputs_hash`: a hash of the
-canonical JSON of the inputs it binds (for a scattered step the whole array; an optional input
-it leaves unbound is not in it, so a fn gaining an optional input leaves the steps that already
-ran alone; a `file` binding as `{"file": <path>}`: its path, not its content, so editing a file
-after its step succeeded does not make the step stale, and the new text runs only when the step
-runs again), or null for a step set by hand with `force` while what it
-reads was not ready ("inputs unknown"). Each tick, in dependency order, a `succeeded` step becomes
-`stale` when a step it reads is stale, or when its inputs are all available and hash differently
-(an upstream re-ran with a different result, a plan input changed, its bindings were edited, or
-a null hash once everything it reads is there). While an upstream is re-running the step keeps
-its status: it turns stale only if the new result differs. Stale steps keep their outputs for
-inspection but never re-run by themselves, and steps reading them wait (they are not
-`succeeded`). A stale step whose inputs hash as recorded again (the upstream came back to the
-same value) is `succeeded` again. `step_retry` re-runs a stale step; `step_set_output` accepts
-its result by hand again. `status` and the views show stale steps distinctly. A succeeded step
-with no `inputs_hash` at all (state written before hashes existed) adopts the current hash.
-
-Loop (every ~1 s, and right after an in-process edit), over all projects:
-1. New steps get `pending`. State entries of steps removed from the plan, and values of plan
-   inputs removed from it, are dropped.
-2. Finished runs — `exit.json` written (§4): code 0 with valid outputs → `succeeded` with
-   `outputs` (for a step that declares outputs, merged with what its agent submitted, §5);
-   otherwise `failed` with `error` (exit code, type errors or declared outputs not submitted,
-   plus the stderr tail). A scattered step collects its runs as they finish; a run's failure
-   is its item's and does not stop the others (above).
-3. Mark stale steps (above), settle `when` (§5: skip what its condition or a skipped input
-   rules out, and put back to `pending` a skipped step whose reason no longer holds), then
-   start every ready `pending` step (what it reads is there, what it runs `after` has
-   succeeded or been skipped) that is not paused (a step's `paused`, or its project's
-   `paused`: it stays `pending`, whatever it would read held, until
-   unpaused; pausing never stops a running step) — a step with `needs` only as its resources
-   allow, in priority order, else it stays `pending` and queued ("Resources" above). A ready
-   `core.external` step is never
-   started (§5): it stays `pending`, with no process, run dir or record, and counts as no
-   work to start. Built-in fns run inline;
-   staleness is re-checked after each round of inline results, so nothing starts from a result
-   that no longer holds.
-4. If anything changed, write the state and a `step.status` record per step whose status
-   changed in this pass (§6b), together.
-5. Calls: start the `pending` calls and collect the `running` ones (the `calls` rows), each
-   status change written to the call's row with its `call` record (§6b).
-
-Processes are never started, stopped or waited on inside a write transaction: a tick (1) reads
-what finished (`exit.json`, `output.json`, stderr, the run's submission) outside any
-transaction; (2) in one short write transaction per project applies it, drops what left the
-plan, settles steps, runs built-ins inline and **reserves** each ready step's launch — `running`
-with fresh run ids in `run_ids` (a kept scattered item keeping its own) and its `step.status`
-records, committed before any of its processes exists; (3) outside the transaction stops the
-steps `step_cancel` flagged (the flag stays until the stop is done) and, for each reserved
-run, makes its dir and starts its shim. Just before each run's start (each step, each
-scattered item) its entry is read again: a step cancelled since its reservation — or a run
-its entry no longer lists — starts nothing more. A cancel committed between that read and the
-start is not seen by it: the run starts, and the next tick stops it, as the flag stays until
-the stop is done; (4) records in a second short transaction what (3) did: a cancelled step fails
-`cancelled[: <reason>]`, and a start that raised fails its step — or, scattered, just that
-item — with `could not start the fn: <error>`. A call is reserved the same way (its row
-`running`, committed) before its process starts. A `busy` database skips that project until
-the next tick; nothing that has started a process is ever retried.
-
-On startup — under `runner.lock`, as its first tick reaches each project — the runner adopts
-what a previous one left. For every step entry still `running` and every `running` non-direct call it
-looks at each run dir (a step's `run_ids`; a call's is `runs/<call>`): no dir at all → the run
-was reserved but never started (its dir is made before its process) and fails `not started
-(the runner stopped before it started the run)` — the step, or just that item of a scattered
-one (a retry then re-runs it alone); it is never started automatically, so no agent runs
-twice; `exit.json` → the run
-is finished from it (its `code`, then §6 step 2 decides outputs or error); a held `shim.lock`
-→ the run lives on and is watched; an entry `running` with no `run_ids` at all, or a run dir
-without `shim.json` (both from before this contract) → the step fails `runner restarted`; a
-free lock with no `exit.json` → `run outcome unknown (its supervisor died)` — never an
-invented exit code — and a `child.json` that still names a live fn process then has its
-process group killed, so a retry never runs two agents. For a scattered step a finished-but-failed
-or unknown run is that item's failure: adoption rebuilds the same per-item picture (finished
-items keep their results, live ones are watched) and the step still ends once every run has
-ended. A run a `--kill-runs` shutdown
-stopped is adopted the same way: usually `finished` off the `exit.json` its shim still
-wrote (`exit code -15`), `unknown` when the shim went down with it — never `runner
-restarted`. Adoption kills use the recorded shim pid only while its lock is held and it
-still leads a live process group, so a reused or tampered pid's group is never signalled;
-`step_cancel` and a step removed from the plan stop an adopted run like one this runner
-started — and a running entry no Active could be built for is still killed by its recorded
-shim pids. The runner kills a native session's recorded tmux server and engine process trees
-when it stops, adopts or finishes the run, checking each pid's `/proc` start time before
-signalling it. Each adopted run appends `run.adopt` `{step or call, run, outcome}`
-(`watching`/`finished`/`unknown`/`restarted`/`not started`), and a run dir whose shim lives —
-or whose recorded fn child lives on past it — but which no running step or call references is
-killed and logged `run.orphan` `{run}` — only when something was actually signalled.
-
-**Run-dir GC.** At startup and about once a minute the runner removes every run dir nothing
-references and nothing runs in: a dir stays while a retained record names it (its `run` or
-`call`, or a `step.status` record's `run_ids`), a state entry lists it (`run_ids` or
-`kept.run_ids`), a `calls` row or a submission is its, its `shim.lock` is held or a recorded
-fn child still lives. Each log's dirs are listed before its references are read; since a run
-is referenced before its dir exists, a listed dir nothing references never gains a reference
-again. The pass also finishes every deleted project's directory removal still pending (each
-`deletions` row: its directory moved to `trash/`, removed, then the row deleted; idempotent)
-and removes whatever else `trash/` holds. A `direct` call (§8 `fn_call`) is
-run by the process that made it, never by the runner; if that process dies before logging the
-end, the runner logs the call `failed` with `error: "the process running this direct call is
-gone"` — the pid is checked with its recorded start time, so a reused pid does not pass for it.
-
-**Manual values** (recorded in state and as log records with the current `rev`, `author` and
-`reason`, so the history shows who set what; a manual status change also gets its `step.status`
-record):
-- `plan_set_input(name, value)`: sets a declared plan input (type-checked). Steps reading it
-  become ready. Changing it later makes steps that already read it `stale`. Record `plan.input`
-  `{name, value}`.
-- `step_set_output(step, outputs, force?)`: marks a non-running step `succeeded` with the given
-  outputs (type-checked against its outputs, its fn's and those it declares; arrays for a
-  scattered step), `manual: true`.
-  For manual work, a failed step whose result is known, or a stand-in. Refused (`invalid`, its
-  `errors` naming each: `step a is pending`, `plan input n has no value`) while any step it reads
-  from has not succeeded or any plan input it reads has no value, unless `force: true`
-  (deliberately bypassing a broken upstream; the step then records unknown inputs and turns
-  `stale` once those values are all there). It is never run afterwards unless retried. Record
-  `step.output` `{step, outputs, force?}`.
-- `step_retry(steps?, tags?)`: sets the selected steps, each `failed`, `stale` or manual, back to
-  `pending` (refused, changing nothing, unless every one is); a `core.external` step goes
-  back to waiting to be settled. A failed scattered step with
-  `results` goes back keeping `{inputs_hash, run_ids, results}` under `kept`: when it starts,
-  an unchanged inputs hash and one kept result per item mean the runs that already succeeded
-  are not re-run (their kept run ids stand in `run_ids`); a different hash or count drops
-  `kept` and runs every item as usual. Their succeeded dependents turn
-  `stale` when they produce a different result. Record `step.retry` `{step}` per step.
-- Setting a step's input by hand is an edit: `step_set_input(step, input, value)` patches its
-  binding to `{"default": value}`.
-- `step_cancel(steps?, tags?, reason?)` on a pending `core.external` step (§5) fails it at
-  once with `cancelled: <reason>` (`cancelled` without one) and appends its `step.cancel`
-  and `step.status` records, so an abandoned outside job reads like any cancelled step (a
-  running step is failed so by the runner, which stops it first). `step_retry` puts it back.
-
-**Built-in fns** (in `src/sluice/fns/`, run inline):
-- `core.echo`: inputs `{"value": "Any"}`, outputs `{"value": "Any"}`.
-- `core.collect`: inputs `{"items": "Any[]"}`, outputs `{"items": "Any[]"}`. The fan-in join.
-- `core.format`: inputs `{"template": "string", "values": "Any"}`, outputs `{"text": "string"}`.
-  Python `str.format`: an array fills `{0}`, `{1}`...; a record fills `{name}`. Non-string values are
-  rendered as JSON. Builds prompts from upstream outputs.
-- `core.external`: open, inputs `{}`, outputs `{}`, no `main.py`; never run, inline or
-  otherwise: a step of work done outside sluice (§5).
-
-## 6a. Verify
-
-`verify(project?)` checks everything and returns every problem it finds, each with a location
-and a message; it changes nothing. `where` is a file path (relative to `SLUICE_HOME` when inside
-it, e.g. `projects/p/fns/x.y/fn.json`, followed by `#<path in the document>` for JSON or
-`:<line>` for `.env` files), or a project's plan or state with the path in it
-(`project p: plan#steps.a.run`, `project p: state#inputs.n`). Without a project it checks the
-built-in and global scopes and every project; with one, the built-in and global scopes and
-that project. It covers:
-- every `fn.json`: shape (`name`, `inputs`, `outputs`, optional `doc`, boolean `open`,
-  for an open fn `submits`, and a text `icon`; nothing else), the name
-  matching its directory, every type parsing, `main.py` present for non-built-ins, and its
-  icon (§4: one icon file at most, within 256 KB and of its type; a text icon's length and
-  characters), reported at its `fn.json`;
-- name collisions across scopes (see §2);
-- `.env` files parsing as `KEY=value` lines (blank lines, `#` comments and `export `
-  allowed);
-- the plan: full validation (§5) against the project's functions (a plan can stop validating
-  when a function it uses changes), and a warning for each `file` binding whose file is not
-  there (or not readable) now;
-- the project's resources (§6): each capacity fn visible to the project with an `int` (or
-  `Any`) output `capacity` and no required input (`project p: project#resources.cpu.capacity_fn`);
-  a step whose `needs` names a resource the project does not declare is a problem, one asking
-  for more than a fixed capacity (lowered since) a warning;
-- the state agreeing with the plan (no state for unknown steps or undeclared plan inputs,
-  valid statuses, outputs of succeeded steps passing their output types, plan input values
-  passing their types).
-
-The database's own constraints (§2) keep the shapes of its rows. Without a project, a directory
-under `projects/` that is no project's is a warning, not a problem (left over, or prepared with
-`fns/` and `.env` before its project is created).
-
-`{"ok": bool, "problems": [{"where", "message"}], "warnings"?: [{"where", "message"}]}`. CLI
-`sluice tool verify '{"project": "P"}'` prints them and exits non-zero when there are problems.
-
-## 6b. The log
-
-Each project has one append-only log, and the home has one more for the calls made without a
-project: the database's `records` (§2). Every record is `{"seq", "at", "kind", ...}`. `seq` is
-the home's: it increases across every log and a committed one is never reused, so a log's seqs
-increase but have gaps (another log's records). Writers in any process (the store, the
-runner, a fn process posting to a thread) get distinct, increasing seqs. Kinds:
-
-| kind | fields | written by |
-|---|---|---|
-| `plan.edit` | `rev, author, reason, ops` | every accepted edit (§5) |
-| `plan.input` | `rev, author, reason, name, value` | `plan_set_input` |
-| `step.output` | `rev, author, reason, step, outputs, force?` | `step_set_output` |
-| `step.retry` | `rev, author, reason, step` | `step_retry` |
-| `step.cancel` | `step, author, reason` | `step_cancel`: the runner then kills the step and fails it with `cancelled: <reason>` (a pending `core.external` step fails at once) |
-| `step.submit` | `step, run, outputs, author?` | every accepted `step_submit` (§5) |
-| `step.status` | `step, from, to, error?, run_ids?, needs?` | every status change of a step: the runner, once per state write (`from` is the status at the previous write, so a built-in finishing inline goes `pending` → `succeeded`; a new step's `from` is null), and the manual tools; `error` when it failed, `run_ids` when it finished, `needs` when a step with `needs` is admitted (goes `running`, §6) |
-| `step.lease` | `step, run, resource, amount, state, reason?` | a section lease (§6 "Resources"): the runner granting it (`state` `held`), the fn letting it go (`released`), or the runner dropping a granted one whose run ended (`released`, `reason` `its run ended`) |
-| `step.queued` | `step, needs, resources, reason` | the runner, when a ready step's `queued` resources change (§6 "Resources"): `resources` those it is short of, `reason` as `status` words it then (`needs lane 1 (56/56 held)`); once per change, never every tick |
-| `call` | `call, fn, status, inputs?, outputs?, error?, direct?, pid?, pid_start?, author?` | every status change of a `fn_call`; the pending record (a direct call's first) carries the `inputs` and the `author`; a direct call's running record also its `pid` and `pid_start` |
-| `message` | `thread, from, to?, body, needs_reply, data?` | `thread.post` and `thread_post` (§10) |
-| `inbox.post` | `item, title, from?, run?, input?` | `inbox_post`, `inbox.ask` (§8a); `run` when a step's run asks |
-| `inbox.answer` | `item, answer, by, waiting?` | `inbox_answer` and the dashboard's answer route; `waiting: false` when the item's asker had stopped (§8a) |
-| `inbox.close` | `item, reason?, by` | `inbox_close` (`by`, like `inbox.answer`'s, is the author) |
-| `inbox.adopt` | `item, from, run?, was?, status` | `inbox.ask` taking up its step's own earlier item (`status` open, or answered while nobody waited); `was` the run that asked before (§8a) |
-| `project.pause` | `paused, reason?, author` | `project_update` (or `drain`, `release`, the dashboard's Pause) that changes `paused` |
-| `project.archive` | `archived, reason?, author` | `project_update` (or the dashboard's Archive) that changes `archived` |
-| `project.update` | `fields, reason?, author` | `project_update` that changes the description, the icon and/or the resources: `fields` names them |
-| `project.capacity` | `resource, fn, capacity, error?` | the runner, when a capacity fn's cached value or error changes (§6 "Resources"; `capacity` null before its first good value) |
-| `run.adopt` | `step or call, run, outcome` | the runner, once per leftover run: what its dir showed (`watching`, `finished`, `unknown`, `restarted`, `not started`, §6) |
-| `run.orphan` | `run` | a live run nothing referenced, killed at startup (§6) |
-
-**Authors.** Every write tool (§8) that leaves a record names who made the change, in the
-record's `author` — `by` is that field in `inbox.answer` and `inbox.close` (the name they had
-first; a query over authors reads `coalesce(data->>'$.author', data->>'$.by')`), and `from` in
-`inbox.post` and `message` — by one rule: the tool's `author` argument (`inbox_post`'s and
-`thread_post`'s `from`) when given (not blank);
-else the `SLUICE_AUTHOR` environment variable of the process running the tool; else
-`step:<id>` when `SLUICE_STEP` is set (an agent inside a step calling `sluice tool`); else the
-MCP client's name from the session's `initialize` (`clientInfo.name`); else `mcp` over MCP and
-`cli` from `sluice tool`. The dashboard writes as `dashboard`, `sluice drain` as `drain`. An
-item `inbox_post` posts from inside a step, its `from` that step (`step:<id>` by the rule, or the
-id given), also records the step's run (`SLUICE_RUN_ID`), so it says when nobody waits (§8a).
-`update_project` records what it changed in the same transaction and nothing when nothing did.
-
-The log is history, not the source of truth, so each log is capped at `config.log_max`
-records (default 10000, counted per log): when an append takes one past the cap, its oldest
-records are dropped in the same transaction, down to 90% of the cap (so a full log is not
-trimmed on every append), together with its finished calls and the submissions that no
-remaining record or state entry refers to any more. A pending or running call is never
-dropped: its row, not its records, is its truth. The trim removes rows only; the runner's GC
-(§6) removes the run dirs nothing references. The plan's edits are kept whole in `plan_edits`,
-so `plan_history` reaches back to rev 1 (to the earliest rev a home imported from older
-storage had); its manual values (`plan.input`, `step.output`, `step.retry`) as far as the log
-does.
-
-`last_seq` is a log's high-water mark (its greatest seq, from the same snapshot as the records),
-never moved back past a `since_seq` given. A `since_seq` the log can no longer continue is
-`cursor_expired` (its message names the log's `earliest` and `latest` seq; read again without
-it): one older than the records a trim dropped, or one past every seq the home has issued (from
-another home, or from before an import renumbered the log), which would otherwise wait forever and
-come back as its own `last_seq`. `log_read` and `log_wait`
-(§8), `thread.wait` and `sluice watch` share one filter: `kinds` (exact kinds, or a group name,
-`step`, `plan`, `inbox`, `run` or `project`, for every kind under it) and `threads` (messages only on these threads; given
-without `kinds`, only messages at all).
-
-## 7. Helper library `sluice.fn` (stdlib only)
+The helper, `sluice_fn` (standard library only):
 
 ```python
 # /// script
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-from sluice.fn import run, sh, Transient
+from sluice_fn import run, sh, Transient
 
 def main(inp, ctx):
-    return {"sha": sh(["git", "rev-parse", "HEAD"], cwd=inp["path"]).stdout.strip()}
+    ctx.log("upper-casing")
+    return {"text": inp["text"].upper()}
 
 if __name__ == "__main__":
-    run(main)            # run(main, retries=3, backoff=600) retries on Transient
+    run(main)
 ```
 
-`run(main, retries=0, backoff=30)` reads stdin, calls `main(inp, ctx)` (`ctx`: `project`, `step`,
-`run_id`, `run_dir`, `home`, `fn_dir`, `attempt`, `log(msg)`, `acquire(resource, amount=1,
-timeout=None)` — a context manager holding a section lease, §6 "Resources" — and for an open
-fn's step
-`extra_inputs` `{name: {type}}` and `outputs` `{name: {type, doc}}` from the env of §4, else
-empty) with stdout redirected to stderr,
-prints the result as JSON. On `Transient` it sleeps `backoff` s (env `SLUICE_BACKOFF` overrides)
-and calls `main` again, up to `retries` times; any other exception, or running out of retries,
-prints the traceback and exits 1. `sh(argv, cwd=None, check=True, env=None, timeout=None,
-input=None)` runs a command and raises `ShError` on a non-zero exit when `check`.
-`sh_stream(argv, on_line=echo_line, cwd=None, check=True, env=None, follow=None, input=None)`
-does the same (`input` is written to the command's stdin) but calls `on_line(line, source)` for each line as it arrives (`source` `stdout`, `stderr`, or
-`follow` for lines appended to the file `follow`); the default echoes each line to stderr, cut
-to 200 chars, so a long-running tool shows live progress in the run's `stderr.log`.
-Both run the command in `child_env(env)`: the fn's environment with `PATH`, `PYTHONPATH` and
-`VIRTUAL_ENV` as they were before `uv run` and sluice set them up for the fn's own interpreter
-(the runner passes the originals as `SLUICE_HOST_*`; without them the fn's environment is
-stripped out), so a tool the fn starts runs the host's `python3`, not the fn's isolated one.
+- `run(main, retries=0, backoff=30)` reads the envelope, calls `main(inputs, ctx)`, writes the
+  result and exits. `Transient` raised by `main` is retried within the same run up to
+  `retries` times, `backoff` seconds apart (`SLUICE_BACKOFF` overrides it); `ctx.attempt`
+  counts the calls. SIGTERM and SIGINT raise `Cancelled`. `main` returning `None` means `{}`;
+  anything but a dict is an error.
+- Error kinds written: `Rejected` → `rejected` (refused on purpose; a registered completion
+  action may follow, below), `Transient` → `transient` (retries exhausted), `Cancelled` →
+  `cancelled`, `AgentFailure(kind, message, session)` → an `agent_failure` error, anything
+  else → `fn_failure` with the exception's text. The traceback goes to stderr.
+- `log(msg)` / `ctx.log`: stderr. `sh(argv, cwd, check, env, timeout, input)` runs a command
+  (raises `ShError` on a non-zero exit when `check`); `stream(argv, on_line, …)` runs one and
+  hands each line to `on_line`; `child_env(extra)` is the environment for child tools (host
+  `PATH`, `PYTHONPATH`, `VIRTUAL_ENV` restored, uv and agent-nesting variables removed).
+- `ctx` attributes: `project_id`, `project`, `step`, `run_id`, `attempt_id`, `invocation_id`,
+  `run_dir`, `home`, `fn_dir`, `project_dir`, `prev_run`, `extra_inputs`, `outputs`,
+  `attempt`.
+- `ctx.callback(command, args)` sends one command to the run's control socket with the run
+  capability and returns the reply; an error reply raises `Transient`, `AgentFailure`,
+  `Cancelled` or `CallbackError` (`error`, `message`, `errors`, `current_rev`, `retryable`).
+- `ctx.tool(name, args)` calls a named tool for the run's own project (`project` defaults to
+  it): the reads `status`, `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get` and
+  `call_status`; `message.post` and `message.wait` (run as the step); and the project's
+  mutations (`project_update`, the edit tools, retry, cancel, manual values). `args` use the command's wire shape (§12.1),
+  not the flat MCP arguments. Another project, or any other tool, is refused (`conflict`).
+- `ctx.builtin(name, inputs)` runs a builtin fn inside this run (same run and attempt, a new
+  invocation) and returns its outputs.
+- `ctx.submission()` returns the outputs submitted so far; `ctx.submit(outputs)` submits the
+  step's declared outputs (§6.4).
+- `ctx.retry_on_failure(step, message)` registers a completion action: if this run ends
+  `rejected`, `step` (which must have a completed result) is retried with `message` (≤ 8 KiB)
+  as feedback. Registering the same action again is a no-op; a different one is an error.
+- `with ctx.acquire(resource, amount=1, timeout=None):` holds a section lease on a project
+  resource (§7.6) for the block; `timeout` raises `TimeoutError`. An undeclared resource or an
+  amount over a fixed capacity raises `CallbackError` (`bad_request`).
+- `ctx.header(text)` appends the step's declared outputs to an agent task.
 
-The Rust release's stdlib helper is `sluice_fn`. Reservations freeze the function's
-signature, declared ports, bundle generation and release executable. Python and inline
-functions use those paths through completion. `ctx.tool(name, args)` calls the coordinator's
-project command service; `ctx.builtin(name, request)` composes a native agent in the same run
-and guardian, retaining its session lock across an outer `Transient` retry. Terminal agent
-errors retain `{error: "agent_failure", kind, message, session}`. `ctx.retry_on_failure(step,
-message)` captures and registers the target atomically; only typed `Rejected` completion
-applies the action.
+## 6. Plans
 
-## 8. MCP server
+### 6.1 Document
 
-`sluice serve` runs the runner and an MCP server (official `mcp` SDK, streamable HTTP) at
-`http://<host>:<port>/mcp` in one process. With `--no-runner` it serves only, and a separate
-`sluice loop` runs the steps: the two share nothing but the home (the database and the run
-dirs; the runner polls about once a second), so the server can restart without ending running
-steps. Stopping the runner leaves
-its runs going — a later runner adopts them (§6) — unless it was started with `--kill-runs`.
-A `--host` that is not loopback warns loudly on stderr: the tools (fn_save, fn_call — running
-code) are served without authentication to anyone who can reach the port. Errors are tool
-errors whose message is JSON
-`{"error": "not_found"|"conflict"|"invalid"|"bad_request"|"busy"|"cursor_expired", "message", ...}` (`conflict`
-carries `current_rev` for a plan edit, or `status` for an inbox item that is no longer open;
-`invalid` carries `errors`; `busy`: the database stayed locked past its timeout and nothing was
-written, try again). `rev` is optional on the convenience tools (they apply to the current
-revision in the same transaction) and required on `plan_patch`.
+```json
+{
+  "inputs":  {"repo": "string", "tasks": {"type": "string[]", "doc": "One task per item"}},
+  "outputs": {"notes": {"source": "notes/final"}},
+  "steps": {
+    "work":  {"run": "agent.run", "scatter": "spec", "tags": ["unit:build"],
+              "in": {"engine": {"default": "devin"}, "cwd": {"source": "repo"},
+                     "spec": {"source": "tasks"}}},
+    "gate":  {"run": "core.collect", "tags": ["unit:build", "exit"],
+              "in": {"items": {"source": ["work/final"]}}},
+    "notes": {"run": "agent.run", "after": ["unit:build"],
+              "in": {"engine": {"default": "claude"}, "cwd": {"source": "repo"},
+                     "spec": {"source": "gate/items.0"}}}
+  }
+}
+```
 
-**Docs for agents.** The server sets MCP `instructions` from `src/sluice/docs/instructions.md`
-(short: what sluice is, the workflow, where to read more). A `docs(topic?)` tool returns the index
-(topic names with their first heading) without a topic, or `src/sluice/docs/<topic>.md`. The same
-pages are MCP resources at `sluice://docs/<topic>`. Tool docstrings describe every argument.
-Validation errors carry the path and what was expected.
+A new project's plan is `{"inputs": {}, "outputs": {}, "steps": {}}` at rev 1. Project names,
+step ids, plan input and output names match `^[a-z0-9][a-z0-9_-]*$`; a project name may not
+look like a UUID; `owner` and `orchestrator` are not step ids. Plan inputs and steps share one
+namespace.
 
-**Views.** A dashboard that only reads, with three exceptions: answering an inbox item (§8a),
-archiving a project, and pausing or resuming a project or a step. On a loopback bind every
-route refuses (403, plain text) a request whose `Host` does not name this machine
-(`127.0.0.1`, `localhost`, `[::1]`); a deliberate non-loopback bind lifts that, and the
-write routes still refuse a foreign `Origin` (DNS rebinding satisfies `Origin == Host`).
-Server-rendered HTML with inline CSS (`static/dashboard.css`; Sluice Light and Sluice Dark
-via `prefers-color-scheme` unless the settings menu chose a theme, usable at phone width,
-keyboard reachable), every page on one centred
-column that the top nav's content shares, one nav and no second row: a project switcher whose
-button is the chosen project's name ("All projects" when none; its menu lists the projects, the
-archived ones last), each name led by the project's icon when it has one (§2), then that scope's
-sections (a project's Plan · Log · History · Functions,
-or Projects · Log · Functions), the current one marked (`aria-current` and a bar, not colour
-alone; a step's page is inside Plan), then Inbox and, at the right end, the settings cog, every value HTML-escaped (plans, logs, run output and inbox items are
-untrusted). The Inbox link carries the count of open items across all projects as the
-dashboard's one coral badge (none when nothing waits); coral, the logo's, is spent on nothing
-else, and a failure is never coral or red. A step's status is a
-drawn glyph (dashed ring pending, spinning ring running, check succeeded, ring and dot set by
-hand, circular arrow stale, cross failed, ring with two bars paused, dashed ring with a slash
-skipped, an arrow leaving a box external) with its word for assistive technology, never colour
-alone. Every script the dashboard runs is served by sluice from `static/`: its own, and
-vendored copies (the version in each name) of Datastar v1.0.4 (`datastar-rocket-1.0.4.js`)
-and, on inbox pages, `@openuidev/lang-core@0.3.0` (jsDelivr's ESM build, with its imports of
-`zod@4.6.5` and `ci-info@4.4.0` rewritten to the vendored files next to it), so no third-party
-script runs with the dashboard's origin, which can reach `/mcp`. The only external assets are
-two font stylesheets from cdn.jsdelivr.net (`@fontsource-variable/archivo@5.3.0/wdth.css` for
-display, `@fontsource-variable/public-sans@5.3.0` for text; the system sans without them). The
-nav's brand is the owner's mark (`static/logo.svg`) beside the wordmark "sluice" as live text,
-one link to the index; every page links the same mark as its icon (`static/favicon.svg`). Markdown bodies are rendered on the server by `markdown-it-py` (CommonMark plus tables,
-raw HTML escaped, unsafe link schemes refused).
-- Mermaid (`flowchart LR`, `plan_view`'s text format for agents; the dashboard does not use it):
-  plan inputs as rounded nodes, steps as boxes labelled
-  `id / fn / status` (a scattered step shows `done/total`; a step's doc, one line of at most 60
-  characters, below it), plan outputs as rounded nodes, an edge
-  per source ref labelled with the output name, one colour class per status (pending grey,
-  running blue, succeeded green, failed navy ink with a heavy border, stale gold, manual
-  outlined; a stale manual step
-  shows as stale).
-- **What waits on a person is the inbox alone** (§8a): its open items, counted by the nav's
-  coral badge. The orchestrator posts there whatever it needs from a person. Failed steps,
-  missing inputs and messages between agents are the orchestrator's: they show on the board,
-  in the summary line and on the Threads tab, never as a call to the person (unless no
-  orchestrator reads them, with `unread_alert_min` set: §9).
-- `GET /projects/<name>/threads` (**Threads**, a tab of the project): every conversation of
-  the project, one per thread, the latest first, each a `<sluice-thread>`. A thread shows its
-  step (glyph, id, doc) or its name, how many messages, when the last came and a line of it; it
-  opens to the messages, each with sender → recipient, when, and its body (markdown rendered, a
-  long one folded); all but the last three fold under "n earlier messages" (none from its first
-  open question on). A step's messages sit on the left, everyone else's indented. A message that
-  asks for a reply (`needs_reply`, true unless the sender marked a note) from someone other
-  than a step of the plan, with no later message from that addressee on the thread, is marked
-  "Awaiting reply" (gold, not coral) and keeps its thread open, but on a step's thread only while
-  that step is in the plan and has not succeeded, failed or been skipped (then nobody waits on
-  the answer); a note is marked "note". A thread whose step has left the plan shows its id and
-  "no longer in the plan". The
-  component counts the messages this browser has not seen ("n new", from localStorage; a
-  thread never seen counts as read), marks them while the thread is open, and opens the thread
-  the address names (`#th-<thread>`). A step's detail links to its thread (`step-<id>`) with
-  its count of messages and of open questions. Markdown anywhere on the dashboard (a spec, a
-  message, a value) has its top heading shifted to an h4, under the page's own headings.
-- **What is stuck.** A pending step that a failed step holds up, directly or through other
-  pending steps, is **blocked** (a paused one counts as paused instead). A project with failed
-  steps leads its page and its index row with one line: the failed steps (the first two, each
-  a link to its detail, then "n more"), "failed", how many steps they block and how many are
-  paused, after "Stopped:" when nothing is running, in sluice or outside it (a ready
-  `core.external` step, which is never named there) (`Stopped: a and b failed, blocking 4
-  steps · 11 paused`). It reports; it does not ask (not red, not the inbox). The browser tab's
-  title leads with `n failed ·` and then `n quiet ·` (running steps gone quiet; the
-  project's, or on the index every active project's), kept current as the page's parts
-  update and as runs age. A Log or History tab is titled `Log · <project>` or
-  `History · <project>`.
-- `GET /`: one row per active project, and the archived ones folded under
-  "Archived (n)"; each row: the project's status glyph, icon and name, the line above when steps
-  failed, description (two lines), a progress bar by status with "n of m"
-  succeeded, what is running now (each running step's title and running time, and its
-  `quiet 40m` badge as on its card) or why nothing is, and the last activity (the later of the last log record and the last state write).
-  When the runner's heartbeat (`SLUICE_HOME/runner.json`'s `beat`) is older than 15 s, the
-  index and each project page's summary line say so in the attention voice ("Runner stopped ·
-  last seen …"); no heartbeat file says nothing (a runner from before it writes none). The
-  streams carry the liveness, not the beat.
-- Board edge relation kinds are separate from their display labels. A port named `after`
-  still forms a handoff edge; a pair with both handoff and ordering relations remains solid.
-- `GET /projects/<name>`: under the nav naming the project (its sections: Plan, Threads,
-  History — the log page filtered to the history kinds, which reads the plan's whole edit
-  history, every edit back to rev 1, with the manual values the log still has, in seq order —
-  Log, and Functions, the functions as the project sees them), first whether the work moves: a progress bar by status and one line
-  (succeeded of total, skipped, running, stale, failed, blocked, paused, last activity;
-  the failed, blocked and paused left to the stuck line when it leads the page; the
-  bar's label counts them all) with the Pause
-  and Archive switches; then the description (markdown, folded to its opening, then "Show
-  more"; a paused or archived project says so), then the **board**. Its **lanes** are the
-  steps joined by handoffs (an edge that carries a value; `after` only orders), so independent
-  pieces of work stay together. The steps any edge joins (a handoff, a `when` or an `after`: a
-  unit, §5) are one independent piece of work, its own quiet box when there are several; the boxes wrap, in
-  the plan's order, and no edge crosses between them. A box is rows by dependency depth
-  (`after` counts) from its first step; in a row its cards stand lane by lane, and a row too
-  wide wraps within itself. A lane's cards stay together: a lane that would crowd a row it
-  shares past the box's width starts below the lanes before it (never above a step it runs
-  after), and a lane keeps its side of the box from row to row. On a phone a box stacks its lanes one after another, and the
-  board draws no edges. A box of several steps that have all succeeded (skipped ones count
-  when the rest succeeded) folds to one line (`<details>`: the success glyph, the first step's id, "… last step
-  · n steps", with "n succeeded, m skipped" when some were skipped; on a phone the first id in full and the count under it,
-  without the last id), which opens to its cards; open, it stays open through live
-  updates and, per browser tab, a reload. No edge joins two boxes, so a folded box hides only
-  its own edges. With several boxes, a toolbar above the board orders and filters them, a
-  plain GET form whose choices live in the query, so a reload, Back and a shared link keep
-  them (the defaults leave the address clean; any other spelling of a choice is sent on, 303,
-  to its clean query; an unknown `order`, `show` or `steps` is a 400). The order (`order`) is live
-  first by default: each box ranks by its most urgent step, 1 attention (failed; running but
-  quiet; asking in an open inbox item, whose `from` is the step; pending on a plan input
-  with no value), 2 running (or its work going on outside sluice, a ready `core.external`
-  step), 3 ready (pending or paused), 4 held (blocked by a failure, or
-  stale), 5 done (succeeded or skipped), the plan's order within a rank, so a box moves only
-  when its rank changes; `?order=plan` is the plan's order. `?show=` filters by rank:
-  `active` (not done), `attention` or `done` (default all); `?tag=<tag>` (a select, shown
-  when the plan tags steps) keeps the boxes with any step so tagged. Each choice of what
-  shows counts the boxes it would show within the tag and the steps shown. **What can't run**
-  is hidden by default (`?steps=all` shows every step; a segmented Runnable · All steps,
-  shown when some step can't run): every skipped step (it never runs), and each step that has
-  not run (pending or stale) with a step upstream of it, through handoffs and `after`, that
-  failed, that is stale (the runner re-runs a stale step only on `step_retry`), that is
-  pending and paused (in the plan; a project's pause does not count), that is pending on a
-  plan input with no value, or that can't run itself. The failed, stale, paused or waiting
-  step is where a person acts, so it stays unless something above it holds it too;
-  and a step behind one that can't run can't run, so no step left waits on a hidden one. A
-  ready `core.external` step is none of these: its work goes on outside sluice and the
-  steps behind it run once it is settled, so they stay. The
-  boxes stay the plan's pieces of work, their cards laid out again without the hidden ones
-  (rows, lanes, wrapping) and their edges dropped; a box left with none goes; a finished box's
-  folded line still counts all its steps. A step that hidden steps wait behind says how many
-  in its small line (`+12 behind`). The stuck sentence, the bar and the index count every
-  step. Boxes a filter hides and steps it hides are said in one quiet line at the toolbar's
-  end ("9 done boxes hidden · show", "14 steps that can't run hidden · show", "1 done box and
-  6 steps that can't run hidden · show", its link showing them); their edges go with them;
-  with none left, the board says so ("No step can run." when only steps went). Without
-  JavaScript the form
-  has an Apply button; with it a choice applies at once, keeping the open step's `#step:`.
-  The page's `board` signal holds the query, so its stream renders the board the same way;
-  each box's id is its first step's (`box-<id>`), so a live update moves a box whole (open,
-  folded, with the drawer's ring). A board of one box ignores `order`, `show` and `tag`; its
-  toolbar, only when some step can't run, holds the steps choice alone. A `#step:` address of
-  a hidden step still opens its drawer. The standalone page (`plan_view` html) shows every
-  step.
-  Inside a lane, each row is sorted by where its
-  neighbours sit, a few sweeps down and up, so
-  edges seldom cross. Each step is a compact bubble: its status glyph, its id and, small, how
-  long it ran (live while running) and `done/total` for a scattered step; its tooltip is its
-  doc and what it says now (a running step's last non-empty stderr line, a failed step's
-  error, what a pending step waits on, "its inputs changed" when stale). A running step that
-  has written nothing for 15 minutes (the newest stderr.log mtime of its runs that have not
-  finished, else their run dirs') is quiet: its card, its index row and its drawer's title
-  wear a `quiet 42m` badge in the attention voice, kept current to the minute (and nothing
-  more: its tooltip stays its last output, and its progress shows the tail). A blocked step's card says `blocked`.
-  A ready `core.external` step (§5) is live work outside sluice, not idle pending: its own
-  glyph in the running blue, the running card's blue border, and `outside · 2h 5m` where
-  its time would be, the time since it became ready (the latest `finished` among the steps
-  it waits for, kept current; none: `outside` alone); before it is ready it is a pending
-  step like any other, and it counts as pending in the summary line and the bar. The index
-  row of a project with nothing running says `Waiting on n steps done outside sluice.` A failed step's
-  line (tooltip, log summary, the head of its Error) is its error's last non-empty line,
-  where a traceback names the exception, in sluice's words: without a leading exception class
-  (`sluice.fn.ShError: `), the home directory as `~`, and an exit code of 128 + n (or -n)
-  explained by its signal (`exited 143 (terminated: SIGTERM)`); the Error section keeps the
-  whole error as raised under it. Nothing is inferred from other records. A pending step whose
-  unfinished upstream steps are all running is next in line and reads at full strength;
-  pending steps further off are faint. Everything else is one click away in the step's detail.
-  Built-ins that run inline (`core.echo`, `core.collect`, `core.format`) are dashed
-  bubbles. The server lays out the board, so
-  the order reads without JavaScript; the `<sluice-board>` component draws an edge per handoff
-  from the bottom of a bubble to the top of the one it feeds, with an arrowhead, several edges
-  on one side spread along it (from its `edges` attribute: `[from, to, "output → input"]`); an
-  edge that passes rows of bubbles runs through the nearest gap in each, never behind a bubble.
-  A legend under the board names the solid (hands on a value) and dashed (runs after) lines.
-  Hovering (not a card a reflow brings under a still pointer) or keyboard-focusing a bubble
-  traces it: its edges light up and name their ports,
-  each name by the bubble at the other end, and the rest recede (their text stays at least
-  3:1); the arrow keys move between bubbles (Down and Up to the next row that way, a bubble
-  joined to this one by an edge first, else the nearest across). A bubble's accessible name is
-  its status, id and time (`failed, a, 1h 14m`). A
-  bubble links to the step's page; with JavaScript it opens the step in a drawer (the
-  `<sluice-drawer>`) instead (the address becomes `#step:<id>`, so Back and a shared link work;
-  Escape, the close button, the scrim or a click on the page around the board (not on a card,
-  link, control or the switcher) close it, and focus returns to the card). From 1200px the
-  drawer stands beside the page, which makes room for it (the board reflows, the opened card
-  scrolls into view); from 721px to 1199px it is over the page on a scrim, below 720px a
-  full-screen sheet, and below 1200px it is a modal dialog with the page behind it inert. The
-  page's first tab stop is "Skip to plan", which moves focus to the board, and a polite live region announces status changes the stream brings
-  (`a failed`). Under the board: the **Result** (the plan's outputs that have a value; a
-  long text folds to its first lines, markdown rendered) and the plan's inputs (name, value,
-  doc).
-- `GET /projects/<name>/boxes/<id>`: the cards and edges of one box, with the board's
-  filters. A finished box initially renders its summary alone. Opening it fetches its
-  cards; without JavaScript, "Show cards" opens this route as a styled page. The drawer
-  can open a box containing its step, and remembered open boxes load on reload. Loaded
-  contents survive graph patches while the box's plan and state entries match; a change
-  fetches fresh content before replacing them. Standalone `plan_view` HTML keeps every
-  card inline.
-- `GET /projects/<name>/icon`: the project's image icon (§2), served with its content type,
-  `X-Content-Type-Options: nosniff`, its sha256 as the `ETag` (a matching `If-None-Match`
-  gets 304) and,
-  for SVG, `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline';
-  img-src data:` so a script inside it cannot run even opened directly; 404 when the project
-  has no image icon. Wherever a project's name shows — its index row, the switcher's button
-  and menu entries, its page head — an image icon is an `<img>` of this URL (its sha256 as
-  `?v=`: a new image busts a stale cache, an unchanged one stays cached whatever else changes)
-  and a text icon is escaped text in the same box. The
-  page's favicon stays sluice's mark.
-- `GET /fns/<name>/icon?project=<p>`: a fn's image icon (§4), the fn as that project sees it
-  (without `project`, the built-in and global fns), with the same headers as a project's icon
-  (content type, `nosniff`, its sha256 as the `ETag`, 304 on a match, and the SVG
-  `Content-Security-Policy`: a pack's SVG is third-party content); 404 when the fn is unknown
-  or has no image icon. The dashboard shows a fn's icon in three places, each after the name
-  it belongs to and hidden from assistive technology (the name says it): on the Functions page
-  at 20px before each fn's name; in a step's drawer at 16px, in muted ink, before the fn's
-  name in its line of meta; and on a board card at 14px, in muted ink, after the step id, so
-  the status glyph (16px, in its status colour) stays the card's first and loudest mark (a
-  card of a fn with none is unchanged; the layout counts the icon in a card's width). A box
-  folded to one line shows its main fn's icon after its first id: the fn of its first step
-  running an open fn (the agent in a lane), none without one; an open box has no header. An
-  SVG is drawn as a CSS mask over a `currentColor` box, so it takes the theme's ink like the
-  status glyphs and none of its markup enters the page; a PNG or WebP is an `<img>` and a text
-  icon escaped text, each at 70% opacity on a card. Each URL carries the image's sha256 as
-  `?v=`, so a changed file busts a stale cache.
-- `GET /projects/<name>/steps/<id>`: one step (the drawer's content, or a page of its own),
-  read like a run history: its id with its state as badges beside it (the status glyph and
-  word, `blocked` for a blocked step; runs done of total for a scattered step; how long it
-  ran, live while running, with when it started and ended as the time's tooltip; the quiet
-  badge; "ended 1h ago" once finished), its doc, one line of meta (fn, session, tags),
-  then a row each for what a pending step waits on, what it runs after, its
-  `when`, and for a failed step the steps it blocks, each a link to that step led by its
-  status glyph, the Pause switch where pausing acts (a pending, failed or stale step; Resume
-  on any paused step; pausing never stops a running one) and a link to its thread on the
-  Threads tab; its error (its last line, then the whole text scrolled to its end); its
-  progress (the tail of the current run's stderr, while
-  running); its outputs (while running, what the agent has submitted so far), its prompt (the binding
-  named `prompt`, `spec`, `task`, `instructions` or `brief`) and its other inputs (the run's
-  own `input.json`, else what the binding resolves to now), as a list of fields (a `<dl>`):
-  each name in a narrow column, its value beside it with its doc and, for an input, where it
-  comes from as a small chip linking to the step (`step/output`, or `plan input name`;
-  nothing for a value set in the plan; for the prompt, in its section's head). A value reads
-  by its kind: short text as text, a number as a number, a boolean as a small `true`/`false`
-  pill, null as "none", a short list of scalars as a comma list, an inbox answer as what was
-  chosen, and an identifier (one token with a slash, colon or `@`, or letters and digits: a
-  path, URL, sha, session or ticket) in the data face, giving way in the middle when it does
-  not fit, whole in its title, with a copy button (with script; it selects the text where the
-  clipboard is not allowed). Long or multi-line text and long structures take the full width
-  below their name (markdown rendered, other multi-line text and structures as code) and fold
-  past a few lines ("Show all"). Types show on demand: in the name's title always, after every
-  name with the one Types switch (the "Show value types" setting). Then the
-  stderr of a finished run ("Log output", folded past six lines) and, when it ran more than
-  once, its attempts from the log, oldest first so the current one closes the list: each its
-  outcome (glyph and word), when it started (from the run id's stamp when the log no longer
-  holds its start; when it ended if neither says) and how long it took (the current run: its
-  live time alone, the start in its tooltip) and,
-  for a failure, its headline with the whole error under "Show error".
-  A pending `core.external` step (§5) shows its doc up front instead of in the head (an
-  "Outside sluice" section, markdown rendered: who is doing the work and where) with one
-  line, "Done outside sluice. Set its outputs with step_set_output when the work lands, or
-  cancel it.", then its declared outputs as fields ("not set yet", each with its type and
-  doc); once ready, its state badges add `outside 2h 5m`.
-- `GET /projects/<name>/log` (and `GET /log` for the home log): the log viewer. Newest first, 50
-  records per page; `?before=<seq>` shows the 50 matching records below that seq, `?after=<seq>`
-  the 50 above it, with newest / newer / older links. Filters are query parameters, so a URL is
-  shareable: `kind` (repeated or comma-separated; exact kinds or the `step`/`plan` groups) and
-  `thread` (comma-separated), the §6b filter `log_read` uses. A row shows seq, time, kind and a
-  one-line summary (`s2 succeeded → stale`, `rev 7 by orch: reason (2 ops)`, `questions from
-  e2e: body…`, `e2e → orchestrator: body…` on a step's own thread, `<call> <fn> <status>`,
-  `logic submitted interface, branch`, `a: run r1 kept through a runner restart`,
-  `run r9 stopped: no step or call claimed it`, `i3 answered by dashboard while nobody was
-  waiting (answer)`, `i3 taken up again by ask run r2`; a project record as who changed what:
-  `paused by dashboard: deploying`, `unpaused by orch-2`, `archived by orch`, `description and
-  icon changed by orch`) and expands to the full record as JSON. On a
-  phone the kind filter folds behind its summary (`Filter: all kinds`, `Filter: 3 kinds`). A
-  `thread.post` call's `call` records are hidden unless the filter selects `call` (a failed
-  one still shows); the tools list everything. Unknown kinds or a
-  bad seq are a 400 page.
-- `GET /fns?project=<name>` (project optional): every function that context sees, grouped by
-  scope, each name led by its icon (§4) when it has one, with doc and typed inputs and
-  outputs (`string[]`, `enum(a|b)`, `{field: type}`, `T?`); a function with a problem (e.g. a collision) is shown in red with the verify message.
-  A scope with more than three functions opens with an index of their names, each a link to
-  the function (`#fn-<name>`).
+Step keys: `run` (the fn), `in` (bindings), `scatter`, `doc`, `outputs` (declared, open fns
+only), `paused` (`true` or a reason string), `after` (gate entries), `tags`, `needs`,
+`priority`. Plan outputs are `{"source": "<ref>"}`.
 
-**Live updates.** Every page renders its visible content on first load and works without JavaScript
-(the log filter is a plain GET form; a card is a link to its step's page). The index, project
-and log pages then open one Datastar SSE stream each (`GET /stream`, `/projects/<name>/stream`,
-`/projects/<name>/log/stream`, `/log/stream`), and a step's detail one of its own
-(`/projects/<name>/steps/<id>/stream`, under the `sver` signal; the drawer ends the previous
-one when it shows another step). The index and project pages carry a `ver` signal, a hash of
-what they show, read from the database in one snapshot. The index uses runner liveness,
-project counters, function registry fingerprints and running-run file stats; a project uses
-its own counter and registry, the open inbox count and running-run file stats. Run activity
-includes stderr, input and exit files and the directory's fallback timestamp. Threads use
-the board data, message revision and nav badge. Inbox pages use their filtered item projection
-(including sender liveness) and nav badge. Step details use the board data, submissions,
-status/output/adoption/message revisions and their run files. Unrelated call logs do not
-invalidate threads, inbox or step details. Log pages use indexed revision counters and the
-latest plan edit revision; appends, trims and record corrections change their version without
-scanning retained history.
+### 6.2 Bindings
 
-The server polls those versions about once a second off the event loop, each poll a short
-read that holds nothing between polls. When they change it re-renders the page's parts
-(each an element with an id) and sends a `datastar-patch-elements` event for each part that
-differs, then the new version. An idle page receives nothing; a reconnecting parts client
-whose version is not current first gets every part. Each version/render baseline is gathered
-in one short SQLite read snapshot, with the version checked before and after rendering.
-External file/liveness changes that alter that observation defer delivery until the next
-poll; the server does not retry in a loop or advance an unsent baseline. SQLite snapshots do
-not make external files atomic. The project stream reuses its parts when only the log
-changes. Its cache belongs to that connection and is keyed by the plan and state documents,
-project description, pause, archive, icon and last state-write time, open inbox senders and
-count, runner liveness, run files and function registry fingerprint. A log-only change sends
-the new version signal alone; the browser keeps elapsed and relative times current. Nothing
-is cached between connections.
-Parts are morphed, so an expanded disclosure stays open. The page loads Datastar
-from its Rocket bundle (`datastar-rocket-1.0.4.js`, which adds web components) and
-`/static/sluice.js`, which keeps relative and running times current and defines three
-components in the light DOM around what the server rendered (their hosts keep Rocket's
-attributes through a morph with `data-preserve-attr`): `<sluice-board>` draws and traces the
-edges (redrawn when its `edges` or board geometry changes or it resizes; the SVG it draws into is
-`data-ignore-morph`), moves between cards with the arrow keys and flips a glyph whose status
-changes; `<sluice-drawer>` opens and closes the drawer; `<sluice-thread>` marks unseen
-messages. On the log page, changing the filter updates the `kinds`/`thread` signals and
-reconnects the stream, which sends the new table and rewrites the address bar to the filter's
-query string. The newest live log always shows at most 50 visible records, plus the pager
-for older records. Each connection starts by morphing that desired table and pager, including
-when its `seen` cursor is current; a replay before cursor delivery cannot duplicate rows.
-Filters reset the cursor and table baseline. Suppressed thread-post call noise does not count
-against the visible page size. Expanded rows remain open through morphing.
+- `{"default": <json>}`: a literal.
+- `{"source": "<ref>"}`: a plan input name, or `<step>/<output>` with optional `.field` or
+  `.0` path segments.
+- `{"source": ["<ref>", …]}`: fan-in, an array of the values in order.
+- `{"file": "/abs/path"}`: the file's UTF-8 text, a `string`, read when the step starts (every
+  start); a missing file fails the step and `verify` warns about one missing now. Only the path
+  feeds the inputs hash.
 
-Components that enhance server-rendered children disable Rocket rendering on prop changes;
-patched descendants retain Datastar's local scope. Disconnecting a host aborts its listeners,
-stream, observers and pending callbacks before a same-node reconnect. Presentation-only
-tracing classes and identical timer text do not redraw the graph or rescan the body.
-Streams end when the server shuts down; the client reconnects with backoff, up to ten retries
-and a 30-second maximum wait. Missing or deleted resources return terminal HTTP 204.
-Dashboard SSE negotiates gzip and flushes each event immediately. Dashboard asset URLs carry
-a content version shared with their local module imports and receive immutable caching;
-unversioned or stale-version URLs revalidate with `no-cache`.
+Unbound optional fn inputs are null. A source binding is a **handoff**: the step waits for its
+sources to succeed and is skipped when a source step is skipped.
 
-- `GET /inbox` (every project) and `GET /projects/<name>/inbox`: the items, filtered by
-  `?status=open|answered|closed|all` (default open; open oldest first, the others newest first).
-  An item shows its title, project, id, `from`, age, the input it sets, and its body as markdown.
-  An open item nobody waits for (§8a) says, in the attention gold under that line, `Nobody is
-  waiting — <stopped>`, above its answer box `An answer will not be delivered unless the step is
-  retried.` (for a call, `: the call has ended`), and lists after the open items somebody waits
-  for. An open item has an answer box that works without JavaScript (a form POST of `text`, then a
-  303 back); with it, `/static/inbox.js` draws the item's `ui` (§8a) above the box, and folds
-  the box away when the program has buttons. An answered item shows its answer, a closed one
-  its reason. The page streams like
-  the index (`/inbox/stream`, `/projects/<name>/inbox/stream`,
-  parts: the items and the nav badge); each open item's answer area carries
-  `data-ignore-morph`, so a patch never resets what a person is typing. An answer the server
-  took shows at once, without waiting on the stream (which may be reconnecting after a
-  restart; streams retry at most 3 s apart): on the open view the item leaves the list and the
-  badge drops.
-- `POST /projects/<name>/inbox/<id>/answer`: the first write. A JSON body is the answer object;
-  a form body (`text`, `next`) becomes `{"action": "answer", "text"}` and redirects to `next` (a
-  local path: no scheme, no netloc, no backslash) on success. Both call the store's `inbox_answer`, the tool's own code path, with
-  author `dashboard`. Refusals map to 404 (`not_found`), 409 (`conflict`: already answered or
-  closed) and 400 (`invalid`, `bad_request`); JSON gets the error payload, a form an HTML page. A
-  request whose `Origin` is not this host is refused (403).
-- `POST /projects/<name>/archive`: the other write. A form `archived` ("1" or "0") calls the
-  store's `update_project`, the `project_update` tool's own code path (author `dashboard`),
-  then redirects (303) to the project. An archived project keeps running; it is listed apart. Same refusals as the answer route (404, 403 for another `Origin`).
-- `POST /projects/<name>/pause` and `POST /projects/<name>/steps/<id>/pause`: a form `paused`
-  ("1" or "0") calls `update_project` or `pause_steps` (the `project_update` and `step_pause`
-  tools' code paths, author `dashboard`), then redirects (303) to the project, with the step's drawer open
-  (`#step:<id>`) for a step. Same refusals. A paused step that has not started shows a pause
-  glyph (its reason in its tooltip and the drawer's Status); a paused project says so under
-  its name with a Resume switch next to Archive. An `after` edge is drawn dashed; the drawer
-  lists a step's After and Tags.
-- **Settings**: the nav's cog (named "Settings", on every page and at every width) opens a
-  menu (a `<details>`; a click elsewhere or Escape closes it) holding a form: the theme, a
-  radio group (legend "Theme") of every preset in `views.THEMES`, each row its name and its
-  swatch (the theme's canvas with "Aa" in its ink, and its nav band and stripes across the
-  corner),
-  the chosen one ticked: Sluice Light (`light`), Sluice Dark (`dark`), Canyon (`canyon`),
-  Ranger (`ranger`), Diner (`diner`), Night Sky (`night-sky`) and Wood Panel (`wood-panel`)
-  (until one is picked, the page follows the OS's `prefers-color-scheme` between the two
-  sluice presets and the menu marks that one; once picked it stays); then
-  "Show value types" (the drawer's Types switch, as a setting), with a Save button that only
-  a page without JavaScript shows. The choices live in the browser's cookies, `sluice_theme`
-  (a preset's id; none until one is picked) and `sluice_types` (`1`), which every route reads
-  (anything else in them is ignored): a page renders the theme on `<html>` as `data-theme`
-  and value types as its `show-types` class, so it never shows the wrong theme first. With
-  JavaScript (`static/nav.js`) a choice applies at once and is posted to the route in the
-  background; the Types switch posts the same way. Cookies are per host, not port, so
-  dashboards on other ports of this machine share them.
-- `POST /settings`: a form `theme` (a preset's id) and `types` (`0` or `1`; of
-  several, the last: the menu sends a hidden `0` before its checkbox) each set their cookie
-  (`Path=/`, `SameSite=Lax`, `HttpOnly`, `Max-Age` 400 days) or clear it (`0`) when
-  present; anything else is 400 and changes nothing. It then redirects (303) to `next` under
-  the answer route's rule (a local path, else `/`), or answers 204 without one. It writes
-  nothing on the server; like the writes it is refused under a foreign `Host` and from a
-  foreign `Origin` (403).
-- `GET /static/inbox.js`, `GET /static/openui.json`: the renderer and its vocabulary;
-  `GET /static/dashboard.css`: the dashboard stylesheet, shared by live pages; standalone
-  HTML keeps it inline. Status glyphs and chevrons use one set of SVG symbols per page,
-  and each board defines its fn icon URLs once.
-  `GET /static/sluice.js`: the dashboard's script and components; `GET /static/nav.js`: the
-nav's menus and settings; `GET /static/logo.svg`,
-  `GET /static/favicon.svg`: the mark (`image/svg+xml`).
+### 6.3 Scatter
 
-`plan_view(project, format, all?)` returns the Mermaid text, or the project page as a standalone
-HTML document from the same renderer: the summary and the board (cards without links), then every
-step's detail in a disclosure (no nav, no drawer, no stream, no script). Unless `all`, both
-leave out the done units (§5) — their steps, and the edges to them and from them to the plan's
-outputs — and say so in one line (`3 done units (7 steps) left out; plan_view with all: true
-shows them`: a `%%` comment after `flowchart LR`, a line under the page's summary, whose bar and
-counts still cover every step).
+`"scatter": "<input>"` runs the step once per item of that input's array (each item must fit
+the input's type); every output becomes an array in item order. The step succeeds when every
+item does and fails if any fails, keeping the per-item results so a retry with unchanged inputs
+and item count re-runs only the failed items. A scattered step holds its `needs` once.
 
-The `query` tool gives trusted agents one SELECT (or WITH) against the database itself — for
-questions the other tools do not answer: joins, aggregates, looking across projects. Each call
-opens its own read-only connection (`PRAGMA query_only`), lets an authorizer allow only reads —
-no writes, ATTACH, PRAGMA or load_extension — and turns SQLite's limits down (100 KB of SQL,
-200 columns and expression depth, 50 compound selects, 1 MB values, 250,000 VM operations); a
-statement still running after 2 s is interrupted (a cooperative check between VM instructions,
-so one huge scalar can run past it, bounded by the value limit). It returns {columns, rows,
-truncated}: at most `limit` rows (an int in 1–1000, default 200), consumed incrementally,
-with one extra row determining whether the row limit truncated the result. Reading stops
-once the rows' JSON passes ~1 MB; the crossing row is retained. SQLite may evaluate ahead
-or materialize sorting and aggregation internally. A BLOB
-cell is refused with the hint to select `hex(col)` or `length(col)`; `params` binds `?`
-placeholders. The `outcomes` table (§6) holds what finished steps removed from plans ended
-with. The `steps`, `messages`, `step_changes`, `edits` and `log` views (§2) join the
-raw tables into readable shapes, and the tool's description names every table and view with
-its columns.
+### 6.4 Open fns: extra inputs, declared outputs, submission
 
-Every tool refuses an argument it does not take (`bad_request`, naming it and the arguments
-the tool does take) rather than ignore it. Every tool whose write leaves a record takes
-`author?`, resolved by the rule in §6b; `inbox_post` names its asker with `from?` instead,
-resolved by the same rule when not given (`thread_post` takes both: its `from` defaults to the
-resolved author), and
-`project_delete` and `fn_save` leave no record to carry one. A tool that changes one step's contents takes
-`step`; a tool that acts on a selection (`step_pause`, `step_retry`, `step_cancel`,
-`step_remove`, `status`) takes `steps` (ids; a single id is a list of one) and/or `tags`;
-`plan_prune` takes `tags` too.
+A step whose fn is open may bind extra inputs (any id-shaped name) and declare `outputs`
+(`{name: type | {"type", "doc"}}`, none named like a fn output); `submits` from fn.json join
+them. Refs to declared outputs validate like any output. While the step runs, whoever does the
+work calls `step_submit(project, step, run, outputs)`: checked against the declared outputs
+(every required one, fitting types, no others; `invalid` lists each mismatch), refused unless
+the run is current; a resubmission replaces the last. Each accepted submission is a
+`step.submit` record. When the run completes, the submission joins the fn's outputs; a required
+declared output never submitted fails the step.
 
-| Tool | Args | Returns |
+### 6.5 Work done outside sluice
+
+A step running `core.external` (open, no inputs or outputs of its own) is never started: once
+ready it waits (wait reason `external: set its outputs with step_set_output`) until
+`step_set_output` settles it or `step_cancel` fails it. It may not scatter, and `fn_call`
+refuses it. Patching a step's `run` to `core.external` and retrying it moves its work out: the
+old fn's inputs become extra inputs, and outputs dependents read must be declared.
+
+### 6.6 Gates: `after`
+
+`after` is a list of gate entries. A step is ready when every handoff source has succeeded and
+every entry is satisfied.
+
+| entry | satisfied when | skips the step when |
 |---|---|---|
-| `docs` | `topic?` | the index, or one page as markdown |
-| `projects_list` | – | `[{name, description, rev, counts, archived, paused, resources?, icon?}]`; `resources` when it declares any (§6); `icon`: `{"kind": "image", "type": <content type>}` or `{"kind": "text", "text": ...}` (§2) |
-| `project_create` | `name, description?, icon?, resources?, author?` | `{name}` (with an empty plan and `resources`, §6 "Resources": `{"lane": 56, "cpu": {"capacity_fn": "p.cpu"}}`; a bad shape or a capacity fn the project does not see is `bad_request`); refused (`bad_request`) while a deleted project of the name is still being removed (§2), or when a leftover `projects/<name>/` holds more than `fns/` and `.env` |
-| `project_update` | `name, description?, archived?, paused?, icon?, resources?, reason?, author?` | `{name}`; each change is a `project.pause`, `project.archive` or `project.update` record with the reason and author (§6b); `archived: true` lists the project apart on the dashboard (nothing stops); `paused: true` starts none of its steps until `false` (§6); `icon` is an image path or a short text icon, `""` removes it (§2); `resources` sets each resource it names and removes each it maps to null (refused, `bad_request`, for one a step's `needs` names or a lease holds or waits for), the others kept (§6 "Resources") |
-| `project_delete` | `name` | `{deleted}`: removes the project (its plan, edits, state, log, inbox, calls, submissions and outcomes in one transaction, then its directory: runs, fns, .env); refused (`bad_request`) unless it is archived, none of its steps is running and no non-direct call on it is pending or running. A direct call that ends after it records nothing; a new project of the same name can be created once the old directory is gone, and starts clean |
-| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, open?, submits?, icon?, error?}]` in lookup order (`scope`: builtin, global or project); `open: true` marks an open fn, `submits` what its agent submits on every step, `icon` its icon (§4); `error` marks a function with a problem |
-| `fn_get` | `name, project?` | the fn.json plus `scope` and `path` |
-| `fn_save` | `fn, main_py, project?` | writes `fn.json` + `main.py` into the project's (or, without a project, the global) `fns/<name>/` after validating `fn`; `{scope, path}` |
-| `fn_call` | `name, inputs, project?, wait?, direct?, author?` | checks `inputs`, then queues one fn run outside the plan (a `calls` row, the call's truth, its inputs kept for its whole life; each status change also a `call` record in the log, §6b) for the runner; `{call, status, outputs?, error?}`, waiting up to `wait` s (capped at 3600). `direct: true` runs it in the calling process to the end instead (no runner needed); refused (`bad_request`) for `core.external`, which never runs |
-| `call_status` | `call, project?` | `{call, status, outputs?, error?, stderr_tail?}` from the call's row (a finished call's row goes with its last record, §6b) |
-| `plan_get` | `project` | `{rev, plan}` |
-| `plan_patch` | `project, rev, ops, reason, author?, start? = true` | `{rev}`; a step it adds starts when ready, or comes in paused when `start` is false (§5) |
-| `step_add` | `project, step, spec, reason?, start? = true, author?` | `{rev}`: `plan_patch` adding one step at the current rev |
-| `recipe_list` | `project` | `[{name, doc, params, scope}]` by name: the recipes the project sees (§5; `scope` global or project, the project's winning a name clash), `params` with `unit` first; a broken recipe file as `{name, scope, error}` |
-| `unit_add` | `project, recipe, params, start? = true, tags?, after?, when?, inputs?, author?, reason?` | `{rev, steps}`: the recipe's steps expanded with `params` (`unit` among them), tagged `unit:<unit>` (then the recipe's tags, then `tags`), with `after` ids appended, `when` set and `inputs` bound as literals on the steps named by suffix, added in one edit at the current rev, paused only when `start` is false (§5); `invalid` lists every param, expansion or staging problem (an unknown suffix, an input the step cannot take, a `unit:` tag), `bad_request` names the ids the plan already has |
-| `unit_tag` | `project, unit, add?, remove?, reason?, author?` | `{rev, steps}`: adds and removes tags on every step tagged `unit:<unit>` (`steps`), in one edit at the current rev (§5); `unit:` tags refused (`invalid`), an unknown unit `not_found`; nothing to change: no edit, the current rev |
-| `edge_add` | `project, step, after, reason?, author?` | `{rev, after}`: appends `after` (an id or a list) to the step's `after`, deduplicated, in one edit at the current rev (§5); an unknown step or a cycle is `invalid`; edges already there: no edit, the current rev. Only `after`: a step's one `when` is set with `step_update` |
-| `edge_remove` | `project, step, after, reason?, author?` | `{rev, after}`: removes those ids from the step's `after` in one edit at the current rev (removing the key when none is left); an unknown step is `invalid`; edges not there: no edit, the current rev |
-| `step_update` | `project, step, changes, reason?, author?` | `{rev}`: each key of `changes` replaces that field of the step, null removes it; a running step takes only `paused` and `tags` |
-| `step_remove` | `project, steps?, tags?, reason?, author?` | `{rev, steps, outcomes}`: removes the selected steps in one edit; refused while one runs or something left reads it; `outcomes` is how many of them finished and kept their outcome (§6) |
-| `step_pause` | `project, steps?, tags?, subtree? = false, paused? = true, reason?, author?` | `{rev, steps}`: one edit setting (to the reason, else true) or clearing `paused` on the steps selected by id and/or tag, with everything downstream of them (what reads from or runs after them, transitively) when `subtree`; an already paused step keeps its reason unless a new one is given |
-| `step_cancel` | `project, steps?, tags?, reason?, author?` | `{steps}`: marks the selected running steps for the runner to kill; each fails with `cancelled: <reason>` (`step_retry` runs it again); a selected pending `core.external` step fails so at once (§6); refused, changing nothing, unless every one is running or a pending `core.external` step |
-| `plan_history` | `project, since_rev?` | every edit (`plan.edit` records from `plan_edits`, back to rev 1) and the `plan.input`, `step.output` and `step.retry` records still in the log, in seq order, each with its `seq` (with `rev` > `since_rev`) |
-| `plan_set_input` | `project, name, value, reason?, author?` | `{ok}` |
-| `step_set_input` | `project, step, input, value, reason?, rev?, author?` | `{rev}` |
-| `step_set_output` | `project, step, outputs, reason?, force?, author?` | `{ok}` (§6: refused while what it reads is not ready, unless `force`) |
-| `step_retry` | `project, steps?, tags?, reason?, author?` | `{steps}` (each failed, stale or manual); a failed scattered step re-runs only its failed items when its inputs are unchanged (§6) |
-| `step_submit` | `project, step, outputs, run?, author?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
-| `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
-| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (reading again only when a commit touches that log, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
-| `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120, settles? = "short"` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs?, omitted?}]}`, the outputs as `settles` says: `short` only the booleans, numbers, strings of at most 80 characters on one line and a `summary`'s first line cut to 200 characters and "…", the others' names in `omitted`; `full` every output whole; `none` no `outputs`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all, the messages first in `records` (each group in seq order). `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
-| `drain` | `projects?, author?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in SQLite so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
-| `release` | `author?` | unpauses exactly the projects the maintenance ledger lists and clears it; `{released}`. Projects paused otherwise stay paused |
-| `step_context` | `project, step` | where the step stands, for the agent doing it — `sluice me` as JSON (§10): `{project, step, fn, doc, status, queued?, needs?, leases?, started, finished, elapsed, run, inputs, upstream, messages, submit, thread, ask}` (`queued`: why a step queued on resources waits; `leases`: the section leases its fn holds or waits for, §6) |
-| `query` | `sql, params?, limit? = 200` | `{columns, rows, truncated}`: one read-only SELECT against the database, on a fresh read-only connection per call (see above) |
-| `verify` | `project?` | `{ok, problems: [{where, message}], warnings?}` (§6a) |
-| `plan_view` | `project, format: "mermaid"\|"html", all? = false` | the diagram or page as text, without the done units unless `all` (above) |
-| `plan_prune` | `project, older_than_hours? = 0, tags?, author?, reason?` | `{rev, units, steps, outcomes}`: removes every step of every done unit (§5) whose last step finished at least `older_than_hours` ago (with `tags`, only the done units with a step carrying one of them), in one edit (so `plan_history` keeps them); `units` is how many, `steps` the ids removed, `outcomes` how many outcomes they kept (§6). A done unit has no edge to anything else, so removing it breaks no step; one a plan output reads is kept (removing it would break the plan). Nothing to remove: no edit, the current rev |
-| `status` | `project, steps?, tags?, brief? = false, all? = false, view? = "steps", state?` | only the steps selected by id and/or tag when given (done or not); else, unless `all`, every step but those of the done units (§5), which `done_units: {units, steps}` counts (only when some were left out); with `brief`, every string over 200 characters in `inputs`, `outputs` and the steps' `outputs` is cut to its first 200 and `… [n more characters]`; `{rev, paused, inputs: {name: value or null}, resources?: {name: {capacity, held, queued, capacity_fn?, error?, holders?, waiting?}}, input_docs?: {name: doc}, outputs: {name: value or null}, steps: [{id, run, status, started, finished, outputs?, error?, doc?, paused?, tags?, after?, when?, needs?, priority?, leases?, skipped?, waiting?, manual}], done_units?: {units, steps}}` (status: pending, running, succeeded, failed, stale or skipped, with `skipped` saying why; `input_docs` only when some input has a doc; `paused` is true or the reason; `waiting`, on a pending step, says why it has not started: `paused: <reason>`, `the project is paused`, `step a is pending`, `after step a, which is running`, `plan input n has no value`, `queued: needs lane 1 (56/56 held)` for a step queued on resources (§6); a ready `core.external` step, §5: `external: set its outputs with step_set_output`; `resources` when the project declares any, §6 "Resources"). `view: "units"` returns one compact row per unit instead (below); `state` (only with it) keeps the units in these states, and `brief` is refused with it |
-| `thread_post` | `project, thread, body, needs_reply? = true, to?, from?, data?, author?` | `{seq}`: appends the `message` record the `thread.post` fn appends (§10; the same validation), here and now; `seq` is its seq in the log, so it is delivered. `from` defaults to the author (§6b) |
-| `inbox_post` | `project, title, body?, ui?, input?, from?` | `{id}` (§8a); `from` defaults by the author rule (§6b); refused (`not_found`) when `input` is not a declared plan input |
-| `inbox_list` | `project?, status? = "open"` | the items with that status (`open`, `answered`, `closed` or `all`), each with its `project`, oldest first; every project's without `project`; an open item a step or a call asked carries `waiting` (and `stopped` when false, §8a) |
-| `inbox_answer` | `project, id, answer, author?` | the answered item; `conflict` (with `status`) unless it is open; with `input`, `invalid` when the value does not fit (the item stays open) |
-| `inbox_close` | `project, id, reason?, author?` | the closed item; `conflict` unless it is open |
+| `s` (a step) | `s` succeeded | `s` was skipped |
+| `s?` | `s` succeeded or was skipped | never |
+| `r` (a boolean ref or plan input) | the value is `true` | the value is `false` or null, or its step was skipped |
+| `!r` | the value is `false` | the value is `true` or null, or its step was skipped |
+| `unit:u` | every exit step of unit `u` succeeded | any exit step was skipped |
+| `unit:u?` | every exit step succeeded or was skipped | never |
 
-**Addressing a post.** A post without `to` goes to the sender of the message it replies to, or,
-when it is not a reply and its thread is `step-<id>` naming a step in the current plan (and it is
-not from that step), to that step, so the step's runs are given it (§6); otherwise `to` stays
-unset.
+- An entry whose step is pending, running, failed or stale is unsatisfied: the step waits.
+- A ref entry must be typed `boolean`, `boolean?` or `Any`; an `Any` value that is not a
+  boolean fails the step (`after: <ref> is 3, not a boolean`). `?` is refused on refs and `!`
+  on step and unit entries. A unit entry naming a unit with no steps is refused.
+- A skipped step is decided again whenever its reasons change and goes back to `pending`. Skip
+  reasons: `<ref> is false|true|null`, `step <s> was skipped`, `unit <u> was skipped (exit step
+  <s>)`. Wait text: `after <entry> (<status>)`.
+- Gates decide starts only: they never stop running work, are not evaluated for paused steps,
+  and never feed the inputs hash.
+- Entries keep their order and are deduplicated. Cycles count every entry; a unit entry counts
+  as edges to the unit's exit steps.
 
-**The units view.** `status(project, view="units")` answers "what is running, blocked or
-failed, and for how long" in one call: `{project, rev, paused, resources?, units: [{unit, state,
-age, engine, steps, blocked, last, line}], done_units?}` (`resources` as in the steps view, here
-only when the project declares any), one row per unit as the plan's units are (the steps sharing
-a `unit:<name>` tag; an untagged step is a unit of one, named by its id), sorted by `age`, oldest first
-(unknown last). `state` is `running` (a step running), else `failed` (a step failed or stale),
-else `settled` (every step succeeded or skipped), else `blocked` (nothing running or startable
-and something pending and held, by `sluice next`'s held rule), else `queued` (a step queued on
-resources, §6), else `pending`. `age` is the
-seconds its running step has run (the longest, when several), else since its last change (its
-steps' last `step.status` record, start or finish), null when nothing is known. `engine` is
-`engine·model·effort` from the unit's agent step (its first step whose fn is open): the values
-its `engine`, `model` and `effort` inputs are bound to now, each cut to 12 characters, empty
-when none. `steps` is each step's mark in plan order, the `<unit>-` prefix dropped: `✓`
-succeeded, `▶` running, `·` pending, `✗` failed, `~` stale, `–` skipped, `‖` paused, `≡`
-queued (`fork✓ work▶ landed· close·`). On a queued unit, `blocked` is its first queued step's
-reason (`queued: needs lane 1 (56/56 held)`). `blocked`, on a blocked unit, says why its first held step is
-held: `paused` (or `paused: <reason>`), `project paused`, `external`, `input <n> (no value)`, or
-the first edge it waits on, `after <step> (<status>)` for an `after` edge and `reads <step>
-(<status>)` for a handoff. `last` is the last message on any of its steps' threads
-(`step-<id>`), whitespace collapsed, cut to 200 characters, `Q: ` before a question
-(`needs_reply` true). `line` is the row in at most 80 characters, for an agent to read:
+### 6.7 Units
 
-```
-fig-4201    ▶ 42m  opus·xhigh  fork✓ work▶ landed· close· rm·  "Q: Which crate …
-fig-4202    ‖   –  devin  fo· wo· la· cl· rm·  after fig-4200-work (failed)
-```
+A unit is its tag: steps tagged `unit:<name>` form unit `<name>` (at most one `unit:` tag per
+step); an untagged step is a unit of one named by its id. Edges may cross units. A unit is
+**done** when every step succeeded or was skipped. Its **exit steps** are its steps tagged
+`exit`, else its sinks over the edges inside the unit; a unit may not depend on its own exits.
+Its **entry steps** (derived, never stored) are its steps with no dependency inside the unit.
+`unit:` and `exit` are reserved tags. A unit is **settled** when none of its steps is running
+and every pending one is external or not ready.
 
-(name, the state's mark — `▶` running, `✗` failed, `‖` blocked, `≡` queued, `✓` settled, `·`
-pending — and
-age, engine, step marks with names cut to 4 characters when they do not fit, then what it is
-blocked on and its last message, cut with "…"). `state` filters (one state or a list); `steps`
-and `tags` select steps, and a unit is shown when any of its steps is selected. Done units
-follow the steps view: left out and counted in `done_units` unless `all` or a selection.
-`sluice tool status` prints the result as JSON like every tool.
+### 6.8 Recipes
 
-## 8a. The inbox
+A recipe is `recipes/<name>.json` in the home (global) or in `projects/<id>/` (the project's
+wins on a name clash): `{"name", "doc"?, "params"?: {name: type | {"type", "doc"}}, "steps"}`,
+`name` matching the file. `unit` (a step id) is always a param. In every step id and string,
+`{param}` is replaced by the value (a non-string as JSON); a string that is exactly `{param}`
+becomes the value with its type; `{{`/`}}` are literal braces; an unknown `{x}` is an error. A
+recipe step with `when` is broken.
 
-Each project has an inbox: its `inbox` rows (§2) in posting order, not trimmed with the log.
-An item is `{id,
-title, body?, ui?, input?, from?, run?, seq?, status, created, answer?, answered?, closed?,
-reason?, waiting?, stopped?}`: `id` is `i<n>` (one more than the highest in the project), `body`
-markdown, `ui` an OpenUI Lang program, `input` a plan input, `from` who asked (a step id, an
-agent; `inbox_post` without one: its author, §6b), `run` the run of that step that asks, `status` `open`, `answered` or `closed`, the times
-ISO UTC. `from` and `run` occupy separate `sender` and `run` columns; literal sender
-strings round-trip unchanged. An item sluice posts itself (`from` `sluice`, §9 "Nobody
-reading") keeps in `run` instead the `seq` of the record it is about, and never carries
-`waiting`. Only an open item changes, once: answering or closing
-anything else is refused (`conflict` with its `status`), which is what makes a stale button or a
-second answer harmless. Every change appends one log record (§6b) in the same transaction as
-the item's change (an answer that sets a plan input, that input's too), so `log_wait(project,
-since_seq, kinds=["inbox"])` and `sluice watch --kinds inbox` wake whoever waits on it.
+`unit_add(project, recipe, unit, params, after?, inputs?, tags?, start?)` checks the params,
+expands the recipe, tags every new step `unit:<unit>` (then the recipe's tags, then `tags`;
+`unit:` tags in `tags` are refused), and in the same edit appends `after` entries per suffix
+(`"*"` means the unit's entry steps) and binds `inputs` per suffix to `{"default": value}`. A
+suffix is a recipe step's id without the leading `<unit>-`. An unknown suffix, an input the
+step's fn does not declare and the recipe does not bind, or a step id the plan already has is
+refused before anything is written.
 
-An **answer** is `{action: string, params?: object, values?: object, text?: string}` (nothing
-else). With `input`, answering sets that plan input through `plan_set_input`'s own path (type
-check, `plan.input` record by the answering author, reason `inbox item <id>: <title>`) before
-the item is marked answered; the value is the first present of `values.value`, `params.value`
-and `text`, including explicit null when the input type permits it. None present, or a
-value that does not fit, refuses the answer (`invalid`) and the
-item stays open. `inbox_post` refuses an `input` the plan does not declare; without a `body`,
-the item's body is that input's doc (§5), if it has one.
+### 6.9 Validation
 
-**Nobody waiting.** An open item that came from a step — `from` is a plan step's id or
-`step:<id>`, or names a step that has left the plan and has a `run` — or from a call (`call
-<run_id>`) carries a derived `waiting`, read from the state each time the item is read: true
-while the step is running the item's `run` (any run of it when the item has none) and has not
-been asked to cancel, or while the call is pending or running. Otherwise it is false and
-`stopped` says why, `<step> is <status>` (`cancelled` for a failure by cancel; `being
-cancelled`; `running another run`; `not in the plan`; `call <id> is <status>`). Nothing closes
-such an item: answering it still works (its `inbox.answer` record then carries `waiting:
-false`), and the dashboard says it will not be delivered unless the step is retried. When a
-retried step's `inbox.ask` asks with the same title, it **takes up** the step's own latest
-earlier item instead of posting another: an open one whose asker no longer waits (or that has
-no `run`), which then records the new run; or an answered one whose answer nobody read — its
-last `inbox.answer`/`inbox.adopt` record is the answer with `waiting: false` — whose answer it
-returns at once. Each take-up logs `inbox.adopt`. An open item another live run of the same
-step waits on (a scattered step's) is left to it, and an answer the log no longer shows unread
-is never reused: the step asks again.
+Every edit is validated whole: ids valid; every `run` visible to the project; required inputs
+bound, no unknown inputs (extra inputs and declared outputs only on open fns); refs naming a
+plan input or a step output (paths through record types, anything under `Any`); every source
+fitting its input (list sources element-wise, the scatter input item-wise); literals passing
+their types; gate entries well formed; `needs` naming declared resources within any fixed
+capacity; no cycles. Errors are a list with paths
+(`steps.notes.in.cwd: repo is int, which does not fit string: int is not string`).
 
-**The ui.** `ui` is OpenUI Lang (openui.com), drawn in the browser by a small vanilla-DOM
-renderer (`src/sluice/static/inbox.js`, no build step) around lang-core's parser. The vocabulary
-is closed and lives in one file, `src/sluice/static/openui.json` (each component's positional
-props with their types, and a description): the renderer builds the parser's JSON Schema from
-it and has one renderer per component; `docs("inbox")` lists the same signatures (a test
-checks both). Components: Stack, Heading, Text, Callout, Table, Separator, Form, Input,
-Textarea, Select, Radio, Checkbox, Button (prose goes in `body`, so there is no Markdown
-component). Program text is only ever set as DOM text, never as HTML. A statement with an
-unknown component or a bad prop, a reference to nothing, an unused statement or a line that is
-not a statement is dropped, and the item shows `n lines dropped` with the reasons; if nothing is
-left to draw, it says so. The text box always remains. A Button answers with `{action (default
-"submit"), params (default {}), values}`, where `values` maps each field of its Form (or, outside
-a form, each field outside any form) to its value (Input text, or a number for `type: "number"`;
-Checkbox a boolean; Select and Radio the chosen option or ""); a primary button first checks the
-fields' `rules` with lang-core's validators and shows what fails.
+### 6.10 Edits
 
-## 9. CLI
+Every edit tool produces RFC 6902 ops against the plan document, validates the result, and
+commits the new plan, a `plan_edits` row and a `plan.edit` record `{rev, author, reason, ops}`
+in one transaction. The reply is the **edit result** `{project: {project_id, name}, rev,
+preview}`, `preview` being `{ops, would_start, would_queue, would_skip, would_stale, errors}`.
+With `dry_run: true` the reply is the preview alone and nothing is written. The simulation uses
+cached capacities and never runs fns; `core.external` steps never appear in `would_start`.
 
-MCP is the interface; the CLI only starts it and reaches the same tools from a shell:
+- `plan_patch` requires the current `rev`; the other edit tools take an optional `rev` and
+  otherwise apply to the current plan. A stale `rev` is `conflict` with `current_rev`.
+- A running step may change only `paused` and `tags`.
+- `start: false` (`plan_patch`, `step_add`, `unit_add`) adds steps with `"paused": true`
+  unless a step sets `paused` itself.
+- An edit that changes nothing still commits a new rev, except `step_set_input`, which refuses
+  it (`bad_request`).
+- Removing a finished step keeps its result as an `outcomes` row; a pending step leaves none.
 
-```
-sluice serve [--host H] [--port P] [--no-runner] [--kill-runs]
-                                      runner + MCP server + dashboard (with the inbox);
-                                      --kill-runs stops runs on exit instead of leaving them
-sluice loop [--kill-runs]             runner only
-sluice tool                           list the MCP tools with one-line descriptions
-sluice tool <name> '<json args>'      call that tool in-process and print its result
-sluice tool rpc '<request json>'      send one raw coordinator request and print its reply
-                                      unshaped (host gates and diagnostics)
-sluice watch [-p P] [--kinds k1,k2] [--threads a,b] [--since-seq N]
-                                      print new log records as JSON lines (§10)
-sluice next [-p P …] [--since-seq N | --cursor FILE] [--me NAME] [--timeout S]
-            [--settle S] [--settle-max S] [--all] [--settles short|full|none]
-            [--cut N] [--json]
-                                      print the next records an orchestrator acts on, exit
-sluice drain [-p P …] [--no-wait] [--release]
-                                      pause projects for maintenance and wait out their
-                                      running work; --release unpauses what it paused
-sluice me [--project P] [--step S]      where this step stands, for its agent (§10)
-sluice query [SQL [PARAM …]] [--limit N] [--table [--width N]]
-                                      one read-only SELECT: its rows as JSON, or a table
-sluice backup PATH [--force]          an online copy of the home's database
-```
+## 7. Running
 
-`sluice next` blocks until the projects' logs (the given ones, or every project not archived)
-hold a record an orchestrator acts on, collects what follows within a settle window, prints
-each record compactly and exits. Every record is judged **as of its own seq**, so reading a
-stretch of the log late gives the same wakes as reading it live. A step's status at seq S is
-the `to` of its last `step.status` record up to S; with none up to S, the `from` of its first
-one after S (null: pending); with no `step.status` record at all, its status now. The plan's
-shape (steps, edges, pauses, fns) is the current plan's.
+### 7.1 Step status
 
-A step's **unit** is the steps sharing its `unit:<name>` tag (a recipe unit, §5, named
-`<name>`); a step without one belongs to its component among the steps without one
-(`plan.units` over just those, so an untagged step after a recipe unit never joins it) when
-that has more than one step (named by its first step); otherwise it is standalone. A unit is
-**settled** when at least one of its steps has finished and none of its steps is running or
-pending and startable: each is succeeded, skipped, failed or stale, or pending and **held** —
-paused, its project paused, a `core.external` step, reading a plan input with no value, or
-waiting (through reads or `after`) on a step that is failed, stale or itself held (a step
-outside the unit counts by the same rule). **Wakes:**
+`pending`, `running`, `succeeded`, `failed`, `stale`, `skipped`. A succeeded step may be
+`manual` (set by hand). A scattered step also has `done`, `total` and `instances`. A step's
+`error` is a structured error object (§12.2).
 
-- a `step.status` to `failed`, `stale` or `skipped`, inside a unit too; a `message` needing a
-  reply, not from `--me` (default `orchestrator`), addressed to `--me` or to nobody; an
-  `inbox.post` or `inbox.answer`; a `project.pause` or `project.archive` not by `--me`
-  (`PROJECT web paused by dashboard: <reason>`);
-- a unit **once, when it settles**: the `step.status` record (any `to`) of one of its steps at
-  which it is settled while it was not at its previous `step.status` record. A step inside a
-  unit never wakes on its own success. When that record is itself a failure (or stale or
-  skipped) it wakes once, with the unit attached; a retry that runs and settles again is a new
-  settling and wakes again;
-- a standalone step's success when its fn is open;
-- with `--all`, every record.
+A step is **ready** when it is pending, not paused, its project is not paused, every plan input
+it reads has a value, every handoff source succeeded and every gate is satisfied. A ready step
+starts at once unless it has `needs` (§7.6); a ready `core.external` step only waits.
 
-Notes (`needs_reply: false`) not from `--me` are held, like `sluice watch --wake questions`. In
-every batch the messages — the questions and the held notes, in seq order — print **first and
-whole** (never cut; a body's further lines indented two spaces), then the other waking records
-in seq order, so a waiter that cuts the output's tail never loses a question. A record that
-settles its unit carries `unit: {name, settled: true, steps: [{id, status, held?, outputs}]}`
-(steps in plan order, status as of the record, `held: true` on a held pending step, `outputs` a
-step's outputs now if it succeeded as of the record — the ones the step declares when it
-declares any (its contract, e.g. `landed`, `summary`), else its fn's — leaving out null and
-empty values; else `{}`). Each record prints as one block: `STEP fix-x running -> failed: <last
-line of the error>`, `MSG step-fix-x fix-x -> orchestrator: <body>`, `NOTE …` for a held note,
-`INBOX post i3 <title>`; a unit settled by a success as its statuses line, `UNIT fig-3984
-settled: fork succeeded · work succeeded · close succeeded · rm succeeded` (step names without
-the `<unit>-` prefix), then its outputs as `--settles` says:
+### 7.2 Admission and launch
 
-- `short` (the default): only its short outputs, one indented line each — booleans, numbers,
-  strings of at most 80 characters on one line, and the first line of a `summary` cut to 200
-  characters and "…" — then one line naming the rest:
+While the scheduler lease is held the coordinator, on every relevant change, settles skips,
+marks staleness, and admits ready steps in priority order (higher first, ties in plan order).
+Admission reserves an attempt and its runs in one transaction (status `running`, fresh run ids,
+the messages assigned to each run, `prev_run`), then launches each run's unit. A reservation
+whose launch fails before the payload starts fails that run with `process_lost`; it is never
+started twice. Built-in fns that need no process run inside the coordinator.
 
-  ```
-  UNIT fig-4188 settled: fork succeeded · work succeeded · landed succeeded · close succeeded
-    work.landed: true
-    work.summary: Split the parser out of core
-    landed.sha: 127c2443a5
-    (+ work.evidence, work.unresolved: sluice query or --settles full)
-  ```
+### 7.3 Staleness
 
-- `full`: every output, one indented line each (strings as they are, anything else as compact
-  JSON, whitespace collapsed, cut to `--cut N` characters, default 600, and "…");
-- `none`: the statuses line only.
+When a step starts or is set by hand it records `inputs_hash`, a hash of the canonical JSON of
+its bound inputs (an unbound optional input is left out; a file binding by path). A succeeded
+step becomes `stale` when a step it reads is stale or its inputs, once all available, hash
+differently; it becomes `succeeded` again if they hash as recorded. Stale steps keep their
+outputs, never re-run by themselves, and block their readers. A step set with `force` while its
+inputs were not ready records unknown inputs and turns stale once they are all there. Gates
+never cause staleness.
 
-A unit settled by a failure prints as its `STEP` line, then `  unit fig-3984: fork succeeded ·
-work failed · close pending (held) · rm pending (held)` and the outputs as `--settles` says.
-The last line is `seq <N>`. After the first waking record it keeps reading until
-`--settle S` seconds (default 20) pass with no new waking record, or `--settle-max S` (default
-120) after the first; `--settle 0` returns at the first waking record. Without `--since-seq` or
-`--cursor` it starts from now; `--cursor FILE` reads the start seq from it (missing: from now)
-and writes back, once and atomically, the seq of the last record consumed — read, waking or not
-— so a relaunch never misses or repeats one. `--timeout S` bounds the wait for the first waking
-record, then exits 0 printing `timeout seq <N>` (and writes the cursor); `--json` prints the
-records as JSON lines (messages first, as above), `unit` included with its outputs whole
-whatever `--settles` and `--cut` say, and a final `{"seq": N, "timed_out": …}`. Exit 0 on a wake or a timeout.
+### 7.4 Retry and re-arm
 
-**Nobody reading.** `next` (the CLI and the tool) notes in the `readers` table (§2), per project,
-how far it has read (`seq`, never going back), when (`at`: at the start, every 30 s while it
-waits, and when it returns) and as whom (`me`); best effort: a busy database never fails
-`next`. The orchestrator is an ordinary agent session:
-when it ends, nothing else reads the log. With `unread_alert_min` set in `config.json` (minutes;
-absent or 0: off), the runner checks once a minute every project `next` has read (not
-archived): when a record after that project's `seq` would wake `me` (the rule above) and is at
-least that old, and no `next` has read the project for as long, it posts one inbox item (§8a),
-`from` `sluice` with `seq` the record's seq (§8a), titled `No orchestrator has read <project>'s
-log for <N> min (seq <S>)`, whose body shows the record and how to restart from where the
-orchestrator stopped. It posts one item per such record, whatever becomes of the item: an item
-from `sluice` with that `seq` is looked for first, so changing `unread_alert_min` does not post
-a record again; a project `next` never read is never checked.
+`step_retry(project, steps?, tags?, message?, reason?)` takes steps that are `succeeded`,
+`failed` or `stale` (any other selected step refuses the whole call). Each goes back to
+`pending` and gets a `step.retry` record with its new work generation. A succeeded step keeps
+showing its old outputs until the new run ends; its dependents go stale only if the result
+differs. A failed scattered step keeps its succeeded items when its inputs hash and item count
+are unchanged.
 
-`sluice drain` pauses the given projects (default: every project not archived) that are not
-already paused. In one SQLite transaction it records ownership in `drain_projects` and
-maintenance metadata in the singleton `drain` row, together with the pauses and their log
-records. Repeated or concurrent drains retain the union of owned projects. It then waits,
-printing a line whenever the count changes (`running: web 1 (fix-x), api 0; calls 0`), until
-none of them has a running step or a pending or running non-direct call, and exits 0 printing
-`drained`. `--no-wait` pauses and exits. `--release` unpauses exactly the owned projects,
-clears ownership in the same transaction, and prints what it released. Projects paused
-otherwise stay paused. Deleting a project deletes its ownership, so a later project with
-the same name is unaffected. Both operations write `project.pause` records (§6b) with author
-`drain` and reason `drain: paused for maintenance` or `drain released`.
+Retrying also **re-arms** the blocked region: from each retried step it walks dependents
+through handoffs and gates, passing through failed, stale and pending steps (failed and stale
+ones go back to `pending`, cancelled failures included) and stopping at succeeded, running and
+skipped steps. The reply is `{project, steps, rearmed, stopped_at}`. `message` (1 to 65536
+bytes) is posted to each retried step's thread in the same transaction, so its next run is
+assigned it. Pauses are kept.
 
-The first drain or release imports a legacy `SLUICE_HOME/drain.json` in its transaction,
-retaining unknown metadata and ownership of projects that still exist. It removes the file
-only after commit. The retained singleton marks the import complete even after release;
-a leftover file from interrupted or failed cleanup is never imported again. Ownership is
-included in database backups (§9).
+### 7.5 Cancel
 
-`sluice me` reads `SLUICE_PROJECT`, `SLUICE_STEP` and `SLUICE_RUN_ID` from the environment
-(the runner sets them for every run, and the native agent packs pass them through to the
-engine); outside a step it says so and exits 1, and `--project`/`--step` work anywhere. It
-prints, compactly: the step, its fn, doc, status and running time (and, for a step queued on
-resources, its `queued: needs …` line, §6); its inputs (cut like
-`status`'s `brief`); each step it reads or runs after, with its status and short outputs
-(an output named `summary` whole, else `final` cut to ~300 characters, plus any output whose
-name ends in `report` or `path`); the messages on its `step-<id>` thread still unanswered,
-newest last; the outputs it must submit (required first) and the exact `sluice tool
-step_submit '{…}'` with its run id; and its thread with the command to ask a question.
+`step_cancel(project, steps?, tags?, reason?, expected_rev?)` asks running steps to stop (their
+guardians stop the payload) and fails a pending `core.external` step at once. A cancelled step
+fails with the error `{"error": "cancelled", "message": <reason>}` and a `step.cancel` record.
+Reply `{"ok": true}`.
 
-`sluice query` runs one SELECT through the `query` tool's guards and limits (§8) and prints the
-tool's `{columns, rows, truncated}` as JSON, one row per line. Each PARAM binds a `?` in order:
-as JSON when it parses (`42`, `null`), else as its text. `--table` prints an aligned table for
-people instead — NULL blank, whitespace collapsed, each cell cut to `--width` characters
-(default 60, 0 never) — then `(n rows)`, `, truncated` when the limit or size cap cut it.
-Without SQL it lists the tables and views with their columns. A refused or failed query exits 1
-with the error on stderr.
+### 7.6 Resources and leases
 
-`sluice backup PATH` writes a consistent copy of the home's `sluice.db` to PATH while the
-runner and the server keep running: SQLite's backup API copies every page in one step, so the
-copy is the snapshot of one read transaction (writers go on meanwhile; WAL readers do not block
-them). It writes a temp file beside PATH (`.<name>.<pid>.tmp`) and renames it into place, then
-prints the path and the size in bytes. It refuses (exit 1) an existing PATH unless `--force`, a
-directory, and the home's own database. The copy is the database alone: run dirs, the fns and
-each project's `.env` are files under the home and are not included. A copy opens as a home's
-`sluice.db` of the same schema version.
+A project declares resources: `{"lane": 4}` or `{"lane": {"capacity": 4}}` (a fixed integer
+≥ 0), or `{"cpu": {"capacity_fn": "<fn>"}}`, a fn the project sees that takes no required input
+and returns `{capacity: int}`. While the scheduler lease is held, every capacity fn is called as
+a direct call (author `capacity`) every 10 s; a good value replaces the cached one and is
+recorded as `project.capacity`, a failure keeps the last good value and records the error.
+Before its first value a capacity fn's resource admits only needs of 0.
 
-Every command creates `SLUICE_HOME` with the default `config.json` on first use. `sluice tool`
-builds the same MCP server object `serve` exposes and calls its tool (same argument validation,
-same code path). It prints JSON results (text for `docs` and `plan_view`); a tool error goes to
-stderr as the error JSON with exit 1, and a result with `"ok": false` (`verify` with problems)
-also exits 1.
+A step's `needs` (`{resource: n}`) is held while it runs (a scattered step once). A ready step
+with `needs` starts only when every named resource has `capacity - held >= need`; otherwise it
+stays pending and queued (`step.queued` record when its shortfall changes; wait reason
+`queued: needs lane 1 (4/4 held)`). Lowering a capacity never stops running work; a resource
+that a step needs or a lease holds cannot be removed.
 
-## 10. Built-in fns and first-party packs
+A **section lease** (`ctx.acquire`, §5.4) waits for and holds an amount of a resource inside a
+running step's run; grants follow the step's `priority`, then arrival. Held leases count in
+the same totals as `needs`. A run that ends releases its leases. Grants and releases are
+`step.lease` records.
 
-`src/sluice/fns/` holds only what sluice itself needs: `core.*` (§6), `thread.*`, `inbox.ask`
-and `inline.*` (below), plus shared helper code for built-in fns in `src/sluice/fns/_lib/`. Their `fn.json` files are
-the reference for their types.
+### 7.7 Manual values
 
-Icons (§4), all single-colour SVGs in the status glyphs' style (a 16×16 grid, 1.5 strokes,
-round caps and joins, `currentColor`): `inbox.ask` a speech bubble, `thread.post` and
-`thread.wait` an envelope, `core.external` the board's external glyph (an arrow leaving a
-box); `core.echo`, `core.collect`, `core.format` and `inline.*` have none. In the packs:
-`agent.run`, `agent.claude`, `agent.codex` and `agent.devin` share a spark, `agent.review` a
-magnifier with a check, `decide.llm` a path forking to two choices, `git.*` a branch and `gh.*` a
-pull request; `packs/jev` has none.
+- `plan_set_input(project, name, value)`: sets a declared plan input (type-checked), a
+  `plan.input` record; readers that already ran go stale when it changes.
+- `step_set_input(project, steps?, tags?, inputs)`: binds the named inputs of the selected
+  steps to `{"default": value}` in one edit, skipping running steps and steps lacking an input;
+  a succeeded step whose binding changes goes stale.
+- `step_set_output(project, step, outputs, force?, reason?)`: marks a non-running step
+  `succeeded` with `manual: true`, outputs checked against the step's outputs (arrays for a
+  scattered step). Without `force`, refused (`invalid`, "step gates or inputs are not ready")
+  while a gate is unsatisfied or something it reads is not ready. A `step.output` record.
 
-Every other fn in this repo is a **first-party pack** under `packs/`, not loaded by default:
+### 7.8 Message delivery and `prev_run`
 
-- `packs/agents/`: `agent.devin`, `agent.codex`, `agent.claude`, `agent.run`, `agent.review`,
-  `decide.llm` (run Devin, Codex, Claude, the review agent, decisions). The agent fns are open
-  (§5): as a plan step they add to their task text an `## Inputs` section (each extra input
-  with its type and value), an `## Outputs you must submit` section (each declared output with
-  its type and doc, and the exact `sluice tool step_submit` command) and the step-thread note.
-  Each takes `session?` and returns `session` (empty when none was recorded): binding a
-  later step's `session` to an earlier step's `session` output continues that agent.
-  All five agent fns use `packs/agents/_agents/native/` to supervise a live session on the
-  owner's engine login. Each run has a private tmux server (`attach:` in the step's stderr).
-  Long tasks go through `<run_dir>/task.md`. A step with required declared outputs completes
-  after the engine submits all of them; an idle turn with missing outputs gets a bounded
-  series of nudges, then a clear failure. Claude's background shell and scheduled-wakeup
-  signals keep its session waiting. Messages addressed to the step arrive in the live session
-  without polling. A `session` resumes only in its original directory. A delivered message
-  must start a turn within 60 seconds or it is retried once, then fails; waiting background
-  work is nudged after 90 minutes by default. Cancel and runner adoption end the tmux server
-  and its process tree (`packs/README.md`, "Agent functions and live sessions").
-  In a git worktree each agent fn also returns the optional record `git`: `head_before`
-  (HEAD when the run started, read once per run and kept in `native.json` across its
-  Transient retries), `head_after`, `commits` (in `head_before..head_after`: how far HEAD
-  moved, so a lane that pulls before it pushes counts upstream commits too) and `dirty`
-  (tracked changes left uncommitted); `git` is absent outside a git worktree.
-  While a session is busy the supervisor samples the worktree and descendant CPU counters
-  from `/proc` every few minutes. A worktree change or CPU used by a descendant restarts the
-  quiet timer; the engine's own CPU and its servers (MCP, Codex app-server, code-mode host,
-  tmux) do not count, but their tool-command children do. After
-  `SLUICE_AGENT_QUIET_MIN` (45) minutes busy with neither changing it posts one note (`needs_reply`
-  false) to the orchestrator on the step's thread, and again after each further quiet period;
-  it never steers or stops the session over it.
-  Both fresh and resumed Codex TUIs pass `-c check_for_update_on_startup=false`, so startup
-  update checks and interactive update prompts cannot hold up a lane.
-  When the step is otherwise done, the supervisor first waits, up to `SLUICE_AGENT_WORK_MIN`
-  (10) minutes, while the session's background work runs (what the engine reports, and
-  processes it started and let go in its private cgroup), then, once per run, when tracked
-  files are changed but not committed, sends the agent one reminder turn; it never commits
-  for the agent.
-  After a context compaction the session gets the step's own context again (`sluice me`, or
-  the path of `task.md` when that fails): Claude through its SessionStart hook (source
-  `compact`), Codex and Devin as a message typed in when they report one.
-  A run that resumes a session holds `SLUICE_HOME/locks/<engine>-<session>.lock`; a second
-  run resuming the same session meanwhile fails at once, naming the holder's project, step
-  and run.
-  Git never prompts in a session (`GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`,
-  `GIT_MERGE_AUTOEDIT=no`).
-  A failed run's error ends with its session and how to resume it (bind the step's `session`
-  input to it, then `step_retry`).
-  A Claude step's progress line leads with its context fill (`ctx 142k · `).
-  Claude (`agent.claude`, `agent.review`, or `agent.run` with engine `claude`) always runs Opus.
-  It has the owner's MCP servers unless `SLUICE_CLAUDE_MCP_CONFIG` names others (only those:
-  `--strict-mcp-config`; `{"mcpServers": {}}` for none).
-  Codex (`agent.codex`, or
-  `agent.run` with engine `codex`) uses the same supervisor with `codex app-server` JSON-RPC
-  and a TUI attached to it in tmux. It takes `model` `sol` (the default) or `astra` and
-  `effort` (`minimal` to `max`), whose default is `high`. Its final message and turn state come
-  from app-server notifications; it waits a configurable grace period before the first nudge
-  because Codex reports no reliable pending background-work state. Devin (`agent.devin`, or
-  `agent.run` with engine `devin`) runs its TUI in the private tmux server with a per-run
-  config that adds lifecycle hooks and an exported transcript. It defaults to `swe-2-high`,
-  retains the owner's Devin config, resumes by session id in the same cwd, and uses the same
-  grace period because its `Stop` hook does not report pending background shell work. The fns
-  share engine code through `packs/agents/_agents/`.
-- `packs/git/`: `git.worktree`, `git.worktree_rm`, `git.head`, `git.merge`, `git.rebase`,
-  `git.push`, `gh.pr` (worktrees, merge, rebase, push, pull requests)
-- `packs/jev/`: `jev.ask`, `jev.choice`, `jev.score`, `jev.noul` (Jev, TypeSafe's System One
-  model; needs `TYPESAFE_API_KEY`), with its shared client in `packs/jev/_jev/`
+Each step keeps a delivery cursor: the last message id addressed to it that a run of it was
+given. Reserving a run assigns it every message to the step after the cursor and records the
+range on the run; the live feed continues from the end of that range, and the cursor advances
+once the run has started. Every run of a scattered step gets the step's messages.
+`runs/<run>/messages.json` shows the assigned range. Each run records `prev_run`, the step's (or
+item's) previous run, seen as `SLUICE_PREV_RUN` and `ctx.prev_run`. Agent fns resume the
+previous session when a bound `session` says so, or when `session` is unbound, the run was
+assigned messages, `prev_run` recorded a session, and the engine and cwd are unchanged;
+`session: ""` always starts fresh.
 
-A pack is installed by copying `packs/<pack>/*` into `SLUICE_HOME/fns/` (or a project's `fns/`),
-or by adding the pack's absolute path to `config.fn_dirs`; its fns then load in the global (or
-project) scope. Packs are self-contained: a fn finds its helpers relative to its own directory,
-so a copy anywhere works (see `packs/README.md`).
+### 7.9 Adoption and completion
 
-**Threads** (`thread.*`, plain functions, no engine support): a thread is the project's log
-filtered to `message` records with that `thread` name (the project comes from `SLUICE_PROJECT`;
-without one they fail with a clear error; thread names use the id pattern). A message is
-`{"seq", "at", "kind": "message", "thread", "from", "to"?, "body", "data"?}`; its `seq` is the
-log's. Agents post with the `thread_post` tool (§8: the same record, returning its seq),
-or `fn_call` of `thread.post`; a plan step posts as a step with `thread.post`. Direct callers can read with `log_read`/`log_wait`
-(`threads: [name]`); the agent functions above deliver addressed messages into their live
-sessions. Plans use thread functions as ordinary steps.
-- `thread.post`: inputs `{thread: string, body: string, from: string, to: string?, data: Any?}`,
-  outputs `{seq: int}`. Appends in its own write transaction, so concurrent posters get
-  distinct, increasing seqs.
-- `thread.wait`: inputs `{thread: string, since_seq: int?, to: string?, timeout: int?,
-  wake: string?}`, outputs `{messages: Any[], last_seq: int}`: the messages after `since_seq`
-  (default 0: all) and, with `to`, only those addressed to it or to nobody; blocks (reading the
-  log every 0.5 s) until there is at least one or `timeout` s (default 300) pass, then
-  `messages` is empty. With `wake: "questions"` a note (`needs_reply` false) does not end the
-  wait: it comes back with the next question, or at the timeout. `last_seq` is the log's last
-  seq (§6b: seqs are the home's, so a log's have gaps), to pass back as `since_seq`.
+A coordinator that starts finds runs whose guardians are still alive and watches them
+(`run.adopt` outcome `watching`), finishes runs that completed while it was away (`finished`),
+and fails runs whose guardian and payload are gone without a completion (`lost`, error
+`process_lost`). A live run that no step or call references is stopped (`run.orphan`). A
+completion is journalled by the guardian and acknowledged durably by the coordinator.
 
-**`inline.bash`** and **`inline.python`**: code given as a string, for a check or a small
-transform no fn exists for. Both are open (§5): each extra input the step binds is visible to the
-code by its name (`-` becomes `_`), and a step that declares outputs gets them from the code
-itself, not from `step_submit` (a declared output the fn returns needs no submitting).
-`inline.bash` inputs `{code: string, cwd: string?, check: boolean?}`, outputs `{stdout: string,
-stderr: string, code: int}`: runs `bash -e -o pipefail -c code`; extra inputs are environment
-variables (strings as they are, anything else as JSON); declared outputs come from one JSON
-object the script writes to the file `$OUT`; a non-zero exit fails the step unless `check` is
-false. `inline.python` inputs `{code: string, cwd: string?}`, outputs `{value: Any?, stdout:
-string}`: runs the code (standard library only) with `inp`, `ctx` and each extra input as a
-variable; `value` is what it assigns to `out`, declared outputs come from `out` as a dict, and
-`stdout` is what it printed (also streamed as progress).
+### 7.10 Outcomes
 
-**`inbox.ask`**: inputs `{title: string, body: string?, ui: string?}`, outputs `{answer: {action:
-string, params: Any?, values: Any?, text: string?}}`. It posts an item to the project's inbox
-(§8a) with `from` = the step and `run` = its run (`from` = `call <run_id>` for a call) and reads the item every 0.5 s
-until the item is answered (the answer is the output) or closed (the step fails with `inbox item
-<id> was closed without an answer: <reason>`). It waits as long as it takes. A retried step
-asking the same title takes up its own earlier item instead of posting again (§8a): an open one
-nobody waits on any more (a run that failed, was cancelled or died with a runner restart), or
-one answered while nobody waited, whose answer it returns at once. Like the thread fns, it needs a
-project.
+Removing a finished step from the plan (any edit, including `plan_prune`) stamps its result row
+`removed_at`; the `outcomes` view shows these rows (`result_id, project_id, step_id,
+generation, work_generation, attempt_id, unit, declaration, inputs, inputs_hash, status,
+outputs, error, manual, run_ids, recorded_at, removed_at`). They are never trimmed and go with
+the project.
 
-**Watching.** Agents watch through MCP: `log_wait` in a loop, passing back `last_seq`. For
-harnesses with monitors (e.g. Claude Code's Monitor tool) the shell form is `sluice watch [-p P]
-[--kinds k1,k2] [--threads a,b] [--since-seq N] [--wake questions]`: it follows the project's log (the home log
-without `-p`) with the same filter as `log_read`, from the end of the log (or after `--since-seq`),
-printing each matching record as one JSON line (flushed) as it is appended, and never exits
-(`--wake questions` holds notes and prints them with the next record that is not one). It
-reads the home's database only; it needs no runner or server. When the next thing to act on
-is what an orchestrator wants — not a stream — `next` (the tool) and `sluice next` (§9) wait
-for the waking records (a unit once, when it settles) and return them in one batch; a worker agent asks where its own step stands with
-`step_context` or `sluice me` inside the step (§9).
+## 8. Messages
 
-## 11. Conventions
+A message is a row `{id, thread, from, to, title, body, needs_reply, reply_to, answer, ui,
+input, data, run, at, claimed_by}` plus a `message` record written in the same transaction. Rows
+are never trimmed with the log and are deleted with their project.
 
-Python ≥ 3.12, `uv` for everything. `src/sluice/fn.py`, `src/sluice/__init__.py`,
-`src/sluice/log.py`, `src/sluice/inbox.py` and `src/sluice/util.py` import only the stdlib (fns
-import them). Tests in
-`tests/`; external tools are faked in tests. Commits: plain sentences, no AI attribution of any
-kind; stage exact paths.
+`message_post(project, body, thread?, to?, needs_reply?, reply_to?, answer?, title?, ui?,
+input?, data?, from?, run?)` → `{id}`:
+
+- `from`: the given `from`, else the author (§12.3).
+- `thread`: the parent's for a reply; else the given thread; else `step-<step>` when posted by a
+  step's run; else `m<id>`. Thread names use the id alphabet.
+- `to`: a step id, `orchestrator`, `owner` or absent (anyone); a reply defaults to the
+  parent's `from`. A post that is not a reply, on a `step-<id>` thread naming a step in the
+  current plan and not from that step, defaults to that step, so its runs are given it.
+- `needs_reply` defaults to true for a new message and false for a reply: true is a question,
+  false a note.
+- `answer` `{action, params?, values?}` requires `reply_to`, and the parent must be an open
+  question, else `conflict` ("question is no longer open").
+- `input` names a declared plan input. The first **answering reply** (a reply with
+  `needs_reply` false, or one carrying `answer`) resolves the question atomically and sets the
+  input when there is one: the value is `answer.values.value`, else `answer.params.value`, else
+  the body; it goes through `plan_set_input`'s path with reason `message <id>: <title>`. A
+  value that does not fit refuses the reply (`invalid`) and the question stays open. A reply
+  that is itself a question answers nothing. `answer.action == "close"` closes the question
+  without setting anything.
+- An open question to `owner` reserves a notification attempt and writes a `project.notify`
+  record.
+
+Question state is derived: `open`, `answered` or `closed`. A question posted by a step's run
+is `waiting` while that run is live; otherwise it reports why nobody waits: `asking run is
+being cancelled`, `<step> is <status>`, `<step> is cancelled`, `running another run`, `not in
+the plan`, `call <run> is <status>`.
+
+`message.post` with `wait: true` (§16) blocks until the first answering reply and returns it as
+`reply`; a closed question fails it (`question closed`). A retried step asking with the same
+title takes up its own latest earlier question: an open one nobody waits on gets the new run as
+asker; an answered one whose answer nobody claimed returns that answer at once. A claimed
+answer (`claimed_by`) is never reused.
+
+`messages(project, view, thread?, since?)` → `{project, messages, last_id}`:
+
+| view | shows |
+|---|---|
+| `inbox` | open questions to `owner`, then notes to `owner` after the reader's read position in their thread |
+| `questions` | every open question in the project |
+| `history` | every thread with a message to or from `owner` |
+| `thread` | one thread in full (`thread` required) |
+
+Read positions are kept per project, reader and thread and advance through `mark_read` (the
+dashboard marks what it shows, as `owner`). The MCP tool reads as reader `cli`.
+
+## 9. The log
+
+Every record is `{seq, at, project, kind, …}`; `seq` is home-wide and increasing, so one log's
+seqs have gaps. Kinds:
+
+| kind | fields |
+|---|---|
+| `plan.edit` | `rev, author, reason, ops` |
+| `plan.input` | `rev, author, reason, name, value` |
+| `step.output` | `rev, author, reason, step, outputs, force` |
+| `step.retry` | `rev, author, reason, step, work` |
+| `step.cancel` | `step, author, reason` |
+| `step.submit` | `step, run, outputs, author` |
+| `step.status` | `step, from, to, error, run_ids, needs` |
+| `step.lease` | `step, run, lease, resource, amount, state, reason` |
+| `step.queued` | `step, needs, resources, reason` |
+| `call` | `call, fn, status, inputs, outputs, error, direct, author` |
+| `message` | the message's fields, with `posted_at` for its time |
+| `project.pause` | `paused, reason, author` |
+| `project.archive` | `archived, reason, author` |
+| `project.update` | `fields, reason, author` |
+| `project.rename` | `old_name, new_name, author` |
+| `project.delete` | `project_id, name, author` |
+| `project.capacity` | `resource, fn, capacity, error` |
+| `project.notify` | `message, outcome, error` |
+| `run.adopt` | `run, step, call, outcome` (`watching`, `finished`, `lost`) |
+| `run.orphan` | `run` |
+| `run.completion_action.register` | `run, target, message, author` |
+| `run.completion_action` | `run, outcome, author` |
+| `unit.settled` | `unit, work, steps: [{id, status, held, outputs, omitted}]` |
+
+`kinds` filters take exact kinds or the groups `plan`, `step`, `project`, `run`, `unit`.
+`threads` keeps only messages on those threads (alone it means messages only). Calls made
+without a project go to the home log (`project` null).
+
+Each log keeps at most 10,000 records; past that it is trimmed to 9,000 in the same
+transaction. A `since_seq` older than a log's trim floor, or newer than any seq the home has
+issued, is `cursor_expired`. `plan_edits` is never trimmed, so `plan_history` reaches rev 1.
+
+## 10. Waiting: `log_wait`, `next`, `watch`
+
+`log_wait(project?, since_seq?, kinds?, threads?, limit=200, timeout=300, wake="any")` returns
+`{records, last_seq}` as soon as a matching record exists after `since_seq`, or with no records
+after `timeout` seconds (capped at 3600). `wake: "questions"` holds notes until a record that is
+not a note arrives or the timeout passes.
+
+`next(projects=[], since_seq=0, me="orchestrator", timeout=300, all=false, settle=20,
+settle_max=120, settles="short")` waits across projects (all live projects when empty) for what
+an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It wakes on:
+
+- a `unit.settled` record (written when a unit settles, once per unit and work generation);
+- a `step.status` to `failed`, `stale` or `skipped`;
+- a question to `me` or to nobody, not from `me`;
+- an answering reply not from `me`;
+- `project.pause` or `project.archive` not authored by `me`;
+- with `all`, any record.
+
+Notes are held and returned in `notes`. After the first waking record it keeps collecting until
+`settle` seconds pass with nothing new, or `settle_max` seconds after the first. Messages come
+first in `records`. `settles` sets how much of a settled unit's step outputs are carried:
+`short` (booleans, numbers, strings up to 80 characters and a `summary`'s first line; the rest
+named in `omitted`), `full` or `none`. Every call records the reader's position and heartbeat in
+`readers`.
+
+`sluice next` is the same wait (§14), and `sluice watch` follows the log as JSON lines.
+
+## 11. Verify
+
+`verify(project?)` returns a list of problems `[{where, message}]` (empty when all is well) and
+changes nothing. It covers the fn registry (shapes, names, icons, collisions), `.env` syntax,
+project directories that belong to no live project (a warning), unfinished attempts, and for
+each project its plan (full validation against its fns, missing `file` bindings) and its state
+against the plan.
+
+## 12. Tools
+
+### 12.1 Transports
+
+- **MCP**: streamable HTTP at `http://127.0.0.1:<port>/mcp`, served by `sluice serve`. The
+  server's instructions are the `instructions` docs topic; every topic is also a resource
+  `sluice://docs/<topic>`.
+- **HTTP**: `POST /api/tools/<name>` with a JSON object body, the same flat arguments as MCP;
+  the reply is the tool's JSON, errors mapped to 400 (`bad_request`, `invalid`), 404, 409
+  (`conflict`, `cursor_expired`), 503 (`busy`), 408 (`cancelled`) and 500.
+- **CLI**: `sluice tool <name> '<json>'` (§14).
+- **Wire**: every tool is a command `{"command": name, "args": {...}}` with a reply `{"reply":
+  kind, "data": …}` on the coordinator socket (`sluice tool rpc '<request>'` sends a raw
+  request). `docs/rust/schemas.json` (`CommandRequest`, `CommandReply`) is its schema.
+
+The HTTP server binds loopback only. Every route refuses a `Host` that is not `127.0.0.1`,
+`localhost` or `[::1]`, and refuses a present `Origin` that is not the same loopback origin.
+Bodies are at most 1 MiB and at most 64 requests run at once. A tool call has a deadline of its
+wait plus 30 s (`busy`, not retryable, "command deadline exceeded").
+
+### 12.2 Arguments, results and errors
+
+MCP and HTTP arguments are flat; an argument a tool does not take is refused (`bad_request`
+naming the ones it takes). `project` is a current name or `id:<uuid>`; `steps`, `tags`,
+`projects` and `state` also accept a single string. Waits (`wait`, `timeout`, `settle_max`) are
+capped at 3600 s. A reply object is returned as is; a non-object reply is wrapped as
+`{"result": …}` in MCP structured content; an acknowledgement is `{"ok": true}`.
+
+Errors are `{"error": kind, "message", …}`:
+
+| kind | extra fields | meaning |
+|---|---|---|
+| `bad_request` | | malformed or unknown argument |
+| `not_found` | | unknown project, step, fn, call, unit |
+| `conflict` | `current_rev?` | stale revision, state changed, question no longer open |
+| `invalid` | `errors` | validation failed; each error has a path |
+| `busy` | `retryable` | drain, maintenance, deadline |
+| `storage` | | database or I/O failure |
+| `cursor_expired` | | `since_seq` outside the log |
+| `process_lost` | | a run's process vanished without a result |
+| `cancelled` | | cancelled work |
+| `fn_failure` | | a fn failed |
+| `transient` | | a retryable failure that exhausted its retries |
+| `rejected` | | a fn refused the work on purpose |
+| `agent_failure` | `kind, session?` | an agent session failed |
+
+### 12.3 Authors
+
+Every write records an author: the tool's `author` argument when given; else `SLUICE_AUTHOR`;
+else `step:<SLUICE_STEP>` when set; else the MCP client's name; else `mcp` (MCP) or `cli`
+(`sluice tool`). The dashboard writes as `owner`, capacity calls as `capacity`.
+
+### 12.4 Tool reference
+
+Edit tools share `rev?` (`plan_patch`: required), `dry_run=false`, `reason=""` and `author?`
+and return the edit result (§6.10) or, with `dry_run`, the preview. Selection tools take
+`steps?` and/or `tags?` (a `unit:` tag selects the unit); naming neither is `bad_request`, an
+unknown step `not_found`.
+
+**Projects and fns**
+
+| tool | arguments | result |
+|---|---|---|
+| `docs` | `topic?` | the topic's markdown, or the index |
+| `projects_list` | | `[{project_id, name}]` (live projects, by name) |
+| `project_create` | `name`, `description=""`, `icon?` (text, ≤ 16 characters), `resources={}`, `author?` | `{project_id, name}` |
+| `project_update` | `project`, `new_name?`, `description?`, `icon?` (text, or `{media_type, bytes_base64}`, ≤ 256 KiB; `""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
+| `project_delete` | `project`, `confirm_name`, `expected_settings_rev`, `author?` | `{project_id, name, deleted}`; the project must be archived, and nothing of it live |
+| `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, submits?, icon?, open?}]` |
+| `fn_get` | `name`, `project?` | the fn.json plus `scope` and `path` (null for a builtin) |
+| `fn_save` | `fn`, `main_py`, `project?` | `{name, scope, path, generation}` |
+| `fn_call` | `name`, `inputs={}`, `project?`, `wait?` (seconds, default 0), `direct=false`, `author?` | `{call, project_id, status, inputs, outputs, error, direct}`; `direct` runs it now through a guardian and ignores `wait` |
+| `call_status` | `call`, `project?` | as `fn_call` |
+| `recipe_list` | `project` | `[{name, doc, params, scope}]`, a broken file as `{name, scope, error}` |
+
+Each call's status changes are `call` records. `core.external` cannot be called.
+
+**Plan edits**
+
+| tool | specific arguments |
+|---|---|
+| `plan_patch` | `project`, `rev`, `ops` (RFC 6902), `start=true` |
+| `step_add` | `project`, `step`, `spec`, `start=true` |
+| `step_update` | `project`, `step`, `changes` (each key replaces that field, null removes it) |
+| `step_remove` | `project`, `steps?`, `tags?` |
+| `step_pause` | `project`, `steps?`, `tags?`, `paused=true` (sets `"paused": true` or removes it) |
+| `unit_add` | `project`, `recipe`, `unit`, `params={}`, `after={}`, `inputs={}`, `tags=[]`, `start=true` |
+| `unit_tag` | `project`, `unit`, `add=[]`, `remove=[]` |
+| `edge_add`, `edge_remove` | `project`, `step` (a step or `unit:<name>`: its entry steps), `after` (entries) |
+| `step_set_input` | `project`, `steps?`, `tags?`, `inputs` |
+| `plan_prune` | `project`, `units?`, `tags?`, `older_than=0` (seconds) |
+
+`plan_prune` selects done units (all, or those named or tagged) whose last step finished at
+least `older_than` seconds ago, keeps any unit that a surviving step or plan output references
+(computed as a closure), and removes the rest in one edit; naming a unit that does not exist or
+is not done is `invalid`.
+
+**State and values**
+
+| tool | arguments | result |
+|---|---|---|
+| `plan_get` | `project` | `{project, rev, plan}` |
+| `plan_history` | `project`, `since_rev?` | records: every edit (`plan.edit`, from rev 1) and the log's `plan.input`, `step.output`, `step.retry` |
+| `plan_set_input` | `project`, `name`, `value`, `rev?`, `dry_run`, `reason`, `author?` | `{ok: true}`, or the preview |
+| `step_set_output` | `project`, `step`, `outputs`, `force=false`, `reason`, `author?` | `{ok: true}` |
+| `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |
+| `step_cancel` | `project`, `steps?`, `tags?`, `reason`, `expected_rev?`, `author?` | `{ok: true}` |
+| `step_submit` | `project`, `step`, `run`, `outputs`, `author?` | `{ok: true}` |
+| `status` | `project`, `steps?`, `tags?`, `brief=false`, `all=false`, `view="steps"`, `state?` | below |
+| `step_context` | `project`, `step` | below |
+| `plan_view` | `project`, `format="mermaid"`, `all=false` | text |
+| `verify` | `project?` | `[{where, message}]` |
+
+`status`, steps view: `{project, rev, paused, inputs, outputs, resources, steps: {id: {status,
+outputs, error, run_ids, done, total, instances, manual, queued?, waiting?}}, done_units?}`.
+Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
+`all`. `brief` cuts strings over 200 characters (`… [n more characters]`). `resources` maps
+each to `{capacity, held, queued, error}`; `queued`/`waiting` appear on steps short of
+resources. Units view (`view: "units"`, `brief` refused): `{project, rev, paused, resources?,
+units: [{unit, state, age, engine, steps, blocked, last, line}], done_units?}`, `state` one of
+`running`, `failed`, `settled`, `blocked`, `queued`, `pending`, filterable with `state`
+(`state` is refused in the steps view).
+
+`step_context` (also `sluice me`): `{project, project_id, step, fn, doc, status, started,
+finished, elapsed, run, inputs, upstream: [{step, fn, status, outputs, error}], messages (open
+questions on its thread), submit: {outputs, command}, thread, ask, needs?, queued?, leases?}`;
+`submit.command` and `ask` are ready-to-run `sluice tool` lines.
+
+`plan_view`: Mermaid `flowchart LR` with one subgraph per unit, nodes labelled `id / fn /
+status [done/total] / doc`, a class per status, done units left out with a `%% n done units (m
+steps) left out` comment unless `all`; or `format: "html"`, a standalone page with an SVG of the
+same graph.
+
+**Messages and the log**
+
+| tool | arguments | result |
+|---|---|---|
+| `message_post` | §8 | `{id}` |
+| `messages` | `project`, `view`, `thread?`, `since?` | `{project, messages, last_id}` |
+| `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records |
+| `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"` | `{records, last_seq}` |
+| `next` | §10 | `{records, notes, last_seq, timed_out}` |
+| `query` | `sql`, `params=[]`, `limit=200` | `{columns, rows, truncated}` |
+
+`query` runs one read-only statement on a fresh connection: at most 100,000 bytes of SQL, `limit`
+1 to 1000 rows, a 2 s deadline, a 1 MiB response; writes, `ATTACH`, extensions and unsafe
+functions are refused. JSON columns come back as JSON text.
+
+**Maintenance**
+
+| tool | arguments | result |
+|---|---|---|
+| `drain` | `projects?`, `author?` | `{paused, status: {mode, owner, paused, blockers, pending_calls, open_questions, drained}}` |
+| `release` | `author?` | `{released}` |
+
+### 12.5 Commands outside MCP
+
+The wire also carries `mark_read` (advance a reader's position on a thread), `backup`, `builtin`
+(guardian-authenticated only), `submission`, `acquire_lease`, `release_lease` and
+`register_completion_action` (run callbacks only).
+
+## 13. Dashboard
+
+`sluice serve` serves the dashboard on the same port. Pages (look: `DESIGN.md`):
+
+| route | page |
+|---|---|
+| `/` | projects: each with its status glyph, progress and what stops it; archived ones folded |
+| `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
+| `/projects/id/<p>` | the board; query `order=live\|plan`, `show=all\|active\|attention\|done`, `tag=`, `format=mermaid` (with `all=true`) |
+| `/projects/id/<p>/units/<u>` | one unit's board |
+| `/projects/id/<p>/steps/<s>` | one step: status, actions, error, outputs, inputs, runs |
+| `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel`, `revision`, `message` (retry feedback) |
+| `/inbox`, `/questions`, `/history` | the message views across projects |
+| `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project; `thread?thread=<name>` |
+| `POST /projects/id/<p>/messages` | post an answer or reply as `owner` |
+| `POST /projects/id/<p>/messages/read` | mark messages read |
+| `/log`, `/projects/id/<p>/log` | the log, 50 records a page, filtered by kinds and threads |
+| `/fns` | the functions a project (`?project=`) or the home sees |
+| `/projects/id/<p>/settings` (GET, POST), `/preview`, `/icon`, `/delete` | project settings |
+| `/projects/id/<p>/icon` | the project's image icon |
+| `POST /settings` | display preferences (theme, value types) |
+| `/static/<name>` | assets |
+
+Every page has a `…/stream` twin that patches the page live over Datastar SSE. Pages render
+fully without JavaScript; every value is HTML-escaped and markdown bodies are rendered on the
+server with unsafe link schemes refused. The only external assets are two font stylesheets from
+cdn.jsdelivr.net; every script is served from `/static/` (Datastar 1.0.4, OpenUI lang-core
+0.3.0, zod 4.6.5 and sluice's own).
+
+**Questions with a ui.** A question's `ui` is an OpenUI Lang program drawn by the inbox page:
+one statement per line, the first drawn, components `Stack`, `Heading`, `Text`, `Callout`,
+`Table`, `Separator`, `Form`, `Input`, `Textarea`, `Select`, `Radio`, `Checkbox`, `Button`
+(signatures in `docs("inbox")`). Unparseable lines are dropped and counted; the text box always
+remains. A Button answers `{action, params, values}`; the text box answers with action
+`answer` and its text as the body; "Close" answers with action `close`.
+
+## 14. CLI
+
+`sluice <mode>`; errors print as JSON on stderr with a non-zero exit.
+
+| mode | |
+|---|---|
+| `serve [--no-runner] [--port 3065] [--host 127.0.0.1]` | dashboard, MCP and HTTP tools; takes the scheduler lease unless `--no-runner`; loopback only |
+| `loop` | takes the scheduler lease and holds it until SIGINT/SIGTERM |
+| `coordinator [--maintenance]` | runs the home's coordinator in the foreground |
+| `install fence <reason> \| unfence \| select <release_dir> <home> \| status` | §2.2 |
+| `tool [name] [json]` | without a name, lists the tools; with one, runs it (JSON from the argument or stdin) and prints the reply |
+| `tool rpc '<request>'` | sends a raw wire request |
+| `next [-p P]… [--since-seq N \| --cursor FILE] [--me NAME] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since it starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
+| `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
+| `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |
+| `me [--project P] [--step S] [--json]` | `step_context` for the current step (from `SLUICE_PROJECT_ID`/`SLUICE_PROJECT` and `SLUICE_STEP`) |
+| `doctor [--json]` | host prerequisites, engine profiles and the selected release's manifest check |
+| `query [SQL [PARAM…]] [--limit N] [--table [--width 60]]` | the `query` tool, read directly from the database; without SQL, every public table and view with its columns |
+| `backup PATH [--force]` | an online copy of `sluice.db` |
+| `docs [topic]` | the agent docs |
+| `agent hook --engine codex\|claude\|devin --event E [--run R]` | engine hook entry (internal) |
+| `guardian`, `payload-exec` | internal |
+
+`sluice next` prints one line per event: `MSG|NOTE <thread> <from> -> <to>: <body>`, `STEP <id>
+<from> -> <to>: <error tail>`, `UNIT <u> settled: <outputs>` (long outputs named with a hint to
+read them with `sluice query` or `--settles full`), `PROJECT <id> paused by <author>`, and last
+`seq N` or `timeout seq N`; `--json` prints the reply.
+
+`sluice tool` takes the wire argument names with these conveniences: `steps`/`tags` (and
+`after`, `projects`, `state`) as plain values or lists, `expected`/`dry_run`/`reason`/`author`
+flat on edit tools, `wait` for `fn_call`, `timeout` and `wake` for `log_wait`, `timeout`,
+`settle` and `settle_max` for `next`, `fn` for `fn_save`, `name` for `project_update` and
+`project_delete` (which also fills `confirm_name` and the current `expected_settings_rev`),
+`params.unit` for `unit_add`, and `step`/`input`/`value` for `step_set_input`.
+
+## 15. Agent engines
+
+`agent.claude`, `agent.codex`, `agent.devin`, `agent.review` and `agent.run` run a supervised
+interactive session of the engine CLI in the run's private tmux, in `cwd`. The supervisor
+writes the task (the prompt or spec, the step's inputs under `## Inputs`, the outputs to submit
+with the exact `step_submit` command under `## Outputs you must submit`, and, unless `listen:
+false`, how to use the step's thread), watches the session through the engine's hooks, nudges a
+stalled session, and ends it when the agent is done. The result carries `session` (pass it back
+to resume) and `git` facts `{head_before, head_after, commits, dirty}` of `cwd`. A failed
+session is an `agent_failure` error with its `kind` and `session`. Agent fns retry up to 3
+times, 600 s apart.
+
+Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
+(600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
+`SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),
+`SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_WAIT_MIN` (90), `SLUICE_AGENT_DIALOG_S` (60),
+`SLUICE_AGENT_QUIET_MIN` (45), `SLUICE_AGENT_WORK_MIN` (10), `SLUICE_AGENT_NUDGES`.
+
+## 16. Built-in fns
+
+| fn | inputs | outputs | notes |
+|---|---|---|---|
+| `core.echo` | `value: Any` | `value: Any` | inline |
+| `core.collect` | `items: Any[]` | `items: Any[]` | the fan-in join; inline |
+| `core.format` | `template: string`, `values: Any` | `text: string` | `{0}` from an array, `{name}` from a record, `{{`/`}}` literal; non-strings as JSON; inline |
+| `core.external` | | | open; never runs (§6.5) |
+| `inline.bash` | `code: string`, `cwd: string?`, `check: boolean?` | `stdout, stderr: string`, `code: int` | open; errexit and pipefail; extra inputs as environment variables (`-` → `_`); declared outputs from the JSON object written to `$OUT`; fails on a non-zero exit unless `check: false` |
+| `inline.python` | `code: string`, `cwd: string?` | `value: Any?`, `stdout: string` | open; standard library; sees `inp` and each extra input; `out` is the result |
+| `message.post` | `body`, `thread?`, `to?`, `needs_reply?`, `reply_to?`, `answer?`, `title?`, `ui?`, `input?`, `data?`, `from?`, `wait?` | `id: int`, `reply: Any?` | §8 |
+| `message.wait` | `thread`, `since: int?`, `to?`, `timeout: int?` (300), `wake?` | `messages: Any[]`, `last_seq: int` | waits for messages on a thread after `since`; `wake: "questions"` holds notes |
+| `agent.claude` | `cwd`, `prompt`, `session?`, `listen?` | `result`, `session`, `git` | open; Opus |
+| `agent.codex` | `cwd`, `spec`, `model?` (`sol` default, `astra`), `effort?` (`minimal`…`max`, default `high`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `report?`, `session`, `git` | open |
+| `agent.devin` | `cwd`, `spec`, `model?` (default `swe-2-high`; `fusion`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `report?`, `session`, `git` | open |
+| `agent.review` | `cwd`, `base`, `standards`, `notes?`, `session?`, `listen?` | `summary`, `sha`, `commits: int`, `session`, `git` | open; reviews and fixes a branch diff with Claude |
+| `agent.run` | `engine` (`devin`, `codex`, `claude`), `cwd`, `spec`, `model?`, `effort?`, `session?`, `report_path?`, `listen?` | `final`, `report?`, `session`, `git` | open |
+| `decide.llm` | `question`, `context: Any?`, `options: string[]`, `threshold: float?` | `choice`, `p: float`, `confident: boolean` | 2 retries, 30 s apart |
+| `git.head` | `path` | `branch`, `sha` | |
+| `git.merge` | `repo`, `source`, `target`, `message?`, `push: boolean?` | `merged: boolean`, `sha?`, `conflicts: string[]` | in a temporary worktree; conflicts are data |
+| `git.push` | `path`, `branch`, `remote?`, `force_with_lease: boolean?` | `sha` | |
+| `git.rebase` | `path`, `onto` | `ok: boolean`, `sha`, `conflicts: string[]` | conflicts abort and are data |
+| `git.worktree` | `repo`, `base`, `branch`, `path?` | `path`, `branch`, `sha` | |
+| `git.worktree_rm` | `repo`, `path`, `force: boolean?` | `removed: boolean` | |
+| `gh.pr` | `path`, `base`, `head`, `title`, `body`, `draft: boolean?` | `number: int`, `url` | creates or updates the open PR |
+| `gh.pr_wait` | `path`, `pr`, `until` (`checks`, `merged`), `interval: int?`, `timeout: int?` | `state` (`green`, `red`, `conflicting`, `merged`, `closed`, `timeout`), `sha`, `url`, `failed: string[]` | 3 retries, 30 s apart |
+| `gh.run_cancel` | `path`, `run_id: int` | `cancelled: boolean` | |
+| `gh.run_latest` | `path`, `branch?`, `workflow?` | `run_id: int`, `sha`, `status`, `conclusion?`, `url`, `workflow`, `failed_jobs: string[]` | |
+| `jev.ask` | `state: Any`, `questions: Any`, `model?` | `answers: Any`, `model`, `usage: Any` | TypeSafe System One; needs `TYPESAFE_API_KEY`; 3 retries, 5 s apart (all `jev.*`) |
+| `jev.choice` | `state`, `instructions`, `options`, `min_confidence: float?`, `model?` | `choice`, `probabilities`, `confidence: float`, `confident: boolean`, `model` | |
+| `jev.score` | `state`, `instructions`, `levels: Any[]`, `model?` | `score: float`, `probabilities`, `confidence: float`, `legend`, `model` | |
+| `jev.noul` | `state`, `instructions`, `yes?`, `no?`, `model?` | `noul: float`, `model` | |
+
+Unmarked inputs and outputs are `string`; `?` marks optional ones. Unless noted, a builtin does
+not retry. Builtin icons: a spark for the agent fns, a review mark, a fork for `decide.llm`, a
+branch for `git.*`, a PR mark for `gh.*`, an arrow leaving a box for `core.external`, a bubble
+for `message.post` and an envelope for `message.wait`.

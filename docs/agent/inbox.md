@@ -1,65 +1,73 @@
 # The inbox: asking a person
 
-When you need a person (a decision, an approval, a value only they know), post an item to the
-project's inbox. The dashboard's Inbox (`/inbox`) shows every open item with a red count in its
-nav; the person answers there (or anyone calls `inbox_answer`), and you read the answer.
+When you need a person (a decision, an approval, a value only they know), post a question to
+them. A question is a message addressed `to="owner"` with `needs_reply` true (the default for a
+new thread). The dashboard's Inbox (`/inbox`) shows every open question with a red count in its
+nav; the person answers there, and you read the answering reply.
 
 ## Posting and waiting
-- `inbox_post(project, title, body?, ui?, input?, from?)` → `{id}` (e.g. `"i3"`). `title` is
-  the question in one line, `body` any context as markdown, `ui` an OpenUI Lang program with
-  buttons or a form (below; without it the person gets a text box), `from` who is asking
-  (default: your author, e.g. `step:<id>` inside a step, whose run the item then records).
-- Wait with `log_wait(project, since_seq, kinds=["inbox"])`: every post, answer and close is a
-  log record (`inbox.post {item, title, from?, run?, input?}`, `inbox.answer {item, answer,
-  by, waiting?}`, `inbox.close {item, reason?, by}`, `inbox.adopt {item, from, run?, was?,
-  status}`). Or read `inbox_list(project, status="answered")`.
-- An answer is `{action, params?, values?, text?}`: a Button sends its `action` and `params`
-  plus the `values` of its form's fields; the text box sends `{"action": "answer", "text"}`.
-- `inbox_close(project, id, reason?)` withdraws an item you no longer need.
-- Only an open item can be answered or closed. A second answer, or one after a close, is
-  refused (`conflict` with the item's `status`), so a stale button can never answer twice.
-- Items live in the project's inbox, not in the log, so they outlast log trimming.
+- `message_post(project, body, to="owner", title=..., ui=..., input=..., thread=..., from=...)`
+  → `{id}`, the message's id. `title` is the question in one line, `body` any context as
+  markdown, `ui` an OpenUI Lang program with buttons or a form (below; without it the person
+  gets a text box), `from` who is asking (default: your author, e.g. `step:<id>` inside a step,
+  whose run the message then records).
+- Wait for the answer with `log_wait(project, since_seq, wake="questions")`, or let `next`
+  return it: a `message` record is written for the question and for the reply. Or read the
+  `messages(project, view)` views: `"inbox"` (open questions to `owner`, then their unread
+  notes), `"questions"` (every open question in the project, whoever it is addressed to),
+  `"history"` (threads that involve `owner`), `"thread"` (one thread in full).
+- An **answer** is a reply to the question with `answer={action, params?, values?}` set. From
+  the dashboard, a Button sends its `action` and `params` plus the `values` of its form's
+  fields; the text box sends `{"action": "answer"}` with the text as the reply's body. A reply with `needs_reply: true` is a clarification and answers nothing — the first
+  *answering* reply resolves the question, atomically.
+- An answer to a question that is no longer open is refused (`conflict`: "question is no
+  longer open"), so a stale button can never answer twice; a later plain reply is just a
+  message. A reply whose
+  `answer.action` is `close` closes the question without answering it.
+- Message rows outlive the log: they are never trimmed with it, and are deleted with their
+  project.
 
 ## Setting a plan input
-With `input` (a declared plan input; anything else is refused at post), the answer sets that
-input, exactly as `plan_set_input` would (same type check, a `plan.input` record whose reason
-names the item), so the steps waiting on it start. The value is the first of `values.value` (a
-field named `value`), `params.value` (a button's value) and `text`. A value that does not fit
-the input's type refuses the answer and the item stays open. Without a `body`, the item shows
-the input's `doc` (`docs("plans")`), so a well-documented input needs only a title.
+With `input` (a declared plan input; anything else is refused at post), the answering reply
+sets that input, exactly as `plan_set_input` would (same type check, a `plan.input` record),
+so the steps waiting on it start. The value is the first of `answer.values.value` (a field
+named `value`), `answer.params.value` (a button's value) and the reply's body text. A value
+that does not fit the input's type refuses the reply and the question stays open. The
+dashboard shows which input a question sets.
 
-## In a plan: `inbox.ask`
-`inbox.ask` `{title, body?, ui?}` → `{answer}` posts an item (`from` = the step) and waits for
-it, so a human decision is a plain step: read `ask/answer.action`, `ask/answer.values`,
-`ask/answer.text`. If the item is closed instead, the step fails.
-
-While the step's run waits, its open item has `waiting: true`. Once that run has stopped
-(failed, cancelled, finished some other way), the item says `waiting: false` and `stopped`
-("ask is failed"), and the dashboard shows "nobody is waiting". It stays open: retrying the
-step takes it up again — a run of the same step asking the same title reuses the step's open
-item instead of posting another, and an answer given while nobody was waiting is delivered to
-it (`inbox.adopt` in the log). Close an item you do not mean to ask again.
+## In a plan: `message.post` with `wait`
+`message.post` is a builtin fn: a step running it posts a message and, with `wait: true`,
+blocks until the first answering reply, which it returns as `reply` — a human decision is a
+plain step. If the question is closed instead, the step fails `question closed`.
 
 ```json
 {"inputs": {},
- "outputs": {"decision": {"source": "ask/answer.action"}},
+ "outputs": {"decision": {"source": "ask/reply.action"}},
  "steps": {
-   "ask": {"run": "inbox.ask", "in": {"title": {"default": "Ship v2?"},
-           "body": {"default": "All **412** tests pass."},
-           "ui": {"default": "root = Stack([Button(\"Ship\", \"ship\"), Button(\"Hold\", \"hold\")], \"row\")"}}}}}
+   "ask": {"run": "message.post",
+           "in": {"to": {"default": "owner"}, "title": {"default": "Ship v2?"},
+                  "body": {"default": "All **412** tests pass."},
+                  "ui": {"default": "root = Stack([Button(\"Ship\", \"ship\"), Button(\"Hold\", \"hold\")], \"row\")"},
+                  "wait": {"default": true}}}}}
 ```
+
+While the step's run waits, its question is `waiting`; once the run stops (failed, cancelled,
+finished some other way) the dashboard shows "Nobody is waiting" with the reason. The
+question stays open: retrying the step takes it up again — a run of the same step asking the
+same title reuses its earlier open question, and an answer given while nobody was waiting is
+delivered to it. Answer or close a question you do not mean to ask again (a reply with
+`answer={"action": "close"}`).
 
 ## The ui: OpenUI Lang
 One statement per line, `name = Component(arg, ...)`; the first statement (conventionally
 `root`) is drawn. Arguments are positional, in the order of the signatures below (pass `null`
 to skip an optional one). Values: `"strings"`, numbers, `true`/`false`, `[arrays]`, `{key:
 value}` objects, and names of other statements. A line with an unknown component, a missing
-required argument or bad syntax is dropped, and the item says how many lines were dropped; the
-text box is always there as a fallback. Put prose in `body`; the ui is for the answer.
+required argument or bad syntax is dropped, and the message says how many lines were dropped;
+the text box is always there as a fallback. Put prose in `body`; the ui is for the answer.
 
 Components (the whole vocabulary):
 
-<!-- vocabulary: from crates/sluice-web/assets/openui.js, which the renderer uses; keep them in step -->
 - `Stack(children: Component[], direction?: "col" | "row")` — Layout container and the usual root: a column of parts, or a row (e.g. of buttons).
 - `Heading(text: string, level?: number)` — A heading, level 1 to 3.
 - `Text(text: string, tone?: "default" | "muted")` — One paragraph of plain text. Longer prose belongs in the item's markdown body.
@@ -72,8 +80,7 @@ Components (the whole vocabulary):
 - `Select(name: string, options: string[], label?: string, value?: string, rules?: string[])` — One choice from a drop-down list.
 - `Radio(name: string, options: string[], label?: string, value?: string, rules?: string[])` — One choice, all options shown. Prefer it to Select for a handful of options.
 - `Checkbox(name: string, label: string, checked?: boolean)` — One yes/no answer (a boolean in values).
-- `Button(label: string, action?: string, params?: Record<string, any>, variant?: "primary" | "secondary")` — Answers the item with {action, params, values}: action defaults to "submit", params to {}, values are the fields of its Form (or every field outside a form). A primary button (the default) checks its fields' rules first.
-<!-- end vocabulary -->
+- `Button(label: string, action?: string, params?: Record<string, any>, variant?: "primary" | "secondary")` — Answers the question with {action, params, values}: action defaults to "submit", params to {}, values are the fields of its Form (or every field outside a form). A primary button (the default) checks its fields' rules first.
 
 ## Examples
 

@@ -4,7 +4,8 @@ Execution requires Linux, cgroup v2 at `/sys/fs/cgroup`, a reachable systemd
 user manager, delegated user services, `pidfd_open` and a readable
 `/proc/sys/kernel/random/boot_id`. `HostCheck::run` returns a serializable
 report with one actionable result for each prerequisite. Any failed result
-blocks execution. The CLI doctor wiring belongs to the later interface unit.
+blocks execution. `sluice doctor` prints the report (`--json` for the full
+object, with the engine profiles and the selected release's manifest check).
 
 The delegation check creates a unique `sluice-test-doctor-*.service` through
 argument-safe `systemd-run --user` argv with `Delegate=yes` and
@@ -98,14 +99,13 @@ recorded processes through pidfds. A host tmux that no longer migrates fails
 this red-side gate, requiring fresh evidence. No existing sessions receive
 keys or signals. JSON evidence goes under `target/p3-00-evidence` by default.
 
-This proves host prerequisites and the pinned tmux's containment. Guardian
-crash/reconciliation and engine admission belong to the subsequent P3 units
-and G4. They must pass before live engines connect.
+This proves host prerequisites and the pinned tmux's containment.
 
 ## Process ownership API
 
-`TransientService::for_run(RunId)` reserves `sluice-run-<UUID>.service`.
-`for_test` uses `sluice-test-<UUID>.service`. Both start through argument-safe
+`TransientService::for_run(RunId)` reserves `sluice-run-<UUID>.service`, the
+name every production run unit uses. `for_test` uses `sluice-test-<UUID>.service`
+and is for tests only. Both start through argument-safe
 `systemd-run --user` with `Delegate=yes`, `KillMode=control-group`,
 `Restart=no`, and a description. `start_once` reserves its in-memory attempt
 before the first await and reconciles every ambiguous command result by that
@@ -171,7 +171,7 @@ error rather than naming a stale holder. Both lock files must remain on the
 same inode and must never be unlinked. These Linux primitives use the workspace's pinned Rust
 1.97.0, rustix 1.1.5 with the local `stdio` feature, procfs 0.18.0 and fs4 1.1.0.
 
-The P3.01 ignored host tests extend the artifact gates with the actual
+The ignored launch host tests extend the artifact gates with the actual
 post-exec fixture mode, cancellation/record-failure injection, exclusive
 invocation leaves, TERM-resistant double-fork work, private tmux server/pane,
 setsid children, a mock app-server child, and guardian SIGKILL. They observe

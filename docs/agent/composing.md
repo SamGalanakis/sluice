@@ -12,12 +12,14 @@ it stays easy to read and to change.
 - **An edge is a real handoff**: an interface, a branch, a finding, a decision. If nothing
   meaningful passes between two steps, they need no edge, unless they must not overlap (both
   change the same file): then `"after": ["<step>"]` orders them without passing anything.
-- **Gate with `when`, not a gate step.** `"when": "tests/ok"` on `land` runs it only if the
-  tests passed; otherwise it and what reads from it are skipped, and cleanup ordered `after`
-  it still runs.
+- **Gate with `after`, not a gate step.** `"after": ["check/ok"]` on `land` runs it only if the
+  value is true; otherwise it and what reads from it is skipped, and cleanup ordered after it
+  with `"after": ["land?"]` still runs. `"!check/ok"` is the else branch.
+- **Group with `unit:` tags, not by drawing boxes.** Tag a lane's steps `unit:<name>` and its
+  delivery step `exit`; a later unit depends on the whole lane with `"after": ["unit:<name>"]`.
 - **Steps start when ready.** A step you add starts as soon as its inputs are there. To draft
   a stretch first, add it with `start=false` (it comes in paused), read it over, then
-  `step_pause(steps=[...], subtree=true, paused=false)` to let it go. To keep everything from
+  `step_pause(project, steps=[...], paused=false)` to let it go. To keep everything from
   starting at once, declare resources on the project and give steps `needs` (`docs("plans")`,
   Resources); pause by tag to back off when the machine is busy.
 - **Agents do their own mechanics.** Worktrees, branches, merges, rebases, commit messages,
@@ -27,12 +29,14 @@ it stays easy to read and to change.
   enough (`"interface": {"type": "string", "doc": "Path of the interface file"}`). The agent
   submits them; the next step gets them as inputs. A step with nothing to hand on declares
   nothing.
-- **People decide in the inbox.** When a choice is theirs, an `inbox.ask` step (or
-  `inbox_post` from you) waits for it (`docs("inbox")`).
+- **People decide in the inbox.** When a choice is theirs, a `message.post` step with
+  `wait: true` (or `message_post` from you, `to="owner"`) waits for it (`docs("inbox")`).
 - **Finish with a check.** A last block verifies the result as a whole (tests pass, the
   feature works, the brief answers the questions) and says what is still open.
 - **The plan is malleable.** Plan the part you understand, run it, read what comes back, then
-  add, change or drop steps. A follow-up to an agent is one more step with its `session`.
+  add, change or drop steps. A follow-up to an agent is one more step with its `session`, or a
+  send-back: `step_retry(project, steps=[...], message="what to fix")` resumes its session with
+  the message first.
 
 ## What to avoid
 - Plumbing nodes: a `git.worktree`, `git.merge` or `git.push` step between two agents, a
@@ -103,7 +107,9 @@ both together; `review` is optional.
 ## A follow-up to the same agent
 `fix` does the work and `check` looks at it with fresh eyes. When the check finds a problem,
 add a step that continues `fix`'s own session (it keeps its context), bound to what `check`
-found. The plan as it stands after that edit:
+found — or send the findings back with `step_retry(project, steps=["fix"], message=...)`, which
+resumes `fix`'s previous session with the message first. The plan as it stands after the added
+step:
 
 ```json
 {"inputs": {"repo": "string"},

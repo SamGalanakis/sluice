@@ -1,5 +1,5 @@
 sluice runs plans: graphs of typed function calls ("steps"). Work is organised in projects; each
-project has one plan, its own functions and its own secrets. You edit a plan with these tools; a
+project has one plan and its own functions. You edit a plan with these tools; a
 runner executes it in the background and records each step's outputs or failure.
 
 The point: the plan carries the routine, so your attention goes to judgment: failures,
@@ -15,18 +15,17 @@ Workflow:
    `fn_save(fn, main_py, project)` writes it (see `docs("fns")`).
 3. One-off work: `fn_call(name, inputs, project, wait)`. Multi-step work: `plan_get(project)`,
    then `plan_patch(project, rev, ops, reason)` to add steps. Many units of one shape: write
-   a recipe once and add each unit with `unit_add(project, recipe, params)`; the same call takes
-   its edges, input overrides and tags (`docs("plans")`). `edge_add` adds an edge at any time.
-   To cap how many steps run at once, declare resources on the project (`project_update(name,
-   resources={"lane": 4})`) and give steps `needs` (`docs("plans")`, Resources).
-4. Watch with `status(project)` (`view="units"`: one short line per unit), or wait for
-   changes with `log_wait(project, since_seq)` (every step status change, call and message
-   is a log record). A failed step stays failed until you
+   a recipe once and add each unit with `unit_add(project, recipe, unit, params)`; the same call
+   takes its gate entries, input overrides and tags (`docs("plans")`). `edge_add` adds a gate at
+   any time. To cap how many steps run at once, declare resources on the project
+   (`project_update(project, resources={"lane": 4})`) and give steps `needs` (`docs("plans")`,
+   Resources). Every edit takes `dry_run: true` to see what would change before it does.
+4. Watch with `status(project)`, or wait for changes with `log_wait(project, since_seq)` or `next(projects)` (every
+   step status change, call and message is a log record). A failed step stays failed until you
    act: fix the plan with `plan_patch` (needs the current `rev`), then `step_retry`; or record
    the result yourself with `step_set_output`. A `stale` step was computed from inputs that have
    changed since: `step_retry` it (or accept it with `step_set_output`). Provide values a plan
-   waits on with `plan_set_input`. `status` leaves out finished units (`all=true` shows them);
-   `plan_prune(project)` removes them from the plan.
+   waits on with `plan_set_input`. `plan_prune(project)` removes done units from the plan.
 5. `verify(project)` lists every problem (bad fn.json, name collisions, plan, state) with where
    it is. A project with function problems refuses edits and runs until they are fixed.
 
@@ -34,14 +33,14 @@ Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.
 inside). Every edit is type-checked; errors name the exact path to fix.
 
 `plan_view(project, "mermaid")` shows the graph with each step's status. Agents working on the
-same project talk through threads (`thread_post`, then `log_wait`); see `docs("threads")`.
+same project talk through messages (`message_post`, then `log_wait`); see `docs("threads")`.
 
-When you need a person (a decision, an approval, a missing value), post to the inbox
-(`inbox_post`, or an `inbox.ask` step in a plan) and wait with `log_wait(project, since_seq,
-kinds=["inbox"])`; see `docs("inbox")`. The inbox is the only place the person looks for what
-needs them: failed steps and workers' questions are yours to handle, not theirs. Answer a
-worker's question on its thread; a note (`needs_reply: false`) needs no answer, and
-`log_wait(..., wake="questions")` lets notes wait for your next wake instead of waking you.
+When you need a person (a decision, an approval, a missing value), post a question to them
+(`message_post(project, to="owner", title=..., body=...)`, or a `message.post` step with
+`wait: true` in a plan) and wait with `log_wait(project, since_seq, wake="questions")`; see
+`docs("inbox")`. Open questions to the owner are the inbox: the only place the person looks for
+what needs them — failed steps and workers' questions are yours to handle, not theirs. Answer a
+worker's question with a reply on its message; a note (`needs_reply: false`) needs no answer.
 
 Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
 plan.

@@ -2,10 +2,10 @@
 
 ## One call
 `fn_call("git.head", {"path": "/repo"}, wait=30)` →
-`{"call": "20260926-120000-a1b2c3", "status": "succeeded", "outputs": {"branch": "main", "sha": "..."}}`.
-For long functions use `wait=0` and poll `call_status(call)`. Pass `project` to run it with that
-project's functions and `.env`. (`git.head` comes from the `git` pack — install it first, see
-`docs("fns")`. The `agent.*` functions below come from the `agents` pack.)
+`{"call": "019a2b3c-…", "project_id": null, "status": "succeeded", "inputs": {"path": "/repo"},
+"outputs": {"branch": "main", "sha": "..."}, "error": null, "direct": false}`.
+The call id is a UUID. For long functions use `wait=0` and poll `call_status(call)`. Pass
+`project` to run it with that project's functions. (`git.head` and the `agent.*` functions below are built in.)
 
 ## Parallel work, then a summary (fan-out, fan-in)
 `project_create("health", "Add health checks to the API and UI")`, then `plan_patch("health",
@@ -38,14 +38,34 @@ inputs. More on shaping plans like this: `docs("composing")`.
 ```
 `plan_set_input("fixes", "repo", "/repo")` and `plan_set_input("fixes", "issues", [...])` start it.
 
-## A project function
-`fn_save({"name": "text.upper", "inputs": {"text": "string"}, "outputs": {"text": "string"}},
-main_py, project="fixes")`, then use `"run": "text.upper"` in that project's plan.
+## A unit of steps that lands together
+Tag the lane `unit:<name>` and its delivery step `exit`, then the next unit depends on the
+whole lane:
+```json
+{"inputs": {},
+ "outputs": {},
+ "steps": {
+   "a-fork":  {"run": "git.worktree", "tags": ["unit:a"],
+               "in": {"repo": {"default": "/repo"}, "base": {"default": "origin/main"},
+                      "branch": {"default": "work/a"}}},
+   "a-work":  {"run": "agent.devin", "tags": ["unit:a", "exit"],
+               "in": {"cwd": {"source": "a-fork/path"},
+                      "spec": {"default": "Fix the flaky login test on your branch"}},
+               "outputs": {"landed": "boolean"}},
+   "a-clean": {"run": "git.worktree_rm", "tags": ["unit:a"], "after": ["a-work?"],
+               "in": {"repo": {"default": "/repo"}, "path": {"source": "a-fork/path"}}},
+   "b-fork":  {"run": "git.worktree", "tags": ["unit:b"], "after": ["unit:a"],
+               "in": {"repo": {"default": "/repo"}, "base": {"default": "origin/main"},
+                      "branch": {"default": "work/b"}}}}}
+```
+`b-fork` starts once unit `a`'s exit (`a-work`) succeeded; `a-clean` runs whether `a-work`
+succeeded or was skipped.
 
 ## A step that failed
-1. `status("fixes")` shows `fix` failed with its error and stderr tail.
+1. `status("fixes")` shows `fix` failed with its error (`{"error": <kind>, "message": ...}`).
 2. Either fix the cause (e.g. `plan_patch` to change an input, with the current `rev`) and
-   `step_retry("fixes", steps=["fix"])`, or record the result yourself with
+   `step_retry("fixes", steps=["fix"])` — the retry also re-arms failed and stale steps
+   blocked behind it — or record the result yourself with
    `step_set_output("fixes", "fix", {...})`.
 
 ## A step that went stale
@@ -56,8 +76,10 @@ readers wait). `step_retry` each stale step in order, or accept one as it is wit
 
 ## A human or orchestrator step
 Declare a plan input (e.g. `"approved": "boolean"`) and have later steps read it. They wait until
-someone calls `plan_set_input(project, "approved", true)`.
+someone calls `plan_set_input(project, "approved", true)` — or answers a question posted with
+`message_post(project, to="owner", input="approved", title=...)`, which sets it.
 
 ## Something is off
-`verify("fixes")` → `{"ok": false, "problems": [{"where": "projects/fixes/fns/thread.post/fn.json",
-"message": "fn thread.post collides with the builtin fn at ..."}]}`: rename or remove that function.
+`verify("fixes")` → `[{"where": "projects/<id>/fns/message.post/fn.json", "message": "fn
+message.post collides with the builtin fn ..."}]`, one entry per problem (empty when all is
+well): rename or remove that function.
