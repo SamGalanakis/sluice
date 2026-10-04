@@ -184,11 +184,22 @@ fn native_next_and_http_read_message_records_across_project_rename() {
         "project_update",
         json!({"project":format!("id:{id}"), "new_name":"renamed-record-at"}),
     );
-    for (body, needs_reply) in [
-        ("note after rename", false),
-        ("question after rename", true),
+    for (verb, body) in [
+        ("say", "note after rename"),
+        ("ask", "question after rename"),
     ] {
-        server.http("message_post", json!({"project":"renamed-record-at", "thread":"step-record-at", "from":"worker", "to":"orchestrator", "body":body, "needs_reply":needs_reply}));
+        // The owner speaks to the orchestrator, whose next wakes on it.
+        let request = json!({"command":verb,"args":{"project":{"kind":"name","value":"renamed-record-at"},"to":"orchestrator","body":body,"owner":true}});
+        let output = server
+            .command()
+            .args(["tool", "rpc", &request.to_string()])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     let request = CommandRequest::Next(Next {
