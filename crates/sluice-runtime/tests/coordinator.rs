@@ -523,6 +523,183 @@ async fn receipts_follow_the_step_from_pending_through_its_run_to_done() {
         ("work", Some(l.identity.run))
     );
 }
+/// A pack fn that runs an agent and passes `listen` on, as a worker fn does: its live
+/// runs listen, whatever guardian protocol they speak, unless the step binds it false.
+#[tokio::test]
+async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches() {
+    use sluice_model::{plan::FnSignature, types::Type};
+    use sluice_process::socket::{CoordinatorLink, UnixCoordinatorLink};
+    let home = home::ScratchHome::new().unwrap();
+    home::ScratchHome::validate(home.path()).unwrap();
+    let f = Fake::default();
+    let mut catalog = Catalog::fixtures();
+    catalog.0.insert(
+        "fixture.worker".into(),
+        FnSignature {
+            inputs: [
+                ("value".into(), Type::Any),
+                ("listen".into(), Type::Optional(Box::new(Type::Boolean))),
+            ]
+            .into(),
+            outputs: [("value".into(), Type::Any)].into(),
+            ..Default::default()
+        },
+    );
+    let b = Coordinator::open(home.path().into(), catalog, f.clone())
+        .await
+        .unwrap();
+    let CommandReply::Project(project) = b.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap() else { panic!("project") };
+    let p = project.project_id;
+    let step = |listen: Option<bool>| {
+        let mut step = json!({"run":"fixture.worker","in":{"value":{"default":1}}});
+        if let Some(listen) = listen {
+            step["in"]["listen"] = json!({ "default": listen });
+        }
+        step
+    };
+    b.command(request(json!({"command":"plan_patch","args":{"project":json!({"kind":"id","value":p}),"rev":1,"ops":[
+        {"op":"add","path":"/steps/polled","value":step(None)},
+        {"op":"add","path":"/steps/watched","value":step(None)},
+        {"op":"add","path":"/steps/quiet","value":step(Some(false))},
+    ],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    let say = |to: &'static str| speak(&b, p, "say", json!({"to":to,"body":"hello"}));
+    // Pending: the next run is assigned it.
+    for to in ["polled", "watched", "quiet"] {
+        let r = say(to).await.unwrap();
+        assert_eq!((r.delivery, r.run), (Delivery::Queued, None), "{to}");
+    }
+    let stop = tokio_util::sync::CancellationToken::new();
+    let server = tokio::spawn({
+        let (b, stop) = (b.clone(), stop.clone());
+        async move { b.serve(stop).await }
+    });
+    let socket = home.path().join("coordinator.sock");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !socket.exists() {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    b.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&b, p, "s").await.unwrap();
+    let launches = f.0.lock().unwrap().clone();
+    let launch = |name: &str| {
+        launches
+            .iter()
+            .find(|l| l.identity.step.as_ref().map(|s| s.as_str()) == Some(name))
+            .unwrap()
+            .clone()
+    };
+    let (polled, watched, quiet) = (launch("polled"), launch("watched"), launch("quiet"));
+    let link = |l: &Launch| UnixCoordinatorLink {
+        path: socket.clone(),
+        capability: l.capability.clone(),
+    };
+    for l in [&polled, &watched, &quiet] {
+        let link = link(l);
+        assert!(matches!(
+            link.request(C::Claim(guardian(l))).await,
+            Ok(R::Claimed(true))
+        ));
+        assert!(matches!(
+            link.request(C::Started {
+                identity: l.identity.clone(),
+                invocation: l.invocation.invocation,
+                executor: executor(),
+            })
+            .await,
+            Ok(R::Started)
+        ));
+    }
+    // An older guardian polls with Messages and never holds a watch.
+    let r = say("polled").await.unwrap();
+    assert_eq!(
+        (r.delivery, r.run),
+        (Delivery::Delivered, Some(polled.identity.run))
+    );
+    let Ok(R::Messages(offered)) = link(&polled)
+        .request(C::Messages {
+            identity: polled.identity.clone(),
+            after: polled.assigned.through,
+            through: None,
+            limit: 128,
+        })
+        .await
+    else {
+        panic!("poll")
+    };
+    assert_eq!(offered.iter().map(|m| m.id).collect::<Vec<_>>(), vec![r.id]);
+    assert!(matches!(
+        link(&polled)
+            .request(C::DeliverAck {
+                identity: polled.identity.clone(),
+                ack: sluice_process::journal::DeliveryAck {
+                    invocation: polled.invocation.invocation,
+                    message: r.id,
+                },
+            })
+            .await,
+        Ok(R::Ack)
+    ));
+    // A current guardian holds a watch over the socket; the message wakes it.
+    let held = tokio::spawn({
+        let (link, identity, after) = (
+            link(&watched),
+            watched.identity.clone(),
+            watched.assigned.through,
+        );
+        async move {
+            link.request(C::Watch {
+                identity,
+                after,
+                wait_ms: 30_000,
+            })
+            .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let r = say("watched").await.unwrap();
+    assert_eq!(
+        (r.delivery, r.run),
+        (Delivery::Delivered, Some(watched.identity.run))
+    );
+    let Ok(R::Watched {
+        cancelled: false,
+        messages,
+    }) = held.await.unwrap()
+    else {
+        panic!("watch")
+    };
+    assert_eq!(
+        messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+        vec![r.id]
+    );
+    // A run whose step binds `listen: false` does not listen.
+    let r = say("quiet").await.unwrap();
+    assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None));
+    // Finished: no live or upcoming run.
+    b.complete(CompletionJournal {
+        protocol: 1,
+        identity: polled.identity.clone(),
+        completion_id: "polled-done".into(),
+        result: PayloadResult::Succeeded(decode_json(br#"{"value":1}"#).unwrap()),
+        starts: vec![],
+        exits: vec![],
+        cleanup: vec![CleanupEvidence {
+            cgroup: "fake".into(),
+            empty: true,
+            escalated: false,
+        }],
+        submissions: JsonMap::default(),
+        submission_version: None,
+        delivery_acks: vec![],
+    })
+    .await
+    .unwrap();
+    let r = say("polled").await.unwrap();
+    assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None));
+    stop.cancel();
+    server.await.unwrap().unwrap();
+}
 #[tokio::test]
 async fn the_retired_message_post_is_bridged_for_a_run_and_refused_without_one() {
     let (_home, b, f, p) = setup().await;

@@ -683,13 +683,18 @@ tool` do not take).
   record (`outcome: reserved`). Notes, replies and questions to anyone else never notify.
 
 Each verb returns its receipt `{id, to, thread, delivery, run?}`. `delivery` is `delivered`
-when a live run of the step that listens (an agent fn whose step does not bind `listen:
-false`) has started and is handed the message on its live feed (`run` names it), and for
-`orchestrator` and `owner` (their inbox); `queued` when the step will run (pending and not
-paused, or its run reserved but not started, which `run` names) and its next run is assigned
-the message; `no_live_run` when the step has no live or upcoming run (done, failed, stale,
-skipped or paused, its live run does not listen, or it left the plan): the message is kept and
-given to the step's next run if one is ever started, e.g. by a retry.
+when a live run of the step that listens has started and is handed the message on its live
+feed (`run` names it), and for `orchestrator` and `owner` (their inbox). A run listens when
+its fn takes a `listen` input (every agent fn, and a pack fn that runs one and passes
+`listen` on) and its inputs do not set it to `false`; its reservation freezes this, so the
+receipt reads stored rows, never which guardian protocol (a held watch or a poll) the run's
+guardian speaks. A run reserved before reservations froze it listens if its step runs an
+agent fn without binding `listen: false`, or once it has acknowledged a message. `delivery`
+is `queued` when the step will run (pending and not paused, or its run reserved but not
+started, which `run` names) and its next run is assigned the message; `no_live_run` when the
+step has no live or upcoming run (done, failed, stale, skipped or paused, its live run does
+not listen, or it left the plan): the message is kept and given to the step's next run if one
+is ever started, e.g. by a retry.
 
 A message is a row `{id, verb, from, to, thread, body, title?, ui?, input?, data?, run?, at,
 to_message?, answer?}` plus a `message` record written in the same transaction; a field with

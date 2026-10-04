@@ -50,9 +50,10 @@ a step) you speak as that run's step; the dashboard speaks as the owner.
 
 Each of the three returns its receipt, `{id, to, thread, delivery, run?}`:
 
-- `delivered`: a live run of the step that listens (an agent fn, unless the step binds
-  `listen: false`) was handed it on its live feed (`run` names it); to `orchestrator` or
-  `owner` it is in their inbox.
+- `delivered`: a live run of the step that listens (its fn takes `listen`, as every agent
+  fn does and a fn that runs one should, and the step does not bind `listen: false`) was
+  handed it on its live feed (`run` names it); to `orchestrator` or `owner` it is in their
+  inbox.
 - `queued`: the step will run (it is pending, or its run has not started yet) and its next
   run is assigned it.
 - `no_live_run`: the step has no live or upcoming run (it is done, failed or paused, or its

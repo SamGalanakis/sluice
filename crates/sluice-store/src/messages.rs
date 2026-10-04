@@ -347,8 +347,8 @@ pub fn bridge(post: MessagePost) -> Result<Post> {
     })
 }
 
-/// The plan's agent fns: a run of one of them takes messages on its live feed unless
-/// its step binds `listen` to false.
+/// The agent fns. A run reserved by an older release has no frozen `listens`; such a
+/// run listens if its step runs one of these, or if it has acknowledged a message.
 const LISTENING_FNS: &[&str] = &[
     "agent.claude",
     "agent.codex",
@@ -357,10 +357,13 @@ const LISTENING_FNS: &[&str] = &[
     "agent.run",
 ];
 
-/// How a message to `to` reaches it now. The orchestrator and owner read inboxes.
-/// A step's live run that listens has it handed over on its live feed; a step that
-/// will run (pending, or a run not yet started) gets it with its next run; anything
-/// else keeps it for a run started later, e.g. by a retry.
+/// How a message to `to` reaches it now, read from the same durable rows the delivery
+/// path reads: the orchestrator and owner read inboxes; a step's live, started run that
+/// listens is offered it by its guardian, whether that guardian holds a watch or polls;
+/// a step that will run (pending, or a run not yet started) gets it with its next run;
+/// anything else keeps it for a run started later, e.g. by a retry. Whether a run
+/// listens is frozen in its reservation from its fn's contract (it takes `listen`) and
+/// its inputs, so a custom fn that runs an agent counts as one.
 pub fn delivery(
     sql: &Connection,
     project: ProjectId,
@@ -379,11 +382,11 @@ pub fn delivery(
     let Some((status, paused, declaration)) = step else {
         return Ok((Delivery::NoLiveRun, None));
     };
-    let live: Option<(String, bool)> = sql
+    let live: Option<(String, bool, Option<bool>, bool)> = sql
         .query_row(
-            "SELECT r.run_id,a.phase='executing' FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation AND s.work_generation=r.work_generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL AND a.phase!='terminal' AND a.cancel_requested=0 ORDER BY a.phase='executing' DESC,r.item_index LIMIT 1",
+            "SELECT r.run_id,a.phase='executing',json_extract(a.request,'$.listens'),EXISTS(SELECT 1 FROM message_deliveries d WHERE d.project_id=r.project_id AND d.run_id=r.run_id AND d.acknowledged_at IS NOT NULL) FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation AND s.work_generation=r.work_generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL AND a.phase!='terminal' AND a.cancel_requested=0 ORDER BY a.phase='executing' DESC,r.item_index LIMIT 1",
             params![project.to_string(), to],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
     let parse = |run: String| {
@@ -391,16 +394,27 @@ pub fn delivery(
             .map_err(|e| StoreError::InvalidDatabase(format!("invalid run: {e}")))
     };
     Ok(match live {
-        Some((run, true)) if listens(&declaration)? => (Delivery::Delivered, Some(parse(run)?)),
-        Some((_, true)) => (Delivery::NoLiveRun, None),
-        Some((run, false)) => (Delivery::Queued, Some(parse(run)?)),
+        Some((run, true, frozen, acknowledged)) => {
+            let listening = match frozen {
+                Some(listens) => listens,
+                None => acknowledged || legacy_listens(&declaration)?,
+            };
+            if listening {
+                (Delivery::Delivered, Some(parse(run)?))
+            } else {
+                (Delivery::NoLiveRun, None)
+            }
+        }
+        Some((run, false, _, _)) => (Delivery::Queued, Some(parse(run)?)),
         None if matches!(status.as_str(), "pending" | "running") && paused == "false" => {
             (Delivery::Queued, None)
         }
         None => (Delivery::NoLiveRun, None),
     })
 }
-fn listens(declaration: &str) -> Result<bool> {
+/// Listening for a run reserved before reservations froze it: an agent fn whose step
+/// does not bind `listen` to false.
+fn legacy_listens(declaration: &str) -> Result<bool> {
     let declaration: serde_json::Value = serde_json::from_str(declaration)?;
     let agent = declaration["run"]
         .as_str()

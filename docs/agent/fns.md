@@ -105,7 +105,9 @@ if __name__ == "__main__":
   (`ctx.tool("step_pause", {"steps": "deploy", "reason": "hold"})`; `project` defaults to the
   run's), and it returns what the MCP tool returns (`{"ok": True}` for an acknowledgement).
   Edits it makes are authored `step:<step>`.
-  `ctx.builtin(name, inputs)` runs a built-in function (an agent, say) inside this run.
+  `ctx.builtin(name, inputs)` runs a built-in function (an agent, say) inside this run. A
+  function that runs an agent declares `"listen": "boolean?"` and passes it on: its runs then
+  take messages live, and `ask`/`say` to its step report `delivered`.
 - `ctx.retry_on_failure(step, message)` registers a send-back: if this run then ends rejected,
   `step` is retried with `message` posted to it first.
 - `ctx` has `project`, `project_id`, `step`, `run_id`, `run_dir` (scratch space), `project_dir`,

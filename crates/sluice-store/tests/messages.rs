@@ -1147,6 +1147,57 @@ async fn repeated_range_request_keeps_the_frozen_window_and_leaves_late_messages
     assert!(late.id > first.through);
 }
 
+/// A run listens by its frozen reservation, not by its fn's name or how its guardian
+/// asks for messages; a run an older release reserved listens once it has taken one.
+#[tokio::test]
+async fn receipts_read_listening_from_the_runs_reservation() {
+    let f = Fixture::new().await;
+    let p = f.project;
+    let set = |sql: &'static str| {
+        let w = f.writer.clone();
+        async move {
+            w.write(RetrySafety::NonIdempotent, move |tx| {
+                tx.sql().execute(sql, [p.to_string()])?;
+                tx.changed(Some(p), "status");
+                Ok(())
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let receipt = || async {
+        let r = f.posted(draft(p, "hi").to("work")).await.unwrap().receipt;
+        (r.delivery, r.run)
+    };
+    set("UPDATE steps SET status='running',declaration='{\"run\":\"lash.worker\",\"in\":{}}' WHERE project_id=?1 AND step_id='work'").await;
+    let run = f.run("work", -1, 1, None).await;
+    // Reserved by this release: a pack fn that takes `listen` listens.
+    set("UPDATE attempts SET request='{\"listens\":true}' WHERE project_id=?1 AND step_id='work'")
+        .await;
+    assert_eq!(receipt().await, (Delivery::Delivered, Some(run)));
+    set("UPDATE attempts SET request='{\"listens\":false}' WHERE project_id=?1 AND step_id='work'")
+        .await;
+    assert_eq!(receipt().await, (Delivery::NoLiveRun, None));
+    // Reserved by an older release: not an agent fn by name, and nothing taken yet.
+    set("UPDATE attempts SET request='{}' WHERE project_id=?1 AND step_id='work'").await;
+    assert_eq!(receipt().await, (Delivery::NoLiveRun, None));
+    // Once it has acknowledged a message on its live feed, it listens.
+    let sent = f.post(draft(p, "taken").to("work")).await.unwrap();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute("INSERT INTO message_deliveries(project_id,run_id,message_id,assigned_at,acknowledged_at) VALUES (?1,?2,?3,'now','now')", params![p.to_string(), run.to_string(), sent.id.0])?;
+            tx.changed(Some(p), "messages");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(receipt().await, (Delivery::Delivered, Some(run)));
+    // Finished: kept for a later run.
+    f.stop(run).await;
+    set("UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='work'").await;
+    assert_eq!(receipt().await, (Delivery::NoLiveRun, None));
+}
+
 #[tokio::test]
 async fn receipts_follow_the_recipient_and_its_step_runs() {
     let f = Fixture::new().await;
