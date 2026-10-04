@@ -346,6 +346,45 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
             .unwrap();
     }
     support::wait(|| !gate.home.join("coordinator.sock").exists());
+    // The selected old Python artifact cannot parse the Rust internal entry flag.
+    // The retained Rust dispatcher must apply the restored home and remove it.
+    let rollback = gate.root.path().join("python-backup");
+    let restored = gate.root.path().join("restored-home");
+    std::fs::create_dir_all(rollback.join("bin")).unwrap();
+    std::fs::create_dir(&restored).unwrap();
+    let old = rollback.join("bin/sluice");
+    std::fs::write(&old, "#!/usr/bin/python3\nimport json, os, sys\nprint(json.dumps({'home':os.environ['SLUICE_HOME'],'args':sys.argv[1:]}))\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dispatcher = std::fs::read_link(gate.install.join("entry")).unwrap();
+    assert!(
+        gate.cli(&["install", "fence", "rollback fixture"])
+            .status
+            .success()
+    );
+    assert!(
+        gate.cli(&[
+            "install",
+            "select",
+            rollback.to_str().unwrap(),
+            restored.to_str().unwrap()
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        std::fs::read_link(gate.install.join("entry")).unwrap(),
+        dispatcher
+    );
+    let output = gate
+        .command(&prefix.join("bin/sluice"), &["fixture-rollback"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    let output: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output["home"], restored.to_string_lossy().as_ref());
+    assert_eq!(output["args"], json!(["fixture-rollback"]));
+    assert!(gate.cli(&["install", "unfence"]).status.success());
     std::fs::write(release.join("python/inline_python.py"), "tampered").unwrap();
     assert!(verify(&release).is_err());
     gate.root.disable_cleanup(false);

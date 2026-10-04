@@ -207,12 +207,20 @@ impl Installation {
             ));
         }
         let generation = self.next()?;
-        // The entry is a bootstrap hint only. selection.json remains the authority.
-        let temp = self
-            .dir
-            .join(format!(".entry.{}", sluice_model::ids::InvocationId::new()));
-        std::os::unix::fs::symlink(release_path.join("bin/sluice"), &temp).map_err(storage)?;
-        fs::rename(&temp, self.dir.join("entry")).map_err(storage)?;
+        // Keep a Rust descriptor reader for rollback targets whose executable
+        // does not understand the internal entry prefix. JSON is the authority.
+        if release_path.join("manifest.json").is_file() || !self.dir.join("entry").exists() {
+            let dispatcher = if release_path.join("manifest.json").is_file() {
+                release_path.join("bin/sluice")
+            } else {
+                std::env::current_exe().map_err(storage)?
+            };
+            let temp = self
+                .dir
+                .join(format!(".entry.{}", sluice_model::ids::InvocationId::new()));
+            std::os::unix::fs::symlink(dispatcher, &temp).map_err(storage)?;
+            fs::rename(&temp, self.dir.join("entry")).map_err(storage)?;
+        }
         self.publish(
             "selection.json",
             &Selection {
