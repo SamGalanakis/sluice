@@ -19,6 +19,15 @@ the kiln repository or those paths.
 recipes add delivery exits and cleanup accept-skip gates by intent; the importer preserves
 the older plans' plain gates and existing unit tags.
 
+## Drift from the live copies
+
+`pristine/{lash,figments}/{fns,recipes}` is the live owner's copy each conversion was last ported
+from, byte for byte (git metadata, bytecode and tool caches excluded). `check-drift` compares the
+live home (`~/.sluice`, or `--home`; only read) with it and exits 1 listing every changed, added
+or removed file. On drift, port each change into `projects/`, keeping the conversion, then copy
+the live trees over `pristine/` in the same commit. The cutover runbook runs it in preflight and
+again immediately before the pause. pytest does not collect `pristine/`.
+
 ## Verification
 
 Run `uv sync`, then `scripts/check`. Its staging Rust tests parse all manifest signatures,

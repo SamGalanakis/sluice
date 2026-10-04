@@ -4,13 +4,16 @@
 # ///
 """lash.worker: agent.run with the lash lane header and a worker-written summary."""
 
+import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sluice_fn import AgentFailure, run, sh
+from sluice.fn import run, sh
+
 
 SUMMARY_WORDS = 120
 FALLBACK_CHARS = 1500
@@ -51,7 +54,7 @@ PROOF = """\
 Proof before landing (Sam: minimal and fast, fix forward; this is the whole gate and it overrides any ticket or note asking for more):
 1. The tests your change adds or changes, plus any your ticket names, run ONCE on the cheapest tier (SQLite stores, the in-process Restate server double), by full test path; check in the report `kiln test` prints that they executed. "Once" bans repeat runs for confidence or flake-hunting; re-running after you change code or fix a broken invocation (one target per invocation, its own selectors only) is normal.
 2. A law for a bug fails once on the unfixed code (write it first).
-3. One `kiln clippy` (the workspace lint aggregate; never a crate-scoped substitute) on the final code. If it fails in code your change does not touch, post a message at once with `sluice tool message_post` (the call your task's closing lines give, with `"to": "orchestrator"` and `"needs_reply": true`) naming file:line and the commit that introduced it; then keep working without waiting for the reply (the orchestrator staffs the fix; do not fix it in your branch unless told). The land step re-runs workspace clippy on your rebased tree and refuses a red push. Run `kiln fmt` right before your final commit (the pre-push hook refuses unformatted code and fails the land step). The pre-push hooks also enforce file-size budgets: 1600 lines for a production Rust file and 2500 for test or support files. Split a file you grow past its budget along a real seam before committing; never raise a budget.
+3. One `kiln clippy` (the workspace lint aggregate; never a crate-scoped substitute) on the final code. If it fails in code your change does not touch, post a needs_reply message at once naming file:line and the commit that introduced it; then keep working (the orchestrator staffs the fix; do not fix it in your branch unless told). The land step re-runs workspace clippy on your rebased tree and refuses a red push. Run `kiln fmt` right before your final commit (the pre-push hook refuses unformatted code and fails the land step). The pre-push hooks also enforce file-size budgets: 1600 lines for a production Rust file and 2500 for test or support files. Split a file you grow past its budget along a real seam before committing; never raise a budget.
 4. Only when they apply: exports changed -> `//crates/lash:ui_fixtures` and `//crates/lash:facade_completeness`; a serialized shape changed -> `kiln build //:schema_checks`; tools/buck2 rules or CI workflows changed -> `kiln build //:schema_checks`, `python3 tools/buck2/sync.py --check` and `scripts/ci/repository-gates.sh`.
 Nothing else: no repeat runs (never --runs_per_test), no dependents or affected-tests gate, no dev-test, no suites, no PostgreSQL or live-Restate legs, no E2E or soak, unless your change is in the PostgreSQL store or the Restate adapter itself (then that code's own tests, once). Main's scheduled full run covers the rest and reds are fixed forward. A failing test your change does not touch blocks nothing, unless your ticket's done-when names it (then making it pass is your task): name it in your unresolved output and carry on; never investigate it or wait for a classification.
 """
@@ -114,6 +117,25 @@ WALL_CAP_CONTINUE = ("You ran past the wall-clock cap; this is the same session,
                      "allows. Your original task follows for reference.\n\n")
 
 
+def fn_dirs(ctx):
+    """Where the project finds its fns, in lookup order after the built-ins (SPEC §2)."""
+    cfg_file = ctx.home / "config.json"
+    cfg = json.loads(cfg_file.read_text()) if cfg_file.exists() else {}
+    project = [ctx.home / "projects" / ctx.project / "fns"] if ctx.project else []
+    return [*project, ctx.home / "fns", *(ctx.home / d for d in cfg.get("fn_dirs", []))]
+
+
+def agent_run(ctx):
+    """The agents pack's agent.run, wherever this project finds it."""
+    found = [d / "agent.run" for d in fn_dirs(ctx) if (d / "agent.run" / "fn.json").is_file()]
+    if not found:
+        raise RuntimeError("lash.worker needs agent.run: install the agents pack")
+    spec = importlib.util.spec_from_file_location("agent_run", found[0] / "main.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def bounded_summary(text):
     """Keep the worker's own report within the function's 120-word contract."""
     text = text.strip()
@@ -140,16 +162,20 @@ def main(inp, ctx):
     if inp.get("model") and (inp["engine"] == "opus"
                              or (inp["model"] == "fusion") != (inp["engine"] == "devin")):
         raise ValueError("model fusion is for the devin engine; sol and astra are for codex")
-    spec = ctx.header(worker_header(inp, ctx) + inp["spec"])
+    spec = worker_header(inp, ctx) + inp["spec"]
     base = {**inp, "engine": engine, "report_path": str(ctx.run_dir / "summary.txt")}
     try:
-        out = ctx.builtin("agent.run", {**base, "spec": spec})
-    except AgentFailure as failure:
-        if failure.kind != "WallCap" or not failure.session:
+        out = agent_run(ctx).main({**base, "spec": spec}, ctx)
+    except RuntimeError as e:
+        # One more stretch past the wall cap, in the same session: a lane that hits it is
+        # usually landing a finished commit.
+        sid = re.search(r"session: ([\w-]+)\. To resume", str(e))
+        if "wall-clock cap" not in str(e) or not sid:
             raise
-        out = ctx.builtin("agent.run", {**base, "session": failure.session,
-                                        "spec": WALL_CAP_CONTINUE + spec})
-    sent = ctx.submission()
+        out = agent_run(ctx).main({**base, "session": sid.group(1),
+                                   "spec": WALL_CAP_CONTINUE + spec}, ctx)
+    sent_file = ctx.run_dir / "submitted.json"
+    sent = json.loads(sent_file.read_text()) if sent_file.exists() else {}
     claimed = sent.get("head_sha")
     if isinstance(claimed, str) and claimed:
         head = sh(["git", "-C", inp["cwd"], "rev-parse", "HEAD"]).stdout.strip()

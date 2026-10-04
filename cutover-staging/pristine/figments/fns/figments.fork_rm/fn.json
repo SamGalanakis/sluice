@@ -1,0 +1,6 @@
+{
+  "name": "figments.fork_rm",
+  "doc": "Remove a figments Kiln fork (`kiln rm figments <name>`, which also stops its Bazel server and anything still running in it). Refused while the fork has uncommitted changes, or while its HEAD is on no remote ref (committed work that was never pushed or merged), unless force. Never remove a fork any other way.",
+  "inputs": {"name": "string", "path": "string", "force": "boolean?"},
+  "outputs": {"removed": "boolean"}
+}

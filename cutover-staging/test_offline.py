@@ -333,10 +333,54 @@ def test_land_failed_check_is_rejected_with_feedback_after_release(monkeypatch):
     monkeypatch.setattr(module, 'names', lambda *a: set())
     monkeypatch.setattr(module, 'rebase', lambda *a: True)
     monkeypatch.setattr(module, 'kiln', lambda *a: SimpleNamespace(returncode=1, stdout='error: broken'))
-    with pytest.raises(Rejected, match='kiln check failed'):
+    with pytest.raises(Rejected, match='kiln clippy failed'):
         module.land('fork', lambda _: None, ctx, {})
     assert events[:2] == ['acquire', 'release'] and events[2][0] == 'lane-work'
     assert 'error: broken' in events[2][1]
+
+
+
+def check_drift(home):
+    import subprocess
+    return subprocess.run([sys.executable, str(ROOT / 'check-drift'), '--home', str(home)],
+                          capture_output=True, text=True, check=False)
+
+
+def test_check_drift_is_clean_against_a_copy_of_pristine_and_lists_every_drift(tmp_path):
+    import shutil
+    for project in ('lash', 'figments'):
+        shutil.copytree(ROOT / 'pristine' / project, tmp_path / 'projects' / project)
+    live = tmp_path / 'projects'
+    (live / 'lash/fns/__pycache__').mkdir(exist_ok=True)
+    (live / 'lash/fns/__pycache__/x.cpython-313.pyc').write_bytes(b'cache')
+    (live / 'lash/fns/.git').mkdir(exist_ok=True)
+    (live / 'lash/fns/.git/HEAD').write_text('ref: refs/heads/main\n')
+    out = check_drift(tmp_path)
+    assert out.returncode == 0 and 'no drift' in out.stdout, out.stdout + out.stderr
+
+    land = live / 'lash/fns/lash.land/main.py'
+    land.write_text(land.read_text() + '# edited\n')
+    (live / 'figments/recipes/new.json').write_text('{}')
+    (live / 'lash/fns/lash.on_main/icon.svg').unlink()
+    out = check_drift(tmp_path)
+    assert out.returncode == 1
+    assert out.stdout.splitlines() == ['changed: lash/fns/lash.land/main.py',
+                                       'added: figments/recipes/new.json',
+                                       'removed: lash/fns/lash.on_main/icon.svg']
+    assert '3 drifted file(s)' in out.stderr
+
+
+def test_check_drift_refuses_a_missing_tree(tmp_path):
+    out = check_drift(tmp_path)
+    assert out.returncode == 2 and 'missing:' in out.stderr
+
+
+def test_pristine_holds_every_converted_file():
+    """Each converted file has the live original it was ported from."""
+    def rels(root):
+        return {p.relative_to(root).as_posix() for p in root.rglob('*')
+                if p.is_file() and '__pycache__' not in p.parts}
+    assert rels(ROOT / 'projects') <= rels(ROOT / 'pristine')
 
 
 PROJECT_FNS = [

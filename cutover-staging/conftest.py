@@ -7,6 +7,8 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# pristine/ is the live owner's copy kept only as the drift baseline; its tests target the old runtime.
+collect_ignore = ['pristine']
 sys.path.insert(0, os.environ.get('STAGING_HELPER_ROOT', str(ROOT / 'python')))
 REAL_HELPER = importlib.util.find_spec('sluice_fn') is not None
 if not REAL_HELPER:

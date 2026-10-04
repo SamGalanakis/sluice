@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from sluice_fn import Rejected
+
 
 FNS = Path(__file__).resolve().parents[1]
 
@@ -46,13 +46,6 @@ def test_worker_header_is_the_one_rule_source_chosen_by_inputs(tmp_path, mode):
     assert ("refs/heads/lanes/x" in header) == (mode == "branch")
     if mode != "read_only":
         assert '"Closes FIG-1"' in header and '"Part of FIG-1"' in header
-        assert "are deleted, not repaired or ported" in header
-    if proves:
-        rule3 = next(line for line in header.splitlines() if line.startswith("3. "))
-        assert "never a crate-scoped substitute" in rule3
-        assert "sluice tool message_post" in rule3 and '"to": "orchestrator"' in rule3
-        assert '"needs_reply": true' in rule3 and "keep working" in rule3
-        assert "1600 lines" in rule3 and "never raise a budget" in rule3
 
 
 def test_worker_summary_output_allows_historical_steps():
@@ -66,14 +59,17 @@ def test_worker_submitted_summary_becomes_final(tmp_path, monkeypatch):
     report = "Landed abc123. Focused tests: 4 passed; format: 1 passed. Open items: none."
     calls = []
 
-    def builtin(name, inp):
-        assert name == "agent.run"
-        calls.append(inp)
-        assert inp["report_path"] == str(tmp_path / "summary.txt")
-        assert "summary.txt" in inp["spec"]
-        return {"report": report, "final": "raw transcript tail", "session": "session-1"}
+    def fake_agent_run(ctx):
+        def fake_main(inp, _ctx):
+            calls.append(inp)
+            assert inp["report_path"] == str(tmp_path / "summary.txt")
+            assert "summary.txt" in inp["spec"]
+            return {"report": report, "final": "raw transcript tail", "session": "session-1"}
+        return SimpleNamespace(main=fake_main)
+
+    monkeypatch.setattr(worker, "agent_run", fake_agent_run)
     out = worker.main({"engine": "codex", "cwd": str(tmp_path), "spec": "Do the task."},
-                      SimpleNamespace(run_dir=tmp_path, header=lambda text: text, builtin=builtin, submission=dict))
+                      SimpleNamespace(run_dir=tmp_path))
     assert len(calls) == 1
     assert out == {"summary": report, "final": report, "session": "session-1"}
 
@@ -81,9 +77,10 @@ def test_worker_submitted_summary_becomes_final(tmp_path, monkeypatch):
 def test_worker_fallback_uses_final_message_with_1500_character_cap(tmp_path, monkeypatch):
     worker = load_fn("lash.worker")
     last_message = "x" * 1700
+    monkeypatch.setattr(worker, "agent_run", lambda _ctx: SimpleNamespace(
+        main=lambda _inp, _ctx: {"report": None, "final": last_message, "session": "s"}))
     out = worker.main({"engine": "codex", "cwd": str(tmp_path), "spec": "Do the task."},
-                      SimpleNamespace(run_dir=tmp_path, header=lambda text: text, submission=dict, builtin=lambda *args:
-                          {"report": None, "final": last_message, "session": "s"}))
+                      SimpleNamespace(run_dir=tmp_path))
     assert out == {"summary": last_message[:1500], "final": last_message[:1500],
                    "session": "s"}
 
@@ -91,9 +88,10 @@ def test_worker_fallback_uses_final_message_with_1500_character_cap(tmp_path, mo
 def test_worker_fallback_uses_harness_final_without_codex_message(tmp_path, monkeypatch):
     worker = load_fn("lash.worker")
     (tmp_path / "codex.log.final").write_text("y" * 1600)
+    monkeypatch.setattr(worker, "agent_run", lambda _ctx: SimpleNamespace(
+        main=lambda _inp, _ctx: {"report": None, "final": "", "session": "s"}))
     out = worker.main({"engine": "codex", "cwd": str(tmp_path), "spec": "Do the task."},
-                      SimpleNamespace(run_dir=tmp_path, header=lambda text: text, submission=dict, builtin=lambda *args:
-                          {"report": None, "final": "", "session": "s"}))
+                      SimpleNamespace(run_dir=tmp_path))
     assert out["final"] == "y" * 1500
     assert out["summary"] == out["final"]
 
@@ -213,9 +211,9 @@ def test_worker_passes_fusion_to_devin_and_refuses_it_elsewhere(tmp_path, monkey
         seen.update(inp)
         return {"report": "Landed abc. Open items: none.", "final": "", "session": "s"}
 
-    builtin = lambda name, inp: run(inp, None)
+    monkeypatch.setattr(worker, "agent_run", lambda _ctx: SimpleNamespace(main=run))
     worker.main({"engine": "devin", "model": "fusion", "cwd": str(tmp_path), "spec": "Do it."},
-                SimpleNamespace(run_dir=tmp_path, header=lambda text: text, builtin=builtin, submission=dict))
+                SimpleNamespace(run_dir=tmp_path))
     assert seen["engine"] == "devin" and seen["model"] == "fusion"
     for engine, model in (("opus", "fusion"), ("codex", "fusion"), ("devin", "sol")):
         try:
@@ -264,11 +262,9 @@ def land_repos(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout="BUILD SUCCEEDED\n")
 
     monkeypatch.setattr(land, "kiln", kiln)
-    actions = []
+    monkeypatch.setattr(land, "SEND_BACK", tmp_path / "absent.sh")
     return SimpleNamespace(land=land, fork=fork, other=other, calls=calls,
-                           ctx=SimpleNamespace(log=lambda _m: None, acquire=_no_lease, step="lane-land",
-                                               retry_on_failure=lambda *args: actions.append(args)),
-                           actions=actions)
+                           ctx=SimpleNamespace(log=lambda _m: None, acquire=_no_lease))
 
 
 def _landed(r):
@@ -277,28 +273,13 @@ def _landed(r):
     return out
 
 
-def test_land_runs_workspace_clippy_once_before_the_first_push(land_repos):
+def test_land_pushes_without_a_build_when_main_moved_elsewhere(land_repos):
     r = land_repos
     _commit(r.fork, {"a.rs": "mine\n"}, "change")
     _commit(r.other, {"b.rs": "theirs\n"}, "elsewhere")
     _git(r.other, "push", "-q", "origin", "HEAD:main")
     _landed(r)
-    assert r.calls == ["clippy"]
-
-
-def test_land_clippy_failure_before_the_first_push_rejects_without_pushing(land_repos):
-    r = land_repos
-    _commit(r.fork, {"a.rs": "mine\n"}, "change")
-    before = _git(r.other, "ls-remote", "origin", "main").split()[0]
-    r.land.kiln = lambda path, args: (r.calls.append(args)
-                                      or SimpleNamespace(returncode=1, stdout="error: lint\n"))
-    with pytest.raises(Rejected, match="kiln clippy failed"):
-        r.land.main({"fork": str(r.fork)}, r.ctx)
-    assert r.calls == ["clippy"]
-    assert _git(r.other, "ls-remote", "origin", "main").split()[0] == before
-    (target, feedback), = r.actions
-    assert target == "lane-work" and "error: lint" in feedback
-    assert "sluice tool message_post" in feedback and "needs_reply true" in feedback
+    assert r.calls == []
 
 
 def test_land_builds_when_main_touched_the_changes_files(land_repos):
@@ -307,7 +288,7 @@ def test_land_builds_when_main_touched_the_changes_files(land_repos):
     _commit(r.other, {"a.rs": "theirs\na\n"}, "same file, no conflict")
     _git(r.other, "push", "-q", "origin", "HEAD:main")
     _landed(r)
-    assert r.calls == ["clippy"]
+    assert r.calls == ["check //..."]
 
 
 def test_land_regenerates_a_conflicted_generated_file_then_builds(land_repos):
@@ -316,7 +297,7 @@ def test_land_regenerates_a_conflicted_generated_file_then_builds(land_repos):
     _commit(r.other, {"BUCK": "theirs\n"}, "generated conflict")
     _git(r.other, "push", "-q", "origin", "HEAD:main")
     _landed(r)
-    assert r.calls == ["sync", "clippy"]
+    assert r.calls == ["sync", "check //..."]
     assert (r.fork / "BUCK").read_text() == "regenerated\n"
 
 
@@ -326,28 +307,27 @@ def test_land_refuses_a_logic_conflict_and_leaves_the_fork_unrebased(land_repos)
     head = _git(r.fork, "rev-parse", "HEAD")
     _commit(r.other, {"a.rs": "theirs\n"}, "conflict")
     _git(r.other, "push", "-q", "origin", "HEAD:main")
-    with pytest.raises(Rejected, match="conflicts in a.rs"):
+    with pytest.raises(RuntimeError, match="conflicts in a.rs"):
         r.land.main({"fork": str(r.fork)}, r.ctx)
     assert _git(r.fork, "rev-parse", "HEAD") == head and r.calls == []
-    assert len(r.actions) == 1 and r.actions[0][0] == "lane-work"
 
 
-def test_land_checks_once_when_main_touched_only_the_changes_docs(land_repos):
+def test_land_skips_the_check_when_main_touched_only_the_changes_docs(land_repos):
     r = land_repos
     _commit(r.fork, {"docs/a.md": "a\nmine\n", "a.rs": "mine\n"}, "change")
     _commit(r.other, {"docs/a.md": "theirs\na\n"}, "same doc, no conflict")
     _git(r.other, "push", "-q", "origin", "HEAD:main")
     _landed(r)
-    assert r.calls == ["clippy"]
+    assert r.calls == []
 
 
-def test_land_checks_once_when_the_overlap_is_not_a_build_input(land_repos):
+def test_land_skips_the_check_when_the_overlap_is_not_a_build_input(land_repos):
     r = land_repos
     _commit(r.fork, {"ci.yml": "a\nmine\n", "a.rs": "mine\n"}, "change")
     _commit(r.other, {"ci.yml": "theirs\na\n"}, "workflow overlap")
     _git(r.other, "push", "-q", "origin", "HEAD:main")
     _landed(r)
-    assert r.calls == ["clippy"]
+    assert r.calls == []
 
 
 def test_land_reports_a_hook_refusal_instead_of_retrying_it_as_a_race(land_repos):
@@ -364,7 +344,6 @@ def test_close_leaves_a_partial_change_open(monkeypatch, tmp_path):
     close = load_fn("linear.close")
     calls = []
     monkeypatch.setattr(close, "sh", lambda argv, **kw: calls.append(argv))
-    monkeypatch.setattr(close, "linear_bin", lambda: "linear")
     ctx = SimpleNamespace(run_dir=tmp_path)
     out = close.main({"issue": "FIG-1", "message": "Slice one\n\nPart of FIG-1"}, ctx)
     assert out["closed"] is False and not any("update" in a for a in calls)

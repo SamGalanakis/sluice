@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Compare the live lash and figments fns and recipes with the pristine baseline.
+
+The importer installs the converted copies under projects/, never the live ones. pristine/
+holds the live files those conversions were last ported from. Any live file that differs from,
+is missing from, or is new against that baseline is an edit cutover would silently lose.
+
+Usage: check-drift [--home DIR]   (default ~/.sluice; only read)
+Exit 0: no drift. Exit 1: drift, every drifted file listed. Exit 2: a tree is missing.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+PROJECTS = ("lash", "figments")
+TREES = ("fns", "recipes")
+# Tool caches and git metadata are not project files.
+IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache", ".ruff_cache"}
+IGNORED_SUFFIXES = (".pyc",)
+PRISTINE = Path(__file__).resolve().parent / "pristine"
+
+
+def files(root):
+    found = {}
+    for path in root.rglob("*"):
+        rel = path.relative_to(root)
+        if any(part in IGNORED_DIRS for part in rel.parts) or path.name.endswith(IGNORED_SUFFIXES):
+            continue
+        if path.is_file():
+            found[rel.as_posix()] = path
+    return found
+
+
+def drift(home):
+    changed, added, removed, missing = [], [], [], []
+    for project in PROJECTS:
+        for tree in TREES:
+            live_root, base_root = home / "projects" / project / tree, PRISTINE / project / tree
+            for root in (live_root, base_root):
+                if not root.is_dir():
+                    missing.append(str(root))
+            if not (live_root.is_dir() and base_root.is_dir()):
+                continue
+            live, base = files(live_root), files(base_root)
+            prefix = f"{project}/{tree}/"
+            for rel in sorted(live.keys() | base.keys()):
+                if rel not in base:
+                    added.append(prefix + rel)
+                elif rel not in live:
+                    removed.append(prefix + rel)
+                elif live[rel].read_bytes() != base[rel].read_bytes():
+                    changed.append(prefix + rel)
+    return changed, added, removed, missing
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--home", type=Path, default=Path.home() / ".sluice",
+                        help="the live sluice home (read only; default ~/.sluice)")
+    home = parser.parse_args().home.expanduser()
+    changed, added, removed, missing = drift(home)
+    if missing:
+        for root in missing:
+            print(f"missing: {root}", file=sys.stderr)
+        return 2
+    for label, paths in (("changed", changed), ("added", added), ("removed", removed)):
+        for path in paths:
+            print(f"{label}: {path}")
+    count = len(changed) + len(added) + len(removed)
+    if count:
+        print(f"{count} drifted file(s) against {PRISTINE}: port each into projects/, then "
+              "refresh pristine/ from the live copy.", file=sys.stderr)
+        return 1
+    print(f"no drift: {home}/projects/{{{','.join(PROJECTS)}}}/{{{','.join(TREES)}}} "
+          "matches pristine/")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

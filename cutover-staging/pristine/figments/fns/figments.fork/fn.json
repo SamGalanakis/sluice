@@ -1,0 +1,16 @@
+{
+  "name": "figments.fork",
+  "doc": "A Kiln fork of figments for one worker (`kiln fork figments <name>`, a git worktree cut from freshly fetched origin/main, or from origin/<base> with `kiln fork --branch <base>` when base is given, e.g. a PR branch to review or stack on). With `branch`, the fork is put on a new local branch of that name (e.g. samuel-<topic>); otherwise HEAD stays detached. An existing fork of that name is reused as it is (reused=true), so a lane can resume a fork's uncommitted work. review=true cuts a read-only review fork (--no-build: env.sh is inert). Remove it with figments.fork_rm.",
+  "inputs": {
+    "name": "string",
+    "base": "string?",
+    "branch": "string?",
+    "review": "boolean?"
+  },
+  "outputs": {
+    "path": "string",
+    "head": "string",
+    "branch": "string?",
+    "reused": "boolean"
+  }
+}
