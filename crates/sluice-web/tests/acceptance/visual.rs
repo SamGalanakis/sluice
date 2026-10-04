@@ -16,7 +16,7 @@ mod home_fixture;
 #[path = "../../examples/dashboard_fixture/messages.rs"]
 mod message_fixture;
 #[allow(dead_code)]
-async fn seed(writer: &Writer) -> (ProjectId, ProjectId, ProjectId) {
+pub(super) async fn seed(writer: &Writer) -> (ProjectId, ProjectId, ProjectId) {
     let home = home_fixture::create(writer).await;
     board_fixture::seed(writer, home).await;
     message_fixture::seed(writer, home).await;
