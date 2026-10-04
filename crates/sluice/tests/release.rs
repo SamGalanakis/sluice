@@ -298,13 +298,19 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
     )
     .unwrap();
     // Put the pinned release beyond the last three before the next deploy.
+    let timestamp = std::time::SystemTime::now();
     for i in 0..4 {
-        std::fs::create_dir(
-            prefix
-                .join("releases")
-                .join(format!("retention-fixture-{i}")),
-        )
-        .unwrap();
+        let directory = prefix
+            .join("releases")
+            .join(format!("retention-fixture-{i}"));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::File::open(directory)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(timestamp + std::time::Duration::from_millis(i)),
+            )
+            .unwrap();
     }
     // Commit an identical tree in an isolated repository with a new commit id.
     let source = gate.root.path().join("source");
