@@ -429,6 +429,8 @@ pub struct Machine {
     base_turns: u64,
     base_starts: u64,
     awaiting: Option<Duration>,
+    /// Input steered into a busy turn rides that turn, so it starts no turn-start wait.
+    steered: bool,
     idle_since: Option<Duration>,
     wait_since: Option<Duration>,
     work_since: Option<Duration>,
@@ -467,6 +469,7 @@ impl Machine {
             base_turns: 0,
             base_starts: 0,
             awaiting: None,
+            steered: false,
             idle_since: None,
             wait_since: None,
             work_since: None,
@@ -488,7 +491,8 @@ impl Machine {
         self.checkpoint.delivery.offer(id).map_err(invalid)?;
         self.base_turns = observation.turns_completed;
         self.base_starts = observation.turns_started;
-        self.awaiting = Some(now);
+        self.steered = observation.status == EngineStatus::Busy;
+        self.awaiting = (!self.steered).then_some(now);
         self.idle_since = None;
         self.work_since = None;
         self.checkpoint.state = State::Delivering;
@@ -532,6 +536,11 @@ impl Machine {
         }
         if o.turns_started > self.base_starts || o.turns_completed > self.base_turns {
             self.awaiting = None;
+            self.steered = false;
+        } else if self.steered && o.status == EngineStatus::Idle {
+            // The busy turn ended without completing, so the steered input needs a turn of its own.
+            self.steered = false;
+            self.awaiting = Some(now);
         }
         let missing: Vec<_> = self
             .required

@@ -523,3 +523,84 @@ fn next_times_out_and_wakes_on_everything_with_all() {
             .any(|r| r["kind"] == "plan.edit")
     );
 }
+
+/// Agents see their project as a bare id (SLUICE_PROJECT_ID) and are told `id:<uuid>`; both
+/// reach the project in every tool, as the name does.
+#[test]
+fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
+    let home = ScratchHome::new().unwrap();
+    let _guard = guard(home.path());
+    let created = tool(
+        home.path(),
+        "project_create",
+        r#"{"name":"demo","description":""}"#,
+    );
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let id = stdout(&created)["project_id"].as_str().unwrap().to_owned();
+    let run = sluice_model::ids::RunId::new().to_string();
+    for selector in [id.clone(), format!("id:{id}"), "demo".into()] {
+        for (name, args) in [
+            (
+                "message_post",
+                json!({"project": selector, "thread": "step-work", "from": "work",
+                       "to": "orchestrator", "body": "question", "needs_reply": false}),
+            ),
+            ("status", json!({"project": selector})),
+            ("plan_get", json!({"project": selector})),
+            ("log_read", json!({"project": selector})),
+            ("fn_list", json!({"project": selector})),
+            (
+                "messages",
+                json!({"project": selector, "view": "thread", "thread": "step-work"}),
+            ),
+        ] {
+            let out = tool(home.path(), name, &args.to_string());
+            assert!(
+                out.status.success(),
+                "{name} with {selector}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        // No such run, but the project resolves: the refusal is about the run, not the project.
+        let submit = tool(
+            home.path(),
+            "step_submit",
+            &json!({"project": selector, "step": "work", "run": run, "outputs": {}}).to_string(),
+        );
+        assert_eq!(submit.status.code(), Some(1));
+        let message = stderr(&submit)["message"].as_str().unwrap().to_owned();
+        assert_eq!(message, "stale submission", "{selector}");
+    }
+    let posted = tool(
+        home.path(),
+        "messages",
+        &json!({"project": "demo", "view": "thread", "thread": "step-work"}).to_string(),
+    );
+    assert_eq!(stdout(&posted)["messages"].as_array().unwrap().len(), 3);
+    let unknown = sluice_model::ids::ProjectId::new();
+    let missing = tool(
+        home.path(),
+        "message_post",
+        &json!({"project": unknown.to_string(), "body": "x", "from": "work",
+                "needs_reply": false})
+        .to_string(),
+    );
+    assert_eq!(stderr(&missing)["error"], "not_found");
+    assert!(
+        stderr(&missing)["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("id:{unknown}"))
+    );
+    // A name that looks like an id would be ambiguous, so it is refused.
+    let refused = tool(
+        home.path(),
+        "project_create",
+        &json!({"name": unknown.to_string(), "description": ""}).to_string(),
+    );
+    assert_eq!(stderr(&refused)["error"], "bad_request");
+}

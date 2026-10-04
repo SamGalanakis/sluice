@@ -1,7 +1,7 @@
 //! Task text and declaration builders shared by standalone and composed agents.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sluice_model::types::Type;
+use sluice_model::{ids::ProjectId, types::Type};
 use std::{collections::BTreeMap, fs, io, path::Path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,10 +37,27 @@ pub fn thread_name(step: &str) -> String {
             .collect::<String>()
     )
 }
+/// The project as every sluice tool's `project` takes it: `id:<uuid>` for an id, else the name.
+pub fn project_selector(project: &str) -> String {
+    match project.parse::<ProjectId>() {
+        Ok(id) => format!("id:{id}"),
+        Err(_) => project.into(),
+    }
+}
 pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) -> String {
     let mut text = String::new();
-    if !ctx.header.is_empty() {
-        text.push_str(&ctx.header);
+    let project = project_selector(&ctx.project);
+    let mut header = ctx.header.clone();
+    if !project.is_empty() {
+        if !header.is_empty() {
+            header.push(' ');
+        }
+        header.push_str(&format!(
+            "This step's project is `{project}`; pass exactly that as `project` to any sluice tool."
+        ));
+    }
+    if !header.is_empty() {
+        text.push_str(&header);
         text.push_str("\n\n");
     }
     text.push_str(task);
@@ -67,7 +84,7 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
                 port.doc
             ));
         }
-        let payload = json!({"project":ctx.project,"step":ctx.step,"run":ctx.run,"outputs":{}});
+        let payload = json!({"project":project,"step":ctx.step,"run":ctx.run,"outputs":{}});
         let mut payload = serde_json::to_string(&payload).expect("JSON value");
         let outputs = ctx
             .outputs
@@ -86,8 +103,8 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
     }
     if ctx.listen && !ctx.project.is_empty() && !ctx.step.is_empty() {
         let thread = thread_name(&ctx.step);
-        let post = json!({"project":ctx.project,"thread":thread,"from":ctx.step,"run":ctx.run,"to":"orchestrator","body":"...","needs_reply":false});
-        text.push_str(&format!("\n\nMessages for you on sluice thread `{thread}` of project `{}` are delivered into this session as they arrive when addressed to this step (or to nobody); you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, post it with `sluice tool message_post {}` and continue with anything not blocked by it. Use `needs_reply: true` for a question that needs an answer. Post questions and changes of scope, not progress.", ctx.project, shell_quote(&post.to_string())));
+        let post = json!({"project":project,"thread":thread,"from":ctx.step,"run":ctx.run,"to":"orchestrator","body":"...","needs_reply":false});
+        text.push_str(&format!("\n\nMessages for you on sluice thread `{thread}` of project `{}` are delivered into this session as they arrive when addressed to this step (or to nobody); you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, post it with `sluice tool message_post {}` and continue with anything not blocked by it. Use `needs_reply: true` for a question that needs an answer. Post questions and changes of scope, not progress.", project, shell_quote(&post.to_string())));
     }
     text
 }

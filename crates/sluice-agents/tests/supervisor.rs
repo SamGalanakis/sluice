@@ -766,16 +766,19 @@ async fn readiness_stall_and_turn_start_have_distinct_caps() {
 }
 
 fn policy(required: Vec<String>, reports_waiting: bool) -> Machine {
+    let mut limits = Limits::test_profile();
+    if !reports_waiting {
+        limits.grace = Duration::from_secs(1);
+    }
+    policy_with(required, reports_waiting, limits)
+}
+fn policy_with(required: Vec<String>, reports_waiting: bool, limits: Limits) -> Machine {
     let mut delivery = sluice_agents::delivery::DeliveryLedger::default();
     delivery.enqueue(InputId::Task, "task".into()).unwrap();
     delivery.offer(&InputId::Task).unwrap();
     delivery
         .outcome(&InputId::Task, DeliveryOutcome::Acknowledged)
         .unwrap();
-    let mut limits = Limits::test_profile();
-    if !reports_waiting {
-        limits.grace = Duration::from_secs(1);
-    }
     Machine::new(
         Checkpoint {
             version: 1,
@@ -1032,4 +1035,179 @@ async fn hooks_are_answered_while_a_delivery_ack_waits_on_the_guardian() {
     assert!(started.elapsed() < Duration::from_secs(3));
     assert_eq!(engine.hooks.len(), 1);
     assert_eq!(guardian.host.acks, vec![MessageId(1)]);
+}
+
+/// Production limits on virtual time: one live message for the running turn.
+fn steering(status: EngineStatus) -> (Machine, InputId) {
+    let mut machine = policy_with(vec!["word".into()], true, Limits::default());
+    let id = InputId::Message { id: MessageId(1) };
+    machine
+        .checkpoint
+        .delivery
+        .enqueue(id.clone(), "feedback".into())
+        .unwrap();
+    let o = observation(status, 1, u64::from(status == EngineStatus::Idle));
+    let at = Duration::from_secs(10);
+    let action = machine.update(at, &o, &[], "").unwrap();
+    assert!(
+        matches!(&action, Action::Send { id: sent, steer, .. } if *sent == id && *steer == (status == EngineStatus::Busy))
+    );
+    machine.offered(&id, &o, at).unwrap();
+    (machine, id)
+}
+fn busy(progress: u64, acknowledged: &[InputId]) -> EngineObservation {
+    EngineObservation {
+        progress,
+        acknowledged: acknowledged.to_vec(),
+        ..observation(EngineStatus::Busy, 1, 0)
+    }
+}
+#[test]
+fn steer_into_a_busy_turn_rides_that_turn_past_the_turn_start_limit() {
+    let (mut machine, id) = steering(EngineStatus::Busy);
+    assert_eq!(Limits::default().turn_start, Duration::from_secs(60));
+    // The engine acknowledges the steer and keeps working on the same turn for five minutes.
+    for second in 11..=310 {
+        let acknowledged = if second == 11 {
+            vec![id.clone()]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            machine
+                .update(
+                    Duration::from_secs(second),
+                    &busy(second, &acknowledged),
+                    &[],
+                    ""
+                )
+                .unwrap(),
+            Action::None,
+            "second {second}"
+        );
+    }
+    machine
+        .checkpoint
+        .submissions
+        .insert("word".into(), serde_json::json!("blue"));
+    let done = observation(EngineStatus::Idle, 1, 1);
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(311), &done, &[], "")
+            .unwrap(),
+        Action::None
+    );
+    let settled = Duration::from_secs(311) + Limits::default().settle;
+    assert_eq!(
+        machine.update(settled, &done, &[], "").unwrap(),
+        Action::Finish
+    );
+}
+#[test]
+fn steer_into_a_busy_turn_waits_for_a_late_acknowledgement() {
+    let (mut machine, id) = steering(EngineStatus::Busy);
+    for second in 11..=200 {
+        assert_eq!(
+            machine
+                .update(Duration::from_secs(second), &busy(second, &[]), &[], "")
+                .unwrap(),
+            Action::None
+        );
+    }
+    assert!(machine.pending());
+    machine
+        .update(Duration::from_secs(201), &busy(201, &[id]), &[], "")
+        .unwrap();
+    assert!(!machine.pending());
+}
+#[test]
+fn input_sent_to_an_idle_engine_still_times_out_when_no_turn_starts() {
+    let (mut machine, id) = steering(EngineStatus::Idle);
+    let mut idle = observation(EngineStatus::Idle, 1, 1);
+    idle.acknowledged = vec![id];
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(69), &idle, &[], "")
+            .unwrap(),
+        Action::None
+    );
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(70), &idle, &[], "")
+            .unwrap_err()
+            .kind,
+        FailureKind::TurnStartTimeout
+    );
+}
+#[test]
+fn a_steered_turn_that_ends_without_completing_starts_the_turn_start_wait() {
+    let (mut machine, id) = steering(EngineStatus::Busy);
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(100), &busy(100, &[id]), &[], "")
+            .unwrap(),
+        Action::None
+    );
+    // The turn is interrupted: idle, no turn completed, nothing picks the input up.
+    let interrupted = observation(EngineStatus::Idle, 1, 0);
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(150), &interrupted, &[], "")
+            .unwrap(),
+        Action::None
+    );
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(209), &interrupted, &[], "")
+            .unwrap(),
+        Action::None
+    );
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(210), &interrupted, &[], "")
+            .unwrap_err()
+            .kind,
+        FailureKind::TurnStartTimeout
+    );
+}
+#[tokio::test]
+async fn live_message_steered_into_a_busy_turn_completes_past_the_turn_start_limit() {
+    let scratch = Scratch::new();
+    let config = config(&scratch);
+    let turn_start = config.limits.turn_start;
+    let message = MessageId(1);
+    let id = InputId::Message { id: message };
+    let mut frames = happy()[..2].to_vec();
+    // Like Codex, a steer joins the running turn: no new turn starts.
+    frames.push(frame(
+        Some(EngineCommand::Steer {
+            id: id.clone(),
+            text: "*".into(),
+        }),
+        busy(2, &[]),
+    ));
+    let ticks = 12u64;
+    for tick in 0..ticks {
+        let mut work = frame(None, busy(3 + tick, &[]));
+        work.delay_ms = 25;
+        frames.push(work);
+    }
+    frames.push(frame(None, observation(EngineStatus::Idle, 1, 1)));
+    let mut engine = ScriptedEngine::new(frames);
+    let mut host = Host::new();
+    host.messages = vec![DeliveryMessage {
+        id: message,
+        body: JsonValue::try_from(serde_json::json!({"body":"feedback"})).unwrap(),
+    }];
+    let started = std::time::Instant::now();
+    run(config, &mut engine, &mut host).await.unwrap();
+    assert!(started.elapsed() >= turn_start * 2);
+    assert!(
+        engine
+            .commands
+            .iter()
+            .any(|c| matches!(c, EngineCommand::Steer { id: steered, .. } if *steered == id))
+    );
+    assert_eq!(host.acks, vec![message]);
+    assert!(engine.commands.contains(&EngineCommand::RequestExit));
 }

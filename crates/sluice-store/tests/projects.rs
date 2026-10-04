@@ -278,6 +278,67 @@ async fn duplicate_names_and_stale_revisions_have_no_partial_effect() {
     writer.shutdown().await.unwrap();
 }
 
+/// A bare project id selects by id, so neither creation nor rename may take a UUID as a name.
+#[tokio::test]
+async fn names_that_look_like_project_ids_are_refused() {
+    let (_home, writer, reads) = setup().await;
+    let p = create(&writer, "p").await;
+    let id = p.project_id;
+    let before = snapshot(&reads, id).await;
+    let v7 = ProjectId::new().to_string();
+    let v4 = "0d4f1f3e-2b6c-4a5e-9f1d-3c2b1a0f9e8d".to_owned();
+    let simple = v7.replace('-', "");
+    for name in [v7, v4, simple] {
+        let refused = writer
+            .write(RetrySafety::NonIdempotent, {
+                let name = name.clone();
+                move |tx| {
+                    projects::project_create(
+                        tx,
+                        CreateProject {
+                            name: name.parse().unwrap(),
+                            description: String::new(),
+                            icon: None,
+                            resources: None,
+                            author: "owner".into(),
+                        },
+                        &EmptyPlanInitializer,
+                        &NoResourceSettings,
+                    )
+                }
+            })
+            .await;
+        assert!(
+            matches!(&refused, Err(PublicError::BadRequest { message }) if message.contains("looks like a project id")),
+            "{name}: {refused:?}"
+        );
+        let renamed = update(
+            &writer,
+            id,
+            UpdateProject {
+                new_name: Some(name.parse().unwrap()),
+                description: Some("changed".into()),
+                author: "owner".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            matches!(renamed, Err(PublicError::BadRequest { .. })),
+            "{name}"
+        );
+        assert_eq!(snapshot(&reads, id).await, before);
+    }
+    let count: i64 = reads
+        .snapshot(|c| Ok(c.query_row("SELECT count(*) FROM projects", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    // Ordinary names that merely contain hex digits and hyphens stay valid.
+    create(&writer, "deadbeef-cafe").await;
+    writer.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn changed_settings_have_authors_reasons_and_noops_do_not_increment_revision() {
     let (_home, writer, reads) = setup().await;

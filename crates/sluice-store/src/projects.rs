@@ -284,6 +284,7 @@ pub fn project_create(
     plans: &dyn PlanInitializer,
     resources: &dyn ResourceSettings,
 ) -> Result<Project> {
+    check_name(&request.name)?;
     let id = ProjectId::new();
     tx.sql().execute(
         "INSERT INTO projects(project_id,name,description,created_at) VALUES (?1,?2,?3,?4)",
@@ -312,6 +313,15 @@ pub fn project_create(
     }
     changed(tx, id);
     resolve(tx.sql(), &ProjectSelector::Id(id))
+}
+/// A bare project id selects by id, so a name may not look like one.
+fn check_name(name: &ProjectName) -> Result<()> {
+    if name.looks_like_id() {
+        return Err(invalid(format!(
+            "project name {name} looks like a project id; choose a name that is not a UUID"
+        )));
+    }
+    Ok(())
 }
 #[derive(Debug, Clone, Default)]
 pub struct UpdateProject {
@@ -388,6 +398,7 @@ pub fn project_update(
     let archived = request.archived.filter(|a| *a != project.archived);
     // Name uniqueness is checked before adapters or other settings mutate.
     if let Some(name) = &rename {
+        check_name(name)?;
         tx.sql().execute(
             "UPDATE projects SET name=?2,settings_rev=settings_rev+1,changed_at=?3 WHERE project_id=?1",
             [id.to_string(), name.to_string(), now()?],

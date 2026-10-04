@@ -72,7 +72,7 @@ fn full_prompt_contains_header_inputs_outputs_exact_submit_identity_and_live_thr
         &BTreeMap::from([("interface".into(), serde_json::json!("api.md\nsecond line"))]),
         &ports(),
     );
-    assert!(text.starts_with("Step work: repair the bug\n\nFix it"));
+    assert!(text.starts_with("Step work: repair the bug This step's project is `p`; pass exactly that as `project` to any sluice tool.\n\nFix it"));
     let i = text.find("## Inputs").unwrap();
     let o = text.find("## Outputs you must submit").unwrap();
     let t = text.find("Messages for you").unwrap();
@@ -87,6 +87,41 @@ fn full_prompt_contains_header_inputs_outputs_exact_submit_identity_and_live_thr
     assert!(!text.contains("inbox_"));
     assert!(!text.contains("log_read"));
     assert_eq!(required_outputs(&ports()), vec!["ready"]);
+}
+/// The tools read a bare string as a name, so every callback the prompt gives names an id
+/// project as `id:<uuid>`, and the header says to pass exactly that.
+#[test]
+fn every_callback_gives_an_id_project_as_an_id_selector() {
+    let id = sluice_model::ids::ProjectId::new();
+    let mut context = ports();
+    context.project = id.to_string();
+    let text = build("Fix it", &BTreeMap::new(), &context);
+    let selector = format!("id:{id}");
+    assert_eq!(prompt::project_selector(&id.to_string()), selector);
+    assert_eq!(prompt::project_selector("p"), "p");
+    assert!(text.starts_with(&format!(
+        "Step work: repair the bug This step's project is `{selector}`; pass exactly that as `project` to any sluice tool.\n\n"
+    )));
+    assert!(text.contains(&format!(
+        "sluice tool step_submit '{{\"project\":\"{selector}\",\"step\":\"work\",\"run\":\"r\","
+    )));
+    let post = text
+        .split("sluice tool message_post '")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .unwrap();
+    let post: serde_json::Value = serde_json::from_str(post).unwrap();
+    assert_eq!(post["project"], selector.as_str());
+    assert_eq!(post["thread"], "step-work");
+    assert!(text.contains(&format!("of project `{selector}`")));
+    // No callback carries the bare id where a project is expected.
+    assert!(!text.contains(&format!("\"project\":\"{id}\"")));
+    assert!(!text.contains(&format!("`{id}`")));
+    // The header alone also names it when the factory gives none.
+    context.header.clear();
+    context.listen = false;
+    let text = build("Fix it", &BTreeMap::new(), &context);
+    assert!(text.starts_with(&format!("This step's project is `{selector}`;")));
 }
 #[test]
 fn listen_false_drops_only_the_note_and_empty_ports_have_no_sections() {

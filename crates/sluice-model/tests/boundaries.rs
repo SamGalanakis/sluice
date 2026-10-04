@@ -82,6 +82,39 @@ fn identifiers_refuse_invalid_names_and_uuid_versions() {
         "project-1".parse::<ProjectSelector>().unwrap().to_string(),
         "project-1"
     );
+    // Agents hold their project as a bare id (SLUICE_PROJECT_ID); it selects that id.
+    assert_eq!(
+        id.to_string().parse::<ProjectSelector>().unwrap(),
+        ProjectSelector::Id(id)
+    );
+    assert_eq!(
+        id.to_string()
+            .to_uppercase()
+            .parse::<ProjectSelector>()
+            .unwrap(),
+        ProjectSelector::Id(id)
+    );
+    // A bare UUID that is not a project id stays a name; project creation refuses such names.
+    let v4 = "0d4f1f3e-2b6c-4a5e-9f1d-3c2b1a0f9e8d";
+    assert_eq!(
+        v4.parse::<ProjectSelector>().unwrap(),
+        ProjectSelector::Name(v4.parse().unwrap())
+    );
+    assert!(v4.parse::<ProjectName>().unwrap().looks_like_id());
+    assert!(
+        id.to_string()
+            .replace('-', "")
+            .parse::<ProjectName>()
+            .unwrap()
+            .looks_like_id()
+    );
+    assert!(
+        !"deadbeef-cafe"
+            .parse::<ProjectName>()
+            .unwrap()
+            .looks_like_id()
+    );
+    assert!("id:project-1".parse::<ProjectSelector>().is_err());
     assert_eq!(Revision(2).to_string(), "2");
     assert_eq!(RecordSeq(3).to_string(), "3");
     assert_eq!(MessageId(4).to_string(), "4");

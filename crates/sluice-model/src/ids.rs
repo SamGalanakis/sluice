@@ -87,6 +87,12 @@ macro_rules! name_id {
     )+};
 }
 name_id!(StepId, UnitName, ProjectName);
+impl ProjectName {
+    /// A UUID-shaped name would be ambiguous with a bare project id, so new names refuse it.
+    pub fn looks_like_id(&self) -> bool {
+        Uuid::parse_str(&self.0).is_ok()
+    }
+}
 
 macro_rules! counter_id {
     ($($name:ident($inner:ty)),+ $(,)?) => {$ (
@@ -126,12 +132,17 @@ impl fmt::Display for ProjectSelector {
         }
     }
 }
+/// `id:<uuid>`, a bare project id (as agents see it in SLUICE_PROJECT_ID), or a current name.
+/// Project creation and rename refuse names that look like ids, so a bare id is never a name.
 impl FromStr for ProjectSelector {
     type Err = InvalidId;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.strip_prefix("id:") {
-            Some(id) => Ok(Self::Id(id.parse()?)),
-            None => Ok(Self::Name(value.parse()?)),
+        if let Some(id) = value.strip_prefix("id:") {
+            return Ok(Self::Id(id.parse()?));
+        }
+        match value.parse() {
+            Ok(id) => Ok(Self::Id(id)),
+            Err(_) => Ok(Self::Name(value.parse()?)),
         }
     }
 }
