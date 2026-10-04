@@ -16,6 +16,8 @@ prefix.mkdir(parents=True, exist_ok=True)
 for child in ['releases', 'bin', '.build']:
     if (prefix / child).is_symlink():
         sys.exit('Refusing symlink output: ' + child)
+(prefix / '.build/tmp').mkdir(parents=True, exist_ok=True)
+os.environ['TMPDIR'] = str(prefix / '.build/tmp')
 sha = os.environ.get('SLUICE_BUILD_GIT_SHA') or subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
 # One shared Cargo feature graph; all build outputs are inside the explicit prefix.
 subprocess.run(['cargo', '--config', 'build.target-dir=' + json.dumps(str(prefix / '.build/target')), 'build', '--workspace', '--bins', '--release', '--locked'], cwd=repo, check=True)
