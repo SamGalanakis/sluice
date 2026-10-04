@@ -12,7 +12,10 @@ use sluice_store::{Writer, artifacts::ArtifactJob};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +43,10 @@ pub struct Publication {
     /// The registry version and projects the current views were published
     /// from, read before their scans; guarded by the refresh lock.
     refresh: tokio::sync::Mutex<Option<(u64, Vec<ProjectId>)>>,
+    /// Refreshes that got past the lock and scanned, for diagnostics.
+    refreshes: AtomicU64,
 }
+type Published<'a> = tokio::sync::MutexGuard<'a, Option<(u64, Vec<ProjectId>)>>;
 impl Publication {
     pub fn new(registry: FnRegistry, base: Catalog) -> Arc<Self> {
         Arc::new(Self {
@@ -48,14 +54,49 @@ impl Publication {
             base,
             views: RwLock::new(BTreeMap::new()),
             refresh: tokio::sync::Mutex::new(None),
+            refreshes: AtomicU64::new(0),
         })
     }
+    /// Scan every scope and republish what changed, waiting for any refresh
+    /// already running.
     pub async fn refresh(
         &self,
         writer: &Writer,
         projects: Vec<ProjectId>,
     ) -> Result<(), PublicError> {
-        let mut published = self.refresh.lock().await;
+        let published = self.refresh.lock().await;
+        self.publish_locked(published, writer, projects).await
+    }
+    /// The read path's refresh. It never waits behind a running refresh (the
+    /// views it would replace are a complete earlier publication) and does not
+    /// scan when neither the registry version (bumped by the watcher and by
+    /// scans) nor the project list moved since the last publication.
+    pub async fn refresh_if_stale(
+        &self,
+        writer: &Writer,
+        projects: Vec<ProjectId>,
+    ) -> Result<(), PublicError> {
+        let Ok(published) = self.refresh.try_lock() else {
+            return Ok(());
+        };
+        if published.as_ref().is_some_and(|(seen, seen_projects)| {
+            *seen == self.registry.version() && *seen_projects == projects
+        }) {
+            return Ok(());
+        }
+        self.publish_locked(published, writer, projects).await
+    }
+    /// How many refreshes have scanned the fn scopes.
+    pub fn refreshes(&self) -> u64 {
+        self.refreshes.load(Ordering::Relaxed)
+    }
+    async fn publish_locked(
+        &self,
+        mut published: Published<'_>,
+        writer: &Writer,
+        projects: Vec<ProjectId>,
+    ) -> Result<(), PublicError> {
+        self.refreshes.fetch_add(1, Ordering::Relaxed);
         // Every scope is re-fingerprinted by its scan, and any change to a scope
         // (a scan's or the watcher's) bumps the version. Unchanged since the last
         // publication, the views stand: republishing reads and digests every fn

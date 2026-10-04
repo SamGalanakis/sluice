@@ -76,6 +76,48 @@ struct Inner<H: ExecutionHost> {
     host: Arc<H>,
     calls: Calls<Catalog, CallLauncher<H>>,
     frozen: std::sync::Mutex<FrozenFacts>,
+    /// False while `serve`'s startup adoption pass runs; see [`Coordinator::ready`].
+    ready: tokio::sync::watch::Sender<bool>,
+    /// Slots for requests waiting on `ready`, so waiting writes never take
+    /// the connection permits reads need.
+    waiting: tokio::sync::Semaphore,
+    /// Runs an adoption task is working on: one adopter per run.
+    adopting: Arc<std::sync::Mutex<std::collections::HashSet<RunId>>>,
+}
+/// Per-run adoptions in flight at once during an adoption pass.
+pub const ADOPTION_PARALLELISM: usize = 16;
+/// Connections the coordinator serves at once.
+const CONNECTIONS: usize = 64;
+/// Requests that may wait for the startup adoption pass at once; past this a
+/// request is told to retry.
+const WAITING_FOR_ADOPTION: usize = CONNECTIONS / 2;
+/// Holds a run in the `adopting` set until its adoption task ends.
+struct AdoptionClaim {
+    adopting: Arc<std::sync::Mutex<std::collections::HashSet<RunId>>>,
+    run: RunId,
+}
+impl AdoptionClaim {
+    fn take(
+        adopting: &Arc<std::sync::Mutex<std::collections::HashSet<RunId>>>,
+        run: RunId,
+    ) -> Option<Self> {
+        adopting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(run)
+            .then(|| Self {
+                adopting: adopting.clone(),
+                run,
+            })
+    }
+}
+impl Drop for AdoptionClaim {
+    fn drop(&mut self) {
+        self.adopting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.run);
+    }
 }
 type StoredAttempt = (Option<String>, Option<String>, i64, i64, Option<String>);
 /// Facts read out of attempts' frozen requests, which never change once
@@ -164,6 +206,9 @@ impl<H: ExecutionHost> Coordinator<H> {
                 host,
                 calls,
                 frozen: Default::default(),
+                ready: tokio::sync::watch::Sender::new(true),
+                waiting: tokio::sync::Semaphore::new(WAITING_FOR_ADOPTION),
+                adopting: Default::default(),
             }),
         };
         artifacts::recover(broker.writer(), broker.home())
@@ -178,6 +223,43 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .refresh(self.writer(), self.projects().await?)
                 .await?;
         }
+        Ok(())
+    }
+    /// The read path's refresh: never waits behind a running republish and
+    /// does not scan while the registry is current.
+    async fn refresh_for_read(&self) -> Result<(), PublicError> {
+        if let Some(publication) = &self.inner.catalog.1 {
+            publication
+                .refresh_if_stale(self.writer(), self.projects().await?)
+                .await?;
+        }
+        Ok(())
+    }
+    /// Whether the startup adoption pass is done (always, for a coordinator
+    /// that is not serving).
+    pub fn adopted(&self) -> bool {
+        *self.inner.ready.borrow()
+    }
+    /// Requests now waiting for the startup adoption pass, for diagnostics.
+    pub fn waiting_for_adoption(&self) -> usize {
+        WAITING_FOR_ADOPTION - self.inner.waiting.available_permits()
+    }
+    /// Wait until the startup adoption pass is done: writes are decided
+    /// against reconciled runs, and nothing is admitted before it.
+    async fn ready(&self) -> Result<(), PublicError> {
+        let mut ready = self.inner.ready.subscribe();
+        if *ready.borrow_and_update() {
+            return Ok(());
+        }
+        let _slot = self
+            .inner
+            .waiting
+            .try_acquire()
+            .map_err(|_| PublicError::Busy {
+                message: "the coordinator is still adopting runs; retry shortly".into(),
+                retryable: true,
+            })?;
+        ready.wait_for(|ready| *ready).await.map_err(storage)?;
         Ok(())
     }
     pub fn writer(&self) -> &Writer {
@@ -257,7 +339,12 @@ impl<H: ExecutionHost> Coordinator<H> {
         self.writer().write(RetrySafety::Idempotent,move|tx|{if tx.sql().execute("UPDATE maintenance SET scheduler_owner=NULL,scheduler_lease_until=NULL WHERE singleton=1 AND scheduler_owner=?1",[owner])?>0{tx.changed(None,"scheduler");}Ok(())}).await
     }
     pub async fn command(&self, request: CommandRequest) -> Result<CommandReply, PublicError> {
-        self.refresh_registry().await?;
+        if served_while_adopting(&request) {
+            self.refresh_for_read().await?;
+        } else {
+            self.ready().await?;
+            self.refresh_registry().await?;
+        }
         crate::drain::check_command(self.reads(), &request).await?;
         if let Some(reply) = calls::dispatch_p3_04(
             self.calls(),
@@ -758,6 +845,13 @@ impl<H: ExecutionHost> Coordinator<H> {
             command if project_mutation(command) => {}
             _ => return Err(conflict("callback command is outside the run authority")),
         }
+        // A run's plan edits and section-lease requests are decided against
+        // reconciled runs, like a user's; its other callbacks are its own.
+        if project_mutation(&request.command)
+            || matches!(request.command, CommandRequest::AcquireLease(_))
+        {
+            self.ready().await?;
+        }
         let key = request.request_id.0;
         let command = request.command;
         let encoded = serde_json::to_value(&command).map_err(storage)?;
@@ -1199,7 +1293,26 @@ impl<H: ExecutionHost> Coordinator<H> {
         }
         Ok(DurableAck { run, completion_id })
     }
+    /// One adoption pass over every nonterminal attempt, at most
+    /// [`ADOPTION_PARALLELISM`] runs at a time.
     pub async fn adopt(&self) -> Result<(), PublicError> {
+        self.adopt_bounded(ADOPTION_PARALLELISM).await
+    }
+    /// An adoption pass with at most `parallelism` runs in flight.
+    pub async fn adopt_bounded(&self, parallelism: usize) -> Result<(), PublicError> {
+        self.adopt_until(parallelism, &CancellationToken::new())
+            .await
+    }
+    /// Each run's adoption touches only that run (its run dir, unit, cgroup and
+    /// attempt rows) and never launches, so runs adopt concurrently. A run's
+    /// failure is deferred to the next pass and does not stop the others; a
+    /// run another pass is adopting is skipped. `stop` ends the pass before the
+    /// next run starts, letting those in flight finish.
+    async fn adopt_until(
+        &self,
+        parallelism: usize,
+        stop: &CancellationToken,
+    ) -> Result<(), PublicError> {
         let home = self.home().to_path_buf();
         let home_id = self.home_id();
         let attempts=self.reads().snapshot(move|sql|{
@@ -1212,14 +1325,32 @@ impl<H: ExecutionHost> Coordinator<H> {
                 out.push(AdoptionAttempt{identity:id.clone(),guardian,run_dir:home.join("runs").join(run.to_string()),unit:row.get::<_,Option<String>>(7)?.unwrap_or_else(||sluice_process::systemd::TransientService::for_launch(run).name().into()),service_cgroup:cgroup.map(|c|c.strip_suffix("/control").unwrap_or(&c).to_string()),capability});
             }Ok(out)
         }).await.map_err(|e|e.into_public(true))?;
+        let mut running = JoinSet::new();
         for attempt in attempts {
-            let link = LocalLink {
-                broker: self.clone(),
-                capability: attempt.capability.clone(),
-            };
-            if let Err(e) = adopt_attempt(&attempt, &link, self.host()).await {
-                tracing::warn!(run=%attempt.identity.run,error=%e,"adoption deferred");
+            while running.len() >= parallelism.max(1) {
+                adoption_ended(running.join_next().await);
             }
+            if stop.is_cancelled() {
+                break;
+            }
+            let Some(claim) = AdoptionClaim::take(&self.inner.adopting, attempt.identity.run)
+            else {
+                continue;
+            };
+            let broker = self.clone();
+            running.spawn(async move {
+                let _claim = claim;
+                let link = LocalLink {
+                    broker: broker.clone(),
+                    capability: attempt.capability.clone(),
+                };
+                if let Err(e) = adopt_attempt(&attempt, &link, broker.host()).await {
+                    tracing::warn!(run=%attempt.identity.run,error=%e,"adoption deferred");
+                }
+            });
+        }
+        while let Some(ended) = running.join_next().await {
+            adoption_ended(Some(ended));
         }
         Ok(())
     }
@@ -1233,23 +1364,52 @@ impl<H: ExecutionHost> Coordinator<H> {
         }
         let listener = UnixListener::bind(&path).map_err(storage)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(storage)?;
-        self.adopt().await?;
+        // Serve at once. Reads, install control, the scheduler lease and the
+        // runs' own guardians are answered during the startup pass; other
+        // commands wait for it (`ready`), and the scheduler, which does all
+        // admission, starts only after it.
+        self.inner.ready.send_replace(false);
+        let serving = stop.child_token();
+        let mut startup = tokio::spawn({
+            let broker = self.clone();
+            let stop = serving.clone();
+            async move { broker.adopt_until(ADOPTION_PARALLELISM, &stop).await }
+        });
+        let mut adopting = true;
+        let mut scheduler_task = None;
+        let mut failure = None;
         let mut clients = JoinSet::new();
-        let scheduler_stop = stop.child_token();
-        let scheduler_broker = self.clone();
-        let scheduler_task = tokio::spawn(scheduler::run(scheduler_broker, scheduler_stop));
-        let permits = Arc::new(tokio::sync::Semaphore::new(64));
+        let permits = Arc::new(tokio::sync::Semaphore::new(CONNECTIONS));
         loop {
             tokio::select! {
-                _=stop.cancelled()=>break,
+                _=serving.cancelled()=>break,
+                adopted=&mut startup, if adopting=>{
+                    adopting=false;
+                    match adopted.map_err(storage).and_then(|r| r) {
+                        Ok(())=>{
+                            self.inner.ready.send_replace(true);
+                            scheduler_task=Some(tokio::spawn(scheduler::run(self.clone(),serving.child_token())));
+                        }
+                        Err(e)=>{failure=Some(e);break;}
+                    }
+                },
                 Some(result)=clients.join_next()=>{if let Err(e)=result{tracing::error!(error=%e,"coordinator client task failed");}},
-                accepted=listener.accept()=>{let (stream,_)=accepted.map_err(storage)?;let Ok(permit)=permits.clone().try_acquire_owned()else{drop(stream);continue;};let broker=self.clone();let stop=stop.child_token();clients.spawn(async move{let _permit=permit;if let Err(e)=broker.connection(stream,stop).await{tracing::debug!(error=%e,"socket client closed");}});}
+                accepted=listener.accept()=>{let (stream,_)=accepted.map_err(storage)?;let Ok(permit)=permits.clone().try_acquire_owned()else{drop(stream);continue;};let broker=self.clone();let stop=serving.child_token();clients.spawn(async move{if let Err(e)=broker.connection(stream,stop,permit).await{tracing::debug!(error=%e,"socket client closed");}});}
             }
         }
+        serving.cancel();
         drop(listener);
+        if adopting {
+            // The pass stops before its next run; those in flight finish.
+            if let Ok(Err(e)) = startup.await {
+                tracing::warn!(error=%e, "startup adoption ended early");
+            }
+        }
         while clients.join_next().await.is_some() {}
         self.calls().close().await;
-        scheduler_task.await.map_err(storage)??;
+        if let Some(task) = scheduler_task {
+            task.await.map_err(storage)??;
+        }
         match std::fs::remove_file(path) {
             Ok(()) => {}
             // A removed home took its socket with it.
@@ -1260,12 +1420,13 @@ impl<H: ExecutionHost> Coordinator<H> {
             .shutdown()
             .await
             .map_err(|e| e.into_public(false))?;
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
     async fn connection(
         &self,
         mut stream: UnixStream,
         stop: CancellationToken,
+        permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<(), PublicError> {
         let request: Request<Value> =
             tokio::time::timeout(Duration::from_secs(5), socket::read_frame(&mut stream))
@@ -1345,6 +1506,17 @@ impl<H: ExecutionHost> Coordinator<H> {
             },
             Incoming::Guardian(command) => {
                 let held = matches!(command, CoordinatorCommand::Watch { .. });
+                // A held watch idles for up to a minute, one per live guardian:
+                // once authenticated it gives its connection permit back, so
+                // the number of live runs never decides whether reads are served.
+                if held
+                    && self
+                        .authenticate(guardian_key(&command), capability.as_ref())
+                        .await
+                        .is_ok()
+                {
+                    drop(permit);
+                }
                 let broker = self.clone();
                 let handler = crate::contain::contained("guardian callback", async move {
                     broker.guardian(command, capability.as_ref()).await
@@ -1476,6 +1648,35 @@ impl Incoming {
     }
 }
 
+fn adoption_ended(ended: Option<Result<(), tokio::task::JoinError>>) {
+    if let Some(Err(e)) = ended {
+        tracing::warn!(error=%e, "adoption task failed; deferred to the next pass");
+    }
+}
+/// Commands answered while the startup adoption pass runs: each is one read
+/// snapshot. Everything else, including commands added later, waits for it.
+fn served_while_adopting(command: &CommandRequest) -> bool {
+    matches!(
+        command,
+        CommandRequest::ProjectsList
+            | CommandRequest::Status(_)
+            | CommandRequest::PlanGet { .. }
+            | CommandRequest::PlanHistory { .. }
+            | CommandRequest::PlanView { .. }
+            | CommandRequest::StepContext { .. }
+            | CommandRequest::RecipeList { .. }
+            | CommandRequest::FnList { .. }
+            | CommandRequest::FnGet { .. }
+            | CommandRequest::CallStatus { .. }
+            | CommandRequest::Verify { .. }
+            | CommandRequest::Messages(_)
+            | CommandRequest::LogRead(_)
+            | CommandRequest::LogWait(_)
+            | CommandRequest::Query(_)
+            | CommandRequest::Docs { .. }
+            | CommandRequest::Submission { .. }
+    )
+}
 struct LocalLink<H: ExecutionHost> {
     broker: Coordinator<H>,
     capability: RunCapability,

@@ -506,6 +506,9 @@ pub async fn run<H: ExecutionHost>(
         broker.writer().clone(),
         broker.reads().clone(),
     );
+    // `serve` starts the scheduler right after its startup adoption pass, so
+    // the immediate first full tick does not adopt again.
+    let mut adopted_at_start = true;
     loop {
         // Owner notifications go out whether or not anything holds the scheduler lease.
         if let Err(error) = notifier.tick().await {
@@ -541,7 +544,9 @@ pub async fn run<H: ExecutionHost>(
             _=full.tick()=>{
                 let projects = broker.projects().await?;
                 dirty.extend(projects.iter().copied());
-                broker.adopt().await?;
+                if !std::mem::take(&mut adopted_at_start) {
+                    broker.adopt().await?;
+                }
                 upkeep(broker.writer(), broker.home(), projects).await?;
                 crate::calls::retain_calls(broker.writer()).await?;
             },
