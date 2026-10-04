@@ -101,10 +101,19 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
         payload = payload.replace("\"outputs\":{}", &format!("\"outputs\":{{{outputs}}}"));
         text.push_str(&format!("\n\nSubmit them, as JSON values of those types, before you finish:\n`sluice tool step_submit {}`\nIf it returns `invalid`, fix what it lists and submit again (the last submission counts).", shell_quote(&payload)));
     }
-    if ctx.listen && !ctx.project.is_empty() && !ctx.step.is_empty() {
+    // Every step can post with its own run identity; `listen` only adds live delivery.
+    if !ctx.project.is_empty() && !ctx.step.is_empty() {
         let thread = thread_name(&ctx.step);
         let post = json!({"project":project,"thread":thread,"from":ctx.step,"run":ctx.run,"to":"orchestrator","body":"...","needs_reply":false});
-        text.push_str(&format!("\n\nMessages for you on sluice thread `{thread}` of project `{}` are delivered into this session as they arrive when addressed to this step (or to nobody); you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, post it with `sluice tool message_post {}` and continue with anything not blocked by it. Use `needs_reply: true` for a question that needs an answer. Post questions and changes of scope, not progress.", project, shell_quote(&post.to_string())));
+        let post = format!(
+            "`sluice tool message_post {}`",
+            shell_quote(&post.to_string())
+        );
+        if ctx.listen {
+            text.push_str(&format!("\n\nMessages for you on sluice thread `{thread}` of project `{project}` are delivered into this session as they arrive when addressed to this step (or to nobody); you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, post it with {post} and continue with anything not blocked by it. Use `needs_reply: true` for a question that needs an answer. Post questions and changes of scope, not progress."));
+        } else {
+            text.push_str(&format!("\n\nTo post a message on this step's sluice thread `{thread}` of project `{project}`, use {post}. Use `needs_reply: true` for a question that needs an answer."));
+        }
     }
     text
 }

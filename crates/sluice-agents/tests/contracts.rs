@@ -131,10 +131,25 @@ fn listen_false_drops_only_the_note_and_empty_ports_have_no_sections() {
     assert!(text.contains("## Inputs"));
     assert!(text.contains("## Outputs"));
     assert!(!text.contains("Messages for you"));
+    // Posting needs no live delivery: the exact command still carries this run's identity.
+    let post = text
+        .split("sluice tool message_post '")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .unwrap();
+    let post: serde_json::Value = serde_json::from_str(post).unwrap();
+    assert_eq!(
+        post,
+        serde_json::json!({"project":"p","thread":"step-work","from":"work","run":"r",
+                           "to":"orchestrator","body":"...","needs_reply":false})
+    );
     context.inputs.clear();
     context.outputs.clear();
     let text = build("task", &BTreeMap::new(), &context);
     assert!(!text.contains("##"));
+    context.step.clear();
+    let text = build("task", &BTreeMap::new(), &context);
+    assert!(!text.contains("message_post"));
 }
 #[test]
 fn thread_names_and_shell_quoting_preserve_literal_data() {
