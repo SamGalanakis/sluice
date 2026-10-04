@@ -64,19 +64,49 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
         Ok(())
     }).await.unwrap();
     println!("BOARD {project}");
-    let paused = writer.write(RetrySafety::NonIdempotent, |tx| projects::project_create(tx, CreateProject { name: "board-paused".parse().unwrap(), description: "Work is held for review.".into(), icon: None, resources: None, author: "owner".into() }, &EmptyPlanInitializer, &NoResourceSettings)).await.unwrap().project_id;
-    writer.write(RetrySafety::NonIdempotent, move |tx| {
-        let doc = json!({"steps":{
+    let paused = writer
+        .write(RetrySafety::NonIdempotent, |tx| {
+            projects::project_create(
+                tx,
+                CreateProject {
+                    name: "board-paused".parse().unwrap(),
+                    description: "Work is held for review.".into(),
+                    icon: None,
+                    resources: None,
+                    author: "owner".into(),
+                },
+                &EmptyPlanInitializer,
+                &NoResourceSettings,
+            )
+        })
+        .await
+        .unwrap()
+        .project_id;
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let doc = json!({"steps":{
             "held":{"run":"custom.open","outputs":{"ok":"boolean"},"tags":["unit:build"]},
             "review":{"run":"custom.open","after":["held"],"tags":["unit:review"]},
             "deliver":{"run":"custom.open","after":["review"],"tags":["unit:review"]}}});
-        let plan = sluice_model::plan::Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &BoardFixtureRegistry).unwrap();
-        tx.sql().execute("DELETE FROM plans WHERE project_id=?1",[paused.to_string()])?;
-        sluice_store::plans::initialize_plan(tx,paused,&plan)?;
-        tx.sql().execute("UPDATE projects SET paused=1 WHERE project_id=?1",[paused.to_string()])?;
-        tx.changed(Some(paused), "project");
-        Ok(())
-    }).await.unwrap();
+            let plan = sluice_model::plan::Plan::parse_json(
+                &serde_json::to_vec(&doc).unwrap(),
+                &BoardFixtureRegistry,
+            )
+            .unwrap();
+            tx.sql().execute(
+                "DELETE FROM plans WHERE project_id=?1",
+                [paused.to_string()],
+            )?;
+            sluice_store::plans::initialize_plan(tx, paused, &plan)?;
+            tx.sql().execute(
+                "UPDATE projects SET paused=1 WHERE project_id=?1",
+                [paused.to_string()],
+            )?;
+            tx.changed(Some(paused), "project");
+            Ok(())
+        })
+        .await
+        .unwrap();
     println!("BOARD-PAUSED {paused}");
 }
 

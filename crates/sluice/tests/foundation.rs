@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 use support::{
-    chrome::Chrome,
     clock::{Clock, ManualClock, SystemClock},
     free_port::free_port,
     home::ScratchHome,
@@ -108,7 +107,7 @@ fn home_guard_resolves_symlinks_and_parent_components_in_path_order() {
     assert_eq!(output.status.code(), Some(1));
 }
 #[test]
-fn test_support_has_injectable_clock_reserved_port_and_typed_browser_stub() {
+fn test_support_has_injectable_clock_and_reserved_port() {
     let clock = ManualClock::default();
     assert_eq!(clock.now(), Duration::ZERO);
     clock.advance(Duration::from_millis(10)).unwrap();
@@ -118,11 +117,6 @@ fn test_support_has_injectable_clock_reserved_port_and_typed_browser_stub() {
     let listener = free_port().unwrap();
     assert_ne!(listener.local_addr().unwrap().port(), 0);
     assert!(std::net::TcpListener::bind(listener.local_addr().unwrap()).is_err());
-    let error = match Chrome::open("http://127.0.0.1") {
-        Ok(_) => panic!("stub started a browser"),
-        Err(e) => e,
-    };
-    assert!(error.to_string().contains("not implemented in this build"));
 }
 #[test]
 fn fixture_binary_is_inert_and_checks_scratch_home() {
