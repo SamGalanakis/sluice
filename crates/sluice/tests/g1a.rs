@@ -37,7 +37,7 @@ impl Gate {
                 .spawn()
                 .unwrap(),
         );
-        wait(|| {
+        wait("coordinator socket accepts", || {
             if self.broker.as_mut().unwrap().try_wait().unwrap().is_some() {
                 panic!(
                     "broker exited: {}",
@@ -137,10 +137,13 @@ fn read_frame(stream: &mut UnixStream) -> Vec<u8> {
     stream.read_exact(&mut bytes).unwrap();
     bytes
 }
-fn wait(mut predicate: impl FnMut() -> bool) {
+fn wait(label: &str, mut predicate: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !predicate() {
-        assert!(Instant::now() < deadline, "gate condition timed out");
+        assert!(
+            Instant::now() < deadline,
+            "gate condition timed out: {label}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -174,7 +177,7 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
     let lease = gate.lease("first").unwrap();
     assert!(gate.lease("conflict").is_err());
     let mut long_run = String::new();
-    wait(|| {
+    wait("long step dispatched", || {
         let status = gate.status(project);
         if let Some(run) = status["steps"]["long"]["run_ids"][0].as_str() {
             long_run = run.into();
@@ -205,7 +208,9 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
     assert_eq!(gate.status(project)["resources"]["cpu"]["held"], 1);
     let lease = gate.lease("replacement").unwrap();
     std::fs::write(run_dir.join("finish"), b"").unwrap();
-    wait(|| gate.status(project)["steps"]["last"]["status"] == "succeeded");
+    wait("last step succeeded after adoption", || {
+        gate.status(project)["steps"]["last"]["status"] == "succeeded"
+    });
     assert_eq!(gate.status(project)["outputs"]["answer"], true);
     assert_eq!(gate.status(project)["resources"]["cpu"]["held"], 0);
     assert_eq!(
@@ -226,7 +231,7 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
             .unwrap(),
     );
     let mut direct_dir = PathBuf::new();
-    wait(|| {
+    wait("direct call dispatched", || {
         for entry in std::fs::read_dir(gate.home.join("runs")).unwrap() {
             let path = entry.unwrap().path();
             if path == run_dir || !dispatched(&path) {
@@ -253,7 +258,7 @@ fn boot_callbacks_restart_adoption_lease_and_direct_caller_death() {
     caller.kill().unwrap();
     caller.wait().unwrap();
     std::fs::write(direct_dir.join("finish"), b"").unwrap();
-    wait(|| {
+    wait("direct call succeeded after caller death", || {
         let CommandReply::Data(status) =
             gate.rpc(json!({"command":"call_status","args":{"call":direct,"project":selector}}))
         else {
