@@ -23,6 +23,8 @@ async fn git(cwd: &Path, args: &[&str]) -> io::Result<std::process::Output> {
     cmd.current_dir(cwd)
         .args(args)
         .stdin(Stdio::null())
+        // Observation must never take index.lock from under an agent's own git commands.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("GIT_MERGE_AUTOEDIT", "no")

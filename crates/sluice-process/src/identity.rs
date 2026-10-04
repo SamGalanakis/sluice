@@ -68,8 +68,8 @@ impl OwnedProcess {
         }
         let pid =
             Pid::from_raw(i32::try_from(expected.pid).map_err(|_| stale())?).ok_or_else(stale)?;
-        let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
-        let current = ProcessIdentity::read(expected.pid)?;
+        let pidfd = open_pidfd(pid)?;
+        let current = ProcessIdentity::read(expected.pid).map_err(vanished)?;
         let owned = Self {
             identity: current,
             pidfd,
@@ -120,5 +120,30 @@ impl OwnedProcess {
 fn stale() -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, "stale process identity")
 }
+/// A process can exit after its identity was checked; that is a stale identity, not a failure.
+fn vanished(error: io::Error) -> io::Error {
+    if error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) {
+        stale()
+    } else {
+        error
+    }
+}
+fn open_pidfd(pid: Pid) -> io::Result<OwnedFd> {
+    pidfd_open(pid, PidfdFlags::empty()).map_err(|e| vanished(e.into()))
+}
 
 pub use rustix::process::Signal;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_gone_before_pidfd_open_is_stale() {
+        let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
+        let pid = Pid::from_raw(child.id() as i32).unwrap();
+        child.wait().unwrap();
+        let error = open_pidfd(pid).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound, "{error}");
+    }
+}

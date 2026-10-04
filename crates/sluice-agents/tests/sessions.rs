@@ -697,3 +697,19 @@ fn session_lock_keys_are_hashes_not_lossy_path_sanitization() {
     let value = JsonValue::try_from(serde_json::json!({"ok":true})).unwrap();
     assert!(value.as_value()["ok"].as_bool().unwrap());
 }
+#[tokio::test]
+async fn git_sampling_never_rewrites_the_index_under_an_agent() {
+    let scratch = Scratch::new();
+    let work = scratch.0.join("work");
+    repo(&work);
+    // Same content, newer stat: a locking `git status` refreshes and rewrites the index.
+    let seed = fs::File::options()
+        .write(true)
+        .open(work.join("seed"))
+        .unwrap();
+    seed.set_modified(std::time::SystemTime::now() + Duration::from_secs(5))
+        .unwrap();
+    let index = fs::read(work.join(".git/index")).unwrap();
+    git::sample(&work).await.unwrap().unwrap();
+    assert_eq!(fs::read(work.join(".git/index")).unwrap(), index);
+}
