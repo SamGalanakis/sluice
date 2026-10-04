@@ -543,6 +543,105 @@ async fn log_wait_cases(socket: bool) {
     f.close().await;
 }
 #[tokio::test]
+async fn log_wait_reads_only_when_its_own_log_commits_and_expires_a_foreign_cursor() {
+    // No server: its scheduler would read on every commit and muddy the count.
+    let home = home::ScratchHome::new().unwrap();
+    let broker = Coordinator::open(home.path().into(), Catalog::fixtures(), Fake)
+        .await
+        .unwrap();
+    let mut ids = vec![];
+    for name in ["p", "q"] {
+        let CommandReply::Project(p) = broker
+            .command(request(
+                "project_create",
+                json!({"name":name,"description":"","resources":{}}),
+            ))
+            .await
+            .unwrap()
+        else {
+            panic!("project")
+        };
+        ids.push(p.project_id);
+    }
+    let (p, q) = (ids[0], ids[1]);
+    let selector = json!({"kind":"id","value":p});
+    let CommandReply::Records(log) = broker
+        .command(request("log_read", json!({"project":selector,"limit":200})))
+        .await
+        .unwrap()
+    else {
+        panic!("log")
+    };
+    let update = || sluice_model::events::Event::ProjectUpdate {
+        fields: vec!["description".into()],
+        reason: None,
+        author: "test".into(),
+    };
+    let wait = broker.command(request(
+        "log_wait",
+        json!({"read":{"project":selector,"since_seq":log.last_seq,"limit":200},"timeout_seconds":30,"questions_only":false}),
+    ));
+    tokio::pin!(wait);
+    // Let the wait read its page and park.
+    tokio::select! {
+        biased;
+        _ = &mut wait => panic!("nothing to return yet"),
+        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+    }
+    let before = broker.reads().snapshots();
+    // Another project's records and this project's other views commit: the
+    // wait must neither wake nor read for them.
+    for _ in 0..50 {
+        tokio::select! {
+            biased;
+            _ = &mut wait => panic!("woke for another log"),
+            written = broker.writer().write(RetrySafety::NonIdempotent, move |tx| {
+                tx.append_record(Some(q), update())?;
+                tx.changed(Some(p), "status");
+                Ok(())
+            }) => written.unwrap(),
+        }
+    }
+    assert_eq!(broker.reads().snapshots(), before);
+    let own = broker
+        .writer()
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.append_record(Some(p), update())
+        })
+        .await
+        .unwrap();
+    let CommandReply::Records(page) = tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("records")
+    };
+    assert_eq!(
+        page.records.iter().map(|r| r.seq).collect::<Vec<_>>(),
+        vec![own.seq]
+    );
+    assert_eq!(page.last_seq, own.seq);
+    // One durable version check, then one page read.
+    assert_eq!(broker.reads().snapshots(), before + 2);
+    // A cursor no seq of this home ever reached (another home's, or one from
+    // before an import renumbered the log) fails at once with the real bounds.
+    let stale = own.seq.0 + 33_000;
+    let started = tokio::time::Instant::now();
+    let expired = broker
+        .command(request(
+            "log_wait",
+            json!({"read":{"project":selector,"since_seq":stale,"limit":200},"timeout_seconds":30,"questions_only":false}),
+        ))
+        .await;
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(
+        matches!(&expired, Err(PublicError::CursorExpired { message }) if message.contains(&format!("latest={}", own.seq.0))),
+        "{expired:?}"
+    );
+    broker.writer().shutdown().await.unwrap();
+}
+#[tokio::test]
 async fn bounded_notes_page_never_skips_the_question_and_mark_read_is_thread_scoped() {
     bounded_notes_cases(false).await;
 }

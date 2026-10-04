@@ -274,6 +274,49 @@ async fn coalesced_unrelated_wake_rechecks_all_durable_interests() {
 }
 
 #[tokio::test]
+async fn commits_to_other_keys_wake_no_durable_read_and_a_watched_commit_reads_once() {
+    let (_home, writer, reads, project) = setup().await;
+    let mut sub = reads.subscribe(&writer, vec![key(project)]).await.unwrap();
+    let wait = sub.wait();
+    tokio::pin!(wait);
+    // Let the wait take its first durable read and park on notifications.
+    tokio::select! {
+        biased;
+        _ = &mut wait => panic!("nothing changed yet"),
+        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+    }
+    let before = reads.snapshots();
+    // Each commit is observed on its own (both futures share this task, and the
+    // notification precedes the write's reply), so none is a coalesced gap.
+    for _ in 0..50 {
+        tokio::select! {
+            biased;
+            _ = &mut wait => panic!("woke for an unwatched key"),
+            written = writer.write(RetrySafety::NonIdempotent, move |tx| {
+                tx.changed(None, "unrelated");
+                tx.changed(Some(project), "log");
+                Ok(())
+            }) => written.unwrap(),
+        }
+    }
+    assert_eq!(reads.snapshots(), before, "unwatched commits must not read");
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let cursor = tokio::time::timeout(Duration::from_secs(1), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cursor.versions[&key(project)], 2);
+    assert_eq!(reads.snapshots(), before + 1);
+    writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn flock_refuses_second_handle_and_shutdown_releases_it() {
     let (home, writer, _reads, _) = setup().await;
     assert!(matches!(

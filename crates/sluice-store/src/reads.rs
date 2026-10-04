@@ -11,7 +11,10 @@ use rusqlite::{
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::{Semaphore, watch};
@@ -24,6 +27,7 @@ struct Pool {
     connections: Mutex<Vec<Connection>>,
     permits: Arc<Semaphore>,
     home: PathBuf,
+    snapshots: AtomicU64,
 }
 #[derive(Clone)]
 pub struct ReadPool {
@@ -66,11 +70,17 @@ impl ReadPool {
                 connections: Mutex::new(connections),
                 permits: Arc::new(Semaphore::new(size)),
                 home,
+                snapshots: AtomicU64::new(0),
             }),
         })
     }
     pub fn home(&self) -> &Path {
         &self.inner.home
+    }
+    /// How many snapshots this pool has begun: the cost of a waiter or poller
+    /// in database reads, for diagnostics and tests.
+    pub fn snapshots(&self) -> u64 {
+        self.inner.snapshots.load(Ordering::Relaxed)
     }
 
     /// All queries in the closure see one DEFERRED read transaction. A snapshot
@@ -89,6 +99,7 @@ impl ReadPool {
             .acquire_owned()
             .await
             .map_err(|_| StoreError::Closed)?;
+        self.inner.snapshots.fetch_add(1, Ordering::Relaxed);
         let pool = Arc::clone(&self.inner);
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -156,6 +167,7 @@ impl ReadPool {
             .into());
         }
         let receiver = writer.subscribe();
+        let seen = receiver.borrow().commits;
         let keys = cursor.versions.keys().cloned().collect::<Vec<_>>();
         let latest = self.cursor(keys.clone()).await?;
         Ok(Subscription {
@@ -164,6 +176,7 @@ impl ReadPool {
             receiver,
             pending: (latest != cursor).then_some(latest),
             cursor,
+            seen,
         })
     }
 }
@@ -174,36 +187,51 @@ pub struct Subscription {
     receiver: watch::Receiver<ChangeNotification>,
     cursor: DurableCursor,
     pending: Option<DurableCursor>,
+    /// The notification commit count last examined.
+    seen: u64,
 }
 impl Subscription {
     pub fn cursor(&self) -> &DurableCursor {
         &self.cursor
     }
-    /// Rechecks all interested versions on any wake and at least every 30s.
-    /// Irrelevant wakes do not produce a change. The cursor advances on return.
+    /// Rechecks all interested versions when a commit may have touched one of
+    /// them and at least every 30s. A notification that is exactly the next
+    /// commit and names none of the keys is skipped without a read; a gap in
+    /// the commit count means coalesced sets, so it rechecks. Irrelevant wakes
+    /// do not produce a change. The cursor advances on return.
     pub async fn wait(&mut self) -> Result<DurableCursor> {
         if let Some(cursor) = self.pending.take() {
             self.cursor = cursor;
             return Ok(self.cursor.clone());
         }
         loop {
-            self.receiver.borrow_and_update();
+            self.seen = self.receiver.borrow_and_update().commits;
             let latest = self.pool.cursor(self.keys.clone()).await?;
             if latest != self.cursor {
                 self.cursor = latest;
                 return Ok(self.cursor.clone());
             }
-            if matches!(
-                tokio::time::timeout(Duration::from_secs(30), self.receiver.changed()).await,
-                Ok(Err(_))
-            ) {
-                // One last durable read when the writer shuts down.
-                let latest = self.pool.cursor(self.keys.clone()).await?;
-                if latest != self.cursor {
-                    self.cursor = latest;
-                    return Ok(self.cursor.clone());
+            loop {
+                match tokio::time::timeout(Duration::from_secs(30), self.receiver.changed()).await {
+                    Err(_) => break,
+                    Ok(Ok(())) => {
+                        let notification = self.receiver.borrow_and_update();
+                        let gap = notification.commits.wrapping_sub(self.seen) != 1;
+                        self.seen = notification.commits;
+                        if gap || notification.changed.iter().any(|k| self.keys.contains(k)) {
+                            break;
+                        }
+                    }
+                    Ok(Err(_)) => {
+                        // One last durable read when the writer shuts down.
+                        let latest = self.pool.cursor(self.keys.clone()).await?;
+                        if latest != self.cursor {
+                            self.cursor = latest;
+                            return Ok(self.cursor.clone());
+                        }
+                        return Err(StoreError::Closed);
+                    }
                 }
-                return Err(StoreError::Closed);
             }
         }
     }

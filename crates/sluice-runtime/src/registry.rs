@@ -1048,9 +1048,13 @@ impl FnRegistry {
     pub fn watch(&self) -> Result<FnWatcher, PublicError> {
         let (tx, rx) = tokio::sync::watch::channel(self.version());
         let version = self.version.clone();
+        let scopes = WatchedScopes {
+            home: self.home.clone(),
+            fn_dirs: self.fn_dirs.clone(),
+        };
         let watcher =
             notify::recommended_watcher(move |result: Result<notify::Event, notify::Error>| {
-                if result.is_ok() {
+                if result.is_ok_and(|event| scopes.affects(&event)) {
                     let new = version.fetch_add(1, Ordering::AcqRel) + 1;
                     let _ = tx.send(new);
                 }
@@ -1066,6 +1070,46 @@ impl FnRegistry {
         };
         watcher.arm();
         Ok(watcher)
+    }
+}
+
+/// The paths whose changes can alter a registry. The home and `projects`
+/// watches are non-recursive but still report every open, read and write of
+/// their direct entries (the database and its WAL, sockets, locks, run dirs),
+/// and the registry's own scans and publications open every fn file; none of
+/// those changes a registry, and counting them made each refresh wake the
+/// watcher again, a loop that kept the coordinator busy while idle.
+struct WatchedScopes {
+    home: PathBuf,
+    fn_dirs: Vec<PathBuf>,
+}
+impl WatchedScopes {
+    fn affects(&self, event: &notify::Event) -> bool {
+        if matches!(event.kind, notify::EventKind::Access(_)) {
+            return false;
+        }
+        // A rescan request or an event without paths may hide anything.
+        event.need_rescan() || event.paths.is_empty() || event.paths.iter().any(|p| self.covers(p))
+    }
+    fn covers(&self, path: &Path) -> bool {
+        let fns = self.home.join("fns");
+        if path.starts_with(&fns) {
+            // Published generations live under the home fns but are not content.
+            return !path.starts_with(fns.join("generations"));
+        }
+        if self.fn_dirs.iter().any(|dir| path.starts_with(dir)) {
+            return true;
+        }
+        let projects = self.home.join("projects");
+        let Ok(rest) = path.strip_prefix(&projects) else {
+            return false;
+        };
+        let mut parts = rest.components();
+        match (parts.next(), parts.next()) {
+            // `projects/` itself, or a project dir created, removed or renamed.
+            (None, _) | (Some(_), None) => true,
+            (Some(_), Some(dir)) => dir.as_os_str() == "fns",
+        }
     }
 }
 

@@ -852,3 +852,41 @@ async fn notify_events_and_fingerprints_invalidate_the_scan() {
         .unwrap();
     assert!(reg.version() > before);
 }
+
+#[tokio::test]
+async fn the_watcher_ignores_reads_and_writes_beside_the_fn_scopes() {
+    let home = scratch();
+    good_fn(&fns_dir(&home), "x.a", &manifest("x.a"));
+    let project = home.join("projects").join(ProjectId::new().to_string());
+    fs::create_dir_all(project.join("fns")).unwrap();
+    good_fn(&project.join("fns"), "p.a", &manifest("p.a"));
+    let reg = FnRegistry::open(&home, vec![]);
+    let mut watcher = reg.watch().unwrap();
+    // What a coordinator does all the time: scan and read every fn (and its
+    // own re-arm lists `projects/`), write the database beside the scopes,
+    // write runs under a project and publish generations. Counted, each of
+    // these woke the watcher, whose refresh did them again.
+    let _ = reg.registry(None);
+    let _ = fs::read(fns_dir(&home).join("x.a/fn.json")).unwrap();
+    let _ = fs::read(project.join("fns/p.a/main.py")).unwrap();
+    let _ = fs::read_dir(home.join("projects")).unwrap().count();
+    let _ = fs::read_dir(&home).unwrap().count();
+    fs::write(home.join("sluice.db-wal"), b"frames").unwrap();
+    let _ = fs::read(home.join("sluice.db-wal")).unwrap();
+    fs::create_dir_all(project.join("runs/r1")).unwrap();
+    fs::write(project.join("runs/r1/out.txt"), b"x").unwrap();
+    fs::create_dir_all(fns_dir(&home).join("generations/1")).unwrap();
+    fs::write(fns_dir(&home).join("generations/1/fn.json"), b"{}").unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), watcher.changed())
+            .await
+            .is_err(),
+        "the watcher woke for a change no registry can see"
+    );
+    // A fn edit still wakes it.
+    fs::write(project.join("fns/p.a/main.py"), "# edit\n").unwrap();
+    tokio::time::timeout(Duration::from_secs(15), watcher.changed())
+        .await
+        .expect("watcher timed out")
+        .unwrap();
+}

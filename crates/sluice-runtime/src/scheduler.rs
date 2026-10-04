@@ -434,6 +434,28 @@ async fn record_queues<H: ExecutionHost>(
     }).await
 }
 
+fn registry_version<H: ExecutionHost>(broker: &Coordinator<H>) -> Option<u64> {
+    broker.catalog().1.as_ref().map(|p| p.registry.version())
+}
+
+/// Refresh the published registry (which re-fingerprints every scope) and mark
+/// every project for reconciliation only when that changed what a project sees.
+async fn registry_changed<H: ExecutionHost>(
+    broker: &Coordinator<H>,
+    seen: &mut Option<u64>,
+    dirty: &mut BTreeSet<ProjectId>,
+) -> Result<(), PublicError> {
+    if let Err(error) = broker.refresh_registry().await {
+        tracing::warn!(%error, "registry refresh deferred");
+    }
+    let current = registry_version(broker);
+    if current != *seen {
+        *seen = current;
+        dirty.extend(broker.projects().await?);
+    }
+    Ok(())
+}
+
 /// Durable versions recover coalesced notifications; timers recover dropped wakes.
 pub async fn run<H: ExecutionHost>(
     broker: Coordinator<H>,
@@ -447,6 +469,7 @@ pub async fn run<H: ExecutionHost>(
         .map(|p| p.registry.watch())
         .transpose()?;
     let mut registry_tick = tokio::time::interval(Duration::from_secs(2));
+    let mut registry_seen = registry_version(&broker);
     let mut versions = std::collections::BTreeMap::new();
     let mut full = tokio::time::interval(FULL_INTERVAL);
     let mut capacity = tokio::time::interval(CAPACITY_INTERVAL);
@@ -477,8 +500,8 @@ pub async fn run<H: ExecutionHost>(
         tokio::select! {
             _=stop.cancelled()=>return Ok(()),
             result=notify.changed()=>{if result.is_err(){return Ok(());}},
-            _=async { match watcher.as_mut() { Some(w) => { let _ = w.changed().await; }, None => std::future::pending::<()>().await } }=>{ if let Err(error) = broker.refresh_registry().await { tracing::warn!(%error, "registry refresh deferred"); } dirty.extend(broker.projects().await?); },
-            _=registry_tick.tick()=>{ if watcher.is_some() { if let Err(error) = broker.refresh_registry().await { tracing::warn!(%error, "registry refresh deferred"); } dirty.extend(broker.projects().await?); } },
+            _=async { match watcher.as_mut() { Some(w) => { let _ = w.changed().await; }, None => std::future::pending::<()>().await } }=>{ registry_changed(&broker, &mut registry_seen, &mut dirty).await?; },
+            _=registry_tick.tick()=>{ if watcher.is_some() { registry_changed(&broker, &mut registry_seen, &mut dirty).await?; } },
             _=full.tick()=>{
                 let projects = broker.projects().await?;
                 dirty.extend(projects.iter().copied());

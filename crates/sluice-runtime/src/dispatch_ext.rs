@@ -20,7 +20,7 @@ use sluice_model::{
     rpc::JsonMap,
     types::{BoundValue, Type, check_value_at},
 };
-use sluice_store::{RetrySafety, messages, plans, projects, records, resources};
+use sluice_store::{RetrySafety, messages, plans, projects, records, resources, writer::ChangeKey};
 use std::{path::Path, time::Duration};
 
 fn storage(error: impl std::fmt::Display) -> PublicError {
@@ -417,11 +417,16 @@ async fn log_wait<H: ExecutionHost>(
     broker: &Coordinator<H>,
     request: LogWait,
 ) -> Result<RecordPage, PublicError> {
-    // Subscribe before reading: commits during a snapshot cannot be missed.
-    let mut changes = broker.writer().subscribe();
     let deadline =
         tokio::time::Instant::now() + Duration::from_secs(request.timeout_seconds.min(3600));
     let project = crate::calls::resolve(broker.reads(), request.read.project).await?;
+    // Subscribe to this log's durable version before reading: a commit during a
+    // snapshot cannot be missed, and other logs' commits never wake the wait.
+    let mut changes = broker
+        .reads()
+        .subscribe(broker.writer(), vec![ChangeKey::new(project, "log")])
+        .await
+        .map_err(public)?;
     let mut filter = records::RecordFilter {
         since: request.read.since_seq.or(Some(RecordSeq(0))),
         kinds: request.read.kinds.unwrap_or_default(),
@@ -482,8 +487,7 @@ async fn log_wait<H: ExecutionHost>(
         }
         tokio::select! {
             _ = tokio::time::sleep_until(deadline) => {},
-            _ = changes.changed() => {},
-            _ = tokio::time::sleep(Duration::from_millis(250)) => {},
+            changed = changes.wait() => { changed.map_err(public)?; },
         }
     }
 }

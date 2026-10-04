@@ -124,6 +124,17 @@ pub fn read_records(
     if filter.since.is_some_and(|seq| seq.0 < floor) {
         return Ok(RecordRead::CursorExpired { earliest, latest });
     }
+    // Seqs are the home's, so a cursor may pass this log's end, but never the
+    // last seq the home has issued: one beyond it comes from another home or
+    // from before an import renumbered the log, and would wait forever.
+    let issued: i64 = sql.query_row(
+        "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='records'),0)",
+        [],
+        |r| r.get(0),
+    )?;
+    if filter.since.is_some_and(|seq| seq.0 > issued) {
+        return Ok(RecordRead::CursorExpired { earliest, latest });
+    }
     let mut query =
         "SELECT seq,at,payload_version,payload FROM records WHERE project_id IS ?".to_owned();
     let mut args = vec![project.map_or(Value::Null, |id| Value::Text(id.to_string()))];

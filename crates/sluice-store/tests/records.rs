@@ -251,6 +251,77 @@ async fn expired_cursors_return_typed_bounds_and_other_projects_do_not_expire() 
     assert_eq!(still.records[0].seq, untouched);
 }
 #[tokio::test]
+async fn a_cursor_past_every_seq_the_home_issued_expires_with_the_real_bounds() {
+    let (_h, w, r, p, q) = setup().await;
+    let ids = append(&w, Some(p), 2).await;
+    let other = append(&w, Some(q), 1).await[0];
+    // Past this log's end but issued by the home: valid, the high-water mark kept.
+    let page = read(
+        &r,
+        Some(p),
+        RecordFilter {
+            since: Some(other),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(page.records.is_empty());
+    assert_eq!(page.last_seq, other);
+    // Past every issued seq (another home's, or one from before a renumbering
+    // import): it would wait forever and echo itself back, so it expires.
+    let stale = RecordSeq(other.0 + 33_000);
+    let expired = r
+        .snapshot(move |c| {
+            read_records(
+                c,
+                Some(p),
+                &RecordFilter {
+                    since: Some(stale),
+                    ..Default::default()
+                },
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        expired,
+        RecordRead::CursorExpired {
+            earliest: ids[0],
+            latest: ids[1]
+        }
+    );
+    let error = expired.into_page().unwrap_err().into_public(true);
+    assert!(error.to_string().contains(&format!("latest={}", ids[1].0)));
+    // Trimming never lowers what the home has issued.
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        trim_to(tx, Some(q), 1, 1)
+    })
+    .await
+    .unwrap();
+    append(&w, Some(q), 1).await;
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql()
+            .execute("DELETE FROM records WHERE project_id=?1", [q.to_string()])?;
+        tx.changed(Some(q), "log");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        read(
+            &r,
+            Some(p),
+            RecordFilter {
+                since: Some(other),
+                ..Default::default()
+            },
+        )
+        .await
+        .last_seq,
+        other
+    );
+}
+#[tokio::test]
 async fn gaps_without_a_trim_are_valid_cursors() {
     let (_h, w, r, p, q) = setup().await;
     let other = append(&w, Some(q), 5).await[4];

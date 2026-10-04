@@ -37,7 +37,9 @@ pub struct Publication {
     pub registry: FnRegistry,
     base: Catalog,
     views: RwLock<BTreeMap<Option<ProjectId>, View>>,
-    refresh: tokio::sync::Mutex<()>,
+    /// The registry version and projects the current views were published
+    /// from, read before their scans; guarded by the refresh lock.
+    refresh: tokio::sync::Mutex<Option<(u64, Vec<ProjectId>)>>,
 }
 impl Publication {
     pub fn new(registry: FnRegistry, base: Catalog) -> Arc<Self> {
@@ -45,7 +47,7 @@ impl Publication {
             registry,
             base,
             views: RwLock::new(BTreeMap::new()),
-            refresh: tokio::sync::Mutex::new(()),
+            refresh: tokio::sync::Mutex::new(None),
         })
     }
     pub async fn refresh(
@@ -53,11 +55,25 @@ impl Publication {
         writer: &Writer,
         projects: Vec<ProjectId>,
     ) -> Result<(), PublicError> {
-        let _refresh = self.refresh.lock().await;
+        let mut published = self.refresh.lock().await;
+        // Every scope is re-fingerprinted by its scan, and any change to a scope
+        // (a scan's or the watcher's) bumps the version. Unchanged since the last
+        // publication, the views stand: republishing reads and digests every fn
+        // file and writes, which an idle refresh tick or every command would
+        // otherwise repeat.
+        let version = self.registry.version();
+        let registries: Vec<_> = std::iter::once(None)
+            .chain(projects.iter().copied().map(Some))
+            .map(|project| (project, self.registry.registry(project)))
+            .collect();
+        if published.as_ref().is_some_and(|(seen, seen_projects)| {
+            *seen == self.registry.version() && *seen_projects == projects
+        }) {
+            return Ok(());
+        }
         let mut views = BTreeMap::new();
         let mut jobs: BTreeMap<Option<ProjectId>, ArtifactJob> = BTreeMap::new();
-        for project in std::iter::once(None).chain(projects.into_iter().map(Some)) {
-            let registry = self.registry.registry(project);
+        for (project, registry) in registries {
             let mut catalog = self.base.clone();
             let mut functions = IndexMap::new();
             let mut details = IndexMap::new();
@@ -161,6 +177,7 @@ impl Publication {
             );
         }
         *self.views.write().unwrap_or_else(|e| e.into_inner()) = views;
+        *published = Some((version, projects));
         Ok(())
     }
     pub fn catalog(&self, project: Option<ProjectId>) -> Catalog {

@@ -786,7 +786,11 @@ storage had); its manual values (`plan.input`, `step.output`, `step.retry`) as f
 does.
 
 `last_seq` is a log's high-water mark (its greatest seq, from the same snapshot as the records),
-never moved back past a `since_seq` given. `log_read` and `log_wait`
+never moved back past a `since_seq` given. A `since_seq` the log can no longer continue is
+`cursor_expired` (its message names the log's `earliest` and `latest` seq; read again without
+it): one older than the records a trim dropped, or one past every seq the home has issued (from
+another home, or from before an import renumbered the log), which would otherwise wait forever and
+come back as its own `last_seq`. `log_read` and `log_wait`
 (§8), `thread.wait` and `sluice watch` share one filter: `kinds` (exact kinds, or a group name,
 `step`, `plan`, `inbox`, `run` or `project`, for every kind under it) and `threads` (messages only on these threads; given
 without `kinds`, only messages at all).
@@ -846,7 +850,7 @@ its runs going — a later runner adopts them (§6) — unless it was started wi
 A `--host` that is not loopback warns loudly on stderr: the tools (fn_save, fn_call — running
 code) are served without authentication to anyone who can reach the port. Errors are tool
 errors whose message is JSON
-`{"error": "not_found"|"conflict"|"invalid"|"bad_request"|"busy", "message", ...}` (`conflict`
+`{"error": "not_found"|"conflict"|"invalid"|"bad_request"|"busy"|"cursor_expired", "message", ...}` (`conflict`
 carries `current_rev` for a plan edit, or `status` for an inbox item that is no longer open;
 `invalid` carries `errors`; `busy`: the database stayed locked past its timeout and nothing was
 written, try again). `rev` is optional on the convenience tools (they apply to the current
@@ -1327,7 +1331,7 @@ resolved author), and
 | `step_retry` | `project, steps?, tags?, reason?, author?` | `{steps}` (each failed, stale or manual); a failed scattered step re-runs only its failed items when its inputs are unchanged (§6) |
 | `step_submit` | `project, step, outputs, run?, author?` | `{ok, run}`: the running step's declared outputs, from its agent (§5); `invalid` with every mismatch |
 | `log_read` | `project?, since_seq?, kinds?, threads?, limit? = 200` | `{records, last_seq}`: matching records oldest first (§6b filter); after `since_seq` the first `limit` of them (`last_seq` is then the last one returned, else the log's last seq, so passing it back continues); without `since_seq` the last `limit`. No project: the home log |
-| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (polling the database with a short read each time, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
+| `log_wait` | `since_seq, project?, kinds?, threads?, timeout? = 300, limit? = 200, wake? = "any"` | like `log_read` after `since_seq`, but waits (reading again only when a commit touches that log, holding nothing in between, without blocking the server or the runner) until at least one matching record exists or `timeout` s pass (then `records` is empty; `timeout` is capped at 3600). `wake: "questions"`: a note (a message with `needs_reply` false) does not end the wait; it comes back with the next record that does, or at the timeout |
 | `next` | `projects, since_seq, me? = "orchestrator", timeout? = 300, all? = false, settle? = 20, settle_max? = 120, settles? = "short"` | `{records, notes, last_seq, timed_out}`: waits with the same short polls (nothing held) until a record one of the projects' logs should wake an orchestrator for — the `sluice next` wake rule (§9): a step failed, stale or skipped (inside a unit too); a unit settling, once (its record carries `unit: {name, settled, steps: [{id, status, held?, outputs?, omitted?}]}`, the outputs as `settles` says: `short` only the booleans, numbers, strings of at most 80 characters on one line and a `summary`'s first line cut to 200 characters and "…", the others' names in `omitted`; `full` every output whole; `none` no `outputs`); a standalone step's success when its fn is open; a question addressed to `me` or to nobody; an inbox post or answer (`all`: every record) — then keeps collecting until `settle` s pass with no new waking record, or `settle_max` s after the first (`settle` 0: returns at the first), and returns them all, the messages first in `records` (each group in seq order). `notes` are the notes held on the way — read them before the records. `last_seq` is the seq of the last record read, waking or not: pass it back as `since_seq` and nothing is missed or repeated. A timeout (on the wait for the first waking record) returns `records` empty and `timed_out` true (`timeout` and `settle_max` capped at 3600) |
 | `drain` | `projects?, author?` | pauses the projects (default: every project not archived) that are not already paused, recording which ones in SQLite so `release` lets exactly those go again; `{paused, pending}`, `pending` the running steps and live non-direct calls still to finish — `sluice drain` (§9) is the one that waits for them |
 | `release` | `author?` | unpauses exactly the projects the maintenance ledger lists and clears it; `{released}`. Projects paused otherwise stay paused |
