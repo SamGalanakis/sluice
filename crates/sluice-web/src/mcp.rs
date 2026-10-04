@@ -480,6 +480,8 @@ impl ServerHandler for McpServer {
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
             tools: tools().to_vec(),
+            ttl_ms: Some(0),
+            cache_scope: Some(rmcp::model::CacheScope::Private),
             ..Default::default()
         })
     }
@@ -536,6 +538,7 @@ pub fn http_service(
     config.cancellation_token = stop;
     config.max_request_body_bytes = crate::http::MAX_BODY;
     config.stateless_protocol_metadata_required = false;
+    config.json_response = true;
     StreamableHttpService::new(
         move || Ok(server.clone()),
         Arc::new(LocalSessionManager::default()),
