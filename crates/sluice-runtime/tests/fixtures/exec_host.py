@@ -115,7 +115,7 @@ class Gate:
         assert 'Ok' in r['result'],r
 
     def status(self):
-        return self.rpc('status',dict(project=self.selector(),selection=dict(steps=None,tags=None)))['data']['steps']['work']
+        return self.rpc('status',dict(project=self.selector(),selection=dict(steps=None,tags=None),all=True))['data']['steps']['work']
 
     def function(self, code):
         d=self.home/'projects'/self.project/'fns/custom.worker'
