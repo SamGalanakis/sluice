@@ -905,24 +905,23 @@ async fn a_board_is_set_cleared_fenced_by_its_rev_and_recorded_without_its_progr
 }
 
 #[tokio::test]
-async fn a_schema_one_home_gains_boards_when_its_writer_opens() {
+async fn a_home_from_before_boards_gains_them_when_its_writer_opens() {
     let home = ScratchHome::new().unwrap();
     let id = {
         let writer = Writer::open(home.path()).unwrap();
         create(&writer, "old").await.project_id
     };
-    // Take the home back to schema 1, as an earlier release left it.
+    // Drop the board columns, as a release before boards left the home.
     {
         let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
         c.execute_batch(
-            "ALTER TABLE projects DROP COLUMN board_rev; ALTER TABLE projects DROP COLUMN board;
-             UPDATE home_meta SET schema_version=1; PRAGMA user_version=1;",
+            "ALTER TABLE projects DROP COLUMN board_rev; ALTER TABLE projects DROP COLUMN board;",
         )
         .unwrap();
     }
     assert!(matches!(
         ReadPool::open(home.path(), 1).map(|_| ()),
-        Err(StoreError::UnsupportedSchema { found: 1 })
+        Err(StoreError::InvalidDatabase(_))
     ));
     let writer = Writer::open(home.path()).unwrap();
     let reads = ReadPool::open(home.path(), 1).unwrap();
@@ -936,5 +935,50 @@ async fn a_schema_one_home_gains_boards_when_its_writer_opens() {
             .await
             .unwrap(),
         Revision(1)
+    );
+}
+
+/// The board briefly shipped as schema 2, which a run's pinned CLI from before it refuses: the
+/// writer marks such a home 1 again and keeps its boards.
+#[tokio::test]
+async fn a_home_marked_with_the_interim_board_schema_is_marked_one_again() {
+    let home = ScratchHome::new().unwrap();
+    let id = {
+        let writer = Writer::open(home.path()).unwrap();
+        let id = create(&writer, "interim").await.project_id;
+        set_board(&writer, id, Some("root = Text(\"kept\")"), Some(0))
+            .await
+            .unwrap();
+        writer.shutdown().await.unwrap();
+        id
+    };
+    let version = |c: &rusqlite::Connection| -> (i64, i64) {
+        (
+            c.query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
+                .unwrap(),
+            c.pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap(),
+        )
+    };
+    {
+        let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+        c.execute_batch("UPDATE home_meta SET schema_version=2; PRAGMA user_version=2;")
+            .unwrap();
+    }
+    assert!(matches!(
+        ReadPool::open(home.path(), 1).map(|_| ()),
+        Err(StoreError::UnsupportedSchema { found: 2 })
+    ));
+    let _writer = Writer::open(home.path()).unwrap();
+    let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+    assert_eq!(version(&c), (1, 1));
+    let reads = ReadPool::open(home.path(), 1).unwrap();
+    let p = reads
+        .snapshot(move |c| projects::resolve(c, &selector(id)))
+        .await
+        .unwrap();
+    assert_eq!(
+        (p.board.as_deref(), p.board_rev),
+        (Some("root = Text(\"kept\")"), Revision(1))
     );
 }

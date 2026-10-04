@@ -23,6 +23,8 @@ CREATE TABLE projects (
   resources_rev INTEGER NOT NULL DEFAULT 0 CHECK (resources_rev >= 0),
   settings_rev INTEGER NOT NULL DEFAULT 1 CHECK (settings_rev >= 1),
   created_at TEXT NOT NULL, changed_at TEXT, deleted_at TEXT,
+  board TEXT,
+  board_rev INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0),
   CHECK (icon_text IS NULL OR icon_hash IS NULL),
   CHECK ((icon_type IS NULL) = (icon_hash IS NULL))
 ) STRICT;

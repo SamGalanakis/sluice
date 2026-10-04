@@ -196,9 +196,12 @@ The home has one maintenance mode: `normal` or `drain`.
 
 ## 3. Storage
 
-`sluice.db` is SQLite in WAL mode at schema 2, created from `migrations/0001.sql` and
-`0002.sql` (23 STRICT tables); the coordinator's writer brings a schema-1 home (and a restore of
-one) forward in one transaction when it opens it, before anything else touches it. Only
+`sluice.db` is SQLite in WAL mode at schema 1, created from `migrations/0001.sql` (23 STRICT
+tables). The schema version changes only for a change older binaries cannot read: a run's pinned
+`sluice` reads the database itself and refuses any other version. Columns added later keep the
+version; the coordinator's writer adds any that are missing (and marks a home left at the
+interim board schema 2 as 1) in one transaction when it opens the home or a restore, before
+anything else touches it, and readers refuse a home still missing one. Only
 the coordinator writes, through one writer task; reads use a pool of read-only connections and
 one snapshot per answer. Every logical change (an edit and its records, a status change and
 its records, a message and its record) commits in one transaction.
