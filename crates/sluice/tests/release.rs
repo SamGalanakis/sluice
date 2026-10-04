@@ -109,7 +109,6 @@ fn p7_release_manifest_paths_and_protocol_are_checked_before_use() {
     manifest.guardian_protocol_major += 1;
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     assert!(verify(&release).is_err());
-    gate.root.disable_cleanup(false);
 }
 #[test]
 fn p7_release_release_scripts_refuse_protected_test_paths_before_building() {
@@ -170,6 +169,7 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
         .unwrap();
     let mut gate = support::Gate::new();
     gate.root.disable_cleanup(true);
+    std::fs::create_dir_all(repo.join("target/p7-02-evidence")).unwrap();
     std::fs::write(
         repo.join("target/p7-02-evidence/package-root.txt"),
         gate.root.path().to_string_lossy().as_bytes(),
@@ -348,4 +348,5 @@ fn p7_release_build_helper_launcher_and_deploy_adopt_the_pinned_guardian() {
     support::wait(|| !gate.home.join("coordinator.sock").exists());
     std::fs::write(release.join("python/inline_python.py"), "tampered").unwrap();
     assert!(verify(&release).is_err());
+    gate.root.disable_cleanup(false);
 }

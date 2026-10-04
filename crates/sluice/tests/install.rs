@@ -310,9 +310,9 @@ fn p7_install_direct_clients_race_fence_without_new_payload_continuations() {
     );
     let sql = rusqlite::Connection::open(gate.home.join("sluice.db")).unwrap();
     assert_eq!(
-        sql.query_row("SELECT count(*) FROM calls", [], |r| r.get::<_, usize>(0))
+        sql.query_row("SELECT count(*) FROM calls", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        accepted
+        accepted as i64
     );
     // Existing completion/status paths remain callable during maintenance.
     assert!(gate.rpc(json!({"command":"projects_list"})).is_ok());
