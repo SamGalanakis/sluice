@@ -119,6 +119,7 @@ pub fn catalog(registry: &Registry) -> Catalog {
                 ))
             })
             .collect(),
+        None,
     )
 }
 

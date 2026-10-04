@@ -38,13 +38,8 @@ pub enum Mode {
         port: u16,
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
-        #[arg(long)]
-        kill_runs: bool,
     },
-    Loop {
-        #[arg(long)]
-        kill_runs: bool,
-    },
+    Loop {},
     Guardian(RunArgs),
     PayloadExec(RunArgs),
     Tool {
