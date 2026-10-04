@@ -997,7 +997,8 @@ fn bounded_error(mut error: PublicError) -> PublicError {
         | PublicError::Transient { message }
         | PublicError::Rejected { message }
         | PublicError::FnFailure { message }
-        | PublicError::AgentFailure { message, .. } => Some(message),
+        | PublicError::AgentFailure { message, .. }
+        | PublicError::ExitedWithoutSubmit { message, .. } => Some(message),
         _ => None,
     };
     if let Some(message) = message {

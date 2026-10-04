@@ -359,8 +359,8 @@ if __name__ == "__main__":
   tool, is refused (`conflict`).
 - `ctx.builtin(name, inputs)` runs a builtin fn inside this run (same run and attempt, a new
   invocation) and returns its outputs.
-- `ctx.submission()` returns the outputs submitted so far; `ctx.submit(outputs)` submits the
-  step's declared outputs (§6.4).
+- `ctx.submission()` returns the run's submission, if any; `ctx.submit(outputs)` submits the
+  step's declared outputs, which settles the step (§6.4).
 - `ctx.retry_on_failure(step, message)` registers a completion action: if this run ends
   `rejected`, `step` (which must have a completed result) is retried with `message` (≤ 8 KiB)
   as feedback. Registering the same action again is a no-op; a different one is an error.
@@ -425,10 +425,18 @@ A step whose fn is open may bind extra inputs (any id-shaped name) and declare `
 (`{name: type | {"type", "doc"}}`, none named like a fn output); `submits` from fn.json join
 them. Refs to declared outputs validate like any output. While the step runs, whoever does the
 work calls `step_submit(project, step, run, outputs)`: checked against the declared outputs
-(every required one, fitting types, no others; `invalid` lists each mismatch), refused unless
-the run is current; a resubmission replaces the last. Each accepted submission is a
-`step.submit` record. When the run completes, the submission joins the fn's outputs; a required
-declared output never submitted fails the step.
+(every required one, fitting types, no others; `invalid` lists each mismatch and nothing is
+stored), refused unless the run is current. A valid submission is the done signal: in the same
+transaction it is a `step.submit` record and settles the step (a scattered step's item) as
+`succeeded` with exactly the submitted outputs (an optional one left out is null) as its
+result, so dependents start at once; an agent's supervisor then stops its session. The run
+finishes on its own and leaves that result alone, even after a retry; until it has, the
+step's next run waits for it. A second submission from the run is refused (`conflict`, the step
+is settled). A run that ends without submitting a required declared output (and without
+returning it) fails the step with `exited_without_submit` (`session` when the agent's is
+known), unless it failed otherwise first. A coordinator adopting a live run that submitted
+under an earlier release, whose step still waits on it, settles the step with that
+submission.
 
 ### 6.5 Work done outside sluice
 
@@ -670,6 +678,11 @@ tool` do not take).
 - `to`, for `ask` and `say`, is a step id in the project's current plan, `orchestrator` or
   `owner`. Anything else (missing, empty, an unknown or removed step, another name, the sender
   itself) is `invalid` and nothing is stored. A reply's `to` is the original's `from`.
+- A step that is settled (`succeeded`, `failed`, `stale` or `skipped`) takes no messages: an
+  `ask` or `say` to it, and a reply whose `to` it is (to a question it asked before it
+  settled, say), are refused (`conflict`, saying the step is settled) and nothing is stored or
+  queued. A reply that closes such a question (`answer.action == "close"`) is still taken. A
+  retry's message reaches the step after the retry has reopened it.
 - The thread: a reply keeps the original's; a message from a step's run lives on its own
   step's thread `step-<step>`; one to a step on `step-<step>`; between the orchestrator and the
   owner on the fixed thread `owner`.
@@ -697,9 +710,8 @@ guardian speaks. A run reserved before reservations froze it listens if its step
 agent fn without binding `listen: false`, or once it has acknowledged a message. `delivery`
 is `queued` when the step will run (pending and not paused, or its run reserved but not
 started, which `run` names) and its next run is assigned the message; `no_live_run` when the
-step has no live or upcoming run (done, failed, stale, skipped or paused, its live run does
-not listen, or it left the plan): the message is kept and given to the step's next run if one
-is ever started, e.g. by a retry.
+step is pending but paused, or its live run does not listen: the message is kept and given to
+the step's next run if one is ever started.
 
 A message is a row `{id, verb, from, to, thread, body, title?, ui?, input?, data?, run?, at,
 to_message?, answer?}` plus a `message` record written in the same transaction; a field with
@@ -882,6 +894,7 @@ Errors are `{"error": kind, "message", …}`:
 | `transient` | | a retryable failure that exhausted its retries |
 | `rejected` | | a fn refused the work on purpose |
 | `agent_failure` | `kind, session?` | an agent session failed |
+| `exited_without_submit` | `session?` | a step's work ended without a valid `step_submit` |
 
 ### 12.3 Authors
 
@@ -982,8 +995,9 @@ units: [{unit, state, age, engine, steps, blocked, last, line}], done_units?}`, 
 
 `step_context` (also `sluice me`): `{project, project_id, step, fn, doc, status, started,
 finished, elapsed, run, inputs, upstream: [{step, fn, status, outputs, error}], messages (open
-questions on its thread), submit: {outputs, command}, thread, ask, needs?, queued?, leases?}`;
-`submit.command` and `ask` are ready-to-run `sluice tool` lines.
+questions on its thread), submit: {outputs, command, note}, thread, ask, needs?, queued?,
+leases?}`; `submit.command` and `ask` are ready-to-run `sluice tool` lines; `submit.note` is
+"Submit only when you are finished: submitting ends your session."
 
 `plan_view`: Mermaid `flowchart TD` with one subgraph per unit, nodes labelled `id / fn /
 status [done/total] / doc`, a class per status, done units left out with a `%% n done units (m
@@ -1121,12 +1135,21 @@ flat on edit tools, `wait` for `fn_call`, `timeout` and `wake` for `log_wait`, `
 `agent.claude`, `agent.codex`, `agent.devin`, `agent.review` and `agent.run` run a supervised
 interactive session of the engine CLI in the run's private tmux, in `cwd`. The supervisor
 writes the task (the prompt or spec, the step's inputs under `## Inputs`, the outputs to submit
-with the exact `step_submit` command under `## Outputs you must submit`, and, unless `listen:
-false`, how to `ask` the orchestrator, `say` to it and `reply`, with the run's id), watches the session through the engine's hooks, nudges a
-stalled session, and ends it when the agent is done. The result carries `session` (pass it back
-to resume) and `git` facts `{head_before, head_after, commits, dirty}` of `cwd`. A failed
-session is an `agent_failure` error with its `kind` and `session`. Agent fns retry up to 3
-times, 600 s apart.
+with the exact `step_submit` command under `## Outputs you must submit` and "Submit only when
+you are finished: submitting ends your session.", and, unless `listen: false`, how to `ask` the
+orchestrator, `say` to it and `reply`, with the run's id), watches the session through the
+engine's hooks, nudges a stalled session, and ends it when the agent is done. The result carries
+`session` (pass it back to resume) and `git` facts `{head_before, head_after, commits, dirty}`
+of `cwd`. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns
+retry up to 3 times, 600 s apart.
+
+The agent is done when it submits: the supervisor stops the session as soon as the run's
+valid submission is stored, busy or not (§6.4). An idle agent that has not submitted is nudged
+after the settle (`SLUICE_AGENT_SETTLE_S`), or, before the first nudge of an engine that does
+not report background work (Codex, Devin), after `SLUICE_AGENT_GRACE_MIN`; after the last nudge,
+or when the engine exits first, the run fails with kind `ExitedWithoutSubmit` and the step with
+`exited_without_submit`. A step with nothing to submit ends a settle after its agent goes idle,
+or when its reported background work ends (at most `SLUICE_AGENT_WORK_MIN`).
 
 Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
 (600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),

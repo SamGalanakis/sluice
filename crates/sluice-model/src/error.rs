@@ -45,6 +45,14 @@ pub enum PublicError {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
     },
+    /// A step's work ended (its agent exited or stopped) without a valid `step_submit`
+    /// of the outputs it must submit.
+    #[error("{message}")]
+    ExitedWithoutSubmit {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
+    },
 }
 impl PublicError {
     pub fn not_implemented(mode: &str) -> Self {

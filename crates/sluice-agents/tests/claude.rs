@@ -993,7 +993,8 @@ async fn supervisor_engine_mismatch() {
 
 #[tokio::test]
 async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
-    let mut h = Harness::new(json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
+    // The agent submits only after the live message: submitting ends the session.
+    let mut h = Harness::new(json!({"turns":[{"reply":"done","compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
     let hook = h.scratch.0.join("journal-hook");
     executable::write(&hook, include_str!("acceptance/hook.py"));
     let fixture = built("fixture").canonicalize().unwrap();
@@ -1041,9 +1042,13 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     assert!(!h.client(&["list-sessions"]).status.success());
     fs::write(
         h.scratch.0.join("config.json"),
-        serde_json::to_vec(
-            &json!({"turns":vec![json!({"reply":"resumed","submit":{"word":"blue"}});8]}),
-        )
+        // The turn cursor carries over from the first session (two turns): the resumed
+        // session's task and message turns submit nothing, a later one submits.
+        serde_json::to_vec(&json!({"turns":[
+            {}, {}, {"reply":"resumed"}, {"reply":"resumed"},
+            {"reply":"resumed","submit":{"word":"blue"}},
+            {"reply":"resumed","submit":{"word":"blue"}}
+        ]}))
         .unwrap(),
     )
     .unwrap();

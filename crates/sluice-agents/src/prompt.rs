@@ -22,6 +22,9 @@ pub struct PromptContext {
     pub outputs: BTreeMap<String, Port>,
     pub listen: bool,
 }
+/// What every agent is told about its submission, in its task and its step context.
+pub const SUBMIT_ENDS_SESSION: &str =
+    "Submit only when you are finished: submitting ends your session.";
 pub fn thread_name(step: &str) -> String {
     format!(
         "step-{}",
@@ -99,7 +102,7 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
             .collect::<Vec<_>>()
             .join(", ");
         payload = payload.replace("\"outputs\":{}", &format!("\"outputs\":{{{outputs}}}"));
-        text.push_str(&format!("\n\nSubmit them, as JSON values of those types, before you finish:\n`sluice tool step_submit {}`\nIf it returns `invalid`, fix what it lists and submit again (the last submission counts).", shell_quote(&payload)));
+        text.push_str(&format!("\n\n{SUBMIT_ENDS_SESSION} Submit them as JSON values of those types:\n`sluice tool step_submit {}`\nIf it returns `invalid`, nothing was submitted: fix what it lists and submit again.", shell_quote(&payload)));
     }
     // Every step speaks with its own run identity; `listen` only adds live delivery.
     if !ctx.project.is_empty() && !ctx.step.is_empty() {

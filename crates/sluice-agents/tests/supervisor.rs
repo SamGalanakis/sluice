@@ -34,6 +34,10 @@ struct Host {
     complete_after: u32,
     complete_after_nudge: bool,
     has_nudged: bool,
+    /// The agent submits once a checkpoint shows this state (`Idle`: its turn is over);
+    /// `None` submits from the start.
+    submit_at: Option<State>,
+    submitted: bool,
     cleanup: u32,
     fail_cleanup: bool,
     acks: Vec<MessageId>,
@@ -49,6 +53,8 @@ impl Host {
             complete_after: 0,
             complete_after_nudge: false,
             has_nudged: false,
+            submit_at: Some(State::Idle),
+            submitted: false,
             cleanup: 0,
             fail_cleanup: false,
             acks: vec![],
@@ -63,6 +69,7 @@ impl SupervisorHost for Host {
         self.snapshots += 1;
         Ok(HostSnapshot {
             submissions: if self.snapshots >= self.complete_after
+                && (self.submit_at.is_none() || self.submitted)
                 && (!self.complete_after_nudge || self.has_nudged)
             {
                 self.outputs.clone()
@@ -95,6 +102,7 @@ impl SupervisorHost for Host {
     }
     async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
         self.has_nudged = checkpoint.nudges > 0;
+        self.submitted |= self.submit_at == Some(checkpoint.state);
         Ok(())
     }
     async fn cleanup(&mut self) -> io::Result<()> {
@@ -210,7 +218,7 @@ async fn done_requires_a_completed_turn_and_cleanup() {
     );
 }
 #[tokio::test]
-async fn busy_with_outputs_submitted_obeys_wall_cap() {
+async fn busy_without_a_submission_obeys_wall_cap() {
     let scratch = Scratch::new();
     let mut config = config(&scratch);
     config.limits.wall = Duration::from_millis(80);
@@ -219,6 +227,19 @@ async fn busy_with_outputs_submitted_obeys_wall_cap() {
     let error = run(config, &mut engine, &mut host).await.unwrap_err();
     assert_eq!(error.kind, FailureKind::WallCap);
     assert!(!engine.commands.contains(&EngineCommand::RequestExit));
+    assert_eq!(host.cleanup, 1);
+}
+#[tokio::test]
+async fn a_submission_mid_turn_ends_the_busy_session() {
+    let scratch = Scratch::new();
+    let mut config = config(&scratch);
+    config.limits.wall = Duration::from_secs(30);
+    let mut engine = ScriptedEngine::new(happy()[..2].to_vec());
+    let mut host = Host::new();
+    host.submit_at = Some(State::Busy);
+    let result = run(config, &mut engine, &mut host).await.unwrap();
+    assert_eq!(result.final_text, "reply 0");
+    assert_eq!(engine.commands.last(), Some(&EngineCommand::RequestExit));
     assert_eq!(host.cleanup, 1);
 }
 #[tokio::test]
@@ -240,7 +261,7 @@ async fn missing_outputs_get_bounded_nudges_then_fail() {
     let mut host = Host::new();
     host.outputs.clear();
     let error = run(config, &mut engine, &mut host).await.unwrap_err();
-    assert_eq!(error.kind, FailureKind::MissingOutputs);
+    assert_eq!(error.kind, FailureKind::ExitedWithoutSubmit);
     assert_eq!(
         engine
             .commands
@@ -357,23 +378,23 @@ async fn waiting_suppresses_missing_output_nudges_and_background_settles() {
     assert_eq!(engine.commands.len(), 3);
 }
 #[tokio::test]
-async fn submitted_outputs_with_background_work_still_obey_wall_cap() {
+async fn a_submission_ends_the_session_despite_background_work() {
     let scratch = Scratch::new();
     let mut config = config(&scratch);
-    config.limits.wall = Duration::from_millis(70);
-    config.limits.work = Duration::from_secs(1);
+    config.limits.wall = Duration::from_secs(30);
+    config.limits.wait = Duration::from_secs(3600);
     let mut frames = happy();
     frames[2].observation.background_work = vec!["shell".into()];
     let mut engine = ScriptedEngine::new(frames);
     let mut host = Host::new();
-    assert_eq!(
-        run(config, &mut engine, &mut host).await.unwrap_err().kind,
-        FailureKind::WallCap
-    );
+    // Its turn is over with work still running in the background, and it has submitted.
+    host.submit_at = Some(State::Waiting);
+    run(config, &mut engine, &mut host).await.unwrap();
+    assert_eq!(engine.commands.last(), Some(&EngineCommand::RequestExit));
 }
 #[tokio::test]
-async fn completion_before_transient_wins_only_after_background_settles() {
-    for work in [false, true] {
+async fn a_submission_wins_over_a_later_transient() {
+    for submitted in [true, false] {
         let scratch = Scratch::new();
         let config = config(&scratch);
         let mut frames = happy();
@@ -381,18 +402,21 @@ async fn completion_before_transient_wins_only_after_background_settles() {
             kind: EngineErrorKind::Transient,
             message: "capacity".into(),
         });
-        if work {
-            frames[2].observation.waiting = Some("shell".into());
-        }
+        frames[2].observation.waiting = Some("shell".into());
         let mut engine = ScriptedEngine::new(frames);
         let mut host = Host::new();
+        // Submitted while its task was being delivered, before the turn ended in error.
+        host.submit_at = submitted.then_some(State::Delivering);
+        if !submitted {
+            host.outputs.clear();
+        }
         let mut config = config;
         config.retry.additional_tries = 0;
         let result = run(config, &mut engine, &mut host).await;
-        if work {
-            assert_eq!(result.unwrap_err().kind, FailureKind::Transient);
-        } else {
+        if submitted {
             result.unwrap();
+        } else {
+            assert_eq!(result.unwrap_err().kind, FailureKind::Transient);
         }
     }
 }
@@ -808,53 +832,109 @@ fn policy_with(required: Vec<String>, reports_waiting: bool, limits: Limits) -> 
     )
 }
 #[test]
-fn no_required_outputs_still_obey_background_bound_and_unsupported_waiting_grace() {
+fn no_required_outputs_still_obey_background_bound_and_end_after_settle() {
     let o = observation(EngineStatus::Idle, 1, 1);
     let mut machine = policy(vec![], true);
     assert_eq!(
         machine
-            .update(Duration::ZERO, &o, &["detached shell".into()], "")
+            .update(Duration::ZERO, &o, &["detached shell".into()])
             .unwrap(),
         Action::None
     );
     assert_eq!(machine.checkpoint.state, State::Finishing);
     assert_eq!(
         machine
-            .update(
-                Duration::from_millis(100),
-                &o,
-                &["detached shell".into()],
-                ""
-            )
+            .update(Duration::from_millis(100), &o, &["detached shell".into()])
             .unwrap(),
         Action::None
     );
     assert_eq!(
         machine
-            .update(
-                Duration::from_millis(125),
-                &o,
-                &["detached shell".into()],
-                ""
-            )
+            .update(Duration::from_millis(125), &o, &["detached shell".into()])
             .unwrap(),
         Action::Finish
     );
     assert_eq!(machine.checkpoint.notes.len(), 1);
+    // With nothing to submit there is no grace, even for an engine that does not report
+    // waiting: its session ends a settle after it goes idle.
     let mut machine = policy(vec![], false);
     assert_eq!(
-        machine.update(Duration::ZERO, &o, &[], "").unwrap(),
+        machine.update(Duration::ZERO, &o, &[]).unwrap(),
         Action::None
     );
+    assert_eq!(
+        machine.update(Duration::from_millis(19), &o, &[]).unwrap(),
+        Action::None
+    );
+    assert_eq!(
+        machine.update(Duration::from_millis(20), &o, &[]).unwrap(),
+        Action::Finish
+    );
+}
+#[test]
+fn a_valid_submission_ends_the_session_at_once_and_only_unsubmitted_agents_get_grace() {
+    let submit = |machine: &mut Machine| {
+        machine
+            .checkpoint
+            .submissions
+            .insert("word".into(), serde_json::json!("blue"));
+    };
+    // Busy, idle, waiting on background work or after an engine error: a submission ends it.
+    let mut busy = observation(EngineStatus::Busy, 1, 0);
+    busy.progress = 7;
+    let mut waiting = observation(EngineStatus::Idle, 1, 1);
+    waiting.waiting = Some("a build".into());
+    let mut failed = observation(EngineStatus::Idle, 1, 1);
+    failed.error = Some(EngineError {
+        kind: EngineErrorKind::Fatal,
+        message: "boom".into(),
+    });
+    for o in [busy, waiting, failed, observation(EngineStatus::Idle, 1, 1)] {
+        for reports_waiting in [true, false] {
+            let mut machine = policy(vec!["word".into()], reports_waiting);
+            submit(&mut machine);
+            assert_eq!(
+                machine.update(Duration::ZERO, &o, &[]).unwrap(),
+                Action::Finish,
+                "{o:?}"
+            );
+            assert_eq!(machine.checkpoint.state, State::Exiting);
+        }
+    }
+    // Unsubmitted and idle: nudged after settle, or after the grace before the first nudge
+    // of an engine that does not report background work.
+    let o = observation(EngineStatus::Idle, 1, 1);
+    let nudged = |action: Action| matches!(action, Action::Send { id: InputId::Nudge { ordinal: 1 }, text, .. } if text.contains("submitting ends your session"));
+    let mut machine = policy(vec!["word".into()], true);
+    assert_eq!(
+        machine.update(Duration::ZERO, &o, &[]).unwrap(),
+        Action::None
+    );
+    assert!(nudged(
+        machine.update(Duration::from_millis(20), &o, &[]).unwrap()
+    ));
+    let mut machine = policy(vec!["word".into()], false);
+    for at in [0, 20, 999] {
+        assert_eq!(
+            machine.update(Duration::from_millis(at), &o, &[]).unwrap(),
+            Action::None
+        );
+    }
+    assert!(nudged(
+        machine.update(Duration::from_secs(1), &o, &[]).unwrap()
+    ));
+    // An engine that exits before submitting fails typed.
+    let mut machine = policy(vec!["word".into()], true);
     assert_eq!(
         machine
-            .update(Duration::from_millis(999), &o, &[], "")
-            .unwrap(),
-        Action::None
-    );
-    assert_eq!(
-        machine.update(Duration::from_secs(1), &o, &[], "").unwrap(),
-        Action::Finish
+            .update(
+                Duration::ZERO,
+                &observation(EngineStatus::Exited, 1, 1),
+                &[]
+            )
+            .unwrap_err()
+            .kind,
+        FailureKind::ExitedWithoutSubmit
     );
 }
 #[test]
@@ -863,20 +943,20 @@ fn waiting_cap_names_work_and_dialog_nudge_is_bounded() {
     let mut o = observation(EngineStatus::Idle, 1, 1);
     o.waiting = Some("formatter".into());
     assert_eq!(
-        machine.update(Duration::ZERO, &o, &[], "").unwrap(),
+        machine.update(Duration::ZERO, &o, &[]).unwrap(),
         Action::None
     );
     assert!(
-        matches!(machine.update(Duration::from_millis(100), &o, &[], "").unwrap(), Action::Send { text, .. } if text.contains("formatter") && text.contains("word"))
+        matches!(machine.update(Duration::from_millis(100), &o, &[]).unwrap(), Action::Send { text, .. } if text.contains("formatter") && text.contains("word"))
     );
     let mut machine = policy(vec!["word".into()], true);
     let o = observation(EngineStatus::Blocked, 1, 0);
     assert_eq!(
-        machine.update(Duration::ZERO, &o, &[], "").unwrap(),
+        machine.update(Duration::ZERO, &o, &[]).unwrap(),
         Action::None
     );
     assert!(
-        matches!(machine.update(Duration::from_millis(21), &o, &[], "").unwrap(), Action::Send { text, .. } if text.contains("Nobody can answer"))
+        matches!(machine.update(Duration::from_millis(21), &o, &[]).unwrap(), Action::Send { text, .. } if text.contains("Nobody can answer"))
     );
     assert_eq!(machine.checkpoint.nudges, 1);
 }
@@ -894,7 +974,7 @@ fn engine_error_precedes_queued_live_delivery_and_early_exit_never_finishes() {
         message: "capacity".into(),
     });
     assert_eq!(
-        machine.update(Duration::ZERO, &o, &[], "").unwrap(),
+        machine.update(Duration::ZERO, &o, &[]).unwrap(),
         Action::Retry
     );
     assert_eq!(machine.checkpoint.delivery.entries[1].tries, 0);
@@ -904,8 +984,7 @@ fn engine_error_precedes_queued_live_delivery_and_early_exit_never_finishes() {
             .update(
                 Duration::ZERO,
                 &observation(EngineStatus::Exited, 1, 0),
-                &[],
-                ""
+                &[]
             )
             .unwrap_err()
             .kind,
@@ -1048,7 +1127,7 @@ fn steering(status: EngineStatus) -> (Machine, InputId) {
         .unwrap();
     let o = observation(status, 1, u64::from(status == EngineStatus::Idle));
     let at = Duration::from_secs(10);
-    let action = machine.update(at, &o, &[], "").unwrap();
+    let action = machine.update(at, &o, &[]).unwrap();
     assert!(
         matches!(&action, Action::Send { id: sent, steer, .. } if *sent == id && *steer == (status == EngineStatus::Busy))
     );
@@ -1078,8 +1157,7 @@ fn steer_into_a_busy_turn_rides_that_turn_past_the_turn_start_limit() {
                 .update(
                     Duration::from_secs(second),
                     &busy(second, &acknowledged),
-                    &[],
-                    ""
+                    &[]
                 )
                 .unwrap(),
             Action::None,
@@ -1093,13 +1171,8 @@ fn steer_into_a_busy_turn_rides_that_turn_past_the_turn_start_limit() {
     let done = observation(EngineStatus::Idle, 1, 1);
     assert_eq!(
         machine
-            .update(Duration::from_secs(311), &done, &[], "")
+            .update(Duration::from_secs(311), &done, &[])
             .unwrap(),
-        Action::None
-    );
-    let settled = Duration::from_secs(311) + Limits::default().settle;
-    assert_eq!(
-        machine.update(settled, &done, &[], "").unwrap(),
         Action::Finish
     );
 }
@@ -1109,14 +1182,14 @@ fn steer_into_a_busy_turn_waits_for_a_late_acknowledgement() {
     for second in 11..=200 {
         assert_eq!(
             machine
-                .update(Duration::from_secs(second), &busy(second, &[]), &[], "")
+                .update(Duration::from_secs(second), &busy(second, &[]), &[])
                 .unwrap(),
             Action::None
         );
     }
     assert!(machine.pending());
     machine
-        .update(Duration::from_secs(201), &busy(201, &[id]), &[], "")
+        .update(Duration::from_secs(201), &busy(201, &[id]), &[])
         .unwrap();
     assert!(!machine.pending());
 }
@@ -1126,14 +1199,12 @@ fn input_sent_to_an_idle_engine_still_times_out_when_no_turn_starts() {
     let mut idle = observation(EngineStatus::Idle, 1, 1);
     idle.acknowledged = vec![id];
     assert_eq!(
-        machine
-            .update(Duration::from_secs(69), &idle, &[], "")
-            .unwrap(),
+        machine.update(Duration::from_secs(69), &idle, &[]).unwrap(),
         Action::None
     );
     assert_eq!(
         machine
-            .update(Duration::from_secs(70), &idle, &[], "")
+            .update(Duration::from_secs(70), &idle, &[])
             .unwrap_err()
             .kind,
         FailureKind::TurnStartTimeout
@@ -1144,7 +1215,7 @@ fn a_steered_turn_that_ends_without_completing_starts_the_turn_start_wait() {
     let (mut machine, id) = steering(EngineStatus::Busy);
     assert_eq!(
         machine
-            .update(Duration::from_secs(100), &busy(100, &[id]), &[], "")
+            .update(Duration::from_secs(100), &busy(100, &[id]), &[])
             .unwrap(),
         Action::None
     );
@@ -1152,19 +1223,19 @@ fn a_steered_turn_that_ends_without_completing_starts_the_turn_start_wait() {
     let interrupted = observation(EngineStatus::Idle, 1, 0);
     assert_eq!(
         machine
-            .update(Duration::from_secs(150), &interrupted, &[], "")
+            .update(Duration::from_secs(150), &interrupted, &[])
             .unwrap(),
         Action::None
     );
     assert_eq!(
         machine
-            .update(Duration::from_secs(209), &interrupted, &[], "")
+            .update(Duration::from_secs(209), &interrupted, &[])
             .unwrap(),
         Action::None
     );
     assert_eq!(
         machine
-            .update(Duration::from_secs(210), &interrupted, &[], "")
+            .update(Duration::from_secs(210), &interrupted, &[])
             .unwrap_err()
             .kind,
         FailureKind::TurnStartTimeout

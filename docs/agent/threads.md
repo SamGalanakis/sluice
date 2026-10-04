@@ -56,9 +56,13 @@ Each of the three returns its receipt, `{id, to, thread, delivery, run?}`:
   inbox.
 - `queued`: the step will run (it is pending, or its run has not started yet) and its next
   run is assigned it.
-- `no_live_run`: the step has no live or upcoming run (it is done, failed or paused, or its
-  live run does not listen). The message is kept and given to the step's next run, if one
-  is ever started (by a retry, say).
+- `no_live_run`: the step has no live or upcoming run (it is paused, or its live run does
+  not listen). The message is kept and given to the step's next run, if one is ever started.
+
+A step that is settled (succeeded, failed, stale or skipped) takes no messages: an `ask` or
+`say` to it, or a reply to a question it asked before it settled, is refused (`conflict`,
+saying the step is settled) and nothing is stored. Closing such a question still works. To
+give a settled step more work, retry it with a message (below).
 
 A message is a row `{id, verb, from, to, thread, body, title?, ui?, input?, data?, run?, at,
 to_message?, answer?}`: `verb` is `ask`, `say` or `reply`; `to_message` and `answer` are a

@@ -7371,6 +7371,30 @@
               "error",
               "message"
             ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
           }
         ]
       },
@@ -9014,6 +9038,30 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
               }
             },
             "additionalProperties": false,
@@ -15527,6 +15575,30 @@
               "error",
               "message"
             ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
           }
         ]
       },
@@ -17185,6 +17257,30 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
               }
             },
             "additionalProperties": false,
@@ -18950,6 +19046,30 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
               }
             },
             "additionalProperties": false,
@@ -25092,6 +25212,30 @@
               "error",
               "message"
             ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
           }
         ]
       },
@@ -27810,6 +27954,30 @@
               "error",
               "message"
             ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
           }
         ]
       },
@@ -29685,6 +29853,30 @@
               "error",
               "message"
             ]
+          },
+          {
+            "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "const": "exited_without_submit"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "message"
+            ]
           }
         ]
       },
@@ -30327,6 +30519,30 @@
           "error": {
             "type": "string",
             "const": "agent_failure"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "error",
+          "message"
+        ]
+      },
+      {
+        "description": "A step's work ended (its agent exited or stopped) without a valid `step_submit`\nof the outputs it must submit.",
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "const": "exited_without_submit"
           }
         },
         "additionalProperties": false,

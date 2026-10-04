@@ -34,6 +34,9 @@ impl Drop for Scratch {
 #[derive(Default)]
 pub struct Host {
     pub submissions: BTreeMap<String, serde_json::Value>,
+    /// What the agent submits in its turn: it lands once a checkpoint shows that state
+    /// (`Idle`: its turn is over; `Busy`: mid-turn).
+    pub submit_when: Option<(State, BTreeMap<String, serde_json::Value>)>,
     pub directory: Option<PathBuf>,
     pub acks: Vec<MessageId>,
     pub notes: Vec<String>,
@@ -45,9 +48,13 @@ pub struct Host {
     pub cancel_on_note: Option<CancellationToken>,
 }
 impl Host {
+    /// An agent that submits `word` in its turn.
     pub fn submitted() -> Self {
         Self {
-            submissions: BTreeMap::from([("word".into(), serde_json::json!("blue"))]),
+            submit_when: Some((
+                State::Idle,
+                BTreeMap::from([("word".into(), serde_json::json!("blue"))]),
+            )),
             ..Self::default()
         }
     }
@@ -96,6 +103,13 @@ impl SupervisorHost for Host {
         Ok(())
     }
     async fn checkpoint(&mut self, cp: &Checkpoint) -> io::Result<()> {
+        if self
+            .submit_when
+            .as_ref()
+            .is_some_and(|(at, _)| *at == cp.state)
+        {
+            self.submissions = self.submit_when.take().unwrap().1;
+        }
         if self.submit_after_nudge && cp.nudges > 0 {
             self.submissions
                 .insert("word".into(), serde_json::json!("blue"));
@@ -230,7 +244,13 @@ pub async fn scenario(name: &str, engine_name: &str) {
             cfg.limits.quiet = Duration::from_millis(20);
             frames.truncate(2);
             if name == "quiet" {
+                host.submit_when = None;
                 repo(&cfg.cwd);
+            } else if let Some((at, _)) = &mut host.submit_when {
+                // Submitted mid-turn: the session ends though the engine is still busy,
+                // long before the wall cap.
+                *at = State::Busy;
+                cfg.limits.wall = Duration::from_secs(30);
             }
         }
         "background" => {
@@ -284,7 +304,7 @@ pub async fn scenario(name: &str, engine_name: &str) {
             );
         }
         "missing_outputs" | "nudge" => {
-            host.submissions.clear();
+            host.submit_when = None;
             host.submit_after_nudge = name == "nudge";
             for ordinal in 1..=2 {
                 frames.push(frame(
@@ -297,13 +317,16 @@ pub async fn scenario(name: &str, engine_name: &str) {
                 ));
             }
         }
-        "unknown_acceptance" => frames[1].outcome = DeliveryOutcome::Uncertain,
+        "unknown_acceptance" => {
+            frames[1].outcome = DeliveryOutcome::Uncertain;
+            host.submit_when = None;
+        }
         "cancel_backoff" | "retry_exhaustion" => {
             frames[2].observation.error = Some(EngineError {
                 kind: EngineErrorKind::Transient,
                 message: "fixture capacity".into(),
             });
-            host.submissions.clear();
+            host.submit_when = None;
             if name == "retry_exhaustion" {
                 cfg.retry.additional_tries = 0;
             }
@@ -379,12 +402,15 @@ pub async fn scenario(name: &str, engine_name: &str) {
     )
     .await;
     match name {
-        "busy_submitted" => assert_eq!(result.unwrap_err().kind, FailureKind::WallCap),
+        "busy_submitted" => {
+            assert_eq!(result.unwrap().session, "acceptance-session");
+            assert_eq!(engine.commands.last(), Some(&EngineCommand::RequestExit));
+        }
         "quiet" => {
             assert_eq!(result.unwrap_err().kind, FailureKind::Cancelled);
             assert!(!host.notes.is_empty());
         }
-        "missing_outputs" => assert_eq!(result.unwrap_err().kind, FailureKind::MissingOutputs),
+        "missing_outputs" => assert_eq!(result.unwrap_err().kind, FailureKind::ExitedWithoutSubmit),
         "unknown_acceptance" => {
             assert_eq!(result.unwrap_err().kind, FailureKind::UnknownAcceptance)
         }

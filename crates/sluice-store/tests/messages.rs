@@ -1222,10 +1222,13 @@ async fn receipts_read_listening_from_the_runs_reservation() {
         .await
         .unwrap();
     assert_eq!(receipt().await, (Delivery::Delivered, Some(run)));
-    // Finished: kept for a later run.
+    // Finished: a settled step takes no messages.
     f.stop(run).await;
     set("UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='work'").await;
-    assert_eq!(receipt().await, (Delivery::NoLiveRun, None));
+    assert!(matches!(
+        f.posted(draft(p, "hi").to("work")).await,
+        Err(PublicError::Conflict { message, .. }) if message.contains("settled")
+    ));
 }
 
 #[tokio::test]
@@ -1278,21 +1281,57 @@ async fn receipts_follow_the_recipient_and_its_step_runs() {
     let r = receipt("work").await.unwrap().receipt;
     assert_eq!((r.delivery, r.run), (Delivery::Queued, Some(run)));
     f.stop(run).await;
-    // Done, failed or paused: no live or upcoming run.
-    for sql in [
-        "UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='work'",
-        "UPDATE steps SET status='failed' WHERE project_id=?1 AND step_id='work'",
-        "UPDATE steps SET status='pending',paused='true' WHERE project_id=?1 AND step_id='work'",
-    ] {
-        set(sql).await;
-        let r = receipt("work").await.unwrap().receipt;
-        assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None), "{sql}");
-    }
-    // A reply to a removed step's message is kept, with nobody to run it.
+    // Paused: no live or upcoming run, kept for a later one.
+    set("UPDATE steps SET status='pending',paused='true' WHERE project_id=?1 AND step_id='work'")
+        .await;
+    let r = receipt("work").await.unwrap().receipt;
+    assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None));
+    // Settled: refused and not stored, and so is a reply to the question it asked
+    // before it settled; closing that question still works.
     let q = f
         .post(asking(p, "q").to("orchestrator").speaker(Speaker::Run(run)))
         .await
         .unwrap();
+    for status in ["succeeded", "failed", "stale", "skipped"] {
+        let w = f.writer.clone();
+        w.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status=?2,paused=NULL WHERE project_id=?1 AND step_id='work'",
+                params![p.to_string(), status],
+            )?;
+            tx.changed(Some(p), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let before = f.count("messages").await;
+        for refused in [
+            f.posted(draft(p, "hi").to("work")).await,
+            f.posted(asking(p, "why").to("work")).await,
+            f.posted(reply(p, q.id, "answer").speaker(Speaker::Orchestrator))
+                .await,
+        ] {
+            assert!(
+                matches!(&refused, Err(PublicError::Conflict { message, .. }) if message.contains("step work is settled")),
+                "{status}: {refused:?}"
+            );
+        }
+        assert_eq!(f.count("messages").await, before, "{status}");
+    }
+    let closed = f
+        .posted(
+            reply(p, q.id, "")
+                .answer(MessageAnswer {
+                    action: "close".into(),
+                    params: None,
+                    values: None,
+                })
+                .speaker(Speaker::Orchestrator),
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed.receipt.to, "work");
+    // A reply to a removed step's message is kept, with nobody to run it.
     set("DELETE FROM steps WHERE project_id=?1 AND step_id='work'").await;
     let r = f
         .posted(reply(p, q.id, "answer").speaker(Speaker::Orchestrator))

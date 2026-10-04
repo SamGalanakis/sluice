@@ -3711,6 +3711,11 @@
     {
       "error": "rejected",
       "message": "fixture"
+    },
+    {
+      "error": "exited_without_submit",
+      "message": "fixture",
+      "session": "fixture-session"
     }
   ],
   "PlanDocument": [

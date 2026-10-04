@@ -460,7 +460,7 @@ async fn only_reported_missing_session_allows_fresh_fallback_and_records_note() 
     }
 }
 #[tokio::test]
-async fn tracked_reminder_fires_once_and_never_commits_untracked_alone_does_not_trigger() {
+async fn a_submission_ends_the_session_without_a_commit_reminder_and_reports_the_dirty_tree() {
     for tracked in [true, false] {
         let scratch = Scratch::new();
         let config = config(&scratch);
@@ -470,7 +470,7 @@ async fn tracked_reminder_fires_once_and_never_commits_untracked_alone_does_not_
             "edited",
         )
         .unwrap();
-        let mut frames = vec![
+        let frames = vec![
             frame(
                 Some(EngineCommand::StartFresh),
                 EngineStatus::Idle,
@@ -481,22 +481,14 @@ async fn tracked_reminder_fires_once_and_never_commits_untracked_alone_does_not_
             frame(Some(deliver(InputId::Task)), EngineStatus::Busy, 1, 0, None),
             frame(None, EngineStatus::Idle, 1, 1, None),
         ];
-        if tracked {
-            frames.push(frame(
-                Some(deliver(InputId::Reminder)),
-                EngineStatus::Busy,
-                2,
-                1,
-                None,
-            ));
-            frames.push(frame(None, EngineStatus::Idle, 2, 2, None));
-        }
-        let mut engine = ScriptedEngine::new(frames);
+        let submissions = Arc::new(Mutex::new(BTreeMap::new()));
+        // The agent submits in its task turn and leaves its edit uncommitted.
+        let mut engine = SubmitEngine {
+            fake: ScriptedEngine::new(frames),
+            submissions: submissions.clone(),
+        };
         let mut host = Host {
-            submissions: Arc::new(Mutex::new(BTreeMap::from([(
-                "word".into(),
-                serde_json::json!("ok"),
-            )]))),
+            submissions,
             clean: 0,
         };
         let result = supervise(
@@ -509,23 +501,65 @@ async fn tracked_reminder_fires_once_and_never_commits_untracked_alone_does_not_
         )
         .await
         .unwrap();
+        assert!(!engine.fake.commands.iter().any(|c| matches!(
+            c,
+            EngineCommand::DeliverText {
+                id: InputId::Reminder,
+                ..
+            }
+        )));
         assert_eq!(
-            engine
-                .commands
-                .iter()
-                .filter(|c| matches!(
-                    c,
-                    EngineCommand::DeliverText {
-                        id: InputId::Reminder,
-                        ..
-                    }
-                ))
-                .count(),
-            usize::from(tracked)
+            engine.fake.commands.last(),
+            Some(&EngineCommand::RequestExit)
         );
         let facts = result.git.unwrap();
         assert_eq!(facts.commits, 0);
         assert_eq!(facts.dirty, tracked);
+    }
+}
+/// Submits `word` when its task is delivered.
+struct SubmitEngine {
+    fake: ScriptedEngine,
+    submissions: Arc<Mutex<BTreeMap<String, serde_json::Value>>>,
+}
+impl EngineAdapter for SubmitEngine {
+    fn profile(&self) -> EngineProfile {
+        self.fake.profile()
+    }
+    async fn session(&mut self, session: &str) -> Result<Option<SessionMetadata>, EngineError> {
+        self.fake.session(session).await
+    }
+    async fn prepare(
+        &mut self,
+        context: &EngineContext,
+        session: Option<&str>,
+    ) -> Result<Option<EngineLaunch>, EngineError> {
+        self.fake.prepare(context, session).await
+    }
+    async fn execute(
+        &mut self,
+        context: &EngineContext,
+        command: EngineCommand,
+    ) -> Result<DeliveryOutcome, EngineError> {
+        if matches!(
+            command,
+            EngineCommand::DeliverText {
+                id: InputId::Task,
+                ..
+            }
+        ) {
+            self.submissions
+                .lock()
+                .unwrap()
+                .insert("word".into(), serde_json::json!("ok"));
+        }
+        self.fake.execute(context, command).await
+    }
+    async fn observe(&mut self, context: &EngineContext) -> Result<EngineObservation, EngineError> {
+        self.fake.observe(context).await
+    }
+    async fn close(&mut self) -> io::Result<()> {
+        self.fake.close().await
     }
 }
 #[test]

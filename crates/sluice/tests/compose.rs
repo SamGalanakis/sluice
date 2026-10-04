@@ -123,6 +123,12 @@ impl Gate {
         json!({"kind":"id","value":self.project})
     }
     fn rpc(&self, command: Value) -> CommandReply {
+        match self.try_rpc(command) {
+            Ok(reply) => reply,
+            Err(e) => panic!("command failed: {e:?}"),
+        }
+    }
+    fn try_rpc(&self, command: Value) -> Result<CommandReply, sluice_model::error::PublicError> {
         let request = json!({"protocol":1,"request_id":"compose-test","run_capability":null,"command":command});
         let mut stream = UnixStream::connect(self.home.join("coordinator.sock")).unwrap();
         stream
@@ -131,8 +137,8 @@ impl Gate {
         stream.write_all(&encode_frame(&request).unwrap()).unwrap();
         let reply: RpcReply = decode_json(&read(&mut stream)).unwrap();
         match reply.result {
-            RpcResult::Ok(v) => *v,
-            RpcResult::Error(e) => panic!("command failed: {e:?}"),
+            RpcResult::Ok(v) => Ok(*v),
+            RpcResult::Error(e) => Err(e),
         }
     }
     fn data(&self, command: Value) -> Value {
@@ -460,6 +466,14 @@ fn native_factory(engine: &str) {
     g.rpc(json!({"command":"step_submit","args":{"project":g.project,"step":"work","run":run,"outputs":{"word":"blue"},"author":"fixture"}}));
     let done = g.terminal("work");
     assert_eq!(done["status"], "succeeded", "{engine}: {done}");
+    assert_eq!(done["outputs"], json!({"word":"blue"}), "{engine}: {done}");
+    // The submission settled the step; its run stops the session and finishes on its own.
+    g.wait(|_| {
+        Checkpoint::read(&directory)
+            .ok()
+            .flatten()
+            .is_some_and(|c| c.state == State::Done)
+    });
     let checkpoint = Checkpoint::read(&directory).unwrap().unwrap();
     assert_eq!(checkpoint.internal_attempt, 2);
     assert_eq!(checkpoint.session.as_deref(), Some(session.as_str()));
@@ -588,7 +602,11 @@ fn native_factory(engine: &str) {
         let feedback_run = g.run("work");
         let failed = g.terminal("work");
         assert_eq!(failed["status"], "failed", "{failed}");
-        assert_eq!(failed["error"]["kind"], "EngineExited", "{failed}");
+        assert_eq!(
+            failed["error"]["error"], "exited_without_submit",
+            "{failed}"
+        );
+        assert_eq!(failed["error"]["session"], session.as_str(), "{failed}");
         let cp = Checkpoint::read(&g.home.join("runs").join(feedback_run))
             .unwrap()
             .unwrap();
@@ -752,9 +770,14 @@ fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {
     assert_eq!(value["status"], "succeeded", "{value}");
     assert_eq!(value["outputs"]["summary"], "fake output");
     let first = g.run("work");
-    // Done: no live or upcoming run; a retry's run gets it.
-    let done = g.say("work", "after the fact");
-    assert_eq!((done.delivery, done.run), (Delivery::NoLiveRun, None));
+    // Settled: a message to it is refused; a retry's message reaches its next run.
+    let refused = g.try_rpc(
+        json!({"command":"say","args":{"project":g.selector(),"body":"after the fact","to":"work"}}),
+    );
+    assert!(
+        matches!(&refused, Err(sluice_model::error::PublicError::Conflict { message, .. }) if message.contains("settled")),
+        "{refused:?}"
+    );
     let delivered = g
         .events()
         .into_iter()
@@ -770,7 +793,21 @@ fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {
     g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first);
     let second = g.terminal("work");
     assert_eq!(second["status"], "succeeded", "{second}");
-    assert_eq!(second["outputs"]["session"], value["outputs"]["session"]);
+    assert_eq!(second["outputs"], json!({"summary":"resumed output"}));
+    let session = |run: &str| {
+        let directory = g.home.join("runs").join(run);
+        g.wait(|_| {
+            sluice_agents::supervisor::Checkpoint::read(&directory)
+                .ok()
+                .flatten()
+                .is_some_and(|c| c.state == sluice_agents::supervisor::State::Done)
+        });
+        sluice_agents::supervisor::Checkpoint::read(&directory)
+            .unwrap()
+            .unwrap()
+            .session
+    };
+    assert_eq!(session(&g.run("work")), session(&first));
     assert!(
         g.events()
             .iter()
@@ -963,14 +1000,24 @@ print(json.dumps({'state':'OPEN','headRefOid':'fixture-sha','url':'fixture-url',
 }
 fn sequential_messages(live: bool) {
     // Ported from execution review's sequential_message_delivery probe.
-    let g = Gate::new();
-    g.script(json!({"outputs":{"summary":"done"},"wait_message":live}));
-    g.function("custom.sequential", json!({"cwd":"string"}), json!({"session":"string"}), r#"from sluice_fn import run
+    let g = Gate::configured(|g| {
+        g.env.insert("SLUICE_AGENT_SETTLE_S".into(), "0.1".into());
+        g.env.insert("SLUICE_AGENT_NUDGES".into(), "1".into());
+    });
+    // The first agent stops without submitting (submitting would settle the step); the fn
+    // continues its session with a second one, as a wrapper continues after a wall cap.
+    g.script(json!({"outputs":{"summary":"done"},"wait_message":live,"no_submit":true}));
+    g.function("custom.sequential", json!({"cwd":"string"}), json!({"session":"string"}), r#"from sluice_fn import run, AgentFailure
 import json, os, pathlib
 def main(inp, ctx):
-    result = ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'First task'})
+    try:
+        ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'First task'})
+        raise RuntimeError('the first agent was to stop without submitting')
+    except AgentFailure as failure:
+        assert failure.kind == 'ExitedWithoutSubmit', failure.kind
+        session = failure.session
     pathlib.Path(os.environ['SLUICE_FAKE_ENGINE_SCRIPT']).write_text(json.dumps({'outputs':{'summary':'done'}}))
-    result = ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'Second task', 'session':result['session']})
+    result = ctx.builtin('agent.run', {'engine':'fake', 'cwd':inp['cwd'], 'spec':'Second task', 'session':session})
     return {'session':result['session']}
 run(main)
 "#);
@@ -1063,7 +1110,7 @@ for line in sys.stdin:
             (home/'transient-ran').write_text(run)
             state['error']={'kind':'transient','message':'fixture rate limit'}
         elif not config.get('wait_message') or messages:
-            if not submitted:
+            if not submitted and not config.get('no_submit'):
                 rpc({'command':'step_submit','args':{'project':os.environ['SLUICE_PROJECT_ID'],'step':os.environ['SLUICE_STEP'],'run':run,'outputs':config.get('outputs',{}),'author':'fixture'}})
                 submitted=True
             state['error']=None;state['status']='idle';state['turns_completed']=state['turns_started'];state['progress']+=1
@@ -1220,17 +1267,22 @@ def main(inp, ctx):
     assert 'later' in plan['plan']['steps'], plan
     paused = ctx.tool('step_pause', {'steps': 'later', 'reason': 'hold'})
     assert paused['rev'] == plan['rev'] + 1 and 'preview' in paused, paused
+    said = ctx.tool('say', {'to': 'later', 'body': 'later, then'})
+    assert said['to'] == 'later' and said['thread'] == 'step-tools', said
     ok = ctx.tool('step_set_output', {'step': 'later', 'outputs': {'value': 5}, 'force': True,
                                       'reason': 'by hand'})
     assert ok == {'ok': True}, ok
+    try:
+        ctx.tool('say', {'to': 'later', 'body': 'too late'})
+        raise AssertionError('a settled step took a message')
+    except CallbackError as error:
+        assert error.error == 'conflict' and 'settled' in error.message, error.message
     log = ctx.tool('log_read', {'limit': 3})
     assert sorted(log) == ['last_seq', 'records'], log
     fns = ctx.tool('fn_list', {})
     assert any(f['name'] == 'custom.tools' for f in fns), fns
     asked = ctx.tool('ask', {'to': 'orchestrator', 'body': 'which?'})
     assert asked['thread'] == 'step-tools' and asked['delivery'] == 'delivered', asked
-    said = ctx.tool('say', {'to': 'later', 'body': 'later, then'})
-    assert said['to'] == 'later' and said['thread'] == 'step-tools', said
     try:
         ctx.tool('say', {'to': 'nobody', 'body': 'x'})
         raise AssertionError('an unknown recipient was accepted')

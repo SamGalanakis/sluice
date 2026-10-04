@@ -37,7 +37,10 @@ pub struct Limits {
     pub nudges: u32,
     pub wall: Duration,
     pub stall: Duration,
+    /// Idle time before a session with nothing to submit ends, or an unfinished one is nudged.
     pub settle: Duration,
+    /// The longer idle time before the first nudge of an engine that does not report
+    /// background work, which may still be running toward the submission.
     pub grace: Duration,
     pub poll: Duration,
     pub ready: Duration,
@@ -154,7 +157,8 @@ pub enum State {
 pub enum FailureKind {
     Transient,
     MissingSession,
-    MissingOutputs,
+    /// The agent exited, or stopped after its nudges, without a valid step_submit.
+    ExitedWithoutSubmit,
     WallCap,
     StallCap,
     ReadyTimeout,
@@ -284,6 +288,9 @@ pub struct Checkpoint {
     pub state: State,
     pub delivery: DeliveryLedger,
     pub submissions: BTreeMap<String, Value>,
+    /// Retired (a reminder to commit before finishing); checkpoints of earlier releases
+    /// still carry it.
+    #[serde(default)]
     pub reminded: bool,
     pub nudges: u32,
     pub compactions: u64,
@@ -498,12 +505,12 @@ impl Machine {
         self.checkpoint.state = State::Delivering;
         Ok(())
     }
+    /// A valid submission ends the session at once: the store settled the step with it.
     pub fn update(
         &mut self,
         now: Duration,
         o: &EngineObservation,
         background: &[String],
-        tracked: &str,
     ) -> Result<Action, AgentFailure> {
         if now >= self.limits.wall {
             return Err(failure(FailureKind::WallCap, "wall-clock cap exceeded"));
@@ -524,6 +531,17 @@ impl Machine {
         if o.session_id.as_ref().is_some_and(|s| !s.is_empty()) {
             self.checkpoint.session.clone_from(&o.session_id);
         }
+        let missing: Vec<_> = self
+            .required
+            .iter()
+            .filter(|n| !self.checkpoint.submissions.contains_key(*n))
+            .cloned()
+            .collect();
+        // The store accepts only a valid submission, so any is the agent's last word.
+        if !self.checkpoint.submissions.is_empty() && missing.is_empty() {
+            self.checkpoint.state = State::Exiting;
+            return Ok(Action::Finish);
+        }
         if self.checkpoint.delivery.uncertain() {
             return Err(failure(
                 FailureKind::UnknownAcceptance,
@@ -542,12 +560,6 @@ impl Machine {
             self.steered = false;
             self.awaiting = Some(now);
         }
-        let missing: Vec<_> = self
-            .required
-            .iter()
-            .filter(|n| !self.checkpoint.submissions.contains_key(*n))
-            .cloned()
-            .collect();
         let new_turn = o.turns_completed > self.base_turns;
         let complete = new_turn
             && missing.is_empty()
@@ -567,10 +579,18 @@ impl Machine {
             };
         }
         if o.status == EngineStatus::Exited && !(complete && !has_work) {
-            return Err(failure(
-                FailureKind::EngineExited,
-                "engine exited before completion",
-            ));
+            return Err(if missing.is_empty() {
+                failure(FailureKind::EngineExited, "engine exited before completion")
+            } else {
+                failure(
+                    FailureKind::ExitedWithoutSubmit,
+                    format!(
+                        "the agent exited without submitting {}; last message: {}",
+                        missing.join(", "),
+                        self.checkpoint.final_text
+                    ),
+                )
+            });
         }
         if o.status == EngineStatus::Starting {
             self.checkpoint.state = State::Boot;
@@ -622,7 +642,7 @@ impl Machine {
             let since = *self.dialog_since.get_or_insert(now);
             if now.saturating_sub(since) >= self.limits.dialog {
                 self.dialog_since = None;
-                return self.nudge("Nobody can answer here. Decide, or post the question with thread.post and continue the task.".into());
+                return self.nudge("Nobody can answer here. Decide, or ask the orchestrator with `sluice tool ask` (to: \"orchestrator\") and continue the task.".into());
             }
             return Ok(Action::None);
         }
@@ -669,7 +689,9 @@ impl Machine {
         }
         self.checkpoint.state = State::Idle;
         let idle = *self.idle_since.get_or_insert(now);
-        let pause = if !self.reports_waiting && self.checkpoint.nudges == 0 {
+        // Before its first nudge, an engine that does not report background work gets the
+        // grace: that work may still be running toward the submission.
+        let pause = if !complete && !self.reports_waiting && self.checkpoint.nudges == 0 {
             self.limits.grace
         } else {
             self.limits.settle
@@ -678,34 +700,18 @@ impl Machine {
             return Ok(Action::None);
         }
         if complete {
-            self.checkpoint.state = State::Finishing;
-            if !self.checkpoint.reminded && !tracked.is_empty() {
-                self.checkpoint.reminded = true;
-                let id = InputId::Reminder;
-                let text = format!(
-                    "You have uncommitted changes: {tracked}. Commit or discard them (unless your task says to leave them), then finish."
-                );
-                self.checkpoint
-                    .delivery
-                    .enqueue(id.clone(), text.clone())
-                    .map_err(invalid)?;
-                return Ok(Action::Send {
-                    id,
-                    text,
-                    steer: false,
-                });
-            }
+            // Nothing to submit: the session ends once the agent is idle.
             self.checkpoint.state = State::Exiting;
             return Ok(Action::Finish);
         }
-        self.nudge(format!("Your turn ended but these outputs are not submitted: {}. Finish and submit them with the command from your task, or explain the blocker.", missing.join(", ")))
+        self.nudge(format!("Your turn ended but these outputs are not submitted: {}. Finish and submit them with the command from your task (submitting ends your session), or explain the blocker.", missing.join(", ")))
     }
     fn nudge(&mut self, text: String) -> Result<Action, AgentFailure> {
         if self.checkpoint.nudges >= self.limits.nudges {
             return Err(failure(
-                FailureKind::MissingOutputs,
+                FailureKind::ExitedWithoutSubmit,
                 format!(
-                    "outputs missing after {} nudges; last message: {}",
+                    "the agent stopped without a valid step_submit after {} nudges; last message: {}",
                     self.checkpoint.nudges, self.checkpoint.final_text
                 ),
             ));
@@ -1124,16 +1130,11 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 .map_err(invalid)?
                 .saturating_sub(machine.checkpoint.started_ms),
         );
-        let sample_due = quiet.due(now, config.limits.quiet);
-        let mark = if o.status != EngineStatus::Busy || sample_due {
-            bounded_host(cancel, deadline, git::sample(&config.cwd)).await?
-        } else {
-            None
-        };
         if o.status == EngineStatus::Busy {
-            if sample_due {
+            if quiet.due(now, config.limits.quiet) {
+                let mark = bounded_host(cancel, deadline, git::sample(&config.cwd)).await?;
                 let cpu = crate::quiet::descendant_cpu(&snapshot.roots).map_err(invalid)?;
-                if let Some(note) = quiet.observe(now, config.limits.quiet, mark.clone(), cpu) {
+                if let Some(note) = quiet.observe(now, config.limits.quiet, mark, cpu) {
                     machine.checkpoint.notes.push(note.clone());
                     if let Err(error) =
                         tokio::time::timeout(Duration::from_secs(2), host.note(&note))
@@ -1147,12 +1148,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
         } else {
             quiet.reset();
         }
-        let action = machine.update(
-            now,
-            &o,
-            &snapshot.background_work,
-            mark.as_ref().map(|m| m.tracked.as_str()).unwrap_or(""),
-        )?;
+        let action = machine.update(now, &o, &snapshot.background_work)?;
         if let Some(session) = &machine.checkpoint.session {
             sessions.acquire(
                 &config.home,

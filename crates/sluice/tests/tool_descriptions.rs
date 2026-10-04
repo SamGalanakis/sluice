@@ -293,12 +293,8 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
         assert!(tokio::time::Instant::now() < deadline, "{status}");
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
-    f.check(
-        "step_submit",
-        json!({"project":"p","step":"work","run":run,"outputs":{"note":"half done"}}),
-    )
-    .await;
     // The message verbs return their receipt; the run speaks as its step.
+    // A settled step takes no messages, so these go while `work` runs.
     let asked = f
         .check(
             "ask",
@@ -316,6 +312,12 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     f.check(
         "messages",
         json!({"project":"p","view":"thread","thread":"step-work"}),
+    )
+    .await;
+    // Submitting settles the step, so it comes after the messages to it.
+    f.check(
+        "step_submit",
+        json!({"project":"p","step":"work","run":run,"outputs":{"note":"half done"}}),
     )
     .await;
     f.check("plan_history", json!({"project":"p"})).await;

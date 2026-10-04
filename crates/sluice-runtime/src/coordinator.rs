@@ -1404,6 +1404,13 @@ impl<H: ExecutionHost> Coordinator<H> {
         parallelism: usize,
         stop: &CancellationToken,
     ) -> Result<(), PublicError> {
+        // A live run that submitted under a release which waited for the run to end
+        // settles its step with that submission now, as one submitting today would.
+        self.writer()
+            .write(RetrySafety::Idempotent, |tx| {
+                attempts::settle_submitted(tx).map(|_| ())
+            })
+            .await?;
         let home = self.home().to_path_buf();
         let home_id = self.home_id();
         let attempts=self.reads().snapshot(move|sql|{

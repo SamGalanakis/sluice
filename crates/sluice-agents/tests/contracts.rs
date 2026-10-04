@@ -80,6 +80,12 @@ fn full_prompt_contains_header_inputs_outputs_exact_submit_identity_and_live_thr
     assert!(text.contains("`interface` (string):\napi.md\nsecond line"));
     assert!(text.contains("\"project\":\"p\",\"step\":\"work\",\"run\":\"r\""));
     assert!(text.contains("\"ready\": <boolean>"));
+    assert!(
+        text.contains(
+            "Submit only when you are finished: submitting ends your session. Submit them"
+        )
+    );
+    assert!(!text.contains("submission counts"));
     assert!(text.contains("step-work"));
     // The verbs, each with this run's identity; nothing is posted "to nobody".
     for verb in ["ask", "say", "reply"] {
@@ -563,11 +569,16 @@ struct CompositionFactory {
     admitted: Option<Arc<tokio::sync::Notify>>,
     release: Option<Arc<tokio::sync::Notify>>,
 }
-struct CompositionHost(Arc<std::sync::atomic::AtomicU32>);
+/// Cleanups so far, and whether the agent has submitted: it does once its turn is over.
+struct CompositionHost(Arc<std::sync::atomic::AtomicU32>, bool);
 impl SupervisorHost for CompositionHost {
     async fn snapshot(&mut self, _: MessageId) -> io::Result<HostSnapshot> {
         Ok(HostSnapshot {
-            submissions: BTreeMap::from([("ready".into(), serde_json::json!(true))]),
+            submissions: if self.1 {
+                BTreeMap::from([("ready".into(), serde_json::json!(true))])
+            } else {
+                BTreeMap::new()
+            },
             ..HostSnapshot::default()
         })
     }
@@ -580,7 +591,8 @@ impl SupervisorHost for CompositionHost {
     async fn note(&mut self, _: &str) -> io::Result<()> {
         Ok(())
     }
-    async fn checkpoint(&mut self, _: &Checkpoint) -> io::Result<()> {
+    async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
+        self.1 |= checkpoint.state == State::Idle;
         Ok(())
     }
     async fn cleanup(&mut self) -> io::Result<()> {
@@ -657,7 +669,7 @@ impl AgentFactory for CompositionFactory {
         Ok(AgentEnvironment {
             config,
             engine,
-            host: CompositionHost(self.cleanups.clone()),
+            host: CompositionHost(self.cleanups.clone(), false),
             prompt: ports(),
             tmux: None,
             cancel: CancellationToken::new(),

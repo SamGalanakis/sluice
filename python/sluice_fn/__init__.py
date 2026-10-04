@@ -206,6 +206,8 @@ class Context:
         return self._data("submission", {"run": self.run_id})
 
     def submit(self, outputs):
+        """Submit the step's declared outputs. A valid submission settles the step at once
+        with exactly these outputs; there is no second one."""
         return self.callback("step_submit", {"project": self.project_id, "step": self.step,
                                              "run": self.run_id, "outputs": outputs,
                                              "author": self.step})
@@ -271,7 +273,8 @@ class Context:
         if not self.outputs:
             return text
         schema = json.dumps(self.outputs, ensure_ascii=False)
-        return f"{text}\n\nDeclared outputs for run {self.run_id}: {schema}\nSubmit through the run callback."
+        return (f"{text}\n\nDeclared outputs for run {self.run_id}: {schema}\nSubmit through the run "
+                "callback. Submit only when you are finished: submitting ends your session.")
 
 
 def _uuid7():

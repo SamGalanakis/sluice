@@ -69,10 +69,16 @@ pub async fn reconcile_project<H: ExecutionHost>(
             })
             .await?;
         let copy = context.clone();
-        let (state, order) = broker
+        let (state, order, stopping) = broker
             .reads()
             .snapshot(move |sql| {
                 let state = plans::read_state(sql, project)?;
+                // A step retried after its submission settled it may still have that
+                // run stopping; its next run waits for it to finish.
+                let stopping = sql
+                    .prepare("SELECT DISTINCT a.step_id FROM attempts a JOIN steps s ON s.project_id=a.project_id AND s.step_id=a.step_id AND s.generation=a.generation WHERE a.project_id=?1 AND a.phase<>'terminal'")?
+                    .query_map([project.to_string()], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<BTreeSet<String>>>()?;
                 let mut order: Vec<_> = copy
                     .plan
                     .topological_order()
@@ -85,7 +91,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
                         .into_iter()
                         .map(|a| a.step),
                 );
-                Ok((state, order))
+                Ok((state, order, stopping))
             })
             .await
             .map_err(|e| e.into_public(true))?;
@@ -93,6 +99,7 @@ pub async fn reconcile_project<H: ExecutionHost>(
         for id in order {
             let step = &context.plan.steps()[&id];
             if state.status(&id) != StepStatus::Pending
+                || stopping.contains(id.as_str())
                 || !matches!(
                     evaluate_step(&context.plan, &state, step),
                     GateDecision::Ready

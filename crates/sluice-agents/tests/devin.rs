@@ -476,7 +476,8 @@ async fn supervisor_devin_fresh_task_delivered_once_submission_and_finish() {
     )
     .await
     .unwrap();
-    assert_eq!(result.final_text, "done");
+    // The submission ends the session at once, possibly before the turn's last words.
+    assert!(["", "done"].contains(&result.final_text.as_str()));
     assert_eq!(result.session, "fixture-devin-session");
     assert_eq!(host.submissions["word"], json!("blue"));
     assert_eq!(host.cleanups, 1);
@@ -1612,7 +1613,8 @@ async fn supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
     let root = Scratch::new();
     let opts = options(
         &root,
-        json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"busy_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]}),
+        // Submitting ends the session, so the agent submits only after its live message.
+        json!({"turns":[{"reply":"done","compact":true,"busy_ms":100},{"reply":"next","busy_ms":100},{"reply":"feedback","submit":{"word":"blue"}},{"reply":"feedback","submit":{"word":"blue"}}]}),
     );
     let mut adapter = Devin::new(opts);
     let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))

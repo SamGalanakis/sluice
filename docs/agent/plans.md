@@ -80,15 +80,22 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   type-checked where it is read.
 - The agent is told the outputs under `## Outputs you must submit`, with the exact command:
   `sluice tool step_submit '{"project": ..., "step": ..., "run": ..., "outputs": {...}}'`
-  (the `step_submit` tool). A submission that does not fit returns `invalid` listing every
-  problem, and the agent submits again; the last one counts. Each accepted one is a
-  `step.submit` log record.
-- When the agent's process ends, the submitted outputs join the step's outputs. A required
-  declared output that was never submitted fails the step, naming it.
+  (the `step_submit` tool), and: "Submit only when you are finished: submitting ends your
+  session." A submission that does not fit returns `invalid` listing every problem and
+  changes nothing; the agent fixes them and submits again.
+- A valid submission is the agent's done signal. It settles the step at once, with exactly
+  the submitted outputs as its result (a `step.submit` and a `step.status` record), its
+  dependents start right away, and the agent's session is stopped. There is no second
+  submission (`conflict`); to send the step more work, `step_retry` it with a message, which
+  reopens it as a new run.
+- A run that ends without a valid submission (its agent exited, or stopped after its
+  nudges) fails the step with `exited_without_submit`, carrying the agent's `session`.
 - Every agent function takes `session` and returns `session`: bind a later step's `session` to
   an earlier step's `session` output to continue that same agent (or `fn_call` it with the
-  session to follow up by hand). An unbound `session` may still resume the previous attempt's
-  session after a retry — the agent fns decide from the assigned messages and `prev_run`.
+  session to follow up by hand). A step with declared outputs settles on its submission, so
+  its result holds only those; a retry with a message still resumes its session (an unbound
+  `session` resumes the previous attempt's after a retry — the agent fns decide from the
+  assigned messages and `prev_run`).
 
 ## Units: the tag is the unit
 Steps tagged `unit:<name>` form **unit** `<name>`; a step carries at most one `unit:` tag. An

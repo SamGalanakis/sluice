@@ -79,11 +79,14 @@ if __name__ == "__main__":
 - `"open": true` makes it an agent block (`docs("plans")`): a step may bind extra inputs and
   declare outputs, which whoever does the work submits with `step_submit` while the step runs
   (`ctx.extra_inputs` and `ctx.outputs` below describe them; `ctx.submit(outputs)` submits from
-  the fn itself). Tell the agent both, and the command; the `agent.*` builtins show how.
+  the fn itself). A valid submission settles the step at once with exactly those outputs, so
+  submit last. Tell the agent both, the command, and "Submit only when you are finished:
+  submitting ends your session."; the `agent.*` builtins (and `ctx.header`) show how.
 - An open function can require outputs of its agent on every step: `"submits": {"summary":
   {"type": "string", "doc": "What it did"}}` in fn.json. Each step running it declares them
   as if it listed them under its `outputs` (so `step/summary` is a typed ref, and a required
-  one never submitted fails the step); they appear in `ctx.outputs` like the rest.
+  one never submitted fails the step with `exited_without_submit`); they appear in
+  `ctx.outputs` like the rest.
 - An icon tells its steps apart on the dashboard: an `icon.svg` (or `icon.png` /
   `icon.webp`, at most 256 KB) next to `fn.json`, or `"icon": "🧪"` in fn.json (at most 16
   characters); the file wins. Draw an SVG single-colour in `currentColor` on a 16×16

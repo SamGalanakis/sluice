@@ -676,7 +676,6 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
     // A run whose step binds `listen: false` does not listen.
     let r = say("quiet").await.unwrap();
     assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None));
-    // Finished: no live or upcoming run.
     b.complete(CompletionJournal {
         protocol: 1,
         identity: polled.identity.clone(),
@@ -695,8 +694,11 @@ async fn receipts_follow_durable_listening_whether_the_guardian_polls_or_watches
     })
     .await
     .unwrap();
-    let r = say("polled").await.unwrap();
-    assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None));
+    // Finished and settled: refused, not kept.
+    assert!(matches!(
+        say("polled").await,
+        Err(PublicError::Conflict { message, .. }) if message.contains("settled")
+    ));
     stop.cancel();
     server.await.unwrap().unwrap();
 }
@@ -906,6 +908,19 @@ async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedbac
             b.command(submit.clone()).await.unwrap(),
             CommandReply::Ack
         ));
+        // The submission settled the step; the run's own second one is refused, replayed or not.
+        let status: String = b
+            .reads()
+            .snapshot(move |sql| {
+                Ok(sql.query_row(
+                    "SELECT status FROM steps WHERE project_id=?1 AND step_id='work'",
+                    [p.to_string()],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(status, "succeeded");
         let callback = RpcRequest {
             protocol: 1,
             request_id: RequestId("reserved-submit".into()),
@@ -913,18 +928,20 @@ async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedbac
             command: submit.clone(),
         };
         for _ in 0..2 {
-            b.guardian(
-                C::Callback {
-                    identity: l.identity.clone(),
-                    request: Box::new(callback.clone()),
-                },
-                Some(&l.capability),
-            )
-            .await
-            .unwrap();
+            assert!(matches!(
+                b.guardian(
+                    C::Callback {
+                        identity: l.identity.clone(),
+                        request: Box::new(callback.clone()),
+                    },
+                    Some(&l.capability),
+                )
+                .await,
+                Err(PublicError::Conflict { message, .. }) if message.contains("settled")
+            ));
         }
         let submitted = b.submissions(run).await.unwrap();
-        assert_eq!(submitted.version, Some(2));
+        assert_eq!(submitted.version, Some(1));
         b.guardian(C::Claim(guardian(&l)), Some(&l.capability))
             .await
             .unwrap();
@@ -960,7 +977,7 @@ async fn current_reserved_run_accepts_submissions_before_claim_and_after_feedbac
             .await
             .is_err()
         );
-        assert_eq!(b.submissions(run).await.unwrap().version, Some(2));
+        assert_eq!(b.submissions(run).await.unwrap().version, Some(1));
         if round == 0 {
             b.command(request(json!({"command":"step_retry","args":{"project":{"kind":"id","value":p},"selection":{"steps":["work"],"tags":null},"message":"Continue with feedback","reason":"fixture","author":"fixture"}}))).await.unwrap();
         }

@@ -266,6 +266,18 @@ pub fn reserve(
     {
         return Err(plans::invalid("step is not pending"));
     }
+    if state.status(&request.step) == StepStatus::Pending {
+        let stopping: bool = tx.sql().query_row(
+            "SELECT EXISTS(SELECT 1 FROM attempts a JOIN steps s ON s.project_id=a.project_id AND s.step_id=a.step_id AND s.generation=a.generation WHERE a.project_id=?1 AND a.step_id=?2 AND a.phase<>'terminal')",
+            params![context.project.to_string(), request.step.as_str()],
+            |r| r.get(0),
+        )?;
+        if stopping {
+            return Err(plans::conflict(
+                "the step's previous run is still stopping after its submission",
+            ));
+        }
+    }
     if !matches!(
         evaluate_step(&context.plan, &state, step),
         GateDecision::Ready
@@ -680,26 +692,164 @@ pub fn step_submit(tx: &mut WriteTransaction<'_>, request: StepSubmit) -> Result
     if frozen["declared"].as_object().is_none_or(|o| o.is_empty()) {
         return Err(plans::invalid("step declares no submitted outputs"));
     }
-    check_schema(&frozen["declared"], &request.outputs)?;
-    tx.sql().execute("INSERT INTO submissions(run_id,project_id,step_id,outputs,at) VALUES (?1,?2,?3,?4,?5)
-        ON CONFLICT(run_id) DO UPDATE SET version=version+1,outputs=excluded.outputs,at=excluded.at",
-        params![id.run.to_string(),id.project.to_string(),id.step.as_str(),serde_json::to_string(&request.outputs)?,plans::now()?])?;
-    let version: i64 = tx.sql().query_row(
-        "SELECT version FROM submissions WHERE run_id=?1",
+    let submitted: bool = tx.sql().query_row(
+        "SELECT EXISTS(SELECT 1 FROM submissions WHERE run_id=?1)",
         [id.run.to_string()],
         |r| r.get(0),
+    )?;
+    if submitted {
+        return Err(plans::conflict(format!(
+            "step {} is settled: run {} already submitted its outputs, and submitting ended it",
+            id.step, id.run
+        )));
+    }
+    check_schema(&frozen["declared"], &request.outputs)?;
+    tx.sql().execute(
+        "INSERT INTO submissions(run_id,project_id,step_id,outputs,at) VALUES (?1,?2,?3,?4,?5)",
+        params![
+            id.run.to_string(),
+            id.project.to_string(),
+            id.step.as_str(),
+            serde_json::to_string(&request.outputs)?,
+            plans::now()?
+        ],
     )?;
     tx.append_record(
         Some(id.project),
         Event::StepSubmit {
             step: request.step,
             run: request.run,
-            outputs: request.outputs,
+            outputs: request.outputs.clone(),
             author: request.author,
         },
     )?;
+    settle_submission(tx, &id, &frozen, &request.outputs)?;
+    Ok(Some(1))
+}
+
+/// A valid submission is the step's result: it settles the step (its item, when
+/// scattered) at once, with exactly the submitted outputs, while the run that submitted
+/// stops and finishes later on its own.
+fn settle_submission(
+    tx: &mut WriteTransaction<'_>,
+    id: &AttemptIdentity,
+    frozen: &Value,
+    submitted: &JsonMap,
+) -> Result<()> {
+    let index: i64 = tx.sql().query_row(
+        "SELECT item_index FROM attempts WHERE attempt_id=?1",
+        [id.attempt.to_string()],
+        |r| r.get(0),
+    )?;
+    let mut outputs = submitted.clone();
+    let declared = frozen["declared"]
+        .as_object()
+        .ok_or_else(|| plans::invalid("frozen declared schema missing"))?;
+    for (name, ty) in declared {
+        if matches!(
+            Type::parse(ty).map_err(|e| plans::invalid(e.to_string()))?,
+            Type::Optional(_)
+        ) {
+            outputs
+                .0
+                .entry(name.clone())
+                .or_insert(Value::Null.try_into()?);
+        }
+    }
+    let mut schema = frozen["returns"].clone();
+    if let Some(schema) = schema.as_object_mut() {
+        schema.extend(declared.clone());
+    }
+    record_result(
+        tx,
+        id,
+        index,
+        frozen,
+        &schema,
+        &StepStatus::Succeeded,
+        &outputs,
+        None,
+    )?;
     tx.changed(Some(id.project), "status");
-    Ok(Some(version as u64))
+    Ok(())
+}
+/// Whether this run's step still waits on it for a result: the run is current and its
+/// result (its item's, when scattered) is not recorded yet.
+fn awaiting_result(tx: &WriteTransaction<'_>, id: &AttemptIdentity) -> Result<bool> {
+    if current_callback(tx, id)?.is_none_or(|phase| phase == "terminal") {
+        return Ok(false);
+    }
+    let (status, instances, index): (String, String, i64) = tx.sql().query_row(
+        "SELECT s.status,s.instances,a.item_index FROM steps s JOIN attempts a ON a.project_id=s.project_id AND a.step_id=s.step_id WHERE a.attempt_id=?1",
+        [id.attempt.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    if status != "running" {
+        return Ok(false);
+    }
+    if index < 0 {
+        return Ok(true);
+    }
+    let instances: Value = serde_json::from_str(&instances)?;
+    Ok(instances[index.to_string()]["run"] != json!(id.run))
+}
+fn required_declared(frozen: &Value) -> Result<Vec<String>> {
+    let mut required = vec![];
+    for (name, ty) in frozen["declared"]
+        .as_object()
+        .ok_or_else(|| plans::invalid("frozen declared schema missing"))?
+    {
+        if !matches!(
+            Type::parse(ty).map_err(|e| plans::invalid(e.to_string()))?,
+            Type::Optional(_)
+        ) {
+            required.push(name.clone());
+        }
+    }
+    Ok(required)
+}
+/// Settle the steps of live runs that submitted before a submission settled its step
+/// (a release that waited for the run to end); adoption calls it. Returns how many.
+pub fn settle_submitted(tx: &mut WriteTransaction<'_>) -> Result<usize> {
+    /// Project, step, attempt, run, generation, work generation, request, outputs.
+    type Submitted = (String, String, String, String, i64, i64, String, String);
+    let rows: Vec<Submitted> = {
+        let mut query = tx.sql().prepare(
+            "SELECT r.project_id,r.step_id,r.attempt_id,r.run_id,r.generation,r.work_generation,a.request,s.outputs FROM submissions s JOIN runs r USING(run_id) JOIN attempts a ON a.attempt_id=r.attempt_id WHERE a.phase<>'terminal' AND r.step_id IS NOT NULL",
+        )?;
+        query
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let parse = |e: String| StoreError::InvalidDatabase(e);
+    let mut settled = 0;
+    for (project, step, attempt, run, generation, work, frozen, outputs) in rows {
+        let id = identity_from_row(
+            project.parse().map_err(|e| parse(format!("{e}")))?,
+            step.parse().map_err(|e| parse(format!("{e}")))?,
+            attempt.parse().map_err(|e| parse(format!("{e}")))?,
+            run.parse().map_err(|e| parse(format!("{e}")))?,
+            generation,
+            work,
+        );
+        if awaiting_result(tx, &id)? {
+            let frozen: Value = serde_json::from_str(&frozen)?;
+            settle_submission(tx, &id, &frozen, &serde_json::from_str(&outputs)?)?;
+            settled += 1;
+        }
+    }
+    Ok(settled)
 }
 
 pub fn completion_target(
@@ -852,7 +1002,31 @@ pub fn complete_frozen(
         }
         return Ok(None);
     }
-    if current_callback(tx, id)?.is_none_or(|phase| phase == "terminal") {
+    let submission: Option<(i64, String)> = tx
+        .sql()
+        .query_row(
+            "SELECT version,outputs FROM submissions WHERE run_id=?1",
+            [id.run.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    // A run whose submission settled its step only finishes here: the step keeps that
+    // result, even once a retry has moved it on. A submission its step still waits on
+    // predates settling at submit, and settles as completions always did.
+    let settled = submission.is_some() && !awaiting_result(tx, id)?;
+    if settled {
+        let phase: Option<String> = tx
+            .sql()
+            .query_row(
+                "SELECT phase FROM attempts WHERE attempt_id=?1",
+                [id.attempt.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if phase.is_none_or(|phase| phase == "terminal") {
+            return Ok(None);
+        }
+    } else if current_callback(tx, id)?.is_none_or(|phase| phase == "terminal") {
         return Ok(None);
     }
     if context.project != id.project {
@@ -874,18 +1048,11 @@ pub fn complete_frozen(
     }
     let (frozen,index,registered,cancelled): (String,i64,Option<String>,bool) = tx.sql().query_row("SELECT a.request,a.item_index,r.completion_action,a.cancel_requested FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1",[id.run.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
     let frozen: Value = serde_json::from_str(&frozen)?;
-    let submission: Option<(i64, String)> = tx
-        .sql()
-        .query_row(
-            "SELECT version,outputs FROM submissions WHERE run_id=?1",
-            [id.run.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
     if request.submission_version != submission.as_ref().map(|(version, _)| *version as u64) {
         return Err(plans::conflict("completion submission version changed"));
     }
     let mut outputs = request.outputs;
+    let submitted = submission.is_some();
     if let Some((_, submitted)) = submission {
         let submitted: JsonMap = serde_json::from_str(&submitted)?;
         // Returned values override submitted values, as the existing fn contract does.
@@ -933,6 +1100,42 @@ pub fn complete_frozen(
                 .or_insert(Value::Null.try_into()?);
         }
     }
+    // Required declared outputs nobody submitted (or returned): the work stopped first.
+    let unsubmitted = required_declared(&frozen)?
+        .into_iter()
+        .filter(|name| !outputs.0.contains_key(name))
+        .collect::<Vec<_>>();
+    if !submitted && !unsubmitted.is_empty() && !cancelled {
+        let session = || {
+            outputs
+                .0
+                .get("session")
+                .and_then(|v| v.as_value().as_str())
+                .map(str::to_owned)
+        };
+        match &error {
+            None => {
+                error = Some(PublicError::ExitedWithoutSubmit {
+                    message: format!(
+                        "the run finished without submitting {}",
+                        unsubmitted.join(", ")
+                    ),
+                    session: session(),
+                });
+            }
+            Some(PublicError::AgentFailure {
+                kind,
+                message,
+                session,
+            }) if kind == "ExitedWithoutSubmit" => {
+                error = Some(PublicError::ExitedWithoutSubmit {
+                    message: message.clone(),
+                    session: session.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
     let validation = check_schema(&schema, &outputs);
     let rejected = !cancelled && matches!(request.kind, CompletionKind::Rejected { .. });
     if error.is_none()
@@ -954,94 +1157,20 @@ pub fn complete_frozen(
         "UPDATE runs SET completion_id=?2,finished_at=?3,completion_ack=1 WHERE run_id=?1",
         params![id.run.to_string(), request.completion_id, at],
     )?;
-    let state = plans::read_state(tx.sql(), id.project)?;
-    let mut step_status = status.clone();
-    let mut step_outputs = outputs.clone();
-    let mut step_error = error.clone();
-    if index >= 0 {
-        let (instances, total): (String, i64) = tx.sql().query_row(
-            "SELECT instances,total FROM steps WHERE project_id=?1 AND step_id=?2",
-            params![id.project.to_string(), id.step.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        let mut instances: Value = serde_json::from_str(&instances)?;
-        instances[index.to_string()] = json!({"status":status,"outputs":outputs,"error":error,"run":id.run,"inputs":frozen["inputs"]});
-        let done = instances
-            .as_object()
-            .expect("instances object")
-            .values()
-            .filter(|v| v["status"] == "succeeded" || v["status"] == "failed")
-            .count() as u64;
-        if done < total as u64 {
-            step_status = StepStatus::Running;
-        } else {
-            let failed = instances
-                .as_object()
-                .expect("instances object")
-                .values()
-                .find(|v| v["status"] == "failed");
-            step_status = if failed.is_some() {
-                StepStatus::Failed
-            } else {
-                StepStatus::Succeeded
-            };
-            step_error = failed
-                .map(|v| serde_json::from_value(v["error"].clone()))
-                .transpose()?;
-            step_outputs = JsonMap::default();
-            for name in schema
-                .as_object()
-                .ok_or_else(|| plans::invalid("frozen schema is not an object"))?
-                .keys()
-            {
-                let values: Vec<Value> = (0..total)
-                    .map(|i| instances[i.to_string()]["outputs"][name].clone())
-                    .collect();
-                step_outputs
-                    .0
-                    .insert(name.clone(), Value::Array(values).try_into()?);
-            }
-        }
-        tx.sql().execute(
-            "UPDATE steps SET instances=?3,done=?4 WHERE project_id=?1 AND step_id=?2",
-            params![
-                id.project.to_string(),
-                id.step.as_str(),
-                instances.to_string(),
-                plans::sql_counter(done)?
-            ],
-        )?;
-    }
-    let mut result = None;
-    if step_status != StepStatus::Running {
-        tx.sql().execute("UPDATE steps SET status=?3,outputs=?4,error=?5,manual=0,result_id=NULL WHERE project_id=?1 AND step_id=?2",params![id.project.to_string(),id.step.as_str(),plans::status_text(&step_status),serde_json::to_string(&step_outputs)?,step_error.as_ref().map(serde_json::to_string).transpose()?])?;
-        let effective: JsonMap = serde_json::from_value(frozen["effective_inputs"].clone())?;
-        result = Some(plans::snapshot_result(
+    let result = if settled {
+        None
+    } else {
+        record_result(
             tx,
-            id.project,
-            &id.step,
-            Some(id.attempt),
-            Some(&effective),
-        )?);
-        plans::status_record(
-            tx,
-            id.project,
-            &id.step,
-            state.status(&id.step),
-            step_status,
-            step_error,
-        )?;
-    }
-    if result.is_none() {
-        plans::status_record(
-            tx,
-            id.project,
-            &id.step,
-            StepStatus::Running,
-            StepStatus::Running,
-            None,
-        )?;
-    }
+            id,
+            index,
+            &frozen,
+            &schema,
+            &status,
+            &outputs,
+            error.as_ref(),
+        )?
+    };
     hooks.release(tx, id)?;
     let action = if let Some(registered) = registered {
         let registered: Value = serde_json::from_str(&registered)?;
@@ -1100,6 +1229,110 @@ pub fn complete_frozen(
     )?;
     tx.changed(Some(id.project), "status");
     Ok(Some(outcome))
+}
+/// Record a run's result on its step: the step's own, or its item's when scattered (the
+/// step settles once every item has). Returns the step's new result when it settled.
+#[allow(clippy::too_many_arguments)]
+fn record_result(
+    tx: &mut WriteTransaction<'_>,
+    id: &AttemptIdentity,
+    index: i64,
+    frozen: &Value,
+    schema: &Value,
+    status: &StepStatus,
+    outputs: &JsonMap,
+    error: Option<&PublicError>,
+) -> Result<Option<ResultId>> {
+    let state = plans::read_state(tx.sql(), id.project)?;
+    let mut step_status = status.clone();
+    let mut step_outputs = outputs.clone();
+    let mut step_error = error.cloned();
+    if index >= 0 {
+        let (instances, total): (String, i64) = tx.sql().query_row(
+            "SELECT instances,total FROM steps WHERE project_id=?1 AND step_id=?2",
+            params![id.project.to_string(), id.step.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let mut instances: Value = serde_json::from_str(&instances)?;
+        instances[index.to_string()] = json!({"status":status,"outputs":outputs,"error":error,"run":id.run,"inputs":frozen["inputs"]});
+        let done = instances
+            .as_object()
+            .expect("instances object")
+            .values()
+            .filter(|v| v["status"] == "succeeded" || v["status"] == "failed")
+            .count() as u64;
+        if done < total as u64 {
+            step_status = StepStatus::Running;
+        } else {
+            let failed = instances
+                .as_object()
+                .expect("instances object")
+                .values()
+                .find(|v| v["status"] == "failed");
+            step_status = if failed.is_some() {
+                StepStatus::Failed
+            } else {
+                StepStatus::Succeeded
+            };
+            step_error = failed
+                .map(|v| serde_json::from_value(v["error"].clone()))
+                .transpose()?;
+            step_outputs = JsonMap::default();
+            for name in schema
+                .as_object()
+                .ok_or_else(|| plans::invalid("frozen schema is not an object"))?
+                .keys()
+            {
+                let values: Vec<Value> = (0..total)
+                    .map(|i| instances[i.to_string()]["outputs"][name].clone())
+                    .collect();
+                step_outputs
+                    .0
+                    .insert(name.clone(), Value::Array(values).try_into()?);
+            }
+        }
+        tx.sql().execute(
+            "UPDATE steps SET instances=?3,done=?4 WHERE project_id=?1 AND step_id=?2",
+            params![
+                id.project.to_string(),
+                id.step.as_str(),
+                instances.to_string(),
+                plans::sql_counter(done)?
+            ],
+        )?;
+    }
+    let mut result = None;
+    if step_status != StepStatus::Running {
+        tx.sql().execute("UPDATE steps SET status=?3,outputs=?4,error=?5,manual=0,result_id=NULL WHERE project_id=?1 AND step_id=?2",params![id.project.to_string(),id.step.as_str(),plans::status_text(&step_status),serde_json::to_string(&step_outputs)?,step_error.as_ref().map(serde_json::to_string).transpose()?])?;
+        let effective: Option<JsonMap> =
+            serde_json::from_value(frozen["effective_inputs"].clone())?;
+        result = Some(plans::snapshot_result(
+            tx,
+            id.project,
+            &id.step,
+            Some(id.attempt),
+            effective.as_ref(),
+        )?);
+        plans::status_record(
+            tx,
+            id.project,
+            &id.step,
+            state.status(&id.step),
+            step_status,
+            step_error,
+        )?;
+    }
+    if result.is_none() {
+        plans::status_record(
+            tx,
+            id.project,
+            &id.step,
+            StepStatus::Running,
+            StepStatus::Running,
+            None,
+        )?;
+    }
+    Ok(result)
 }
 fn apply_action(
     tx: &mut WriteTransaction<'_>,

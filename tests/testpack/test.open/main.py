@@ -2,7 +2,8 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Submit through the Rust run capability, including invalid and repeated submissions."""
+"""Submit through the Rust run capability, including invalid and repeated submissions (a
+repeated one is refused once the first has settled the step)."""
 from sluice_fn import CallbackError, run
 
 

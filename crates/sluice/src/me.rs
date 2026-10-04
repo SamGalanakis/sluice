@@ -377,6 +377,7 @@ fn build(
         "submit": {
             "outputs": outputs,
             "command": format!("sluice tool step_submit '{args}'"),
+            "note": sluice_agents::prompt::SUBMIT_ENDS_SESSION,
         },
         "thread": thread,
         "ask": format!("sluice tool ask '{ask}'"),
@@ -624,6 +625,10 @@ pub fn render(context: &Value) -> String {
         lines.push(format!(
             "  {}",
             context["submit"]["command"].as_str().unwrap_or("")
+        ));
+        lines.push(format!(
+            "  {}",
+            context["submit"]["note"].as_str().unwrap_or("")
         ));
     }
     lines.push(format!(
