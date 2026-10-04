@@ -422,46 +422,36 @@ pub fn guard_home(path: &Path, protected: &Path) -> Result<PathBuf, PublicError>
 
 /// Resolve a home or a path in one. In test mode ([`test_mode`]) it must be a
 /// scratch path: the live installation's selected home and everything under it
-/// are refused.
+/// are refused ([`refuse_live_home`] for the account in the passwd entry, so a
+/// test that points `HOME` at a scratch account still cannot reach the real one).
 pub fn guard_scratch_home(path: &Path) -> Result<PathBuf, PublicError> {
     let resolved = resolve_path(path)?;
-    if test_mode() {
-        for live in live_homes()? {
-            guard_home(&resolved, &live)?;
-        }
+    if test_mode()
+        && let Some(account) = passwd_home()
+    {
+        refuse_live_home(&resolved, &account)?;
     }
     Ok(resolved)
 }
 
-/// The homes the account's live installations select. The live installation is
-/// `.local/share/sluice/install` under the account's home, looked up under both
-/// `$HOME` and the passwd entry so a test that points `HOME` elsewhere still sees
-/// the real one. `SLUICE_INSTALL_DIR` is not consulted: tests point it at scratch.
-fn live_homes() -> Result<Vec<PathBuf>, PublicError> {
-    let mut accounts: Vec<PathBuf> = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .into_iter()
-        .collect();
-    accounts.extend(passwd_home());
-    accounts.dedup();
-    let mut homes = Vec::new();
-    for account in accounts {
-        let selection = account.join(".local/share/sluice/install/selection.json");
-        let bytes = match fs::read(&selection) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(storage(e)),
-        };
-        // Fail closed: a selection this guard cannot read could name any home.
-        let home = serde_json::from_slice::<serde_json::Value>(&bytes)
-            .ok()
-            .and_then(|value| value["home_path"].as_str().map(PathBuf::from))
-            .ok_or_else(|| PublicError::Storage {
-                message: format!("unreadable live selection {}", selection.display()),
-            })?;
-        homes.push(home);
-    }
-    Ok(homes)
+/// Refuse `path` when it is, or is under, the home that `account`'s live
+/// installation (`.local/share/sluice/install`) selects. `SLUICE_INSTALL_DIR` is
+/// not consulted: tests point it at scratch installations.
+pub fn refuse_live_home(path: &Path, account: &Path) -> Result<PathBuf, PublicError> {
+    let selection = account.join(".local/share/sluice/install/selection.json");
+    let bytes = match fs::read(&selection) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return resolve_path(path),
+        Err(e) => return Err(storage(e)),
+    };
+    // Fail closed: a selection this guard cannot read could name any home.
+    let live = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| value["home_path"].as_str().map(PathBuf::from))
+        .ok_or_else(|| PublicError::Storage {
+            message: format!("unreadable live selection {}", selection.display()),
+        })?;
+    guard_home(path, &live)
 }
 fn passwd_home() -> Option<PathBuf> {
     let uid = rustix::process::getuid().as_raw().to_string();

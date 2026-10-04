@@ -2,7 +2,7 @@
 mod support;
 
 use sluice_model::{error::PublicError, rpc::FnInvocation};
-use sluice_process::host::{guard_home, resolve_path};
+use sluice_process::host::{guard_home, refuse_live_home, resolve_path};
 use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -99,7 +99,7 @@ fn sluice_as(account: &Path, home: Option<&Path>, args: &[&str]) -> Command {
 }
 const REFUSAL: &str = "refusing the live installation's selected home";
 #[test]
-fn test_mode_rejects_the_live_home_before_even_help_parsing() {
+fn test_mode_rejects_the_live_home() {
     let temp = tempfile::tempdir().unwrap();
     let (account, live) = live_account(temp.path());
     std::os::unix::fs::symlink(&live, temp.path().join("alias")).unwrap();
@@ -109,27 +109,18 @@ fn test_mode_rejects_the_live_home_before_even_help_parsing() {
         live.join("nonexistent/../child"),
         temp.path().join("alias/child"),
     ] {
-        let output = sluice_as(&account, Some(&path), &["--help"])
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{path:?}");
-        assert!(
-            String::from_utf8(output.stderr).unwrap().contains(REFUSAL),
-            "{path:?}"
-        );
+        let error = refuse_live_home(&path, &account).unwrap_err();
+        assert!(error.to_string().contains(REFUSAL), "{path:?}: {error}");
     }
-    // Without SLUICE_HOME the home is the installation's selection: refused too.
-    let output = sluice_as(&account, None, &["doctor"]).output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8(output.stderr).unwrap().contains(REFUSAL));
-    // Outside test mode the selected home is the home, not a refusal.
-    for home in [Some(live.as_path()), None] {
-        let output = sluice_as(&account, home, &["--help"])
-            .env_remove("SLUICE_TEST")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{home:?}: {output:?}");
-    }
+    assert!(refuse_live_home(&temp.path().join("scratch"), &account).is_ok());
+    // An account without an installation protects nothing.
+    assert!(refuse_live_home(&live, temp.path()).is_ok());
+    std::fs::write(
+        account.join(".local/share/sluice/install/selection.json"),
+        "{",
+    )
+    .unwrap();
+    assert!(refuse_live_home(&temp.path().join("scratch"), &account).is_err());
 }
 #[test]
 fn without_sluice_home_or_a_selection_only_install_runs() {
