@@ -159,7 +159,7 @@ async fn stream(
                     threads::load(&state.dashboard.reads, project, view(&path), query.thread)
                         .await?;
                 let nav = super::NavView::new(&page.nav, project, &page.title().to_lowercase())?;
-                Ok(Some(RenderedBatch {
+                Ok(RenderedBatch {
                     version: page.version(),
                     regions: vec![
                         PatchRegion::new("messages-view", page.body()?),
@@ -169,7 +169,7 @@ async fn stream(
                                 .map_err(threads::render_error)?,
                         ),
                     ],
-                }))
+                })
             }
         },
         version,

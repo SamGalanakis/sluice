@@ -369,7 +369,7 @@ fn stream(
             async move {
                 let page = load(&state.reads, project, query).await?;
                 let nav = NavView::new(&page.nav, project, "log")?;
-                Ok(Some(RenderedBatch {
+                Ok(RenderedBatch {
                     version: page.version(),
                     regions: vec![
                         PatchRegion::new("log-view", page.body()?),
@@ -379,7 +379,7 @@ fn stream(
                                 .map_err(super::threads::render_error)?,
                         ),
                     ],
-                }))
+                })
             }
         },
         version,

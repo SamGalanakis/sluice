@@ -115,7 +115,7 @@ async fn router_and_facade_read_a_fixture_store_and_render_first_load_without_a_
         ReadPool::open(home.path(), 1).unwrap(),
         Arc::new(EmptyCatalog),
     );
-    let snapshot = state.snapshot(None).await.unwrap().unwrap();
+    let snapshot = state.snapshot(None).await.unwrap();
     assert_eq!(snapshot.projects.len(), 1);
     assert_eq!(snapshot.projects[0].name, "fixture");
     let router = dashboard_router(state);
@@ -138,7 +138,7 @@ async fn router_and_facade_read_a_fixture_store_and_render_first_load_without_a_
     }
 }
 #[tokio::test]
-async fn a_registry_that_changes_during_the_snapshot_defers_the_batch() {
+async fn a_catalog_that_changes_on_every_read_is_read_once_per_snapshot() {
     struct Changing(std::sync::atomic::AtomicUsize);
     impl CatalogSource for Changing {
         fn catalog(
@@ -160,7 +160,9 @@ async fn a_registry_that_changes_during_the_snapshot_defers_the_batch() {
         ReadPool::open(home.path(), 1).unwrap(),
         Arc::new(Changing(std::sync::atomic::AtomicUsize::new(0))),
     );
-    assert!(state.snapshot(None).await.unwrap().is_none());
+    // Each snapshot renders the one catalog it read; a change never defers or fails it.
+    assert_eq!(state.snapshot(None).await.unwrap().functions.version, "0");
+    assert_eq!(state.snapshot(None).await.unwrap().functions.version, "1");
 }
 #[tokio::test]
 async fn display_preferences_validate_cookies_and_empty_scope_stays_global() {
@@ -233,15 +235,15 @@ async fn runner_line_follows_the_scheduler_lease_and_is_versioned() {
             .to_owned()
     };
     // No loop holds the lease: nothing new starts, and the home page says so.
-    let stopped = state.snapshot(None).await.unwrap().unwrap();
+    let stopped = state.snapshot(None).await.unwrap();
     assert!(stopped.runner_stopped);
     assert!(render(&stopped).contains("Runner stopped"));
     lease(Some("loop")).await.unwrap();
-    let running = state.snapshot(None).await.unwrap().unwrap();
+    let running = state.snapshot(None).await.unwrap();
     assert!(!running.runner_stopped);
     assert!(!render(&running).contains("Runner stopped"));
     assert_ne!(stopped.version(), running.version());
     // The holder's connection closing releases the lease.
     lease(None).await.unwrap();
-    assert!(state.snapshot(None).await.unwrap().unwrap().runner_stopped);
+    assert!(state.snapshot(None).await.unwrap().runner_stopped);
 }

@@ -228,28 +228,41 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
                     || (settings_response && v.as_bytes().starts_with(b"text/html"))
             })
     {
-        let status = response.status();
-        let (parts, body) = response.into_parts();
-        let text = to_bytes(body, 64 * 1024)
-            .await
-            .ok()
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_else(|| status.to_string());
-        let mut error = if status == StatusCode::NOT_FOUND {
-            error_response(PublicError::NotFound { message: text })
-        } else if status.is_server_error() {
-            error_response(PublicError::Storage { message: text })
-        } else {
-            status_error(status, text)
-        };
-        *error.headers_mut() = parts.headers;
-        error.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        response = error;
+        response = error_json(response).await;
     }
     response.extensions_mut().insert(Arc::new(permit));
+    response
+}
+/// A handler's non-JSON error as the shared JSON error, keeping its status and headers. Its
+/// body is the message; an empty one is named by its status, never left blank.
+pub async fn error_json(response: Response) -> Response {
+    let status = response.status();
+    let (parts, body) = response.into_parts();
+    let text = to_bytes(body, 64 * 1024)
+        .await
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).trim().to_owned())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| {
+            status
+                .canonical_reason()
+                .unwrap_or(status.as_str())
+                .to_owned()
+        });
+    let error = match status {
+        StatusCode::NOT_FOUND => PublicError::NotFound { message: text },
+        StatusCode::SERVICE_UNAVAILABLE => PublicError::Busy {
+            message: text,
+            retryable: true,
+        },
+        status if status.is_server_error() => PublicError::Storage { message: text },
+        _ => PublicError::BadRequest { message: text },
+    };
+    let mut response = (status, axum::Json(error)).into_response();
+    let json = response.headers()[header::CONTENT_TYPE].clone();
+    *response.headers_mut() = parts.headers;
+    response.headers_mut().insert(header::CONTENT_TYPE, json);
+    response.headers_mut().remove(header::CONTENT_LENGTH);
     response
 }
 async fn name_redirect(state: &HttpState, path: &str, query: Option<&str>) -> Option<Response> {

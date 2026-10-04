@@ -355,12 +355,12 @@ pub fn load_detail(
     project: ProjectId,
     step: &mut StepView,
 ) -> sluice_store::Result<()> {
-    let (manual,total,done,revision): (bool,Option<i64>,i64,i64) = c.query_row("SELECT manual,total,done,(SELECT rev FROM plans WHERE project_id=?1) FROM steps WHERE project_id=?1 AND step_id=?2", (project.to_string(),step.id.as_str()), |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    let (manual,total,done,revision): (bool,Option<i64>,i64,i64) = c.prepare_cached("SELECT manual,total,done,(SELECT rev FROM plans WHERE project_id=?1) FROM steps WHERE project_id=?1 AND step_id=?2")?.query_row((project.to_string(),step.id.as_str()), |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
     step.manual = manual;
     step.total = total.map(|n| n as usize);
     step.done = done as usize;
     step.revision = revision as u64;
-    let mut q = c.prepare("SELECT r.run_id,coalesce(r.started_at,r.created_at),coalesce(r.finished_at,''),coalesce(r.result,''),coalesce(s.session_id,''),coalesce(s.engine,''),a.request FROM runs r JOIN attempts a USING(attempt_id) LEFT JOIN sessions s USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 ORDER BY r.created_at,r.run_id")?;
+    let mut q = c.prepare_cached("SELECT r.run_id,coalesce(r.started_at,r.created_at),coalesce(r.finished_at,''),coalesce(r.result,''),coalesce(s.session_id,''),coalesce(s.engine,''),a.request FROM runs r JOIN attempts a USING(attempt_id) LEFT JOIN sessions s USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 ORDER BY r.created_at,r.run_id")?;
     let mut rows = q.query((project.to_string(), step.id.as_str()))?;
     while let Some(r) = rows.next()? {
         let id: String = r.get(0)?;
@@ -406,8 +406,8 @@ pub fn load_detail(
             }
         }
     }
-    (step.messages,step.awaiting) = c.query_row("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2", (project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
-    let mut q = c.prepare("SELECT sub.outputs FROM submissions sub JOIN runs r USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL ORDER BY r.created_at DESC LIMIT 1")?;
+    (step.messages,step.awaiting) = c.prepare_cached("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2")?.query_row((project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
+    let mut q = c.prepare_cached("SELECT sub.outputs FROM submissions sub JOIN runs r USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL ORDER BY r.created_at DESC LIMIT 1")?;
     use rusqlite::OptionalExtension;
     let submitted: Option<String> = q
         .query_row((project.to_string(), step.id.as_str()), |r| r.get(0))
@@ -483,8 +483,7 @@ async fn execute_action(
             .into_response();
     };
     let view = match board::snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await {
-        Ok(Some((_, view))) => view,
-        Ok(None) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Ok((_, view)) => view,
         Err(e) => return board::error_response(e),
     };
     if view.revision != form.revision {
@@ -541,21 +540,12 @@ pub async fn step_page(
     Path((project, id)): Path<(ProjectId, StepId)>,
     headers: HeaderMap,
 ) -> Response {
-    match board::snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await {
-        Ok(Some((shared, view))) => {
-            let Some(step) = view
-                .units
-                .iter()
-                .flat_map(|u| &u.steps)
-                .find(|s| s.id == id)
-            else {
-                return StatusCode::NOT_FOUND.into_response();
-            };
-            let nav = match NavView::new(&shared, Some(project), "plan") {
-                Ok(n) => n,
-                Err(e) => return board::error_response(e),
-            };
-            let html = step.page_body().and_then(|body| {
+    let page = async {
+        let (shared, _, step) =
+            board::step_snapshot(&state, project, registry.as_ref().map(|r| &r.0), &id).await?;
+        let nav = NavView::new(&shared, Some(project), "plan")?;
+        step.page_body()
+            .and_then(|body| {
                 super::render_layout(
                     id.as_str(),
                     &body,
@@ -565,13 +555,11 @@ pub async fn step_page(
                     "",
                     &step.href(),
                 )
-            });
-            match html {
-                Ok(html) => Html(html.as_str().to_owned()).into_response(),
-                Err(e) => board::error_response(render_error(e)),
-            }
-        }
-        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            })
+            .map_err(render_error)
+    };
+    match page.await {
+        Ok(html) => Html(html.0).into_response(),
         Err(e) => board::error_response(e),
     }
 }
@@ -588,26 +576,15 @@ pub async fn step_stream(
         let id = id.clone();
         let registry = registry.clone();
         async move {
-            let Some((_, view)) =
-                board::snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?
-            else {
-                return Ok(None);
-            };
-            let step = view
-                .units
-                .iter()
-                .flat_map(|u| &u.steps)
-                .find(|s| s.id == id)
-                .ok_or_else(|| PublicError::NotFound {
-                    message: "step not found".into(),
-                })?;
-            Ok(Some(RenderedBatch {
+            let (_, _, step) =
+                board::step_snapshot(&state, project, registry.as_ref().map(|r| &r.0), &id).await?;
+            Ok(RenderedBatch {
                 version: step.version(),
                 regions: vec![PatchRegion::new(
                     "step-detail",
                     step.body().map_err(render_error)?,
                 )],
-            }))
+            })
         }
     };
     Sse::new(streams::page_events(

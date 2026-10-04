@@ -312,11 +312,6 @@ impl ProjectView {
     pub fn edges_json(&self) -> String {
         serde_json::to_string(&self.relations).expect("typed relations serialize")
     }
-    pub fn version(&self, shared: &DashboardSnapshot) -> String {
-        sluice_store::artifacts::fingerprint(
-            &serde_json::to_vec(&(self, shared)).expect("views serialize"),
-        )
-    }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ProjectTemplate {
             view: self,
@@ -324,13 +319,34 @@ impl ProjectView {
             board_js_url: super::asset_url("board.js"),
         })
     }
+    /// The part of the body a stream patches: everything before the drawer.
     pub fn region(&self) -> Result<TrustedHtml, askama::Error> {
-        let body = self.body()?;
+        Ok(Self::board_region(&self.body()?))
+    }
+    fn board_region(body: &TrustedHtml) -> TrustedHtml {
         let end = body
             .as_str()
             .find("<sluice-drawer")
             .expect("owned template drawer boundary");
-        Ok(TrustedHtml::owned(body.as_str()[..end].trim().to_owned()))
+        TrustedHtml::owned(body.as_str()[..end].trim().to_owned())
+    }
+    /// The page body and the batch its stream patches: the board region and the nav,
+    /// versioned by that HTML, so the page and its stream agree while nothing shown changes.
+    pub fn draw(
+        &self,
+        shared: &DashboardSnapshot,
+        viewer: &Viewer,
+    ) -> Result<(TrustedHtml, RenderedBatch), PublicError> {
+        let nav = NavView::new(shared, Some(self.project.id), "plan")?;
+        let body = self.body().map_err(render_error)?;
+        let batch = RenderedBatch::new(vec![
+            PatchRegion::new("project-board", Self::board_region(&body)),
+            PatchRegion::new(
+                "top-nav",
+                super::render_nav(&nav, viewer, &self.href()).map_err(render_error)?,
+            ),
+        ]);
+        Ok((body, batch))
     }
     pub fn render(
         &self,
@@ -338,13 +354,14 @@ impl ProjectView {
         viewer: &Viewer,
     ) -> Result<TrustedHtml, PublicError> {
         let nav = NavView::new(shared, Some(self.project.id), "plan")?;
+        let (body, batch) = self.draw(shared, viewer)?;
         super::render_layout(
             &self.project.name,
-            &self.body().map_err(render_error)?,
+            &body,
             &nav,
             viewer,
             &format!("{}/stream?{}", self.href(), self.query),
-            &self.version(shared),
+            &batch.version,
             &self.href(),
         )
         .map_err(render_error)
@@ -390,14 +407,62 @@ impl SignatureProvider for CatalogSignatures<'_> {
         Some(sig)
     }
 }
-/// Load the shared nav and board in a single caller-owned transaction. The
-/// signature provider must be the registry's exact compiled signatures.
+/// Each project's compiled plan, kept while its stored document and the signatures it was
+/// compiled against stay the same: compiling a large plan costs more than the rest of its page.
+#[derive(Clone, Default)]
+pub struct PlanCache(std::sync::Arc<std::sync::Mutex<BTreeMap<ProjectId, CompiledPlan>>>);
+struct CompiledPlan {
+    signatures: String,
+    doc: String,
+    plan: std::sync::Arc<Plan>,
+}
+impl PlanCache {
+    /// The plan `doc` compiled against `provider`, whose version is `signatures`.
+    fn compile(
+        &self,
+        project: ProjectId,
+        doc: String,
+        signatures: &str,
+        provider: &impl SignatureProvider,
+    ) -> Result<std::sync::Arc<Plan>, PublicError> {
+        let held = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(compiled) = held.get(&project)
+            && compiled.signatures == signatures
+            && compiled.doc == doc
+        {
+            return Ok(compiled.plan.clone());
+        }
+        drop(held);
+        let plan = std::sync::Arc::new(Plan::parse_json(doc.as_bytes(), provider).map_err(
+            |e| PublicError::Invalid {
+                message: "stored plan cannot be compiled".into(),
+                errors: e.into_iter().map(|e| e.to_string()).collect(),
+            },
+        )?);
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            project,
+            CompiledPlan {
+                signatures: signatures.to_owned(),
+                doc,
+                plan: plan.clone(),
+            },
+        );
+        Ok(plan)
+    }
+}
+/// Load the board and its compiled plan in a single caller-owned transaction. The signature
+/// provider must be the registry's exact compiled signatures, `signatures` its version. Every
+/// step gets what its card shows; `detail` also gets its runs, thread and submissions (its
+/// page).
 pub fn load_board(
     c: &Connection,
     shared: &DashboardSnapshot,
     project: ProjectId,
-    signatures: &impl SignatureProvider,
-) -> sluice_store::Result<ProjectView> {
+    plans: &PlanCache,
+    signatures: &str,
+    provider: &impl SignatureProvider,
+    detail: Option<&StepId>,
+) -> sluice_store::Result<(ProjectView, std::sync::Arc<Plan>)> {
     let summary = shared
         .projects
         .iter()
@@ -410,10 +475,7 @@ pub fn load_board(
         [project.to_string()],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let plan = Plan::parse_json(doc.as_bytes(), signatures).map_err(|e| PublicError::Invalid {
-        message: "stored plan cannot be compiled".into(),
-        errors: e.into_iter().map(|e| e.to_string()).collect(),
-    })?;
+    let plan = plans.compile(project, doc, signatures, provider)?;
     let mut state = sluice_store::plans::read_state(c, project)?;
     for (id, step) in plan.steps() {
         if state.status(id) == StepStatus::Pending
@@ -433,24 +495,74 @@ pub fn load_board(
         }
     }
     let mut board = ProjectView::new(summary.clone(), &plan, &state, revision as u64);
+    let mut last = last_messages(c, project, &board)?;
+    // What a card shows; a step's runs, thread and submissions are its page's (load_detail).
+    let mut cards = BTreeMap::new();
+    let mut rows = c.prepare_cached("SELECT step_id,manual,total,done FROM steps WHERE project_id=?1")?;
+    let mut found = rows.query([project.to_string()])?;
+    while let Some(r) = found.next()? {
+        let (manual, total, done): (bool, Option<i64>, i64) = (r.get(1)?, r.get(2)?, r.get(3)?);
+        cards.insert(r.get::<_, String>(0)?, (manual, total, done));
+    }
     for unit in &mut board.units {
-        let last: Option<(String, String)> = c.query_row("SELECT body,at FROM messages WHERE project_id=?1 AND (\"from\" IN (SELECT step_id FROM steps WHERE project_id=?1 AND coalesce(unit,step_id)=?2) OR \"to\" IN (SELECT step_id FROM steps WHERE project_id=?1 AND coalesce(unit,step_id)=?2) OR thread IN (SELECT 'step-'||step_id FROM steps WHERE project_id=?1 AND coalesce(unit,step_id)=?2)) ORDER BY id DESC LIMIT 1", (project.to_string(), unit.id.as_str()), |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
-        if let Some((message, at)) = last {
+        if let Some((message, at)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
         }
-        for step in &mut unit.steps {
-            super::step::load_detail(c, project, step)?;
+        for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
+            if let Some((manual, total, done)) = cards.get(step.id.as_str()) {
+                step.manual = *manual;
+                step.total = total.map(|n| n as usize);
+                step.done = *done as usize;
+            }
+            step.revision = revision as u64;
         }
-        for row in &mut unit.rows {
-            for step in row {
-                if let Some(detail) = unit.steps.iter().find(|s| s.id == step.id) {
-                    *step = detail.clone();
-                }
+        if let Some(id) = detail
+            && let Some(step) = unit.steps.iter_mut().find(|s| &s.id == id)
+        {
+            super::step::load_detail(c, project, step)?;
+            for drawn in unit.rows.iter_mut().flatten().filter(|s| &s.id == id) {
+                *drawn = step.clone();
             }
         }
     }
-    Ok(board)
+    Ok((board, plan))
+}
+/// Each unit's last message (body and time): the newest from or to one of its steps, or in one
+/// of its steps' threads. One pass over the project's messages, newest first.
+fn last_messages(
+    c: &Connection,
+    project: ProjectId,
+    board: &ProjectView,
+) -> sluice_store::Result<BTreeMap<String, (String, String)>> {
+    let mut unit_of = BTreeMap::new();
+    let mut steps = c.prepare("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
+    let mut rows = steps.query([project.to_string()])?;
+    while let Some(r) = rows.next()? {
+        unit_of.insert(r.get::<_, String>(0)?, r.get::<_, String>(1)?);
+    }
+    let wanted: BTreeSet<&str> = board.units.iter().map(|u| u.id.as_str()).collect();
+    let mut last = BTreeMap::new();
+    let mut messages = c.prepare(
+        "SELECT \"from\",\"to\",thread,body,at FROM messages WHERE project_id=?1 ORDER BY id DESC",
+    )?;
+    let mut rows = messages.query([project.to_string()])?;
+    while last.len() < wanted.len()
+        && let Some(r) = rows.next()?
+    {
+        let (from, to, thread): (String, Option<String>, String) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let units = [
+            unit_of.get(&from),
+            to.and_then(|to| unit_of.get(&to)),
+            thread.strip_prefix("step-").and_then(|step| unit_of.get(step)),
+        ];
+        for unit in units.into_iter().flatten() {
+            if wanted.contains(unit.as_str()) && !last.contains_key(unit) {
+                last.insert(unit.clone(), (r.get(3)?, r.get(4)?));
+            }
+        }
+    }
+    Ok(last)
 }
 /// Exact registry signatures, including open/submitted ports, supplied by the
 /// application. Display catalog ports alone cannot describe arbitrary open fns.
@@ -472,64 +584,103 @@ pub trait RegistrySource: Send + Sync {
 }
 #[derive(Clone)]
 pub struct Registry(pub std::sync::Arc<dyn RegistrySource>);
+/// The shared nav and the project's board from one store snapshot, with the runs' activity
+/// observed once after it. Nothing that moves while the page renders can fail it.
 pub async fn snapshot(
     state: &DashboardState,
     project: ProjectId,
     registry: Option<&Registry>,
-) -> Result<Option<(DashboardSnapshot, ProjectView)>, PublicError> {
+) -> Result<(DashboardSnapshot, ProjectView), PublicError> {
+    let (shared, view, _) = load(state, project, registry, None, false).await?;
+    Ok((shared, view))
+}
+/// The project's page: the board with its panel (the project's board program, drawn), both
+/// read in the one store snapshot.
+pub async fn page_snapshot(
+    state: &DashboardState,
+    project: ProjectId,
+    registry: Option<&Registry>,
+    cache: Option<&super::panel::QueryCache>,
+) -> Result<(DashboardSnapshot, ProjectView), PublicError> {
+    let (shared, mut view, panel) = load(state, project, registry, None, true).await?;
+    view.panel = super::panel::draw(state, project, panel, cache).await?;
+    Ok((shared, view))
+}
+/// The board with one step's full detail (its runs, frozen inputs, thread and submissions), for
+/// the step's page and drawer.
+pub async fn step_snapshot(
+    state: &DashboardState,
+    project: ProjectId,
+    registry: Option<&Registry>,
+    step: &StepId,
+) -> Result<(DashboardSnapshot, ProjectView, StepView), PublicError> {
+    let (shared, view, _) = load(state, project, registry, Some(step.clone()), false).await?;
+    let detail = view
+        .units
+        .iter()
+        .flat_map(|u| &u.steps)
+        .find(|s| &s.id == step)
+        .cloned()
+        .ok_or_else(|| PublicError::NotFound {
+            message: "step not found".into(),
+        })?;
+    Ok((shared, view, detail))
+}
+async fn load(
+    state: &DashboardState,
+    project: ProjectId,
+    registry: Option<&Registry>,
+    detail: Option<StepId>,
+    panel: bool,
+) -> Result<
+    (
+        DashboardSnapshot,
+        ProjectView,
+        Option<super::panel::Loaded>,
+    ),
+    PublicError,
+> {
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
-    let exact_before = exact.clone();
     let catalog = state.catalog.catalog(Some(project))?;
-    let before = catalog.clone();
-    let (mut shared, mut board) = state
+    let plans = state.plans.clone();
+    let (shared, mut board, loaded) = state
         .reads
         .snapshot(move |c| {
             let shared = super::load_snapshot(c, catalog)?;
-            let board = if let Some(exact) = exact {
-                load_board(c, &shared, project, &exact)?
+            let detail = detail.as_ref();
+            let (board, plan) = if let Some(exact) = exact {
+                let version = format!("registry:{}", exact.version);
+                load_board(c, &shared, project, &plans, &version, &exact, detail)?
             } else {
-                load_board(c, &shared, project, &CatalogSignatures(&shared.functions))?
+                let version = format!("catalog:{}", shared.functions.version);
+                let provider = CatalogSignatures(&shared.functions);
+                load_board(c, &shared, project, &plans, &version, &provider, detail)?
             };
-            Ok((shared, board))
+            let loaded = if panel {
+                super::panel::gather(c, project, Some(&plan), &board, None)?
+            } else {
+                None
+            };
+            Ok((shared, board, loaded))
         })
         .await
         .map_err(|e| e.into_public(true))?;
-    let home = state.reads.home().to_owned();
-    let (updated, stable) = tokio::task::spawn_blocking(move || {
-        super::observe_activity(&home, &mut shared);
-        let before = shared.version();
-        super::observe_activity(&home, &mut shared);
-        let stable = before == shared.version();
-        (shared, stable)
-    })
-    .await
-    .map_err(|e| PublicError::Storage {
-        message: e.to_string(),
-    })?;
-    shared = updated;
+    let shared = state.observe(shared).await?;
+    let running = shared
+        .projects
+        .iter()
+        .find(|p| p.id == project)
+        .map(|p| p.running.as_slice())
+        .unwrap_or_default();
     for unit in &mut board.units {
-        for step in &mut unit.steps {
-            step.quiet = shared
-                .projects
+        for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
+            step.quiet = running
                 .iter()
-                .find(|p| p.id == project)
-                .into_iter()
-                .flat_map(|p| &p.running)
                 .find(|r| r.step == step.id.as_str())
                 .is_some_and(|r| r.quiet);
         }
-        for row in &mut unit.rows {
-            for step in row {
-                if let Some(updated) = unit.steps.iter().find(|s| s.id == step.id) {
-                    *step = updated.clone();
-                }
-            }
-        }
     }
-    Ok((stable
-        && before == state.catalog.catalog(Some(project))?
-        && exact_before == registry.map(|r| r.0.signatures(project)).transpose()?)
-    .then_some((shared, board)))
+    Ok((shared, board, loaded))
 }
 #[derive(Clone, Debug, Deserialize, Default)]
 pub struct BoardQuery {
@@ -632,54 +783,30 @@ pub async fn project_page(
     Query(query): Query<BoardQuery>,
     headers: HeaderMap,
 ) -> Response {
-    match snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await {
-        Ok(Some((shared, mut view))) => {
-            if query.format.as_deref() != Some("mermaid") {
-                match super::panel::load(
-                    &state,
-                    project,
-                    registry.as_ref().map(|r| &r.0),
-                    &view,
-                    None,
-                    None,
-                )
-                .await
-                {
-                    Ok(panel) => view.panel = panel,
-                    Err(e) => return error_response(e),
-                }
-            }
-            if let Err(e) = query.apply(&mut view) {
-                return error_response(e);
-            }
-            if query.format.as_deref() == Some("mermaid") {
-                return match plan_mermaid(
-                    &state,
-                    project,
-                    registry.as_ref().map(|r| &r.0),
-                    query.all.unwrap_or(false),
-                )
-                .await
-                {
-                    Ok(text) => (
-                        [(
-                            axum::http::header::CONTENT_TYPE,
-                            "text/plain; charset=utf-8",
-                        )],
-                        text,
-                    )
-                        .into_response(),
-                    Err(e) => error_response(e),
-                };
-            }
-            match view.render(&shared, &Viewer::from_headers(&headers)) {
-                Ok(html) => Html(html.as_str().to_owned()).into_response(),
-                Err(e) => error_response(e),
-            }
+    let registry = registry.as_ref().map(|r| &r.0);
+    let mermaid = query.format.as_deref() == Some("mermaid");
+    let page = async {
+        let (shared, mut view) = if mermaid {
+            snapshot(&state, project, registry).await?
+        } else {
+            page_snapshot(&state, project, registry, None).await?
+        };
+        query.apply(&mut view)?;
+        if mermaid {
+            let text = plan_mermaid(&state, project, registry, query.all.unwrap_or(false)).await?;
+            return Ok((
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                text,
+            )
+                .into_response());
         }
-        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        Err(e) => error_response(e),
-    }
+        let html = view.render(&shared, &Viewer::from_headers(&headers))?;
+        Ok(Html(html.0).into_response())
+    };
+    page.await.unwrap_or_else(error_response)
 }
 pub async fn project_stream(
     State(state): State<DashboardState>,
@@ -703,32 +830,10 @@ pub async fn project_stream(
         let registry = registry.clone();
         let cache = cache.clone();
         async move {
-            let Some((shared, mut view)) =
-                snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?
-            else {
-                return Ok(None);
-            };
-            view.panel = super::panel::load(
-                &state,
-                project,
-                registry.as_ref().map(|r| &r.0),
-                &view,
-                None,
-                Some(&cache),
-            )
-            .await?;
+            let registry = registry.as_ref().map(|r| &r.0);
+            let (shared, mut view) = page_snapshot(&state, project, registry, Some(&cache)).await?;
             query.apply(&mut view)?;
-            let nav = NavView::new(&shared, Some(project), "plan")?;
-            Ok(Some(RenderedBatch {
-                version: view.version(&shared),
-                regions: vec![
-                    PatchRegion::new("project-board", view.region().map_err(render_error)?),
-                    PatchRegion::new(
-                        "top-nav",
-                        super::render_nav(&nav, &viewer, &view.href()).map_err(render_error)?,
-                    ),
-                ],
-            }))
+            Ok(view.draw(&shared, &viewer)?.1)
         }
     };
     Sse::new(streams::page_events(
@@ -763,38 +868,54 @@ pub async fn project_redirect(
         Err(e) => error_response(e.into_public(true)),
     }
 }
+/// One unit's page body and the batch its stream patches, versioned by that HTML.
+fn unit_batch(
+    shared: &DashboardSnapshot,
+    view: &ProjectView,
+    unit: &UnitName,
+    viewer: &Viewer,
+) -> Result<RenderedBatch, PublicError> {
+    let unit = view
+        .units
+        .iter()
+        .find(|u| &u.id == unit)
+        .ok_or_else(|| PublicError::NotFound {
+            message: "unit not found".into(),
+        })?;
+    let nav = NavView::new(shared, Some(view.project.id), "plan")?;
+    Ok(RenderedBatch::new(vec![
+        PatchRegion::new("unit-detail", unit.page_body().map_err(render_error)?),
+        PatchRegion::new(
+            "top-nav",
+            super::render_nav(&nav, viewer, &format!("{}/units/{}", view.href(), unit.id))
+                .map_err(render_error)?,
+        ),
+    ]))
+}
 pub async fn unit_page(
     State(state): State<DashboardState>,
     registry: Option<Extension<Registry>>,
     Path((project, unit)): Path<(ProjectId, UnitName)>,
     headers: HeaderMap,
 ) -> Response {
-    match snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await {
-        Ok(Some((shared, view))) => {
-            let Some(unit) = view.units.iter().find(|u| u.id == unit) else {
-                return StatusCode::NOT_FOUND.into_response();
-            };
-            let nav = match NavView::new(&shared, Some(project), "plan") {
-                Ok(n) => n,
-                Err(e) => return error_response(e),
-            };
-            let page = unit.page_body().and_then(|body| {
-                super::render_layout(
-                    unit.id.as_str(),
-                    &body,
-                    &nav,
-                    &Viewer::from_headers(&headers),
-                    &format!("{}/units/{}/stream", view.href(), unit.id),
-                    &view.version(&shared),
-                    &format!("{}/units/{}", view.href(), unit.id),
-                )
-            });
-            match page {
-                Ok(html) => Html(html.as_str().to_owned()).into_response(),
-                Err(e) => error_response(render_error(e)),
-            }
-        }
-        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    let page = async {
+        let (shared, view) = snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
+        let viewer = Viewer::from_headers(&headers);
+        let drawn = unit_batch(&shared, &view, &unit, &viewer)?;
+        let nav = NavView::new(&shared, Some(project), "plan")?;
+        super::render_layout(
+            unit.as_str(),
+            &drawn.regions[0].html,
+            &nav,
+            &viewer,
+            &format!("{}/units/{}/stream", view.href(), unit),
+            &drawn.version,
+            &format!("{}/units/{}", view.href(), unit),
+        )
+        .map_err(render_error)
+    };
+    match page.await {
+        Ok(html) => Html(html.0).into_response(),
         Err(e) => error_response(e),
     }
 }
@@ -815,30 +936,9 @@ pub async fn unit_stream(
         let id = id.clone();
         let viewer = viewer.clone();
         async move {
-            let Some((shared, view)) =
-                snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?
-            else {
-                return Ok(None);
-            };
-            let unit =
-                view.units
-                    .iter()
-                    .find(|u| u.id == id)
-                    .ok_or_else(|| PublicError::NotFound {
-                        message: "unit not found".into(),
-                    })?;
-            let nav = NavView::new(&shared, Some(project), "plan")?;
-            Ok(Some(RenderedBatch {
-                version: view.version(&shared),
-                regions: vec![
-                    PatchRegion::new("unit-detail", unit.page_body().map_err(render_error)?),
-                    PatchRegion::new(
-                        "top-nav",
-                        super::render_nav(&nav, &viewer, &format!("{}/units/{id}", view.href()))
-                            .map_err(render_error)?,
-                    ),
-                ],
-            }))
+            let (shared, view) =
+                snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?;
+            unit_batch(&shared, &view, &id, &viewer)
         }
     };
     Sse::new(streams::page_events(

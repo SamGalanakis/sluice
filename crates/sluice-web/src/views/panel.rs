@@ -75,7 +75,7 @@ struct UnitsData {
     done: Option<(usize, usize)>,
 }
 /// What one render needs from the store, gathered in one read snapshot.
-struct Loaded {
+pub(crate) struct Loaded {
     rev: u64,
     board: Result<Board, Vec<Problem>>,
     units: BTreeMap<Vec<String>, Result<UnitsData, String>>,
@@ -86,8 +86,9 @@ struct Loaded {
     token: String,
 }
 
-/// Load and draw the project's board, or `draft` instead (the settings preview). `None` when
-/// the project has no board. `view` is the plan's page model (its steps give StepStatus).
+/// Load and draw the project's board, or `draft` instead (the settings preview), in a snapshot
+/// of its own. `None` when the project has no board. `view` is the plan's page model (its steps
+/// give StepStatus).
 pub async fn load(
     state: &DashboardState,
     project: ProjectId,
@@ -98,107 +99,131 @@ pub async fn load(
 ) -> Result<Option<Panel>, PublicError> {
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
     let catalog = state.catalog.catalog(Some(project))?;
-    let steps: BTreeMap<String, StepView> = view
-        .units
-        .iter()
-        .flat_map(|u| &u.steps)
-        .map(|s| (s.id.to_string(), s.clone()))
-        .collect();
-    let known: std::collections::BTreeSet<String> = steps.keys().cloned().collect();
+    let view = view.clone();
     let loaded = state
         .reads
         .snapshot(move |c| {
-            let (program, rev): (Option<String>, i64) = c.query_row(
-                "SELECT board,board_rev FROM projects WHERE project_id=?1 AND deleted_at IS NULL",
-                [project.to_string()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            let Some(program) = draft.or(program) else {
-                return Ok(None);
-            };
-            let board = openui::check_board(&program);
-            let mut loaded = Loaded {
-                rev: rev as u64,
-                units: BTreeMap::new(),
-                outputs: BTreeMap::new(),
-                steps: BTreeMap::new(),
-                known: known.clone(),
-                token: String::new(),
-                board,
-            };
-            let Ok(board) = &loaded.board else {
-                return Ok(Some(loaded));
-            };
-            let (plan_rev, doc): (i64, String) = c.query_row(
-                "SELECT rev,doc FROM plans WHERE project_id=?1",
-                [project.to_string()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            let seq: Option<i64> = c.query_row(
-                "SELECT max(seq) FROM records WHERE project_id=?1",
+            let doc: String = c.query_row(
+                "SELECT doc FROM plans WHERE project_id=?1",
                 [project.to_string()],
                 |r| r.get(0),
             )?;
-            loaded.token = format!("{rev}:{plan_rev}:{}", seq.unwrap_or(0));
             let plan = match &exact {
                 Some(exact) => Plan::parse_json(doc.as_bytes(), exact),
                 None => Plan::parse_json(doc.as_bytes(), &CatalogSignatures(&catalog)),
             };
-            let mut wants_units = vec![];
-            board.walk(&mut |c, _| match c.name.as_str() {
-                "Units" => wants_units.push(c.strings_arg(0)),
-                "StepStatus" => {
-                    if let Some(step) = c.str_arg(0) {
-                        loaded
-                            .steps
-                            .insert(step.into(), steps.get(step).cloned());
-                    }
-                }
-                "Output" => {
-                    if let (Some(step), Some(field)) = (c.str_arg(0), c.str_arg(1)) {
-                        loaded.outputs.insert((step.into(), field.into()), None);
-                    }
-                }
-                _ => {}
-            });
-            for filter in wants_units {
-                let rows = match &plan {
-                    Err(_) => Err("the plan cannot be compiled, so its units are unknown".into()),
-                    Ok(plan) => {
-                        let wanted: Vec<UnitState> = filter
-                            .iter()
-                            .filter_map(|s| serde_json::from_value(json!(s)).ok())
-                            .collect();
-                        let wanted = (!filter.is_empty()).then_some(wanted.as_slice());
-                        sluice_runtime::status::unit_rows(c, project, plan, wanted)
-                            .map(|v| UnitsData {
-                                rows: v.rows,
-                                done: v.done,
-                            })
-                            .map_err(|e| e.into_public(true).to_string())
-                    }
-                };
-                loaded.units.insert(filter, rows);
-            }
-            let keys: Vec<(String, String)> = loaded.outputs.keys().cloned().collect();
-            for (step, field) in keys {
-                let outputs: Option<String> = c
-                    .query_row(
-                        "SELECT outputs FROM steps WHERE project_id=?1 AND step_id=?2",
-                        rusqlite::params![project.to_string(), step],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                    .flatten();
-                let value = outputs
-                    .and_then(|o| serde_json::from_str::<Value>(&o).ok())
-                    .and_then(|o| o.get(&field).cloned());
-                loaded.outputs.insert((step, field), value);
-            }
-            Ok(Some(loaded))
+            gather(c, project, plan.as_ref().ok(), &view, draft)
         })
         .await
         .map_err(|e| e.into_public(true))?;
+    draw(state, project, loaded, cache).await
+}
+
+/// Read what the board shows inside the caller's transaction: its program (or `draft`), and
+/// the units, outputs and steps its components name. `None` when the project has no board.
+/// `plan` is the stored plan compiled, `None` when it does not compile.
+pub(crate) fn gather(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    plan: Option<&Plan>,
+    view: &board::ProjectView,
+    draft: Option<String>,
+) -> sluice_store::Result<Option<Loaded>> {
+    let (program, rev): (Option<String>, i64) = c.query_row(
+        "SELECT board,board_rev FROM projects WHERE project_id=?1 AND deleted_at IS NULL",
+        [project.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let Some(program) = draft.or(program) else {
+        return Ok(None);
+    };
+    let steps = || view.units.iter().flat_map(|u| &u.steps);
+    let board = openui::check_board(&program);
+    let mut loaded = Loaded {
+        rev: rev as u64,
+        units: BTreeMap::new(),
+        outputs: BTreeMap::new(),
+        steps: BTreeMap::new(),
+        known: steps().map(|s| s.id.to_string()).collect(),
+        token: String::new(),
+        board,
+    };
+    let Ok(board) = &loaded.board else {
+        return Ok(Some(loaded));
+    };
+    let plan_rev: i64 = c.query_row(
+        "SELECT rev FROM plans WHERE project_id=?1",
+        [project.to_string()],
+        |r| r.get(0),
+    )?;
+    let seq: Option<i64> = c.query_row(
+        "SELECT max(seq) FROM records WHERE project_id=?1",
+        [project.to_string()],
+        |r| r.get(0),
+    )?;
+    loaded.token = format!("{rev}:{plan_rev}:{}", seq.unwrap_or(0));
+    let mut wants_units = vec![];
+    board.walk(&mut |c, _| match c.name.as_str() {
+        "Units" => wants_units.push(c.strings_arg(0)),
+        "StepStatus" => {
+            if let Some(step) = c.str_arg(0) {
+                loaded.steps.insert(
+                    step.into(),
+                    steps().find(|s| s.id.as_str() == step).cloned(),
+                );
+            }
+        }
+        "Output" => {
+            if let (Some(step), Some(field)) = (c.str_arg(0), c.str_arg(1)) {
+                loaded.outputs.insert((step.into(), field.into()), None);
+            }
+        }
+        _ => {}
+    });
+    for filter in wants_units {
+        let rows = match plan {
+            None => Err("the plan cannot be compiled, so its units are unknown".into()),
+            Some(plan) => {
+                let wanted: Vec<UnitState> = filter
+                    .iter()
+                    .filter_map(|s| serde_json::from_value(json!(s)).ok())
+                    .collect();
+                let wanted = (!filter.is_empty()).then_some(wanted.as_slice());
+                sluice_runtime::status::unit_rows(c, project, plan, wanted)
+                    .map(|v| UnitsData {
+                        rows: v.rows,
+                        done: v.done,
+                    })
+                    .map_err(|e| e.into_public(true).to_string())
+            }
+        };
+        loaded.units.insert(filter, rows);
+    }
+    let keys: Vec<(String, String)> = loaded.outputs.keys().cloned().collect();
+    for (step, field) in keys {
+        let outputs: Option<String> = c
+            .query_row(
+                "SELECT outputs FROM steps WHERE project_id=?1 AND step_id=?2",
+                rusqlite::params![project.to_string(), step],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let value = outputs
+            .and_then(|o| serde_json::from_str::<Value>(&o).ok())
+            .and_then(|o| o.get(&field).cloned());
+        loaded.outputs.insert((step, field), value);
+    }
+    Ok(Some(loaded))
+}
+
+/// Run the gathered board's queries and draw it.
+pub(crate) async fn draw(
+    state: &DashboardState,
+    project: ProjectId,
+    loaded: Option<Loaded>,
+    cache: Option<&QueryCache>,
+) -> Result<Option<Panel>, PublicError> {
     let Some(loaded) = loaded else {
         return Ok(None);
     };

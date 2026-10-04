@@ -625,12 +625,7 @@ async fn board_preview(
     }
     let registry = registry.map(|r| r.0);
     let result = async {
-        let (_, view) = views::board::snapshot(&state.dashboard, id, registry.as_ref())
-            .await?
-            .ok_or_else(|| PublicError::Busy {
-                message: "the dashboard is refreshing; try again".into(),
-                retryable: true,
-            })?;
+        let (_, view) = views::board::snapshot(&state.dashboard, id, registry.as_ref()).await?;
         views::panel::load(
             &state.dashboard,
             id,
@@ -777,8 +772,8 @@ async fn settings_stream(
         let viewer = viewer.clone();
         async move {
             match state.snapshot(id).await {
-                Ok(v) => v.batch(&viewer).map(Some),
-                Err(PublicError::NotFound {..}) => Ok(Some(RenderedBatch { version:"deleted".into(), regions:vec![PatchRegion::new("settings-live", TrustedHtml::owned("<header id=\"settings-live\" data-deleted=\"true\">Project deleted.</header>".into()))] })),
+                Ok(v) => v.batch(&viewer),
+                Err(PublicError::NotFound {..}) => Ok(RenderedBatch { version:"deleted".into(), regions:vec![PatchRegion::new("settings-live", TrustedHtml::owned("<header id=\"settings-live\" data-deleted=\"true\">Project deleted.</header>".into()))] }),
                 Err(e) => Err(e),
             }
         }

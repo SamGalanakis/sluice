@@ -38,6 +38,23 @@ pub struct RenderedBatch {
     pub version: String,
     pub regions: Vec<PatchRegion>,
 }
+impl RenderedBatch {
+    /// A batch versioned by the HTML it draws: the same regions are the same version, so a page
+    /// drawn with these regions and its stream's first batch agree whenever they show the same.
+    pub fn new(regions: Vec<PatchRegion>) -> Self {
+        let mut drawn = Vec::new();
+        for region in &regions {
+            drawn.extend_from_slice(region.id.as_bytes());
+            drawn.push(0);
+            drawn.extend_from_slice(region.html.as_str().as_bytes());
+            drawn.push(0);
+        }
+        Self {
+            version: sluice_store::artifacts::fingerprint(&drawn),
+            regions,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub enum VersionSignal {
     Page,
@@ -116,8 +133,7 @@ impl Comparison {
         events
     }
 }
-/// Loader must finish its coherent snapshot before returning. Unstable external
-/// observations return None and defer until the next poll. Dropping the response
+/// Loader must finish its coherent snapshot before returning. Dropping the response
 /// cancels the loader/wait; no producer task or database lease survives it.
 pub fn page_events<L, F>(
     loader: L,
@@ -127,7 +143,7 @@ pub fn page_events<L, F>(
 ) -> impl Stream<Item = Result<Event, Infallible>>
 where
     L: Fn() -> F + Send + 'static,
-    F: Future<Output = Result<Option<RenderedBatch>, PublicError>> + Send + 'static,
+    F: Future<Output = Result<RenderedBatch, PublicError>> + Send + 'static,
 {
     stream::unfold(
         (
@@ -157,10 +173,9 @@ where
                 }
                 waited = true;
                 match loader().await {
-                    Ok(Some(batch)) => {
+                    Ok(batch) => {
                         pending.extend(comparison.events(batch).iter().map(StreamEvent::axum_event))
                     }
-                    Ok(None) => {}
                     Err(_) => {
                         pending.push_back(
                             PatchSignals::new(r#"{"stale":true}"#).write_as_axum_sse_event(),
@@ -212,9 +227,9 @@ async fn response(
     let project = if functions { query.project } else { None };
     if let Some(project) = project {
         match state.snapshot(Some(project)).await {
-            Ok(Some(s)) if s.projects.iter().any(|p| p.id == project) => {}
-            Ok(Some(_)) => return StatusCode::NO_CONTENT.into_response(),
-            _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            Ok(s) if s.projects.iter().any(|p| p.id == project) => {}
+            Ok(_) => return StatusCode::NO_CONTENT.into_response(),
+            Err(e) => return crate::http::error_response(e),
         }
     }
     let viewer = Viewer::from_headers(&headers);
@@ -222,13 +237,7 @@ async fn response(
     let loader = move || {
         let state = state.clone();
         let viewer = viewer.clone();
-        async move {
-            state
-                .snapshot(project)
-                .await?
-                .map(|s| home::batch(&s, project, functions, &viewer))
-                .transpose()
-        }
+        async move { home::batch(&state.snapshot(project).await?, project, functions, &viewer) }
     };
     Sse::new(page_events(
         loader,

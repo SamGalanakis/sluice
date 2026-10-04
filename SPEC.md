@@ -1068,7 +1068,12 @@ Every page has a `…/stream` twin that patches the page live over Datastar SSE.
 fully without JavaScript; every value is HTML-escaped and markdown bodies are rendered on the
 server with unsafe link schemes refused. The only external assets are two font stylesheets from
 cdn.jsdelivr.net; every script is served from `/static/` (Datastar 1.0.4, OpenUI lang-core
-0.3.0, zod 4.6.5 and sluice's own).
+0.3.0, zod 4.6.5 and sluice's own). A page and each stream batch are drawn from one store
+snapshot, with each running run's activity (its run files' modification times) read once;
+nothing that changes meanwhile fails the page. The version a page carries (`ver`) is a
+fingerprint of the HTML its stream patches, so a stream opened at it sends nothing until
+something shown changes. A page that fails answers the shared JSON error with its status, its
+message never empty. Assets linked with their fingerprint (`?v=`) are served immutable.
 
 **Questions with a ui.** A question's `ui` is an OpenUI Lang program drawn by the inbox page:
 one statement per line, the first drawn, components `Stack`, `Heading`, `Text`, `Callout`,

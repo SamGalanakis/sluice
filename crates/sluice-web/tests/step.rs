@@ -243,12 +243,19 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
         tx.changed(Some(project), "project");
         Ok(())
     }).await.unwrap();
-    let (_, board) = views::board::snapshot(&state, project, Some(&Registry(Arc::new(Exact))))
+    let work = "work".parse().unwrap();
+    let registry = Registry(Arc::new(Exact));
+    let (_, board) = views::board::snapshot(&state, project, Some(&registry))
         .await
-        .unwrap()
+        .unwrap();
+    // The board's cards carry no run detail; the step's page loads it.
+    assert!(board.units[0].steps[0].runs.is_empty());
+    let (_, board, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
+        .await
         .unwrap();
     let unit = &board.units[0];
-    let step = &unit.steps[0];
+    assert_eq!(unit.steps[0].runs.len(), 1);
+    let step = &step;
     assert_eq!(step.runs.len(), 1);
     assert_eq!(step.runs[0].id, live);
     assert_eq!(step.inputs[0].value, "frozen attempted value");
@@ -267,9 +274,8 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
         })
         .await
         .unwrap();
-    let (_, board) = views::board::snapshot(&state, project, Some(&Registry(Arc::new(Exact))))
+    let (_, _, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
         .await
-        .unwrap()
         .unwrap();
-    assert!(!board.units[0].steps[0].outputs[0].available);
+    assert!(!step.outputs[0].available);
 }

@@ -451,7 +451,6 @@ async fn deletion_requires_archive_exact_name_current_revision_and_no_active_wor
             .snapshot(None)
             .await
             .unwrap()
-            .unwrap()
             .projects
             .is_empty()
     );

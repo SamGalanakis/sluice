@@ -16,10 +16,11 @@ pub mod threads;
 use askama::Template;
 use axum::{
     Router,
-    extract::Path,
+    extract::{Path, Query},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sluice_model::{error::PublicError, ids::ProjectId};
 use sluice_store::ReadPool;
@@ -121,7 +122,6 @@ pub struct RunningView {
     pub quiet: bool,
     pub run_id: String,
     pub activity: Option<u64>,
-    pub activity_stamp: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectView {
@@ -189,8 +189,8 @@ impl CatalogSource for EmptyCatalog {
         Ok(FunctionCatalog::default())
     }
 }
-/// One database snapshot; filesystem observations have a separate stability
-/// check in DashboardState::snapshot and are never called atomic with SQLite.
+/// One database snapshot, with each running run's activity observed once from its run files
+/// after the read (best effort: those files change constantly and are never atomic with SQLite).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DashboardSnapshot {
     pub projects: Vec<ProjectView>,
@@ -212,6 +212,7 @@ pub struct DashboardState {
     pub reads: ReadPool,
     pub catalog: Arc<dyn CatalogSource>,
     pub stop: Arc<std::sync::atomic::AtomicBool>,
+    pub plans: board::PlanCache,
 }
 impl DashboardState {
     pub fn new(reads: ReadPool, catalog: Arc<dyn CatalogSource>) -> Self {
@@ -219,43 +220,37 @@ impl DashboardState {
             reads,
             catalog,
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            plans: board::PlanCache::default(),
         }
     }
+    /// The catalog, one store snapshot and the runs' activity, each read once. A page renders
+    /// what this returns; nothing that moves while it renders can fail it.
     pub async fn snapshot(
         &self,
         project: Option<ProjectId>,
-    ) -> Result<Option<DashboardSnapshot>, PublicError> {
-        let catalog = self.catalog.clone();
-        let before = tokio::task::spawn_blocking(move || catalog.catalog(project))
-            .await
-            .map_err(|e| PublicError::Storage {
-                message: e.to_string(),
-            })??;
-        let functions = before.clone();
-        let mut observed = self
+    ) -> Result<DashboardSnapshot, PublicError> {
+        let functions = self.catalog.catalog(project)?;
+        let snapshot = self
             .reads
             .snapshot(move |c| load_snapshot(c, functions))
             .await
             .map_err(|e| e.into_public(true))?;
-        let home_for_activity = self.reads.home().to_owned();
-        let (updated, stable_activity) = tokio::task::spawn_blocking(move || {
-            observe_activity(&home_for_activity, &mut observed);
-            let before = serde_json::to_vec(&observed).expect("view models serialize");
-            observe_activity(&home_for_activity, &mut observed);
-            let after = serde_json::to_vec(&observed).expect("view models serialize");
-            (observed, before == after)
+        self.observe(snapshot).await
+    }
+    /// Observe each running run's activity from its run files, once.
+    pub async fn observe(
+        &self,
+        mut snapshot: DashboardSnapshot,
+    ) -> Result<DashboardSnapshot, PublicError> {
+        let home = self.reads.home().to_owned();
+        tokio::task::spawn_blocking(move || {
+            observe_activity(&home, &mut snapshot);
+            snapshot
         })
         .await
         .map_err(|e| PublicError::Storage {
             message: e.to_string(),
-        })?;
-        let catalog = self.catalog.clone();
-        let after = tokio::task::spawn_blocking(move || catalog.catalog(project))
-            .await
-            .map_err(|e| PublicError::Storage {
-                message: e.to_string(),
-            })??;
-        Ok((before == after && stable_activity).then_some(updated))
+        })
     }
 }
 #[derive(Clone, Debug)]
@@ -380,31 +375,66 @@ pub fn render_nav(
         + 6;
     Ok(TrustedHtml::owned(layout.as_str()[start..end].into()))
 }
+/// An asset's URL, fingerprinted by its bytes: the page asks for exactly this build's asset,
+/// which can then be cached for good.
 pub fn asset_url(name: &str) -> String {
     format!(
         "/static/{name}?v={}",
-        sluice_store::artifacts::fingerprint(asset(name).map(|(_, b)| b).unwrap_or_default())
-            .get(..16)
+        asset(name)
+            .map(|a| a.fingerprint.as_str())
             .unwrap_or_default()
     )
 }
-fn asset(name: &str) -> Option<(&'static str, &'static [u8])> {
-    PAGES
-        .iter()
-        .flat_map(|page| (page)().assets)
-        .find(|asset| asset.names.contains(&name))
-        .map(|asset| (asset.media_type, asset.bytes))
+struct EmbeddedAsset {
+    media_type: &'static str,
+    bytes: &'static [u8],
+    fingerprint: String,
 }
-async fn static_asset(Path(name): Path<String>) -> Response {
+/// Each embedded asset by name, hashed once per process.
+fn asset(name: &str) -> Option<&'static EmbeddedAsset> {
+    static ASSETS: std::sync::OnceLock<std::collections::BTreeMap<&'static str, EmbeddedAsset>> =
+        std::sync::OnceLock::new();
+    ASSETS
+        .get_or_init(|| {
+            let mut assets = std::collections::BTreeMap::new();
+            for asset in PAGES.iter().flat_map(|page| (page)().assets) {
+                let mut fingerprint = sluice_store::artifacts::fingerprint(asset.bytes);
+                fingerprint.truncate(16);
+                for name in asset.names {
+                    assets.entry(*name).or_insert(EmbeddedAsset {
+                        media_type: asset.media_type,
+                        bytes: asset.bytes,
+                        fingerprint: fingerprint.clone(),
+                    });
+                }
+            }
+            assets
+        })
+        .get(name)
+}
+#[derive(Deserialize)]
+struct AssetQuery {
+    v: Option<String>,
+}
+/// A fingerprinted URL (`?v=` this build's fingerprint) never changes content, so the browser
+/// keeps it without asking again; any other URL is revalidated on every use.
+async fn static_asset(Path(name): Path<String>, Query(query): Query<AssetQuery>) -> Response {
     match asset(&name) {
-        Some((ty, bytes)) => (
-            [
-                (header::CONTENT_TYPE, ty),
-                (header::CACHE_CONTROL, "public, max-age=0, must-revalidate"),
-            ],
-            bytes,
-        )
-            .into_response(),
+        Some(asset) => {
+            let cache = if query.v.as_ref() == Some(&asset.fingerprint) {
+                "public, max-age=31536000, immutable"
+            } else {
+                "public, max-age=0, must-revalidate"
+            };
+            (
+                [
+                    (header::CONTENT_TYPE, asset.media_type),
+                    (header::CACHE_CONTROL, cache),
+                ],
+                asset.bytes,
+            )
+                .into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -513,6 +543,8 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
     }
     response
 }
+/// Each running run's activity: the newest of its start and its run files' modification times,
+/// in seconds; quiet after 15 minutes without any.
 pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
@@ -521,7 +553,6 @@ pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot
         .unwrap_or(0);
     for run in snapshot.projects.iter_mut().flat_map(|p| &mut p.running) {
         let mut newest = timestamp(&run.started);
-        let mut stamp = String::new();
         if run.run_id.parse::<sluice_model::ids::RunId>().is_ok() {
             let directory = home.join("runs").join(&run.run_id);
             for path in [
@@ -536,14 +567,10 @@ pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot
                     && let Ok(age) = modified.duration_since(UNIX_EPOCH)
                 {
                     newest = Some(newest.unwrap_or(0).max(age.as_secs()));
-                    stamp.push_str(&format!("{}:{};", age.as_nanos(), meta.len()));
-                } else {
-                    stamp.push_str("none;");
                 }
             }
         }
         run.activity = newest;
-        run.activity_stamp = stamp;
         run.quiet = newest.is_some_and(|at| now.saturating_sub(at) >= 900);
     }
 }
@@ -581,7 +608,7 @@ pub fn load_snapshot(
             running: vec![],
             failed_steps: vec![],
         };
-        let mut counts = c.prepare("SELECT status,count(*),sum(paused IS NOT NULL AND paused <> 'false') FROM steps WHERE project_id=?1 GROUP BY status")?;
+        let mut counts = c.prepare_cached("SELECT status,count(*),sum(paused IS NOT NULL AND paused <> 'false') FROM steps WHERE project_id=?1 GROUP BY status")?;
         let mut count_rows = counts.query([&raw])?;
         while let Some(r) = count_rows.next()? {
             let status: String = r.get(0)?;
@@ -597,7 +624,7 @@ pub fn load_snapshot(
                 _ => {}
             }
         }
-        let mut steps = c.prepare("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),'') FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
+        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),'') FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
         let mut step_rows = steps.query([&raw])?;
         while let Some(r) = step_rows.next()? {
             let status: String = r.get(2)?;
@@ -611,15 +638,17 @@ pub fn load_snapshot(
                     quiet: false,
                     run_id: r.get(4)?,
                     activity: None,
-                    activity_stamp: String::new(),
                 });
             }
         }
-        let last: Option<String> = c.query_row(
-            "SELECT max(at) FROM records WHERE project_id=?1",
-            [&raw],
-            |r| r.get(0),
-        )?;
+        // The project's last record, by its index: records are appended in time order.
+        let last: Option<String> = c
+            .query_row(
+                "SELECT at FROM records WHERE project_id=?1 ORDER BY seq DESC LIMIT 1",
+                [&raw],
+                |r| r.get(0),
+            )
+            .optional()?;
         if let Some(last) = last
             && last > view.changed
         {

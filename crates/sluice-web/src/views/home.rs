@@ -58,17 +58,19 @@ impl HomeView {
         &self,
         snapshot: &DashboardSnapshot,
         viewer: &Viewer,
-    ) -> Result<TrustedHtml, askama::Error> {
-        let nav = NavView::new(snapshot, None, "").expect("home has no project selector");
+    ) -> Result<TrustedHtml, PublicError> {
+        let nav = NavView::new(snapshot, None, "")?;
+        let drawn = batch(snapshot, None, false, viewer)?;
         render_layout(
             &self.title(),
-            &self.body()?,
+            &drawn.regions[0].html,
             &nav,
             viewer,
             "/stream",
-            &snapshot.version(),
+            &drawn.version,
             "/",
         )
+        .map_err(template_error)
     }
 }
 #[derive(Template)]
@@ -140,7 +142,7 @@ pub fn render_functions(
     viewer: &Viewer,
 ) -> Result<TrustedHtml, PublicError> {
     let nav = NavView::new(snapshot, project, "functions")?;
-    let body = function_body(snapshot, &nav).map_err(template_error)?;
+    let drawn = batch(snapshot, project, true, viewer)?;
     let path = project
         .map(|id| format!("/fns?project={id}"))
         .unwrap_or_else(|| "/fns".into());
@@ -149,11 +151,11 @@ pub fn render_functions(
         .unwrap_or_else(|| "/fns/stream".into());
     render_layout(
         "Functions",
-        &body,
+        &drawn.regions[0].html,
         &nav,
         viewer,
         &stream,
-        &snapshot.version(),
+        &drawn.version,
         &path,
     )
     .map_err(template_error)
@@ -164,7 +166,8 @@ fn template_error(error: askama::Error) -> PublicError {
     }
 }
 /// Render every target from the same snapshot. Stable target replacement makes
-/// replay safe even when the preceding connection applied only part of a batch.
+/// replay safe even when the preceding connection applied only part of a batch. The page
+/// draws its first region and carries the batch's version.
 pub fn batch(
     snapshot: &DashboardSnapshot,
     project: Option<ProjectId>,
@@ -185,28 +188,23 @@ pub fn batch(
     } else {
         "/".into()
     };
-    Ok(RenderedBatch {
-        version: snapshot.version(),
-        regions: vec![
-            PatchRegion::new(if functions { "functions" } else { "projects" }, body),
-            PatchRegion::new(
-                "top-nav",
-                render_nav(&nav, viewer, &path).map_err(template_error)?,
-            ),
-        ],
-    })
+    Ok(RenderedBatch::new(vec![
+        PatchRegion::new(if functions { "functions" } else { "projects" }, body),
+        PatchRegion::new(
+            "top-nav",
+            render_nav(&nav, viewer, &path).map_err(template_error)?,
+        ),
+    ]))
 }
 
 async fn home_handler(State(state): State<DashboardState>, headers: HeaderMap) -> Response {
-    match state.snapshot(None).await {
-        Ok(Some(snapshot)) => match home::HomeView::new(&snapshot)
-            .render(&snapshot, &Viewer::from_headers(&headers))
-        {
-            Ok(html) => Html(html.0).into_response(),
-            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        },
-        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let page = async {
+        let snapshot = state.snapshot(None).await?;
+        home::HomeView::new(&snapshot).render(&snapshot, &Viewer::from_headers(&headers))
+    };
+    match page.await {
+        Ok(html) => Html(html.0).into_response(),
+        Err(e) => crate::http::error_response(e),
     }
 }
 async fn functions_handler(
@@ -214,17 +212,13 @@ async fn functions_handler(
     Query(query): Query<PageQuery>,
     headers: HeaderMap,
 ) -> Response {
-    match state.snapshot(query.project).await {
-        Ok(Some(snapshot)) => {
-            match home::render_functions(&snapshot, query.project, &Viewer::from_headers(&headers))
-            {
-                Ok(html) => Html(html.0).into_response(),
-                Err(PublicError::NotFound { .. }) => StatusCode::NOT_FOUND.into_response(),
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-        }
-        Ok(None) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let page = async {
+        let snapshot = state.snapshot(query.project).await?;
+        home::render_functions(&snapshot, query.project, &Viewer::from_headers(&headers))
+    };
+    match page.await {
+        Ok(html) => Html(html.0).into_response(),
+        Err(e) => crate::http::error_response(e),
     }
 }
 
