@@ -1210,3 +1210,111 @@ main > .phead + * { margin-top: 0; }
 #functions .fn-head { overflow-wrap: anywhere; }
 #nav-inbox { gap: 6px; }
 @media (max-width: 720px) { .inbox-word { display: none; } .picker button { min-height: 44px; } }
+
+/* ---- the project's board (docs("board")): an OpenUI program drawn on the server. From 1280px
+   it is a right-hand column beside the plan (the column widens to hold both, nav included, so
+   their edges stay shared) that scrolls on its own; below that, a section the Plan · Board
+   switch shows in turn (both, one after the other, without script). Without a board the plan
+   keeps the page. With the step drawer open, the drawer takes the side instead. ----------- */
+:root { --board-w: 400px; --board-gap: 32px; }
+.project-page { min-width: 0; }
+.plan-pane { min-width: 0; }
+.board-pane { min-width: 0; margin-top: 32px; }
+.board-h { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.board-h .icon { color: var(--heading-accent); flex: none; }
+.view-switch { display: none; justify-self: start; width: fit-content; gap: 2px; margin: 0 0 16px;
+               padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-md);
+               background: var(--card); }
+.view-switch button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
+                      padding: 2px 12px 2px 10px; border: 0; border-radius: var(--radius-sm);
+                      background: transparent; color: var(--muted-foreground);
+                      font: 500 13px/18px var(--font-sans); }
+.view-switch button:hover { color: var(--foreground); background: transparent; }
+.view-switch button[aria-pressed="true"] { color: var(--foreground); background: var(--secondary);
+                                           box-shadow: 0 0 0 1px var(--border-strong); }
+@media (max-width: 1279px) and (scripting: enabled) {
+  .has-panel > .view-switch { display: flex; }
+  .project-page[data-view="board"] > .plan-pane,
+  .project-page:not([data-view="board"]) > .board-pane { display: none; }
+  .board-pane { margin-top: 0; }
+  .board-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+             white-space: nowrap; }  /* the switch names the section */
+}
+@media (min-width: 1280px) {
+  html:not(.drawer-open):has(.project-page.has-panel) {
+    --column: calc(960px + var(--board-gap) + var(--board-w)); }
+  html:not(.drawer-open) .project-page.has-panel {
+    display: grid; grid-template-columns: minmax(0, 1fr) var(--board-w);
+    column-gap: var(--board-gap); align-items: start; }
+  .project-page.has-panel > .plan-pane { grid-column: 1; grid-row: 1; }
+  .project-page.has-panel > .board-pane {
+    grid-column: 2; grid-row: 1; margin-top: 0; position: sticky; top: 16px;
+    max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain;
+    box-sizing: border-box; padding: 14px 16px 16px; background: var(--card);
+    border: 1px solid var(--border); border-radius: var(--radius); }
+  html.drawer-open .board-pane { display: none; }
+}
+@media (min-width: 2200px) { :root { --board-w: 480px; } }
+@media (max-width: 720px) {
+  .view-switch button { min-height: 44px; padding: 0 14px 0 12px; }
+}
+
+/* the board's parts: the question vocabulary's look, plus its live parts */
+.board-ui { margin: 0; gap: 12px; }
+.board-ui .ou-h { margin: 4px 0 0; font: 750 15px/21px var(--font-display); font-stretch: 105%; }
+.board-ui h3.ou-h { font-size: 17px; line-height: 23px; }
+.board-ui .ou-text { max-width: 72ch; }
+.board-ui .ou-text.muted, .ou-note { color: var(--muted-foreground); }
+.board-ui .ou-sep { width: 100%; border: 0; border-top: 1px solid var(--border); margin: 2px 0; }
+.board-ui .ou-row > * { min-width: 0; }
+.board-ui .ou-form { border: 0; margin: 0; padding: 0; min-width: 0; }
+.board-ui .ou-field input:not([type=checkbox]):not([type=radio]), .board-ui .ou-field select,
+.board-ui .ou-field textarea { width: 100%; box-sizing: border-box; }
+.board-ui .ou-choice { display: inline-flex; align-items: center; gap: 6px; }
+.ou-table-wrap { max-width: 100%; }
+.ou-table { font-size: 13px; line-height: 18px; }
+.ou-table caption { caption-side: top; text-align: left; padding: 0 0 6px; font-size: 13px;
+                    color: var(--muted-foreground); }
+.ou-table td { overflow-wrap: break-word; vertical-align: baseline; }
+.board-units td { padding: 6px 8px 6px 0; }
+.board-units th { padding-left: 0; }
+.board-units td:first-child { overflow-wrap: normal; }  /* a unit name breaks at its hyphens */
+.board-units .u-state { white-space: nowrap; }
+.board-units .u-state > span:not(.g) { margin-left: 4px; }
+.board-units .u-state .g { vertical-align: -3px; }
+.board-units .u-steps { font: 12px/18px var(--font-mono); overflow-wrap: normal; }  /* breaks between steps */
+.board-units .u-wait { color: var(--muted-foreground); }
+.board-step { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0;
+              max-width: 100%; }
+.board-step .board-chip { max-width: 100%; }
+.board-why { overflow-wrap: anywhere; }
+.board-output { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.board-output .v { overflow-wrap: anywhere; }
+.board-output .v.num { font-variant-numeric: tabular-nums; }
+.board-metric { display: flex; flex-direction: column; gap: 0; min-width: 0;
+                padding: 10px 14px; border-radius: var(--radius-md); background: var(--box); }
+.board-metric .metric-v { font: 800 28px/34px var(--font-display); letter-spacing: -0.015em;
+                          font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.board-metric .metric-l { font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
+.ou-row > .board-metric { flex: 1 1 90px; }
+.board-chart { margin: 0; min-width: 0; }
+.board-chart svg { display: block; max-width: min(100%, 520px); height: auto; overflow: visible; }
+.board-chart figcaption { margin-top: 4px; font-size: 13px; color: var(--muted-foreground); }
+.chart text { font: 12px var(--font-sans); fill: var(--muted-foreground);
+              font-variant-numeric: tabular-nums; }
+.chart .c-label { fill: var(--foreground); }
+.chart .c-bar, .chart .c-dot { fill: var(--accent); }
+.chart .c-line { stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.chart .c-grid { stroke: var(--border); }
+/* a part that cannot be drawn says so in place, in ink with the attention mark; the rest of
+   the board still draws */
+.ou-error-box { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px;
+                border: 1px solid var(--border-strong);
+                border-left: 3px solid var(--status-attention); border-radius: var(--radius-md);
+                background: var(--muted); font-size: 13px; line-height: 18px;
+                overflow-wrap: anywhere; min-width: 0; }
+.ou-error-box .eb-icon { flex: none; margin-top: 1px; color: var(--status-attention); }
+.ou-error-box b { font-weight: 600; }
+.ou-error-box p { margin: 2px 0 0; font-family: var(--font-mono); font-size: 12px; }
+.board-status { margin-top: 10px; }
+.board-status:empty { display: none; }

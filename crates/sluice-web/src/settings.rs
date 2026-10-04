@@ -41,6 +41,12 @@ pub trait SettingsCommands: Send + Sync {
         id: ProjectId,
         request: projects::DeleteProject,
     ) -> BoxFuture<'_, Result<(), PublicError>>;
+    /// Set or clear the project's board (`board_set`); returns its revision.
+    fn board(
+        &self,
+        id: ProjectId,
+        request: projects::SetBoard,
+    ) -> BoxFuture<'_, Result<Revision, PublicError>>;
 }
 #[derive(Clone)]
 pub struct StoreCommands {
@@ -81,6 +87,19 @@ impl SettingsCommands for StoreCommands {
                 })
                 .await
                 .map(|_| ())
+        })
+    }
+    fn board(
+        &self,
+        id: ProjectId,
+        request: projects::SetBoard,
+    ) -> BoxFuture<'_, Result<Revision, PublicError>> {
+        Box::pin(async move {
+            self.writer
+                .write(RetrySafety::NonIdempotent, move |tx| {
+                    projects::board_set(tx, &ProjectSelector::Id(id), request)
+                })
+                .await
         })
     }
 }
@@ -446,6 +465,11 @@ pub fn router(state: SettingsState) -> Router {
         .route("/projects/id/{id}/settings", get(page).post(change))
         .route("/projects/{name}/settings", get(named_page))
         .route("/projects/id/{id}/settings/preview", post(preview))
+        .route("/projects/id/{id}/settings/board", post(board_change))
+        .route(
+            "/projects/id/{id}/settings/board/preview",
+            post(board_preview),
+        )
         .route("/projects/id/{id}/settings/icon", post(upload))
         .route("/projects/id/{id}/settings/delete", post(delete))
         .route("/projects/id/{id}/settings/stream", get(settings_stream))
@@ -513,6 +537,114 @@ async fn change(
         .and_then(|v| v.render(&Viewer::from_headers(&headers), &feedback))
     {
         Ok(html) => (status, Html(html.to_string())).into_response(),
+        Err(e) => error_response(e),
+    }
+}
+/// The Board section's Save (`op=save`, `program`) and Clear (`op=clear`), each fenced by
+/// `expected_rev`; the page comes back with the outcome, as the other settings do.
+async fn board_change(
+    State(state): State<SettingsState>,
+    Path(id): Path<ProjectId>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mut fields = BTreeMap::new();
+    for (key, value) in url::form_urlencoded::parse(&body) {
+        fields.insert(key.into_owned(), value.into_owned());
+    }
+    let program = fields.remove("program").unwrap_or_default();
+    let request = (|| {
+        let expected_rev = fields
+            .get("expected_rev")
+            .ok_or_else(|| bad("board revision required"))?
+            .parse()
+            .map(Revision)
+            .map_err(|_| bad("invalid board revision"))?;
+        let program = match fields.get("op").map(String::as_str) {
+            Some("clear") => None,
+            Some("save") if program.trim().is_empty() => {
+                return Err(bad(
+                    "Write a program, or use Clear board to remove the board.",
+                ));
+            }
+            Some("save") => Some(program.replace("\r\n", "\n")),
+            _ => return Err(bad("op must be save or clear")),
+        };
+        Ok(projects::SetBoard {
+            program,
+            expected_rev: Some(expected_rev),
+            reason: Some("set in project settings".into()),
+            author: "owner".into(),
+        })
+    })();
+    let clear = request.as_ref().is_ok_and(|r| r.program.is_none());
+    let result = match request {
+        Ok(request) => state.commands.board(id, request).await,
+        Err(e) => Err(e),
+    };
+    let status = result.as_ref().err().map(status).unwrap_or(StatusCode::OK);
+    let feedback = Feedback {
+        field: "board".into(),
+        value: program,
+        resource: String::new(),
+        saved: result.is_ok(),
+        message: match &result {
+            Ok(rev) if clear => format!("Cleared (rev {rev})"),
+            Ok(rev) => format!("Saved (rev {rev})"),
+            Err(PublicError::Invalid { message, errors }) => std::iter::once(message.clone())
+                .chain(errors.iter().cloned())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Err(e) => e.to_string(),
+        },
+    };
+    match state
+        .snapshot(id)
+        .await
+        .and_then(|v| v.render(&Viewer::from_headers(&headers), &feedback))
+    {
+        Ok(html) => (status, Html(html.to_string())).into_response(),
+        Err(e) => error_response(e),
+    }
+}
+/// The Board section's live preview: the draft drawn with the project's data, or its problems.
+async fn board_preview(
+    State(state): State<SettingsState>,
+    registry: Option<axum::Extension<views::board::Registry>>,
+    Path(id): Path<ProjectId>,
+    body: Bytes,
+) -> Response {
+    let Ok(program) = std::str::from_utf8(&body) else {
+        return error_response(bad("the program must be UTF-8"));
+    };
+    if program.trim().is_empty() {
+        return Html(
+            "<p class=\"setting-help\">No board: the plan keeps the whole page.</p>".to_owned(),
+        )
+        .into_response();
+    }
+    let registry = registry.map(|r| r.0);
+    let result = async {
+        let (_, view) = views::board::snapshot(&state.dashboard, id, registry.as_ref())
+            .await?
+            .ok_or_else(|| PublicError::Busy {
+                message: "the dashboard is refreshing; try again".into(),
+                retryable: true,
+            })?;
+        views::panel::load(
+            &state.dashboard,
+            id,
+            registry.as_ref(),
+            &view,
+            Some(program.to_owned()),
+            None,
+        )
+        .await
+    }
+    .await;
+    match result {
+        Ok(Some(panel)) => Html(panel.html).into_response(),
+        Ok(None) => Html(String::new()).into_response(),
         Err(e) => error_response(e),
     }
 }

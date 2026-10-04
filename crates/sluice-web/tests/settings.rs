@@ -527,6 +527,13 @@ async fn injected_command_receives_id_revision_and_owner_and_preserves_errors() 
             let name = self.project.name.to_string();
             Box::pin(async move { Err(PublicError::NotFound { message: name }) })
         }
+        fn board(
+            &self,
+            _: ProjectId,
+            _: projects::SetBoard,
+        ) -> BoxFuture<'_, Result<Revision, PublicError>> {
+            Box::pin(async { Ok(Revision(1)) })
+        }
     }
     let mut f = Fixture::new().await;
     let fake = Arc::new(Fake {

@@ -8,7 +8,7 @@ macro_rules! register_pages {
         const PAGES: &[fn() -> PageRegistration] = &[$($module::registration),*];
     };
 }
-register_pages! { home, board, inbox, log, project_settings }
+register_pages! { home, board, inbox, log, project_settings, panel }
 pub mod icons;
 pub mod step;
 pub mod threads;

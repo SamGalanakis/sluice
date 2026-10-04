@@ -206,6 +206,8 @@ pub struct ProjectView {
     pub query: String,
     pub order: String,
     pub show: String,
+    /// The project's board, drawn beside the plan (`docs("board")`), when it has one.
+    pub panel: Option<super::panel::Panel>,
 }
 impl ProjectView {
     pub fn new(
@@ -301,6 +303,7 @@ impl ProjectView {
             query: String::new(),
             order: "live".into(),
             show: "all".into(),
+            panel: None,
         }
     }
     pub fn href(&self) -> String {
@@ -318,6 +321,7 @@ impl ProjectView {
         TrustedHtml::from_template(&ProjectTemplate {
             view: self,
             js_url: super::asset_url("sluice.js"),
+            board_js_url: super::asset_url("board.js"),
         })
     }
     pub fn region(&self) -> Result<TrustedHtml, askama::Error> {
@@ -351,13 +355,14 @@ impl ProjectView {
 struct ProjectTemplate<'a> {
     view: &'a ProjectView,
     js_url: String,
+    board_js_url: String,
 }
 pub(crate) fn render_error(error: askama::Error) -> PublicError {
     PublicError::Storage {
         message: error.to_string(),
     }
 }
-struct CatalogSignatures<'a>(&'a FunctionCatalog);
+pub(crate) struct CatalogSignatures<'a>(pub(crate) &'a FunctionCatalog);
 impl SignatureProvider for CatalogSignatures<'_> {
     fn signature(&self, name: &str) -> Option<FnSignature> {
         let entry = self
@@ -629,6 +634,21 @@ pub async fn project_page(
 ) -> Response {
     match snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await {
         Ok(Some((shared, mut view))) => {
+            if query.format.as_deref() != Some("mermaid") {
+                match super::panel::load(
+                    &state,
+                    project,
+                    registry.as_ref().map(|r| &r.0),
+                    &view,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    Ok(panel) => view.panel = panel,
+                    Err(e) => return error_response(e),
+                }
+            }
             if let Err(e) = query.apply(&mut view) {
                 return error_response(e);
             }
@@ -675,17 +695,28 @@ pub async fn project_stream(
         datastar: query.datastar.clone(),
     }
     .version(VersionSignal::Page);
+    let cache = super::panel::SharedCache::default();
     let loader = move || {
         let state = state.clone();
         let viewer = viewer.clone();
         let query = query.clone();
         let registry = registry.clone();
+        let cache = cache.clone();
         async move {
             let Some((shared, mut view)) =
                 snapshot(&state, project, registry.as_ref().map(|r| &r.0)).await?
             else {
                 return Ok(None);
             };
+            view.panel = super::panel::load(
+                &state,
+                project,
+                registry.as_ref().map(|r| &r.0),
+                &view,
+                None,
+                Some(&cache),
+            )
+            .await?;
             query.apply(&mut view)?;
             let nav = NavView::new(&shared, Some(project), "plan")?;
             Ok(Some(RenderedBatch {

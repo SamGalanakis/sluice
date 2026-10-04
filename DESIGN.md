@@ -164,6 +164,16 @@ components:
     rounded: "{rounded.pill}"
     height: "8px"
     width: "200px"
+  board-column:
+    backgroundColor: "{colors.card}"
+    rounded: "{rounded.lg}"
+    padding: "14px 16px 16px"
+    width: "400px"
+  view-switch-current:
+    backgroundColor: "{colors.secondary-fill}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.sm}"
+    padding: "2px 12px"
   status-filter-current:
     backgroundColor: "{colors.secondary-fill}"
     textColor: "{colors.ink}"
@@ -195,7 +205,8 @@ the board.
 The pages are server-rendered by `crates/sluice-web` (askama templates in `templates/`, views in
 `src/views/`), styled by `assets/style.css` and `assets/settings.css`, and kept live by Datastar
 streams; `assets/sluice.js` adds the drawer, edge drawing, tracing and live times, `nav.js` the
-menus, `inbox.js` and `openui.js` the answer forms. Every page works without JavaScript.
+menus, `inbox.js` and `openui.js` the answer forms, `board.js` the project board's Plan · Board
+switch and its buttons. Every page works without JavaScript.
 
 ## Colors
 
@@ -316,7 +327,10 @@ meta in muted ink, sentence case. Nothing is uppercase; no kickers or eyebrows.
 **The One Column Rule.** Every page sits on one centred 960px column (`--column`, with at least
 a 24px gutter, 16px at 720px and below). The top nav's content aligns to the same edges (the
 mark on the left edge, the display preferences icon ending on the right), so nav, titles, lists
-and cards share one left edge at every width. Nothing makes the page scroll sideways.
+and cards share one left edge at every width. Nothing makes the page scroll sideways. The one
+widening: from 1280px a plan page with a board grows the column by the board's width and gap
+(`--board-w` 400px, 480px from 2200px; `--board-gap` 32px), nav included, so the plan keeps its
+960px and the board's right edge is the nav's.
 
 **The One Click Rule.** The board is names and states. Everything else (inputs, outputs,
 errors, runs) is one click away on the step's page, or under the board for the plan as a
@@ -385,6 +399,32 @@ Top down:
 5. **Under the board**: Result (each plan output's value, or "No value yet.") and Plan inputs
    (value or "No value yet.", and the input's doc).
 
+### The project's board (beside the plan)
+A project may carry a board (`docs("board")`): an OpenUI program the server draws with the
+project's live data. It is the owner's instrument for that project, never a second plan.
+- **Wide (1280px and up):** a right-hand column (`board-pane`) beside the plan, top-aligned
+  with the summary line: the card colour with a hairline and the 14px corner, 14 by 16px
+  padding, sticky 16px from the top and at most the window's height, scrolling on its own. Its
+  head is "Board" (section voice, `heading-accent`, Lucide `layout-dashboard`). With the step
+  drawer open the drawer takes the side and the board steps away until it closes.
+- **Narrow (below 1280px):** a small segmented control first, "Plan" (Lucide `workflow`) and
+  "Board" (`layout-dashboard`), the current one in the secondary fill (44px tall at 720px and
+  below), then one section at a time; the choice is remembered per project. Without script
+  there is no switch and the board follows the plan, flat on the canvas under its head.
+- **No board:** nothing at all: no column, no switch; the plan keeps the whole column.
+- **Its parts** keep the question forms' look (`ou-*`): headings in Archivo, text at 15/22,
+  callouts, tables at 13px with hairline rows. Units is a table of unit (a link), state (the
+  status glyph and word, then its age in meta), the steps' marks in data mono and what it waits
+  on in muted ink. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
+  under it in meta. Output is its name in meta over the value. Metric is a number in Archivo
+  800 at 28/34 over its label, on the box tone; metrics in a row share it. Chart is an inline
+  SVG at most 520px wide: bars and the line in the accent, labels in ink and values in muted
+  ink at 12px, its caption in meta under it. Buttons are the dashboard's buttons; what a press
+  did (or why it was refused) is a status line under the board.
+- **A part that cannot be drawn** is a small box in its place: the muted fill, a strong
+  hairline, a 3px left rule in the attention gold and Lucide `triangle-alert` in gold; the
+  component and line in 600, the reason in data mono. Never coral, never red.
+
 ### Step (`/projects/id/<p>/steps/<s>`, and the drawer)
 On the board, opening a card with script loads the step into a right-hand drawer (beside the
 page from 1200px, `min(680px, 45vw)`; over the page on a scrim below that; full width on a
@@ -443,6 +483,8 @@ with a link to the authored changes. Details: Name (with its rules; links and ru
 the project id), Description (with a Preview), Icon (a text icon up to 16 characters, or an
 image up to 256 KiB). Resources: a line per resource (static capacity or capacity fn, in use,
 waiting, the step queue) and a capacity field each, then a new resource's name and capacity.
+Board: the program in a monospace textarea (with its rev), Save board and Clear board, and under
+them a live preview, drawn as the board column would draw it (its width), as one types.
 Activity: Pause project and Archive project switches. Delete project, in a bordered danger card:
 it explains what goes, refuses until the project is archived, and needs the current name typed.
 
@@ -450,7 +492,8 @@ it explains what goes, refuses until the project is archived, and needs the curr
 
 Flat by default, as supergraphics are: fields of flat colour, cards separated by hairline, not
 shadow. One lift (`--lift`) on what floats over the page: the drawer below 1200px, the
-switcher's and the preferences' menus and the focused skip link.
+switcher's and the preferences' menus and the focused skip link. The board column is flat: a
+card with a hairline, no shadow.
 
 ## Shapes
 
@@ -476,9 +519,9 @@ since they are ends, not work.
   `crates/sluice-web/assets/icons/` and inlined by `views::icons::icon`: Lucide's 24-unit grid
   and 2-unit round stroke, in `currentColor` so it takes its control's ink, hover and focus, and
   `aria-hidden` (the control carries the name). 20px in the nav (the inbox tray, project
-  settings, display preferences), 16px for status glyphs, chevrons and the theme tick. A new
-  icon is fetched from Lucide at that version, never drawn; the mark and favicon are the
-  owner's, and a project's own icon is the user's.
+  settings, display preferences), 16px for status glyphs, chevrons, the theme tick, the board's
+  head and switch and its error boxes. A new icon is fetched from Lucide at that version, never
+  drawn; the mark and favicon are the owner's, and a project's own icon is the user's.
 - **Tracing**: hovering or focusing a card lights its edges; the other cards lose their border
   and fill and their text turns muted ink.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input

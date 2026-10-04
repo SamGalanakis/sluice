@@ -44,6 +44,14 @@
 <label for="resource-name">Resource name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required>
 <label for="resource-value">Capacity</label><input id="resource-value" name="value" value="{% if feedback.error("resources") %}{{ feedback.value }}{% else %}1{% endif %}" required>
 <div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></section>
+<section aria-labelledby="board-heading" id="board-settings"><h2 id="board-heading">Board</h2>
+<p class="setting-help">An OpenUI Lang program drawn beside the plan (its own section on a phone), with live units, step states, outputs, metrics, tables and charts. Agents set it with <code>board_set</code>; <code>docs("board")</code> lists the components.</p>
+<form method="post" action="{{ view.path() }}/board" data-setting="board" id="board-form">
+<input type="hidden" name="expected_rev" id="board-rev" value="{{ view.project.board_rev }}">
+<label for="board-program">Program{% if view.project.board_rev.0 > 0 %} · rev {{ view.project.board_rev }}{% endif %}</label>
+<textarea id="board-program" name="program" class="board-program" spellcheck="false" aria-describedby="board-feedback">{{ feedback.value("board", view.project.board.as_deref().unwrap_or("")) }}</textarea>
+<div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><button type="submit" name="op" value="clear"{% if view.project.board.is_none() %} disabled{% endif %}>Clear board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
+</form><p class="setting-help" data-board-preview-label hidden>Preview</p><div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div></section>
 <section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
 <form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch"><div><p>Pause project</p><p class="setting-help">Hold future work. Running work continues.</p></div>
 <input type="hidden" name="field" value="paused"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.paused %}false{% else %}true{% endif %}">
@@ -87,13 +95,13 @@ function patch(doc, ids) {
  for (const id of ids) { const node = doc.getElementById(id); if (node) document.getElementById(id)?.replaceWith(node); }
  refresh();
 }
-async function sendForm(form) {
+async function sendForm(form, submitter) {
  if (saving) return;
  saving = true;
  const feedback = form.querySelector('.settings-feedback');
  feedback.textContent = 'Saving…';
  try {
-  const response = await fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form))});
+  const response = await fetch(form.action, {method:'POST', body:new URLSearchParams(new FormData(form, submitter))});
   const text = await response.text();
   const doc = new DOMParser().parseFromString(text, 'text/html');
   if (doc.getElementById('settings-live')) {
@@ -107,13 +115,19 @@ async function sendForm(form) {
    if (response.ok && field === 'description') patch(doc, ['description-preview']);
    if (response.ok && field === 'icon') { const image = doc.querySelector('#icon-preview'); document.querySelector('#icon-preview')?.remove(); if(image) form.before(image); }
    if (response.ok && ['paused','archived'].includes(field)) form.replaceWith(source);
+   if (field === 'board' && source) {
+    document.querySelector('#board-rev').value = source.querySelector('#board-rev').value;
+    form.querySelector('label[for=board-program]').textContent = source.querySelector('label[for=board-program]').textContent;
+    form.querySelector('button[value=clear]').disabled = source.querySelector('button[value=clear]').disabled;
+    if (response.ok) { document.querySelector('#board-program').value = source.querySelector('#board-program').value; previewBoard(); }
+   }
   } else { feedback.textContent = JSON.parse(text).message || 'Could not save.'; }
  } catch { feedback.textContent = 'Could not save. Check the connection and try again.'; }
  finally { saving = false; refresh(); }
 }
 document.addEventListener('submit', event => {
  const form = event.target;
- if (form.matches('form[data-setting]')) { event.preventDefault(); sendForm(form); }
+ if (form.matches('form[data-setting]')) { event.preventDefault(); sendForm(form, event.submitter); }
  if (form.id === 'delete-form') {
   event.preventDefault(); if (document.querySelector('#delete-button').disabled) return;
   saving = true; refresh();
@@ -138,6 +152,22 @@ document.querySelector('[data-upload-button]').addEventListener('click', async (
  document.querySelector('#icon-preview')?.remove(); const image = doc.querySelector('#icon-preview'); if(image) document.querySelector('form[data-setting=icon]').before(image);
  feedback.textContent = 'Saved';
 });
+let previewTimer, previewSeq = 0;
+async function previewBoard() {
+ const seq = ++previewSeq;
+ const area = document.querySelector('#board-preview');
+ try {
+  const response = await fetch(base + '/board/preview', {method:'POST', body:document.querySelector('#board-program').value});
+  const text = await response.text();
+  if (seq !== previewSeq) return;
+  area.innerHTML = response.ok ? text : '<p class="setting-error"></p>';
+  if (!response.ok) area.firstChild.textContent = (() => { try { return JSON.parse(text).message; } catch { return 'Could not draw the preview.'; } })();
+ } catch { if (seq === previewSeq) area.textContent = 'Could not draw the preview. Check the connection.'; }
+ area.hidden = false; document.querySelector('[data-board-preview-label]').hidden = false;
+}
+document.querySelector('#board-program').addEventListener('input', () => { clearTimeout(previewTimer); previewTimer = setTimeout(previewBoard, 400); });
+document.querySelector('#board-preview').addEventListener('submit', event => event.preventDefault());
+previewBoard();
 new MutationObserver(() => { if(document.querySelector('#settings-live')?.dataset.deleted === 'true') location.assign('/'); }).observe(document.querySelector('#content'),{childList:true,subtree:true});
 refresh();
 </script>

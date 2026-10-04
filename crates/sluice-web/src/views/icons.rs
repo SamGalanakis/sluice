@@ -33,6 +33,9 @@ icons! {
     CirclePause => "circle-pause",
     CircleSlash => "circle-slash",
     SquareArrowOutUpRight => "square-arrow-out-up-right",
+    TriangleAlert => "triangle-alert",
+    LayoutDashboard => "layout-dashboard",
+    Workflow => "workflow",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.

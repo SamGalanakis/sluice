@@ -46,3 +46,9 @@
  .settings-danger { padding:16px; }
  .settings-switch { flex-wrap:wrap; }
 }
+.settings-page textarea.board-program { min-height:220px; font:12.5px/19px var(--font-mono); tab-size:2; }
+.board-feedback { white-space:pre-line; }
+.board-preview { background:var(--card); border:1px solid var(--border); max-width:calc(var(--board-w) + 34px); box-sizing:border-box; }
+.settings-preview table.ou-table { display:table; }
+.board-preview .board-ui { overflow-wrap:break-word; }
+.board-preview .board-status { display:none; }

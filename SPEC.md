@@ -15,7 +15,8 @@ the agent-facing topics the `docs` tool serves.
 - **Home:** one directory holding a database and everything a set of projects needs (§2.3). One
   coordinator process owns each home's writes.
 - **Project:** a name (renameable), an immutable UUIDv7 id, a description, an optional icon,
-  named resources, paused and archived flags. Each project has exactly one plan and its own
+  named resources, paused and archived flags, and an optional board (an OpenUI Lang program the
+  dashboard draws beside the plan, `docs("board")`). Each project has exactly one plan and its own
   functions and recipes.
 - **Function (fn):** a named unit with typed `inputs` and `outputs`. Built-in fns are compiled
   into sluice (§16); user fns are Python (`fn.json` plus `main.py`, §5). An **open** fn (every
@@ -195,7 +196,9 @@ The home has one maintenance mode: `normal` or `drain`.
 
 ## 3. Storage
 
-`sluice.db` is SQLite in WAL mode, created from `migrations/0001.sql` (23 STRICT tables). Only
+`sluice.db` is SQLite in WAL mode at schema 2, created from `migrations/0001.sql` and
+`0002.sql` (23 STRICT tables); the coordinator's writer brings a schema-1 home (and a restore of
+one) forward in one transaction when it opens it, before anything else touches it. Only
 the coordinator writes, through one writer task; reads use a pool of read-only connections and
 one snapshot per answer. Every logical change (an edit and its records, a status change and
 its records, a message and its record) commits in one transaction.
@@ -778,6 +781,7 @@ seqs have gaps. Kinds:
 | `project.pause` | `paused, reason, author` |
 | `project.archive` | `archived, reason, author` |
 | `project.update` | `fields, reason, author` |
+| `project.board` | `rev, cleared, reason, author` (never the program) |
 | `project.rename` | `old_name, new_name, author` |
 | `project.delete` | `project_id, name, author` |
 | `project.capacity` | `resource, fn, capacity, error` |
@@ -897,9 +901,11 @@ unknown step `not_found`.
 | tool | arguments | result |
 |---|---|---|
 | `docs` | `topic?` | the topic's markdown, or the index |
-| `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, resources?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
+| `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
 | `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `author?` | `{project_id, name}` |
 | `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
+| `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …`; the same program again changes nothing; writes `project.board` |
+| `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
 | `project_delete` | `project`, `confirm_name`, `expected_settings_rev` (from `projects_list`), `author?` | `{project_id, name, deleted}`; the project must be archived, and nothing of it live |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, submits?, icon?, open?}]` |
 | `fn_get` | `name`, `project?` | the fn.json plus `scope` and `path` (null for a builtin) |
@@ -913,6 +919,9 @@ WebP, JPEG or GIF file of at most 256 KiB, which the coordinator reads once and 
 `{media_type, bytes_base64}`. A missing or unreadable path is `invalid`.
 
 Each call's status changes are `call` records. `core.external` cannot be called.
+
+A step's run may call `board_set` (and `board_get`) for its own project, as it may the plan
+edits; another project's board is outside its authority.
 
 **Plan edits**
 
@@ -956,7 +965,7 @@ it; `steps` lists the removed steps.
 | `plan_view` | `project`, `format="mermaid"`, `all=false` | text |
 | `verify` | `project?` | `[{where, message}]` |
 
-`status`, steps view: `{project, rev, paused, inputs, outputs, resources, steps: {id: {status,
+`status`, steps view: `{project, rev, board_rev, paused, inputs, outputs, resources, steps: {id: {status,
 outputs, error, run_ids, done, total, instances, manual, paused?, queued?, waiting?}},
 done_units?}`.
 Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
@@ -966,7 +975,7 @@ pending step that is not about to start has `waiting`, the reasons in order: `pa
 `paused: <reason>`, `project paused`, each handoff not ready (`step <id> is <status>`, `plan
 input <name> has no value`), each gate not satisfied (`after <entry> (<why>)`), the resource
 shortfall (`queued: needs lane 1 (4/4 held)`, with `queued` listing the resources), and for a
-`core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, paused, resources?,
+`core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, board_rev, paused, resources?,
 units: [{unit, state, age, engine, steps, blocked, last, line}], done_units?}`, `state` one of
 `running`, `failed`, `settled`, `blocked`, `queued`, `pending`, filterable with `state`
 (`state` is refused in the steps view).
@@ -1030,6 +1039,9 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 | `/log`, `/projects/id/<p>/log` | the log, 50 records a page, filtered by kinds and threads |
 | `/fns` | the functions a project (`?project=`) or the home sees |
 | `/projects/id/<p>/settings` (GET, POST), `/preview`, `/icon`, `/delete` | project settings |
+| `POST /projects/id/<p>/settings/board` | the Board section: `op=save\|clear`, `program`, `expected_rev`; the page with the outcome |
+| `POST /projects/id/<p>/settings/board/preview` | the body (a draft program) drawn as the board would draw it, with the project's data |
+| `POST /projects/id/<p>/board/action` | a board Button: `board_rev`, `button` (its number), `field-<n>`; JSON `{ok, message}` with `Accept: application/json`, else a redirect to the board |
 | `/projects/id/<p>/icon` | the project's image icon |
 | `POST /settings` | display preferences (theme, value types) |
 | `/static/<name>` | assets |
@@ -1046,6 +1058,27 @@ one statement per line, the first drawn, components `Stack`, `Heading`, `Text`, 
 (signatures in `docs("inbox")`). Unparseable lines are dropped and counted; the text box always
 remains. A Button answers `{action, params, values}`; the text box answers with action
 `answer` and its text as the body; "Close" answers with action `close`.
+
+**The project board.** A project with a board (`board_set`, `docs("board")`) draws it on its
+plan page: from 1280 px wide a right-hand column beside the plan (the page's column widens so
+nav, plan and board keep shared edges; the column scrolls on its own; with the step drawer open
+the drawer takes the side instead); below that a section after the plan, shown in turn with the
+plan by a Plan · Board switch that remembers its choice per project in `localStorage` (without
+script both show, the plan first). Without a board the page is as before. The program is
+checked again and drawn on the server: the question components draw as the inbox draws them,
+and the data components are filled when the page renders and with every live patch:
+`Units(state?)` (the units view's rows), `StepStatus(step)`, `Output(step, field)`,
+`Metric(label, query)`, `Query(query, caption?)` and `Chart(kind, query, caption?)` (bar or
+line, an inline SVG). A query runs through the `query` tool's path, views and limits, every
+`?` bound to the project's id, at most 16 per board; a stream reruns them when the project's
+log, plan or board changes and at least every 30 s. A component that cannot be drawn (a bad
+query, an unknown step, a non-numeric chart) is an inline error box naming it, its line and the
+reason; the page still renders. A Button sends `say(to: "orchestrator")` as `owner` with body
+`Board: <label>` and data `{board_rev, action, params, values}` (a primary button checks its
+form's rules first, `invalid` otherwise); if the board's rev changed since the page was drawn
+it is refused (`conflict`, shown under the board) and nothing is sent. The board never edits
+the plan. Project settings has a Board section: the program, a live preview, Save (fenced by
+`expected_rev`) and Clear.
 
 ## 14. CLI
 

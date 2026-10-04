@@ -404,6 +404,30 @@ impl settings::SettingsCommands for SocketSettings {
             Ok(())
         })
     }
+    fn board(
+        &self,
+        id: ProjectId,
+        request: projects::SetBoard,
+    ) -> BoxFuture<'_, Result<Revision, PublicError>> {
+        Box::pin(async move {
+            match self
+                .client
+                .command(CommandRequest::BoardSet(BoardSet {
+                    project: ProjectSelector::Id(id),
+                    program: request.program,
+                    expected_rev: request.expected_rev,
+                    reason: request.reason,
+                    author: Some(request.author),
+                }))
+                .await?
+            {
+                CommandReply::BoardRev { rev } => Ok(rev),
+                other => Err(PublicError::Storage {
+                    message: format!("unexpected board_set reply {other:?}"),
+                }),
+            }
+        })
+    }
 }
 /// The broker must enforce this revision inside its single command transaction.
 #[derive(Clone)]
