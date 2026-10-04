@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# Ship a gated branch: rebase onto origin/main, build (or re-test), push to main, deploy that
+# commit to the selected home, and check that the deploy adopted every live run.
+set -euo pipefail
+script_repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
+exec python3 - "$script_repo" "$@" <<'PY'
+import argparse, json, os, pathlib, re, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
+parser = argparse.ArgumentParser(prog='scripts/ship', description=
+    'Rebase REF onto origin/main, build it (re-test when the rebase brought in changes to files '
+    'the branch touched), push it to main, deploy origin/main to the selected home and check '
+    'that every live run was adopted.')
+parser.add_argument('ref', nargs='?', default='HEAD', help='what to ship (default HEAD of the current worktree)')
+parser.add_argument('--dry-run', action='store_true', help='print each step; rebase, build, push and deploy nothing')
+parser.add_argument('--retries', type=int, default=3, help='rebase-and-push attempts when main moves (default 3)')
+parser.add_argument('--prefix', default=str(pathlib.Path.home() / '.local/share/sluice'))
+parser.add_argument('--skip-compat', metavar='REASON', help='passed to scripts/deploy')
+parser.add_argument('--adopt-timeout', type=float, default=180, help='seconds to wait for the adoption check (default 180)')
+args = parser.parse_args(sys.argv[2:])
+script_repo = pathlib.Path(sys.argv[1])
+dry = args.dry_run
+def say(message): print('ship: ' + message, file=sys.stderr, flush=True)
+def fail(message): sys.exit('ship: ' + message)
+def git(*arguments, cwd, check=True):
+    result = subprocess.run(['git', '-C', str(cwd), *arguments], capture_output=True, text=True)
+    if check and result.returncode: fail('git %s: %s' % (' '.join(arguments), result.stderr.strip()))
+    return result.stdout.strip()
+def run(command, cwd, env=None):
+    say('$ ' + ' '.join(str(c) for c in command))
+    if dry: return
+    if subprocess.run([str(c) for c in command], cwd=cwd, env=env).returncode: fail('failed: ' + ' '.join(str(c) for c in command))
+
+# The worktree this runs from, whichever checkout's script it is; it must be the same repository.
+here = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+worktree = pathlib.Path(here.stdout.strip()) if here.returncode == 0 else script_repo
+common = lambda p: pathlib.Path(git('rev-parse', '--path-format=absolute', '--git-common-dir', cwd=p)).resolve()
+if common(worktree) != common(script_repo): fail('%s is not a worktree of %s' % (worktree, script_repo))
+if git('status', '--porcelain', cwd=worktree): fail('%s has uncommitted or untracked changes' % worktree)
+for state in ('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'):
+    if pathlib.Path(git('rev-parse', '--path-format=absolute', '--git-path', state, cwd=worktree)).exists():
+        fail('%s has a %s in progress' % (worktree, state))
+if git('rev-parse', '--verify', '--quiet', args.ref + '^{commit}', cwd=worktree, check=False) == '':
+    fail('unknown ref ' + args.ref)
+
+# Ship HEAD in place; any other ref in a temporary worktree, so this worktree is never switched.
+branch = git('symbolic-ref', '--quiet', '--short', 'HEAD', cwd=worktree, check=False)
+temporary = None
+if args.ref in ('HEAD', branch):
+    work = worktree
+else:
+    # A local branch is checked out (git refuses one checked out elsewhere); anything else detached.
+    local = subprocess.run(['git', '-C', str(worktree), 'show-ref', '--verify', '--quiet', 'refs/heads/' + args.ref]).returncode == 0
+    temporary = pathlib.Path(tempfile.mkdtemp(prefix='ship-'))
+    work = temporary / 'tree'
+    command = ['worktree', 'add', '--quiet', *([] if local else ['--detach']), str(work), args.ref]
+    say('$ git ' + ' '.join(command))
+    if dry: work = worktree
+    else: git(*command, cwd=worktree)
+
+def cleanup():
+    if temporary is None: return
+    if not dry: git('worktree', 'remove', '--force', str(work), cwd=worktree, check=False)
+    shutil.rmtree(temporary, ignore_errors=True)
+
+def selected():
+    launcher = shutil.which('sluice') or str(pathlib.Path(args.prefix) / 'bin/sluice')
+    result = subprocess.run([launcher, 'install', 'status'], capture_output=True, text=True)
+    if result.returncode: fail('sluice install status: ' + result.stderr.strip())
+    status = json.loads(result.stdout)
+    if not status.get('selection'): fail('the installation selects no home')
+    if status.get('fence'): fail('the installation is fenced: %s' % status['fence'].get('reason'))
+    return pathlib.Path(status['selection']['home_path'])
+
+def live_db(home):
+    return sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True, timeout=30)
+
+try:
+    say('shipping %s from %s%s' % (args.ref, work, ' (dry run)' if dry else ''))
+    selected()  # an installation that cannot be deployed to stops this before main moves
+    git('fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main', cwd=work)
+    head = git('rev-parse', args.ref if dry else 'HEAD', cwd=work)
+    gated_upstream = None  # the main the branch's tree was last checked against
+    for attempt in range(1, args.retries + 1):
+        upstream = git('rev-parse', 'origin/main', cwd=work)
+        base = git('merge-base', head, upstream, cwd=work)
+        if base == head:
+            say('%s is already on origin/main; nothing to push' % head[:12])
+            head = upstream
+            break
+        # Tests again only when main brought changes to files the branch touched. The branch was
+        # gated against its base; after a failed push, against the main it last rebased onto.
+        since = gated_upstream or base
+        ours = set(git('diff', '--name-only', base, head, cwd=work).split())
+        theirs = set(git('diff', '--name-only', since, upstream, cwd=work).split()) if since != upstream else set()
+        overlap = sorted(ours & theirs)
+        if base != upstream:
+            say('rebase %d commit(s) onto origin/main %s (main changed %d file(s) since %s)' % (
+                int(git('rev-list', '--count', base + '..' + head, cwd=work)), upstream[:12], len(theirs), since[:12]))
+            if not dry:
+                rebase = subprocess.run(['git', '-C', str(work), 'rebase', '--quiet', upstream], capture_output=True, text=True)
+                if rebase.returncode:
+                    subprocess.run(['git', '-C', str(work), 'rebase', '--abort'], capture_output=True)
+                    fail('rebase onto %s conflicts; resolve it by hand, re-gate and ship again:\n%s' % (upstream[:12], rebase.stdout + rebase.stderr))
+                head = git('rev-parse', 'HEAD', cwd=work)
+        if overlap:
+            say('main changed %d file(s) this branch also touched (%s): re-running the gate' % (len(overlap), ', '.join(overlap[:5]) + (' ...' if len(overlap) > 5 else '')))
+            run([work / 'scripts/check'], cwd=work)
+        else:
+            say('no overlap with main\'s changes: build only')
+            run(['cargo', '--config', 'build.target-dir=%s' % json.dumps(str(work / 'target')), 'build', '--workspace', '--all-targets', '--locked'], cwd=work)
+        gated_upstream = upstream
+        say('$ git push origin HEAD:refs/heads/main  (%s)' % (head[:12] if not dry else 'the rebased ' + args.ref))
+        if dry: break
+        push = subprocess.run(['git', '-C', str(work), 'push', '--porcelain', 'origin', 'HEAD:refs/heads/main'], capture_output=True, text=True)
+        if push.returncode == 0: break
+        if re.search(r'non-fast-forward|fetch first|\[rejected\]', push.stdout + push.stderr):
+            say('main moved during the push (attempt %d of %d); fetching and rebasing again' % (attempt, args.retries))
+            git('fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main', cwd=work)
+            continue
+        fail('push failed:\n' + push.stdout + push.stderr)
+    else:
+        fail('main kept moving: gave up after %d attempts' % args.retries)
+    if not dry:
+        git('fetch', '--quiet', 'origin', '+refs/heads/main:refs/remotes/origin/main', cwd=work)
+        if git('rev-parse', 'origin/main', cwd=work) != head: fail('origin/main is not %s after the push' % head[:12])
+    subject = git('log', '-1', '--format=%s', head, cwd=work)
+
+    # Deploy origin/main to the home the installation selects.
+    home = selected()
+    install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(pathlib.Path(args.prefix) / 'install')))
+    with live_db(home) as db:
+        before = [r[0] for r in db.execute('SELECT run_id FROM runs WHERE finished_at IS NULL')]
+        project = db.execute('SELECT project_id FROM runs WHERE finished_at IS NULL AND project_id IS NOT NULL LIMIT 1').fetchone() \
+            or db.execute('SELECT project_id FROM projects WHERE archived=0 LIMIT 1').fetchone()
+    db.close()
+    port = os.environ.get('SLUICE_DEPLOY_PORT', '3065')
+    urls = ['http://127.0.0.1:%s/' % port] + (['http://127.0.0.1:%s/projects/id/%s' % (port, project[0])] if project else [])
+    deploy = [work / 'scripts/deploy', 'origin/main', '--prefix', args.prefix, *(['--skip-compat', args.skip_compat] if args.skip_compat else [])]
+    say('deploy to %s (%d live run(s) to adopt)' % (home, len(before)))
+    say('$ SLUICE_HOME=%s %s' % (home, ' '.join(str(c) for c in deploy)))
+    compat = 'compat skipped' if args.skip_compat else None
+    if not dry:
+        child = subprocess.Popen([str(c) for c in deploy], cwd=work, env=dict(os.environ, SLUICE_HOME=str(home)),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in child.stdout:
+            sys.stderr.write(line)
+            match = re.match(r'compat: (\d+) releases ok', line)
+            if match: compat = 'compat %s releases ok' % match.group(1)
+        if child.wait(): fail('deploy failed (see above)')
+
+    # Adoption: every run live before the deploy is still live under its unit, or finished
+    # with a recorded result; the deploy's units are active; the dashboard answers.
+    services = {}
+    if (install / 'services.json').exists():
+        services = json.loads((install / 'services.json').read_text())
+    units = [record['unit'] for record in services.values() if 'unit' in record]
+    say('check: %d run(s) adopted or finished with a result; units %s active; %s answer 200' % (len(before), ', '.join(units) or '(none recorded)', ' and '.join(urls)))
+    if dry:
+        say('dry run: shipped nothing')
+        print('would ship %s %s · deploy origin/main · adoption check of %d runs' % (head[:12], subject, len(before)))
+        sys.exit(0)
+    def active(unit): return subprocess.run(['systemctl', '--user', 'is-active', '--quiet', unit]).returncode == 0
+    def status(url):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as response: return response.status
+        except Exception as e: return getattr(e, 'code', str(e))
+    deadline = time.monotonic() + args.adopt_timeout
+    while True:
+        problems = []
+        with live_db(home) as db:
+            for run_id in before:
+                row = db.execute('SELECT finished_at, result IS NOT NULL, unit_name FROM runs WHERE run_id=?', (run_id,)).fetchone()
+                if row is None: problems.append('run %s is gone from the store' % run_id)
+                elif row[0] is None and not active(row[2] or 'sluice-run-%s.service' % run_id): problems.append('run %s is unfinished but its unit is not active' % run_id)
+                elif row[0] is not None and not row[1]: problems.append('run %s finished without a recorded result' % run_id)
+        db.close()
+        problems += ['unit %s is not active' % unit for unit in units if not active(unit)]
+        problems += ['%s answered %s' % (url, code) for url in urls for code in [status(url)] if code != 200]
+        if not problems or time.monotonic() > deadline: break
+        time.sleep(3)
+    if problems:
+        for problem in problems: say('adoption: ' + problem)
+        fail('deployed %s, but the adoption check failed' % head[:12])
+    print('shipped %s %s · deploy ok · %s · adopted %d runs' % (head[:12], subject, compat or 'compat ok', len(before)))
+finally:
+    cleanup()
+PY

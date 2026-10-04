@@ -31,7 +31,14 @@ SLUICE_HOME=~/sluice-home scripts/deploy HEAD
 release and the home, starts the coordinator, the dashboard (`serve --no-runner --port 3065`)
 and the scheduler (`loop`) as systemd user units, runs `sluice doctor`, and unfences. Running
 steps carry on through it. `scripts/build-release <prefix>` alone builds and stages a release
-without selecting it.
+without selecting it. Before the fence, deploy runs `scripts/compat-check`, which starts the
+new release on a copy of the home and checks that every release a live run is pinned to can
+still read, say and submit against it; a failure stops the deploy unless
+`--skip-compat "<reason>"` is given.
+
+To ship a gated branch in one go, `scripts/ship [REF]` rebases it onto `origin/main`, builds,
+pushes to main, deploys `origin/main` to the selected home and checks that every live run was
+adopted and the dashboard answers; `--dry-run` prints the steps without doing them.
 
 Put the launcher on your `PATH`:
 

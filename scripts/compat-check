@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# Prove that a candidate release can serve every release a live run is pinned to: start the
+# candidate's coordinator on a read-only copy of the home, then run the CLI calls an agent
+# makes with each pinned release binary against it. Never touches the live home or units.
+set -euo pipefail
+repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
+exec python3 - "$repo" "$@" <<'PY'
+import argparse, json, os, pathlib, shutil, signal, sqlite3, subprocess, sys, tempfile, time, uuid
+parser = argparse.ArgumentParser(prog='scripts/compat-check', description=
+    'Start the candidate release on a copy of the home and run the agent CLI calls with every '
+    'release a live run is pinned to, plus the selected release and the candidate itself.')
+parser.add_argument('--release', help='candidate release dir (default: the newest under PREFIX/releases, '
+    'which is the one scripts/build-release just built)')
+parser.add_argument('--prefix', default=str(pathlib.Path.home() / '.local/share/sluice'))
+parser.add_argument('--home', help='home to copy (default: SLUICE_HOME, else the installation\'s selected home)')
+parser.add_argument('--pinned', action='append', default=[], metavar='DIR',
+    help='also check this release dir as if a live run were pinned to it (repeatable)')
+parser.add_argument('--mark-schema', type=int, metavar='N',
+    help='after the candidate opens the copy, mark the copy at schema N, as a candidate that bumped '
+    'the version would (proves the check catches it)')
+parser.add_argument('--keep', action='store_true', help='keep the scratch dir (its processes are still stopped)')
+parser.add_argument('--timeout', type=float, default=60, help='seconds per CLI call (default 60)')
+args = parser.parse_args(sys.argv[2:])
+prefix = pathlib.Path(args.prefix).resolve()
+install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(prefix / 'install'))).resolve()
+def selection():
+    try: return json.loads((install / 'selection.json').read_text())
+    except FileNotFoundError: return None
+if args.home: home = pathlib.Path(args.home).resolve()
+elif 'SLUICE_HOME' in os.environ: home = pathlib.Path(os.environ['SLUICE_HOME']).resolve()
+elif selection(): home = pathlib.Path(selection()['home_path']).resolve()
+else: sys.exit('compat-check: no home: set SLUICE_HOME or --home (the installation selects none)')
+if not (home / 'sluice.db').is_file():
+    print('compat: no database at %s; nothing to check' % home)
+    print('compat: 0 releases ok')
+    sys.exit(0)
+releases = prefix / 'releases'
+if args.release: candidate = pathlib.Path(args.release).resolve()
+else:
+    built = [p for p in releases.iterdir() if p.is_dir() and not p.name.startswith('.')] if releases.is_dir() else []
+    if not built: sys.exit('compat-check: no release under %s; pass --release' % releases)
+    candidate = max(built, key=lambda p: p.stat().st_mtime_ns)
+if not (candidate / 'bin/sluice').is_file(): sys.exit('compat-check: %s has no bin/sluice' % candidate)
+
+# Scratch layout. Short on purpose: Unix socket paths are limited to 108 bytes.
+scratch = pathlib.Path(tempfile.mkdtemp(prefix='cc.', dir='/tmp'))
+copy, scratch_install, bus = scratch / 'home', scratch / 'install', scratch / 'bus'
+started = []  # (pid, start time) of every process this script started
+def start_time(pid):
+    try: return pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    except (FileNotFoundError, ProcessLookupError): return None
+def alive(record):
+    pid, start = record
+    if start_time(pid) != start: return False
+    return pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+def stop(record):
+    pid, start = record
+    for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        if not alive(record): return
+        os.kill(pid, sig)
+        deadline = time.monotonic() + wait
+        while alive(record) and time.monotonic() < deadline:
+            try: os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError: pass
+            time.sleep(.05)
+def strays():
+    # Anything a candidate or CLI spawned in turn carries the scratch home in its environment.
+    found = []
+    marker = b'SLUICE_HOME=' + os.fsencode(copy)
+    for proc in pathlib.Path('/proc').iterdir():
+        if not proc.name.isdecimal() or int(proc.name) == os.getpid(): continue
+        try:
+            if marker in (proc / 'environ').read_bytes().split(b'\0'): found.append((int(proc.name), start_time(int(proc.name))))
+        except OSError: pass
+    return found
+def cleanup():
+    for record in started: stop(record)
+    for record in strays(): stop(record)
+    if args.keep: print('compat: kept ' + str(scratch), flush=True)
+    else: shutil.rmtree(scratch, ignore_errors=True)
+def interrupted(signum, frame): raise SystemExit(130)
+signal.signal(signal.SIGTERM, interrupted)
+signal.signal(signal.SIGINT, interrupted)
+
+# Every process here gets the copy as its home, a scratch installation, and no route to the
+# user's systemd manager: systemctl and systemd-run fail, so nothing can start, stop or query
+# a live unit (the candidate's adoption pass sees the live runs' rows), and a CLI that finds
+# no coordinator cannot auto-start one as a unit.
+env = {k: v for k, v in os.environ.items() if not k.startswith('SLUICE_') or k in ('SLUICE_TEST', 'SLUICE_FIXTURE')}
+env.update(SLUICE_HOME=str(copy), SLUICE_INSTALL_DIR=str(scratch_install), SLUICE_AUTHOR='compat-check',
+           XDG_RUNTIME_DIR=str(bus), DBUS_SESSION_BUS_ADDRESS='unix:path=' + str(bus / 'none'))
+
+def short(release): return pathlib.Path(release).name[:12]
+def uuid7():
+    value = (time.time_ns() // 1_000_000) << 80 | 0x7 << 76 | uuid.uuid4().int & ((1 << 76) - 1)
+    return str(uuid.UUID(int=value & ~(0xc << 60) | 0x8 << 60))
+def classify(command, proc):
+    """(verdict, detail): ok; refused, a typed refusal that is not about storage; or FAIL, a
+    storage or schema error, a crash, unreadable output, or a step_submit not refused as stale."""
+    out = proc.stdout.strip()
+    err = proc.stderr.strip().splitlines()
+    reply = None
+    # A reply is JSON on stdout; an error is a JSON object on stdout or stderr's last line.
+    for text in (out, err[-1] if err else ''):
+        try: reply = json.loads(text) if text else None
+        except json.JSONDecodeError: reply = None
+        if reply is not None: break
+    if proc.returncode < 0: return 'FAIL', 'crash: signal %d' % -proc.returncode
+    if isinstance(reply, dict) and isinstance(reply.get('error'), str):
+        kind, message = reply['error'], str(reply.get('message', ''))
+        if isinstance(reply.get('errors'), list) and reply['errors']:
+            message += ' (%s%s)' % ('; '.join(str(e) for e in reply['errors'][:3]), '; ...' if len(reply['errors']) > 3 else '')
+        detail = '%s: %s' % (kind, message[:400])
+        if command == 'step_submit':
+            return ('ok', '') if kind == 'conflict' and 'stale' in message else ('FAIL', 'not refused as stale: ' + detail)
+        if kind == 'storage' or 'schema' in message.lower(): return 'FAIL', detail
+        return 'refused', detail
+    if proc.returncode == 0 and reply is not None:
+        return ('FAIL', 'accepted a submission for a run that does not exist') if command == 'step_submit' else ('ok', '')
+    if proc.returncode not in (0, 1): return 'FAIL', 'crash: exit %d: %s' % (proc.returncode, (err[-1] if err else out[:160]))
+    return 'FAIL', 'exit %d without a reply: %s' % (proc.returncode, (err[-1] if err else out[:160]) or 'no output')
+def cli(binary, *arguments, timeout):
+    child = subprocess.Popen([str(binary), *arguments], env=env, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True, cwd=scratch)
+    record = (child.pid, start_time(child.pid))
+    started.append(record)
+    try:
+        stdout, stderr = child.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop(record); child.communicate()
+        return None
+    finally:
+        started.remove(record)
+    return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
+
+try:
+    for p in (copy, scratch_install, bus):
+        if p == home or home in p.parents or p in home.parents: sys.exit('compat-check: scratch overlaps the home')
+        p.mkdir(mode=0o700)
+    # A consistent snapshot through SQLite's backup API; the live file is opened read-only.
+    with sqlite3.connect('file:%s?mode=ro' % (home / 'sluice.db'), uri=True) as live, \
+         sqlite3.connect(str(copy / 'sluice.db')) as snapshot:
+        live.backup(snapshot)
+    live.close(); snapshot.close()
+    config = {}
+    if (home / 'config.json').is_file():
+        try: config = json.loads((home / 'config.json').read_text())
+        except json.JSONDecodeError: config = {}
+    # The copy never notifies anyone and never listens on the live port.
+    for key in ('notify', 'unread_alert_min'): config.pop(key, None)
+    config['http'] = {'host': '127.0.0.1', 'port': 1}
+    (copy / 'config.json').write_text(json.dumps(config))
+    # Plans name project and global fns: copy their trees, never a .env.
+    skip = shutil.ignore_patterns('.env', '__pycache__')
+    for tree in ['projects', 'fns', 'recipes', *[d for d in config.get('fn_dirs', []) if isinstance(d, str) and not os.path.isabs(d)]]:
+        source = (home / tree).resolve()
+        if source.is_dir() and (source == home or home in source.parents) and not (copy / tree).exists():
+            shutil.copytree(source, copy / tree, symlinks=True, ignore=skip)
+
+    db = sqlite3.connect('file:%s?mode=ro' % (copy / 'sluice.db'), uri=True)
+    runs = db.execute("SELECT r.run_id, r.release_id, r.project_id, p.name, r.step_id FROM runs r "
+                      "LEFT JOIN projects p USING(project_id) WHERE r.finished_at IS NULL ORDER BY r.created_at").fetchall()
+    db.close()
+
+    # Releases to check: each live run's, the selected one, the candidate (agents now run the
+    # launcher, i.e. the candidate once selected) and any --pinned.
+    rows = {}  # release dir -> {roles, runs, target}
+    absent = {}
+    def add(release, role, run=None):
+        entry = rows.setdefault(str(release), dict(roles=[], runs=0, target=None))
+        if role not in entry['roles']: entry['roles'].append(role)
+        if run:
+            entry['runs'] += 1
+            if run[4] and run[3] and entry['target'] is None: entry['target'] = (run[2], run[3], run[4], run[0])
+    for run in runs:
+        release = releases / (run[1] or '')
+        if run[1] and (release / 'bin/sluice').is_file(): add(release, 'pinned', run)
+        else: absent.setdefault(run[1] or '(none)', []).append(run[0])
+    if selection() and pathlib.Path(selection()['release_path']).is_dir(): add(pathlib.Path(selection()['release_path']).resolve(), 'selected')
+    add(candidate, 'candidate')
+    for extra in args.pinned:
+        if not (pathlib.Path(extra) / 'bin/sluice').is_file(): sys.exit('compat-check: %s has no bin/sluice' % extra)
+        add(pathlib.Path(extra).resolve(), 'pinned (--pinned)')
+    fallback = next(((r[2], r[3], r[4], r[0]) for r in runs if r[3] and r[4]), None)
+    if fallback is None:
+        row = None
+        db = sqlite3.connect('file:%s?mode=ro' % (copy / 'sluice.db'), uri=True)
+        try: row = db.execute("SELECT p.project_id, p.name, s.step_id FROM steps s JOIN projects p USING(project_id) "
+                              "WHERE p.archived = 0 ORDER BY s.rowid DESC LIMIT 1").fetchone()
+        except sqlite3.Error: row = None
+        db.close()
+        fallback = (*row, None) if row else None
+
+    print('compat: candidate %s on a copy of %s (scratch %s)' % (candidate.name, home, scratch), flush=True)
+    print('compat: %d live run(s) pinned to %d release(s)' % (len(runs), len({r[1] for r in runs})), flush=True)
+
+    # The candidate's coordinator, a plain child of this script.
+    log = (scratch / 'coordinator.log').open('wb')
+    coordinator = subprocess.Popen([str(candidate / 'bin/sluice'), 'coordinator'], env=env, stdin=subprocess.DEVNULL,
+        stdout=log, stderr=log, start_new_session=True, cwd=scratch)
+    log.close()
+    coordinator_record = (coordinator.pid, start_time(coordinator.pid))
+    started.append(coordinator_record)
+    def coordinator_tail():
+        text = (scratch / 'coordinator.log').read_text(errors='replace').strip().splitlines()
+        return ('; '.join(text[-3:]) if text else 'no output')
+    deadline = time.monotonic() + max(args.timeout, 120)
+    ready = None
+    while time.monotonic() < deadline:
+        if coordinator.poll() is not None:
+            ready = 'candidate coordinator exited %d: %s' % (coordinator.returncode, coordinator_tail())
+            break
+        if (copy / 'coordinator.sock').exists():
+            probe = cli(candidate / 'bin/sluice', 'tool', 'rpc', '{"command":"projects_list"}', timeout=10)
+            if probe is not None and probe.returncode == 0:
+                ready = 'ok'
+                break
+        time.sleep(.2)
+    if ready != 'ok':
+        print('compat: FAILED: ' + (ready or 'candidate coordinator did not answer'), flush=True)
+        sys.exit(1)
+    if args.mark_schema is not None:
+        with sqlite3.connect(str(copy / 'sluice.db'), timeout=30) as marked:
+            marked.execute('UPDATE home_meta SET schema_version=? WHERE singleton=1', (args.mark_schema,))
+            marked.execute('PRAGMA user_version=%d' % args.mark_schema)
+        marked.close()
+        print('compat: marked the copy at schema %d' % args.mark_schema, flush=True)
+
+    commands = ['log_read', 'status', 'say', 'step_submit', 'step_context']
+    results = {}
+    for release, entry in rows.items():
+        binary = pathlib.Path(release) / 'bin/sluice'
+        target = entry['target'] or fallback
+        cells = {}
+        if target is None:
+            cells = {c: ('skip', 'no project or step to address') for c in commands}
+        else:
+            project_id, name, step, run = target
+            calls = {
+                'log_read': {'project': name, 'limit': 1},
+                'status': {'project': name, 'steps': [step], 'brief': True},
+                # As an agent says it: from its run, to the orchestrator. Without a live run the
+                # caller is the orchestrator, so it says to the owner.
+                'say': {'project': 'id:' + project_id, 'to': 'orchestrator', 'run': run,
+                        'body': 'compat-check: %s can say on a copy of this home' % short(release)}
+                       if run else {'project': 'id:' + project_id, 'to': 'owner',
+                        'body': 'compat-check: %s can say on a copy of this home' % short(release)},
+                # A run id no home has: the candidate must refuse it as stale.
+                'step_submit': {'project': 'id:' + project_id, 'step': step, 'run': uuid7(), 'outputs': {}},
+                'step_context': {'project': name, 'step': step},
+            }
+            for command in commands:
+                proc = cli(binary, 'tool', command, json.dumps(calls[command]), timeout=args.timeout)
+                cells[command] = ('FAIL', 'timeout after %gs' % args.timeout) if proc is None else classify(command, proc)
+        results[release] = cells
+    if not alive(coordinator_record):
+        results.setdefault(str(candidate), {})['coordinator'] = ('FAIL', 'crash: candidate coordinator exited: ' + coordinator_tail())
+
+    # The table: release x command.
+    header = ['release', 'role', 'runs', *commands]
+    table = [header]
+    failures, notes = [], []
+    for release, cells in results.items():
+        entry = rows[release]
+        table.append([short(release), '+'.join(entry['roles']), str(entry['runs']), *[cells.get(c, ('-',))[0] for c in commands]])
+        for command, (verdict, detail) in cells.items():
+            if verdict == 'FAIL': failures.append((short(release), '%s %s: %s' % (short(release), command, detail)))
+            elif verdict != 'ok': notes.append('%s %s %s: %s' % (short(release), command, verdict, detail))
+    widths = [max(len(r[i]) for r in table) for i in range(len(header))]
+    for i, r in enumerate(table):
+        print('  '.join(c.ljust(w) for c, w in zip(r, widths)).rstrip())
+        if i == 0: print('  '.join('-' * w for w in widths))
+    for release_id, run_ids in absent.items():
+        print('compat: warning: %d live run(s) pinned to %s, which is not under %s: not checked' % (len(run_ids), release_id[:12], releases))
+    for note in notes: print('compat: note: ' + note)
+    for _, failure in failures: print('compat: ' + failure)
+    if failures:
+        print('compat: FAILED: %d of %d releases' % (len({r for r, _ in failures}), len(results)), flush=True)
+        sys.exit(1)
+    print('compat: %d releases ok' % len(results), flush=True)
+finally:
+    cleanup()
+PY

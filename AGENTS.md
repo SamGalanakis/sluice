@@ -25,7 +25,42 @@
   `SLUICE_HOME=<the selected home> scripts/deploy <ref>` (ref defaults to `origin/main`;
   `--prefix DIR` picks the installation) builds a pinned release of that commit, selects it
   under the installation fence and restarts the coordinator, serve and loop units; running
-  steps are adopted. `sluice install status` names the selected home.
+  steps are adopted. `sluice install status` names the selected home. Ship with `scripts/ship`
+  (below) rather than by hand.
+
+## Shipping
+
+- `scripts/ship [REF] [--dry-run]` takes a branch that already passed `scripts/check` to a
+  verified live deploy. From any worktree, with a clean tree, it rebases REF (default `HEAD`;
+  another ref is worked on in a temporary worktree) onto `origin/main`, builds, pushes to main
+  (fetching and rebasing again, up to `--retries`, when the push is not a fast-forward), runs
+  `scripts/deploy origin/main` with the home `sluice install status` selects, and checks
+  adoption: every run live before the deploy is still live under its unit or finished with a
+  recorded result, the coordinator, serve and loop units are active, and the dashboard answers
+  200 on `/` and a project page. It ends with one line: `shipped <sha> <subject> · deploy ok ·
+  compat N releases ok · adopted M runs`. `--dry-run` prints each step and changes nothing.
+- Re-test rule: after a rebase, re-run `scripts/check` only when main's new commits changed a
+  file the branch also changed; otherwise a build (`cargo build --workspace --all-targets
+  --locked` into the worktree's `target/`) is enough. A rebase conflict stops the ship: resolve
+  it, gate again and ship again.
+- `scripts/compat-check [--release DIR]` proves a candidate release (default: the newest under
+  the prefix, i.e. the one `scripts/build-release` just built) can serve every release a live
+  run is pinned to. It copies the home's `sluice.db` (SQLite backup API, the live file opened
+  read-only), `config.json` and fn trees (never a `.env`) into `/tmp/cc.*`, starts the
+  candidate's coordinator on the copy as a plain child with no route to the systemd user
+  manager, and runs `tool log_read`, `status`, `say`, `step_submit` (for a made-up run, which
+  must be refused as stale) and `step_context` with each pinned release, the selected one and
+  the candidate. A storage or schema error, a crash, a timeout or a submit not refused as stale
+  fails it; any other typed refusal (e.g. `invalid` for a fixture fn the CLI's catalog lacks)
+  shows as `refused` with its message but does not. It prints a release × command table, stops
+  what it started by PID, removes the copy, and exits 0 when nothing failed (also when nothing
+  is live). `--pinned DIR` adds a release; `--mark-schema N` marks the copy at schema
+  N once the candidate has opened it, to prove the check catches a bump.
+- `scripts/deploy` runs compat-check after the build and before the fence. A failure stops the
+  deploy unless `--skip-compat "<reason>"` is given; the reason is printed and every deploy's
+  compat outcome is appended to `<install>/deploy.log`.
+- `SCHEMA_VERSION` stays 1: a run's pinned `sluice` reads the database itself and refuses any
+  other version. Additive columns go in `ADDED_COLUMNS`.
 
 ## UI changes
 

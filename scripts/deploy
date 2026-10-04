@@ -6,6 +6,7 @@ import argparse, hashlib, json, os, pathlib, shutil, sqlite3, subprocess, sys, t
 parser = argparse.ArgumentParser()
 parser.add_argument('ref', nargs='?', default='origin/main')
 parser.add_argument('--prefix', default=str(pathlib.Path.home() / '.local/share/sluice'))
+parser.add_argument('--skip-compat', metavar='REASON', help='deploy without scripts/compat-check; the reason is printed and logged')
 args = parser.parse_args(sys.argv[2:])
 repo = pathlib.Path(sys.argv[1])
 prefix = pathlib.Path(args.prefix).resolve()
@@ -40,6 +41,22 @@ with tempfile.TemporaryDirectory(prefix='.source-', dir=prefix) as source:
     release = pathlib.Path(result.strip().splitlines()[-1])
 program = release / 'bin/sluice'
 env = dict(os.environ, SLUICE_HOME=str(home), SLUICE_INSTALL_DIR=str(install))
+def log_deploy(**fields):
+    # One JSON line per deploy decision, beside the control files.
+    install.mkdir(parents=True, exist_ok=True)
+    with (install / 'deploy.log').open('a') as f:
+        f.write(json.dumps(dict(at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), sha=sha, release=release.name, **fields)) + '\n')
+# Before the fence: the candidate must serve every release a live run is pinned to.
+if args.skip_compat is not None:
+    if not args.skip_compat.strip(): sys.exit('--skip-compat needs a reason')
+    print('compat: skipped: ' + args.skip_compat, file=sys.stderr)
+    log_deploy(compat='skipped', reason=args.skip_compat)
+else:
+    check = subprocess.run([str(repo / 'scripts/compat-check'), '--release', str(release), '--prefix', str(prefix), '--home', str(home)],
+        stdin=subprocess.DEVNULL, stdout=sys.stderr)
+    log_deploy(compat='ok' if check.returncode == 0 else 'failed')
+    if check.returncode:
+        sys.exit('Deploy stopped before the fence: scripts/compat-check failed. Fix it, or pass --skip-compat "<reason>".')
 def control(*arguments):
     return json.loads(subprocess.check_output([str(program), 'install', *arguments], env=env, text=True))
 def publish(name, value):
