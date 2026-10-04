@@ -118,6 +118,14 @@ pub enum Event {
         reason: Option<String>,
         author: String,
     },
+    /// A board set or cleared; the program itself is not recorded.
+    #[serde(rename = "project.board")]
+    ProjectBoard {
+        rev: Revision,
+        cleared: bool,
+        reason: Option<String>,
+        author: String,
+    },
     #[serde(rename = "project.rename")]
     ProjectRename {
         old_name: ProjectName,

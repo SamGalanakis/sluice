@@ -5,7 +5,7 @@ The workspace has seven crates:
 | crate | owns |
 |---|---|
 | `sluice-model` | ids, commands and replies, events and records, the error envelope, RPC framing, plan parsing, types, gates, units, recipes, edits, status views, input hashing |
-| `sluice-store` | the SQLite schema (`migrations/0001.sql`), the single writer and read pool, projects, plans, attempts, resources, messages, records, backup, the `query` reader |
+| `sluice-store` | the SQLite schema (`migrations/`, one file per schema version), the single writer and read pool, projects, plans, attempts, resources, messages, records, backup, the `query` reader |
 | `sluice-process` | the run guardian, transient systemd units, cgroups, the payload launcher, the private tmux, file locks, the host prerequisite check |
 | `sluice-agents` | the engine supervisor and the Claude, Codex and Devin engines |
 | `sluice-runtime` | the coordinator, scheduler, calls, drain, verify, `next`/`watch`, the fn registry, the Python fn host, the builtins, the installation, the agent docs topics |

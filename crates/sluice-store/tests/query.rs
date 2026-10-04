@@ -230,7 +230,7 @@ async fn authorizer_denies_mutation_ddl_attachment_pragmas_and_transactions() {
         "CREATE VIRTUAL TABLE evil USING fts5(body)",
         "ATTACH ':memory:' AS evil",
         "DETACH main",
-        "PRAGMA user_version=2",
+        "PRAGMA user_version=99",
         "PRAGMA query_only=OFF",
         "PRAGMA journal_mode=DELETE",
         "PRAGMA table_info(projects)",
@@ -257,7 +257,7 @@ async fn authorizer_denies_mutation_ddl_attachment_pragmas_and_transactions() {
     assert_eq!(
         c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        1
+        sluice_store::schema::SCHEMA_VERSION
     );
     assert_eq!(
         c.query_row(

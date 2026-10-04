@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use sluice_model::error::PublicError;
 
 pub const PAGES: &[(&str, &str)] = &[
+    ("board", include_str!("../../../docs/agent/board.md")),
     (
         "composing",
         include_str!("../../../docs/agent/composing.md"),

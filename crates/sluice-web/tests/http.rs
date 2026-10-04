@@ -463,7 +463,7 @@ async fn catalog_is_loaded_only_from_the_broker_and_keeps_exact_port_types() {
     let fixture = Fixture::new().await;
     let id = fixture.id;
     let broker = broker_fixture(fixture._home.path(), 3, move |request| match request {
-        CommandRequest::ProjectsList => CommandReply::Projects(vec![sluice_model::commands::ProjectSummary {project_id:id,name:"web".parse().unwrap(),description:String::new(),rev:sluice_model::ids::Revision(1),settings_rev:sluice_model::ids::Revision(1),counts:Default::default(),paused:false,archived:false,resources:None,icon:None}]),
+        CommandRequest::ProjectsList => CommandReply::Projects(vec![sluice_model::commands::ProjectSummary {project_id:id,name:"web".parse().unwrap(),description:String::new(),rev:sluice_model::ids::Revision(1),settings_rev:sluice_model::ids::Revision(1),counts:Default::default(),paused:false,archived:false,board_rev:sluice_model::ids::Revision(0),resources:None,icon:None}]),
         CommandRequest::FnList { .. } => CommandReply::Data(json!([
             {"name":"custom.work","scope":"project","doc":"Work","inputs":{"prompt":{"type":"string","doc":"Prompt"}},"outputs":{"ready":"boolean"},"submits":{"result":{"type":"string","doc":"Result"}}},
             {"name":"broken.fn","scope":"project","error":"Invalid manifest"}

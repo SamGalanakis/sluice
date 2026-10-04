@@ -11,7 +11,7 @@ pub mod notify;
 pub mod python;
 pub mod registry;
 pub mod scheduler;
-mod status;
+pub mod status;
 pub mod verify;
 pub mod watch;
 

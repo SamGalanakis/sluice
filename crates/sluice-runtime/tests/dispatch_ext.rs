@@ -414,7 +414,7 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
     assert!(html.as_str().unwrap().contains("<svg"));
     assert!(!html.as_str().unwrap().contains("<script>"));
     let docs = data(f.client.command(request("docs", json!({}))).await.unwrap());
-    assert_eq!(docs.as_object().unwrap().len(), 8);
+    assert_eq!(docs.as_object().unwrap().len(), 9);
     for topic in docs.as_object().unwrap().keys() {
         let page = data(
             f.client
@@ -795,6 +795,12 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             json!({"confirm_name":"p","expected_settings_rev":1}),
         ),
         (
+            "BoardSet",
+            "board_set",
+            json!({"program":"root = Units()","expected_rev":null,"reason":null,"author":"test"}),
+        ),
+        ("BoardGet", "board_get", json!({})),
+        (
             "PlanPatch",
             "plan_patch",
             json!({"rev":f.rev().await,"ops":[],"dry_run":true,"reason":"test"}),
@@ -974,6 +980,8 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             variant,
             "ProjectUpdate"
                 | "ProjectDelete"
+                | "BoardSet"
+                | "BoardGet"
                 | "PlanPatch"
                 | "StepAdd"
                 | "UnitAdd"

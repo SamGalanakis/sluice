@@ -236,6 +236,8 @@ pub fn restore_into_fresh_home(src: &Path, dst: &Path) -> Result<BackupInfo> {
     pin_snapshot(&source)?;
     let mut destination = FreshDirectory::create(dst, true)?;
     let info = backup_connection(&source, &dst.join(DATABASE_FILE))?;
+    // A backup of an older schema comes forward here, as its writer would bring it.
+    schema::upgrade_copy(&dst.join(DATABASE_FILE))?;
     // This verifies HomeId, format, schema, application_id and all 23 tables.
     schema::open_reader(dst, Duration::from_millis(50))?;
     if is_home {

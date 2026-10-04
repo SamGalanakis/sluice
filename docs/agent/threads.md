@@ -18,8 +18,8 @@ log — a question and its answer outlive the records that announced them.
   then `records` is empty). Call it in a loop to follow a project.
 - `kinds`: `plan.edit`, `plan.input`, `step.output`, `step.retry`, `step.cancel`,
   `step.submit`, `step.status`, `step.lease`, `step.queued`, `call`, `message`,
-  `project.pause`, `project.archive`, `project.update`, `project.rename`, `project.delete`,
-  `project.capacity`, `project.notify`, `run.adopt`, `run.orphan`, `run.completion_action`,
+  `project.pause`, `project.archive`, `project.update`, `project.board`, `project.rename`,
+  `project.delete`, `project.capacity`, `project.notify`, `run.adopt`, `run.orphan`, `run.completion_action`,
   `run.completion_action.register`, `unit.settled`; the groups `plan`, `step`, `project`,
   `run` and `unit` match every kind under them. `threads`: only messages on these threads
   (alone, it means messages only).

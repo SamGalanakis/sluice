@@ -87,9 +87,9 @@ pub(crate) fn status(
         query.selection.tags.as_deref(),
     )
     .map_err(|message| sluice_store::StoreError::from(PublicError::NotFound { message }))?;
-    let project = {
+    let (project, board_rev) = {
         let p = sluice_store::projects::resolve(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
-        json!({"project_id":id,"name":p.name})
+        (json!({"project_id":id,"name":p.name}), p.board_rev)
     };
     let queued = queued(sql, id, plan)?;
     let resources = resources_value(sql, id, plan)?;
@@ -106,7 +106,8 @@ pub(crate) fn status(
             query.all,
             query.state.as_deref(),
         );
-        let mut out = json!({"project":project,"rev":ctx.revision,"paused":paused});
+        let mut out =
+            json!({"project":project,"rev":ctx.revision,"board_rev":board_rev,"paused":paused});
         if !resources.is_empty() {
             out["resources"] = json!(resources);
         }
@@ -184,11 +185,30 @@ pub(crate) fn status(
         inputs = status::brief(&inputs);
         outputs = status::brief(&outputs);
     }
-    let mut out = json!({"project":project,"rev":ctx.revision,"paused":paused,"inputs":inputs,"steps":steps,"outputs":outputs,"resources":resources});
+    let mut out = json!({"project":project,"rev":ctx.revision,"board_rev":board_rev,"paused":paused,"inputs":inputs,"steps":steps,"outputs":outputs,"resources":resources});
     if !done.is_empty() {
         out["done_units"] = json!({"units":done.len(),"steps":left_out.len()});
     }
     Ok(out)
+}
+
+/// The units view's rows for a plan already compiled, as `status(view: "units")` builds them:
+/// what a board's `Units` draws. `wanted` keeps the units in those states; done units are
+/// left out (and counted) unless `wanted` names `settled`.
+pub fn unit_rows(
+    sql: &Connection,
+    id: ProjectId,
+    plan: &sluice_model::Plan,
+    wanted: Option<&[sluice_model::commands::UnitState]>,
+) -> sluice_store::Result<status::UnitsView> {
+    let state = plans::read_state(sql, id)?;
+    let queued = queued(sql, id, plan)?;
+    let facts = facts(sql, id, &queued)?;
+    let last = last_messages(sql, id)?;
+    let all = wanted.is_some_and(|w| w.contains(&sluice_model::commands::UnitState::Settled));
+    Ok(status::units_view(
+        plan, &state, &facts, &last, None, all, wanted,
+    ))
 }
 
 /// Seconds-ago figures come from SQLite's clock over the stored RFC 3339 times.

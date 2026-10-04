@@ -445,6 +445,16 @@ fn contract_project_update() {
 }
 
 #[test]
+fn contract_board_set() {
+    contract::<BoardSet>("BoardSet");
+}
+
+#[test]
+fn contract_board_view() {
+    contract::<BoardView>("BoardView");
+}
+
+#[test]
 fn contract_project_delete() {
     contract::<ProjectDelete>("ProjectDelete");
 }

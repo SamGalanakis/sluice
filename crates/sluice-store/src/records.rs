@@ -26,6 +26,7 @@ const KINDS: &[&str] = &[
     "project.pause",
     "project.archive",
     "project.update",
+    "project.board",
     "project.rename",
     "project.delete",
     "project.capacity",

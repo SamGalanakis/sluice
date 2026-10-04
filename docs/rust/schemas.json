@@ -416,6 +416,13 @@
       "archived": {
         "type": "boolean"
       },
+      "board_rev": {
+        "description": "The board's revision: 0 until a board is first set, then one more per set or clear.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0,
+        "default": 0
+      },
       "resources": {
         "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
         "anyOf": [
@@ -6632,6 +6639,39 @@
             ]
           },
           {
+            "description": "A board set or cleared; the program itself is not recorded.",
+            "type": "object",
+            "properties": {
+              "rev": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cleared": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "project.board"
+              }
+            },
+            "required": [
+              "kind",
+              "rev",
+              "cleared",
+              "author"
+            ]
+          },
+          {
             "type": "object",
             "properties": {
               "old_name": {
@@ -8245,6 +8285,39 @@
             "required": [
               "kind",
               "fields",
+              "author"
+            ]
+          },
+          {
+            "description": "A board set or cleared; the program itself is not recorded.",
+            "type": "object",
+            "properties": {
+              "rev": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cleared": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "project.board"
+              }
+            },
+            "required": [
+              "kind",
+              "rev",
+              "cleared",
               "author"
             ]
           },
@@ -10136,6 +10209,49 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "board_set"
+              },
+              "args": {
+                "$ref": "#/$defs/BoardSet"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "board_get"
+              },
+              "args": {
+                "type": "object",
+                "properties": {
+                  "project": {
+                    "$ref": "#/$defs/ProjectSelector"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "project"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "plan_patch"
               },
               "args": {
@@ -11429,6 +11545,47 @@
           "project",
           "confirm_name",
           "expected_settings_rev"
+        ]
+      },
+      "BoardSet": {
+        "description": "`board_set`: set the project's board (an OpenUI Lang program, `docs(\"board\")`) or clear it\nwith a null `program`. A stale `expected_rev` is a conflict, a program that does not check\nis invalid (each bad line listed).",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "program": {
+            "description": "The board program; null clears the board.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "program"
         ]
       },
       "PlanPatch": {
@@ -13170,6 +13327,52 @@
             "additionalProperties": false
           },
           {
+            "description": "`board_set`'s reply: the board's new revision.",
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "board_rev"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "rev": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "rev"
+                ]
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "board"
+              },
+              "data": {
+                "$ref": "#/$defs/BoardView"
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
             "type": "object",
             "properties": {
               "reply": {
@@ -13362,6 +13565,13 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "board_rev": {
+            "description": "The board's revision: 0 until a board is first set, then one more per set or clear.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "default": 0
           },
           "resources": {
             "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
@@ -13939,6 +14149,31 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "BoardView": {
+        "description": "A project's board as `board_get` reads it: no program while none is set.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "program": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "rev"
+        ]
       },
       "MessagePage": {
         "type": "object",
@@ -14738,6 +14973,39 @@
             "required": [
               "kind",
               "fields",
+              "author"
+            ]
+          },
+          {
+            "description": "A board set or cleared; the program itself is not recorded.",
+            "type": "object",
+            "properties": {
+              "rev": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cleared": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "project.board"
+              }
+            },
+            "required": [
+              "kind",
+              "rev",
+              "cleared",
               "author"
             ]
           },
@@ -16188,6 +16456,39 @@
         "required": [
           "kind",
           "fields",
+          "author"
+        ]
+      },
+      {
+        "description": "A board set or cleared; the program itself is not recorded.",
+        "type": "object",
+        "properties": {
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "cleared": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "project.board"
+          }
+        },
+        "required": [
+          "kind",
+          "rev",
+          "cleared",
           "author"
         ]
       },
@@ -17924,6 +18225,39 @@
             ]
           },
           {
+            "description": "A board set or cleared; the program itself is not recorded.",
+            "type": "object",
+            "properties": {
+              "rev": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cleared": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "project.board"
+              }
+            },
+            "required": [
+              "kind",
+              "rev",
+              "cleared",
+              "author"
+            ]
+          },
+          {
             "type": "object",
             "properties": {
               "old_name": {
@@ -19492,6 +19826,49 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "board_set"
+          },
+          "args": {
+            "$ref": "#/$defs/BoardSet"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "board_get"
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectSelector"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "project"
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "plan_patch"
           },
           "args": {
@@ -20785,6 +21162,47 @@
           "project",
           "confirm_name",
           "expected_settings_rev"
+        ]
+      },
+      "BoardSet": {
+        "description": "`board_set`: set the project's board (an OpenUI Lang program, `docs(\"board\")`) or clear it\nwith a null `program`. A stale `expected_rev` is a conflict, a program that does not check\nis invalid (each bad line listed).",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "program": {
+            "description": "The board program; null clears the board.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "program"
         ]
       },
       "PlanPatch": {
@@ -22474,6 +22892,52 @@
         "additionalProperties": false
       },
       {
+        "description": "`board_set`'s reply: the board's new revision.",
+        "type": "object",
+        "properties": {
+          "reply": {
+            "type": "string",
+            "const": "board_rev"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "rev": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "rev"
+            ]
+          }
+        },
+        "required": [
+          "reply",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "reply": {
+            "type": "string",
+            "const": "board"
+          },
+          "data": {
+            "$ref": "#/$defs/BoardView"
+          }
+        },
+        "required": [
+          "reply",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      {
         "type": "object",
         "properties": {
           "reply": {
@@ -22666,6 +23130,13 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "board_rev": {
+            "description": "The board's revision: 0 until a board is first set, then one more per set or clear.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "default": 0
           },
           "resources": {
             "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
@@ -23243,6 +23714,31 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "BoardView": {
+        "description": "A project's board as `board_get` reads it: no program while none is set.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "program": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "rev"
+        ]
       },
       "MessagePage": {
         "type": "object",
@@ -24042,6 +24538,39 @@
             "required": [
               "kind",
               "fields",
+              "author"
+            ]
+          },
+          {
+            "description": "A board set or cleared; the program itself is not recorded.",
+            "type": "object",
+            "properties": {
+              "rev": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cleared": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "project.board"
+              }
+            },
+            "required": [
+              "kind",
+              "rev",
+              "cleared",
               "author"
             ]
           },
@@ -25081,6 +25610,52 @@
             "additionalProperties": false
           },
           {
+            "description": "`board_set`'s reply: the board's new revision.",
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "board_rev"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "rev": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "rev"
+                ]
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "board"
+              },
+              "data": {
+                "$ref": "#/$defs/BoardView"
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
             "type": "object",
             "properties": {
               "reply": {
@@ -25273,6 +25848,13 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "board_rev": {
+            "description": "The board's revision: 0 until a board is first set, then one more per set or clear.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "default": 0
           },
           "resources": {
             "description": "Each declared resource: `{\"capacity\": n}` or `{\"capacity_fn\": fn}`.",
@@ -25850,6 +26432,31 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "BoardView": {
+        "description": "A project's board as `board_get` reads it: no program while none is set.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectIdentity"
+          },
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "program": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "rev"
+        ]
       },
       "MessagePage": {
         "type": "object",
@@ -26649,6 +27256,39 @@
             "required": [
               "kind",
               "fields",
+              "author"
+            ]
+          },
+          {
+            "description": "A board set or cleared; the program itself is not recorded.",
+            "type": "object",
+            "properties": {
+              "rev": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cleared": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "project.board"
+              }
+            },
+            "required": [
+              "kind",
+              "rev",
+              "cleared",
               "author"
             ]
           },
@@ -28304,6 +28944,40 @@
         "required": [
           "kind",
           "fields",
+          "author"
+        ]
+      },
+      {
+        "description": "A board set or cleared; the program itself is not recorded.",
+        "type": "object",
+        "properties": {
+          "rev": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "cleared": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "project.board"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "rev",
+          "cleared",
           "author"
         ]
       },
@@ -30234,6 +30908,152 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "BoardSet": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "BoardSet",
+    "description": "`board_set`: set the project's board (an OpenUI Lang program, `docs(\"board\")`) or clear it\nwith a null `program`. A stale `expected_rev` is a conflict, a program that does not check\nis invalid (each bad line listed).",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "program": {
+        "description": "The board program; null clears the board.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "expected_rev": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
+      "reason": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "author": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "program"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "BoardView": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "BoardView",
+    "description": "A project's board as `board_get` reads it: no program while none is set.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectIdentity"
+      },
+      "rev": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "program": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "rev"
+    ],
+    "$defs": {
+      "ProjectIdentity": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "name": {
+            "$ref": "#/$defs/ProjectName"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "name"
+        ]
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
       }
     }
   }

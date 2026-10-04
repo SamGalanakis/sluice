@@ -2869,6 +2869,28 @@
       "args": {
         "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
       }
+    },
+    {
+      "command": "board_set",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "program": "root = Units()",
+        "expected_rev": 2,
+        "reason": "lane overview",
+        "author": "orch"
+      }
+    },
+    {
+      "command": "board_get",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        }
+      }
     }
   ],
   "PlanViewFormat": [
@@ -2898,6 +2920,7 @@
           },
           "paused": false,
           "archived": false,
+          "board_rev": 3,
           "resources": {
             "lane": {
               "capacity": 4
@@ -2917,6 +2940,7 @@
           "counts": {},
           "paused": true,
           "archived": true,
+          "board_rev": 0,
           "icon": {
             "kind": "text",
             "text": "🧪"
@@ -3263,6 +3287,23 @@
           }
         ]
       }
+    },
+    {
+      "reply": "board_rev",
+      "data": {
+        "rev": 4
+      }
+    },
+    {
+      "reply": "board",
+      "data": {
+        "project": {
+          "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+          "name": "work-1"
+        },
+        "rev": 3,
+        "program": "root = Units()"
+      }
     }
   ],
   "ProjectSelector": [
@@ -3487,6 +3528,13 @@
       ],
       "reason": null,
       "author": "fixture"
+    },
+    {
+      "kind": "project.board",
+      "rev": 4,
+      "cleared": false,
+      "reason": "lane overview",
+      "author": "orch"
     },
     {
       "kind": "project.rename",
@@ -3716,6 +3764,7 @@
       },
       "paused": false,
       "archived": false,
+      "board_rev": 3,
       "resources": {
         "lane": {
           "capacity": 4
@@ -3735,6 +3784,7 @@
       "counts": {},
       "paused": true,
       "archived": true,
+      "board_rev": 0,
       "icon": {
         "kind": "text",
         "text": "🧪"
@@ -3907,5 +3957,45 @@
     "delivered",
     "queued",
     "no_live_run"
+  ],
+  "BoardSet": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "program": "root = Units()",
+      "expected_rev": 2,
+      "reason": "lane overview",
+      "author": "orch"
+    },
+    {
+      "project": {
+        "kind": "id",
+        "value": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      },
+      "program": null,
+      "expected_rev": null,
+      "reason": null,
+      "author": null
+    }
+  ],
+  "BoardView": [
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 3,
+      "program": "root = Units()"
+    },
+    {
+      "project": {
+        "project_id": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "name": "work-1"
+      },
+      "rev": 0,
+      "program": null
+    }
   ]
 }

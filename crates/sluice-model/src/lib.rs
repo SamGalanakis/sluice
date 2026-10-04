@@ -7,6 +7,7 @@ pub mod events;
 pub mod gates;
 pub mod hash;
 pub mod ids;
+pub mod openui;
 pub mod plan;
 pub mod recipe;
 pub mod rpc;

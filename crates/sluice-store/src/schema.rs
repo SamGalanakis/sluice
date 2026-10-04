@@ -8,10 +8,15 @@ use sluice_model::{error::PublicError, ids::HomeId};
 
 pub const DATABASE_FILE: &str = "sluice.db";
 pub const FORMAT_MAJOR: i64 = 1;
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 pub const RECORD_PAYLOAD_VERSION: i64 = 1;
 const APPLICATION_ID: i64 = 0x534c5543;
-const MIGRATION: &str = include_str!("../migrations/0001.sql");
+/// Each schema version's migration, in order: a fresh home runs them all, and the writer
+/// brings an older home forward (in one transaction) before anything else touches it.
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001.sql"),
+    include_str!("../migrations/0002.sql"),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -122,7 +127,7 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
     )?;
     let user_version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if tables != 0 {
-        verify(&connection)?;
+        verify_schema(&connection, true)?;
     } else if user_version != 0 {
         return Err(StoreError::UnsupportedSchema {
             found: user_version,
@@ -135,7 +140,9 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
     connection.pragma_update(None, "synchronous", "FULL")?;
     if tables == 0 {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(MIGRATION)?;
+        for migration in MIGRATIONS {
+            transaction.execute_batch(migration)?;
+        }
         transaction.execute(
             "INSERT INTO home_meta(singleton, home_id, format_major, schema_version) VALUES (1,?1,?2,?3)",
             (HomeId::new().to_string(), FORMAT_MAJOR, SCHEMA_VERSION),
@@ -143,8 +150,42 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
+    } else {
+        upgrade(&mut connection)?;
     }
     Ok(connection)
+}
+
+/// Bring a restored copy of an older schema forward (the copy is private to its restore).
+pub(crate) fn upgrade_copy(database: &Path) -> Result<()> {
+    let mut connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    connection.pragma_update(None, "foreign_keys", true)?;
+    verify_schema(&connection, true)?;
+    upgrade(&mut connection)
+}
+
+/// Bring a verified home of an older schema forward, one migration at a time, in one
+/// immediate transaction; a current home is left alone.
+pub(crate) fn upgrade(connection: &mut Connection) -> Result<()> {
+    let found: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if found >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let found: i64 = transaction.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    for migration in MIGRATIONS.iter().skip(usize::try_from(found).unwrap_or(0)) {
+        transaction.execute_batch(migration)?;
+    }
+    transaction.execute(
+        "UPDATE home_meta SET schema_version=?1 WHERE singleton=1",
+        [SCHEMA_VERSION],
+    )?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    verify(connection)
 }
 
 pub(crate) fn open_reader(home: &Path, timeout: Duration) -> Result<Connection> {
@@ -160,6 +201,11 @@ pub(crate) fn open_reader(home: &Path, timeout: Duration) -> Result<Connection> 
 }
 
 fn verify(connection: &Connection) -> Result<()> {
+    verify_schema(connection, false)
+}
+
+/// `older`: a home at an earlier schema version passes, for the writer to upgrade.
+fn verify_schema(connection: &Connection, older: bool) -> Result<()> {
     let has_meta: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='home_meta')",
         [],
@@ -186,7 +232,7 @@ fn verify(connection: &Connection) -> Result<()> {
     if major != FORMAT_MAJOR {
         return Err(StoreError::UnsupportedFormat { found: major });
     }
-    if schema != SCHEMA_VERSION {
+    if schema != SCHEMA_VERSION && !(older && (1..SCHEMA_VERSION).contains(&schema)) {
         return Err(StoreError::UnsupportedSchema { found: schema });
     }
     if home.parse::<HomeId>().is_err() {

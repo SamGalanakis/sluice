@@ -204,6 +204,34 @@ fn a_project_through_the_tools() {
         "{}",
         String::from_utf8_lossy(&set.stderr)
     );
+    // The board: set, read back, refused without a program, cleared with null.
+    let board = tool(
+        home.path(),
+        "board_set",
+        r#"{"project":"demo","program":"root = StepStatus(\"a\")","expected_rev":0}"#,
+    );
+    assert!(
+        board.status.success(),
+        "{}",
+        String::from_utf8_lossy(&board.stderr)
+    );
+    assert_eq!(stdout(&board), json!({"rev": 1}));
+    let read = tool(home.path(), "board_get", r#"{"project":"demo"}"#);
+    assert_eq!(stdout(&read)["program"], "root = StepStatus(\"a\")");
+    let missing = tool(home.path(), "board_set", r#"{"project":"demo"}"#);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        stderr(&missing)["message"]
+            .as_str()
+            .unwrap()
+            .contains("null to clear")
+    );
+    let cleared = tool(
+        home.path(),
+        "board_set",
+        r#"{"project":"demo","program":null}"#,
+    );
+    assert_eq!(stdout(&cleared), json!({"rev": 2}));
 }
 
 #[test]

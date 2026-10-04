@@ -1408,3 +1408,71 @@ async fn terminal_callbacks_replay_exact_replies_and_refuse_new_mutations() {
         .unwrap();
     assert_eq!(count, 1);
 }
+#[tokio::test]
+async fn a_run_sets_its_projects_board_and_reads_it_back() {
+    let (_home, b, f, p) = setup().await;
+    b.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&b, p, "s").await.unwrap();
+    let l = f.0.lock().unwrap()[0].clone();
+    b.guardian(C::Claim(guardian(&l)), Some(&l.capability))
+        .await
+        .unwrap();
+    let set = |id: &str, project: Value, program: &str| RpcRequest {
+        protocol: 1,
+        request_id: RequestId(id.into()),
+        run_capability: Some(l.capability.clone()),
+        command: request(
+            json!({"command":"board_set","args":{"project":project,"program":program,"expected_rev":0,"reason":"lane overview","author":"step:work"}}),
+        ),
+    };
+    let reply = b
+        .guardian(
+            C::Callback {
+                identity: l.identity.clone(),
+                request: Box::new(set(
+                    "board",
+                    json!({"kind":"id","value":p}),
+                    "root = Units()",
+                )),
+            },
+            Some(&l.capability),
+        )
+        .await
+        .unwrap();
+    assert!(format!("{reply:?}").contains("BoardRev"), "{reply:?}");
+    let CommandReply::Board(board) = b
+        .command(request(
+            json!({"command":"board_get","args":{"project":{"kind":"id","value":p}}}),
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("board")
+    };
+    assert_eq!(board.rev, sluice_model::ids::Revision(1));
+    assert_eq!(board.program.as_deref(), Some("root = Units()"));
+    // Another project's board is outside the run's authority.
+    let CommandReply::Project(other) = b.command(request(json!({"command":"project_create","args":{"name":"other","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap() else {
+        panic!("project")
+    };
+    assert!(
+        b.guardian(
+            C::Callback {
+                identity: l.identity.clone(),
+                request: Box::new(set(
+                    "other",
+                    json!({"kind":"id","value":other.project_id}),
+                    "root = Units()"
+                )),
+            },
+            Some(&l.capability),
+        )
+        .await
+        .is_err()
+    );
+    let status = b.command(request(json!({"command":"status","args":{"project":{"kind":"id","value":p},"selection":{"steps":null,"tags":null}}}))).await.unwrap();
+    let CommandReply::Data(status) = status else {
+        panic!("status")
+    };
+    assert_eq!(status.as_value()["board_rev"], 1);
+}

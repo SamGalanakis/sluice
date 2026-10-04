@@ -799,3 +799,142 @@ async fn owned_rows_and_global_run_directories_are_removed_but_shared_engine_hom
     assert!(!home.path().join(engine).exists());
     writer.shutdown().await.unwrap();
 }
+
+async fn set_board(
+    writer: &Writer,
+    id: ProjectId,
+    program: Option<&str>,
+    expected_rev: Option<u64>,
+) -> Result<Revision, PublicError> {
+    let request = projects::SetBoard {
+        program: program.map(Into::into),
+        expected_rev: expected_rev.map(Revision),
+        reason: Some("lane overview".into()),
+        author: "orch".into(),
+    };
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::board_set(tx, &selector(id), request)
+        })
+        .await
+}
+
+#[tokio::test]
+async fn a_board_is_set_cleared_fenced_by_its_rev_and_recorded_without_its_program() {
+    let (_home, writer, reads) = setup().await;
+    let p = create(&writer, "board").await;
+    let id = p.project_id;
+    assert_eq!((p.board.as_deref(), p.board_rev), (None, Revision(0)));
+    let program = "root = Stack([units, failed])\nunits = Units([\"running\"])\nfailed = Metric(\"Failed\", \"SELECT count(*) FROM steps WHERE project_id = ? AND status = 'failed'\")";
+    assert_eq!(
+        set_board(&writer, id, Some(program), Some(0))
+            .await
+            .unwrap(),
+        Revision(1)
+    );
+    let (p, records, _) = snapshot(&reads, id).await;
+    assert_eq!(
+        (p.board.as_deref(), p.board_rev),
+        (Some(program), Revision(1))
+    );
+    // The same program again changes nothing.
+    assert_eq!(
+        set_board(&writer, id, Some(program), None).await.unwrap(),
+        Revision(1)
+    );
+    // A stale rev is a conflict naming the current one, and nothing changes.
+    let stale = set_board(&writer, id, Some("root = Text(\"x\")"), Some(0)).await;
+    assert!(
+        matches!(
+            stale,
+            Err(PublicError::Conflict {
+                current_rev: Some(Revision(1)),
+                ..
+            })
+        ),
+        "{stale:?}"
+    );
+    // A program that does not check is invalid, every bad line listed, and nothing changes.
+    let bad = set_board(
+        &writer,
+        id,
+        Some("root = Stack([a])\nnot a statement\na = Chart(\"pie\", \"SELECT 1\")"),
+        None,
+    )
+    .await;
+    let Err(PublicError::Invalid { errors, .. }) = bad else {
+        panic!("{bad:?}")
+    };
+    assert!(
+        errors.iter().any(|e| e.starts_with("line 2: ")),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| e.starts_with("line 3: Chart: kind")),
+        "{errors:?}"
+    );
+    // Clearing.
+    assert_eq!(
+        set_board(&writer, id, None, Some(1)).await.unwrap(),
+        Revision(2)
+    );
+    let (cleared, after, _) = snapshot(&reads, id).await;
+    assert_eq!((cleared.board, cleared.board_rev), (None, Revision(2)));
+    let boards: Vec<&Value> = after
+        .iter()
+        .filter(|r| r["kind"] == "project.board")
+        .collect();
+    assert_eq!(
+        boards,
+        [
+            &json!({"kind":"project.board","rev":1,"cleared":false,"reason":"lane overview","author":"orch"}),
+            &json!({"kind":"project.board","rev":2,"cleared":true,"reason":"lane overview","author":"orch"}),
+        ]
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| r["kind"] == "project.board")
+            .count(),
+        1
+    );
+    // The settings revision is the settings', not the board's.
+    assert_eq!(cleared.settings_rev, p.settings_rev);
+    let listed = reads.snapshot(projects::list).await.unwrap();
+    assert_eq!(listed[0].board_rev, Revision(2));
+}
+
+#[tokio::test]
+async fn a_schema_one_home_gains_boards_when_its_writer_opens() {
+    let home = ScratchHome::new().unwrap();
+    let id = {
+        let writer = Writer::open(home.path()).unwrap();
+        create(&writer, "old").await.project_id
+    };
+    // Take the home back to schema 1, as an earlier release left it.
+    {
+        let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+        c.execute_batch(
+            "ALTER TABLE projects DROP COLUMN board_rev; ALTER TABLE projects DROP COLUMN board;
+             UPDATE home_meta SET schema_version=1; PRAGMA user_version=1;",
+        )
+        .unwrap();
+    }
+    assert!(matches!(
+        ReadPool::open(home.path(), 1).map(|_| ()),
+        Err(StoreError::UnsupportedSchema { found: 1 })
+    ));
+    let writer = Writer::open(home.path()).unwrap();
+    let reads = ReadPool::open(home.path(), 1).unwrap();
+    let p = reads
+        .snapshot(move |c| projects::resolve(c, &selector(id)))
+        .await
+        .unwrap();
+    assert_eq!((p.board, p.board_rev), (None, Revision(0)));
+    assert_eq!(
+        set_board(&writer, id, Some("root = Text(\"hello\")"), Some(0))
+            .await
+            .unwrap(),
+        Revision(1)
+    );
+}

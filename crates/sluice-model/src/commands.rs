@@ -28,6 +28,9 @@ pub struct ProjectSummary {
     pub counts: std::collections::BTreeMap<String, u64>,
     pub paused: bool,
     pub archived: bool,
+    /// The board's revision: 0 until a board is first set, then one more per set or clear.
+    #[serde(default)]
+    pub board_rev: Revision,
     /// Each declared resource: `{"capacity": n}` or `{"capacity_fn": fn}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<JsonMap>,
@@ -86,6 +89,30 @@ pub struct ProjectDelete {
     pub confirm_name: ProjectName,
     pub expected_settings_rev: Revision,
     pub author: Option<String>,
+}
+
+/// `board_set`: set the project's board (an OpenUI Lang program, `docs("board")`) or clear it
+/// with a null `program`. A stale `expected_rev` is a conflict, a program that does not check
+/// is invalid (each bad line listed).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardSet {
+    pub project: ProjectSelector,
+    /// The board program; null clears the board.
+    #[schemars(required, extend("type" = ["string", "null"]))]
+    pub program: Option<String>,
+    pub expected_rev: Option<Revision>,
+    pub reason: Option<String>,
+    pub author: Option<String>,
+}
+
+/// A project's board as `board_get` reads it: no program while none is set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardView {
+    pub project: ProjectIdentity,
+    pub rev: Revision,
+    pub program: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -792,6 +819,10 @@ pub enum CompletionActionOutcome {
 pub enum CommandRequest {
     ProjectUpdate(ProjectUpdate),
     ProjectDelete(ProjectDelete),
+    BoardSet(BoardSet),
+    BoardGet {
+        project: ProjectSelector,
+    },
     PlanPatch(PlanPatch),
     StepAdd(StepAdd),
     UnitAdd(UnitAdd),
@@ -924,6 +955,11 @@ pub enum CommandReply {
         id: MessageId,
     },
     Receipt(MessageReceipt),
+    /// `board_set`'s reply: the board's new revision.
+    BoardRev {
+        rev: Revision,
+    },
+    Board(BoardView),
     Messages(MessagePage),
     Records(RecordPage),
     Next(NextResult),

@@ -236,6 +236,14 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
         .await;
     assert_eq!(plan["rev"], 2);
     f.check("plan_get", json!({"project":"p"})).await;
+    let board = f
+        .check(
+            "board_set",
+            json!({"project":"p","program":"root = Units()","expected_rev":0,"reason":"lanes"}),
+        )
+        .await;
+    assert_eq!(board["rev"], 1);
+    f.check("board_get", json!({"project":"p"})).await;
     f.check(
         "step_add",
         json!({"project":"p","step":"c","start":false,

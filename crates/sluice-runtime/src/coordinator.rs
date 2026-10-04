@@ -467,6 +467,14 @@ impl<H: ExecutionHost> Coordinator<H> {
             },
             CommandRequest::PlanGet{project}=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"plan":ctx.plan.document()}))}).await.map_err(|e|e.into_public(true)).and_then(data),
             CommandRequest::Status(query)=>self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,query)).await.map_err(|e|e.into_public(true)).and_then(data),
+            CommandRequest::BoardGet { project } => self.reads().snapshot(move |sql| {
+                let p = projects::resolve(sql, &project)?;
+                Ok(CommandReply::Board(sluice_model::commands::BoardView {
+                    project: ProjectIdentity { project_id: p.project_id, name: p.name },
+                    rev: p.board_rev,
+                    program: p.board,
+                }))
+            }).await.map_err(|e| e.into_public(true)),
             command if project_mutation(&command) => {
                 let command = match command {
                     CommandRequest::ProjectUpdate(mut update) => {
@@ -1243,6 +1251,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     if !matches!(
                         command,
                         CommandRequest::PlanGet { .. }
+                            | CommandRequest::BoardGet { .. }
                             | CommandRequest::Status(_)
                             | CommandRequest::Messages(_)
                             | CommandRequest::LogRead(_)
@@ -1825,6 +1834,7 @@ fn served_while_adopting(command: &CommandRequest) -> bool {
         CommandRequest::ProjectsList
             | CommandRequest::Status(_)
             | CommandRequest::PlanGet { .. }
+            | CommandRequest::BoardGet { .. }
             | CommandRequest::PlanHistory { .. }
             | CommandRequest::PlanView { .. }
             | CommandRequest::StepContext { .. }
@@ -2159,6 +2169,7 @@ fn project_mutation(command: &CommandRequest) -> bool {
     matches!(
         command,
         CommandRequest::ProjectUpdate(_)
+            | CommandRequest::BoardSet(_)
             | CommandRequest::StepRetry(_)
             | CommandRequest::StepCancel(_)
             | CommandRequest::StepSetOutput(_)
@@ -2193,6 +2204,19 @@ fn mutate_project(
                 project_id: project.project_id,
                 name: project.name,
             }))
+        }
+        CommandRequest::BoardSet(request) => {
+            let rev = projects::board_set(
+                tx,
+                &request.project,
+                projects::SetBoard {
+                    program: request.program,
+                    expected_rev: request.expected_rev,
+                    reason: request.reason,
+                    author: request.author.unwrap_or_else(|| "cli".into()),
+                },
+            )?;
+            Ok(CommandReply::BoardRev { rev })
         }
         CommandRequest::StepRetry(request) => {
             crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;

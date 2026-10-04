@@ -183,6 +183,10 @@ pub struct Project {
     pub archived: bool,
     pub settings_rev: Revision,
     pub resources_rev: Revision,
+    /// The board program (`docs("board")`), when one is set.
+    pub board: Option<String>,
+    /// 0 until a board is first set; one more per change.
+    pub board_rev: Revision,
 }
 /// Resolve on admission; all subsequent state and callbacks carry the immutable id.
 pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
@@ -190,7 +194,7 @@ pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
         ProjectSelector::Id(id) => ("project_id", id.to_string()),
         ProjectSelector::Name(name) => ("name", name.to_string()),
     };
-    let row=c.query_row(&format!("SELECT project_id,name,description,icon_text,icon_type,icon_hash,icon_generation,paused,archived,settings_rev,resources_rev FROM projects WHERE {column}=?1 AND deleted_at IS NULL"),[value],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?,r.get::<_,bool>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?))).optional()?.ok_or_else(|| StoreError::from(PublicError::NotFound{message:format!("project {selector} not found")}))?;
+    let row=c.query_row(&format!("SELECT project_id,name,description,icon_text,icon_type,icon_hash,icon_generation,paused,archived,settings_rev,resources_rev,board,board_rev FROM projects WHERE {column}=?1 AND deleted_at IS NULL"),[value],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?,r.get::<_,bool>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,i64>(12)?))).optional()?.ok_or_else(|| StoreError::from(PublicError::NotFound{message:format!("project {selector} not found")}))?;
     let icon = match (row.3, row.4, row.5) {
         (Some(t), None, None) => Some(ProjectIcon::Text(t)),
         (None, Some(media_type), Some(hash)) => Some(ProjectIcon::Image {
@@ -223,6 +227,12 @@ pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
             row.10
                 .try_into()
                 .map_err(|_| invalid("invalid resource revision"))?,
+        ),
+        board: row.11,
+        board_rev: Revision(
+            row.12
+                .try_into()
+                .map_err(|_| invalid("invalid board revision"))?,
         ),
     })
 }
@@ -270,6 +280,7 @@ pub fn list(c: &Connection) -> Result<Vec<ProjectSummary>> {
             counts,
             paused: project.paused,
             archived: project.archived,
+            board_rev: project.board_rev,
             resources: (!resources.0.is_empty()).then_some(resources),
             icon: project.icon.map(|icon| match icon {
                 ProjectIcon::Text(text) => ProjectIconSummary::Text { text },
@@ -547,6 +558,71 @@ pub fn project_update(
     }
     resolve(tx.sql(), &ProjectSelector::Id(id))
 }
+#[derive(Debug, Clone, Default)]
+pub struct SetBoard {
+    /// The program; `None` clears the board.
+    pub program: Option<String>,
+    pub expected_rev: Option<Revision>,
+    pub reason: Option<String>,
+    pub author: String,
+}
+/// Set or clear a project's board in one transaction with its `project.board` record (which
+/// leaves the program out). A stale `expected_rev` is a conflict; a program that does not
+/// check against the board vocabulary is invalid, each problem with its line. Setting the
+/// board it already has (or clearing none) changes nothing and returns the current rev.
+pub fn board_set(
+    tx: &mut WriteTransaction<'_>,
+    selector: &ProjectSelector,
+    request: SetBoard,
+) -> Result<Revision> {
+    let project = resolve(tx.sql(), selector)?;
+    if request.expected_rev.is_some_and(|r| r != project.board_rev) {
+        return Err(PublicError::Conflict {
+            message: "the board changed".into(),
+            current_rev: Some(project.board_rev),
+        }
+        .into());
+    }
+    if let Some(program) = &request.program
+        && let Err(problems) = sluice_model::openui::check_board(program)
+    {
+        return Err(PublicError::Invalid {
+            message: format!(
+                "the board program has {} problem{}",
+                problems.len(),
+                if problems.len() == 1 { "" } else { "s" }
+            ),
+            errors: problems.iter().map(ToString::to_string).collect(),
+        }
+        .into());
+    }
+    if request.program == project.board {
+        return Ok(project.board_rev);
+    }
+    let id = project.project_id;
+    let rev = Revision(project.board_rev.0 + 1);
+    tx.sql().execute(
+        "UPDATE projects SET board=?2,board_rev=?3 WHERE project_id=?1",
+        rusqlite::params![
+            id.to_string(),
+            request.program,
+            i64::try_from(rev.0).map_err(|_| invalid("board revision overflow"))?
+        ],
+    )?;
+    tx.append_record(
+        Some(id),
+        Event::ProjectBoard {
+            rev,
+            cleared: request.program.is_none(),
+            reason: request.reason,
+            author: request.author,
+        },
+    )?;
+    tx.changed(Some(id), "board");
+    tx.changed(Some(id), "status");
+    tx.changed(None, "projects");
+    Ok(rev)
+}
 /// Coordinator can add live-process knowledge not yet reflected in attempt rows.
 /// This check runs under the writer transaction and must not perform external I/O.
 pub trait DeletionGuard {
@@ -707,7 +783,7 @@ pub fn project_delete(
         )?;
     }
     tx.sql().execute("UPDATE maintenance SET paused_projects=(SELECT coalesce(json_group_array(value),'[]') FROM json_each(maintenance.paused_projects) WHERE value<>?1),revision=revision+1 WHERE EXISTS(SELECT 1 FROM json_each(maintenance.paused_projects) WHERE value=?1)",[id.to_string()])?;
-    tx.sql().execute("UPDATE projects SET deleted_at=?2,changed_at=?2,settings_rev=settings_rev+1,icon_text=NULL,icon_type=NULL,icon_hash=NULL,description='' WHERE project_id=?1",[id.to_string(),now()?])?;
+    tx.sql().execute("UPDATE projects SET deleted_at=?2,changed_at=?2,settings_rev=settings_rev+1,icon_text=NULL,icon_type=NULL,icon_hash=NULL,description='',board=NULL WHERE project_id=?1",[id.to_string(),now()?])?;
     tx.append_record(
         None,
         Event::ProjectDelete {

@@ -129,7 +129,7 @@ async fn online_backup_during_commits_is_coherent_and_restores_an_isolated_home(
         assert_eq!(
             c.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
                 .unwrap(),
-            1
+            sluice_store::schema::SCHEMA_VERSION
         );
         assert_eq!(
             c.query_row("SELECT name FROM projects", [], |r| r.get::<_, String>(0))

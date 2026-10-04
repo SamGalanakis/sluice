@@ -324,6 +324,11 @@ const TOOLS: &[(&str, &str)] = &[
         "delete a project (confirm_name, expected_settings_rev)",
     ),
     ("projects_list", "every project, oldest first"),
+    (
+        "board_set",
+        "set or clear (program null) the project's board",
+    ),
+    ("board_get", "the project's board program and its rev"),
     ("plan_get", "the plan document and its revision"),
     ("plan_history", "the plan's edit history"),
     ("plan_patch", "JSON-patch the plan at a required rev"),
@@ -420,6 +425,7 @@ fn fill_author(request: &mut CommandRequest, author: &str) {
     match request {
         CommandRequest::ProjectUpdate(r) => fill(&mut r.author),
         CommandRequest::ProjectDelete(r) => fill(&mut r.author),
+        CommandRequest::BoardSet(r) => fill(&mut r.author),
         CommandRequest::PlanPatch(r) => fill(&mut r.author),
         CommandRequest::StepAdd(r) => fill_edit(&mut r.edit),
         CommandRequest::UnitAdd(r) => fill_edit(&mut r.edit),
@@ -574,6 +580,11 @@ async fn normalize_args(
         }
         "plan_patch" => {
             args.entry("dry_run").or_insert(Value::Bool(false));
+        }
+        "board_set" if !args.contains_key("program") => {
+            return Err(bad_request(
+                "board_set needs program: the board program, or null to clear the board",
+            ));
         }
         "step_add" | "step_update" | "unit_tag" | "edge_add" | "edge_remove" | "plan_set_input"
         | "plan_prune" => {

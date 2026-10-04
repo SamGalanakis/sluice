@@ -110,6 +110,7 @@ pub const KIND_OPTIONS: &[&str] = &[
     "project.pause",
     "project.archive",
     "project.update",
+    "project.board",
     "project.rename",
     "project.delete",
     "project.capacity",

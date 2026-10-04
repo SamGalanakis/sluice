@@ -43,5 +43,9 @@ Open questions to the owner are the inbox: the only place the person looks for w
 them — failed steps and workers' questions are yours to handle, not theirs. Answer a worker's
 question with `reply(project, to_message=<its id>, body=...)`; a note (`say`) needs no answer.
 
+To give the owner a live view of a project (a lane overview, a few numbers, a chart, a button
+that asks you for something), set its board: `board_set(project, program)`, drawn beside the
+plan on the dashboard; see `docs("board")`.
+
 Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
 plan.
