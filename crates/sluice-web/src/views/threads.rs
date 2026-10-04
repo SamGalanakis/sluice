@@ -38,6 +38,11 @@ impl MessageItem {
     pub fn ui(&self) -> &str {
         self.message.ui.as_deref().unwrap_or("")
     }
+    /// The dashboard speaks as the owner, and a reply goes to the question's sender, so the
+    /// owner answers every open question but its own.
+    pub fn answerable(&self) -> bool {
+        self.state == "open" && self.message.from != "owner"
+    }
     pub fn input(&self) -> &str {
         self.message.input.as_deref().unwrap_or("")
     }
@@ -53,6 +58,9 @@ pub struct ThreadView {
     pub project: ProjectId,
     pub project_name: String,
     pub thread: String,
+    /// Who the owner's message on this thread goes to: its step while the step is in
+    /// the plan, else the orchestrator.
+    pub recipient: String,
     pub messages: Vec<MessageItem>,
     pub through: i64,
 }
@@ -183,19 +191,19 @@ pub async fn load(
                 let selected =
                     messages::messages(sql, p.id, view.clone(), thread.as_deref(), None, "owner")?;
                 for message in selected {
-                    let (state, stopped) = if message.needs_reply {
-                        let q = messages::question(sql, p.id, message.id)?;
-                        (
-                            match q.state {
+                    let (state, stopped) = match message.state {
+                        Some(state) => (
+                            match state {
                                 QuestionState::Open => "open",
                                 QuestionState::Answered => "answered",
                                 QuestionState::Closed => "closed",
                             }
                             .into(),
-                            q.stopped.unwrap_or_default(),
-                        )
-                    } else {
-                        ("note".into(), String::new())
+                            messages::question(sql, p.id, message.id)?
+                                .stopped
+                                .unwrap_or_default(),
+                        ),
+                        None => ("note".into(), String::new()),
                     };
                     let is_step: bool = sql.query_row(
                         "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
@@ -223,13 +231,29 @@ pub async fn load(
                         questions.push(item);
                     } else {
                         let key = (p.id.to_string(), item.message.thread.clone());
-                        let group = groups.entry(key).or_insert_with(|| ThreadView {
-                            project: p.id,
-                            project_name: p.name.clone(),
-                            thread: item.message.thread.clone(),
-                            messages: vec![],
-                            through: 0,
-                        });
+                        if !groups.contains_key(&key) {
+                            let step = item.message.thread.strip_prefix("step-");
+                            let in_plan: bool = sql.query_row(
+                                "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+                                (p.id.to_string(), step.unwrap_or("")),
+                                |r| r.get(0),
+                            )?;
+                            groups.insert(
+                                key.clone(),
+                                ThreadView {
+                                    project: p.id,
+                                    project_name: p.name.clone(),
+                                    thread: item.message.thread.clone(),
+                                    recipient: step
+                                        .filter(|_| in_plan)
+                                        .unwrap_or(messages::ORCHESTRATOR_STREAM)
+                                        .into(),
+                                    messages: vec![],
+                                    through: 0,
+                                },
+                            );
+                        }
+                        let group = groups.get_mut(&key).expect("thread group");
                         group.through = group.through.max(item.id());
                         group.messages.push(item);
                     }

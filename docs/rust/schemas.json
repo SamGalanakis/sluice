@@ -3160,6 +3160,7 @@
   "MessagePost": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "MessagePost",
+    "description": "The retired `message_post` wire shape. Only runs started before ask, say and reply\nsend it; the coordinator translates it and refuses it without a run identity.",
     "type": "object",
     "properties": {
       "project": {
@@ -3411,6 +3412,10 @@
           "null"
         ],
         "format": "int64"
+      },
+      "owner": {
+        "description": "Read as the owner (the dashboard's identity) instead of the orchestrator.",
+        "type": "boolean"
       }
     },
     "additionalProperties": false,
@@ -5539,14 +5544,15 @@
   "Message": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Message",
+    "description": "One message. `to_message` and `answer` are a reply's; `state` and `answered_by`\nare a question's as read now (never in the log record). Rows stored before the\nverbs existed read with the verb derived from them.",
     "type": "object",
     "properties": {
       "id": {
         "type": "integer",
         "format": "int64"
       },
-      "thread": {
-        "type": "string"
+      "verb": {
+        "$ref": "#/$defs/MessageVerb"
       },
       "from": {
         "type": "string"
@@ -5557,33 +5563,16 @@
           "null"
         ]
       },
-      "title": {
-        "type": [
-          "string",
-          "null"
-        ]
+      "thread": {
+        "type": "string"
       },
       "body": {
         "type": "string"
       },
-      "needs_reply": {
-        "type": "boolean"
-      },
-      "reply_to": {
+      "title": {
         "type": [
-          "integer",
+          "string",
           "null"
-        ],
-        "format": "int64"
-      },
-      "answer": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/MessageAnswer"
-          },
-          {
-            "type": "null"
-          }
         ]
       },
       "ui": {
@@ -5621,65 +5610,58 @@
       "at": {
         "type": "string"
       },
-      "claimed_by": {
+      "to_message": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "int64"
+      },
+      "answer": {
         "anyOf": [
           {
-            "$ref": "#/$defs/RunId"
+            "$ref": "#/$defs/MessageAnswer"
           },
           {
             "type": "null"
           }
         ]
+      },
+      "state": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/QuestionState"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "answered_by": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "int64"
       }
     },
     "additionalProperties": false,
     "required": [
       "id",
-      "thread",
+      "verb",
       "from",
+      "thread",
       "body",
-      "needs_reply",
       "at"
     ],
     "$defs": {
-      "MessageAnswer": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string"
-          },
-          "params": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "values": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "action"
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
-      },
-      "JsonMap": {
-        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/$defs/JsonValue"
-        }
       },
       "JsonValue": {
         "x-sluice-integer-lexemes": "i64",
@@ -5720,6 +5702,53 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "MessageAnswer": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "values": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ]
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "QuestionState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "answered",
+          "closed"
+        ]
       }
     }
   },
@@ -5777,14 +5806,15 @@
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "Message": {
+        "description": "One message. `to_message` and `answer` are a reply's; `state` and `answered_by`\nare a question's as read now (never in the log record). Rows stored before the\nverbs existed read with the verb derived from them.",
         "type": "object",
         "properties": {
           "id": {
             "type": "integer",
             "format": "int64"
           },
-          "thread": {
-            "type": "string"
+          "verb": {
+            "$ref": "#/$defs/MessageVerb"
           },
           "from": {
             "type": "string"
@@ -5795,33 +5825,16 @@
               "null"
             ]
           },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "thread": {
+            "type": "string"
           },
           "body": {
             "type": "string"
           },
-          "needs_reply": {
-            "type": "boolean"
-          },
-          "reply_to": {
+          "title": {
             "type": [
-              "integer",
+              "string",
               "null"
-            ],
-            "format": "int64"
-          },
-          "answer": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/MessageAnswer"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "ui": {
@@ -5859,65 +5872,58 @@
           "at": {
             "type": "string"
           },
-          "claimed_by": {
+          "to_message": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "answer": {
             "anyOf": [
               {
-                "$ref": "#/$defs/RunId"
+                "$ref": "#/$defs/MessageAnswer"
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuestionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answered_by": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         },
         "additionalProperties": false,
         "required": [
           "id",
-          "thread",
+          "verb",
           "from",
+          "thread",
           "body",
-          "needs_reply",
           "at"
         ]
       },
-      "MessageAnswer": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string"
-          },
-          "params": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "values": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "action"
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
-      },
-      "JsonMap": {
-        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/$defs/JsonValue"
-        }
       },
       "JsonValue": {
         "x-sluice-integer-lexemes": "i64",
@@ -5958,6 +5964,53 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "MessageAnswer": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "values": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ]
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "QuestionState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "answered",
+          "closed"
+        ]
       }
     }
   },
@@ -6399,14 +6452,15 @@
             ]
           },
           {
+            "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
             "type": "object",
             "properties": {
               "id": {
                 "type": "integer",
                 "format": "int64"
               },
-              "thread": {
-                "type": "string"
+              "verb": {
+                "$ref": "#/$defs/MessageVerb"
               },
               "from": {
                 "type": "string"
@@ -6417,33 +6471,16 @@
                   "null"
                 ]
               },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "thread": {
+                "type": "string"
               },
               "body": {
                 "type": "string"
               },
-              "needs_reply": {
-                "type": "boolean"
-              },
-              "reply_to": {
+              "title": {
                 "type": [
-                  "integer",
+                  "string",
                   "null"
-                ],
-                "format": "int64"
-              },
-              "answer": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/MessageAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
                 ]
               },
               "ui": {
@@ -6481,10 +6518,17 @@
               "posted_at": {
                 "type": "string"
               },
-              "claimed_by": {
+              "to_message": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "answer": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/RunId"
+                    "$ref": "#/$defs/MessageAnswer"
                   },
                   {
                     "type": "null"
@@ -6499,10 +6543,10 @@
             "required": [
               "kind",
               "id",
-              "thread",
+              "verb",
               "from",
+              "thread",
               "body",
-              "needs_reply",
               "posted_at"
             ]
           },
@@ -7296,6 +7340,14 @@
           "waiting",
           "held",
           "released"
+        ]
+      },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
       },
       "MessageAnswer": {
@@ -8017,14 +8069,15 @@
             ]
           },
           {
+            "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
             "type": "object",
             "properties": {
               "id": {
                 "type": "integer",
                 "format": "int64"
               },
-              "thread": {
-                "type": "string"
+              "verb": {
+                "$ref": "#/$defs/MessageVerb"
               },
               "from": {
                 "type": "string"
@@ -8035,33 +8088,16 @@
                   "null"
                 ]
               },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "thread": {
+                "type": "string"
               },
               "body": {
                 "type": "string"
               },
-              "needs_reply": {
-                "type": "boolean"
-              },
-              "reply_to": {
+              "title": {
                 "type": [
-                  "integer",
+                  "string",
                   "null"
-                ],
-                "format": "int64"
-              },
-              "answer": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/MessageAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
                 ]
               },
               "ui": {
@@ -8099,10 +8135,17 @@
               "posted_at": {
                 "type": "string"
               },
-              "claimed_by": {
+              "to_message": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "answer": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/RunId"
+                    "$ref": "#/$defs/MessageAnswer"
                   },
                   {
                     "type": "null"
@@ -8117,10 +8160,10 @@
             "required": [
               "kind",
               "id",
-              "thread",
+              "verb",
               "from",
+              "thread",
               "body",
-              "needs_reply",
               "posted_at"
             ]
           },
@@ -8914,6 +8957,14 @@
           "waiting",
           "held",
           "released"
+        ]
+      },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
       },
       "MessageAnswer": {
@@ -10319,6 +10370,58 @@
             "additionalProperties": false
           },
           {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "ask"
+              },
+              "args": {
+                "$ref": "#/$defs/Ask"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "say"
+              },
+              "args": {
+                "$ref": "#/$defs/Say"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "reply"
+              },
+              "args": {
+                "$ref": "#/$defs/Reply"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Retired; accepted only from runs started on an older release.",
             "type": "object",
             "properties": {
               "command": {
@@ -11982,7 +12085,195 @@
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
+      "Ask": {
+        "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "to": {
+            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "type": "string",
+            "default": ""
+          },
+          "body": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ui": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "description": "The asking run: its step is the sender. Without it the caller is the orchestrator.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "description": "The dashboard speaks as the owner.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "body"
+        ]
+      },
+      "Say": {
+        "description": "A note; no reply is expected.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "to": {
+            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "type": "string",
+            "default": ""
+          },
+          "body": {
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "body"
+        ]
+      },
+      "Reply": {
+        "description": "A reply to one message: to its sender, on its thread. It resolves an open question.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "to_message": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "body": {
+            "type": "string",
+            "default": ""
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MessageAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "to_message"
+        ]
+      },
+      "MessageAnswer": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "values": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ]
+      },
       "MessagePost": {
+        "description": "The retired `message_post` wire shape. Only runs started before ask, say and reply\nsend it; the coordinator translates it and refuses it without a run identity.",
         "type": "object",
         "properties": {
           "project": {
@@ -12083,38 +12374,6 @@
           "body"
         ]
       },
-      "MessageAnswer": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string"
-          },
-          "params": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "values": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "action"
-        ]
-      },
       "Messages": {
         "type": "object",
         "properties": {
@@ -12136,6 +12395,10 @@
               "null"
             ],
             "format": "int64"
+          },
+          "owner": {
+            "description": "Read as the owner (the dashboard's identity) instead of the orchestrator.",
+            "type": "boolean"
           }
         },
         "additionalProperties": false,
@@ -12862,6 +13125,7 @@
             "additionalProperties": false
           },
           {
+            "description": "The retired message_post's reply, kept for the binaries that sent it.",
             "type": "object",
             "properties": {
               "reply": {
@@ -12880,6 +13144,23 @@
                 "required": [
                   "id"
                 ]
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "receipt"
+              },
+              "data": {
+                "$ref": "#/$defs/MessageReceipt"
               }
             },
             "required": [
@@ -13598,6 +13879,67 @@
           "unit"
         ]
       },
+      "MessageReceipt": {
+        "description": "What ask, say and reply return.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "to": {
+            "type": "string"
+          },
+          "thread": {
+            "type": "string"
+          },
+          "delivery": {
+            "$ref": "#/$defs/Delivery"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "to",
+          "thread",
+          "delivery"
+        ]
+      },
+      "Delivery": {
+        "description": "How a message reached its recipient when it was posted.",
+        "oneOf": [
+          {
+            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "type": "string",
+            "const": "delivered"
+          },
+          {
+            "description": "The step will run, and its next run is assigned it.",
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "description": "The step has no live or upcoming run; a later run (e.g. a retry) gets it.",
+            "type": "string",
+            "const": "no_live_run"
+          }
+        ]
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "MessagePage": {
         "type": "object",
         "properties": {
@@ -13625,14 +13967,15 @@
         ]
       },
       "Message": {
+        "description": "One message. `to_message` and `answer` are a reply's; `state` and `answered_by`\nare a question's as read now (never in the log record). Rows stored before the\nverbs existed read with the verb derived from them.",
         "type": "object",
         "properties": {
           "id": {
             "type": "integer",
             "format": "int64"
           },
-          "thread": {
-            "type": "string"
+          "verb": {
+            "$ref": "#/$defs/MessageVerb"
           },
           "from": {
             "type": "string"
@@ -13643,33 +13986,16 @@
               "null"
             ]
           },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "thread": {
+            "type": "string"
           },
           "body": {
             "type": "string"
           },
-          "needs_reply": {
-            "type": "boolean"
-          },
-          "reply_to": {
+          "title": {
             "type": [
-              "integer",
+              "string",
               "null"
-            ],
-            "format": "int64"
-          },
-          "answer": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/MessageAnswer"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "ui": {
@@ -13707,25 +14033,57 @@
           "at": {
             "type": "string"
           },
-          "claimed_by": {
+          "to_message": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "answer": {
             "anyOf": [
               {
-                "$ref": "#/$defs/RunId"
+                "$ref": "#/$defs/MessageAnswer"
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuestionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answered_by": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         },
         "additionalProperties": false,
         "required": [
           "id",
-          "thread",
+          "verb",
           "from",
+          "thread",
           "body",
-          "needs_reply",
           "at"
+        ]
+      },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
       },
       "MessageAnswer": {
@@ -13760,10 +14118,13 @@
           "action"
         ]
       },
-      "RunId": {
+      "QuestionState": {
         "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        "enum": [
+          "open",
+          "answered",
+          "closed"
+        ]
       },
       "RecordPage": {
         "type": "object",
@@ -14201,14 +14562,15 @@
             ]
           },
           {
+            "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
             "type": "object",
             "properties": {
               "id": {
                 "type": "integer",
                 "format": "int64"
               },
-              "thread": {
-                "type": "string"
+              "verb": {
+                "$ref": "#/$defs/MessageVerb"
               },
               "from": {
                 "type": "string"
@@ -14219,33 +14581,16 @@
                   "null"
                 ]
               },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "thread": {
+                "type": "string"
               },
               "body": {
                 "type": "string"
               },
-              "needs_reply": {
-                "type": "boolean"
-              },
-              "reply_to": {
+              "title": {
                 "type": [
-                  "integer",
+                  "string",
                   "null"
-                ],
-                "format": "int64"
-              },
-              "answer": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/MessageAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
                 ]
               },
               "ui": {
@@ -14283,10 +14628,17 @@
               "posted_at": {
                 "type": "string"
               },
-              "claimed_by": {
+              "to_message": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "answer": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/RunId"
+                    "$ref": "#/$defs/MessageAnswer"
                   },
                   {
                     "type": "null"
@@ -14301,10 +14653,10 @@
             "required": [
               "kind",
               "id",
-              "thread",
+              "verb",
               "from",
+              "thread",
               "body",
-              "needs_reply",
               "posted_at"
             ]
           },
@@ -15660,14 +16012,15 @@
         ]
       },
       {
+        "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
         "type": "object",
         "properties": {
           "id": {
             "type": "integer",
             "format": "int64"
           },
-          "thread": {
-            "type": "string"
+          "verb": {
+            "$ref": "#/$defs/MessageVerb"
           },
           "from": {
             "type": "string"
@@ -15678,33 +16031,16 @@
               "null"
             ]
           },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "thread": {
+            "type": "string"
           },
           "body": {
             "type": "string"
           },
-          "needs_reply": {
-            "type": "boolean"
-          },
-          "reply_to": {
+          "title": {
             "type": [
-              "integer",
+              "string",
               "null"
-            ],
-            "format": "int64"
-          },
-          "answer": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/MessageAnswer"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "ui": {
@@ -15742,10 +16078,17 @@
           "posted_at": {
             "type": "string"
           },
-          "claimed_by": {
+          "to_message": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "answer": {
             "anyOf": [
               {
-                "$ref": "#/$defs/RunId"
+                "$ref": "#/$defs/MessageAnswer"
               },
               {
                 "type": "null"
@@ -15760,10 +16103,10 @@
         "required": [
           "kind",
           "id",
-          "thread",
+          "verb",
           "from",
+          "thread",
           "body",
-          "needs_reply",
           "posted_at"
         ]
       },
@@ -16557,6 +16900,14 @@
           "waiting",
           "held",
           "released"
+        ]
+      },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
       },
       "MessageAnswer": {
@@ -17393,14 +17744,15 @@
             ]
           },
           {
+            "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
             "type": "object",
             "properties": {
               "id": {
                 "type": "integer",
                 "format": "int64"
               },
-              "thread": {
-                "type": "string"
+              "verb": {
+                "$ref": "#/$defs/MessageVerb"
               },
               "from": {
                 "type": "string"
@@ -17411,33 +17763,16 @@
                   "null"
                 ]
               },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "thread": {
+                "type": "string"
               },
               "body": {
                 "type": "string"
               },
-              "needs_reply": {
-                "type": "boolean"
-              },
-              "reply_to": {
+              "title": {
                 "type": [
-                  "integer",
+                  "string",
                   "null"
-                ],
-                "format": "int64"
-              },
-              "answer": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/MessageAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
                 ]
               },
               "ui": {
@@ -17475,10 +17810,17 @@
               "posted_at": {
                 "type": "string"
               },
-              "claimed_by": {
+              "to_message": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "answer": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/RunId"
+                    "$ref": "#/$defs/MessageAnswer"
                   },
                   {
                     "type": "null"
@@ -17493,10 +17835,10 @@
             "required": [
               "kind",
               "id",
-              "thread",
+              "verb",
               "from",
+              "thread",
               "body",
-              "needs_reply",
               "posted_at"
             ]
           },
@@ -18290,6 +18632,14 @@
           "waiting",
           "held",
           "released"
+        ]
+      },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
       },
       "MessageAnswer": {
@@ -19376,6 +19726,58 @@
         "additionalProperties": false
       },
       {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "ask"
+          },
+          "args": {
+            "$ref": "#/$defs/Ask"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "say"
+          },
+          "args": {
+            "$ref": "#/$defs/Say"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "reply"
+          },
+          "args": {
+            "$ref": "#/$defs/Reply"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "description": "Retired; accepted only from runs started on an older release.",
         "type": "object",
         "properties": {
           "command": {
@@ -21039,7 +21441,195 @@
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       },
+      "Ask": {
+        "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "to": {
+            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "type": "string",
+            "default": ""
+          },
+          "body": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ui": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "description": "The asking run: its step is the sender. Without it the caller is the orchestrator.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "description": "The dashboard speaks as the owner.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "body"
+        ]
+      },
+      "Say": {
+        "description": "A note; no reply is expected.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "to": {
+            "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+            "type": "string",
+            "default": ""
+          },
+          "body": {
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "body"
+        ]
+      },
+      "Reply": {
+        "description": "A reply to one message: to its sender, on its thread. It resolves an open question.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "to_message": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "body": {
+            "type": "string",
+            "default": ""
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MessageAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "to_message"
+        ]
+      },
+      "MessageAnswer": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "values": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ]
+      },
       "MessagePost": {
+        "description": "The retired `message_post` wire shape. Only runs started before ask, say and reply\nsend it; the coordinator translates it and refuses it without a run identity.",
         "type": "object",
         "properties": {
           "project": {
@@ -21140,38 +21730,6 @@
           "body"
         ]
       },
-      "MessageAnswer": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string"
-          },
-          "params": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "values": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/JsonMap"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "required": [
-          "action"
-        ]
-      },
       "Messages": {
         "type": "object",
         "properties": {
@@ -21193,6 +21751,10 @@
               "null"
             ],
             "format": "int64"
+          },
+          "owner": {
+            "description": "Read as the owner (the dashboard's identity) instead of the orchestrator.",
+            "type": "boolean"
           }
         },
         "additionalProperties": false,
@@ -21867,6 +22429,7 @@
         "additionalProperties": false
       },
       {
+        "description": "The retired message_post's reply, kept for the binaries that sent it.",
         "type": "object",
         "properties": {
           "reply": {
@@ -21885,6 +22448,23 @@
             "required": [
               "id"
             ]
+          }
+        },
+        "required": [
+          "reply",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "reply": {
+            "type": "string",
+            "const": "receipt"
+          },
+          "data": {
+            "$ref": "#/$defs/MessageReceipt"
           }
         },
         "required": [
@@ -22603,6 +23183,67 @@
           "unit"
         ]
       },
+      "MessageReceipt": {
+        "description": "What ask, say and reply return.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "to": {
+            "type": "string"
+          },
+          "thread": {
+            "type": "string"
+          },
+          "delivery": {
+            "$ref": "#/$defs/Delivery"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "to",
+          "thread",
+          "delivery"
+        ]
+      },
+      "Delivery": {
+        "description": "How a message reached its recipient when it was posted.",
+        "oneOf": [
+          {
+            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "type": "string",
+            "const": "delivered"
+          },
+          {
+            "description": "The step will run, and its next run is assigned it.",
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "description": "The step has no live or upcoming run; a later run (e.g. a retry) gets it.",
+            "type": "string",
+            "const": "no_live_run"
+          }
+        ]
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "MessagePage": {
         "type": "object",
         "properties": {
@@ -22630,14 +23271,15 @@
         ]
       },
       "Message": {
+        "description": "One message. `to_message` and `answer` are a reply's; `state` and `answered_by`\nare a question's as read now (never in the log record). Rows stored before the\nverbs existed read with the verb derived from them.",
         "type": "object",
         "properties": {
           "id": {
             "type": "integer",
             "format": "int64"
           },
-          "thread": {
-            "type": "string"
+          "verb": {
+            "$ref": "#/$defs/MessageVerb"
           },
           "from": {
             "type": "string"
@@ -22648,33 +23290,16 @@
               "null"
             ]
           },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "thread": {
+            "type": "string"
           },
           "body": {
             "type": "string"
           },
-          "needs_reply": {
-            "type": "boolean"
-          },
-          "reply_to": {
+          "title": {
             "type": [
-              "integer",
+              "string",
               "null"
-            ],
-            "format": "int64"
-          },
-          "answer": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/MessageAnswer"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "ui": {
@@ -22712,25 +23337,57 @@
           "at": {
             "type": "string"
           },
-          "claimed_by": {
+          "to_message": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "answer": {
             "anyOf": [
               {
-                "$ref": "#/$defs/RunId"
+                "$ref": "#/$defs/MessageAnswer"
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuestionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answered_by": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         },
         "additionalProperties": false,
         "required": [
           "id",
-          "thread",
+          "verb",
           "from",
+          "thread",
           "body",
-          "needs_reply",
           "at"
+        ]
+      },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
       },
       "MessageAnswer": {
@@ -22765,10 +23422,13 @@
           "action"
         ]
       },
-      "RunId": {
+      "QuestionState": {
         "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        "enum": [
+          "open",
+          "answered",
+          "closed"
+        ]
       },
       "RecordPage": {
         "type": "object",
@@ -23206,14 +23866,15 @@
             ]
           },
           {
+            "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
             "type": "object",
             "properties": {
               "id": {
                 "type": "integer",
                 "format": "int64"
               },
-              "thread": {
-                "type": "string"
+              "verb": {
+                "$ref": "#/$defs/MessageVerb"
               },
               "from": {
                 "type": "string"
@@ -23224,33 +23885,16 @@
                   "null"
                 ]
               },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "thread": {
+                "type": "string"
               },
               "body": {
                 "type": "string"
               },
-              "needs_reply": {
-                "type": "boolean"
-              },
-              "reply_to": {
+              "title": {
                 "type": [
-                  "integer",
+                  "string",
                   "null"
-                ],
-                "format": "int64"
-              },
-              "answer": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/MessageAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
                 ]
               },
               "ui": {
@@ -23288,10 +23932,17 @@
               "posted_at": {
                 "type": "string"
               },
-              "claimed_by": {
+              "to_message": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "answer": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/RunId"
+                    "$ref": "#/$defs/MessageAnswer"
                   },
                   {
                     "type": "null"
@@ -23306,10 +23957,10 @@
             "required": [
               "kind",
               "id",
-              "thread",
+              "verb",
               "from",
+              "thread",
               "body",
-              "needs_reply",
               "posted_at"
             ]
           },
@@ -24385,6 +25036,7 @@
             "additionalProperties": false
           },
           {
+            "description": "The retired message_post's reply, kept for the binaries that sent it.",
             "type": "object",
             "properties": {
               "reply": {
@@ -24403,6 +25055,23 @@
                 "required": [
                   "id"
                 ]
+              }
+            },
+            "required": [
+              "reply",
+              "data"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reply": {
+                "type": "string",
+                "const": "receipt"
+              },
+              "data": {
+                "$ref": "#/$defs/MessageReceipt"
               }
             },
             "required": [
@@ -25121,6 +25790,67 @@
           "unit"
         ]
       },
+      "MessageReceipt": {
+        "description": "What ask, say and reply return.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "to": {
+            "type": "string"
+          },
+          "thread": {
+            "type": "string"
+          },
+          "delivery": {
+            "$ref": "#/$defs/Delivery"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "to",
+          "thread",
+          "delivery"
+        ]
+      },
+      "Delivery": {
+        "description": "How a message reached its recipient when it was posted.",
+        "oneOf": [
+          {
+            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "type": "string",
+            "const": "delivered"
+          },
+          {
+            "description": "The step will run, and its next run is assigned it.",
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "description": "The step has no live or upcoming run; a later run (e.g. a retry) gets it.",
+            "type": "string",
+            "const": "no_live_run"
+          }
+        ]
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
       "MessagePage": {
         "type": "object",
         "properties": {
@@ -25148,14 +25878,15 @@
         ]
       },
       "Message": {
+        "description": "One message. `to_message` and `answer` are a reply's; `state` and `answered_by`\nare a question's as read now (never in the log record). Rows stored before the\nverbs existed read with the verb derived from them.",
         "type": "object",
         "properties": {
           "id": {
             "type": "integer",
             "format": "int64"
           },
-          "thread": {
-            "type": "string"
+          "verb": {
+            "$ref": "#/$defs/MessageVerb"
           },
           "from": {
             "type": "string"
@@ -25166,33 +25897,16 @@
               "null"
             ]
           },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "thread": {
+            "type": "string"
           },
           "body": {
             "type": "string"
           },
-          "needs_reply": {
-            "type": "boolean"
-          },
-          "reply_to": {
+          "title": {
             "type": [
-              "integer",
+              "string",
               "null"
-            ],
-            "format": "int64"
-          },
-          "answer": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/MessageAnswer"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "ui": {
@@ -25230,25 +25944,57 @@
           "at": {
             "type": "string"
           },
-          "claimed_by": {
+          "to_message": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "answer": {
             "anyOf": [
               {
-                "$ref": "#/$defs/RunId"
+                "$ref": "#/$defs/MessageAnswer"
               },
               {
                 "type": "null"
               }
             ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QuestionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answered_by": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           }
         },
         "additionalProperties": false,
         "required": [
           "id",
-          "thread",
+          "verb",
           "from",
+          "thread",
           "body",
-          "needs_reply",
           "at"
+        ]
+      },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
         ]
       },
       "MessageAnswer": {
@@ -25283,10 +26029,13 @@
           "action"
         ]
       },
-      "RunId": {
+      "QuestionState": {
         "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        "enum": [
+          "open",
+          "answered",
+          "closed"
+        ]
       },
       "RecordPage": {
         "type": "object",
@@ -25724,14 +26473,15 @@
             ]
           },
           {
+            "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
             "type": "object",
             "properties": {
               "id": {
                 "type": "integer",
                 "format": "int64"
               },
-              "thread": {
-                "type": "string"
+              "verb": {
+                "$ref": "#/$defs/MessageVerb"
               },
               "from": {
                 "type": "string"
@@ -25742,33 +26492,16 @@
                   "null"
                 ]
               },
-              "title": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "thread": {
+                "type": "string"
               },
               "body": {
                 "type": "string"
               },
-              "needs_reply": {
-                "type": "boolean"
-              },
-              "reply_to": {
+              "title": {
                 "type": [
-                  "integer",
+                  "string",
                   "null"
-                ],
-                "format": "int64"
-              },
-              "answer": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/MessageAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
                 ]
               },
               "ui": {
@@ -25806,10 +26539,17 @@
               "posted_at": {
                 "type": "string"
               },
-              "claimed_by": {
+              "to_message": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "answer": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/RunId"
+                    "$ref": "#/$defs/MessageAnswer"
                   },
                   {
                     "type": "null"
@@ -25824,10 +26564,10 @@
             "required": [
               "kind",
               "id",
-              "thread",
+              "verb",
               "from",
+              "thread",
               "body",
-              "needs_reply",
               "posted_at"
             ]
           },
@@ -27384,14 +28124,15 @@
         ]
       },
       {
+        "description": "The message record: a log record (kind \"message\") flattens these fields, so\nthe message's own time is `posted_at`. A question's state is never recorded.",
         "type": "object",
         "properties": {
           "id": {
             "type": "integer",
             "format": "int64"
           },
-          "thread": {
-            "type": "string"
+          "verb": {
+            "$ref": "#/$defs/MessageVerb"
           },
           "from": {
             "type": "string"
@@ -27402,33 +28143,16 @@
               "null"
             ]
           },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "thread": {
+            "type": "string"
           },
           "body": {
             "type": "string"
           },
-          "needs_reply": {
-            "type": "boolean"
-          },
-          "reply_to": {
+          "title": {
             "type": [
-              "integer",
+              "string",
               "null"
-            ],
-            "format": "int64"
-          },
-          "answer": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/MessageAnswer"
-              },
-              {
-                "type": "null"
-              }
             ]
           },
           "ui": {
@@ -27466,10 +28190,17 @@
           "posted_at": {
             "type": "string"
           },
-          "claimed_by": {
+          "to_message": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "answer": {
             "anyOf": [
               {
-                "$ref": "#/$defs/RunId"
+                "$ref": "#/$defs/MessageAnswer"
               },
               {
                 "type": "null"
@@ -27485,10 +28216,10 @@
         "required": [
           "kind",
           "id",
-          "thread",
+          "verb",
           "from",
+          "thread",
           "body",
-          "needs_reply",
           "posted_at"
         ]
       },
@@ -28291,6 +29022,14 @@
           "released"
         ]
       },
+      "MessageVerb": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "say",
+          "reply"
+        ]
+      },
       "MessageAnswer": {
         "type": "object",
         "properties": {
@@ -28923,5 +29662,579 @@
         ]
       }
     ]
+  },
+  "Delivery": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Delivery",
+    "description": "How a message reached its recipient when it was posted.",
+    "oneOf": [
+      {
+        "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+        "type": "string",
+        "const": "delivered"
+      },
+      {
+        "description": "The step will run, and its next run is assigned it.",
+        "type": "string",
+        "const": "queued"
+      },
+      {
+        "description": "The step has no live or upcoming run; a later run (e.g. a retry) gets it.",
+        "type": "string",
+        "const": "no_live_run"
+      }
+    ]
+  },
+  "MessageVerb": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "MessageVerb",
+    "type": "string",
+    "enum": [
+      "ask",
+      "say",
+      "reply"
+    ]
+  },
+  "Say": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Say",
+    "description": "A note; no reply is expected.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "to": {
+        "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+        "type": "string",
+        "default": ""
+      },
+      "body": {
+        "type": "string"
+      },
+      "data": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JsonValue"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "run": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RunId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "owner": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "body"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "MessageReceipt": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "MessageReceipt",
+    "description": "What ask, say and reply return.",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "integer",
+        "format": "int64"
+      },
+      "to": {
+        "type": "string"
+      },
+      "thread": {
+        "type": "string"
+      },
+      "delivery": {
+        "$ref": "#/$defs/Delivery"
+      },
+      "run": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RunId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "to",
+      "thread",
+      "delivery"
+    ],
+    "$defs": {
+      "Delivery": {
+        "description": "How a message reached its recipient when it was posted.",
+        "oneOf": [
+          {
+            "description": "A live listening run of the step was handed it (or an orchestrator/owner inbox).",
+            "type": "string",
+            "const": "delivered"
+          },
+          {
+            "description": "The step will run, and its next run is assigned it.",
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "description": "The step has no live or upcoming run; a later run (e.g. a retry) gets it.",
+            "type": "string",
+            "const": "no_live_run"
+          }
+        ]
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "QuestionState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "QuestionState",
+    "type": "string",
+    "enum": [
+      "open",
+      "answered",
+      "closed"
+    ]
+  },
+  "Reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Reply",
+    "description": "A reply to one message: to its sender, on its thread. It resolves an open question.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "to_message": {
+        "type": "integer",
+        "format": "int64"
+      },
+      "body": {
+        "type": "string",
+        "default": ""
+      },
+      "answer": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/MessageAnswer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "run": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RunId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "owner": {
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "to_message"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "MessageAnswer": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "values": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "action"
+        ]
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "Ask": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Ask",
+    "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "to": {
+        "description": "Required; a missing or unknown recipient is refused as `invalid`, never stored.",
+        "type": "string",
+        "default": ""
+      },
+      "body": {
+        "type": "string"
+      },
+      "title": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "ui": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "input": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "data": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JsonValue"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "run": {
+        "description": "The asking run: its step is the sender. Without it the caller is the orchestrator.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RunId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "owner": {
+        "description": "The dashboard speaks as the owner.",
+        "type": "boolean"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "body"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
+        ]
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
   }
 }

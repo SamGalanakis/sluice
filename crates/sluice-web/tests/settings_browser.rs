@@ -104,8 +104,8 @@ async fn chromium_settings_commands_streams_geometry_and_screenshots() {
             callback_writer.write(RetrySafety::NonIdempotent,move |tx| {
                 let submission = serde_json::from_value(serde_json::json!({"project":id,"step":"work","run":run,"outputs":{"result":"callback after browser rename"},"author":"worker"}))?;
                 assert_eq!(sluice_store::attempts::step_submit(tx,submission)?,Some(1));
-                let message = serde_json::from_value(serde_json::json!({"project":{"kind":"id","value":id},"thread":"work","from":"worker","to":"orchestrator","body":"callback after browser rename","needs_reply":true,"run":run}))?;
-                sluice_store::messages::message_post(tx,message,&sluice_store::messages::NoPlanInputs)?;
+                let message: sluice_model::commands::Ask = serde_json::from_value(serde_json::json!({"project":{"kind":"id","value":id},"to":"orchestrator","body":"callback after browser rename","run":run}))?;
+                sluice_store::messages::post(tx,message.try_into()?,&sluice_store::messages::NoPlanInputs)?;
                 tx.sql().execute("UPDATE attempts SET phase='terminal' WHERE attempt_id=?1",[attempt.to_string()])?;
                 tx.sql().execute("UPDATE runs SET finished_at='done' WHERE run_id=?1",[run.to_string()])?;
                 tx.sql().execute("UPDATE steps SET status='succeeded' WHERE project_id=?1",[id.to_string()])?;

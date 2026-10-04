@@ -362,7 +362,9 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
     .await
     .unwrap();
     f.patch(json!([{"op":"add","path":"/steps/work/after","value":["pre","enabled"]},{"op":"add","path":"/steps/work/doc","value":"<script>alert('x')</script>"}] )).await;
-    f.call("message_post",json!({"thread":"step-work","body":"question","from":"work","to":"orchestrator","needs_reply":true})).await.unwrap();
+    f.call("ask", json!({"to":"work","body":"question","owner":true}))
+        .await
+        .unwrap();
     let ctx = data(
         f.call("step_context", json!({"step":"work"}))
             .await
@@ -372,7 +374,13 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
     assert_eq!(ctx["upstream"][0]["step"], "pre");
     assert_eq!(ctx["messages"].as_array().unwrap().len(), 1);
     assert_eq!(ctx["submit"]["outputs"][0]["name"], "ready");
-    assert!(ctx["ask"].as_str().unwrap().contains("message.post"));
+    assert!(ctx["ask"].as_str().unwrap().starts_with("sluice tool ask "));
+    assert!(
+        ctx["ask"]
+            .as_str()
+            .unwrap()
+            .contains("\"to\":\"orchestrator\"")
+    );
     assert!(
         ctx["submit"]["command"]
             .as_str()
@@ -439,23 +447,24 @@ async fn context_docs_query_and_views_use_the_coordinator_snapshot() {
     f.close().await;
 }
 
+/// The owner tells or asks the orchestrator, on the `owner` thread.
 async fn post(f: &Fixture, body: &str, question: bool) -> MessageId {
-    let CommandReply::Posted { id } = f
+    let CommandReply::Receipt(receipt) = f
         .call(
-            "message_post",
-            json!({"thread":"t","body":body,"from":"worker","to":"owner","needs_reply":question}),
+            if question { "ask" } else { "say" },
+            json!({"to":"orchestrator","body":body,"owner":true}),
         )
         .await
         .unwrap()
     else {
         panic!("post")
     };
-    id
+    receipt.id
 }
 fn wait_request(f: &Fixture, since: i64, limit: u32, timeout: u64) -> CommandRequest {
     request(
         "log_wait",
-        json!({"read":{"project":f.selector(),"since_seq":since,"kinds":["message"],"threads":["t"],"limit":limit},"timeout_seconds":timeout,"questions_only":true}),
+        json!({"read":{"project":f.selector(),"since_seq":since,"kinds":["message"],"threads":["owner"],"limit":limit},"timeout_seconds":timeout,"questions_only":true}),
     )
 }
 async fn send_wait(
@@ -677,7 +686,7 @@ async fn bounded_notes_cases(socket: bool) {
     f.client
         .command(request(
             "mark_read",
-            json!({"project":f.project,"identity":"cli","thread":"t","through":c}),
+            json!({"project":f.project,"identity":"orchestrator","thread":"owner","through":c}),
         ))
         .await
         .unwrap();
@@ -874,6 +883,13 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             json!({"projects":[f.selector()],"since_seq":0,"me":"test","timeout_seconds":0,"all":false,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}),
         ),
         // Message-record round trips belong to the ignored record-at cases below.
+        ("Ask", "ask", json!({"to":"owner","body":"question"})),
+        ("Say", "say", json!({"to":"owner","body":"note"})),
+        (
+            "Reply",
+            "reply",
+            json!({"to_message":999999,"body":"answer"}),
+        ),
         (
             "MessagePost",
             "message_post",
@@ -971,6 +987,9 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
                 | "StepSetOutput"
                 | "StepRetry"
                 | "StepCancel"
+                | "Ask"
+                | "Say"
+                | "Reply"
                 | "MessagePost"
                 | "Messages"
                 | "FnCall"

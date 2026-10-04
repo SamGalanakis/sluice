@@ -2,9 +2,8 @@
 mod home;
 use home::ScratchHome;
 use rusqlite::params;
-use serde_json::json;
 use sluice_model::{
-    commands::{MarkRead, Message, MessagePost, MessageView},
+    commands::{MarkRead, Message, MessageVerb, MessageView},
     error::PublicError,
     events::{Event, UnitStep},
     ids::{MessageId, ProjectId, RecordSeq, StepId, UnitName, WorkGeneration},
@@ -30,6 +29,8 @@ async fn setup() -> (ScratchHome, Writer, ReadPool, ProjectId) {
     let r = ReadPool::open(h.path(), 2).unwrap();
     (h, w, r, p)
 }
+/// A message row and record as any release may have stored it (free threads and
+/// senders, a question with no recipient): the readers must take them all.
 async fn post(
     w: &Writer,
     p: ProjectId,
@@ -39,9 +40,43 @@ async fn post(
     needs_reply: bool,
     reply: Option<MessageId>,
 ) -> Message {
-    let post:MessagePost=serde_json::from_value(json!({"project":{"kind":"id","value":p},"thread":thread,"from":from,"to":to,"needs_reply":needs_reply,"reply_to":reply,"body":"hello"})).unwrap();
+    let (thread, from, to) = (thread.to_owned(), from.to_owned(), to.map(str::to_owned));
     w.write(RetrySafety::NonIdempotent, move |tx| {
-        message_post(tx, post, &NoPlanInputs)
+        let mut m = Message {
+            id: MessageId(0),
+            verb: match (reply, needs_reply) {
+                (Some(_), _) => MessageVerb::Reply,
+                (None, true) => MessageVerb::Ask,
+                (None, false) => MessageVerb::Say,
+            },
+            from,
+            to,
+            thread,
+            body: "hello".into(),
+            title: None,
+            ui: None,
+            input: None,
+            data: None,
+            run: None,
+            at: String::new(),
+            to_message: reply,
+            answer: None,
+            state: None,
+            answered_by: None,
+        };
+        let record = tx.append_record(Some(p), Event::Message(Box::new(m.clone())))?;
+        m.id = MessageId(record.seq.0);
+        m.at = record.at;
+        tx.sql().execute(
+            "UPDATE records SET thread=?1,payload=?2 WHERE seq=?3",
+            params![m.thread, serde_json::to_string(&Event::Message(Box::new(m.clone())))?, m.id.0],
+        )?;
+        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,needs_reply,reply_to,at) VALUES (?1,?2,?3,?4,?5,'hello',?6,?7,?8)",params![m.id.0,p.to_string(),m.thread,m.from,m.to,needs_reply,reply.map(|r| r.0),m.at])?;
+        if let Some(parent) = reply.filter(|_| !needs_reply) {
+            tx.sql().execute("UPDATE messages SET resolved_by=?1 WHERE id=?2 AND needs_reply=1 AND resolved_by IS NULL",params![m.id.0,parent.0])?;
+        }
+        tx.changed(Some(p), "messages");
+        Ok(m)
     })
     .await
     .unwrap()

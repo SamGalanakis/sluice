@@ -317,7 +317,7 @@ fn build(
         MessageView::Questions,
         Some(thread.as_str()),
         None,
-        "cli",
+        messages::ORCHESTRATOR_STREAM,
     )?;
     let messages_json: Vec<Value> = open
         .iter()
@@ -356,10 +356,10 @@ fn build(
             .collect::<serde_json::Map<_, _>>(),
     });
     let ask = json!({
-        "name": "message.post",
         "project": format!("id:{project}"),
-        "direct": true,
-        "inputs": {"thread": thread, "from": step.as_str(), "to": "orchestrator", "body": "..."},
+        "run": reported.as_ref().map(|r| r.to_string()).unwrap_or_else(|| "<run>".into()),
+        "to": "orchestrator",
+        "body": "...",
     });
     let mut context = json!({
         "project": {"project_id": project.to_string(), "name": name},
@@ -379,7 +379,7 @@ fn build(
             "command": format!("sluice tool step_submit '{args}'"),
         },
         "thread": thread,
-        "ask": format!("sluice tool fn_call '{ask}'"),
+        "ask": format!("sluice tool ask '{ask}'"),
     });
     if let Some(queued) = queued {
         context["queued"] = json!(queued);

@@ -30,77 +30,105 @@ so `log_wait(project, since_seq, kinds=["step.status"])` wakes you when a step f
 or turns stale.
 
 ## Messages and threads
-A message is a row `{id, thread, from, to, title, body, needs_reply, reply_to, answer, ui,
-input, data, run, at, claimed_by}` plus its `message` log record, which carries the same fields
-with `at` renamed `posted_at` (the record's own `at` is when the record was written). Ids come from the same sequence
-as log seqs. A thread is a named conversation in the project; names use lowercase letters,
-digits, `-` and `_`.
+Three verbs, each with a required recipient; the thread and the sender are derived, never
+given:
 
-- Post: `message_post(project="myproj", thread="questions", body="Which DB?", to="lead")` →
-  `{id}`. `from` defaults to who you are (your MCP client's name, or `step:<id>` inside a
-  step); `to` is a step id, `orchestrator`, `owner`, or absent (anyone). `needs_reply` (true
-  on a new thread) makes it a question; set it false for a note, a heads-up or a decision
-  already made. `data` is an optional structured payload. A post with no `thread` and no
-  `reply_to` goes on `step-<step>` when it comes from a step's run, else starts a thread named
-  `m<id>`.
-- Reply: `message_post(project, reply_to=<id>, body=...)` joins the parent's thread, `to`
-  defaults to the parent's `from`, and `needs_reply` defaults to false. `reply_to` and `body`
-  are all it needs. See `docs("inbox")` for questions to the person, `ui` and `answer`, and
-  the `input` that sets a plan input.
-- Read or wait: `log_wait("myproj", since_seq=42, threads=["questions"])`. A message record is
-  `{"seq", "at", "project", "kind": "message", "id", "thread", "from", "to", "body",
-  "needs_reply", ..., "posted_at"}`; `messages(project, "thread", thread="questions")` reads a
-  thread's rows directly (`{project, messages, last_id}`).
+- `ask(project, to, body, title?, ui?, input?, data?)`: a question that needs a reply.
+- `say(project, to, body, data?)`: a note; no reply is expected.
+- `reply(project, to_message, body, answer?)`: a reply to that message, sent to its `from`
+  on its thread. A reply to an open question answers it (with `answer {"action": "close"}`
+  it closes it instead). A reply to a question already answered or closed is just a message;
+  one carrying an `answer` is refused (`conflict`). See `docs("inbox")` for `ui`, `answer`
+  and the `input` an answer sets.
+
+`to` is a step of the project's current plan, `orchestrator` or `owner`. Anything else (left
+out, an unknown or removed step, any other name, yourself) is `invalid` and nothing is
+stored. A message to or from a step lives on that step's thread, `step-<step>`; when a
+step's run speaks, the thread is its own step's. The orchestrator and the owner talk on the
+thread `owner`. You speak as the orchestrator; with `run` (a run id, `SLUICE_RUN_ID` inside
+a step) you speak as that run's step; the dashboard speaks as the owner.
+
+Each of the three returns its receipt, `{id, to, thread, delivery, run?}`:
+
+- `delivered`: a live run of the step that listens (an agent fn, unless the step binds
+  `listen: false`) was handed it on its live feed (`run` names it); to `orchestrator` or
+  `owner` it is in their inbox.
+- `queued`: the step will run (it is pending, or its run has not started yet) and its next
+  run is assigned it.
+- `no_live_run`: the step has no live or upcoming run (it is done, failed or paused, or its
+  live run does not listen). The message is kept and given to the step's next run, if one
+  is ever started (by a retry, say).
+
+A message is a row `{id, verb, from, to, thread, body, title?, ui?, input?, data?, run?, at,
+to_message?, answer?}`: `verb` is `ask`, `say` or `reply`; `to_message` and `answer` are a
+reply's; fields with no value are left out. A question also carries `state`: `open`,
+`answered` (with `answered_by`, the answering message's id) or `closed`; a question with an
+empty body shows its plan input's doc. Its `message` log record has the same fields, with
+`at` renamed `posted_at` (the record's own `at` is when the record was written) and never a
+`state`. Ids come from the same sequence as log seqs. Messages stored before the verbs read
+in this shape too, with their verb derived (a reply if they replied, else a question if they
+needed a reply, else a note).
+
+- Read or wait: `log_wait("myproj", since_seq=42, threads=["step-work"])`. A message record
+  is `{"seq", "at", "project", "kind": "message", "id", "verb", "from", "to", "thread",
+  "body", ..., "posted_at"}`; `messages(project, "thread", thread="step-work")` reads a
+  thread's rows directly (`{project, messages, last_id}`). `messages(project, "inbox")` is
+  your inbox: your open questions, then the notes and replies to you not yet read (pass
+  `owner: true` to read the owner's).
 - Wake only on questions: `log_wait(..., wake="questions")` (and `message.wait`'s `wake`
-  input) does not return for a note; notes come back with the next question or record that
-  does wake it, or when `timeout` passes, so nothing is lost and nothing wakes you early.
+  input) does not return for a note or a reply; they come back with the next question or
+  record that does wake it, or when `timeout` passes, so nothing is lost and nothing wakes
+  you early.
 - `next(projects, since_seq)` waits on your behalf across projects (all live projects when
-  `projects` is empty): it wakes on a question addressed to you or to nobody, on an answering
-  reply you did not write, on a step that failed, turned stale or was skipped, on a unit that
+  `projects` is empty): it wakes on a question to you, on a reply that answers a question,
+  not written by you, on a step that failed, turned stale or was skipped, on a unit that
   settled, and on a project paused or archived by someone else. Notes ride along in `notes`.
-  It returns `{records, notes, last_seq, timed_out}`. Pass `me` your name (the same `from` you
-  post with, default `orchestrator`); `since_seq` defaults to 0, so pass the `last_seq` you
-  hold.
+  It returns `{records, notes, last_seq, timed_out}`. Pass `me` your name (default
+  `orchestrator`); `since_seq` defaults to 0, so pass the `last_seq` you hold.
 
-In a plan, `message.wait` blocks a step until a message arrives (`to` keeps only messages
-addressed to it or to nobody; `timeout` defaults to 300 s, then `messages` is empty):
+In a plan, the fns `message.ask`, `message.say` and `message.reply` take the tools'
+arguments and return `{id, receipt}` (`message.ask` also `reply`, below), speaking as the
+step. `message.wait` blocks a step until a message lands on a thread (`to` keeps only
+messages addressed to it; `timeout` defaults to 300 s, then `messages` is empty):
 
 ```json
 {"inputs": {"question": "string"},
  "outputs": {"answer": {"source": "answer/messages"}},
  "steps": {
-   "ask":    {"run": "message.post",
-              "in": {"thread": {"default": "questions"}, "from": {"default": "plan"},
-                     "to": {"default": "lead"}, "body": {"source": "question"}}},
+   "ask":    {"run": "message.ask",
+              "in": {"to": {"default": "orchestrator"}, "body": {"source": "question"}}},
    "answer": {"run": "message.wait",
-              "in": {"thread": {"default": "questions"}, "since": {"source": "ask/id"},
-                     "to": {"default": "plan"}, "timeout": {"default": 3600}}}}}
+              "in": {"thread": {"default": "step-ask"}, "since": {"source": "ask/id"},
+                     "to": {"default": "ask"}, "timeout": {"default": 3600}}}}}
 ```
+
+`message.ask` with `wait: true` blocks until its question is answered instead
+(`docs("inbox")`).
 
 ## Talking to a running agent step
 
 The agent fns (`agent.devin`, `agent.codex`, `agent.claude`, `agent.review`, and so
 `agent.run`) give every agent running as a plan step its own thread, `step-<id>`, and tell it
-in the spec to check that thread at natural checkpoints and to post questions to
-`orchestrator` there, with notes (decisions already made) marked `needs_reply: false` and no
-progress reports (pass `listen: false` to a step to leave the section out). A person is never
-asked through a thread: when the orchestrator needs one, it posts a question `to="owner"`
-(`docs("inbox")`).
+in the spec how to `ask` the orchestrator a question it cannot settle, `say` something that
+needs no answer and `reply` to a question it is asked, each with its run, and to send no
+progress reports. Messages to the step reach it live unless the step binds `listen: false`.
+A person is never asked through a step's thread: when the orchestrator needs one, it asks
+`to="owner"` (`docs("inbox")`).
 
-- To steer a running step, post on its thread with `to` set to the step id:
-  `message_post(project="myproj", thread="step-work", to="work", from="orchestrator",
-  body="skip the Windows build")`. A post on `step-<id>` without `to` (not a reply) is
-  addressed to that step when it is in the current plan. Messages to a step are delivered to its run durably: each
-  step keeps a delivery cursor, a run is assigned every message after it when it is reserved,
-  and a retried step picks up where the last attempt left off.
-- To read what the step asks back, watch the same thread:
+- To steer a running step, tell it: `say(project="myproj", to="work", body="skip the
+  Windows build")`; the receipt says whether its live run got it (`delivered`). Messages to a
+  step are delivered to its runs durably: each step keeps a delivery cursor, a run is
+  assigned every message after it when it is reserved, and a retried step picks up where the
+  last attempt left off.
+- To answer what it asks, `reply(project, to_message=<its id>, body=...)`.
+- To read what the step asks back, watch its thread:
   `log_wait(project="myproj", since_seq=<last>, threads=["step-work"], wake="questions")`,
   or wait on everything you act on with `next(projects, since_seq)`: questions and notes come
   first and whole in every batch, and a settled unit's long outputs are named, not printed
   (`settles="full"` for all of them).
 - To send a step back to fix something: `step_retry(project, steps=["work"],
-  message="what to fix")` posts the message and runs the step again; an agent fn that can
-  resume its session sees the message first.
+  message="what to fix")` says the message to the step and runs it again; an agent fn that
+  can resume its session sees the message first.
 
 ## Watching from a shell
 `sluice watch -p myproj [--kinds k1,k2] [--threads a,b] [--since-seq N] [--wake any|questions]`
@@ -111,4 +139,4 @@ event:
 
     Monitor("sluice watch -p myproj --kinds step.status,message")
 
-`--threads questions` narrows the messages to that thread.
+`--threads step-work` narrows the messages to that thread.

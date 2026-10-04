@@ -575,7 +575,7 @@ async fn a_guardian_watch_is_held_until_its_message_or_cancel_and_repeated_repor
     }
     assert_eq!(f.broker.reads().snapshots(), reads);
     let project = json!({"kind":"id","value":f.project});
-    let CommandReply::Posted { id } = command(&f.broker, json!({"command":"message_post","args":{"project":project,"thread":"t","body":"hello","from":"owner","to":"active"}})).await else {
+    let CommandReply::Receipt(MessageReceipt { id, .. }) = command(&f.broker, json!({"command":"say","args":{"project":project,"body":"hello","owner":true,"to":"active"}})).await else {
         panic!("post")
     };
     let reply = tokio::time::timeout(std::time::Duration::from_secs(5), held)

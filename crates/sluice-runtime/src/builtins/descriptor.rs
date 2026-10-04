@@ -2,7 +2,7 @@
 //! fn.json in name, doc, ordered typed ports and icon, plus the same-run retry
 //! budget the Python pack declared through `run(main, retries=N, backoff=S)`.
 //!
-//! `catalog()` lists all 28 builtins. jev's four live in `builtins::jev` with
+//! `catalog()` lists all 31 builtins. jev's four live in `builtins::jev` with
 //! their implementation; the rest are declared here until their units land the
 //! dispatch bodies (agents in P5, git/gh in P4.04, core/messages in P4.03).
 //! Until then [`dispatch`](crate::builtins::dispatch) returns
@@ -224,14 +224,6 @@ const EXTERNAL: BuiltinIcon = BuiltinIcon {
     media_type: SVG,
     bytes: include_bytes!("../../assets/icons/external.svg"),
 };
-const BUBBLE: BuiltinIcon = BuiltinIcon {
-    media_type: SVG,
-    bytes: include_bytes!("../../assets/icons/bubble.svg"),
-};
-const ENVELOPE: BuiltinIcon = BuiltinIcon {
-    media_type: SVG,
-    bytes: include_bytes!("../../assets/icons/envelope.svg"),
-};
 
 const AGENT_RETRY: RetryBudget = RetryBudget {
     retries: 3,
@@ -239,7 +231,7 @@ const AGENT_RETRY: RetryBudget = RetryBudget {
 };
 
 /// Every compiled builtin, in the catalog order SPEC §10 presents them: the
-/// four core fns, the two inline fns, the two message fns, six agent fns, six
+/// four core fns, the two inline fns, the five message fns, six agent fns, six
 /// git fns, four gh fns and the four jev fns.
 pub fn catalog() -> &'static [BuiltinDescriptor] {
     static CATALOG: LazyLock<Vec<BuiltinDescriptor>> = LazyLock::new(|| {
@@ -323,59 +315,10 @@ gets them from `out`, a dict. `stdout` is what it printed.",
                 icon: None,
                 retry: DEFAULT_RETRY,
             },
-            // ---- messages: replace thread.* and inbox.ask (semantics-v2 §4) ----
-            BuiltinDescriptor {
-                name: "message.post",
-                doc: "Post a message to a thread of the project. needs_reply (default \
-true for a new thread, false for a reply) makes it a question; false marks a note. \
-wait: true blocks until the first answering reply, which it returns, and fails when \
-the question is closed.",
-                inputs: vec![
-                    ("body", ty("string")),
-                    ("thread", ty("string?")),
-                    ("to", ty("string?")),
-                    ("needs_reply", ty("boolean?")),
-                    ("reply_to", ty("int?")),
-                    (
-                        "answer",
-                        optional(record(&[
-                            ("action", "string"),
-                            ("params", "Any?"),
-                            ("values", "Any?"),
-                        ])),
-                    ),
-                    ("title", ty("string?")),
-                    ("ui", ty("string?")),
-                    ("input", ty("string?")),
-                    ("data", ty("Any?")),
-                    ("from", ty("string?")),
-                    ("wait", ty("boolean?")),
-                ],
-                outputs: vec![("id", ty("int")), ("reply", ty("Any?"))],
-                open: false,
-                submits: vec![],
-                icon: Some(BUBBLE),
-                retry: DEFAULT_RETRY,
-            },
-            BuiltinDescriptor {
-                name: "message.wait",
-                doc: "Wait for messages on a thread after since (with `to`: those \
-addressed to it or to nobody). Returns as soon as there is one, or with none after \
-timeout seconds (default 300). wake \"questions\": notes (needs_reply false) do not \
-end the wait; they come back with the next question, or at the timeout.",
-                inputs: ports(&[
-                    ("thread", "string"),
-                    ("since", "int?"),
-                    ("to", "string?"),
-                    ("timeout", "int?"),
-                    ("wake", "string?"),
-                ]),
-                outputs: ports(&[("messages", "Any[]"), ("last_seq", "int")]),
-                open: false,
-                submits: vec![],
-                icon: Some(ENVELOPE),
-                retry: DEFAULT_RETRY,
-            },
+        ];
+        // ---- messages: the ask, say and reply verbs, wait, and the retired post ----
+        all.extend(crate::builtins::messages::descriptors());
+        all.extend([
             // ---- agents ----
             BuiltinDescriptor {
                 name: "agent.claude",
@@ -711,7 +654,7 @@ workflow), with its failed jobs.",
                 icon: Some(PR),
                 retry: DEFAULT_RETRY,
             },
-        ];
+        ]);
         all.extend(crate::builtins::jev::descriptors());
         all
     });

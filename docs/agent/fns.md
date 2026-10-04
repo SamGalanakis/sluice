@@ -30,8 +30,9 @@ each extra input, and returns what it assigns to `out`. Anything longer or reuse
 function of its own (`fn_save`).
 
 ## Scopes
-- **builtin**: compiled into sluice — `core.*`, `inline.bash` / `inline.python`, `message.post`
-  and `message.wait` (`docs("threads")`), `decide.llm`, the agent functions (`agent.claude`,
+- **builtin**: compiled into sluice — `core.*`, `inline.bash` / `inline.python`,
+  `message.ask`, `message.say`, `message.reply` and `message.wait` (`docs("threads")`; the
+  retired `message.post` still runs for older plans), `decide.llm`, the agent functions (`agent.claude`,
   `agent.codex`, `agent.devin`, `agent.review`, `agent.run`), `git.*`, `gh.*` and `jev.*`.
 - **global**: `$SLUICE_HOME/fns/` and the dirs in the config's `fn_dirs`; every project sees them.
 - **project**: the project's own `fns/`; only that project sees them.
@@ -98,8 +99,9 @@ if __name__ == "__main__":
 - `log(msg)` (or `ctx.log`) writes to stderr; `stream(argv, on_line=...)` runs a command and
   hands each output line to `on_line`; `child_env()` is the environment to give child tools.
 - `ctx.tool(name, args)` calls a sluice tool for the run's own project: reads (`status`,
-  `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get`, `call_status`), `message.post` /
-  `message.wait`, and the project's edit tools. `args` are the tool's MCP arguments
+  `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get`, `call_status`), `ask`, `say` and
+  `reply` (as the step, with its run), `message.ask` / `message.wait`, and the project's edit
+  tools. `args` are the tool's MCP arguments
   (`ctx.tool("step_pause", {"steps": "deploy", "reason": "hold"})`; `project` defaults to the
   run's), and it returns what the MCP tool returns (`{"ok": True}` for an acknowledgement).
   Edits it makes are authored `step:<step>`.

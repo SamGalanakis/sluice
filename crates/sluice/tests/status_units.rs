@@ -187,8 +187,8 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     f.unit("flow", true, json!({})).await;
     f.wait_for("flow-work", "running").await;
     f.ok(
-        "message_post",
-        json!({"project":"p","thread":"step-flow-work","body":"Which crate\n  owns   the parser?","needs_reply":true}),
+        "ask",
+        json!({"project":"p","to":"flow-work","body":"Which crate\n  owns   the parser?"}),
     )
     .await;
     // later: ready, but the lane is held.

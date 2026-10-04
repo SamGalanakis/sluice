@@ -2,7 +2,7 @@
 use crate::calls::{parse_id, public};
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{Next, NextResult, Settles, StepStatus},
+    commands::{MessageVerb, Next, NextResult, Settles, StepStatus},
     error::PublicError,
     events::{Event, Record, UnitStep},
     gates::{GateDecision, evaluate_step},
@@ -290,7 +290,7 @@ async fn batch(
                             )?;
                             if wake {
                                 Classification::Wake
-                            } else if !msg.needs_reply && msg.from != options.me {
+                            } else if !msg.is_question() && msg.from != options.me {
                                 Classification::Note
                             } else {
                                 Classification::Ignore
@@ -608,7 +608,11 @@ pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, Pub
     Ok(match &record.event {
         Event::Message(m) => format!(
             "{} {} {} -> {}: {}",
-            if m.needs_reply { "MSG" } else { "NOTE" },
+            match m.verb {
+                MessageVerb::Ask => "ASK",
+                MessageVerb::Say => "SAY",
+                MessageVerb::Reply => "REPLY",
+            },
             m.thread,
             m.from,
             m.to.as_deref().unwrap_or("-"),
@@ -802,8 +806,8 @@ pub async fn unread_alerts(
             let project:ProjectId=parse_id(project)?;
             let alerted:bool=tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"from\"='sluice' AND json_extract(data,'$.unread_record')=?2)",(project.to_string(),seq),|r|r.get(0))?;
             if alerted{continue;}
-            let post=serde_json::from_value(json!({"project":{"kind":"id","value":project},"from":"sluice","to":"owner","needs_reply":true,"title":format!("No orchestrator has read {name}'s log for {minutes} min (seq {seq})"),"body":format!("Unread settlement: {payload}\nResnapshot status/messages if the cursor expired; otherwise resume with sluice next -p id:{project} --since-seq {cursor}."),"data":{"unread_record":seq}}))?;
-            posted.push(messages::message_post(tx,post,&messages::NoPlanInputs)?);
+            let alert=messages::Post{project:ProjectSelector::Id(project),speaker:messages::Speaker::Sluice,body:format!("Unread settlement: {payload}\nResnapshot status/messages if the cursor expired; otherwise resume with sluice next -p id:{project} --since-seq {cursor}."),verb:messages::Verb::Ask{to:messages::OWNER_STREAM.into(),title:Some(format!("No orchestrator has read {name}'s log for {minutes} min (seq {seq})")),ui:None,input:None,data:Some(serde_json::from_value(json!({"unread_record":seq}))?)}};
+            posted.push(messages::post(tx,alert,&messages::NoPlanInputs)?.message);
         }Ok(posted)
     }).await
 }

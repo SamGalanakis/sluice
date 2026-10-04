@@ -1,7 +1,9 @@
-use sluice_model::commands::{MessagePost, MessageView};
+#[allow(dead_code)]
+#[path = "../../../tests/support/messages.rs"]
+mod stored_messages;
+use sluice_model::commands::MessageView;
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
-    messages::{self, NoPlanInputs},
     projects::{self, CreateProject, EmptyPlanInitializer, NoResourceSettings},
 };
 use sluice_web::views::{Viewer, threads};
@@ -32,13 +34,19 @@ async fn p605_history_includes_full_owner_conversations_without_marking_unrender
         ("arc/a #1", "orchestrator", "worker"),
         ("private", "worker", "orchestrator"),
     ] {
-        let post: MessagePost = serde_json::from_value(serde_json::json!({"project":{"kind":"id","value":project.to_string()},"thread":thread,"from":from,"to":to,"body":"**Evidence** and a decision","needs_reply":false})).unwrap();
-        writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                messages::message_post(tx, post, &NoPlanInputs)
-            })
-            .await
-            .unwrap();
+        // Threads stored before they were derived keep their names.
+        stored_messages::stored(
+            &writer,
+            project,
+            stored_messages::Stored {
+                thread,
+                from,
+                to: Some(to),
+                body: "**Evidence** and a decision",
+                ..Default::default()
+            },
+        )
+        .await;
     }
     let reads = ReadPool::open(home.path(), 1).unwrap();
     let history = threads::load(&reads, Some(project), MessageView::History, None)

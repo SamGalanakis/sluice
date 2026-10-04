@@ -509,7 +509,7 @@ impl Claude {
         }
         if event == "PreToolUse" && hook.tool_name.as_deref() == Some("AskUserQuestion") {
             return Ok(
-                json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Use message.post on your sluice thread. Interactive questions have no reader."}}),
+                json!({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Ask the orchestrator with sluice tool ask, as your task says. Interactive questions have no reader."}}),
             );
         }
         Ok(json!({}))

@@ -210,7 +210,7 @@ pub async fn load(
         if !query.threads.is_empty() {
             condition.push_str(" AND (kind!='message' OR thread IN ("); condition.push_str(&vec!["?"; query.threads.len()].join(",")); condition.push_str("))"); args.extend(query.threads.iter().cloned().map(Value::Text));
         }
-        if !query.kinds.iter().any(|k| k == "call") { condition.push_str(" AND NOT (kind='call' AND json_extract(payload,'$.fn')='message.post' AND json_extract(payload,'$.status')!='failed')"); }
+        if !query.kinds.iter().any(|k| k == "call") { condition.push_str(" AND NOT (kind='call' AND json_extract(payload,'$.fn') IN ('message.post','message.ask','message.say','message.reply') AND json_extract(payload,'$.status')!='failed')"); }
         let base_args = args.clone();
         let base_condition = condition.clone();
         if let Some(before) = query.before { condition.push_str(" AND seq<?"); args.push(Value::Integer(before)); }

@@ -1,12 +1,10 @@
+#[allow(dead_code)]
+#[path = "../../../tests/support/messages.rs"]
+mod stored_messages;
 use axum::{body::Body, http::Request};
-use sluice_model::{
-    commands::{MessageAnswer, MessagePost},
-    events::Event,
-    ids::Revision,
-};
+use sluice_model::{commands::MessageAnswer, events::Event, ids::Revision};
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
-    messages::{self, NoPlanInputs},
     projects::{self, CreateProject, EmptyPlanInitializer, NoResourceSettings},
 };
 use sluice_web::views::{
@@ -190,13 +188,18 @@ async fn p605_thread_filter_uses_message_records_and_log_retention_cannot_erase_
         .unwrap()
         .project_id;
     for thread in ["a", "b"] {
-        let post:MessagePost=serde_json::from_value(serde_json::json!({"project":{"kind":"id","value":project.to_string()},"thread":thread,"from":"worker","to":"owner","body":thread,"needs_reply":false})).unwrap();
-        writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                messages::message_post(tx, post, &NoPlanInputs)
-            })
-            .await
-            .unwrap();
+        stored_messages::stored(
+            &writer,
+            project,
+            stored_messages::Stored {
+                thread,
+                from: "worker",
+                to: Some("owner"),
+                body: thread,
+                ..Default::default()
+            },
+        )
+        .await;
     }
     let reads = ReadPool::open(home.path(), 1).unwrap();
     let page = log::load(

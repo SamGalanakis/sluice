@@ -2,17 +2,14 @@
 mod home;
 use home::ScratchHome;
 use rusqlite::params;
-use serde_json::json;
 use sluice_model::{
-    commands::{MessagePost, RecordPage},
+    commands::{Message, MessageVerb, RecordPage},
     error::PublicError,
     events::Event,
-    ids::{ProjectId, RecordSeq, ResultId, Revision, RunId},
+    ids::{MessageId, ProjectId, RecordSeq, ResultId, Revision, RunId},
 };
 use sluice_store::{
-    ReadPool, RetrySafety, Writer,
-    messages::{NoPlanInputs, message, message_post},
-    records::*,
+    ReadPool, RetrySafety, WriteTransaction, Writer, messages::message, records::*,
 };
 
 async fn setup() -> (ScratchHome, Writer, ReadPool, ProjectId, ProjectId) {
@@ -44,11 +41,44 @@ fn event() -> Event {
         author: "test".into(),
     }
 }
-fn post(p: ProjectId, thread: &str) -> MessagePost {
-    serde_json::from_value(
-        json!({"project":{"kind":"id","value":p},"body":"hello","thread":thread,"from":"worker"}),
-    )
-    .unwrap()
+/// A note on any thread, as messages stored before threads were derived may be: the
+/// log's thread filters must take any name.
+fn note_on(
+    tx: &mut WriteTransaction<'_>,
+    p: ProjectId,
+    thread: &str,
+) -> sluice_store::Result<Message> {
+    let mut m = Message {
+        id: MessageId(0),
+        verb: MessageVerb::Say,
+        from: "orchestrator".into(),
+        to: Some("owner".into()),
+        thread: thread.into(),
+        body: "hello".into(),
+        title: None,
+        ui: None,
+        input: None,
+        data: None,
+        run: None,
+        at: String::new(),
+        to_message: None,
+        answer: None,
+        state: None,
+        answered_by: None,
+    };
+    let record = tx.append_record(Some(p), Event::Message(Box::new(m.clone())))?;
+    m.id = MessageId(record.seq.0);
+    m.at = record.at;
+    tx.sql().execute(
+        "UPDATE records SET thread=?1,payload=?2 WHERE seq=?3",
+        params![
+            thread,
+            serde_json::to_string(&Event::Message(Box::new(m.clone())))?,
+            m.id.0
+        ],
+    )?;
+    tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES (?1,?2,?3,'orchestrator','owner','hello',?4)",params![m.id.0,p.to_string(),thread,m.at])?;
+    Ok(m)
 }
 async fn append(w: &Writer, p: Option<ProjectId>, count: usize) -> Vec<RecordSeq> {
     w.write(RetrySafety::NonIdempotent, move |tx| {
@@ -95,13 +125,11 @@ async fn filters_groups_threads_since_tail_and_forward_pagination_share_a_snapsh
     let mut ids = vec![];
     for thread in ["a", "b", "a", "b", "a", "b"] {
         ids.push(
-            w.write(RetrySafety::NonIdempotent, move |tx| {
-                message_post(tx, post(p, thread), &NoPlanInputs)
-            })
-            .await
-            .unwrap()
-            .id
-            .0,
+            w.write(RetrySafety::NonIdempotent, move |tx| note_on(tx, p, thread))
+                .await
+                .unwrap()
+                .id
+                .0,
         );
         append(&w, Some(q), 1).await;
     }
@@ -391,7 +419,7 @@ async fn default_retention_trims_only_after_10000_and_keeps_9000() {
 async fn trimming_keeps_messages_calls_results_and_authored_edits_queryable() {
     let (_h, w, r, p, _q) = setup().await;
     let id=w.write(RetrySafety::NonIdempotent,move |tx|{
-        let m=message_post(tx,post(p,"t"),&NoPlanInputs)?;
+        let m=note_on(tx, p, "t")?;
         tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,outputs,created_at,finished_at) VALUES (?1,?2,'test','succeeded','{}','{}','now','now')",params![RunId::new().to_string(),p.to_string()])?;
         tx.sql().execute("INSERT INTO step_results(result_id,project_id,step_id,generation,declaration,status,outputs,recorded_at,removed_at) VALUES (?1,?2,'removed',1,'{}','succeeded','{}','now','now')",params![ResultId::new().to_string(),p.to_string()])?;
         let edit=tx.append_record(Some(p),Event::PlanEdit {rev:Revision(1),author:"editor".into(),reason:"test".into(),ops:vec![]})?;
@@ -519,9 +547,7 @@ async fn filter_values_are_bound_and_literal_thread_names_round_trip() {
     let (_h, w, r, p, _q) = setup().await;
     let name = "x' OR 1=1 -- %_*";
     let m = w
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            message_post(tx, post(p, name), &NoPlanInputs)
-        })
+        .write(RetrySafety::NonIdempotent, move |tx| note_on(tx, p, name))
         .await
         .unwrap();
     let page = read(
@@ -551,7 +577,7 @@ async fn legacy_message_payload_keeps_both_timestamps_in_strict_log_reply() {
     let (_h, w, r, p, _q) = setup().await;
     let message = w
         .write(RetrySafety::NonIdempotent, move |tx| {
-            message_post(tx, post(p, "legacy"), &NoPlanInputs)
+            note_on(tx, p, "legacy")
         })
         .await
         .unwrap();

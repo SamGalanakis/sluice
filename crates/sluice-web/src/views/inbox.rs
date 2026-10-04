@@ -11,7 +11,9 @@ use axum::{
 use serde::Deserialize;
 use sluice_model::{
     RuntimeApi,
-    commands::{CommandReply, CommandRequest, MarkRead, MessageAnswer, MessagePost, MessageView},
+    commands::{
+        Ask, CommandReply, CommandRequest, MarkRead, MessageAnswer, MessageView, Reply, Say,
+    },
     error::PublicError,
     ids::{MessageId, ProjectId, ProjectSelector},
 };
@@ -196,9 +198,11 @@ struct ReplyBody {
     body: String,
     answer: Option<MessageAnswer>,
     action: Option<String>,
-    thread: Option<String>,
+    /// A new message's recipient: a step, or the orchestrator.
+    to: Option<String>,
+    /// A new message is a question (ask) rather than a note (say).
     #[serde(default)]
-    needs_reply: bool,
+    ask: bool,
 }
 fn decode(headers: &HeaderMap, body: &Bytes) -> Result<ReplyBody, PublicError> {
     if headers
@@ -215,8 +219,8 @@ fn decode(headers: &HeaderMap, body: &Bytes) -> Result<ReplyBody, PublicError> {
             match key.as_ref() {
                 "body" => result.body = value.into(),
                 "action" => result.action = Some(value.into()),
-                "thread" => result.thread = Some(value.into()),
-                "needs_reply" => result.needs_reply = value == "true",
+                "to" => result.to = Some(value.into()),
+                "ask" => result.ask = value == "true",
                 _ => {}
             }
         }
@@ -266,25 +270,49 @@ async fn mutate(
                 errors: vec![],
             });
         }
-        state
-            .commands
-            .command(CommandRequest::MessagePost(MessagePost {
-                project: ProjectSelector::Id(project),
+        let project = ProjectSelector::Id(project);
+        // The dashboard speaks as the owner: answering is a reply, composing an ask or say.
+        let command = match (reply_to, fields.to) {
+            (Some(to_message), _) => CommandRequest::Reply(Reply {
+                project,
+                to_message,
                 body: fields.body,
-                thread: fields.thread,
-                to: None,
-                needs_reply: Some(fields.needs_reply),
-                reply_to,
                 answer: fields.answer,
+                run: None,
+                owner: true,
+            }),
+            (None, _) if fields.answer.is_some() => {
+                return Err(PublicError::BadRequest {
+                    message: "an answer replies to a question".into(),
+                });
+            }
+            (None, None) => {
+                return Err(PublicError::Invalid {
+                    message: "to is required: a step of the plan or orchestrator".into(),
+                    errors: vec![],
+                });
+            }
+            (None, Some(to)) if fields.ask => CommandRequest::Ask(Ask {
+                project,
+                to,
+                body: fields.body,
                 title: None,
                 ui: None,
                 input: None,
                 data: None,
-                from: Some("owner".into()),
                 run: None,
-                author: Some("owner".into()),
-            }))
-            .await
+                owner: true,
+            }),
+            (None, Some(to)) => CommandRequest::Say(Say {
+                project,
+                to,
+                body: fields.body,
+                data: None,
+                run: None,
+                owner: true,
+            }),
+        };
+        state.commands.command(command).await
     }
     .await;
     match result {

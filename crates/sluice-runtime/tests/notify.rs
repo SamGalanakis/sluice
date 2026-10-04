@@ -1,7 +1,7 @@
 //! Owner notification dispatch: config.json `notify`, one run per open owner question.
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{Message, MessagePost},
+    commands::{Ask, Message, Reply, Say},
     error::PublicError,
     events::NotificationOutcome,
     ids::{ProjectId, RunId},
@@ -64,12 +64,20 @@ async fn setup() -> (Home, Writer, ReadPool, ProjectId, Notifier) {
     (h, w, r, p, n)
 }
 
+/// Posts `{"verb": "ask"|"say"|"reply", ...}` with that command's arguments.
 async fn post(w: &Writer, p: ProjectId, value: Value) -> Message {
     let mut value = value;
+    let verb = value["verb"].as_str().unwrap().to_owned();
+    value.as_object_mut().unwrap().remove("verb");
     value["project"] = json!({"kind":"id","value":p});
-    let post: MessagePost = serde_json::from_value(value).unwrap();
+    let post = match verb.as_str() {
+        "ask" => messages::Post::try_from(serde_json::from_value::<Ask>(value).unwrap()),
+        "say" => messages::Post::try_from(serde_json::from_value::<Say>(value).unwrap()),
+        _ => messages::Post::try_from(serde_json::from_value::<Reply>(value).unwrap()),
+    }
+    .unwrap();
     w.write(RetrySafety::NonIdempotent, move |tx| {
-        messages::message_post(tx, post, &messages::NoPlanInputs)
+        messages::post(tx, post, &messages::NoPlanInputs).map(|p| p.message)
     })
     .await
     .unwrap()
@@ -79,7 +87,7 @@ async fn question(w: &Writer, p: ProjectId) -> Message {
     post(
         w,
         p,
-        json!({"body":"Ship it?","title":"Release","to":"owner","needs_reply":true,"from":"orchestrator"}),
+        json!({"verb":"ask","body":"Ship it?","title":"Release","to":"owner"}),
     )
     .await
 }
@@ -118,16 +126,11 @@ async fn open_owner_question_runs_the_command_once_with_the_message_on_stdin() {
     h.configure(APPEND, 10.0);
     let q = question(&w, p).await;
     // Notes and questions to anyone else never notify.
+    post(&w, p, json!({"verb":"say","body":"fyi","to":"owner"})).await;
     post(
         &w,
         p,
-        json!({"body":"fyi","to":"owner","needs_reply":false,"from":"orchestrator"}),
-    )
-    .await;
-    post(
-        &w,
-        p,
-        json!({"body":"which?","to":"orchestrator","needs_reply":true,"from":"worker"}),
+        json!({"verb":"ask","body":"which?","to":"orchestrator","owner":true}),
     )
     .await;
     round(&mut n).await;
@@ -138,7 +141,8 @@ async fn open_owner_question_runs_the_command_once_with_the_message_on_stdin() {
     assert_eq!(sent["title"], "Release");
     assert_eq!(sent["body"], "Ship it?");
     assert_eq!(sent["to"], "owner");
-    assert_eq!(sent["needs_reply"], true);
+    assert_eq!(sent["verb"], "ask");
+    assert_eq!(sent["state"], "open");
     assert_eq!(sent["project"], "alerts");
     assert_eq!(sent["project_id"], json!(p));
     let a = attempt(&r, p, &q).await;
@@ -256,7 +260,7 @@ async fn unconfigured_home_keeps_the_reservation_and_a_closed_question_is_not_se
     post(
         &w,
         p,
-        json!({"body":"yes","reply_to":q.id,"from":"owner","needs_reply":false}),
+        json!({"verb":"reply","body":"yes","to_message":q.id,"owner":true}),
     )
     .await;
     h.configure(APPEND, 10.0);

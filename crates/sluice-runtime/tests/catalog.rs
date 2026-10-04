@@ -1,4 +1,4 @@
-//! The compiled catalog: 28 descriptors, each equal to its source fn.json
+//! The compiled catalog: 31 descriptors, each equal to its source fn.json
 //! where one exists, with the SPEC §10 icons and the pack's same-run retry
 //! budgets.
 
@@ -36,8 +36,11 @@ const NAMES: &[&str] = &[
     "core.external",
     "inline.bash",
     "inline.python",
-    "message.post",
+    "message.ask",
+    "message.say",
+    "message.reply",
     "message.wait",
+    "message.post",
     "agent.claude",
     "agent.codex",
     "agent.devin",
@@ -61,10 +64,10 @@ const NAMES: &[&str] = &[
 ];
 
 #[test]
-fn the_catalog_is_the_28_builtins_in_order() {
+fn the_catalog_is_the_31_builtins_in_order() {
     let names: Vec<&str> = catalog().iter().map(|d| d.name).collect();
     assert_eq!(names, NAMES);
-    assert_eq!(catalog().len(), 28);
+    assert_eq!(catalog().len(), 31);
 }
 
 #[test]
@@ -150,8 +153,11 @@ fn retry_budgets_match_the_pack_helpers() {
         "core.external",
         "inline.bash",
         "inline.python",
-        "message.post",
+        "message.ask",
+        "message.say",
+        "message.reply",
         "message.wait",
+        "message.post",
         "git.head",
         "git.merge",
         "git.push",
@@ -164,7 +170,7 @@ fn retry_budgets_match_the_pack_helpers() {
     ] {
         assert_eq!(budgets[name], (0, 30), "{name}");
     }
-    assert_eq!(budgets.len(), 28);
+    assert_eq!(budgets.len(), 31);
 }
 
 /// The icon each catalog entry carries, as the source asset it was embedded
@@ -174,7 +180,9 @@ fn icons_are_their_source_assets() {
     let icon_of = |name: &str| {
         let rel = match name {
             "core.external" => "src/sluice/fns/core.external/icon.svg",
-            "message.post" => "src/sluice/fns/inbox.ask/icon.svg",
+            "message.ask" | "message.say" | "message.reply" | "message.post" => {
+                "src/sluice/fns/inbox.ask/icon.svg"
+            }
             "message.wait" => "src/sluice/fns/thread.wait/icon.svg",
             "agent.review" => "packs/agents/agent.review/icon.svg",
             "decide.llm" => "packs/agents/decide.llm/icon.svg",
@@ -206,7 +214,7 @@ fn icons_are_their_source_assets() {
             ),
         }
     }
-    assert_eq!(with_icons, 19);
+    assert_eq!(with_icons, 22);
 }
 
 #[test]

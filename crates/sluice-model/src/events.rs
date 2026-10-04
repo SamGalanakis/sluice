@@ -97,7 +97,7 @@ pub enum Event {
     #[serde(rename = "message")]
     Message(
         #[serde(with = "message_event")]
-        #[schemars(with = "message_event::Fields")]
+        #[schemars(with = "message_event::Fields<'static>")]
         Box<Message>,
     ),
     #[serde(rename = "project.pause")]
@@ -177,18 +177,49 @@ pub enum Event {
 mod message_event {
     use super::*;
 
-    // Standalone messages keep `at`; flattened events reserve it for Record.
-    #[derive(Serialize, Deserialize, JsonSchema)]
-    #[serde(remote = "Message", deny_unknown_fields)]
-    pub(super) struct Fields {
+    /// The message record: a log record (kind "message") flattens these fields, so
+    /// the message's own time is `posted_at`. A question's state is never recorded.
+    #[derive(Serialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub(super) struct Fields<'a> {
         id: MessageId,
+        verb: MessageVerb,
+        from: &'a str,
+        to: Option<&'a str>,
+        thread: &'a str,
+        body: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ui: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<&'a JsonValue>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        run: Option<RunId>,
+        posted_at: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        to_message: Option<MessageId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        answer: Option<&'a MessageAnswer>,
+    }
+
+    /// Records written before the verbs carry needs_reply, reply_to and claimed_by
+    /// instead; they read as the one current shape.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Stored {
+        id: MessageId,
+        verb: Option<MessageVerb>,
         thread: String,
         from: String,
         to: Option<String>,
         title: Option<String>,
         body: String,
-        needs_reply: bool,
+        needs_reply: Option<bool>,
         reply_to: Option<MessageId>,
+        to_message: Option<MessageId>,
         answer: Option<MessageAnswer>,
         ui: Option<String>,
         input: Option<String>,
@@ -196,6 +227,7 @@ mod message_event {
         run: Option<RunId>,
         #[serde(rename = "posted_at", alias = "at")]
         at: String,
+        #[allow(dead_code)]
         claimed_by: Option<RunId>,
     }
 
@@ -203,13 +235,55 @@ mod message_event {
         message: &Message,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        Fields::serialize(message, serializer)
+        Fields {
+            id: message.id,
+            verb: message.verb,
+            from: &message.from,
+            to: message.to.as_deref(),
+            thread: &message.thread,
+            body: &message.body,
+            title: message.title.as_deref(),
+            ui: message.ui.as_deref(),
+            input: message.input.as_deref(),
+            data: message.data.as_ref(),
+            run: message.run,
+            posted_at: &message.at,
+            to_message: message.to_message,
+            answer: message.answer.as_ref(),
+        }
+        .serialize(serializer)
     }
 
     pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Box<Message>, D::Error> {
-        Fields::deserialize(deserializer).map(Box::new)
+        let stored = Stored::deserialize(deserializer)?;
+        let to_message = stored.to_message.or(stored.reply_to);
+        let verb = stored.verb.unwrap_or(if to_message.is_some() {
+            MessageVerb::Reply
+        } else if stored.needs_reply.unwrap_or(false) {
+            MessageVerb::Ask
+        } else {
+            MessageVerb::Say
+        });
+        Ok(Box::new(Message {
+            id: stored.id,
+            verb,
+            from: stored.from,
+            to: stored.to,
+            thread: stored.thread,
+            body: stored.body,
+            title: stored.title,
+            ui: stored.ui,
+            input: stored.input,
+            data: stored.data,
+            run: stored.run,
+            at: stored.at,
+            to_message,
+            answer: stored.answer,
+            state: None,
+            answered_by: None,
+        }))
     }
 }
 

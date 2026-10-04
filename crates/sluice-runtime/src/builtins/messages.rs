@@ -1,4 +1,5 @@
-//! message.post and message.wait: the step-facing message fns over the durable store.
+//! message.ask, message.say, message.reply and message.wait: the step-facing message fns
+//! over the durable store, plus the retired message.post for plans that still name it.
 //!
 //! message.truth lives in sluice_store::messages: posts, take-up, first answering reply,
 //! closes, claims and attachments are all store-side (p2-03). These fns only adapt a
@@ -14,7 +15,7 @@ use super::descriptor::{BuiltinDescriptor, BuiltinIcon, DEFAULT_RETRY, FnFailure
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{Message, MessageAnswer, MessagePost, MessageView},
+    commands::{Delivery, Message, MessageAnswer, MessagePost, MessageReceipt, MessageView},
     error::PublicError,
     ids::{MessageId, ProjectId, ProjectSelector, RunId, StepId},
     rpc::{JsonMap, JsonValue},
@@ -23,8 +24,8 @@ use sluice_model::{
 use sluice_store::{
     ChangeKey, ReadPool, Result as StoreResult, RetrySafety, StoreError, WriteTransaction, Writer,
     messages::{
-        self, AskResult, InputAnswer, PlanInputSetter, QuestionState, ask, claim_answer,
-        message_post,
+        self, AskResult, InputAnswer, PlanInputSetter, Post, Posted, QuestionState, Speaker, Verb,
+        ask_waiting, claim_answer,
     },
     records,
 };
@@ -45,7 +46,7 @@ const ENVELOPE: BuiltinIcon = BuiltinIcon {
 };
 
 /// What a message fn sees of its run: the durable home it posts and waits in.
-/// `run`/`step` are the executing run's identity — `message.post` needs them to own
+/// `run`/`step` are the executing run's identity — `message.ask` needs them to own
 /// its question (attachments, take-up and claims); `message.wait` needs neither.
 pub type MutationGuard = Arc<dyn Fn(&WriteTransaction<'_>) -> StoreResult<()> + Send + Sync>;
 #[derive(Clone)]
@@ -69,15 +70,82 @@ impl PlanInputSetter for ArcPlanInputs {
     }
 }
 
-/// Descriptors for the two message fns, matching the message_post tool plus `wait`.
-pub fn descriptors() -> [BuiltinDescriptor; 2] {
+/// Descriptors for the message fns: the ask, say and reply verbs, `wait` for a thread,
+/// and the retired message.post that plans written before the verbs still name.
+pub fn descriptors() -> [BuiltinDescriptor; 5] {
     [
         BuiltinDescriptor {
+            name: "message.ask",
+            doc: "Ask a question that needs a reply. to is a step of the plan, \
+orchestrator or owner; the thread and sender are derived. input names a plan input the \
+answer sets. wait: true blocks until the first answering reply, which it returns, and \
+fails when the question is closed. Returns the message id and its receipt.",
+            inputs: ports(&[
+                ("to", "string"),
+                ("body", "string"),
+                ("title", "string?"),
+                ("ui", "string?"),
+                ("input", "string?"),
+                ("data", "Any?"),
+                ("wait", "boolean?"),
+            ]),
+            outputs: ports(&[("id", "int"), ("receipt", "Any"), ("reply", "Any?")]),
+            open: false,
+            submits: vec![],
+            icon: Some(BUBBLE),
+            retry: DEFAULT_RETRY,
+        },
+        BuiltinDescriptor {
+            name: "message.say",
+            doc: "Tell a step of the plan, the orchestrator or the owner something; no \
+reply is expected. Returns the message id and its receipt.",
+            inputs: ports(&[("to", "string"), ("body", "string"), ("data", "Any?")]),
+            outputs: ports(&[("id", "int"), ("receipt", "Any")]),
+            open: false,
+            submits: vec![],
+            icon: Some(BUBBLE),
+            retry: DEFAULT_RETRY,
+        },
+        BuiltinDescriptor {
+            name: "message.reply",
+            doc: "Reply to a message: to its sender, on its thread. A reply to an open \
+question answers it; answer {action: \"close\"} closes it. Returns the message id and \
+its receipt.",
+            inputs: ports(&[
+                ("to_message", "int"),
+                ("body", "string?"),
+                ("answer", "answer?"),
+            ]),
+            outputs: ports(&[("id", "int"), ("receipt", "Any")]),
+            open: false,
+            submits: vec![],
+            icon: Some(BUBBLE),
+            retry: DEFAULT_RETRY,
+        },
+        BuiltinDescriptor {
+            name: "message.wait",
+            doc: "Wait for messages on a thread after since (with `to`: those addressed to \
+it). Returns as soon as there is one, or with none after timeout seconds (default 300). \
+wake \"questions\": other messages do not end the wait; they come back with the next \
+question, or at the timeout.",
+            inputs: ports(&[
+                ("thread", "string"),
+                ("since", "int?"),
+                ("to", "string?"),
+                ("timeout", "int?"),
+                ("wake", "string?"),
+            ]),
+            outputs: ports(&[("messages", "Any[]"), ("last_seq", "int")]),
+            open: false,
+            submits: vec![],
+            icon: Some(ENVELOPE),
+            retry: DEFAULT_RETRY,
+        },
+        BuiltinDescriptor {
             name: "message.post",
-            doc: "Post a message to a thread of the project. needs_reply (default true for \
-a new thread, false for a reply) makes it a question; false marks a note. wait: true \
-blocks until the first answering reply, which it returns, and fails when the question is \
-closed.",
+            doc: "Retired: use message.ask, message.say or message.reply. Plans written \
+before them still run: a reply when reply_to is given, else a question unless needs_reply \
+is false, to the orchestrator unless to names a recipient; thread and from are ignored.",
             inputs: ports(&[
                 ("body", "string"),
                 ("thread", "string?"),
@@ -98,25 +166,6 @@ closed.",
             icon: Some(BUBBLE),
             retry: DEFAULT_RETRY,
         },
-        BuiltinDescriptor {
-            name: "message.wait",
-            doc: "Wait for messages on a thread after since (with `to`: those addressed to \
-it or to nobody). Returns as soon as there is one, or with none after timeout seconds \
-(default 300). wake \"questions\": notes (needs_reply false) do not end the wait; they \
-come back with the next question, or at the timeout.",
-            inputs: ports(&[
-                ("thread", "string"),
-                ("since", "int?"),
-                ("to", "string?"),
-                ("timeout", "int?"),
-                ("wake", "string?"),
-            ]),
-            outputs: ports(&[("messages", "Any[]"), ("last_seq", "int")]),
-            open: false,
-            submits: vec![],
-            icon: Some(ENVELOPE),
-            retry: DEFAULT_RETRY,
-        },
     ]
 }
 
@@ -126,24 +175,79 @@ pub async fn dispatch(
     ctx: &MessageCtx,
 ) -> Result<JsonMap, FnFailure> {
     match name {
-        "message.post" => post(inputs, ctx).await,
+        "message.ask" => ask(inputs, ctx).await,
+        "message.say" => say(inputs, ctx).await,
+        "message.reply" => reply(inputs, ctx).await,
+        "message.post" => retired_post(inputs, ctx).await,
         "message.wait" => wait(inputs, ctx).await,
         _ => Err(terminal(format!("unknown message builtin: {name}"))),
     }
 }
 
-/// message.post: one durable post through the writer, or the waiting ask when `wait`.
-async fn post(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
+/// The fn's run speaks; a fn called with no run speaks as the orchestrator.
+fn speaker(ctx: &MessageCtx) -> Speaker {
+    ctx.run.map_or(Speaker::Orchestrator, Speaker::Run)
+}
+
+async fn ask(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
+    let post = Post {
+        project: ProjectSelector::Id(ctx.project),
+        speaker: speaker(ctx),
+        body: required_string(inputs, "body")?,
+        verb: Verb::Ask {
+            to: required_string(inputs, "to")?,
+            title: opt_string(inputs, "title")?,
+            ui: opt_string(inputs, "ui")?,
+            input: opt_string(inputs, "input")?,
+            data: opt_json(inputs, "data"),
+        },
+    };
+    asking(post, flag(inputs, "wait")?, ctx, true).await
+}
+
+async fn say(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
+    let post = Post {
+        project: ProjectSelector::Id(ctx.project),
+        speaker: speaker(ctx),
+        body: required_string(inputs, "body")?,
+        verb: Verb::Say {
+            to: required_string(inputs, "to")?,
+            data: opt_json(inputs, "data"),
+        },
+    };
+    let posted = write_post(post, ctx).await?;
+    receipt_output(&posted, None)
+}
+
+async fn reply(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
+    let post = Post {
+        project: ProjectSelector::Id(ctx.project),
+        speaker: speaker(ctx),
+        body: opt_string(inputs, "body")?.unwrap_or_default(),
+        verb: Verb::Reply {
+            to_message: MessageId(
+                opt_id(inputs, "to_message")?
+                    .ok_or_else(|| terminal("input \"to_message\" must be an integer"))?,
+            ),
+            answer: opt_answer(inputs)?,
+        },
+    };
+    let posted = write_post(post, ctx).await?;
+    receipt_output(&posted, None)
+}
+
+/// message.post from plans written before the verbs, through the message_post bridge.
+async fn retired_post(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> {
     let waiting = flag(inputs, "wait")?;
     if waiting && opt_bool(inputs, "needs_reply")? == Some(false) {
         return Err(terminal(
             "a waiting post is a question: needs_reply cannot be false",
         ));
     }
-    let post = MessagePost {
+    let retired = MessagePost {
         project: ProjectSelector::Id(ctx.project),
         body: required_string(inputs, "body")?,
-        thread: opt_string(inputs, "thread")?,
+        thread: None,
         to: opt_string(inputs, "to")?,
         needs_reply: opt_bool(inputs, "needs_reply")?,
         reply_to: opt_id(inputs, "reply_to")?.map(MessageId),
@@ -152,25 +256,70 @@ async fn post(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> 
         ui: opt_string(inputs, "ui")?,
         input: opt_string(inputs, "input")?,
         data: opt_json(inputs, "data"),
-        from: opt_string(inputs, "from")?,
+        from: None,
         run: ctx.run,
-        // A step's posts are authored by the step; the store falls back to it for `from`.
-        author: ctx.step.as_ref().map(ToString::to_string),
+        author: None,
     };
+    if ctx.run.is_none() {
+        return Err(terminal(
+            "message.post is retired: use message.ask, message.say or message.reply",
+        ));
+    }
+    let post = messages::bridge(retired).map_err(|e| store_failure(e.into_public(false)))?;
+    let asked = matches!(post.verb, Verb::Ask { .. });
+    let out = asking(post, waiting && asked, ctx, asked).await?;
+    let mut legacy = JsonMap(IndexMap::new());
+    for key in ["id", "reply"] {
+        legacy.0.insert(
+            key.into(),
+            out.0
+                .get(key)
+                .cloned()
+                .unwrap_or(JsonValue::try_from(Value::Null).map_err(|e| terminal(e.to_string()))?),
+        );
+    }
+    Ok(legacy)
+}
+
+async fn write_post(post: Post, ctx: &MessageCtx) -> Result<Posted, FnFailure> {
+    let inputs_setter = ArcPlanInputs(Arc::clone(&ctx.plan_inputs));
+    let guard = ctx.mutation_guard.clone();
+    ctx.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            if let Some(guard) = guard {
+                guard(tx)?;
+            }
+            messages::post(tx, post, &inputs_setter)
+        })
+        .await
+        .map_err(store_failure)
+}
+
+/// `{id, receipt}`, plus `reply` (null until answered) for an ask.
+fn receipt_output(posted: &Posted, reply: Option<Option<&Message>>) -> Result<JsonMap, FnFailure> {
+    let receipt = serde_json::to_value(&posted.receipt).map_err(|e| terminal(e.to_string()))?;
+    let mut out = output([("id", json!(posted.message.id.0)), ("receipt", receipt)])?;
+    if let Some(reply) = reply {
+        let reply = serde_json::to_value(reply).map_err(|e| terminal(e.to_string()))?;
+        out.0.insert(
+            "reply".into(),
+            JsonValue::try_from(reply).map_err(|e| terminal(e.to_string()))?,
+        );
+    }
+    Ok(out)
+}
+
+/// A question, or the waiting ask when `wait`: it takes up an earlier question of the
+/// same item lineage and blocks until its first answering reply.
+async fn asking(
+    post: Post,
+    waiting: bool,
+    ctx: &MessageCtx,
+    with_reply: bool,
+) -> Result<JsonMap, FnFailure> {
     if !waiting {
-        let inputs_setter = ArcPlanInputs(Arc::clone(&ctx.plan_inputs));
-        let guard = ctx.mutation_guard.clone();
-        let posted = ctx
-            .writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                if let Some(guard) = guard {
-                    guard(tx)?;
-                }
-                message_post(tx, post, &inputs_setter)
-            })
-            .await
-            .map_err(store_failure)?;
-        return output([("id", json!(posted.id.0)), ("reply", Value::Null)]);
+        let posted = write_post(post, ctx).await?;
+        return receipt_output(&posted, with_reply.then_some(None));
     }
     let run = ctx
         .run
@@ -183,25 +332,30 @@ async fn post(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> 
             if let Some(guard) = guard {
                 guard(tx)?;
             }
-            ask(tx, post, &inputs_setter)
+            ask_waiting(tx, post, &inputs_setter)
         })
         .await
         .map_err(store_failure)?;
-    let (question, reply) = match result {
-        AskResult::Answered { question, reply } => (question, *reply),
-        AskResult::Closed(_) => return Err(terminal("question closed")),
-        AskResult::Waiting(question) => {
-            let reply = wait_for_answer(ctx, question.id, run).await?;
-            (question, reply)
+    match result {
+        AskResult::Answered { question, reply } => {
+            let posted = Posted {
+                receipt: MessageReceipt {
+                    id: question.id,
+                    to: question.to.clone().unwrap_or_default(),
+                    thread: question.thread.clone(),
+                    delivery: Delivery::Delivered,
+                    run: None,
+                },
+                message: question,
+            };
+            receipt_output(&posted, Some(Some(&reply)))
         }
-    };
-    output([
-        ("id", json!(question.id.0)),
-        (
-            "reply",
-            serde_json::to_value(&reply).map_err(|e| terminal(e.to_string()))?,
-        ),
-    ])
+        AskResult::Closed(_) => Err(terminal("question closed")),
+        AskResult::Waiting(posted) => {
+            let reply = wait_for_answer(ctx, posted.message.id, run).await?;
+            receipt_output(&posted, Some(Some(&reply)))
+        }
+    }
 }
 
 /// Park on committed `messages` changes until the question resolves, then claim its
@@ -309,7 +463,7 @@ async fn wait(inputs: &JsonMap, ctx: &MessageCtx) -> Result<JsonMap, FnFailure> 
             })
             .collect();
         let waking = if questions {
-            found.iter().any(|msg| msg.needs_reply)
+            found.iter().any(Message::is_question)
         } else {
             !found.is_empty()
         };

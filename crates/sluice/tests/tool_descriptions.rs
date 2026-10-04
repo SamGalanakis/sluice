@@ -290,6 +290,26 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
         json!({"project":"p","step":"work","run":run,"outputs":{"note":"half done"}}),
     )
     .await;
+    // The message verbs return their receipt; the run speaks as its step.
+    let asked = f
+        .check(
+            "ask",
+            json!({"project":"p","to":"orchestrator","body":"which?","run":run}),
+        )
+        .await;
+    assert_eq!(asked["thread"], "step-work");
+    f.check("say", json!({"project":"p","to":"work","body":"fyi"}))
+        .await;
+    f.check(
+        "reply",
+        json!({"project":"p","to_message":asked["id"],"body":"this one"}),
+    )
+    .await;
+    f.check(
+        "messages",
+        json!({"project":"p","view":"thread","thread":"step-work"}),
+    )
+    .await;
     f.check("plan_history", json!({"project":"p"})).await;
     f.check("log_read", json!({"project":"p","limit":5})).await;
     f.check("log_wait", json!({"project":"p","since_seq":0,"timeout":1}))

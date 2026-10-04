@@ -284,6 +284,58 @@ pub struct MessageAnswer {
     pub values: Option<JsonMap>,
 }
 
+/// A question that needs a reply. `to` is a step of the project's current plan,
+/// `orchestrator` or `owner`; the thread and sender are derived, never given.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Ask {
+    pub project: ProjectSelector,
+    /// Required; a missing or unknown recipient is refused as `invalid`, never stored.
+    #[serde(default)]
+    pub to: String,
+    pub body: String,
+    pub title: Option<String>,
+    pub ui: Option<String>,
+    pub input: Option<String>,
+    pub data: Option<JsonValue>,
+    /// The asking run: its step is the sender. Without it the caller is the orchestrator.
+    pub run: Option<RunId>,
+    /// The dashboard speaks as the owner.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owner: bool,
+}
+
+/// A note; no reply is expected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Say {
+    pub project: ProjectSelector,
+    /// Required; a missing or unknown recipient is refused as `invalid`, never stored.
+    #[serde(default)]
+    pub to: String,
+    pub body: String,
+    pub data: Option<JsonValue>,
+    pub run: Option<RunId>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owner: bool,
+}
+
+/// A reply to one message: to its sender, on its thread. It resolves an open question.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Reply {
+    pub project: ProjectSelector,
+    pub to_message: MessageId,
+    #[serde(default)]
+    pub body: String,
+    pub answer: Option<MessageAnswer>,
+    pub run: Option<RunId>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owner: bool,
+}
+
+/// The retired `message_post` wire shape. Only runs started before ask, say and reply
+/// send it; the coordinator translates it and refuses it without a run identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MessagePost {
@@ -310,6 +362,9 @@ pub struct Messages {
     pub view: MessageView,
     pub thread: Option<String>,
     pub since: Option<MessageId>,
+    /// Read as the owner (the dashboard's identity) instead of the orchestrator.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owner: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -529,24 +584,83 @@ pub struct UnsupportedInput {
     pub inputs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageVerb {
+    Ask,
+    Say,
+    Reply,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionState {
+    Open,
+    Answered,
+    Closed,
+}
+
+/// One message. `to_message` and `answer` are a reply's; `state` and `answered_by`
+/// are a question's as read now (never in the log record). Rows stored before the
+/// verbs existed read with the verb derived from them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Message {
     pub id: MessageId,
-    pub thread: String,
+    pub verb: MessageVerb,
     pub from: String,
     pub to: Option<String>,
-    pub title: Option<String>,
+    pub thread: String,
     pub body: String,
-    pub needs_reply: bool,
-    pub reply_to: Option<MessageId>,
-    pub answer: Option<MessageAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<JsonValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<RunId>,
     pub at: String,
-    pub claimed_by: Option<RunId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_message: Option<MessageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<MessageAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<QuestionState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<MessageId>,
+}
+impl Message {
+    /// Asks, and replies stored as questions before the verbs existed.
+    pub fn is_question(&self) -> bool {
+        self.verb == MessageVerb::Ask || self.state.is_some()
+    }
+}
+
+/// How a message reached its recipient when it was posted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// A live listening run of the step was handed it (or an orchestrator/owner inbox).
+    Delivered,
+    /// The step will run, and its next run is assigned it.
+    Queued,
+    /// The step has no live or upcoming run; a later run (e.g. a retry) gets it.
+    NoLiveRun,
+}
+
+/// What ask, say and reply return.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MessageReceipt {
+    pub id: MessageId,
+    pub to: String,
+    pub thread: String,
+    pub delivery: Delivery,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -692,6 +806,10 @@ pub enum CommandRequest {
     StepRetry(StepRetry),
     StepCancel(StepCancel),
     StepSubmit(StepSubmit),
+    Ask(Ask),
+    Say(Say),
+    Reply(Reply),
+    /// Retired; accepted only from runs started on an older release.
     MessagePost(MessagePost),
     Messages(Messages),
     MarkRead(MarkRead),
@@ -801,9 +919,11 @@ pub enum CommandReply {
     Retry(RetryResult),
     Inputs(InputEditResult),
     Pruned(PruneResult),
+    /// The retired message_post's reply, kept for the binaries that sent it.
     Posted {
         id: MessageId,
     },
+    Receipt(MessageReceipt),
     Messages(MessagePage),
     Records(RecordPage),
     Next(NextResult),

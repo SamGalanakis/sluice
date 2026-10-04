@@ -6,7 +6,7 @@ use axum::{
 use futures_util::{StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{MessagePost, StepSubmit},
+    commands::StepSubmit,
     error::PublicError,
     ids::{AttemptId, ProjectId, ProjectSelector, Revision, RunId},
     plan::{FnSignature, SignatureProvider},
@@ -354,8 +354,8 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
     assert_eq!(f.post("name", "second", "", 1).await.0, 200);
     f.writer.write(RetrySafety::NonIdempotent,move |tx| {
   assert_eq!(sluice_store::attempts::step_submit(tx,StepSubmit {project:id,step:"s".parse().unwrap(),run,outputs:serde_json::from_value(json!({"result":"still live"}))?,author:Some("worker".into())})?,Some(1));
-  let message:MessagePost=serde_json::from_value(json!({"project":{"kind":"id","value":id},"from":"worker","to":"orchestrator","thread":"s","body":"callback after rename","needs_reply":true,"run":run}))?;
-  sluice_store::messages::message_post(tx,message,&sluice_store::messages::NoPlanInputs)?;Ok(())
+  let message:sluice_model::commands::Ask=serde_json::from_value(json!({"project":{"kind":"id","value":id},"to":"orchestrator","body":"callback after rename","run":run}))?;
+  sluice_store::messages::post(tx,message.try_into()?,&sluice_store::messages::NoPlanInputs)?;Ok(())
  }).await.unwrap();
     let next = next.await.unwrap().unwrap();
     assert!(!next.timed_out);

@@ -414,14 +414,17 @@ words instead"; without one, a text box with Answer and Close question. The inbo
 then lists "Unread notes". History lists the threads with the owner, each with its message
 count and a preview. A thread page (`thread?thread=<name>`) shows every message, each a head
 (from → to, when, an "Awaiting reply" or state tag, "Reply to n"), an optional title, the body,
-"Answer as sent" folded, and an open question's answer form; under them a "Message to the
-thread" box with "Ask a follow-up question" and Send. Messages shown are marked read.
+"Answer as sent" folded, and an open question's answer form; under them a "Message to
+<recipient>" box (the thread's step while it is in the plan, else the orchestrator) with "Ask a
+question that needs a reply" (an ask; unchecked, a note) and Send. Messages shown are marked
+read.
 
 ### Log (`/log`, `/projects/id/<p>/log`)
 A "Kinds" fieldset of checkboxes (every kind and group), a Threads field ("any") and Apply; then
 a table of seq, time, kind (12px data) and a one-line summary that opens to the record's JSON,
 50 records a page with "« newest", "‹ newer" and "older ›". The home log shows records without
-a project; `message.post` call noise is left out. On a phone the kinds fold behind "Filter: all
+a project; the message fns' call noise (`message.ask`, `message.say`, `message.reply`,
+`message.post`) is left out. On a phone the kinds fold behind "Filter: all
 kinds" and the time column hides.
 
 ### Functions (`/fns`)

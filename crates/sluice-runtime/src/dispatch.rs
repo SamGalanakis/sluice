@@ -6,7 +6,6 @@ use crate::{
 use indexmap::IndexMap;
 use serde_json::json;
 use sluice_model::{
-    commands::MessagePost,
     error::PublicError,
     ids::*,
     plan::{FnSignature, SignatureProvider},
@@ -177,23 +176,22 @@ impl RetryMessages for Hooks {
         body: &str,
         author: &str,
     ) -> sluice_store::Result<()> {
-        messages::message_post(
+        // Retry feedback is said to the step: by the owner from the dashboard, else by
+        // the orchestrator.
+        messages::post(
             tx,
-            MessagePost {
+            messages::Post {
                 project: ProjectSelector::Id(project),
+                speaker: if author == messages::OWNER_STREAM {
+                    messages::Speaker::Owner
+                } else {
+                    messages::Speaker::Orchestrator
+                },
                 body: body.into(),
-                thread: Some(format!("step-{step}")),
-                to: Some(step.to_string()),
-                needs_reply: Some(false),
-                reply_to: None,
-                answer: None,
-                title: None,
-                ui: None,
-                input: None,
-                data: None,
-                from: Some(author.into()),
-                run: None,
-                author: Some(author.into()),
+                verb: messages::Verb::Say {
+                    to: step.to_string(),
+                    data: None,
+                },
             },
             &messages::NoPlanInputs,
         )?;

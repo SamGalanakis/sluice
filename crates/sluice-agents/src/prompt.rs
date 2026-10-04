@@ -101,18 +101,28 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
         payload = payload.replace("\"outputs\":{}", &format!("\"outputs\":{{{outputs}}}"));
         text.push_str(&format!("\n\nSubmit them, as JSON values of those types, before you finish:\n`sluice tool step_submit {}`\nIf it returns `invalid`, fix what it lists and submit again (the last submission counts).", shell_quote(&payload)));
     }
-    // Every step can post with its own run identity; `listen` only adds live delivery.
+    // Every step speaks with its own run identity; `listen` only adds live delivery.
     if !ctx.project.is_empty() && !ctx.step.is_empty() {
         let thread = thread_name(&ctx.step);
-        let post = json!({"project":project,"thread":thread,"from":ctx.step,"run":ctx.run,"to":"orchestrator","body":"...","needs_reply":false});
-        let post = format!(
-            "`sluice tool message_post {}`",
-            shell_quote(&post.to_string())
+        let tool = |verb: &str, args: Value| {
+            format!("`sluice tool {verb} {}`", shell_quote(&args.to_string()))
+        };
+        let ask = tool(
+            "ask",
+            json!({"project":project,"run":ctx.run,"to":"orchestrator","body":"..."}),
+        );
+        let say = tool(
+            "say",
+            json!({"project":project,"run":ctx.run,"to":"orchestrator","body":"..."}),
+        );
+        let reply = tool(
+            "reply",
+            json!({"project":project,"run":ctx.run,"to_message":"<id>","body":"..."}),
         );
         if ctx.listen {
-            text.push_str(&format!("\n\nMessages for you on sluice thread `{thread}` of project `{project}` are delivered into this session as they arrive when addressed to this step (or to nobody); you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, post it with {post} and continue with anything not blocked by it. Use `needs_reply: true` for a question that needs an answer. Post questions and changes of scope, not progress."));
+            text.push_str(&format!("\n\nMessages addressed to this step arrive in this session as they come, on its sluice thread `{thread}` of project `{project}`; you need not poll for them. Follow instructions addressed to you. If you hit a question you cannot settle within your task, ask the orchestrator with {ask} and continue with anything not blocked by it. To tell it something that needs no answer, use {say}. Answer a question you are asked with {reply}, giving its message id. Post questions and changes of scope, not progress."));
         } else {
-            text.push_str(&format!("\n\nTo post a message on this step's sluice thread `{thread}` of project `{project}`, use {post}. Use `needs_reply: true` for a question that needs an answer."));
+            text.push_str(&format!("\n\nTo ask the orchestrator a question, use {ask}; to tell it something that needs no answer, use {say}. Both land on this step's sluice thread `{thread}` of project `{project}`."));
         }
     }
     text

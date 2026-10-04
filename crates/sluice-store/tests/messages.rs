@@ -4,7 +4,7 @@ use home::ScratchHome;
 use rusqlite::params;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{Message, MessageAnswer, MessagePost},
+    commands::{Delivery, Message, MessageAnswer, MessageVerb, QuestionState},
     error::PublicError,
     events::{Event, NotificationOutcome},
     ids::{AttemptId, MessageId, ProjectId, ProjectSelector, Revision, RunId},
@@ -40,12 +40,27 @@ impl Fixture {
             project,
         }
     }
-    async fn post(&self, post: MessagePost) -> std::result::Result<Message, PublicError> {
+    async fn post(&self, post: Post) -> std::result::Result<Message, PublicError> {
+        self.posted(post).await.map(|p| p.message)
+    }
+    async fn posted(&self, post: Post) -> std::result::Result<Posted, PublicError> {
         self.writer
             .write(RetrySafety::NonIdempotent, move |tx| {
-                message_post(tx, post, &TestInputs)
+                sluice_store::messages::post(tx, post, &TestInputs)
             })
             .await
+    }
+    async fn claimed(&self, id: MessageId) -> Option<String> {
+        self.reads
+            .snapshot(move |c| {
+                Ok(
+                    c.query_row("SELECT claimed_by FROM messages WHERE id=?1", [id.0], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .await
+            .unwrap()
     }
     async fn question(&self, id: MessageId) -> Question {
         let p = self.project;
@@ -75,14 +90,12 @@ impl Fixture {
         }).await.unwrap();
     }
     async fn ask(&self, run: RunId, title: &str) -> AskResult {
-        let mut post = draft(self.project, "question");
-        post.title = Some(title.into());
-        post.from = None;
-        post.run = Some(run);
-        post.to = Some("owner".into());
+        let post = asking(self.project, "question")
+            .title(title)
+            .speaker(Speaker::Run(run));
         self.writer
             .write(RetrySafety::NonIdempotent, move |tx| {
-                ask(tx, post, &TestInputs)
+                ask_waiting(tx, post, &TestInputs)
             })
             .await
             .unwrap()
@@ -110,43 +123,90 @@ impl Fixture {
             .unwrap()
     }
 }
-fn draft(project: ProjectId, body: &str) -> MessagePost {
-    MessagePost {
+/// The orchestrator tells the owner something.
+fn draft(project: ProjectId, body: &str) -> Post {
+    Post {
         project: ProjectSelector::Id(project),
+        speaker: Speaker::Orchestrator,
         body: body.into(),
-        thread: None,
-        to: None,
-        needs_reply: Some(false),
-        reply_to: None,
-        answer: None,
-        title: None,
-        ui: None,
-        input: None,
-        data: None,
-        from: Some("worker".into()),
-        run: None,
-        author: None,
+        verb: Verb::Say {
+            to: "owner".into(),
+            data: None,
+        },
     }
 }
-fn reply(project: ProjectId, id: MessageId, body: &str) -> MessagePost {
-    let mut post = draft(project, body);
-    post.reply_to = Some(id);
-    post.needs_reply = None;
-    post.from = Some("owner".into());
-    post
+/// The orchestrator asks the owner.
+fn asking(project: ProjectId, body: &str) -> Post {
+    Post {
+        verb: Verb::Ask {
+            to: "owner".into(),
+            title: None,
+            ui: None,
+            input: None,
+            data: None,
+        },
+        ..draft(project, body)
+    }
 }
-fn answer(project: ProjectId, id: MessageId, value: Value) -> MessagePost {
-    let mut post = reply(project, id, "");
-    post.answer = Some(MessageAnswer {
+/// The owner replies.
+fn reply(project: ProjectId, id: MessageId, body: &str) -> Post {
+    Post {
+        speaker: Speaker::Owner,
+        verb: Verb::Reply {
+            to_message: id,
+            answer: None,
+        },
+        ..draft(project, body)
+    }
+}
+fn answer(project: ProjectId, id: MessageId, value: Value) -> Post {
+    reply(project, id, "").answer(MessageAnswer {
         action: "submit".into(),
         params: Some(serde_json::from_value(json!({"value":7})).unwrap()),
         values: Some(serde_json::from_value(json!({"value":value})).unwrap()),
-    });
-    post
+    })
+}
+trait Draft {
+    fn to(self, to: &str) -> Self;
+    fn input(self, input: &str) -> Self;
+    fn title(self, title: &str) -> Self;
+    fn speaker(self, speaker: Speaker) -> Self;
+    fn answer(self, answer: MessageAnswer) -> Self;
+}
+impl Draft for Post {
+    fn to(mut self, recipient: &str) -> Self {
+        match &mut self.verb {
+            Verb::Ask { to, .. } | Verb::Say { to, .. } => *to = recipient.into(),
+            Verb::Reply { .. } => panic!("a reply's recipient is derived"),
+        }
+        self
+    }
+    fn input(mut self, name: &str) -> Self {
+        if let Verb::Ask { input, .. } = &mut self.verb {
+            *input = Some(name.into());
+        }
+        self
+    }
+    fn title(mut self, text: &str) -> Self {
+        if let Verb::Ask { title, .. } = &mut self.verb {
+            *title = Some(text.into());
+        }
+        self
+    }
+    fn speaker(mut self, speaker: Speaker) -> Self {
+        self.speaker = speaker;
+        self
+    }
+    fn answer(mut self, given: MessageAnswer) -> Self {
+        if let Verb::Reply { answer, .. } = &mut self.verb {
+            *answer = Some(given);
+        }
+        self
+    }
 }
 fn waiting(result: AskResult) -> Message {
     match result {
-        AskResult::Waiting(m) => m,
+        AskResult::Waiting(p) => p.message,
         _ => panic!("expected waiting"),
     }
 }
@@ -201,17 +261,18 @@ impl PlanInputSetter for TestInputs {
 }
 
 #[tokio::test]
-async fn messages_have_record_ids_generated_threads_and_exact_optional_fields() {
+async fn messages_have_record_ids_derived_threads_and_exact_optional_fields() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "hello");
-    post.needs_reply = None;
-    post.data = Some(JsonValue::try_from(json!({"x":[null,1]})).unwrap());
-    post.ui = Some("root = Button()".into());
-    post.title = Some("Title".into());
-    post.from = Some("reviewer#r-7".into());
+    let mut post = asking(f.project, "hello").title("Title");
+    if let Verb::Ask { data, ui, .. } = &mut post.verb {
+        *data = Some(JsonValue::try_from(json!({"x":[null,1]})).unwrap());
+        *ui = Some("root = Button()".into());
+    }
     let m = f.post(post).await.unwrap();
-    assert_eq!(m.thread, format!("m{}", m.id.0));
-    assert!(m.needs_reply);
+    assert_eq!(m.thread, "owner");
+    assert_eq!(m.verb, MessageVerb::Ask);
+    assert_eq!(m.from, "orchestrator");
+    assert_eq!(m.state, Some(QuestionState::Open));
     let p = f.project;
     let id = m.id;
     let (stored, event) = f
@@ -226,29 +287,51 @@ async fn messages_have_record_ids_generated_threads_and_exact_optional_fields() 
         .await
         .unwrap();
     assert_eq!(stored, m);
-    assert_eq!(event, Event::Message(Box::new(m)));
+    // The record never carries a question's state.
+    let mut recorded = m.clone();
+    recorded.state = None;
+    assert_eq!(event, Event::Message(Box::new(recorded)));
 }
 #[tokio::test]
-async fn replies_inherit_thread_recipient_and_default_to_notes() {
+async fn replies_inherit_thread_and_go_to_the_parent_sender() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "question");
-    post.thread = Some("step-work".into());
-    post.needs_reply = Some(true);
-    let q = f.post(post).await.unwrap();
-    let r = f.post(reply(f.project, q.id, "yes")).await.unwrap();
+    let q = f
+        .post(
+            asking(f.project, "question")
+                .to("work")
+                .speaker(Speaker::Owner),
+        )
+        .await
+        .unwrap();
+    assert_eq!(q.thread, "step-work");
+    let r = f
+        .post(reply(f.project, q.id, "yes").speaker(Speaker::Orchestrator))
+        .await
+        .unwrap();
     assert_eq!(r.thread, q.thread);
     assert_eq!(r.to, Some(q.from));
-    assert!(!r.needs_reply);
+    assert_eq!(r.verb, MessageVerb::Reply);
+    assert_eq!(r.to_message, Some(q.id));
     assert_eq!(f.question(q.id).await.state, QuestionState::Answered);
+    let q = f.question(q.id).await.message;
+    assert_eq!(q.answered_by, Some(r.id));
 }
 #[tokio::test]
-async fn invalid_thread_unknown_parent_and_cross_project_reply_write_nothing() {
+async fn unknown_recipient_unknown_parent_and_cross_project_reply_write_nothing() {
     let f = Fixture::new().await;
     let m = f.post(draft(f.project, "a")).await.unwrap();
-    let mut post = reply(f.project, m.id, "b");
-    post.thread = Some("wrong".into());
+    for to in ["", "nobody", "cli", "Work"] {
+        assert!(matches!(
+            f.post(draft(f.project, "b").to(to)).await,
+            Err(PublicError::Invalid { .. })
+        ));
+        assert!(matches!(
+            f.post(asking(f.project, "b").to(to)).await,
+            Err(PublicError::Invalid { .. })
+        ));
+    }
     assert!(matches!(
-        f.post(post).await,
+        f.post(draft(f.project, "self").to("orchestrator")).await,
         Err(PublicError::Invalid { .. })
     ));
     assert!(matches!(
@@ -275,27 +358,36 @@ async fn invalid_thread_unknown_parent_and_cross_project_reply_write_nothing() {
     assert_eq!(f.count("records").await, 1);
 }
 #[tokio::test]
-async fn a_reply_that_is_a_question_answers_nothing() {
+async fn a_reply_to_a_note_or_a_closed_question_is_just_a_message() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "question");
-    post.needs_reply = Some(true);
-    let q = f.post(post).await.unwrap();
-    let mut clarification = reply(f.project, q.id, "which?");
-    clarification.needs_reply = Some(true);
-    let c = f.post(clarification).await.unwrap();
-    assert_eq!(f.question(q.id).await.state, QuestionState::Open);
-    assert_eq!(f.question(c.id).await.state, QuestionState::Open);
-    f.post(reply(f.project, c.id, "that one")).await.unwrap();
-    assert_eq!(f.question(q.id).await.state, QuestionState::Open);
+    let note = f.post(draft(f.project, "fyi")).await.unwrap();
+    let r = f.post(reply(f.project, note.id, "thanks")).await.unwrap();
+    assert_eq!(r.verb, MessageVerb::Reply);
+    assert_eq!(r.state, None);
+    assert!(matches!(
+        f.post(answer(f.project, note.id, json!(1))).await,
+        Err(PublicError::Invalid { .. })
+    ));
+    let q = f.post(asking(f.project, "q")).await.unwrap();
+    let close = reply(f.project, q.id, "").answer(MessageAnswer {
+        action: "close".into(),
+        params: None,
+        values: None,
+    });
+    f.post(close).await.unwrap();
+    f.post(reply(f.project, q.id, "after all")).await.unwrap();
+    assert_eq!(f.question(q.id).await.state, QuestionState::Closed);
+    let blank = reply(f.project, q.id, " ");
+    assert!(matches!(
+        f.post(blank).await,
+        Err(PublicError::Invalid { .. })
+    ));
 }
 #[tokio::test]
 async fn first_answer_wins_later_plain_reply_sets_no_input_and_stale_ui_conflicts() {
     let f = Fixture::new().await;
     f.input(json!("int")).await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    post.input = Some("n".into());
-    let q = f.post(post).await.unwrap();
+    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
     let first = f.post(answer(f.project, q.id, json!(3))).await.unwrap();
     f.post(reply(f.project, q.id, "later invalid integer"))
         .await
@@ -317,11 +409,7 @@ async fn first_answer_wins_later_plain_reply_sets_no_input_and_stale_ui_conflict
 async fn invalid_typed_answer_leaves_question_input_revision_records_and_notifications_unchanged() {
     let f = Fixture::new().await;
     f.input(json!("int")).await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    post.input = Some("n".into());
-    post.to = Some("owner".into());
-    let q = f.post(post).await.unwrap();
+    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
     let records = f.count("records").await;
     let wake = f.writer.subscribe();
     assert!(matches!(
@@ -352,10 +440,7 @@ async fn null_precedence_and_nullable_inputs_use_the_shared_type_contract() {
         let f = Fixture::new().await;
         f.input(typ).await;
         for value in [json!(null), json!(4)] {
-            let mut post = draft(f.project, "q");
-            post.needs_reply = Some(true);
-            post.input = Some("n".into());
-            let q = f.post(post).await.unwrap();
+            let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
             f.post(answer(f.project, q.id, value.clone()))
                 .await
                 .unwrap();
@@ -373,14 +458,13 @@ async fn plain_body_and_params_fallback_set_input_and_name_the_answering_author(
     let f = Fixture::new().await;
     f.input(json!("string")).await;
     for structured in [false, true] {
-        let mut post = draft(f.project, "q");
-        post.needs_reply = Some(true);
-        post.input = Some("n".into());
-        post.title = Some("Which word?".into());
-        let q = f.post(post).await.unwrap();
+        let q = f
+            .post(asking(f.project, "q").input("n").title("Which word?"))
+            .await
+            .unwrap();
         let mut r = reply(f.project, q.id, "body");
         if structured {
-            r.answer = Some(MessageAnswer {
+            r = r.answer(MessageAnswer {
                 action: "submit".into(),
                 values: None,
                 params: Some(serde_json::from_value(json!({"value":"param"})).unwrap()),
@@ -408,12 +492,8 @@ async fn plain_body_and_params_fallback_set_input_and_name_the_answering_author(
 async fn missing_answer_value_and_null_required_input_are_atomic() {
     let f = Fixture::new().await;
     f.input(json!("int")).await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    post.input = Some("n".into());
-    let q = f.post(post).await.unwrap();
-    let mut r = reply(f.project, q.id, "");
-    r.answer = Some(MessageAnswer {
+    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
+    let r = reply(f.project, q.id, "").answer(MessageAnswer {
         action: "submit".into(),
         params: None,
         values: None,
@@ -422,22 +502,21 @@ async fn missing_answer_value_and_null_required_input_are_atomic() {
         assert!(matches!(f.post(r).await, Err(PublicError::Invalid { .. })));
     }
     assert_eq!(f.question(q.id).await.state, QuestionState::Open);
-    assert_eq!(f.count("records").await, 1);
+    assert_eq!(f.count("records").await, 2); // the question and its notify reservation
 }
 #[tokio::test]
-async fn close_resolves_without_setting_input_even_with_a_question_reply() {
+async fn close_resolves_without_setting_input() {
     let f = Fixture::new().await;
     f.input(json!("int")).await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    post.input = Some("n".into());
-    let q = f.post(post).await.unwrap();
+    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
     let mut r = answer(f.project, q.id, json!("invalid"));
-    r.answer.as_mut().unwrap().action = "close".into();
-    r.needs_reply = Some(true);
+    if let Verb::Reply { answer, .. } = &mut r.verb {
+        answer.as_mut().unwrap().action = "close".into();
+    }
     f.post(r).await.unwrap();
     assert_eq!(f.question(q.id).await.state, QuestionState::Closed);
-    assert_eq!(f.count("records").await, 2);
+    assert_eq!(f.question(q.id).await.message.answered_by, None);
+    assert_eq!(f.count("records").await, 3);
     assert!(matches!(
         f.post(answer(f.project, q.id, json!(1))).await,
         Err(PublicError::Conflict { .. })
@@ -458,20 +537,17 @@ async fn errors_after_the_setter_wrote_still_roll_back_the_whole_transaction() {
     }
     let f = Fixture::new().await;
     f.input(json!("int")).await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    post.input = Some("n".into());
-    let q = f.post(post).await.unwrap();
+    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
     let r = answer(f.project, q.id, json!(4));
     assert!(
         f.writer
-            .write(RetrySafety::NonIdempotent, move |tx| message_post(
-                tx, r, &Fault
-            ))
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                sluice_store::messages::post(tx, r, &Fault)
+            })
             .await
             .is_err()
     );
-    assert_eq!(f.count("records").await, 1);
+    assert_eq!(f.count("records").await, 2);
     assert_eq!(f.question(q.id).await.state, QuestionState::Open);
     let rev: i64 = f
         .reads
@@ -481,21 +557,20 @@ async fn errors_after_the_setter_wrote_still_roll_back_the_whole_transaction() {
     assert_eq!(rev, 1);
 }
 #[tokio::test]
-async fn unknown_input_project_and_invalid_answer_shapes_leave_no_rows() {
+async fn unknown_input_project_and_blank_bodies_leave_no_rows() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "q");
-    post.input = Some("missing".into());
     assert!(matches!(
-        f.post(post).await,
+        f.post(asking(f.project, "q").input("missing")).await,
         Err(PublicError::NotFound { .. })
     ));
-    let mut post = draft(f.project, "q");
-    post.answer = Some(MessageAnswer {
-        action: "close".into(),
-        values: None,
-        params: None,
-    });
-    assert!(f.post(post).await.is_err());
+    assert!(matches!(
+        f.post(draft(f.project, " ")).await,
+        Err(PublicError::Invalid { .. })
+    ));
+    assert!(matches!(
+        f.post(asking(f.project, "")).await,
+        Err(PublicError::Invalid { .. })
+    ));
     assert!(f.post(draft(ProjectId::new(), "q")).await.is_err());
     assert_eq!(f.count("records").await, 0);
 }
@@ -530,7 +605,7 @@ async fn an_absent_asker_answer_is_claimed_once_and_never_reused() {
         AskResult::Answered { question, reply } => {
             assert_eq!(question.id, q.id);
             assert_eq!(reply.id, a.id);
-            assert_eq!(reply.claimed_by, Some(next));
+            assert_eq!(f.claimed(reply.id).await, Some(next.to_string()));
         }
         _ => panic!("expected answer"),
     }
@@ -592,13 +667,15 @@ async fn only_latest_question_is_considered_and_closed_question_is_not_adopted()
     let f = Fixture::new().await;
     let r = f.run("work", -1, 1, None).await;
     let old = waiting(f.ask(r, "Title").await);
-    let mut post = draft(f.project, "new");
-    post.run = Some(r);
-    post.title = Some("Title".into());
-    post.needs_reply = Some(true);
-    let new = f.post(post).await.unwrap();
-    let mut close = reply(f.project, new.id, "");
-    close.answer = Some(MessageAnswer {
+    let new = f
+        .post(
+            asking(f.project, "new")
+                .title("Title")
+                .speaker(Speaker::Run(r)),
+        )
+        .await
+        .unwrap();
+    let close = reply(f.project, new.id, "").answer(MessageAnswer {
         action: "close".into(),
         params: None,
         values: None,
@@ -613,13 +690,8 @@ async fn only_latest_question_is_considered_and_closed_question_is_not_adopted()
 #[tokio::test]
 async fn notify_is_reserved_once_for_questions_only_and_result_never_replays() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    post.to = Some("owner".into());
-    let q = f.post(post).await.unwrap();
-    let mut note = draft(f.project, "note");
-    note.to = Some("owner".into());
-    f.post(note).await.unwrap();
+    let q = f.post(asking(f.project, "q")).await.unwrap();
+    f.post(draft(f.project, "note")).await.unwrap();
     assert_eq!(f.count("notification_attempts").await, 1);
     let p = f.project;
     let a = f
@@ -674,9 +746,10 @@ async fn notify_is_reserved_once_for_questions_only_and_result_never_replays() {
 #[tokio::test]
 async fn delivery_reservation_does_not_consume_and_actual_start_advances_once() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "feedback");
-    post.to = Some("work".into());
-    let m = f.post(post).await.unwrap();
+    let m = f
+        .post(draft(f.project, "feedback").to("work"))
+        .await
+        .unwrap();
     let run = f.run("work", -1, 1, None).await;
     let p = f.project;
     let range = f
@@ -746,9 +819,10 @@ async fn delivery_reservation_does_not_consume_and_actual_start_advances_once() 
 #[tokio::test]
 async fn scatter_windows_and_not_started_item_survive_shared_cursor_advance() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "feedback");
-    post.to = Some("work".into());
-    let m = f.post(post).await.unwrap();
+    let m = f
+        .post(draft(f.project, "feedback").to("work"))
+        .await
+        .unwrap();
     let r0 = f.run("work", 0, 1, None).await;
     let r1 = f.run("work", 1, 1, None).await;
     let p = f.project;
@@ -797,9 +871,7 @@ async fn scatter_windows_and_not_started_item_survive_shared_cursor_advance() {
 #[tokio::test]
 async fn live_feed_starts_at_exact_window_end_and_generation_fences_old_start() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "first");
-    post.to = Some("work".into());
-    let first = f.post(post).await.unwrap();
+    let first = f.post(draft(f.project, "first").to("work")).await.unwrap();
     let run = f.run("work", -1, 1, None).await;
     let p = f.project;
     let assigned = f
@@ -809,9 +881,7 @@ async fn live_feed_starts_at_exact_window_end_and_generation_fences_old_start() 
         })
         .await
         .unwrap();
-    let mut post = draft(p, "late");
-    post.to = Some("work".into());
-    let late = f.post(post).await.unwrap();
+    let late = f.post(draft(p, "late").to("work")).await.unwrap();
     assert_eq!(assigned.through, first.id);
     assert!(late.id > assigned.through);
     assert!(
@@ -847,10 +917,7 @@ async fn live_feed_starts_at_exact_window_end_and_generation_fences_old_start() 
 async fn simultaneous_ui_answers_set_input_only_once() {
     let f = Fixture::new().await;
     f.input(json!("int")).await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    post.input = Some("n".into());
-    let q = f.post(post).await.unwrap();
+    let q = f.post(asking(f.project, "q").input("n")).await.unwrap();
     let (a, b) = tokio::join!(
         f.post(answer(f.project, q.id, json!(1))),
         f.post(answer(f.project, q.id, json!(2)))
@@ -896,7 +963,8 @@ async fn delivery_acknowledgement_claims_answer_and_claim_outlives_log_trimming(
         })
         .await
         .unwrap();
-    assert_eq!(f.question(q.id).await.reply.unwrap().claimed_by, Some(run));
+    let answer = f.question(q.id).await.reply.unwrap();
+    assert_eq!(f.claimed(answer.id).await, Some(run.to_string()));
     let retained: i64 = f
         .reads
         .snapshot(move |c| {
@@ -915,34 +983,97 @@ async fn delivery_acknowledgement_claims_answer_and_claim_outlives_log_trimming(
 }
 
 #[tokio::test]
-async fn message_authors_use_explicit_sender_then_resolved_author_and_keep_literal_names() {
+async fn sender_and_thread_are_derived_from_the_speaker_and_recipient() {
     let f = Fixture::new().await;
-    for (sender, author, want) in [
-        (Some("reviewer#r-7"), Some("dashboard"), "reviewer#r-7"),
-        (None, Some("step:work"), "step:work"),
-        (Some(" "), Some("mcp-client"), "mcp-client"),
-        (None, None, "cli"),
+    let run = f.run("work", -1, 1, None).await;
+    for (speaker, to, from, thread) in [
+        (Speaker::Owner, "orchestrator", "owner", "owner"),
+        (Speaker::Orchestrator, "owner", "orchestrator", "owner"),
+        (Speaker::Owner, "work", "owner", "step-work"),
+        (Speaker::Orchestrator, "other", "orchestrator", "step-other"),
+        (Speaker::Run(run), "orchestrator", "work", "step-work"),
+        (Speaker::Run(run), "owner", "work", "step-work"),
+        (Speaker::Run(run), "other", "work", "step-work"),
+        (Speaker::Sluice, "owner", "sluice", "owner"),
     ] {
-        let mut post = draft(f.project, "note");
-        post.from = sender.map(str::to_owned);
-        post.author = author.map(str::to_owned);
-        assert_eq!(f.post(post).await.unwrap().from, want);
+        let m = f
+            .post(draft(f.project, "note").to(to).speaker(speaker))
+            .await
+            .unwrap();
+        assert_eq!((m.from.as_str(), m.thread.as_str()), (from, thread));
+        assert_eq!(m.to.as_deref(), Some(to));
+        assert_eq!(
+            m.run,
+            match speaker {
+                Speaker::Run(run) => Some(run),
+                _ => None,
+            }
+        );
     }
+    assert!(matches!(
+        f.post(
+            draft(f.project, "self")
+                .to("work")
+                .speaker(Speaker::Run(run))
+        )
+        .await,
+        Err(PublicError::Invalid { .. })
+    ));
+    assert!(matches!(
+        f.post(draft(f.project, "x").speaker(Speaker::Run(RunId::new())))
+            .await,
+        Err(PublicError::NotFound { .. })
+    ));
 }
-
 #[tokio::test]
-async fn structured_answer_on_a_question_reply_still_resolves_its_parent() {
+async fn rows_and_records_stored_before_the_verbs_read_in_the_current_shape() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "q");
-    post.needs_reply = Some(true);
-    let q = f.post(post).await.unwrap();
-    let mut r = answer(f.project, q.id, json!(1));
-    r.needs_reply = Some(true);
-    let followup = f.post(r).await.unwrap();
-    assert_eq!(f.question(q.id).await.state, QuestionState::Answered);
-    assert_eq!(f.question(followup.id).await.state, QuestionState::Open);
+    let p = f.project;
+    let read = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let project = p.to_string();
+            tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,needs_reply,at) VALUES (1,?1,'m1','cli',NULL,'old question',1,'then'),(2,?1,'m1','owner','cli','old reply',0,'then'),(3,?1,'m1','cli','owner','old note',0,'then')",[&project])?;
+            tx.sql().execute("UPDATE messages SET reply_to=1 WHERE id=2", [])?;
+            tx.sql().execute("UPDATE messages SET resolved_by=2 WHERE id=1", [])?;
+            tx.changed(Some(p), "messages");
+            let legacy = json!({"kind":"message","id":2,"thread":"m1","from":"owner","to":"cli","title":null,"body":"old reply","needs_reply":false,"reply_to":1,"answer":null,"ui":null,"input":null,"data":null,"run":null,"posted_at":"then","claimed_by":null});
+            let event: Event = serde_json::from_value(legacy).unwrap();
+            Ok((
+                message(tx.sql(), p, MessageId(1))?,
+                message(tx.sql(), p, MessageId(2))?,
+                message(tx.sql(), p, MessageId(3))?,
+                event,
+            ))
+        })
+        .await
+        .unwrap();
+    let (question, reply, note, event) = read;
+    assert_eq!(question.verb, MessageVerb::Ask);
+    assert_eq!(question.state, Some(QuestionState::Answered));
+    assert_eq!(question.answered_by, Some(MessageId(2)));
+    assert_eq!(reply.verb, MessageVerb::Reply);
+    assert_eq!(reply.to_message, Some(MessageId(1)));
+    assert_eq!(note.verb, MessageVerb::Say);
+    assert_eq!(note.state, None);
+    let Event::Message(legacy) = event else {
+        panic!("message record")
+    };
+    assert_eq!(legacy.verb, MessageVerb::Reply);
+    assert_eq!(legacy.to_message, Some(MessageId(1)));
+    let fields: Vec<String> = serde_json::to_value(Event::Message(legacy))
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    assert!(
+        !fields
+            .iter()
+            .any(|k| k == "needs_reply" || k == "reply_to" || k == "claimed_by")
+    );
 }
-
 #[tokio::test]
 async fn stopped_reason_follows_cancelled_failed_and_removed_step_truth() {
     let f = Fixture::new().await;
@@ -990,9 +1121,7 @@ async fn stopped_reason_follows_cancelled_failed_and_removed_step_truth() {
 #[tokio::test]
 async fn repeated_range_request_keeps_the_frozen_window_and_leaves_late_messages_for_live_feed() {
     let f = Fixture::new().await;
-    let mut post = draft(f.project, "first");
-    post.to = Some("work".into());
-    f.post(post).await.unwrap();
+    f.post(draft(f.project, "first").to("work")).await.unwrap();
     let run = f.run("work", -1, 1, None).await;
     let p = f.project;
     let first = f
@@ -1002,9 +1131,7 @@ async fn repeated_range_request_keeps_the_frozen_window_and_leaves_late_messages
         })
         .await
         .unwrap();
-    let mut late = draft(p, "late");
-    late.to = Some("work".into());
-    let late = f.post(late).await.unwrap();
+    let late = f.post(draft(p, "late").to("work")).await.unwrap();
     let exact = sluice_store::attempts::AssignedRange {
         after: first.after.0,
         through: first.through.0,
@@ -1018,4 +1145,82 @@ async fn repeated_range_request_keeps_the_frozen_window_and_leaves_late_messages
         .unwrap();
     assert_eq!(again, first);
     assert!(late.id > first.through);
+}
+
+#[tokio::test]
+async fn receipts_follow_the_recipient_and_its_step_runs() {
+    let f = Fixture::new().await;
+    let p = f.project;
+    let set = |sql: &'static str| {
+        let w = f.writer.clone();
+        async move {
+            w.write(RetrySafety::NonIdempotent, move |tx| {
+                tx.sql().execute(sql, [p.to_string()])?;
+                tx.changed(Some(p), "status");
+                Ok(())
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let receipt = |to: &'static str| f.posted(draft(p, "hi").to(to));
+    for to in ["owner"] {
+        let r = receipt(to).await.unwrap().receipt;
+        assert_eq!(
+            (r.delivery, r.run, r.thread.as_str()),
+            (Delivery::Delivered, None, "owner")
+        );
+    }
+    let r = f
+        .posted(draft(p, "hi").to("orchestrator").speaker(Speaker::Owner))
+        .await
+        .unwrap()
+        .receipt;
+    assert_eq!(r.delivery, Delivery::Delivered);
+    // A pending step runs later: its next run is assigned the message.
+    let r = receipt("work").await.unwrap().receipt;
+    assert_eq!((r.delivery, r.run), (Delivery::Queued, None));
+    assert_eq!((r.to.as_str(), r.thread.as_str()), ("work", "step-work"));
+    // A live run of an agent step that listens is handed it.
+    set("UPDATE steps SET status='running',declaration='{\"run\":\"agent.run\",\"in\":{}}' WHERE project_id=?1 AND step_id='work'").await;
+    let run = f.run("work", -1, 1, None).await;
+    let r = receipt("work").await.unwrap().receipt;
+    assert_eq!((r.delivery, r.run), (Delivery::Delivered, Some(run)));
+    // One that does not listen keeps it for a later run.
+    set("UPDATE steps SET declaration='{\"run\":\"agent.run\",\"in\":{\"listen\":{\"default\":false}}}' WHERE project_id=?1 AND step_id='work'").await;
+    assert_eq!(
+        receipt("work").await.unwrap().receipt.delivery,
+        Delivery::NoLiveRun
+    );
+    // A run reserved but not started takes it when it starts.
+    set("UPDATE attempts SET phase='claimed' WHERE project_id=?1 AND step_id='work'").await;
+    let r = receipt("work").await.unwrap().receipt;
+    assert_eq!((r.delivery, r.run), (Delivery::Queued, Some(run)));
+    f.stop(run).await;
+    // Done, failed or paused: no live or upcoming run.
+    for sql in [
+        "UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='work'",
+        "UPDATE steps SET status='failed' WHERE project_id=?1 AND step_id='work'",
+        "UPDATE steps SET status='pending',paused='true' WHERE project_id=?1 AND step_id='work'",
+    ] {
+        set(sql).await;
+        let r = receipt("work").await.unwrap().receipt;
+        assert_eq!((r.delivery, r.run), (Delivery::NoLiveRun, None), "{sql}");
+    }
+    // A reply to a removed step's message is kept, with nobody to run it.
+    let q = f
+        .post(asking(p, "q").to("orchestrator").speaker(Speaker::Run(run)))
+        .await
+        .unwrap();
+    set("DELETE FROM steps WHERE project_id=?1 AND step_id='work'").await;
+    let r = f
+        .posted(reply(p, q.id, "answer").speaker(Speaker::Orchestrator))
+        .await
+        .unwrap()
+        .receipt;
+    assert_eq!((r.to.as_str(), r.delivery), ("work", Delivery::NoLiveRun));
+    assert!(matches!(
+        receipt("work").await,
+        Err(PublicError::Invalid { .. })
+    ));
 }

@@ -29,8 +29,8 @@ it stays easy to read and to change.
   enough (`"interface": {"type": "string", "doc": "Path of the interface file"}`). The agent
   submits them; the next step gets them as inputs. A step with nothing to hand on declares
   nothing.
-- **People decide in the inbox.** When a choice is theirs, a `message.post` step with
-  `wait: true` (or `message_post` from you, `to="owner"`) waits for it (`docs("inbox")`).
+- **People decide in the inbox.** When a choice is theirs, a `message.ask` step with
+  `wait: true` (or `ask` from you, `to="owner"`) waits for it (`docs("inbox")`).
 - **Finish with a check.** A last block verifies the result as a whole (tests pass, the
   feature works, the brief answers the questions) and says what is still open.
 - **The plan is malleable.** Plan the part you understand, run it, read what comes back, then

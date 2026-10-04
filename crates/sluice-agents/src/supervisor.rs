@@ -1031,19 +1031,30 @@ fn enqueue_message(
 ) -> Result<(), AgentFailure> {
     let body = message.body.as_value();
     let text = if let Some(object) = body.as_object() {
+        let field = |key: &str| object.get(key).and_then(Value::as_str);
+        let from = field("from").unwrap_or("orchestrator");
+        let thread = field("thread").unwrap_or("step");
+        // A question says how to answer it: a reply to its id.
+        let heading = match field("verb") {
+            Some("ask") => format!(
+                "Question {} from {from} on your sluice thread `{thread}` (answer it with sluice tool reply, to_message {})",
+                message.id, message.id
+            ),
+            Some("reply") => format!(
+                "Reply from {from} on your sluice thread `{thread}` to message {}",
+                object
+                    .get("to_message")
+                    .map(Value::to_string)
+                    .unwrap_or_default()
+            ),
+            _ => format!("Message from {from} on your sluice thread `{thread}`"),
+        };
         format!(
-            "Message from {} on your sluice thread `{}`: {}{}",
-            object
-                .get("from")
-                .and_then(Value::as_str)
-                .unwrap_or("orchestrator"),
-            object
-                .get("thread")
-                .and_then(Value::as_str)
-                .unwrap_or("step"),
-            object.get("body").and_then(Value::as_str).unwrap_or(""),
+            "{heading}: {}{}",
+            field("body").unwrap_or(""),
             object
                 .get("data")
+                .filter(|v| !v.is_null())
                 .map(|v| format!("\n\ndata: {v}"))
                 .unwrap_or_default()
         )

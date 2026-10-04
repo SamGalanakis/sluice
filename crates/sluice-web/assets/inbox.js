@@ -32,7 +32,7 @@ function bind(root) {
       const status = form.querySelector(".ou-status");
       const data = new FormData(form);
       try {
-        const response = await fetch(form.action, {method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify({body:data.get("body"), thread:data.get("thread"), needs_reply:data.get("needs_reply") === "true"})});
+        const response = await fetch(form.action, {method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify({body:data.get("body"), to:data.get("to"), ask:data.get("ask") === "true"})});
         const result = await response.json();
         if (!response.ok) throw new Error(result.message);
         status.textContent = "Sent."; form.reset();

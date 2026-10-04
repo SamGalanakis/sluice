@@ -346,13 +346,30 @@ fn watch(home: &Path, args: &[&str]) -> (std::process::Child, std::sync::mpsc::R
     (child, rx)
 }
 
-fn post(home: &Path, thread: &str, body: &str, needs_reply: bool) {
+/// Project `p` with pending steps `q` and `r` (work done outside sluice, so they stay
+/// pending): their threads are `step-q` and `step-r`.
+fn project_with_steps(home: &Path) {
+    tool(home, "project_create", r#"{"name":"p","description":""}"#);
+    let patched = tool(
+        home,
+        "plan_patch",
+        r#"{"project":"p","rev":1,"reason":"threads","ops":[
+            {"op":"add","path":"/steps/q","value":{"run":"core.external","outputs":{"ok":"boolean"}}},
+            {"op":"add","path":"/steps/r","value":{"run":"core.external","outputs":{"ok":"boolean"}}}]}"#,
+    );
+    assert!(
+        patched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&patched.stderr)
+    );
+}
+
+/// The orchestrator asks (or tells) step `step`, on its thread `step-<step>`.
+fn post(home: &Path, step: &str, body: &str, question: bool) {
     let out = tool(
         home,
-        "message_post",
-        &json!({"project": "p", "thread": thread, "body": body, "from": "x",
-                "needs_reply": needs_reply})
-        .to_string(),
+        if question { "ask" } else { "say" },
+        &json!({"project": "p", "to": step, "body": body}).to_string(),
     );
     assert!(
         out.status.success(),
@@ -364,11 +381,7 @@ fn post(home: &Path, thread: &str, body: &str, needs_reply: bool) {
 #[test]
 fn watch_prints_matching_records_from_now_or_since_a_seq() {
     let home = ScratchHome::new().unwrap();
-    tool(
-        home.path(),
-        "project_create",
-        r#"{"name":"p","description":""}"#,
-    );
+    project_with_steps(home.path());
     post(home.path(), "q", "before", true);
 
     // From now: records appended while the watcher runs, on the chosen
@@ -376,7 +389,15 @@ fn watch_prints_matching_records_from_now_or_since_a_seq() {
     // it; post until the newest marker lands, which proves it is live.
     let (mut child, rx) = watch(
         home.path(),
-        &["watch", "-p", "p", "--kinds", "message", "--threads", "q"],
+        &[
+            "watch",
+            "-p",
+            "p",
+            "--kinds",
+            "message",
+            "--threads",
+            "step-q",
+        ],
     );
     let mut marker = String::new();
     for i in 0..40 {
@@ -404,7 +425,15 @@ fn watch_prints_matching_records_from_now_or_since_a_seq() {
     // From --since-seq 0: the whole thread's history, in order.
     let (mut child, rx) = watch(
         home.path(),
-        &["watch", "-p", "p", "--threads", "q", "--since-seq", "0"],
+        &[
+            "watch",
+            "-p",
+            "p",
+            "--threads",
+            "step-q",
+            "--since-seq",
+            "0",
+        ],
     );
     let mut bodies = Vec::new();
     while let Ok(line) = rx.recv_timeout(std::time::Duration::from_secs(15)) {
@@ -425,14 +454,18 @@ fn watch_prints_matching_records_from_now_or_since_a_seq() {
 #[test]
 fn watch_holds_notes_until_a_question_under_wake_questions() {
     let home = ScratchHome::new().unwrap();
-    tool(
-        home.path(),
-        "project_create",
-        r#"{"name":"p","description":""}"#,
-    );
+    project_with_steps(home.path());
     let (mut child, rx) = watch(
         home.path(),
-        &["watch", "-p", "p", "--threads", "q", "--wake", "questions"],
+        &[
+            "watch",
+            "-p",
+            "p",
+            "--threads",
+            "step-q",
+            "--wake",
+            "questions",
+        ],
     );
     // Bring the watcher live with a question that must print; anything posted
     // before it resolves its start bounds never reaches it.
@@ -583,9 +616,8 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
     for selector in [id.clone(), format!("id:{id}"), "demo".into()] {
         for (name, args) in [
             (
-                "message_post",
-                json!({"project": selector, "thread": "step-work", "from": "work",
-                       "to": "orchestrator", "body": "question", "needs_reply": false}),
+                "say",
+                json!({"project": selector, "to": "owner", "body": "note"}),
             ),
             ("status", json!({"project": selector})),
             ("plan_get", json!({"project": selector})),
@@ -593,7 +625,7 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
             ("fn_list", json!({"project": selector})),
             (
                 "messages",
-                json!({"project": selector, "view": "thread", "thread": "step-work"}),
+                json!({"project": selector, "view": "thread", "thread": "owner"}),
             ),
         ] {
             let out = tool(home.path(), name, &args.to_string());
@@ -616,16 +648,14 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
     let posted = tool(
         home.path(),
         "messages",
-        &json!({"project": "demo", "view": "thread", "thread": "step-work"}).to_string(),
+        &json!({"project": "demo", "view": "thread", "thread": "owner"}).to_string(),
     );
     assert_eq!(stdout(&posted)["messages"].as_array().unwrap().len(), 3);
     let unknown = sluice_model::ids::ProjectId::new();
     let missing = tool(
         home.path(),
-        "message_post",
-        &json!({"project": unknown.to_string(), "body": "x", "from": "work",
-                "needs_reply": false})
-        .to_string(),
+        "say",
+        &json!({"project": unknown.to_string(), "to": "owner", "body": "x"}).to_string(),
     );
     assert_eq!(stderr(&missing)["error"], "not_found");
     assert!(
@@ -908,4 +938,160 @@ fn tool_results_match_the_mcp_shapes() {
     keys.sort();
     assert_eq!(keys, ["last_seq", "records"], "{waited}");
     assert!(!waited["records"].as_array().unwrap().is_empty());
+}
+
+/// `sluice tool ask/say/reply`: the orchestrator speaks (no run identity), the thread and
+/// sender are derived, each call prints its receipt, a bad recipient is `invalid` with
+/// nothing stored, and the retired `message_post` is refused without a run.
+#[test]
+fn ask_say_and_reply_through_sluice_tool() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    project_with_steps(home);
+    let listing = String::from_utf8(run(home, &["tool"]).stdout).unwrap();
+    let listed: Vec<&str> = listing
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    for name in ["ask", "say", "reply", "messages"] {
+        assert!(listed.contains(&name), "{name} not listed");
+    }
+    assert!(!listed.contains(&"message_post"));
+    let ok = |out: Output| {
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout(&out)
+    };
+    let said = ok(tool(
+        home,
+        "say",
+        r#"{"project":"p","to":"q","body":"start with the parser"}"#,
+    ));
+    assert_eq!(said["to"], "q");
+    assert_eq!(said["thread"], "step-q");
+    assert_eq!(said["delivery"], "queued");
+    assert!(said.get("run").is_none());
+    let asked = ok(tool(
+        home,
+        "ask",
+        r#"{"project":"p","to":"owner","body":"ship it?","title":"Ship"}"#,
+    ));
+    assert_eq!(
+        (asked["thread"].as_str(), asked["delivery"].as_str()),
+        (Some("owner"), Some("delivered"))
+    );
+    // The owner's question (the dashboard's, sent raw) is answered by the orchestrator.
+    let owner_ask = json!({"command":"ask","args":{"project":{"kind":"name","value":"p"},"to":"orchestrator","body":"which db?","owner":true}});
+    let raw = ok(run(home, &["tool", "rpc", &owner_ask.to_string()]));
+    let question = raw["data"]["id"].clone();
+    let replied = ok(tool(
+        home,
+        "reply",
+        &json!({"project":"p","to_message":question,"body":"postgres"}).to_string(),
+    ));
+    assert_eq!(
+        (replied["to"].as_str(), replied["thread"].as_str()),
+        (Some("owner"), Some("owner"))
+    );
+    let thread = ok(tool(
+        home,
+        "messages",
+        r#"{"project":"p","view":"thread","thread":"owner"}"#,
+    ));
+    let rows: Vec<(String, String, String, Value)> = thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["verb"].as_str().unwrap().into(),
+                m["from"].as_str().unwrap().into(),
+                m["to"].as_str().unwrap().into(),
+                m["state"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "ask".into(),
+                "orchestrator".into(),
+                "owner".into(),
+                json!("open")
+            ),
+            (
+                "ask".into(),
+                "owner".into(),
+                "orchestrator".into(),
+                json!("answered")
+            ),
+            (
+                "reply".into(),
+                "orchestrator".into(),
+                "owner".into(),
+                Value::Null
+            ),
+        ]
+    );
+    assert_eq!(thread["messages"][1]["answered_by"], replied["id"]);
+    // The orchestrator's inbox is what is addressed to it; the owner's is the owner's.
+    let inbox = ok(tool(home, "messages", r#"{"project":"p","view":"inbox"}"#));
+    assert_eq!(inbox["messages"].as_array().unwrap().len(), 0);
+    let owners = ok(tool(
+        home,
+        "messages",
+        r#"{"project":"p","view":"inbox","owner":true}"#,
+    ));
+    assert_eq!(owners["messages"].as_array().unwrap().len(), 2);
+    let count = || {
+        ok(tool(
+            home,
+            "query",
+            r#"{"sql":"SELECT count(*) AS n FROM messages"}"#,
+        ))["rows"][0]["n"]
+            .clone()
+    };
+    let before = count();
+    for (name, args, error) in [
+        (
+            "say",
+            json!({"project":"p","to":"nobody","body":"x"}),
+            "invalid",
+        ),
+        ("ask", json!({"project":"p","body":"x"}), "invalid"),
+        (
+            "say",
+            json!({"project":"p","to":"orchestrator","body":"x"}),
+            "invalid",
+        ),
+        (
+            "ask",
+            json!({"project":"p","to":"q","body":"x","owner":true}),
+            "bad_request",
+        ),
+        (
+            "say",
+            json!({"project":"p","to":"q","body":"x","thread":"mine"}),
+            "bad_request",
+        ),
+        (
+            "message_post",
+            json!({"project":"p","body":"x","needs_reply":false}),
+            "invalid",
+        ),
+        (
+            "message_post",
+            json!({"project":"p","body":"x","run":sluice_model::ids::RunId::new()}),
+            "not_found",
+        ),
+    ] {
+        let out = tool(home, name, &args.to_string());
+        assert_eq!(out.status.code(), Some(1), "{name} {args}");
+        assert_eq!(stderr(&out)["error"], error, "{name} {args}");
+    }
+    assert_eq!(count(), before);
 }

@@ -704,31 +704,14 @@ impl SupervisorHost for RunHost {
         ))
     }
     async fn note(&mut self, body: &str) -> io::Result<()> {
-        let command = CommandRequest::MessagePost(MessagePost {
+        // The run says it to the orchestrator; its step and thread are derived.
+        let command = CommandRequest::Say(Say {
             project: ProjectSelector::Id(self.launch.invocation.project),
+            to: "orchestrator".into(),
             body: body.into(),
-            thread: self
-                .launch
-                .invocation
-                .step
-                .as_ref()
-                .map(|s| format!("step-{s}")),
-            to: Some("orchestrator".into()),
-            needs_reply: Some(false),
-            reply_to: None,
-            answer: None,
-            title: None,
-            ui: None,
-            input: None,
             data: None,
-            from: self
-                .launch
-                .invocation
-                .step
-                .as_ref()
-                .map(ToString::to_string),
             run: Some(self.launch.identity.run),
-            author: Some("agent".into()),
+            owner: false,
         });
         self.link
             .request(C::Callback {

@@ -1,12 +1,14 @@
-use serde_json::json;
+#[allow(dead_code)]
+#[path = "../../../tests/support/messages.rs"]
+mod stored_messages;
 use sluice_model::{
-    commands::MessagePost,
     error::PublicError,
     ids::{ProjectId, RecordSeq, RunId},
 };
 use sluice_runtime::watch::*;
 use sluice_store::{ReadPool, RetrySafety, Writer, messages};
 use std::{path::PathBuf, time::Duration};
+use stored_messages::{Stored, stored};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_util::sync::CancellationToken;
 struct Home(PathBuf);
@@ -41,12 +43,19 @@ async fn setup() -> (Home, Writer, ReadPool, ProjectId) {
     (h, w, r, p)
 }
 async fn post(w: &Writer, p: ProjectId, thread: &str, body: &str, question: bool) {
-    let req:MessagePost=serde_json::from_value(json!({"project":{"kind":"id","value":p},"body":body,"thread":thread,"from":"worker","to":"orchestrator","needs_reply":question})).unwrap();
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        messages::message_post(tx, req, &messages::NoPlanInputs)
-    })
-    .await
-    .unwrap();
+    stored(
+        w,
+        p,
+        Stored {
+            thread,
+            from: "worker",
+            to: Some("orchestrator"),
+            body,
+            question,
+            ..Stored::default()
+        },
+    )
+    .await;
 }
 #[tokio::test]
 async fn watch_flushes_wakes_and_holds_notes_until_question() {

@@ -75,14 +75,20 @@ fn full_prompt_contains_header_inputs_outputs_exact_submit_identity_and_live_thr
     assert!(text.starts_with("Step work: repair the bug This step's project is `p`; pass exactly that as `project` to any sluice tool.\n\nFix it"));
     let i = text.find("## Inputs").unwrap();
     let o = text.find("## Outputs you must submit").unwrap();
-    let t = text.find("Messages for you").unwrap();
+    let t = text.find("Messages addressed to this step").unwrap();
     assert!(i < o && o < t);
     assert!(text.contains("`interface` (string):\napi.md\nsecond line"));
     assert!(text.contains("\"project\":\"p\",\"step\":\"work\",\"run\":\"r\""));
     assert!(text.contains("\"ready\": <boolean>"));
     assert!(text.contains("step-work"));
-    assert!(text.contains("needs_reply"));
-    assert!(text.contains("sluice tool message_post"));
+    // The verbs, each with this run's identity; nothing is posted "to nobody".
+    for verb in ["ask", "say", "reply"] {
+        assert!(text.contains(&format!("`sluice tool {verb} '")), "{verb}");
+    }
+    assert!(text.contains("\"to\":\"orchestrator\""));
+    assert!(!text.contains("needs_reply"));
+    assert!(!text.contains("message_post"));
+    assert!(!text.contains("nobody"));
     assert!(!text.contains("thread.post"));
     assert!(!text.contains("inbox_"));
     assert!(!text.contains("log_read"));
@@ -106,13 +112,13 @@ fn every_callback_gives_an_id_project_as_an_id_selector() {
         "sluice tool step_submit '{{\"project\":\"{selector}\",\"step\":\"work\",\"run\":\"r\","
     )));
     let post = text
-        .split("sluice tool message_post '")
+        .split("sluice tool ask '")
         .nth(1)
         .and_then(|rest| rest.split('\'').next())
         .unwrap();
     let post: serde_json::Value = serde_json::from_str(post).unwrap();
     assert_eq!(post["project"], selector.as_str());
-    assert_eq!(post["thread"], "step-work");
+    assert!(text.contains("thread `step-work`"));
     assert!(text.contains(&format!("of project `{selector}`")));
     // No callback carries the bare id where a project is expected.
     assert!(!text.contains(&format!("\"project\":\"{id}\"")));
@@ -130,26 +136,27 @@ fn listen_false_drops_only_the_note_and_empty_ports_have_no_sections() {
     let text = build("task", &BTreeMap::new(), &context);
     assert!(text.contains("## Inputs"));
     assert!(text.contains("## Outputs"));
-    assert!(!text.contains("Messages for you"));
-    // Posting needs no live delivery: the exact command still carries this run's identity.
-    let post = text
-        .split("sluice tool message_post '")
-        .nth(1)
-        .and_then(|rest| rest.split('\'').next())
-        .unwrap();
-    let post: serde_json::Value = serde_json::from_str(post).unwrap();
-    assert_eq!(
-        post,
-        serde_json::json!({"project":"p","thread":"step-work","from":"work","run":"r",
-                           "to":"orchestrator","body":"...","needs_reply":false})
-    );
+    assert!(!text.contains("Messages addressed to this step"));
+    // Asking needs no live delivery: the exact commands still carry this run's identity.
+    for verb in ["ask", "say"] {
+        let post = text
+            .split(&format!("sluice tool {verb} '"))
+            .nth(1)
+            .and_then(|rest| rest.split('\'').next())
+            .unwrap();
+        let post: serde_json::Value = serde_json::from_str(post).unwrap();
+        assert_eq!(
+            post,
+            serde_json::json!({"project":"p","run":"r","to":"orchestrator","body":"..."})
+        );
+    }
     context.inputs.clear();
     context.outputs.clear();
     let text = build("task", &BTreeMap::new(), &context);
     assert!(!text.contains("##"));
     context.step.clear();
     let text = build("task", &BTreeMap::new(), &context);
-    assert!(!text.contains("message_post"));
+    assert!(!text.contains("sluice tool ask"));
 }
 #[test]
 fn thread_names_and_shell_quoting_preserve_literal_data() {

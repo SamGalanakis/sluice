@@ -1,8 +1,10 @@
 use sluice_model::{
-    commands::{CommandReply, CommandRequest, MessagePost},
+    commands::{CommandReply, CommandRequest, Message, MessageVerb},
     error::PublicError,
-    ids::ProjectId,
+    events::Event,
+    ids::{MessageId, ProjectId},
 };
+use sluice_store::messages::{NoPlanInputs, Post, post};
 use sluice_store::{RetrySafety, Writer};
 use sluice_web::views::{
     PageState,
@@ -16,14 +18,15 @@ impl MessageCommands for FixtureCommands {
         Box::pin(async move {
             writer
                 .write(RetrySafety::NonIdempotent, move |tx| match request {
-                    CommandRequest::MessagePost(post) => Ok(CommandReply::Posted {
-                        id: sluice_store::messages::message_post(
-                            tx,
-                            post,
-                            &sluice_store::messages::NoPlanInputs,
-                        )?
-                        .id,
-                    }),
+                    CommandRequest::Ask(m) => Ok(CommandReply::Receipt(
+                        post(tx, Post::try_from(m)?, &NoPlanInputs)?.receipt,
+                    )),
+                    CommandRequest::Say(m) => Ok(CommandReply::Receipt(
+                        post(tx, Post::try_from(m)?, &NoPlanInputs)?.receipt,
+                    )),
+                    CommandRequest::Reply(m) => Ok(CommandReply::Receipt(
+                        post(tx, Post::try_from(m)?, &NoPlanInputs)?.receipt,
+                    )),
                     CommandRequest::MarkRead(read) => {
                         sluice_store::messages::mark_read(tx, read)?;
                         Ok(CommandReply::Ack)
@@ -93,32 +96,92 @@ pub async fn seed(writer: &Writer, id: ProjectId) {
             None,
         ),
     ] {
-        let post: MessagePost = serde_json::from_value(serde_json::json!({"project":{"kind":"id","value":fixture_project.to_string()},"thread":thread,"from":from,"to":to,"title":title,"body":body,"needs_reply":needs_reply,"ui":ui})).unwrap();
-        let message = writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                sluice_store::messages::message_post(
-                    tx,
-                    post,
-                    &sluice_store::messages::NoPlanInputs,
-                )
-            })
-            .await
-            .unwrap();
+        let message = stored(
+            writer,
+            fixture_project,
+            Stored {
+                thread,
+                from,
+                to,
+                title: Some(title),
+                body: body.into(),
+                question: needs_reply,
+                ui,
+            },
+        )
+        .await;
         println!("MESSAGE {index} {}", message.id.0);
     }
     for n in 0..16 {
-        let post: MessagePost = serde_json::from_value(serde_json::json!({"project":{"kind":"id","value":fixture_project.to_string()},"thread":"long-conversation","from":if n%2==0 {"work-2"} else {"orchestrator"},"to":if n%2==0 {"orchestrator"} else {"owner"},"body":format!("### Evidence {}\n\nA paragraph explaining the result and its consequences. The test checked the rendered thread and preserved questions in the other conversation.\n\n```text\n{}\n```", n+1, "long-path/".repeat(14)),"needs_reply":false})).unwrap();
-        writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                sluice_store::messages::message_post(
-                    tx,
-                    post,
-                    &sluice_store::messages::NoPlanInputs,
-                )
-            })
-            .await
-            .unwrap();
+        stored(
+            writer,
+            fixture_project,
+            Stored {
+                thread: "long-conversation",
+                from: if n % 2 == 0 { "work-2" } else { "orchestrator" },
+                to: if n % 2 == 0 { "orchestrator" } else { "owner" },
+                title: None,
+                body: format!("### Evidence {}\n\nA paragraph explaining the result and its consequences. The test checked the rendered thread and preserved questions in the other conversation.\n\n```text\n{}\n```", n + 1, "long-path/".repeat(14)),
+                question: false,
+                ui: None,
+            },
+        )
+        .await;
     }
+}
+struct Stored {
+    thread: &'static str,
+    from: &'static str,
+    to: &'static str,
+    title: Option<&'static str>,
+    body: String,
+    question: bool,
+    ui: Option<&'static str>,
+}
+/// Conversations as a home keeps them, older free-named threads included: the rows and
+/// records are written directly, as any release may have stored them.
+async fn stored(writer: &Writer, project: ProjectId, m: Stored) -> Message {
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let mut message = Message {
+                id: MessageId(0),
+                verb: if m.question {
+                    MessageVerb::Ask
+                } else {
+                    MessageVerb::Say
+                },
+                from: m.from.into(),
+                to: Some(m.to.into()),
+                thread: m.thread.into(),
+                body: m.body,
+                title: m.title.map(Into::into),
+                ui: m.ui.map(Into::into),
+                input: None,
+                data: None,
+                run: None,
+                at: String::new(),
+                to_message: None,
+                answer: None,
+                state: None,
+                answered_by: None,
+            };
+            let record = tx.append_record(Some(project), Event::Message(Box::new(message.clone())))?;
+            message.id = MessageId(record.seq.0);
+            message.at = record.at;
+            tx.sql().execute(
+                "UPDATE records SET thread=?1,payload=?2 WHERE seq=?3",
+                (
+                    &message.thread,
+                    serde_json::to_string(&Event::Message(Box::new(message.clone())))?,
+                    message.id.0,
+                ),
+            )?;
+            tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",title,body,needs_reply,ui,at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",(message.id.0,project.to_string(),&message.thread,&message.from,&message.to,&message.title,&message.body,m.question,&message.ui,&message.at))?;
+            tx.changed(Some(project), "messages");
+            Ok(message)
+        })
+        .await
+        .unwrap()
 }
 pub async fn configure(state: &mut PageState, writer: &Writer, _id: ProjectId) {
     state.messages = Some(MessageState {

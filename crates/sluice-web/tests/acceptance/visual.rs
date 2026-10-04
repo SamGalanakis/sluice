@@ -238,8 +238,8 @@ async fn record_at_rename_with_active_run_preserves_callbacks_and_next() {
         let args=json!({"project":"renamed-callback-project","step":"work","run":run,"outputs":{"ready":true}});
         let reply=browser.eval(&format!("(async()=>{{const r=await fetch('/api/tools/step_submit',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({args})}});return {{status:r.status,body:await r.json()}}}})()")).unwrap();
         assert_eq!(reply["status"],json!(200),"callback {reply}");
-        let message=json!({"project":"renamed-callback-project","thread":"step-work","from":"work","to":"orchestrator","body":"Callback survived browser rename","needs_reply":true,"run":run});
-        let posted=browser.eval(&format!("(async()=>{{const r=await fetch('/api/tools/message_post',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({message})}});return {{status:r.status,body:await r.json()}}}})()")).unwrap();
+        let message=json!({"project":"renamed-callback-project","to":"orchestrator","body":"Callback survived browser rename","run":run});
+        let posted=browser.eval(&format!("(async()=>{{const r=await fetch('/api/tools/ask',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({message})}});return {{status:r.status,body:await r.json()}}}})()")).unwrap();
         assert_eq!(posted["status"],json!(200),"{posted}");
         browser.wait("window.nextResult!==null").unwrap();
         let next=browser.eval("JSON.stringify(window.nextResult)").unwrap();

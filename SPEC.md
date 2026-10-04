@@ -26,8 +26,8 @@ the agent-facing topics the `docs` tool serves.
 - **Unit:** the steps sharing one `unit:<name>` tag; an untagged step is a unit of one (§6.7).
 - **Run:** one execution of a step (one per scattered item) or of a call, in its own transient
   systemd unit under a guardian (§2.5, §7).
-- **Message:** a row on a project thread: a question (`needs_reply`) or a note. Open questions
-  to `owner` are the inbox (§8).
+- **Message:** a row on a project thread: a question (`ask`), a note (`say`) or a `reply`, to
+  a step, the orchestrator or the owner. Open questions to `owner` are the inbox (§8).
 - **Log:** each project's ordered records of what happened (edits, manual values, status
   changes, calls, messages, …), each with a home-wide `seq` (§9). History, not truth: `status`
   and `plan_get` are the current state.
@@ -207,7 +207,7 @@ Tables: `home_meta`, `projects`, `plans`, `plan_edits`, `inputs`, `steps`, `atte
 
 Views for agents' queries (§12.4 `query`): `outcomes` (removed steps' results), `log` (each
 record as the log tools return it), `step_changes` (`step.status` records as rows), `edits`
-(`plan_edits`) and `questions` (messages with `needs_reply`, plus derived `state`
+(`plan_edits`) and `questions` (the questions, `ask`s, plus derived `state`
 open|answered|closed and `waiting`). Public tables are keyed by the immutable `project_id`,
 never by name.
 
@@ -348,7 +348,8 @@ if __name__ == "__main__":
   `Cancelled` or `CallbackError` (`error`, `message`, `errors`, `current_rev`, `retryable`).
 - `ctx.tool(name, args)` calls a named tool for the run's own project (`project` defaults to
   it): the reads `status`, `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get` and
-  `call_status`; `message.post` and `message.wait` (run as the step); and the project's
+  `call_status`; `ask`, `say` and `reply`, `message.ask`, `message.say`, `message.reply` and
+  `message.wait` (as the step, with its run); and the project's
   mutations (`project_update`, the edit tools, retry, cancel, manual values). `args` are the
   tool's flat MCP arguments (§12.2) and the result is the tool's MCP result (`{"ok": true}` for
   an acknowledgement); an unspecified author is `step:<step>`. Another project, or any other
@@ -637,32 +638,66 @@ the project.
 
 ## 8. Messages
 
-A message is a row `{id, thread, from, to, title, body, needs_reply, reply_to, answer, ui,
-input, data, run, at, claimed_by}` plus a `message` record written in the same transaction. Rows
-are never trimmed with the log and are deleted with their project.
+Three verbs post a message, each with a required recipient; the thread and the sender are
+derived, never given:
 
-`message_post(project, body, thread?, to?, needs_reply?, reply_to?, answer?, title?, ui?,
-input?, data?, from?, run?)` → `{id}`:
+- `ask(project, to, body, title?, ui?, input?, data?)`: a question that needs a reply.
+- `say(project, to, body, data?)`: a note; no reply is expected.
+- `reply(project, to_message, body="", answer?)`: a reply to that message.
 
-- `from`: the given `from`, else the author (§12.3).
-- `thread`: the parent's for a reply; else the given thread; else `step-<step>` when posted by a
-  step's run; else `m<id>`. Thread names use the id alphabet.
-- `to`: a step id, `orchestrator`, `owner` or absent (anyone); a reply defaults to the
-  parent's `from`. A post that is not a reply, on a `step-<id>` thread naming a step in the
-  current plan and not from that step, defaults to that step, so its runs are given it.
-- `needs_reply` defaults to true for a new message and false for a reply: true is a question,
-  false a note.
-- `answer` `{action, params?, values?}` requires `reply_to`, and the parent must be an open
-  question, else `conflict` ("question is no longer open").
-- `input` names a declared plan input. The first **answering reply** (a reply with
-  `needs_reply` false, or one carrying `answer`) resolves the question atomically and sets the
-  input when there is one: the value is `answer.values.value`, else `answer.params.value`, else
-  the body; it goes through `plan_set_input`'s path with reason `message <id>: <title>`. A
-  value that does not fit refuses the reply (`invalid`) and the question stays open. A reply
-  that is itself a question answers nothing. `answer.action == "close"` closes the question
-  without setting anything.
+Each takes `run?` too: the run that speaks (agent and fn callers; `sluice tool` fills it from
+`SLUICE_RUN_ID`). The dashboard speaks as the owner (`owner: true`, which MCP and `sluice
+tool` do not take).
+
+- `from` is derived: a run's step for a step's run (`orchestrator` for a call's run), `owner`
+  for the dashboard, `orchestrator` for MCP and command-line callers with no run identity,
+  `sluice` for the coordinator's own alerts.
+- `to`, for `ask` and `say`, is a step id in the project's current plan, `orchestrator` or
+  `owner`. Anything else (missing, empty, an unknown or removed step, another name, the sender
+  itself) is `invalid` and nothing is stored. A reply's `to` is the original's `from`.
+- The thread: a reply keeps the original's; a message from a step's run lives on its own
+  step's thread `step-<step>`; one to a step on `step-<step>`; between the orchestrator and the
+  owner on the fixed thread `owner`.
+- A reply to an open question answers it (an **answering reply**) atomically: with or without
+  `answer` `{action, params?, values?}`; `answer.action == "close"` closes it without setting
+  anything. A reply to a question already answered or closed is just a message, but one with
+  an `answer` is refused (`conflict`, "question is no longer open"); `answer` on a reply to a
+  message that is not a question is `invalid`. `body` may be empty only with an `answer`; an
+  `ask` or `say` body may not be blank (an `ask` with `input` may have an empty body: it shows
+  the input's doc).
+- `input` names a declared plan input. The answering reply sets it: the value is
+  `answer.values.value`, else `answer.params.value`, else the body; it goes through
+  `plan_set_input`'s path with reason `message <id>: <title>`. A value that does not fit
+  refuses the reply (`invalid`) and the question stays open.
 - An open question to `owner` reserves a notification attempt and writes a `project.notify`
-  record (`outcome: reserved`). Notes and questions to anyone else never notify.
+  record (`outcome: reserved`). Notes, replies and questions to anyone else never notify.
+
+Each verb returns its receipt `{id, to, thread, delivery, run?}`. `delivery` is `delivered`
+when a live run of the step that listens (an agent fn whose step does not bind `listen:
+false`) has started and is handed the message on its live feed (`run` names it), and for
+`orchestrator` and `owner` (their inbox); `queued` when the step will run (pending and not
+paused, or its run reserved but not started, which `run` names) and its next run is assigned
+the message; `no_live_run` when the step has no live or upcoming run (done, failed, stale,
+skipped or paused, its live run does not listen, or it left the plan): the message is kept and
+given to the step's next run if one is ever started, e.g. by a retry.
+
+A message is a row `{id, verb, from, to, thread, body, title?, ui?, input?, data?, run?, at,
+to_message?, answer?}` plus a `message` record written in the same transaction; a field with
+no value is left out. `verb` is `ask`, `say` or `reply`; `to_message` and `answer` are a
+reply's. Read as rows, a question also carries `state` (`open`, `answered` with
+`answered_by`, the answering message's id, or `closed`). The record carries the same fields
+flattened into `{seq, at, project, kind: "message", ...}` with the message's own time as
+`posted_at`, and never `state`. Rows and records stored before the verbs keep their stored
+fields and read in this shape: a reply if they replied (`reply_to` becomes `to_message`), else
+a question if they needed a reply, else a note. Rows are never trimmed with the log and are
+deleted with their project.
+
+The retired `message_post` is accepted only from a caller presenting a run identity (a run's
+callback, or `run`), as runs started on older releases still post: translated to `reply` when
+it names `reply_to`, else to `ask` unless `needs_reply` is false, else `say`, addressed to
+`orchestrator` when it names nobody; its `thread`, `from` and `author` are ignored. It answers
+`{id}` and logs a deprecation line. It is not an MCP tool, not listed by `sluice tool` and not
+documented for agents.
 
 **Notify.** With `notify: {command, timeout_s}` in config.json, the coordinator runs `command`
 (argv, no shell; cwd the home; its environment plus the home's and the project's `.env`) once
@@ -686,23 +721,24 @@ is `waiting` while that run is live; otherwise it reports why nobody waits: `ask
 being cancelled`, `<step> is <status>`, `<step> is cancelled`, `running another run`, `not in
 the plan`, `call <run> is <status>`.
 
-`message.post` with `wait: true` (§16) blocks until the first answering reply and returns it as
+`message.ask` with `wait: true` (§16) blocks until the first answering reply and returns it as
 `reply`; a closed question fails it (`question closed`). A retried step asking with the same
 title takes up its own latest earlier question: an open one nobody waits on gets the new run as
 asker; an answered one whose answer nobody claimed returns that answer at once. A claimed
 answer (`claimed_by`) is never reused.
 
-`messages(project, view, thread?, since?)` → `{project, messages, last_id}`:
+`messages(project, view, thread?, since?, owner=false)` → `{project, messages, last_id}`, read
+as the caller: the owner for the dashboard and with `owner`, else the orchestrator:
 
 | view | shows |
 |---|---|
-| `inbox` | open questions to `owner`, then notes to `owner` after the reader's read position in their thread |
+| `inbox` | open questions to the reader, then the other messages to it after its read position in their thread |
 | `questions` | every open question in the project |
-| `history` | every thread with a message to or from `owner` |
+| `history` | every thread with a message to or from the reader |
 | `thread` | one thread in full (`thread` required) |
 
 Read positions are kept per project, reader and thread and advance through `mark_read` (the
-dashboard marks what it shows, as `owner`). The MCP tool reads as reader `cli`.
+dashboard marks what it shows, as `owner`).
 
 ## 9. The log
 
@@ -756,8 +792,8 @@ an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It 
 
 - a `unit.settled` record (written when a unit settles, once per unit and work generation);
 - a `step.status` to `failed`, `stale` or `skipped`;
-- a question to `me` or to nobody, not from `me`;
-- an answering reply not from `me`;
+- a question to `me` (or, stored before the verbs, to nobody), not from `me`;
+- a reply to a question, not from `me`;
 - `project.pause` or `project.archive` not authored by `me`;
 - with `all`, any record.
 
@@ -932,8 +968,10 @@ same graph.
 
 | tool | arguments | result |
 |---|---|---|
-| `message_post` | §8 | `{id}` |
-| `messages` | `project`, `view`, `thread?`, `since?` | `{project, messages, last_id}` |
+| `ask` | `project`, `to`, `body`, `title?`, `ui?`, `input?`, `data?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
+| `say` | `project`, `to`, `body`, `data?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
+| `reply` | `project`, `to_message`, `body=""`, `answer?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
+| `messages` | `project`, `view`, `thread?`, `since?`, `owner=false` | `{project, messages, last_id}` |
 | `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records |
 | `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"` | `{records, last_seq}` |
 | `next` | §10 | `{records, notes, last_seq, timed_out}` |
@@ -1034,7 +1072,7 @@ flat on edit tools, `wait` for `fn_call`, `timeout` and `wake` for `log_wait`, `
 interactive session of the engine CLI in the run's private tmux, in `cwd`. The supervisor
 writes the task (the prompt or spec, the step's inputs under `## Inputs`, the outputs to submit
 with the exact `step_submit` command under `## Outputs you must submit`, and, unless `listen:
-false`, how to use the step's thread), watches the session through the engine's hooks, nudges a
+false`, how to `ask` the orchestrator, `say` to it and `reply`, with the run's id), watches the session through the engine's hooks, nudges a
 stalled session, and ends it when the agent is done. The result carries `session` (pass it back
 to resume) and `git` facts `{head_before, head_after, commits, dirty}` of `cwd`. A failed
 session is an `agent_failure` error with its `kind` and `session`. Agent fns retry up to 3
@@ -1056,8 +1094,11 @@ Limits (minutes unless noted), overridable through environment variables: `SLUIC
 | `core.external` | | | open; never runs (§6.5) |
 | `inline.bash` | `code: string`, `cwd: string?`, `check: boolean?` | `stdout, stderr: string`, `code: int` | open; errexit and pipefail; extra inputs as environment variables (`-` → `_`); declared outputs from the JSON object written to `$OUT`; fails on a non-zero exit unless `check: false` |
 | `inline.python` | `code: string`, `cwd: string?` | `value: Any?`, `stdout: string` | open; standard library; sees `inp` and each extra input; `out` is the result |
-| `message.post` | `body`, `thread?`, `to?`, `needs_reply?`, `reply_to?`, `answer?`, `title?`, `ui?`, `input?`, `data?`, `from?`, `wait?` | `id: int`, `reply: Any?` | §8 |
-| `message.wait` | `thread`, `since: int?`, `to?`, `timeout: int?` (300), `wake?` | `messages: Any[]`, `last_seq: int` | waits for messages on a thread after `since`; `wake: "questions"` holds notes |
+| `message.ask` | `to`, `body`, `title?`, `ui?`, `input?`, `data: Any?`, `wait: boolean?` | `id: int`, `receipt: Any`, `reply: Any?` | §8; `wait` blocks until answered |
+| `message.say` | `to`, `body`, `data: Any?` | `id: int`, `receipt: Any` | §8 |
+| `message.reply` | `to_message: int`, `body?`, `answer?` | `id: int`, `receipt: Any` | §8 |
+| `message.wait` | `thread`, `since: int?`, `to?`, `timeout: int?` (300), `wake?` | `messages: Any[]`, `last_seq: int` | waits for messages on a thread after `since`; `wake: "questions"` holds the rest |
+| `message.post` | `body`, `thread?`, `to?`, `needs_reply?`, `reply_to?`, `answer?`, `title?`, `ui?`, `input?`, `data?`, `from?`, `wait?` | `id: int`, `reply: Any?` | retired; plans that name it run through the `message_post` translation (§8), only in a run |
 | `agent.claude` | `cwd`, `prompt`, `session?`, `listen?` | `result`, `session`, `git` | open; Opus |
 | `agent.codex` | `cwd`, `spec`, `model?` (`sol` default, `astra`), `effort?` (`minimal`…`max`, default `high`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `report?`, `session`, `git` | open |
 | `agent.devin` | `cwd`, `spec`, `model?` (default `swe-2-high`; `fusion`), `log?`, `session?`, `report_path?`, `listen?` | `log`, `final`, `report?`, `session`, `git` | open |
@@ -1082,4 +1123,5 @@ Limits (minutes unless noted), overridable through environment variables: `SLUIC
 Unmarked inputs and outputs are `string`; `?` marks optional ones. Unless noted, a builtin does
 not retry. Builtin icons: a spark for the agent fns, a review mark, a fork for `decide.llm`, a
 branch for `git.*`, a PR mark for `gh.*`, an arrow leaving a box for `core.external`, a bubble
-for `message.post` and an envelope for `message.wait`.
+for `message.ask`, `message.say`, `message.reply` and `message.post`, and an envelope for
+`message.wait`.

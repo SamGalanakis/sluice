@@ -644,24 +644,17 @@ impl sluice_store::plans::RetryMessages for Hooks {
         body: &str,
         author: &str,
     ) -> sluice_store::Result<()> {
-        use sluice_model::commands::MessagePost;
-        sluice_store::messages::message_post(
+        let _ = author;
+        sluice_store::messages::post(
             tx,
-            MessagePost {
+            sluice_store::messages::Post {
                 project: ProjectSelector::Id(project),
+                speaker: sluice_store::messages::Speaker::Orchestrator,
                 body: body.into(),
-                thread: Some(format!("step-{step}")),
-                to: Some(step.to_string()),
-                needs_reply: Some(false),
-                reply_to: None,
-                answer: None,
-                title: None,
-                ui: None,
-                input: None,
-                data: None,
-                from: Some(author.into()),
-                run: None,
-                author: Some(author.into()),
+                verb: sluice_store::messages::Verb::Say {
+                    to: step.to_string(),
+                    data: None,
+                },
             },
             &sluice_store::messages::NoPlanInputs,
         )?;

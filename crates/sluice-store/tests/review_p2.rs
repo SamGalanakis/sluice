@@ -339,15 +339,16 @@ pub mod support {
                 to: Some(step.to_string()),
                 title: None,
                 body: body.into(),
-                needs_reply: false,
-                reply_to: None,
+                verb: sluice_model::commands::MessageVerb::Say,
+                to_message: None,
                 answer: None,
                 ui: None,
                 input: None,
                 data: None,
                 run: None,
                 at: "now".into(),
-                claimed_by: None,
+                state: None,
+                answered_by: None,
             };
             let record = tx.append_record(
                 Some(project),
@@ -417,8 +418,21 @@ use sluice_store::{
 };
 use support::*;
 
-fn post(project: ProjectId, body: &str) -> MessagePost {
-    serde_json::from_value(json!({"project":serde_json::to_value(ProjectSelector::Id(project)).unwrap(),"body":body,"from":"sam","needs_reply":false})).unwrap()
+fn post(project: ProjectId, body: &str) -> messages::Post {
+    messages::Post {
+        project: ProjectSelector::Id(project),
+        speaker: messages::Speaker::Orchestrator,
+        body: body.into(),
+        verb: messages::Verb::Say {
+            to: "owner".into(),
+            data: None,
+        },
+    }
+}
+fn to(post: &mut messages::Post, step: &str) {
+    if let messages::Verb::Say { to, .. } = &mut post.verb {
+        *to = step.into();
+    }
 }
 #[derive(Default)]
 struct RealHooks {
@@ -455,10 +469,11 @@ impl RetryMessages for RealHooks {
         author: &str,
     ) -> Result<()> {
         let mut m = post(project, body);
-        m.to = Some(step.to_string());
-        m.from = Some(author.into());
-        m.thread = Some(format!("step-{step}"));
-        messages::message_post(tx, m, &messages::NoPlanInputs)?;
+        to(&mut m, step.as_str());
+        if author == "owner" {
+            m.speaker = messages::Speaker::Owner;
+        }
+        messages::post(tx, m, &messages::NoPlanInputs)?;
         Ok(())
     }
 }
@@ -596,10 +611,10 @@ async fn real_finish(
 }
 async fn feedback(f: &Fixture, step: &str, body: &str) -> Message {
     let mut m = post(f.context.project, body);
-    m.to = Some(step.into());
+    to(&mut m, step);
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            messages::message_post(tx, m, &messages::NoPlanInputs)
+            messages::post(tx, m, &messages::NoPlanInputs).map(|p| p.message)
         })
         .await
         .unwrap()
@@ -740,23 +755,30 @@ async fn real_adapter_wiring_and_rollback() {
         .await
         .unwrap();
     let mut ask = post(project, "pick integer");
-    ask.needs_reply = Some(true);
-    ask.input = Some("decision".into());
+    ask.verb = messages::Verb::Ask {
+        to: "owner".into(),
+        title: None,
+        ui: None,
+        input: Some("decision".into()),
+        data: None,
+    };
     let q = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            messages::message_post(tx, ask, &messages::NoPlanInputs)
+            messages::post(tx, ask, &messages::NoPlanInputs).map(|p| p.message)
         })
         .await
         .unwrap();
     let mut answer = post(project, "");
-    answer.reply_to = Some(q.id);
-    answer.answer =
-        Some(serde_json::from_value(json!({"action":"set","values":{"value":7}})).unwrap());
+    answer.speaker = messages::Speaker::Owner;
+    answer.verb = messages::Verb::Reply {
+        to_message: q.id,
+        answer: Some(serde_json::from_value(json!({"action":"set","values":{"value":7}})).unwrap()),
+    };
     let context = f.context.clone();
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            messages::message_post(tx, answer, &Inputs(context))
+            messages::post(tx, answer, &Inputs(context))
         })
         .await
         .unwrap();
@@ -775,7 +797,7 @@ async fn real_adapter_wiring_and_rollback() {
                 "sam".into(),
                 "test".into(),
             )?;
-            messages::message_post(tx, post(project, "rollback"), &messages::NoPlanInputs)?;
+            messages::post(tx, post(project, "rollback"), &messages::NoPlanInputs)?;
             Err(StoreError::InvalidDatabase("injected after writes".into()))
         })
         .await;
@@ -859,10 +881,16 @@ async fn delete_invalidates_project_log_and_questions_subscriptions() {
     let f = Fixture::new(json!({"steps":{}})).await;
     let project = f.context.project;
     let mut q = post(project, "question");
-    q.needs_reply = Some(true);
+    q.verb = messages::Verb::Ask {
+        to: "owner".into(),
+        title: None,
+        ui: None,
+        input: None,
+        data: None,
+    };
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            messages::message_post(tx, q, &messages::NoPlanInputs)
+            messages::post(tx, q, &messages::NoPlanInputs)
         })
         .await
         .unwrap();

@@ -2,8 +2,12 @@
 
 use crate::{Result, StoreError, WriteTransaction};
 use rusqlite::{Connection, OptionalExtension, params};
+pub use sluice_model::commands::QuestionState;
 use sluice_model::{
-    commands::{MarkRead, Message, MessagePost, MessageView},
+    commands::{
+        Ask, Delivery, MarkRead, Message, MessageAnswer, MessagePost, MessageReceipt, MessageVerb,
+        MessageView, Reply, Say,
+    },
     error::PublicError,
     events::{Event, NotificationOutcome},
     ids::{AttemptId, MessageId, ProjectId, ProjectSelector, RecordSeq, RunId},
@@ -80,7 +84,9 @@ pub fn resolve_project(sql: &Connection, selector: &ProjectSelector) -> Result<P
 }
 
 // A JSON projection shares the strict model decoder without a second message wire shape.
-const MESSAGE_JSON: &str = "json_object('id',id,'thread',thread,'from',\"from\",'to',\"to\",'title',title,'body',body,'needs_reply',json(CASE needs_reply WHEN 1 THEN 'true' ELSE 'false' END),'reply_to',reply_to,'answer',json(answer),'ui',ui,'input',input,'data',json(data),'run',run_id,'at',at,'claimed_by',claimed_by)";
+// Rows stored before the verbs read with the verb derived from needs_reply/reply_to; a
+// question with an empty body shows its plan input's doc.
+const MESSAGE_JSON: &str = "json_object('id',id,'verb',CASE WHEN reply_to IS NOT NULL THEN 'reply' WHEN needs_reply=1 THEN 'ask' ELSE 'say' END,'from',\"from\",'to',\"to\",'thread',thread,'body',CASE WHEN body='' AND needs_reply=1 AND input IS NOT NULL THEN coalesce((SELECT json_extract(i.declaration,'$.doc') FROM inputs i WHERE i.project_id=messages.project_id AND i.name=messages.input),'') ELSE body END,'title',title,'ui',ui,'input',input,'data',json(data),'run',run_id,'at',at,'to_message',reply_to,'answer',json(answer),'state',CASE WHEN needs_reply=1 THEN CASE WHEN closed_at IS NOT NULL THEN 'closed' WHEN resolved_by IS NOT NULL THEN 'answered' ELSE 'open' END END,'answered_by',CASE WHEN needs_reply=1 AND closed_at IS NULL THEN resolved_by END)";
 
 pub fn message(sql: &Connection, project: ProjectId, id: MessageId) -> Result<Message> {
     let json: String = sql
@@ -94,12 +100,21 @@ pub fn message(sql: &Connection, project: ProjectId, id: MessageId) -> Result<Me
     Ok(serde_json::from_str(&json)?)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuestionState {
-    Open,
-    Answered,
-    Closed,
+/// The run that has claimed this answering reply, if any.
+fn claimed_by(sql: &Connection, project: ProjectId, id: MessageId) -> Result<Option<RunId>> {
+    let claimed: Option<String> = sql.query_row(
+        "SELECT claimed_by FROM messages WHERE project_id=?1 AND id=?2",
+        params![project.to_string(), id.0],
+        |r| r.get(0),
+    )?;
+    claimed
+        .map(|run| {
+            run.parse()
+                .map_err(|e| StoreError::InvalidDatabase(format!("invalid claimed_by: {e}")))
+        })
+        .transpose()
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Question {
     pub message: Message,
@@ -111,7 +126,7 @@ pub struct Question {
 
 pub fn question(sql: &Connection, project: ProjectId, id: MessageId) -> Result<Question> {
     let msg = message(sql, project, id)?;
-    if !msg.needs_reply {
+    if !msg.is_question() {
         return Err(invalid("message is not a question"));
     }
     let reply_id: Option<i64> = sql.query_row("SELECT id FROM messages WHERE project_id=?1 AND reply_to=?2 AND (needs_reply=0 OR answer IS NOT NULL) ORDER BY id LIMIT 1",
@@ -199,82 +214,343 @@ fn changed(tx: &mut WriteTransaction<'_>, project: ProjectId) {
     }
 }
 
+/// Who posts. Never a free name: the transport derives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Speaker {
+    /// The dashboard.
+    Owner,
+    /// MCP and command-line callers with no run identity.
+    Orchestrator,
+    /// An agent or fn run; a step's run speaks as its step.
+    Run(RunId),
+    /// Sluice itself (unread alerts to the owner).
+    Sluice,
+}
+impl Speaker {
+    /// `owner` comes from the dashboard; a run identity makes the run the speaker.
+    pub fn of(owner: bool, run: Option<RunId>) -> Result<Self> {
+        match (owner, run) {
+            (true, Some(_)) => Err(invalid("a run cannot speak as the owner")),
+            (true, None) => Ok(Self::Owner),
+            (false, Some(run)) => Ok(Self::Run(run)),
+            (false, None) => Ok(Self::Orchestrator),
+        }
+    }
+}
+
+/// What is posted: the three verbs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Verb {
+    Ask {
+        to: String,
+        title: Option<String>,
+        ui: Option<String>,
+        input: Option<String>,
+        data: Option<JsonValue>,
+    },
+    Say {
+        to: String,
+        data: Option<JsonValue>,
+    },
+    Reply {
+        to_message: MessageId,
+        answer: Option<MessageAnswer>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Post {
+    pub project: ProjectSelector,
+    pub speaker: Speaker,
+    pub body: String,
+    pub verb: Verb,
+}
+impl TryFrom<Ask> for Post {
+    type Error = StoreError;
+    fn try_from(a: Ask) -> Result<Self> {
+        Ok(Self {
+            project: a.project,
+            speaker: Speaker::of(a.owner, a.run)?,
+            body: a.body,
+            verb: Verb::Ask {
+                to: a.to,
+                title: a.title,
+                ui: a.ui,
+                input: a.input,
+                data: a.data,
+            },
+        })
+    }
+}
+impl TryFrom<Say> for Post {
+    type Error = StoreError;
+    fn try_from(s: Say) -> Result<Self> {
+        Ok(Self {
+            project: s.project,
+            speaker: Speaker::of(s.owner, s.run)?,
+            body: s.body,
+            verb: Verb::Say {
+                to: s.to,
+                data: s.data,
+            },
+        })
+    }
+}
+impl TryFrom<Reply> for Post {
+    type Error = StoreError;
+    fn try_from(r: Reply) -> Result<Self> {
+        Ok(Self {
+            project: r.project,
+            speaker: Speaker::of(r.owner, r.run)?,
+            body: r.body,
+            verb: Verb::Reply {
+                to_message: r.to_message,
+                answer: r.answer,
+            },
+        })
+    }
+}
+/// The retired message_post, as runs started on an older release still send it:
+/// accepted only with a run identity, a reply when it names `reply_to`, else a question
+/// unless `needs_reply` is false, addressed to the orchestrator when it names nobody.
+/// Its `thread`, `from` and `author` are ignored: both are derived now.
+pub fn bridge(post: MessagePost) -> Result<Post> {
+    let Some(run) = post.run else {
+        return Err(invalid(
+            "message_post is retired: use ask, say or reply (sluice docs threads)",
+        ));
+    };
+    let to = post.to.unwrap_or_else(|| ORCHESTRATOR_STREAM.into());
+    let verb = match post.reply_to {
+        Some(to_message) => Verb::Reply {
+            to_message,
+            answer: post.answer,
+        },
+        None if post.answer.is_some() => return Err(invalid("answer requires reply_to")),
+        None if post.needs_reply.unwrap_or(true) => Verb::Ask {
+            to,
+            title: post.title,
+            ui: post.ui,
+            input: post.input,
+            data: post.data,
+        },
+        None => Verb::Say {
+            to,
+            data: post.data,
+        },
+    };
+    Ok(Post {
+        project: post.project,
+        speaker: Speaker::Run(run),
+        body: post.body,
+        verb,
+    })
+}
+
+/// The plan's agent fns: a run of one of them takes messages on its live feed unless
+/// its step binds `listen` to false.
+const LISTENING_FNS: &[&str] = &[
+    "agent.claude",
+    "agent.codex",
+    "agent.devin",
+    "agent.review",
+    "agent.run",
+];
+
+/// How a message to `to` reaches it now. The orchestrator and owner read inboxes.
+/// A step's live run that listens has it handed over on its live feed; a step that
+/// will run (pending, or a run not yet started) gets it with its next run; anything
+/// else keeps it for a run started later, e.g. by a retry.
+pub fn delivery(
+    sql: &Connection,
+    project: ProjectId,
+    to: &str,
+) -> Result<(Delivery, Option<RunId>)> {
+    if to == OWNER_STREAM || to == ORCHESTRATOR_STREAM {
+        return Ok((Delivery::Delivered, None));
+    }
+    let step: Option<(String, String, String)> = sql
+        .query_row(
+            "SELECT status,coalesce(paused,'false'),declaration FROM steps WHERE project_id=?1 AND step_id=?2",
+            params![project.to_string(), to],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((status, paused, declaration)) = step else {
+        return Ok((Delivery::NoLiveRun, None));
+    };
+    let live: Option<(String, bool)> = sql
+        .query_row(
+            "SELECT r.run_id,a.phase='executing' FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation AND s.work_generation=r.work_generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL AND a.phase!='terminal' AND a.cancel_requested=0 ORDER BY a.phase='executing' DESC,r.item_index LIMIT 1",
+            params![project.to_string(), to],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let parse = |run: String| {
+        run.parse::<RunId>()
+            .map_err(|e| StoreError::InvalidDatabase(format!("invalid run: {e}")))
+    };
+    Ok(match live {
+        Some((run, true)) if listens(&declaration)? => (Delivery::Delivered, Some(parse(run)?)),
+        Some((_, true)) => (Delivery::NoLiveRun, None),
+        Some((run, false)) => (Delivery::Queued, Some(parse(run)?)),
+        None if matches!(status.as_str(), "pending" | "running") && paused == "false" => {
+            (Delivery::Queued, None)
+        }
+        None => (Delivery::NoLiveRun, None),
+    })
+}
+fn listens(declaration: &str) -> Result<bool> {
+    let declaration: serde_json::Value = serde_json::from_str(declaration)?;
+    let agent = declaration["run"]
+        .as_str()
+        .is_some_and(|f| LISTENING_FNS.contains(&f));
+    let listen = &declaration["in"]["listen"];
+    let off = listen == &serde_json::Value::Bool(false)
+        || listen["default"] == serde_json::Value::Bool(false);
+    Ok(agent && !off)
+}
+
+/// A recipient of ask and say: a step of the current plan, the orchestrator or the owner.
+fn recipient(sql: &Connection, project: ProjectId, to: &str) -> Result<()> {
+    if to == OWNER_STREAM || to == ORCHESTRATOR_STREAM {
+        return Ok(());
+    }
+    let step: bool = sql.query_row(
+        "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+        params![project.to_string(), to],
+        |r| r.get(0),
+    )?;
+    if !step {
+        let message = if to.trim().is_empty() {
+            "to is required: a step of the plan, orchestrator or owner".to_owned()
+        } else {
+            format!("to {to:?} is not a step of the current plan, orchestrator or owner")
+        };
+        return Err(invalid(message));
+    }
+    Ok(())
+}
+
+/// A posted message and its receipt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Posted {
+    pub message: Message,
+    pub receipt: MessageReceipt,
+}
+
 /// Posting and its record, first-answer resolution, optional plan input and notify
-/// reservation all commit together. Root messages default to questions; replies
-/// default to notes. Replies default `to` to the parent's sender; a root post on a
-/// current step's `step-<id>` thread defaults it to that step. Propagate errors out
-/// of Writer::write.
-pub fn message_post(
+/// reservation all commit together. The sender, recipient of a reply and thread are
+/// derived: a step's messages live on `step-<step>`, the orchestrator and owner talk
+/// on `owner`, and a reply stays on its parent's thread, addressed to its sender.
+/// Propagate errors out of Writer::write.
+pub fn post(
     tx: &mut WriteTransaction<'_>,
-    post: MessagePost,
+    post: Post,
     inputs: &impl PlanInputSetter,
-) -> Result<Message> {
+) -> Result<Posted> {
     let project = resolve_project(tx.sql(), &post.project)?;
-    if post.title.as_ref().is_some_and(|s| s.trim().is_empty()) {
-        return Err(invalid("title must not be blank"));
-    }
-    if post.thread.as_ref().is_some_and(|s| s.trim().is_empty()) {
-        return Err(invalid("thread must not be blank"));
-    }
-    if post.answer.is_some() && post.reply_to.is_none() {
-        return Err(invalid("answer requires reply_to"));
-    }
-    if post
-        .answer
-        .as_ref()
-        .is_some_and(|a| a.action.trim().is_empty())
-    {
-        return Err(invalid("answer.action must not be blank"));
-    }
-    if let Some(input) = &post.input {
-        let exists: bool = tx.sql().query_row(
-            "SELECT EXISTS(SELECT 1 FROM inputs WHERE project_id=?1 AND name=?2)",
-            params![project.to_string(), input],
-            |r| r.get(0),
-        )?;
-        if !exists {
-            return Err(missing(format!("no plan input {input}")));
-        }
-    }
-    let parent = post
-        .reply_to
-        .map(|id| message(tx.sql(), project, id))
-        .transpose()?;
-    if let Some(parent) = &parent {
-        if post.thread.as_ref().is_some_and(|t| t != &parent.thread) {
-            return Err(invalid("reply thread differs from parent thread"));
-        }
-        if post.answer.is_some() {
-            if !parent.needs_reply {
-                return Err(invalid("answer must reply to a question"));
+    let posting_run = match post.speaker {
+        Speaker::Run(run) => Some(run_info(tx.sql(), project, run)?),
+        _ => None,
+    };
+    let from = match (post.speaker, posting_run.as_ref()) {
+        (Speaker::Owner, _) => OWNER_STREAM.to_owned(),
+        (Speaker::Sluice, _) => "sluice".to_owned(),
+        (
+            Speaker::Run(_),
+            Some(RunInfo {
+                step: Some(step), ..
+            }),
+        ) => step.clone(),
+        _ => ORCHESTRATOR_STREAM.to_owned(),
+    };
+    let run = match post.speaker {
+        Speaker::Run(run) => Some(run),
+        _ => None,
+    };
+    let (to, verb, parent) = match post.verb {
+        Verb::Ask {
+            to,
+            title,
+            ui,
+            input,
+            data,
+        } => {
+            recipient(tx.sql(), project, &to)?;
+            if title.as_ref().is_some_and(|s| s.trim().is_empty()) {
+                return Err(invalid("title must not be blank"));
             }
-            if question(tx.sql(), project, parent.id)?.state != QuestionState::Open {
-                return Err(conflict("question is no longer open"));
+            if post.body.trim().is_empty() && input.is_none() {
+                return Err(invalid("body must not be blank"));
             }
+            if let Some(input) = &input {
+                let exists: bool = tx.sql().query_row(
+                    "SELECT EXISTS(SELECT 1 FROM inputs WHERE project_id=?1 AND name=?2)",
+                    params![project.to_string(), input],
+                    |r| r.get(0),
+                )?;
+                if !exists {
+                    return Err(missing(format!("no plan input {input}")));
+                }
+            }
+            let ask = Verb::Ask {
+                to: to.clone(),
+                title,
+                ui,
+                input,
+                data,
+            };
+            (to, ask, None)
         }
+        Verb::Say { to, data } => {
+            recipient(tx.sql(), project, &to)?;
+            if post.body.trim().is_empty() {
+                return Err(invalid("body must not be blank"));
+            }
+            (to.clone(), Verb::Say { to, data }, None)
+        }
+        Verb::Reply { to_message, answer } => {
+            let parent = message(tx.sql(), project, to_message)?;
+            if let Some(answer) = &answer {
+                if answer.action.trim().is_empty() {
+                    return Err(invalid("answer.action must not be blank"));
+                }
+                if !parent.is_question() {
+                    return Err(invalid("answer must reply to a question"));
+                }
+                if question(tx.sql(), project, parent.id)?.state != QuestionState::Open {
+                    return Err(conflict("question is no longer open"));
+                }
+            } else if post.body.trim().is_empty() {
+                return Err(invalid("a reply needs a body or an answer"));
+            }
+            (
+                parent.from.clone(),
+                Verb::Reply { to_message, answer },
+                Some(parent),
+            )
+        }
+    };
+    if to == from {
+        return Err(invalid(format!("{from} cannot address itself")));
     }
-    let needs_reply = post.needs_reply.unwrap_or(parent.is_none());
     let resolving = parent
         .as_ref()
-        .filter(|p| p.needs_reply && (!needs_reply || post.answer.is_some()))
+        .filter(|p| p.is_question())
         .map(|p| question(tx.sql(), project, p.id))
         .transpose()?
         .filter(|q| q.state == QuestionState::Open);
-    let from = post
-        .from
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| post.author.filter(|s| !s.trim().is_empty()))
-        .unwrap_or_else(|| "cli".into());
-    let posting_run = post
-        .run
-        .map(|run| run_info(tx.sql(), project, run))
-        .transpose()?;
+    let answer = match &verb {
+        Verb::Reply { answer, .. } => answer.clone(),
+        _ => None,
+    };
     if let Some(q) = &resolving
-        && !post.answer.as_ref().is_some_and(|a| a.action == "close")
+        && !answer.as_ref().is_some_and(|a| a.action == "close")
         && let Some(name) = &q.message.input
     {
         // Present JSON null wins over all later fields, just like any other value.
-        let structured = post.answer.as_ref().and_then(|a| {
+        let structured = answer.as_ref().and_then(|a| {
             a.values
                 .as_ref()
                 .and_then(|v| v.0.get("value"))
@@ -282,7 +558,7 @@ pub fn message_post(
         });
         let value = match structured {
             Some(value) => value.clone(),
-            None if post.answer.is_some() && post.body.is_empty() => {
+            None if answer.is_some() && post.body.is_empty() => {
                 return Err(invalid(
                     "answer needs values.value, params.value or a reply body",
                 ));
@@ -305,46 +581,55 @@ pub fn message_post(
             },
         )?;
     }
-    let thread = parent
-        .as_ref()
-        .map(|p| p.thread.clone())
-        .or(post.thread)
-        .or_else(|| {
-            posting_run
-                .as_ref()
-                .and_then(|r| r.step.as_ref())
-                .map(|step| format!("step-{step}"))
-        })
-        .unwrap_or_default();
-    let to = match (post.to, &parent) {
-        (Some(to), _) => Some(to),
-        (None, Some(parent)) => Some(parent.from.clone()),
-        (None, None) => thread_step(tx.sql(), project, &thread, &from, posting_run.as_ref())?,
+    let thread = match (&parent, posting_run.as_ref().and_then(|r| r.step.as_ref())) {
+        (Some(parent), _) => parent.thread.clone(),
+        (None, Some(step)) => format!("step-{step}"),
+        (None, None) if to != OWNER_STREAM && to != ORCHESTRATOR_STREAM => format!("step-{to}"),
+        (None, None) => OWNER_STREAM.to_owned(),
     };
     let mut msg = Message {
         id: MessageId(0),
-        thread,
+        verb: MessageVerb::Say,
         from,
-        to,
-        title: post.title,
+        to: Some(to.clone()),
+        thread,
         body: post.body,
-        needs_reply,
-        reply_to: post.reply_to,
-        answer: post.answer,
-        ui: post.ui,
-        input: post.input,
-        data: post.data,
-        run: post.run,
+        title: None,
+        ui: None,
+        input: None,
+        data: None,
+        run,
         at: now()?,
-        claimed_by: None,
+        to_message: None,
+        answer: None,
+        state: None,
+        answered_by: None,
     };
+    match verb {
+        Verb::Ask {
+            title,
+            ui,
+            input,
+            data,
+            ..
+        } => {
+            msg.verb = MessageVerb::Ask;
+            msg.title = title;
+            msg.ui = ui;
+            msg.input = input;
+            msg.data = data;
+        }
+        Verb::Say { data, .. } => msg.data = data,
+        Verb::Reply { to_message, answer } => {
+            msg.verb = MessageVerb::Reply;
+            msg.to_message = Some(to_message);
+            msg.answer = answer;
+        }
+    }
     let record = tx.append_record(Some(project), Event::Message(Box::new(msg.clone())))?;
     msg.id = MessageId(record.seq.0);
     msg.at = record.at;
-    if msg.thread.is_empty() {
-        msg.thread = format!("m{}", msg.id.0);
-    }
-    // The writer allocates the id. Finalize the generated thread and event timestamp.
+    // The writer allocates the id. Finalize the record with it and the event timestamp.
     tx.sql().execute(
         "UPDATE records SET thread=?1,payload=?2 WHERE seq=?3",
         params![
@@ -353,28 +638,28 @@ pub fn message_post(
             msg.id.0
         ],
     )?;
+    let asking = msg.verb == MessageVerb::Ask;
     tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",title,body,needs_reply,reply_to,answer,ui,input,data,run_id,at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
-        params![msg.id.0,project.to_string(),msg.thread,msg.from,msg.to,msg.title,msg.body,msg.needs_reply,msg.reply_to.map(|id| id.0),
+        params![msg.id.0,project.to_string(),msg.thread,msg.from,msg.to,msg.title,msg.body,asking,msg.to_message.map(|id| id.0),
         msg.answer.as_ref().map(serde_json::to_string).transpose()?,msg.ui,msg.input,msg.data.as_ref().map(serde_json::to_string).transpose()?,msg.run.map(|id| id.to_string()),msg.at])?;
     if let Some(q) = resolving {
         tx.sql().execute("UPDATE messages SET resolved_by=?1,closed_at=?2 WHERE project_id=?3 AND id=?4 AND resolved_by IS NULL",
             params![msg.id.0,msg.answer.as_ref().filter(|a| a.action=="close").map(|_| msg.at.clone()),project.to_string(),q.message.id.0])?;
     }
-    if msg.needs_reply {
-        if let Some(run) = msg.run {
-            let info = run_info(tx.sql(), project, run)?;
-            if info.step.is_some() {
-                attach(
-                    tx,
-                    project,
-                    msg.id,
-                    run,
-                    &info,
-                    msg.title.as_deref().unwrap_or(""),
-                )?;
-            }
+    if asking {
+        if let (Some(run), Some(info)) = (msg.run, posting_run.as_ref())
+            && info.step.is_some()
+        {
+            attach(
+                tx,
+                project,
+                msg.id,
+                run,
+                info,
+                msg.title.as_deref().unwrap_or(""),
+            )?;
         }
-        if msg.to.as_deref() == Some("owner") {
+        if to == OWNER_STREAM {
             tx.sql().execute("INSERT INTO notification_attempts(project_id,message_id,attempt_id,outcome,reserved_at) VALUES (?1,?2,?3,'reserved',?4)",
                 params![project.to_string(),msg.id.0,AttemptId::new().to_string(),msg.at])?;
             tx.append_record(
@@ -388,30 +673,18 @@ pub fn message_post(
         }
     }
     changed(tx, project);
-    Ok(msg)
-}
-
-/// The step a root post without `to` addresses: the current plan step its `step-<id>`
-/// thread names, unless the post comes from that step itself.
-fn thread_step(
-    sql: &Connection,
-    project: ProjectId,
-    thread: &str,
-    from: &str,
-    posting_run: Option<&RunInfo>,
-) -> Result<Option<String>> {
-    let Some(step) = thread.strip_prefix("step-") else {
-        return Ok(None);
-    };
-    if step == from || posting_run.is_some_and(|r| r.step.as_deref() == Some(step)) {
-        return Ok(None);
-    }
-    let exists: bool = sql.query_row(
-        "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
-        params![project.to_string(), step],
-        |r| r.get(0),
-    )?;
-    Ok(exists.then(|| step.to_owned()))
+    let (delivery, delivered_to) = delivery(tx.sql(), project, &to)?;
+    let message = message(tx.sql(), project, msg.id)?;
+    Ok(Posted {
+        receipt: MessageReceipt {
+            id: message.id,
+            to,
+            thread: message.thread.clone(),
+            delivery,
+            run: delivered_to,
+        },
+        message,
+    })
 }
 
 #[derive(Debug)]
@@ -453,7 +726,7 @@ fn attach(
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AskResult {
-    Waiting(Message),
+    Waiting(Posted),
     Answered {
         question: Message,
         reply: Box<Message>,
@@ -461,16 +734,19 @@ pub enum AskResult {
     Closed(Message),
 }
 
-/// message.post(wait=true) takes up only the latest question in this exact item lineage.
-pub fn ask(
+/// message.ask(wait=true) takes up only the latest question in this exact item lineage.
+pub fn ask_waiting(
     tx: &mut WriteTransaction<'_>,
-    post: MessagePost,
+    post: Post,
     inputs: &impl PlanInputSetter,
 ) -> Result<AskResult> {
     let project = resolve_project(tx.sql(), &post.project)?;
-    let run = post
-        .run
-        .ok_or_else(|| invalid("waiting ask requires a run"))?;
+    let Speaker::Run(run) = post.speaker else {
+        return Err(invalid("waiting ask requires a run"));
+    };
+    let Verb::Ask { to, title, .. } = &post.verb else {
+        return Err(invalid("only a question waits"));
+    };
     let info = run_info(tx.sql(), project, run)?;
     if !info.live {
         return Err(conflict("asking run has stopped"));
@@ -479,13 +755,12 @@ pub fn ask(
         .step
         .as_deref()
         .ok_or_else(|| invalid("take-up requires a step run"))?;
-    let title = post
-        .title
+    let title = title
         .as_deref()
         .filter(|t| !t.trim().is_empty())
         .ok_or_else(|| invalid("waiting ask requires a title"))?;
-    let prior: Option<i64>=tx.sql().query_row("SELECT q.message_id FROM question_attachments q JOIN messages m ON m.project_id=q.project_id AND m.id=q.message_id WHERE q.project_id=?1 AND q.step_id=?2 AND q.generation=?3 AND q.item_index=?4 AND q.title=?5 GROUP BY q.message_id ORDER BY q.message_id DESC LIMIT 1",
-        params![project.to_string(),step,info.generation,info.item,title],|r| r.get(0)).optional()?;
+    let prior: Option<i64>=tx.sql().query_row("SELECT q.message_id FROM question_attachments q JOIN messages m ON m.project_id=q.project_id AND m.id=q.message_id WHERE q.project_id=?1 AND q.step_id=?2 AND q.generation=?3 AND q.item_index=?4 AND q.title=?5 AND m.\"to\"=?6 GROUP BY q.message_id ORDER BY q.message_id DESC LIMIT 1",
+        params![project.to_string(),step,info.generation,info.item,title,to],|r| r.get(0)).optional()?;
     if let Some(id) = prior {
         let q = question(tx.sql(), project, MessageId(id))?;
         match q.state {
@@ -493,34 +768,38 @@ pub fn ask(
                 let attached:Option<String>=tx.sql().query_row("SELECT run_id FROM question_attachments WHERE project_id=?1 AND message_id=?2 AND detached_at IS NULL",params![project.to_string(),id],|r|r.get(0)).optional()?;
                 if !q.waiting || attached.as_deref() == Some(&run.to_string()) {
                     attach(tx, project, q.message.id, run, &info, title)?;
-                    return Ok(AskResult::Waiting(message(
-                        tx.sql(),
-                        project,
-                        q.message.id,
-                    )?));
+                    let message = message(tx.sql(), project, q.message.id)?;
+                    let (delivery, delivered_to) = delivery(tx.sql(), project, to)?;
+                    return Ok(AskResult::Waiting(Posted {
+                        receipt: MessageReceipt {
+                            id: message.id,
+                            to: to.clone(),
+                            thread: message.thread.clone(),
+                            delivery,
+                            run: delivered_to,
+                        },
+                        message,
+                    }));
                 }
             }
-            QuestionState::Answered if q.reply.as_ref().is_some_and(|r| r.claimed_by.is_none()) => {
-                attach(tx, project, q.message.id, run, &info, title)?;
-                let reply = claim_answer(tx, project, q.message.id, run)?;
-                return Ok(AskResult::Answered {
-                    question: message(tx.sql(), project, q.message.id)?,
-                    reply: Box::new(reply),
-                });
+            QuestionState::Answered => {
+                let unclaimed = match &q.reply {
+                    Some(reply) => claimed_by(tx.sql(), project, reply.id)?.is_none(),
+                    None => false,
+                };
+                if unclaimed {
+                    attach(tx, project, q.message.id, run, &info, title)?;
+                    let reply = claim_answer(tx, project, q.message.id, run)?;
+                    return Ok(AskResult::Answered {
+                        question: message(tx.sql(), project, q.message.id)?,
+                        reply: Box::new(reply),
+                    });
+                }
             }
             QuestionState::Closed => {}
-            _ => {}
         }
     }
-    let mut post = post;
-    post.needs_reply = Some(true);
-    if post.thread.is_none() && post.reply_to.is_none() {
-        post.thread = Some(format!("step-{step}"));
-    }
-    if post.from.as_ref().is_none_or(|s| s.trim().is_empty()) {
-        post.from = Some(step.to_owned());
-    }
-    Ok(AskResult::Waiting(message_post(tx, post, inputs)?))
+    Ok(AskResult::Waiting(self::post(tx, post, inputs)?))
 }
 
 /// Claim only for the current attached asker. Repeated acknowledgements by that
@@ -543,21 +822,21 @@ pub fn claim_answer(
     if attached.as_deref() != Some(&run.to_string()) {
         return Err(conflict("answer belongs to another asking run"));
     }
-    let mut reply = q.reply.ok_or_else(|| conflict("question has no answer"))?;
-    if reply.claimed_by.is_some_and(|owner| owner != run) {
+    let reply = q.reply.ok_or_else(|| conflict("question has no answer"))?;
+    if claimed_by(tx.sql(), project, reply.id)?.is_some_and(|owner| owner != run) {
         return Err(conflict("answer already claimed"));
     }
     tx.sql().execute(
         "UPDATE messages SET claimed_by=?1 WHERE project_id=?2 AND id=?3 AND claimed_by IS NULL",
         params![run.to_string(), project.to_string(), reply.id.0],
     )?;
-    reply.claimed_by = Some(run);
     changed(tx, project);
     Ok(reply)
 }
 
-/// Questions lead the inbox, followed by unread owner notes grouped by thread.
-/// History includes every message in any conversation the owner participated in.
+/// The caller's inbox: its open questions lead, followed by its unread notes grouped
+/// by thread, unread by `identity`'s read watermarks. History is every message in
+/// any conversation `identity` took part in.
 pub fn messages(
     sql: &Connection,
     project: ProjectId,
@@ -574,9 +853,9 @@ pub fn messages(
     }
     let open = "needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL";
     let condition=match view {
-        MessageView::Inbox => format!("\"to\"='owner' AND (({open}) OR (needs_reply=0 AND id>coalesce((SELECT cursor FROM readers r WHERE r.project_id=messages.project_id AND r.identity=?4 AND r.stream='owner' AND r.thread=messages.thread),0)))"),
+        MessageView::Inbox => format!("\"to\"=?4 AND (({open}) OR (needs_reply=0 AND id>coalesce((SELECT cursor FROM readers r WHERE r.project_id=messages.project_id AND r.identity=?4 AND r.stream='owner' AND r.thread=messages.thread),0)))"),
         MessageView::Questions=>open.into(),
-        MessageView::History=>"thread IN (SELECT thread FROM messages WHERE project_id=?1 AND (\"to\"='owner' OR \"from\"='owner'))".into(),
+        MessageView::History=>"thread IN (SELECT thread FROM messages WHERE project_id=?1 AND (\"to\"=?4 OR \"from\"=?4))".into(),
         MessageView::Thread=>"1".into(),
     };
     let order = if matches!(view, MessageView::Inbox) {
@@ -828,13 +1107,13 @@ pub fn message_wakes(
     if msg.from == me {
         return Ok(false);
     }
-    if msg.needs_reply && msg.to.as_deref().is_none_or(|to| to == me) {
+    if msg.verb == MessageVerb::Ask && msg.to.as_deref().is_none_or(|to| to == me) {
         return Ok(true);
     }
-    if (!msg.needs_reply || msg.answer.is_some())
-        && let Some(id) = msg.reply_to
+    if msg.verb == MessageVerb::Reply
+        && let Some(id) = msg.to_message
     {
-        return Ok(message(sql, project, id)?.needs_reply);
+        return Ok(message(sql, project, id)?.is_question());
     }
     Ok(false)
 }
@@ -1061,27 +1340,23 @@ pub fn unread_alert(
     if alerted {
         return Ok(None);
     }
-    let post = MessagePost {
+    let alert = Post {
         project: ProjectSelector::Id(project),
+        speaker: Speaker::Sluice,
         body: format!(
             "No reader progress after record {seq}. Resnapshot status/messages and resume reading."
         ),
-        thread: None,
-        to: Some("owner".into()),
-        needs_reply: Some(true),
-        reply_to: None,
-        answer: None,
-        title: Some(format!(
-            "No orchestrator has read for {minutes} min (seq {seq})"
-        )),
-        ui: None,
-        input: None,
-        data: Some(JsonValue::try_from(
-            serde_json::json!({"unread_record":seq,"reader":identity}),
-        )?),
-        from: Some("sluice".into()),
-        run: None,
-        author: None,
+        verb: Verb::Ask {
+            to: OWNER_STREAM.into(),
+            title: Some(format!(
+                "No orchestrator has read for {minutes} min (seq {seq})"
+            )),
+            ui: None,
+            input: None,
+            data: Some(JsonValue::try_from(
+                serde_json::json!({"unread_record":seq,"reader":identity}),
+            )?),
+        },
     };
-    Ok(Some(message_post(tx, post, &NoPlanInputs)?))
+    Ok(Some(post(tx, alert, &NoPlanInputs)?.message))
 }

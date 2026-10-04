@@ -861,6 +861,16 @@
       "view": "inbox",
       "thread": "fixture",
       "since": 1
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "view": "questions",
+      "thread": null,
+      "since": null,
+      "owner": true
     }
   ],
   "MarkRead": [
@@ -1383,35 +1393,21 @@
   "Message": [
     {
       "id": 1,
-      "thread": "fixture",
+      "verb": "say",
       "from": "fixture",
       "to": null,
-      "title": null,
+      "thread": "fixture",
       "body": "fixture",
-      "needs_reply": false,
-      "reply_to": null,
-      "answer": null,
-      "ui": null,
-      "input": null,
-      "data": null,
-      "run": null,
-      "at": "fixture",
-      "claimed_by": null
+      "at": "fixture"
     },
     {
       "id": 1,
-      "thread": "fixture",
+      "verb": "reply",
       "from": "fixture",
       "to": "fixture",
-      "title": "fixture",
+      "thread": "fixture",
       "body": "fixture",
-      "needs_reply": false,
-      "reply_to": 1,
-      "answer": {
-        "action": "fixture",
-        "params": null,
-        "values": null
-      },
+      "title": "fixture",
       "ui": "fixture",
       "input": "fixture",
       "data": {
@@ -1419,7 +1415,24 @@
       },
       "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
       "at": "fixture",
-      "claimed_by": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      "to_message": 1,
+      "answer": {
+        "action": "fixture",
+        "params": null,
+        "values": null
+      }
+    },
+    {
+      "id": 2,
+      "verb": "ask",
+      "from": "orchestrator",
+      "to": "owner",
+      "thread": "owner",
+      "body": "fixture",
+      "title": "fixture",
+      "at": "fixture",
+      "state": "answered",
+      "answered_by": 3
     }
   ],
   "MessagePage": [
@@ -1431,20 +1444,12 @@
       "messages": [
         {
           "id": 1,
-          "thread": "fixture",
+          "verb": "say",
           "from": "fixture",
           "to": null,
-          "title": null,
+          "thread": "fixture",
           "body": "fixture",
-          "needs_reply": false,
-          "reply_to": null,
-          "answer": null,
-          "ui": null,
-          "input": null,
-          "data": null,
-          "run": null,
-          "at": "fixture",
-          "claimed_by": null
+          "at": "fixture"
         }
       ],
       "last_id": null
@@ -1457,20 +1462,12 @@
       "messages": [
         {
           "id": 1,
-          "thread": "fixture",
+          "verb": "say",
           "from": "fixture",
           "to": null,
-          "title": null,
+          "thread": "fixture",
           "body": "fixture",
-          "needs_reply": false,
-          "reply_to": null,
-          "answer": null,
-          "ui": null,
-          "input": null,
-          "data": null,
-          "run": null,
-          "at": "fixture",
-          "claimed_by": null
+          "at": "fixture"
         }
       ],
       "last_id": 1
@@ -2481,6 +2478,55 @@
       }
     },
     {
+      "command": "ask",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "to": "orchestrator",
+        "body": "fixture",
+        "title": null,
+        "ui": null,
+        "input": null,
+        "data": null,
+        "run": null
+      }
+    },
+    {
+      "command": "say",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "to": "work-1",
+        "body": "fixture",
+        "data": {
+          "file": "/tmp/brief.md"
+        },
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      }
+    },
+    {
+      "command": "reply",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "to_message": 1,
+        "body": "",
+        "answer": {
+          "action": "close",
+          "params": null,
+          "values": null
+        },
+        "run": null,
+        "owner": true
+      }
+    },
+    {
       "command": "message_post",
       "args": {
         "project": {
@@ -3026,6 +3072,16 @@
       }
     },
     {
+      "reply": "receipt",
+      "data": {
+        "id": 1,
+        "to": "work-1",
+        "thread": "step-work-1",
+        "delivery": "delivered",
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      }
+    },
+    {
       "reply": "messages",
       "data": {
         "project": {
@@ -3035,20 +3091,12 @@
         "messages": [
           {
             "id": 1,
-            "thread": "fixture",
+            "verb": "say",
             "from": "fixture",
             "to": null,
-            "title": null,
+            "thread": "fixture",
             "body": "fixture",
-            "needs_reply": false,
-            "reply_to": null,
-            "answer": null,
-            "ui": null,
-            "input": null,
-            "data": null,
-            "run": null,
-            "at": "fixture",
-            "claimed_by": null
+            "at": "fixture"
           }
         ],
         "last_id": null
@@ -3413,20 +3461,12 @@
     {
       "kind": "message",
       "id": 1,
-      "thread": "fixture",
+      "verb": "say",
       "from": "fixture",
       "to": null,
-      "title": null,
+      "thread": "fixture",
       "body": "fixture",
-      "needs_reply": false,
-      "reply_to": null,
-      "answer": null,
-      "ui": null,
-      "input": null,
-      "data": null,
-      "run": null,
-      "posted_at": "fixture",
-      "claimed_by": null
+      "posted_at": "fixture"
     },
     {
       "kind": "project.pause",
@@ -3771,5 +3811,101 @@
         }
       ]
     }
+  ],
+  "Ask": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "to": "orchestrator",
+      "body": "fixture",
+      "title": null,
+      "ui": null,
+      "input": null,
+      "data": null,
+      "run": null
+    },
+    {
+      "project": {
+        "kind": "id",
+        "value": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      },
+      "to": "owner",
+      "body": "",
+      "title": "fixture",
+      "ui": "fixture",
+      "input": "fixture",
+      "data": null,
+      "run": null,
+      "owner": true
+    }
+  ],
+  "Say": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "to": "work-1",
+      "body": "fixture",
+      "data": {
+        "file": "/tmp/brief.md"
+      },
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    }
+  ],
+  "Reply": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "to_message": 1,
+      "body": "",
+      "answer": {
+        "action": "close",
+        "params": null,
+        "values": null
+      },
+      "run": null,
+      "owner": true
+    }
+  ],
+  "MessageReceipt": [
+    {
+      "id": 1,
+      "to": "owner",
+      "thread": "owner",
+      "delivery": "delivered"
+    },
+    {
+      "id": 2,
+      "to": "work-1",
+      "thread": "step-work-1",
+      "delivery": "queued",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+    },
+    {
+      "id": 3,
+      "to": "work-1",
+      "thread": "step-work-1",
+      "delivery": "no_live_run"
+    }
+  ],
+  "MessageVerb": [
+    "ask",
+    "say",
+    "reply"
+  ],
+  "QuestionState": [
+    "open",
+    "answered",
+    "closed"
+  ],
+  "Delivery": [
+    "delivered",
+    "queued",
+    "no_live_run"
   ]
 }

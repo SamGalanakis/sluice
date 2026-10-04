@@ -76,10 +76,10 @@ readers wait). `step_retry` each stale step in order, or accept one as it is wit
 
 ## A human or orchestrator step
 Declare a plan input (e.g. `"approved": "boolean"`) and have later steps read it. They wait until
-someone calls `plan_set_input(project, "approved", true)` — or answers a question posted with
-`message_post(project, to="owner", input="approved", title=...)`, which sets it.
+someone calls `plan_set_input(project, "approved", true)` — or answers a question asked with
+`ask(project, to="owner", input="approved", title=...)`, which sets it.
 
 ## Something is off
-`verify("fixes")` → `[{"where": "projects/<id>/fns/message.post/fn.json", "message": "fn
-message.post collides with the builtin fn ..."}]`, one entry per problem (empty when all is
+`verify("fixes")` → `[{"where": "projects/<id>/fns/message.ask/fn.json", "message": "fn
+message.ask collides with the builtin fn ..."}]`, one entry per problem (empty when all is
 well): rename or remove that function.

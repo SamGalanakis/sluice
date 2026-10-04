@@ -92,7 +92,9 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "plan_view",
         "status",
         "plan_prune",
-        "message_post",
+        "ask",
+        "say",
+        "reply",
         "messages",
     ];
     assert_eq!(
@@ -338,7 +340,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 41);
+    assert_eq!(tools.len(), 43);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await
@@ -446,7 +448,7 @@ async fn rmcp_client_initializes_lists_and_reads_over_process_stdio() {
             .unwrap()
             .success()
     );
-    eprintln!("stdio fixture PID {pid} reaped; 41 tools");
+    eprintln!("stdio fixture PID {pid} reaped; 43 tools");
 }
 
 #[tokio::test]
@@ -600,4 +602,63 @@ async fn real_boot_acceptance() {
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
     client.cancel().await.unwrap();
+}
+
+/// ask, say and reply speak as the orchestrator over MCP (or the run they name): no
+/// `owner` argument; ask and say require `to`, and a call without one decodes so the
+/// coordinator refuses it as `invalid`. Reading may be done as the owner.
+#[test]
+fn message_verbs_take_a_required_recipient_and_no_owner_over_mcp() {
+    let schema = |name: &str| {
+        mcp::tools()
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("no tool {name}"))
+            .input_schema
+            .clone()
+    };
+    for name in ["ask", "say", "reply"] {
+        let s = schema(name);
+        assert!(s["properties"].get("owner").is_none(), "{name}");
+        assert!(s["properties"].get("thread").is_none(), "{name}");
+        assert!(s["properties"].get("from").is_none(), "{name}");
+        assert!(s["properties"].get("run").is_some(), "{name}");
+        assert!(
+            matches!(
+                mcp::decode_tool(
+                    name,
+                    serde_json::from_value(json!({"project":"p","owner":true,"body":"x"})).unwrap(),
+                    None
+                ),
+                Err(PublicError::BadRequest { .. })
+            ),
+            "{name}"
+        );
+    }
+    for name in ["ask", "say"] {
+        let s = schema(name);
+        assert!(
+            s["required"].as_array().unwrap().contains(&json!("to")),
+            "{name}"
+        );
+        assert!(s["properties"]["to"].get("default").is_none(), "{name}");
+        let to = match mcp::decode_tool(
+            name,
+            serde_json::from_value(json!({"project":"p","body":"x"})).unwrap(),
+            None,
+        )
+        .unwrap()
+        {
+            CommandRequest::Say(say) => say.to,
+            CommandRequest::Ask(ask) => ask.to,
+            other => panic!("{name}: {other:?}"),
+        };
+        assert_eq!(to, "", "{name}: left for the coordinator to refuse");
+    }
+    assert!(schema("messages")["properties"].get("owner").is_some());
+    assert!(mcp::tools().iter().all(|t| t.name != "message_post"));
+    assert!(matches!(
+        mcp::decode_tool("message_post", serde_json::Map::new(), None),
+        Err(PublicError::BadRequest { .. })
+    ));
 }

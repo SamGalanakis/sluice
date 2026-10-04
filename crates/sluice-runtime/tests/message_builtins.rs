@@ -1,9 +1,13 @@
-//! message.post / message.wait builtin tests over a real scratch home.
+//! message.ask / say / reply / wait (and the retired message.post) builtin tests over a
+//! real scratch home.
 //! The fns park on durable-cursor subscriptions while the store keeps truth:
 //! first answering reply, closes, take-up lineage and answer claims.
+#[allow(dead_code)]
+#[path = "../../../tests/support/messages.rs"]
+mod stored_messages;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::{Message, MessageAnswer, MessagePost, MessageView},
+    commands::{Message, MessageAnswer, MessageVerb, MessageView},
     ids::{AttemptId, MessageId, ProjectId, ProjectSelector, RunId, StepId},
     rpc::{JsonMap, decode_json},
 };
@@ -13,13 +17,14 @@ use sluice_runtime::builtins::{
 };
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
-    messages::{self, NoPlanInputs, Question, message_post},
+    messages::{self, NoPlanInputs, Post, Question, Speaker, Verb},
 };
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
+use stored_messages::{Stored, stored};
 use tokio_util::sync::CancellationToken;
 
 fn map(value: Value) -> JsonMap {
@@ -142,48 +147,55 @@ impl Fixture {
             .await
             .unwrap();
     }
-    async fn post(&self, post: MessagePost) -> Message {
+    async fn post(&self, post: Post) -> Message {
         self.writer
             .write(RetrySafety::NonIdempotent, move |tx| {
-                message_post(tx, post, &NoPlanInputs)
+                messages::post(tx, post, &NoPlanInputs).map(|p| p.message)
             })
             .await
             .unwrap()
     }
-    fn draft(&self, body: &str) -> MessagePost {
-        MessagePost {
-            project: ProjectSelector::Id(self.project),
-            body: body.into(),
-            thread: None,
-            to: None,
-            needs_reply: None,
-            reply_to: None,
-            answer: None,
-            title: None,
-            ui: None,
-            input: None,
-            data: None,
-            from: Some("owner".into()),
-            run: None,
-            author: None,
-        }
-    }
-    /// The owner replies to a question; a note reply resolves it.
+    /// The owner replies to a question, which answers it.
     async fn answer(&self, parent: MessageId, body: &str) -> Message {
-        let mut post = self.draft(body);
-        post.reply_to = Some(parent);
-        self.post(post).await
+        self.post(Post {
+            project: ProjectSelector::Id(self.project),
+            speaker: Speaker::Owner,
+            body: body.into(),
+            verb: Verb::Reply {
+                to_message: parent,
+                answer: None,
+            },
+        })
+        .await
     }
     /// The owner closes a question without an answer.
     async fn close(&self, parent: MessageId) -> Message {
-        let mut post = self.draft("");
-        post.reply_to = Some(parent);
-        post.answer = Some(MessageAnswer {
-            action: "close".into(),
-            params: None,
-            values: None,
-        });
-        self.post(post).await
+        self.post(Post {
+            project: ProjectSelector::Id(self.project),
+            speaker: Speaker::Owner,
+            body: String::new(),
+            verb: Verb::Reply {
+                to_message: parent,
+                answer: Some(MessageAnswer {
+                    action: "close".into(),
+                    params: None,
+                    values: None,
+                }),
+            },
+        })
+        .await
+    }
+    async fn claimed(&self, reply: MessageId) -> Option<String> {
+        self.reads
+            .snapshot(move |sql| {
+                Ok(sql.query_row(
+                    "SELECT claimed_by FROM messages WHERE id=?1",
+                    (reply.0,),
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap()
     }
     async fn question(&self, id: MessageId) -> Question {
         let project = self.project;
@@ -249,44 +261,120 @@ impl Fixture {
 }
 
 fn ask_inputs(body: &str, title: &str) -> Value {
-    json!({"body": body, "title": title, "wait": true})
+    json!({"to": "owner", "body": body, "title": title, "wait": true})
 }
 
 #[tokio::test]
-async fn post_without_wait_commits_the_message_and_returns_its_id() {
+async fn ask_say_and_reply_commit_the_message_and_return_its_receipt() {
     let f = Fixture::new().await;
-    let ctx = f.ctx(None, CancellationToken::new());
-    let result = fns::dispatch(
-        "message.post",
-        &map(json!({"body": "progress note", "needs_reply": false, "thread": "t"})),
+    let run = f.run("work", -1, 1, None).await;
+    let ctx = f.ctx(Some(run), CancellationToken::new());
+    let said = fns::dispatch(
+        "message.say",
+        &map(json!({"to": "orchestrator", "body": "progress note"})),
         &ctx,
     )
     .await
     .unwrap();
-    let posted = &f.thread("t").await[0];
-    assert_eq!(out(&result, "id"), json!(posted.id.0));
-    assert_eq!(out(&result, "reply"), Value::Null);
-    assert_eq!(posted.body, "progress note");
-    assert!(!posted.needs_reply);
-    // A root post defaults to a question.
-    let ctx = f.ctx(None, CancellationToken::new());
-    fns::dispatch(
-        "message.post",
-        &map(json!({"body": "q", "thread": "u"})),
+    let posted = &f.thread("step-work").await[0];
+    assert_eq!(out(&said, "id"), json!(posted.id.0));
+    assert!(!said.0.contains_key("reply"));
+    assert_eq!(
+        out(&said, "receipt"),
+        json!({"id": posted.id.0, "to": "orchestrator", "thread": "step-work", "delivery": "delivered"})
+    );
+    assert_eq!(
+        (posted.verb, posted.from.as_str()),
+        (MessageVerb::Say, "work")
+    );
+    let asked = fns::dispatch(
+        "message.ask",
+        &map(json!({"to": "owner", "body": "q", "title": "Pick"})),
         &ctx,
     )
     .await
     .unwrap();
-    assert!(f.thread("u").await[0].needs_reply);
+    assert_eq!(out(&asked, "reply"), Value::Null);
+    let id = out(&asked, "id").as_i64().unwrap();
+    // The orchestrator (a fn called with no run) replies, to the asking step.
+    let ctx = f.ctx(None, CancellationToken::new());
+    let replied = fns::dispatch(
+        "message.reply",
+        &map(json!({"to_message": id, "body": "that one"})),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out(&replied, "receipt")["to"], json!("work"));
+    assert_eq!(out(&replied, "receipt")["thread"], json!("step-work"));
+    assert_eq!(
+        f.question(MessageId(id)).await.state,
+        messages::QuestionState::Answered
+    );
+    for (name, inputs) in [
+        ("message.say", json!({"to": "nobody", "body": "x"})),
+        ("message.ask", json!({"body": "x"})),
+        ("message.reply", json!({"body": "x"})),
+    ] {
+        assert!(
+            matches!(
+                fns::dispatch(name, &map(inputs), &ctx).await,
+                Err(FnFailure::Terminal(_))
+            ),
+            "{name}"
+        );
+    }
+    assert_eq!(f.thread("step-work").await.len(), 3);
 }
 
+#[tokio::test]
+async fn retired_message_post_still_runs_through_the_bridge_and_only_for_a_run() {
+    let f = Fixture::new().await;
+    let ctx = f.ctx(None, CancellationToken::new());
+    match fns::dispatch(
+        "message.post",
+        &map(json!({"body": "x", "needs_reply": false, "thread": "t"})),
+        &ctx,
+    )
+    .await
+    {
+        Err(FnFailure::Terminal(message)) => assert!(message.contains("retired"), "{message}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    let run = f.run("work", -1, 1, None).await;
+    let ctx = f.ctx(Some(run), CancellationToken::new());
+    let note = fns::dispatch(
+        "message.post",
+        &map(json!({"body": "progress", "needs_reply": false, "thread": "ignored", "from": "x"})),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(out(&note, "reply"), Value::Null);
+    assert!(!note.0.contains_key("receipt"));
+    fns::dispatch("message.post", &map(json!({"body": "q"})), &ctx)
+        .await
+        .unwrap();
+    let thread = f.thread("step-work").await;
+    assert_eq!(out(&note, "id"), json!(thread[0].id.0));
+    // A note to nobody goes to the orchestrator; a root post is a question.
+    assert_eq!(
+        (
+            thread[0].verb,
+            thread[0].to.as_deref(),
+            thread[0].from.as_str()
+        ),
+        (MessageVerb::Say, Some("orchestrator"), "work")
+    );
+    assert_eq!(thread[1].verb, MessageVerb::Ask);
+}
 #[tokio::test]
 async fn waiting_post_parks_then_claims_the_first_answering_reply() {
     let f = Fixture::new().await;
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("which one?", "Pick")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("which one?", "Pick")), &ctx).await
     });
     let question = f.asked_question(run).await;
     assert_eq!(question.thread, "step-work");
@@ -297,11 +385,10 @@ async fn waiting_post_parks_then_claims_the_first_answering_reply() {
     let got = out(&result, "reply");
     assert_eq!(got["id"], json!(reply.id.0));
     assert_eq!(got["body"], json!("yes, that one"));
-    assert_eq!(got["claimed_by"], json!(run.to_string()));
-    assert_eq!(
-        f.question(question.id).await.reply.unwrap().claimed_by,
-        Some(run)
-    );
+    assert_eq!(got["verb"], json!("reply"));
+    assert_eq!(out(&result, "receipt")["to"], json!("owner"));
+    let answer = f.question(question.id).await.reply.unwrap();
+    assert_eq!(f.claimed(answer.id).await, Some(run.to_string()));
 }
 
 #[tokio::test]
@@ -310,7 +397,7 @@ async fn waiting_post_fails_terminally_when_the_question_closes() {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("which?", "Pick")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("which?", "Pick")), &ctx).await
     });
     let question = f.asked_question(run).await;
     f.close(question.id).await;
@@ -326,7 +413,7 @@ async fn a_stopped_run_ends_the_wait_with_the_stopped_reason() {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("which?", "Pick")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("which?", "Pick")), &ctx).await
     });
     let question = f.asked_question(run).await;
     f.stop(run).await;
@@ -343,7 +430,7 @@ async fn a_retry_takes_up_the_open_question_and_claims_its_answer() {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let first = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("which?", "Pick")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("which?", "Pick")), &ctx).await
     });
     let question = f.asked_question(run).await;
     f.stop(run).await;
@@ -352,7 +439,7 @@ async fn a_retry_takes_up_the_open_question_and_claims_its_answer() {
     let retry = f.run("work", -1, 1, Some(run)).await;
     let ctx = f.ctx(Some(retry), CancellationToken::new());
     let second = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("which?", "Pick")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("which?", "Pick")), &ctx).await
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(f.question(question.id).await.waiting);
@@ -361,10 +448,7 @@ async fn a_retry_takes_up_the_open_question_and_claims_its_answer() {
     let result = f.settle(second).await.unwrap();
     assert_eq!(out(&result, "id"), json!(question.id.0));
     assert_eq!(out(&result, "reply")["id"], json!(reply.id.0));
-    assert_eq!(
-        out(&result, "reply")["claimed_by"],
-        json!(retry.to_string())
-    );
+    assert_eq!(f.claimed(reply.id).await, Some(retry.to_string()));
 }
 
 #[tokio::test]
@@ -373,7 +457,7 @@ async fn a_claimed_answer_is_never_reused_by_a_later_retry() {
     let run = f.run("work", -1, 1, None).await;
     let ctx = f.ctx(Some(run), CancellationToken::new());
     let handle = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("which?", "Pick")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("which?", "Pick")), &ctx).await
     });
     let question = f.asked_question(run).await;
     f.answer(question.id, "first answer").await;
@@ -385,7 +469,7 @@ async fn a_claimed_answer_is_never_reused_by_a_later_retry() {
     let retry = f.run("work", -1, 1, Some(run)).await;
     let ctx = f.ctx(Some(retry), CancellationToken::new());
     let handle = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("which?", "Pick")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("which?", "Pick")), &ctx).await
     });
     let next = f.asked_question(retry).await;
     assert_ne!(next.id, question.id);
@@ -400,7 +484,7 @@ async fn a_claimed_answer_is_never_reused_by_a_later_retry() {
 async fn waiting_post_requires_a_run_and_waiting_cancels_through_the_token() {
     let f = Fixture::new().await;
     let ctx = f.ctx(None, CancellationToken::new());
-    match fns::dispatch("message.post", &map(ask_inputs("q", "T")), &ctx).await {
+    match fns::dispatch("message.ask", &map(ask_inputs("q", "T")), &ctx).await {
         Err(FnFailure::Terminal(message)) => assert!(message.contains("run"), "{message}"),
         other => panic!("expected a terminal refusal, got {other:?}"),
     }
@@ -408,7 +492,7 @@ async fn waiting_post_requires_a_run_and_waiting_cancels_through_the_token() {
     let cancel = CancellationToken::new();
     let ctx = f.ctx(Some(run), cancel.clone());
     let handle = tokio::spawn(async move {
-        fns::dispatch("message.post", &map(ask_inputs("q", "T")), &ctx).await
+        fns::dispatch("message.ask", &map(ask_inputs("q", "T")), &ctx).await
     });
     f.asked_question(run).await;
     cancel.cancel();
@@ -421,21 +505,58 @@ async fn waiting_post_requires_a_run_and_waiting_cancels_through_the_token() {
 #[tokio::test]
 async fn message_wait_returns_thread_messages_after_since_and_filters_to() {
     let f = Fixture::new().await;
-    let mut mine = f.draft("to me");
-    mine.thread = Some("t".into());
-    mine.to = Some("me".into());
-    let m1 = f.post(mine).await;
-    let mut other = f.draft("to other");
-    other.thread = Some("t".into());
-    other.to = Some("other".into());
-    let m2 = f.post(other).await;
-    let mut all = f.draft("broadcast");
-    all.thread = Some("t".into());
-    let m3 = f.post(all).await;
-    let mut elsewhere = f.draft("other thread");
-    elsewhere.thread = Some("elsewhere".into());
-    elsewhere.to = Some("me".into());
-    let m4 = f.post(elsewhere).await;
+    let m1 = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "t",
+            from: "owner",
+            to: Some("me"),
+            body: "to me",
+            question: false,
+            ..Stored::default()
+        },
+    )
+    .await;
+    let m2 = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "t",
+            from: "owner",
+            to: Some("other"),
+            body: "to other",
+            question: false,
+            ..Stored::default()
+        },
+    )
+    .await;
+    let m3 = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "t",
+            from: "owner",
+            to: None,
+            body: "broadcast",
+            question: false,
+            ..Stored::default()
+        },
+    )
+    .await;
+    let m4 = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "elsewhere",
+            from: "owner",
+            to: Some("me"),
+            body: "other thread",
+            question: false,
+            ..Stored::default()
+        },
+    )
+    .await;
     let ctx = f.ctx(None, CancellationToken::new());
     let result = fns::dispatch(
         "message.wait",
@@ -484,16 +605,34 @@ async fn message_wait_questions_hold_through_notes_until_a_question_lands() {
         .await
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut note = f.draft("just a note");
-    note.thread = Some("t".into());
-    note.needs_reply = Some(false);
-    let note = f.post(note).await;
+    let note = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "t",
+            from: "owner",
+            to: None,
+            body: "just a note",
+            question: false,
+            ..Stored::default()
+        },
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!handle.is_finished(), "a note must not wake questions mode");
-    let mut question = f.draft("a real question");
-    question.thread = Some("t".into());
-    question.needs_reply = Some(true);
-    let question = f.post(question).await;
+    let question = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "t",
+            from: "owner",
+            to: None,
+            body: "a real question",
+            question: true,
+            ..Stored::default()
+        },
+    )
+    .await;
     let result = f.settle(handle).await.unwrap();
     let ids: Vec<i64> = out(&result, "messages")
         .as_array()
@@ -529,10 +668,19 @@ async fn message_wait_returns_at_the_timeout_with_everything_it_saw() {
         .await
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut note = f.draft("note only");
-    note.thread = Some("t2".into());
-    note.needs_reply = Some(false);
-    let note = f.post(note).await;
+    let note = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "t2",
+            from: "owner",
+            to: None,
+            body: "note only",
+            question: false,
+            ..Stored::default()
+        },
+    )
+    .await;
     let result = f.settle(handle).await.unwrap();
     let ids: Vec<i64> = out(&result, "messages")
         .as_array()
@@ -556,10 +704,19 @@ async fn message_wait_wakes_on_any_post_by_default_and_cancels() {
         .await
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let mut post = f.draft("a note wakes any-mode");
-    post.thread = Some("t".into());
-    post.needs_reply = Some(false);
-    let posted = f.post(post).await;
+    let posted = stored(
+        &f.writer,
+        f.project,
+        Stored {
+            thread: "t",
+            from: "owner",
+            to: None,
+            body: "a note wakes any-mode",
+            question: false,
+            ..Stored::default()
+        },
+    )
+    .await;
     let result = f.settle(handle).await.unwrap();
     assert_eq!(out(&result, "messages").as_array().unwrap().len(), 1);
     assert_eq!(
@@ -612,6 +769,8 @@ async fn bad_inputs_fail_terminally_before_any_wait() {
             "question",
         ),
         ("message.post", json!({"wait": true}), "must be a string"),
+        ("message.ask", json!({"wait": true}), "must be a string"),
+        ("message.reply", json!({"body": "x"}), "to_message"),
         ("message.where", json!({}), "unknown message builtin"),
     ] {
         match fns::dispatch(name, &map(inputs.clone()), &ctx).await {

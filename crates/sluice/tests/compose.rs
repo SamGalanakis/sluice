@@ -6,7 +6,7 @@ mod executable;
 mod units;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::CommandReply,
+    commands::{CommandReply, Delivery, MessageReceipt},
     ids::ProjectId,
     rpc::{RpcReply, RpcResult, decode_json, encode_frame},
 };
@@ -200,9 +200,17 @@ impl Gate {
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
     }
+    /// The orchestrator tells `step` something: its receipt.
+    fn say(&self, step: &str, body: &str) -> MessageReceipt {
+        let CommandReply::Receipt(receipt) = self
+            .rpc(json!({"command":"say","args":{"project":self.selector(),"body":body,"to":step}}))
+        else {
+            panic!("say")
+        };
+        receipt
+    }
     fn post(&self, step: &str, body: &str) -> i64 {
-        let CommandReply::Posted{id}=self.rpc(json!({"command":"message_post","args":{"project":self.selector(),"body":body,"thread":format!("step-{step}"),"to":step,"needs_reply":false,"from":"test","author":"test"}})) else {panic!("post")};
-        id.0
+        self.say(step, body).id.0
     }
 }
 impl Drop for Gate {
@@ -675,14 +683,25 @@ run(main)
 fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {
     let g = Gate::new();
     g.script(json!({"outputs":{"summary":"fake output"},"wait_message":true,"marker_transient_once":true}));
-    g.plan(json!({"work":agent(&g)}));
+    g.plan(json!({"work":agent(&g),"after":{"run":"core.external","after":["work"],"outputs":{"ok":"boolean"}}}));
+    // A step that will run once `work` is done: its next run is assigned the message.
+    let queued = g.say("after", "for the next run");
+    assert_eq!((queued.delivery, queued.run), (Delivery::Queued, None));
     let _lease = g.lease();
     g.wait(|g| g.home.join("fake-events.jsonl").exists());
-    let id = g.post("work", "first live message");
+    // The live fake agent listens: it is handed the message on its live feed.
+    let receipt = g.say("work", "first live message");
+    assert_eq!(receipt.delivery, Delivery::Delivered, "{receipt:?}");
+    assert_eq!(receipt.run.map(|r| r.to_string()), Some(g.run("work")));
+    assert_eq!(receipt.thread, "step-work");
+    let id = receipt.id.0;
     let value = g.terminal("work");
     assert_eq!(value["status"], "succeeded", "{value}");
     assert_eq!(value["outputs"]["summary"], "fake output");
     let first = g.run("work");
+    // Done: no live or upcoming run; a retry's run gets it.
+    let done = g.say("work", "after the fact");
+    assert_eq!((done.delivery, done.run), (Delivery::NoLiveRun, None));
     let delivered = g
         .events()
         .into_iter()
@@ -1098,8 +1117,10 @@ fn owner_question_runs_the_configured_notify_command_once() {
         )
         .unwrap();
     });
-    let CommandReply::Posted{id}=g.rpc(json!({"command":"message_post","args":{"project":g.selector(),"body":"Merge the release branch?","title":"Release","to":"owner","needs_reply":true,"from":"orchestrator","author":"test"}})) else {panic!("post")};
-    g.rpc(json!({"command":"message_post","args":{"project":g.selector(),"body":"just a note","to":"owner","needs_reply":false,"from":"orchestrator","author":"test"}}));
+    let CommandReply::Receipt(MessageReceipt { id, .. }) = g.rpc(json!({"command":"ask","args":{"project":g.selector(),"body":"Merge the release branch?","title":"Release","to":"owner"}})) else {panic!("ask")};
+    g.rpc(
+        json!({"command":"say","args":{"project":g.selector(),"body":"just a note","to":"owner"}}),
+    );
     let read = |g: &Gate| -> Vec<Value> {
         std::fs::read_to_string(g.home.join("notified.jsonl"))
             .unwrap_or_default()
@@ -1123,6 +1144,7 @@ fn owner_question_runs_the_configured_notify_command_once() {
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0]["id"], id.0);
     assert_eq!(sent[0]["title"], "Release");
+    assert_eq!(sent[0]["verb"], "ask");
     assert_eq!(sent[0]["project"], "compose");
     assert_eq!(sent[0]["project_id"], json!(g.project));
 }
@@ -1152,6 +1174,15 @@ def main(inp, ctx):
     assert sorted(log) == ['last_seq', 'records'], log
     fns = ctx.tool('fn_list', {})
     assert any(f['name'] == 'custom.tools' for f in fns), fns
+    asked = ctx.tool('ask', {'to': 'orchestrator', 'body': 'which?'})
+    assert asked['thread'] == 'step-tools' and asked['delivery'] == 'delivered', asked
+    said = ctx.tool('say', {'to': 'later', 'body': 'later, then'})
+    assert said['to'] == 'later' and said['thread'] == 'step-tools', said
+    try:
+        ctx.tool('say', {'to': 'nobody', 'body': 'x'})
+        raise AssertionError('an unknown recipient was accepted')
+    except CallbackError as error:
+        assert error.error == 'invalid', error.message
     try:
         ctx.tool('status', {'selection': {'steps': ['later'], 'tags': None}})
         raise AssertionError('the wire shape was accepted')
@@ -1178,4 +1209,13 @@ run(main)
         )
         .unwrap();
     assert_eq!((author.as_str(), reason.as_str()), ("step:tools", "hold"));
+    // The fn's messages speak as its step, with its run.
+    let (from, run): (String, String) = db
+        .query_row(
+            "SELECT \"from\", run_id FROM messages WHERE project_id=?1 AND needs_reply=1",
+            [g.project.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((from.as_str(), run), ("tools", g.run("tools")));
 }

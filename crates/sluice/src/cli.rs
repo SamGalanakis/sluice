@@ -85,8 +85,8 @@ pub enum Mode {
         threads: Vec<String>,
         #[arg(long, value_name = "N")]
         since_seq: Option<i64>,
-        /// questions: hold notes (needs_reply false) and print them with the next
-        /// record that is not one.
+        /// questions: hold messages that are not questions (say, reply) and print
+        /// them with the next record that is not one.
         #[arg(long, default_value = "any", value_parser = ["any", "questions"])]
         wake: String,
     },
@@ -351,7 +351,15 @@ const TOOLS: &[(&str, &str)] = &[
     ("unit_tag", "tag or untag a unit"),
     ("edge_add", "add `after` ordering to a step"),
     ("edge_remove", "remove `after` ordering"),
-    ("message_post", "post a message or question on a thread"),
+    (
+        "ask",
+        "ask a step, the orchestrator or the owner a question",
+    ),
+    (
+        "say",
+        "tell a step, the orchestrator or the owner something",
+    ),
+    ("reply", "reply to a message (answers an open question)"),
     ("messages", "read a view of a project's messages"),
     ("mark_read", "record how far a thread's reader has read"),
     ("fn_call", "call a fn directly (or wait on it)"),
@@ -427,12 +435,6 @@ fn fill_author(request: &mut CommandRequest, author: &str) {
         CommandRequest::StepRetry(r) => fill(&mut r.author),
         CommandRequest::StepCancel(r) => fill(&mut r.author),
         CommandRequest::StepSubmit(r) => fill(&mut r.author),
-        CommandRequest::MessagePost(r) => {
-            fill(&mut r.author);
-            if r.from.is_none() {
-                r.from = r.author.clone();
-            }
-        }
         CommandRequest::FnCall(r) => fill(&mut r.author),
         CommandRequest::Drain { author: a, .. } | CommandRequest::Release { author: a } => fill(a),
         CommandRequest::ProjectCreate { author: a, .. } => fill(a),
@@ -650,6 +652,21 @@ async fn normalize_args(
                 args.insert("run".into(), Value::String(run));
             }
         }
+        // A run's agent speaks as its step: the run identity comes from its environment
+        // when the call does not name it. The owner is the dashboard's alone.
+        "ask" | "say" | "reply" | "message_post" => {
+            if args.contains_key("owner") && name != "message_post" {
+                return Err(bad_request(format!(
+                    "{name} takes no argument 'owner': the dashboard speaks as the owner"
+                )));
+            }
+            if args.get("run").is_none_or(Value::is_null)
+                && let Ok(run) = std::env::var("SLUICE_RUN_ID")
+                && !run.trim().is_empty()
+            {
+                args.insert("run".into(), Value::String(run));
+            }
+        }
         "mark_read" => project_id_arg(home, args).await?,
         "fn_save" => {
             if let Some(value) = args.remove("fn") {
@@ -741,7 +758,9 @@ async fn tool(home: &Path, name: Option<String>, args: Option<String>) -> Result
     if name == "rpc" {
         return rpc(home, args).await;
     }
-    if !TOOLS.iter().any(|(tool, _)| *tool == name) {
+    // message_post is retired and unlisted; runs started on an older release still
+    // call it, and the coordinator translates it for them.
+    if !TOOLS.iter().any(|(tool, _)| *tool == name) && name != "message_post" {
         return Err(bad_request(format!(
             "unknown tool {name:?} (sluice tool lists them)"
         )));
@@ -1079,7 +1098,7 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
 /// Follow the log: one JSON line per matching record, starting at the end unless
 /// --since-seq says where. Reads come straight from the store — a watcher must
 /// not need the coordinator (or take its writer lock) to observe. With
-/// --wake questions, notes (messages with needs_reply false) are held and print
+/// --wake questions, messages that are not questions (say, reply) are held and print
 /// just before the next record that is not one.
 async fn watch_log(
     home: &Path,
@@ -1135,7 +1154,7 @@ async fn watch_log(
             let note = questions
                 && matches!(
                     &record.event,
-                    sluice_model::events::Event::Message(message) if !message.needs_reply
+                    sluice_model::events::Event::Message(message) if !message.is_question()
                 );
             if note {
                 held.append(&mut line);

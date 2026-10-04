@@ -1,7 +1,10 @@
+#[allow(dead_code)]
+#[path = "../../../tests/support/messages.rs"]
+mod stored_messages;
 use indexmap::IndexMap;
 use serde_json::json;
 use sluice_model::{
-    commands::{MessagePost, NextResult, Settles, StepStatus},
+    commands::{NextResult, Settles, StepStatus},
     error::PublicError,
     events::{Event, Record, UnitStep},
     ids::{ProjectId, RecordSeq, RunId, UnitName, WorkGeneration},
@@ -12,6 +15,7 @@ use sluice_model::{
 use sluice_runtime::watch::*;
 use sluice_store::{ReadPool, RetrySafety, Writer, messages, records};
 use std::{path::PathBuf, time::Duration};
+use stored_messages::{Stored, stored};
 struct Home(PathBuf);
 impl Home {
     fn new() -> Self {
@@ -66,12 +70,20 @@ async fn post(
     question: bool,
     reply: Option<sluice_model::ids::MessageId>,
 ) -> sluice_model::commands::Message {
-    let post:MessagePost=serde_json::from_value(json!({"project":{"kind":"id","value":p},"body":body,"from":from,"to":to,"needs_reply":question,"reply_to":reply})).unwrap();
-    w.write(RetrySafety::NonIdempotent, move |tx| {
-        messages::message_post(tx, post, &messages::NoPlanInputs)
-    })
+    stored(
+        w,
+        p,
+        Stored {
+            thread: "t",
+            from,
+            to,
+            body,
+            question,
+            reply,
+            ..Stored::default()
+        },
+    )
     .await
-    .unwrap()
 }
 async fn settled(w: &Writer, p: ProjectId, name: &str) -> Record {
     let unit: UnitName = name.parse().unwrap();
@@ -159,7 +171,7 @@ async fn singleton_settles_once_per_generation_without_open_exception() {
     w.shutdown().await.unwrap();
 }
 #[tokio::test]
-async fn owner_answer_to_worker_wakes_and_notes_own_questions_and_clarifications_do_not() {
+async fn owner_answer_to_worker_wakes_and_notes_and_own_questions_do_not() {
     let (_h, w, r, p) = setup().await;
     let q = post(
         &w,
@@ -177,24 +189,12 @@ async fn owner_answer_to_worker_wakes_and_notes_own_questions_and_clarifications
     assert!(silent.timed_out);
     assert_eq!(silent.records.len(), 0);
     assert_eq!(silent.notes.len(), 1);
-    post(&w, p, "clarify", "owner", Some("worker"), true, Some(q.id)).await;
-    let silent2 = next(
-        &w,
-        &r,
-        NextOptions {
-            since_seq: Some(silent.last_seq),
-            ..options(p)
-        },
-    )
-    .await
-    .unwrap();
-    assert!(silent2.timed_out);
     let answer = post(&w, p, "yes", "owner", None, false, Some(q.id)).await;
     let wake = next(
         &w,
         &r,
         NextOptions {
-            since_seq: Some(silent2.last_seq),
+            since_seq: Some(silent.last_seq),
             ..options(p)
         },
     )
@@ -222,7 +222,7 @@ async fn notes_are_messages_first_and_whole_and_cursor_stops_at_first_wake() {
     assert_eq!(batch.last_seq, first.seq);
     assert_eq!(batch.notes.len(), 1);
     let text = render(&batch, Settles::None, 1, false).unwrap();
-    assert!(text.starts_with("NOTE"));
+    assert!(text.starts_with("SAY"));
     assert!(text.contains("all\n  whole\n  lines"));
     assert!(!text.contains("question"));
     let more = next(

@@ -540,6 +540,41 @@ fn contract_message_answer() {
 }
 
 #[test]
+fn contract_ask() {
+    contract::<Ask>("Ask");
+}
+
+#[test]
+fn contract_say() {
+    contract::<Say>("Say");
+}
+
+#[test]
+fn contract_reply() {
+    contract::<Reply>("Reply");
+}
+
+#[test]
+fn contract_message_receipt() {
+    contract::<MessageReceipt>("MessageReceipt");
+}
+
+#[test]
+fn contract_message_verb() {
+    contract::<MessageVerb>("MessageVerb");
+}
+
+#[test]
+fn contract_question_state() {
+    contract::<QuestionState>("QuestionState");
+}
+
+#[test]
+fn contract_delivery() {
+    contract::<Delivery>("Delivery");
+}
+
+#[test]
 fn contract_message_post() {
     contract::<MessagePost>("MessagePost");
 }

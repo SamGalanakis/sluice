@@ -313,8 +313,15 @@ impl<H: ExecutionHost> Coordinator<H> {
             },
             CommandRequest::StepSubmit(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let version=attempts::step_submit(tx,request)?;if version.is_none(){return Err(conflict("stale submission").into());}Ok(CommandReply::Ack)}).await,
             CommandRequest::Submission{run}=>data(self.submissions(run).await?),
-            CommandRequest::MessagePost(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let id=messages_project(tx.sql(),&request.project)?;let ctx=context(tx.sql(),id,&catalog)?;let m=sluice_store::messages::message_post(tx,request,&InputSetter(ctx))?;Ok(CommandReply::Posted{id:m.id})}).await,
-            CommandRequest::Messages(request)=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&request.project)?;let messages=sluice_store::messages::messages(sql,id,request.view,request.thread.as_deref(),request.since,"cli")?;Ok(CommandReply::Messages(MessagePage{project:projects_identity(sql,id)?,last_id:messages.last().map(|m|m.id),messages}))}).await.map_err(|e|e.into_public(true)),
+            CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_) => {
+                let post = message_post(request)?;
+                self.writer().write(RetrySafety::NonIdempotent, move |tx| post_message(tx, &catalog, post).map(CommandReply::Receipt)).await
+            }
+            CommandRequest::MessagePost(request) => {
+                let post = bridge_post(request)?;
+                self.writer().write(RetrySafety::NonIdempotent, move |tx| Ok(CommandReply::Posted { id: post_message(tx, &catalog, post)?.id })).await
+            }
+            CommandRequest::Messages(request)=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&request.project)?;let identity=if request.owner {sluice_store::messages::OWNER_STREAM} else {sluice_store::messages::ORCHESTRATOR_STREAM};let messages=sluice_store::messages::messages(sql,id,request.view,request.thread.as_deref(),request.since,identity)?;Ok(CommandReply::Messages(MessagePage{project:projects_identity(sql,id)?,last_id:messages.last().map(|m|m.id),messages}))}).await.map_err(|e|e.into_public(true)),
             CommandRequest::AcquireLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{let lease=resources::request_lease_keyed(tx,request.run,&request.resource,request.amount,&format!("callback/{}/{}",request.run,request.request_id))?;let state=resources::leases(tx.sql(),run_project(tx.sql(),request.run)?)?.into_iter().find(|l|l.id==lease).ok_or_else(||conflict("lease missing"))?.state;Ok(CommandReply::Lease{lease,state})}).await,
             CommandRequest::ReleaseLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{resources::release_lease(tx,request.lease,request.run)?;Ok(CommandReply::Ack)}).await,
             CommandRequest::RegisterCompletionAction(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{if !attempts::register_completion_action(tx,request,&Hooks)?{return Err(conflict("stale action registration").into());}Ok(CommandReply::Ack)}).await,
@@ -735,6 +742,15 @@ impl<H: ExecutionHost> Coordinator<H> {
                                 .ok_or_else(|| conflict("callback needs a project"))?,
                         )
                     && m.from.as_deref() == id.step.as_ref().map(StepId::as_str) => {}
+            command @ (CommandRequest::Ask(_)
+            | CommandRequest::Say(_)
+            | CommandRequest::Reply(_))
+                if run_speaks(
+                    command,
+                    id.run,
+                    id.project
+                        .ok_or_else(|| conflict("callback needs a project"))?,
+                ) => {}
             CommandRequest::AcquireLease(l) if l.run == id.run && id.project.is_some() => {}
             CommandRequest::ReleaseLease(l) if l.run == id.run => {}
             CommandRequest::RegisterCompletionAction(a)
@@ -768,12 +784,13 @@ impl<H: ExecutionHost> Coordinator<H> {
                             .optional()?;
                         CommandReply::Data(serde_json::from_str(row.as_deref().unwrap_or("{}"))?)
                     }
-                    CommandRequest::MessagePost(m) => {
-                        let ctx =
-                            context(tx.sql(), id.project.expect("validated project"), &catalog)?;
-                        CommandReply::Posted {
-                            id: sluice_store::messages::message_post(tx, m, &InputSetter(ctx))?.id,
-                        }
+                    CommandRequest::MessagePost(m) => CommandReply::Posted {
+                        id: post_message(tx, &catalog, bridge_post(m)?)?.id,
+                    },
+                    command @ (CommandRequest::Ask(_)
+                    | CommandRequest::Say(_)
+                    | CommandRequest::Reply(_)) => {
+                        CommandReply::Receipt(post_message(tx, &catalog, message_post(command)?)?)
                     }
                     CommandRequest::AcquireLease(l) => {
                         let lease = resources::request_lease_keyed(
@@ -1000,15 +1017,24 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let mut command = crate::compose::decode_tool(tool, author.as_deref())?;
                 // Named callbacks use the same command adapters with the run's
                 // immutable project and submission identity.
-                if let CommandRequest::MessagePost(m) = &mut command {
-                    m.run = Some(id.run);
-                    m.from = id.step.as_ref().map(ToString::to_string);
+                match &mut command {
+                    CommandRequest::MessagePost(m) => {
+                        m.run = Some(id.run);
+                        m.from = id.step.as_ref().map(ToString::to_string);
+                    }
+                    CommandRequest::Ask(m) => (m.run, m.owner) = (Some(id.run), false),
+                    CommandRequest::Say(m) => (m.run, m.owner) = (Some(id.run), false),
+                    CommandRequest::Reply(m) => (m.run, m.owner) = (Some(id.run), false),
+                    _ => {}
                 }
                 let reply = if matches!(
                     &command,
                     CommandRequest::StepSubmit(_)
                         | CommandRequest::Submission { .. }
                         | CommandRequest::MessagePost(_)
+                        | CommandRequest::Ask(_)
+                        | CommandRequest::Say(_)
+                        | CommandRequest::Reply(_)
                         | CommandRequest::AcquireLease(_)
                         | CommandRequest::ReleaseLease(_)
                         | CommandRequest::RegisterCompletionAction(_)
@@ -1510,6 +1536,44 @@ pub enum RuntimeCommand {
 }
 pub use crate::client::CoordinatorClient;
 
+/// ask, say and reply as one store post.
+fn message_post(command: CommandRequest) -> Result<sluice_store::messages::Post, PublicError> {
+    use sluice_store::messages::Post;
+    match command {
+        CommandRequest::Ask(a) => Post::try_from(a),
+        CommandRequest::Say(s) => Post::try_from(s),
+        CommandRequest::Reply(r) => Post::try_from(r),
+        _ => return Err(conflict("not a message command")),
+    }
+    .map_err(|e| e.into_public(false))
+}
+/// The retired message_post, translated for the runs of older releases that send it.
+fn bridge_post(request: MessagePost) -> Result<sluice_store::messages::Post, PublicError> {
+    tracing::warn!(
+        run = ?request.run,
+        "message_post is deprecated: a run of an older release posted; translating it to ask, say or reply"
+    );
+    sluice_store::messages::bridge(request).map_err(|e| e.into_public(false))
+}
+fn post_message(
+    tx: &mut sluice_store::WriteTransaction<'_>,
+    catalog: &Catalog,
+    post: sluice_store::messages::Post,
+) -> sluice_store::Result<MessageReceipt> {
+    let project = messages_project(tx.sql(), &post.project)?;
+    let ctx = context(tx.sql(), project, catalog)?;
+    Ok(sluice_store::messages::post(tx, post, &InputSetter(ctx))?.receipt)
+}
+/// A callback's message speaks only as its own run, in its own project.
+fn run_speaks(command: &CommandRequest, run: RunId, project: ProjectId) -> bool {
+    let (selector, speaker, owner) = match command {
+        CommandRequest::Ask(m) => (&m.project, m.run, m.owner),
+        CommandRequest::Say(m) => (&m.project, m.run, m.owner),
+        CommandRequest::Reply(m) => (&m.project, m.run, m.owner),
+        _ => return false,
+    };
+    !owner && speaker == Some(run) && *selector == ProjectSelector::Id(project)
+}
 pub(crate) fn context(
     sql: &Connection,
     project: ProjectId,

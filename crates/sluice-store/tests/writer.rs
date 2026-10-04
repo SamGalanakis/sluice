@@ -636,8 +636,8 @@ async fn results_and_messages_survive_projection_removal_and_record_trim() {
         tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,result_id) VALUES (?1,'a',0,'{}','succeeded',?2)", (project.to_string(), &result_id))?;
         let record = tx.append_record(Some(project), Event::Message(Box::new(Message {
             id: MessageId(0), thread: "t".into(), from: "a".into(), to: Some("owner".into()),
-            title: None, body: "question".into(), needs_reply: true, reply_to: None,
-            answer: None, ui: None, input: None, data: None, run: None, at: "now".into(), claimed_by: None,
+            title: None, body: "question".into(), verb: sluice_model::commands::MessageVerb::Ask, to_message: None,
+            answer: None, ui: None, input: None, data: None, run: None, at: "now".into(), state: None, answered_by: None,
         })))?;
         let Event::Message(message) = record.event else { unreachable!() };
         assert_eq!(message.id.0, record.seq.0);

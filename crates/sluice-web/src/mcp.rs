@@ -119,14 +119,6 @@ pub fn decode_tool(
         let given = args.get("author").and_then(Value::as_str);
         args.insert("author".into(), json!(author_of(given, client, "mcp")));
     }
-    if name == "message_post"
-        && args
-            .get("from")
-            .and_then(Value::as_str)
-            .is_none_or(|s| s.trim().is_empty())
-    {
-        args.insert("from".into(), args["author"].clone());
-    }
     if name == "log_wait"
         && let Some(wake) = args.get_mut("wake")
     {
@@ -396,6 +388,10 @@ fn schema_fields(
         return;
     };
     for (key, value) in fields {
+        // Only the dashboard speaks as the owner; MCP callers read as it at most.
+        if key == "owner" && matches!(name, "ask" | "say" | "reply") {
+            continue;
+        }
         if matches!(key.as_str(), "edit" | "selection" | "read") {
             schema_fields(root, name, resolve(root, value), properties, required);
             continue;
@@ -405,6 +401,14 @@ fn schema_fields(
             .iter()
             .find(|(_, internal)| *internal == key)
             .map_or(key.as_str(), |(public, _)| *public);
+        // ask and say name their recipient: required here, though a call without
+        // one decodes, so the store refuses it as `invalid` like an unknown one.
+        if key == "to" && matches!(name, "ask" | "say") {
+            value.as_object_mut().expect("to schema").remove("default");
+            required.push(json!(key));
+            properties.insert(key.clone(), value);
+            continue;
+        }
         let default = default_value(name, key).or_else(|| value.get("default").cloned());
         if let Some(default) = default {
             value["default"] = default;
@@ -737,11 +741,19 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "Remove done units (every step succeeded or skipped), all or those named in units or tagged with tags, whose last step finished at least older_than seconds ago, in one edit. A unit a surviving step or plan output references is kept. Returns the edit result {project, rev, preview, steps} (steps: the removed steps) with units (the removed units) and kept: [{unit, step}] or [{unit, output}], each kept unit with the step or plan output holding it. Nothing to remove: no edit, the current rev. dry_run previews without committing. rev is the revision you read, reason and author record the edit.",
     ),
     (
-        "message_post",
-        "Post a message or answer on a project thread. body is markdown. reply_to joins the parent thread, to defaults to its sender. needs_reply distinguishes questions from notes. The first answer resolves a question atomically, including an input value; stale UI answers conflict. from and author name the sender and actor. title, ui, input, data and run carry optional metadata.",
+        "ask",
+        "Ask a question that needs a reply. Returns its receipt {id, to, thread, delivery,\nrun?}. The thread and sender are derived: a message to or from a step lives on\n`step-<step>`, the orchestrator and owner talk on `owner`; you are the orchestrator,\nor the run's step with `run`. delivery is `delivered` (a live run of the step that\nlistens was handed it, or the orchestrator's or owner's inbox), `queued` (the step\nwill run and its next run is assigned it) or `no_live_run` (the step is done, failed\nor paused: a later run, e.g. a retry, gets it). The first reply answers it.\n\nArgs:\n    project: the project.\n    to: a step of the project's current plan, \"orchestrator\" or \"owner\"; anything\n        else is `invalid` and nothing is stored.\n    body: the question, markdown.\n    title: a short title for the inbox.\n    ui: an OpenUI form the owner answers with.\n    input: a plan input the answer sets.\n    data: any JSON for the recipient.\n    run: the asking run (SLUICE_RUN_ID): its step is the sender.",
+    ),
+    (
+        "say",
+        "Tell a step, the orchestrator or the owner something; no reply is expected.\nReturns its receipt {id, to, thread, delivery, run?}, as ask does.\n\nArgs:\n    project: the project.\n    to: a step of the project's current plan, \"orchestrator\" or \"owner\".\n    body: the note, markdown.\n    data: any JSON for the recipient.\n    run: the speaking run (SLUICE_RUN_ID): its step is the sender.",
+    ),
+    (
+        "reply",
+        "Reply to a message: to its sender, on its thread. Returns its receipt {id, to,\nthread, delivery, run?}. A reply to an open question answers it (with `input`, it\nsets that plan input to `answer.values.value`, `answer.params.value` or the body);\nanswer {\"action\": \"close\"} closes it without setting anything. A reply to a\nquestion already answered or closed is just a message, but one with an `answer` is\nrefused with `conflict`.\n\nArgs:\n    project: the project.\n    to_message: the id of the message replied to.\n    body: the reply, markdown (may be empty with an answer).\n    answer: {action, params?, values?}, the answer to a question's ui form.\n    run: the replying run (SLUICE_RUN_ID): its step is the sender.",
     ),
     (
         "messages",
-        "Read project messages using view: inbox, questions, history or thread. thread selects the full conversation for the thread view. since filters by message id.",
+        "Read a project's messages. Returns {project, messages, last_id}. Each message is {id,\nverb (ask, say or reply), from, to, thread, body, title?, ui?, input?, data?, run?, at,\nto_message?, answer?}; a question also carries state: open, answered (with\nanswered_by, the answering message's id) or closed.\n\nArgs:\n    project: the project.\n    view: inbox (your open questions and unread notes and replies), questions (every\n        open question), history (every conversation you took part in) or thread.\n    thread: the thread, for the thread view (or to narrow another).\n    since: only messages after this id.\n    owner: read as the owner, whose inbox the dashboard shows (default: the\n        orchestrator).",
     ),
 ];

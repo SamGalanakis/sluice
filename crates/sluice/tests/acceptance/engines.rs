@@ -528,7 +528,7 @@ fn g3(engine: &str) {
             .sum::<u32>(),
         1
     );
-    gate.rpc(json!({"command":"message_post","args":{"project":selector,"body":"Addressed live fixture input: write live.txt containing received, without another commit. Submit word=blue for this current run and finish.","thread":"step-work","to":"work","needs_reply":false,"reply_to":null,"answer":null,"title":null,"ui":null,"input":null,"data":null,"from":"fixture","run":null,"author":"fixture"}}));
+    gate.rpc(json!({"command":"say","args":{"project":selector,"body":"Addressed live fixture input: write live.txt containing received, without another commit. Submit word=blue for this current run and finish.","to":"work"}}));
     let first = step_finished(&mut gate, &selector);
     assert_eq!(first["outputs"]["word"], "blue");
     assert_eq!(
@@ -758,7 +758,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
                     1
                 );
                 if addressed {
-                    gate.rpc(json!({"command":"message_post","args":{"project":selector,"body":"Addressed fixture input","thread":"step-work","to":"work","needs_reply":false,"reply_to":null,"answer":null,"title":null,"ui":null,"input":null,"data":null,"from":"fixture","run":null,"author":"fixture"}}));
+                    gate.rpc(json!({"command":"say","args":{"project":selector,"body":"Addressed fixture input","to":"work"}}));
                     gate.wait(Duration::from_secs(30), |_| {
                         sluice_agents::supervisor::Checkpoint::read(&directory)
                             .unwrap()

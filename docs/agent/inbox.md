@@ -1,51 +1,54 @@
 # The inbox: asking a person
 
-When you need a person (a decision, an approval, a value only they know), post a question to
-them. A question is a message addressed `to="owner"` with `needs_reply` true (the default for a
-new thread). The dashboard's Inbox (`/inbox`) shows every open question with a red count in its
-nav; the person answers there, and you read the answering reply. When the home's config sets a
-`notify` command, each new open question to `owner` also runs it once (a note never does).
+When you need a person (a decision, an approval, a value only they know), ask them. A
+question to them is `ask(project, to="owner", ...)`. The dashboard's Inbox (`/inbox`) shows
+every open question to the owner with a red count in its nav; the person answers there, and
+you read the answering reply. When the home's config sets a `notify` command, each new open
+question to `owner` also runs it once (a note never does).
 
-## Posting and waiting
-- `message_post(project, body, to="owner", title=..., ui=..., input=..., thread=..., from=...)`
-  → `{id}`, the message's id. `title` is the question in one line, `body` any context as
-  markdown, `ui` an OpenUI Lang program with buttons or a form (below; without it the person
-  gets a text box), `from` who is asking (default: your author, e.g. `step:<id>` inside a step,
-  whose run the message then records).
+## Asking and waiting
+- `ask(project, to="owner", body, title=..., ui=..., input=..., data=...)` → its receipt
+  `{id, to, thread, delivery}` (`docs("threads")`). `title` is the question in one line,
+  `body` any context as markdown, `ui` an OpenUI Lang program with buttons or a form (below;
+  without it the person gets a text box). You ask as the orchestrator, on the thread `owner`;
+  a step's run asking (with its `run`) asks as its step, on its own thread.
 - Wait for the answer with `log_wait(project, since_seq, wake="questions")`, or let `next`
   return it: a `message` record is written for the question and for the reply. Or read the
-  `messages(project, view)` views: `"inbox"` (open questions to `owner`, then their unread
-  notes), `"questions"` (every open question in the project, whoever it is addressed to),
-  `"history"` (threads that involve `owner`), `"thread"` (one thread in full).
-- An **answer** is a reply to the question with `answer={action, params?, values?}` set. From
-  the dashboard, a Button sends its `action` and `params` plus the `values` of its form's
-  fields; the text box sends `{"action": "answer"}` with the text as the reply's body. A reply with `needs_reply: true` is a clarification and answers nothing — the first
-  *answering* reply resolves the question, atomically.
-- An answer to a question that is no longer open is refused (`conflict`: "question is no
-  longer open"), so a stale button can never answer twice; a later plain reply is just a
-  message. A reply whose
-  `answer.action` is `close` closes the question without answering it.
+  `messages(project, view)` views: `"inbox"` (your open questions, then your unread notes and
+  replies; `owner: true` for the owner's), `"questions"` (every open question in the project,
+  whoever it is addressed to), `"history"` (threads you took part in), `"thread"` (one thread
+  in full). Each question shows its `state`: `open`, `answered` (with `answered_by`) or
+  `closed`.
+- An **answer** is a `reply(project, to_message=<question id>, body, answer={action,
+  params?, values?})`. From the dashboard, a Button sends its `action` and `params` plus the
+  `values` of its form's fields; the text box sends `{"action": "answer"}` with the text as
+  the reply's body. The first reply to an open question answers it, atomically.
+- A reply with an `answer` to a question that is no longer open is refused (`conflict`:
+  "question is no longer open"), so a stale button can never answer twice; a later plain
+  reply is just a message. A reply whose `answer.action` is `close` closes the question
+  without answering it.
 - Message rows outlive the log: they are never trimmed with it, and are deleted with their
   project.
 
 ## Setting a plan input
-With `input` (a declared plan input; anything else is refused at post), the answering reply
+With `input` (a declared plan input; anything else is refused when asked), the answering reply
 sets that input, exactly as `plan_set_input` would (same type check, a `plan.input` record),
 so the steps waiting on it start. The value is the first of `answer.values.value` (a field
 named `value`), `answer.params.value` (a button's value) and the reply's body text. A value
 that does not fit the input's type refuses the reply and the question stays open. The
 dashboard shows which input a question sets.
 
-## In a plan: `message.post` with `wait`
-`message.post` is a builtin fn: a step running it posts a message and, with `wait: true`,
-blocks until the first answering reply, which it returns as `reply` — a human decision is a
-plain step. If the question is closed instead, the step fails `question closed`.
+## In a plan: `message.ask` with `wait`
+`message.ask` is a builtin fn taking `ask`'s arguments: a step running it asks and, with
+`wait: true`, blocks until the first answering reply, which it returns as `reply` (with the
+question's `id` and `receipt`) — a human decision is a plain step. If the question is closed
+instead, the step fails `question closed`.
 
 ```json
 {"inputs": {},
  "outputs": {"decision": {"source": "ask/reply.action"}},
  "steps": {
-   "ask": {"run": "message.post",
+   "ask": {"run": "message.ask",
            "in": {"to": {"default": "owner"}, "title": {"default": "Ship v2?"},
                   "body": {"default": "All **412** tests pass."},
                   "ui": {"default": "root = Stack([Button(\"Ship\", \"ship\"), Button(\"Hold\", \"hold\")], \"row\")"},
@@ -57,7 +60,8 @@ finished some other way) the dashboard shows "Nobody is waiting" with the reason
 question stays open: retrying the step takes it up again — a run of the same step asking the
 same title reuses its earlier open question, and an answer given while nobody was waiting is
 delivered to it. Answer or close a question you do not mean to ask again (a reply with
-`answer={"action": "close"}`).
+`answer={"action": "close"}`). Plans written before the verbs may still name `message.post`;
+it runs as `message.ask`, `message.say` or `message.reply` would, and is retired.
 
 ## The ui: OpenUI Lang
 One statement per line, `name = Component(arg, ...)`; the first statement (conventionally
@@ -85,7 +89,7 @@ Components (the whole vocabulary):
 
 ## Examples
 
-Approve or reject; posted with `input: "approved"` (a `boolean` plan input), the button's
+Approve or reject; asked with `input: "approved"` (a `boolean` plan input), the button's
 `params.value` sets it. Approve answers `{"action": "approve", "params": {"value": true},
 "values": {}}`:
 

@@ -1,14 +1,17 @@
+#[allow(dead_code)]
+#[path = "../../../tests/support/messages.rs"]
+mod stored_messages;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use sluice_model::{
-    commands::{CommandReply, CommandRequest, MessagePost, MessageView},
+    commands::{CommandReply, CommandRequest, MessageView},
     ids::{ProjectId, ProjectSelector},
 };
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
-    messages::{self, NoPlanInputs},
+    messages::{self, Post},
     projects::{self, CreateProject, EmptyPlanInitializer, NoResourceSettings},
 };
 use sluice_web::views::{
@@ -62,9 +65,15 @@ impl MessageCommands for Commands {
         Box::pin(async move {
             writer
                 .write(RetrySafety::NonIdempotent, move |tx| match request {
-                    CommandRequest::MessagePost(post) => Ok(CommandReply::Posted {
-                        id: messages::message_post(tx, post, &TypedInputs)?.id,
-                    }),
+                    CommandRequest::Ask(m) => Ok(CommandReply::Receipt(
+                        messages::post(tx, Post::try_from(m)?, &TypedInputs)?.receipt,
+                    )),
+                    CommandRequest::Say(m) => Ok(CommandReply::Receipt(
+                        messages::post(tx, Post::try_from(m)?, &TypedInputs)?.receipt,
+                    )),
+                    CommandRequest::Reply(m) => Ok(CommandReply::Receipt(
+                        messages::post(tx, Post::try_from(m)?, &TypedInputs)?.receipt,
+                    )),
                     CommandRequest::MarkRead(read) => {
                         messages::mark_read(tx, read)?;
                         Ok(CommandReply::Ack)
@@ -115,19 +124,35 @@ async fn fixture() -> (
     };
     (home, writer, project, state, commands)
 }
+/// A message as the home stores it (default: a worker's note to the owner on `a`).
 async fn post(writer: &Writer, project: ProjectId, data: serde_json::Value) -> i64 {
-    let mut value = serde_json::json!({"project":{"kind":"id","value":project.to_string()},"body":"message","from":"worker","to":"owner","thread":"a","needs_reply":false});
-    value
-        .as_object_mut()
-        .unwrap()
-        .extend(data.as_object().unwrap().clone());
-    let post: MessagePost = serde_json::from_value(value).unwrap();
-    writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            Ok(messages::message_post(tx, post, &NoPlanInputs)?.id.0)
-        })
-        .await
-        .unwrap()
+    let text = |key: &str| data.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+    let (thread, to, body, title, ui, input) = (
+        text("thread").unwrap_or_else(|| "a".into()),
+        text("to").unwrap_or_else(|| "owner".into()),
+        text("body").unwrap_or_else(|| "message".into()),
+        text("title"),
+        text("ui"),
+        text("input"),
+    );
+    stored_messages::stored(
+        writer,
+        project,
+        stored_messages::Stored {
+            thread: &thread,
+            from: "worker",
+            to: Some(&to),
+            body: &body,
+            title: title.as_deref(),
+            ui: ui.as_deref(),
+            input: input.as_deref(),
+            question: data["needs_reply"] == true,
+            reply: None,
+        },
+    )
+    .await
+    .id
+    .0
 }
 async fn send(
     router: &axum::Router,
@@ -253,11 +278,12 @@ async fn p605_typed_ui_reply_is_atomic_and_stale_buttons_conflict() {
     assert!(questions.questions.is_empty());
     assert_eq!(questions.nav.inbox, 0);
     let requests = commands.requests.lock().unwrap();
-    let CommandRequest::MessagePost(post) = &requests[0] else {
+    let CommandRequest::Reply(post) = &requests[0] else {
         panic!()
     };
-    assert_eq!(post.author.as_deref(), Some("owner"));
-    assert_eq!(post.from.as_deref(), Some("owner"));
+    assert!(post.owner);
+    assert_eq!(post.run, None);
+    assert_eq!(post.to_message.0, question);
     assert_eq!(post.project, ProjectSelector::Id(project));
     let json = serde_json::to_value(&post.answer).unwrap();
     assert_eq!(json["values"]["value"], 42);
@@ -385,5 +411,92 @@ async fn p605_pages_escape_programs_and_validate_projects_thread_and_reply_paylo
         .await
         .status(),
         400
+    );
+}
+
+#[tokio::test]
+async fn the_owner_composes_ask_or_say_to_the_thread_step_or_the_orchestrator() {
+    let (_home, writer, project, state, commands) = fixture().await;
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "INSERT INTO steps(project_id,step_id,position,declaration) VALUES (?1,'work',0,'{}')",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "plan");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    post(&writer, project, serde_json::json!({"thread":"step-work"})).await;
+    post(&writer, project, serde_json::json!({"thread":"step-gone"})).await;
+    let page = |thread: &str| {
+        let reads = state.dashboard.reads.clone();
+        let thread = thread.to_owned();
+        async move {
+            threads::load(&reads, Some(project), MessageView::Thread, Some(thread))
+                .await
+                .unwrap()
+        }
+    };
+    let work = page("step-work").await;
+    assert_eq!(work.threads[0].recipient, "work");
+    let html = work
+        .render(&Viewer::default(), "/thread", "/thread/stream")
+        .unwrap();
+    assert!(
+        html.as_str()
+            .contains(r#"<input type="hidden" name="to" value="work">"#)
+    );
+    assert!(html.as_str().contains("Message to work"));
+    assert!(html.as_str().contains(r#"name="ask" value="true""#));
+    assert!(!html.as_str().contains("needs_reply"));
+    // A step no longer in the plan: the owner writes to the orchestrator instead.
+    assert_eq!(page("step-gone").await.threads[0].recipient, "orchestrator");
+    let router = inbox::router(state.clone());
+    let url = format!("/projects/id/{project}/messages");
+    for body in [
+        serde_json::json!({"body":"which db?","to":"work","ask":true}),
+        serde_json::json!({"body":"fyi","to":"orchestrator"}),
+    ] {
+        let response = send(&router, &url, body).await;
+        assert_eq!(response.status(), 200);
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap())
+                .unwrap();
+        assert_eq!(receipt["reply"], "receipt");
+        assert!(receipt["data"]["delivery"].is_string(), "{receipt}");
+    }
+    let requests = commands.requests.lock().unwrap().clone();
+    assert!(matches!(&requests[0], CommandRequest::Ask(a) if a.owner && a.to == "work"));
+    assert!(matches!(&requests[1], CommandRequest::Say(s) if s.owner && s.to == "orchestrator"));
+    let thread = page("step-work").await;
+    let last = &thread.threads[0].messages.last().unwrap().message;
+    assert_eq!(
+        (last.from.as_str(), last.to.as_deref()),
+        ("owner", Some("work"))
+    );
+    assert_eq!(
+        last.state,
+        Some(sluice_model::commands::QuestionState::Open)
+    );
+    // A reply goes to the question's sender, so the owner gets no form to answer its own.
+    let html = thread
+        .render(&Viewer::default(), "/thread", "/thread/stream")
+        .unwrap();
+    assert!(html.as_str().contains("Awaiting reply"));
+    assert!(!html.as_str().contains("Close question"));
+    // A recipient is required, and only the composed message has one.
+    assert_eq!(
+        send(&router, &url, serde_json::json!({"body":"x"}))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        send(&router, &url, serde_json::json!({"body":"x","to":"nobody"}))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
     );
 }

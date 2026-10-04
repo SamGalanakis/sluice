@@ -33,14 +33,15 @@ Refs: a plan input is `name`; a step output is `step/output` (add `.field` or `.
 inside). Every edit is type-checked; errors name the exact path to fix.
 
 `plan_view(project, "mermaid")` shows the graph with each step's status. Agents working on the
-same project talk through messages (`message_post`, then `log_wait`); see `docs("threads")`.
+same project talk through messages (`ask`, `say` and `reply`, then `log_wait`); see
+`docs("threads")`.
 
-When you need a person (a decision, an approval, a missing value), post a question to them
-(`message_post(project, to="owner", title=..., body=...)`, or a `message.post` step with
-`wait: true` in a plan) and wait with `log_wait(project, since_seq, wake="questions")`; see
-`docs("inbox")`. Open questions to the owner are the inbox: the only place the person looks for
-what needs them — failed steps and workers' questions are yours to handle, not theirs. Answer a
-worker's question with a reply on its message; a note (`needs_reply: false`) needs no answer.
+When you need a person (a decision, an approval, a missing value), ask them
+(`ask(project, to="owner", title=..., body=...)`, or a `message.ask` step with `wait: true` in
+a plan) and wait with `log_wait(project, since_seq, wake="questions")`; see `docs("inbox")`.
+Open questions to the owner are the inbox: the only place the person looks for what needs
+them — failed steps and workers' questions are yours to handle, not theirs. Answer a worker's
+question with `reply(project, to_message=<its id>, body=...)`; a note (`say`) needs no answer.
 
 Read `docs()` for the index, `docs("composing")` and `docs("plans")` before writing your first
 plan.
