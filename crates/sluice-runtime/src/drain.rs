@@ -46,6 +46,19 @@ pub fn ensure_admission(
     }
     Err(busy(format!("{mode} rejects new work")).into())
 }
+/// Maintenance commands can edit/retry while cutover holds admission closed.
+pub fn ensure_edit(tx: &WriteTransaction<'_>) -> sluice_store::Result<()> {
+    let mode: String =
+        tx.sql()
+            .query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
+                r.get(0)
+            })?;
+    if mode == "cutover" {
+        Ok(())
+    } else {
+        ensure_admission(tx, &Admission::Plan)
+    }
+}
 /// Register before the dispatch table. Resource observations use ensure_admission
 /// with a coordinator-created Capacity request, never user-provided privilege.
 pub async fn check_command(reads: &ReadPool, request: &CommandRequest) -> Result<(), PublicError> {
@@ -69,13 +82,14 @@ pub async fn check_command(reads: &ReadPool, request: &CommandRequest) -> Result
     if !fenced {
         return Ok(());
     }
+    let user_call = matches!(request, CommandRequest::FnCall(_));
     reads
-        .snapshot(|sql| {
+        .snapshot(move |sql| {
             let mode: String =
                 sql.query_row("SELECT mode FROM maintenance WHERE singleton=1", [], |r| {
                     r.get(0)
                 })?;
-            if mode != "normal" {
+            if mode != "normal" && (mode != "cutover" || user_call) {
                 return Err(busy(format!("{mode} rejects new plan work and user calls")).into());
             }
             Ok(())

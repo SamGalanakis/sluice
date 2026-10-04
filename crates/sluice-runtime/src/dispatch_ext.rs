@@ -402,7 +402,7 @@ async fn edit_extension<H: ExecutionHost>(
     broker
         .writer()
         .write(RetrySafety::NonIdempotent, move |tx| {
-            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+            crate::drain::ensure_edit(tx)?;
             let result = if let Some(evidence) = evidence {
                 plans::apply_prune(tx, id, prepared, &evidence)?
             } else {

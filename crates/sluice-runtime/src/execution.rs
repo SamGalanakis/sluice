@@ -453,7 +453,13 @@ pub async fn guardian_entry(
         vec!["runtime".into()],
         home.clone(),
     )
-    .map_err(storage)?;
+    .map_err(storage)?
+    .with_admission_guard(|home| {
+        crate::install::Installation::for_home(home)
+            .and_then(|install| install.payload_guard(home))
+            .map(|guard| Box::new(guard) as Box<dyn Send>)
+            .map_err(io::Error::other)
+    });
     let args = GuardianArgs {
         home_dir: home.clone(),
         run_dir: home.join("runs").join(run.to_string()),

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
+exec python3 - "$repo" "$@" <<'PY'
+import hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile
+repo = pathlib.Path(sys.argv[1])
+if len(sys.argv) != 3:
+    sys.exit('Usage: scripts/build-release <prefix>')
+prefix = pathlib.Path(sys.argv[2]).resolve()
+protected = [pathlib.Path.home() / '.sluice', pathlib.Path.home() / '.local/bin']
+if prefix == pathlib.Path('/') or any(p == prefix or p in prefix.parents for p in protected) or any(prefix == pathlib.Path(p).resolve() for p in os.get_exec_path()):
+    sys.exit('Refusing live-home or PATH release prefix')
+if os.environ.get('SLUICE_TEST') == '1' and (pathlib.Path.home() / '.local/share/sluice') in [prefix, *prefix.parents]:
+    sys.exit('Tests refuse the live release prefix')
+prefix.mkdir(parents=True, exist_ok=True)
+for child in ['releases', 'bin', '.build']:
+    if (prefix / child).is_symlink():
+        sys.exit('Refusing symlink output: ' + child)
+sha = os.environ.get('SLUICE_BUILD_GIT_SHA') or subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+# One shared Cargo feature graph; all build outputs are inside the explicit prefix.
+subprocess.run(['cargo', '--config', 'build.target-dir=' + json.dumps(str(prefix / '.build/target')), 'build', '--workspace', '--bins', '--release', '--locked'], cwd=repo, check=True)
+def fsync_tree(root):
+    for path in root.rglob('*'):
+        if path.is_file() and not path.is_symlink():
+            with path.open('rb') as f: os.fsync(f.fileno())
+    for path in sorted([root, *[p for p in root.rglob('*') if p.is_dir()]], key=lambda p: len(p.parts), reverse=True):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+releases = prefix / 'releases'
+releases.mkdir(exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='.stage-', dir=releases) as staging:
+    stage = pathlib.Path(staging) / 'release'
+    (stage / 'bin').mkdir(parents=True)
+    shutil.copy2(prefix / '.build/target/release/sluice', stage / 'bin/sluice')
+    shutil.copytree(repo / 'python', stage / 'python', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    # Build/cache the approved artifact entirely under this prefix.
+    tmux_cache = prefix / '.build/private-tmux'
+    if not (tmux_cache / 'tmux-manifest.json').is_file():
+        subprocess.run([str(repo / 'scripts/build-private-tmux'), str(tmux_cache)], check=True, stdout=sys.stderr)
+    shutil.copytree(tmux_cache, stage / 'tmux')
+    (stage / 'assets').mkdir()
+    assets = repo / 'crates/sluice-web/assets'
+    if assets.is_dir():
+        shutil.copytree(assets, stage / 'assets', dirs_exist_ok=True)
+    # Builtin definitions are embedded, so no copied packs are installed.
+    files = {str(p.relative_to(stage)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage.rglob('*')) if p.is_file()}
+    digest = hashlib.sha256(json.dumps(files, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+    release_id = sha + '-' + digest
+    manifest = dict(release_id=release_id, git_sha=sha, guardian_protocol_major=1, guardian_protocol_minor=0, files=files,
+                    private_tmux=json.loads((stage / 'tmux/tmux-manifest.json').read_text()),
+                    build_toolchain={tool: subprocess.check_output([tool, '--version'], text=True).strip() for tool in ['rustc', 'cargo', 'cc']})
+    (stage / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    fsync_tree(stage)
+    destination = releases / release_id
+    if destination.exists():
+        if (destination / 'manifest.json').read_bytes() != (stage / 'manifest.json').read_bytes():
+            sys.exit('Existing release id has different metadata')
+    else:
+        stage.rename(destination)
+        fd = os.open(releases, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
+# A small native entry uses an atomically replaced bootstrap symlink. The selected
+# binary re-reads selection.json, so a concurrent switch cannot mix the home pair.
+launcher_dir = prefix / 'bin'
+launcher_dir.mkdir(exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='.launcher-', dir=prefix) as work:
+    source = pathlib.Path(work) / 'entry.rs'
+    source.write_text('''use std::{os::unix::process::CommandExt, path::PathBuf, process::Command};
+fn main() {
+    let dir = std::env::var_os("SLUICE_INSTALL_DIR").map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_INSTALL));
+    let error = Command::new(dir.join("entry")).arg("--installation-entry").arg(&dir)
+        .args(std::env::args_os().skip(1)).exec();
+    eprintln!("sluice installation entry: {error}"); std::process::exit(1);
+}
+'''.replace('DEFAULT_INSTALL', json.dumps(str(prefix / 'install'))))
+    binary = pathlib.Path(work) / 'sluice'
+    subprocess.run(['rustc', '--edition=2024', '-C', 'opt-level=s', '-C', 'strip=symbols', str(source), '-o', str(binary)], check=True)
+    with binary.open('rb') as f: os.fsync(f.fileno())
+    binary.replace(launcher_dir / 'sluice')
+    fd = os.open(launcher_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+print(destination)
+PY

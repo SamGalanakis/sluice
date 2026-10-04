@@ -670,6 +670,8 @@ pub async fn replay_completion<L: CoordinatorLink>(
     }
 }
 
+type AdmissionGuard = Arc<dyn Fn(&Path) -> io::Result<Box<dyn Send>> + Send + Sync>;
+
 /// Real OS host. Construct inside the admitted delegated service, before calling
 /// guardian_main; no payload is created by construction.
 pub struct OsFnHost<H> {
@@ -677,6 +679,7 @@ pub struct OsFnHost<H> {
     groups: Arc<RunCgroups>,
     program: PathBuf,
     payload_args: Vec<OsString>,
+    admission_guard: AdmissionGuard,
     home: PathBuf,
 }
 impl<H: FnHost> OsFnHost<H> {
@@ -694,8 +697,17 @@ impl<H: FnHost> OsFnHost<H> {
             groups,
             program,
             payload_args,
+            admission_guard: Arc::new(|_| Ok(Box::new(()))),
             home,
         })
+    }
+    /// Hold an installation guard only through the launcher's continuation barrier.
+    pub fn with_admission_guard(
+        mut self,
+        guard: impl Fn(&Path) -> io::Result<Box<dyn Send>> + Send + Sync + 'static,
+    ) -> Self {
+        self.admission_guard = Arc::new(guard);
+        self
     }
     pub fn control_identity(&self) -> io::Result<ProcessIdentity> {
         ProcessIdentity::read(std::process::id())
@@ -741,11 +753,12 @@ impl<H: FnHost> PayloadHost for OsFnHost<H> {
             .prev_run
             .map(|id| id.to_string())
             .unwrap_or_default();
+        let admission_guard = self.admission_guard.clone();
         let launched = tokio::task::spawn_blocking(move || {
             let mut command = Command::new(&program);
             command
                 .current_dir(&dir)
-                .env("SLUICE_HOME", home)
+                .env("SLUICE_HOME", &home)
                 .env("SLUICE_RUN_DIR", &dir)
                 .env("SLUICE_PROJECT_ID", project)
                 .env("SLUICE_STEP", step)
@@ -758,6 +771,7 @@ impl<H: FnHost> PayloadHost for OsFnHost<H> {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             let prepared = PreparedLaunch::spawn(&mut command, &args, Duration::from_secs(5))?;
+            let _admission = admission_guard(&home)?;
             prepared.continue_in(&leaf, &cancel, |executor| {
                 atomic_json(
                     &dir,

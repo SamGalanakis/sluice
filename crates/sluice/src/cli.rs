@@ -39,6 +39,10 @@ pub enum Mode {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
     },
+    Install {
+        #[command(subcommand)]
+        command: InstallCommand,
+    },
     Loop {},
     Guardian(RunArgs),
     PayloadExec(RunArgs),
@@ -162,6 +166,7 @@ impl Mode {
         match self {
             Self::Coordinator { .. } => "coordinator",
             Self::Serve { .. } => "serve",
+            Self::Install { .. } => "install",
             Self::Loop { .. } => "loop",
             Self::Guardian(_) => "guardian",
             Self::PayloadExec(_) => "payload-exec",
@@ -1519,4 +1524,12 @@ fn backup(home: &Path, path: &Path, force: bool) -> Result<(), PublicError> {
     let info = sluice_store::backup::backup(home, &path).map_err(|e| e.into_public(true))?;
     println!("{} {} bytes", info.path.display(), info.bytes);
     Ok(())
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InstallCommand {
+    Fence { reason: String },
+    Unfence,
+    Select { release_dir: PathBuf, home: PathBuf },
+    Status,
 }

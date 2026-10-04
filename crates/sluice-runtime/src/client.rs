@@ -108,6 +108,12 @@ pub async fn ensure_coordinator(
     if UnixStream::connect(&client.path).await.is_ok() {
         return Ok(client);
     }
+    let installation = crate::install::Installation::for_home(home)?;
+    let activation_home = home.to_path_buf();
+    let _activation =
+        tokio::task::spawn_blocking(move || installation.admission_guard(&activation_home, false))
+            .await
+            .map_err(storage)??;
     if home.join("sluice.db").exists() {
         let reads = sluice_store::ReadPool::open(home, 1).map_err(|e| e.into_public(true))?;
         let fenced = reads
@@ -140,6 +146,10 @@ pub async fn ensure_coordinator(
         ])
         .arg(format!("sluice-test-coordinator-{}", &digest[..16]))
         .arg(format!("--setenv=SLUICE_HOME={}", home.display()))
+        .arg(format!(
+            "--setenv=SLUICE_INSTALL_DIR={}",
+            crate::install::Installation::for_home(home)?.dir.display()
+        ))
         .args(if std::env::var_os("SLUICE_FIXTURE").is_some() {
             vec!["--setenv=SLUICE_FIXTURE=1"]
         } else {
@@ -175,6 +185,13 @@ pub async fn wait_for_signal() -> Result<(), PublicError> {
     tokio::select! {r=tokio::signal::ctrl_c()=>r.map_err(storage),_=terminate.recv()=>Ok(())}
 }
 pub async fn run_home(home: PathBuf, scheduling: bool) -> Result<(), PublicError> {
+    run_home_maintenance(home, scheduling, false).await
+}
+pub async fn run_home_maintenance(
+    home: PathBuf,
+    scheduling: bool,
+    maintenance: bool,
+) -> Result<(), PublicError> {
     let client = CoordinatorClient::new(&home);
     if UnixStream::connect(&client.path).await.is_ok() {
         let _lease = if scheduling {
@@ -184,6 +201,13 @@ pub async fn run_home(home: PathBuf, scheduling: bool) -> Result<(), PublicError
         };
         return wait_for_signal().await;
     }
+    let installation = crate::install::Installation::for_home(&home)?;
+    let activation_home = home.clone();
+    let activation = tokio::task::spawn_blocking(move || {
+        installation.admission_guard(&activation_home, maintenance)
+    })
+    .await
+    .map_err(storage)??;
     let program = std::env::current_exe().map_err(storage)?;
     let catalog = if std::env::var_os("SLUICE_FIXTURE").is_some() {
         crate::dispatch::Catalog::fixtures()
@@ -201,6 +225,7 @@ pub async fn run_home(home: PathBuf, scheduling: bool) -> Result<(), PublicError
             .acquire_scheduler(InvocationId::new().to_string())
             .await?;
     }
+    drop(activation);
     let stop = tokio_util::sync::CancellationToken::new();
     let signal_stop = stop.clone();
     let signal = tokio::spawn(async move {

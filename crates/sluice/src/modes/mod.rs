@@ -6,6 +6,7 @@ pub mod agent;
 pub mod coordinator;
 pub mod guardian;
 pub mod import_python_home;
+pub mod install;
 pub mod payload_exec;
 pub mod scheduler;
 pub mod serve;
@@ -22,6 +23,7 @@ macro_rules! register_modes {
     };
 }
 register_modes! {
+    "install" => install::run,
     "coordinator" => coordinator::run,
     "serve" => serve::run,
     "loop" => scheduler::run,

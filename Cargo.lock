@@ -2297,6 +2297,7 @@ dependencies = [
  "clap",
  "fs4",
  "rusqlite",
+ "serde",
  "serde_json",
  "sluice-agents",
  "sluice-model",
@@ -2367,6 +2368,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
+ "fs4",
  "indexmap",
  "notify",
  "reqwest",

@@ -1,45 +1,130 @@
 #!/usr/bin/env bash
-# Deploy sluice from one commit (default origin/main) so running steps never import a working
-# tree: a non-editable install of that commit, the first-party pack fns this home has
-# installed refreshed from it, then `sluice serve --no-runner` and `sluice loop` restarted in
-# their tmux sessions. Stopping them leaves runs running; the new runner adopts them.
-#   scripts/deploy [REF]
 set -euo pipefail
-
-ref=${1:-origin/main}
-repo=$(cd "$(dirname "$0")/.." && pwd)
-home=${SLUICE_HOME:-$HOME/.sluice}
-
-git -C "$repo" fetch -q origin
-sha=$(git -C "$repo" rev-parse --verify "$ref^{commit}")
-build=$(mktemp -d)
-trap 'rm -rf "$build"' EXIT
-git -C "$repo" archive "$sha" | tar -x -C "$build"
-uv build -q --wheel -o "$build/dist" "$build"
-uv tool install -q --force "$build"/dist/sluice-*.whl
-
-# A pack fn is refreshed only where the home already has it (packs are opt-in).
-for src in "$build"/packs/*/*/; do
-  name=$(basename "$src")
-  if [ -d "$home/fns/$name" ]; then
-    rsync -a --delete --exclude __pycache__ "$src" "$home/fns/$name/"
-  fi
-done
-
-# restart SESSION PATTERN COMMAND: stop the session (SIGHUP: exit 0, runs left running),
-# wait for the old process to go, start the new one.
-restart() {
-  local session=$1 pattern=$2 command=$3
-  local old
-  old=$(pgrep -f "^[^ ]*python[^ ]* [^ ]*/sluice $pattern" || true)
-  tmux kill-session -t "$session" 2>/dev/null || true
-  for pid in $old; do
-    for _ in $(seq 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
-  done
-  tmux new-session -d -s "$session" "$command"
-}
-restart sluice-runner "loop" "sluice loop 2>&1 | tee -a $home/runner.out"
-restart sluice "serve" "sluice serve --no-runner 2>&1 | tee -a $home/serve.out"
-
-printf '%s\n' "$sha" > "$home/deployed"
-echo "deployed $(git -C "$repo" log -1 --format='%h %s' "$sha")"
+repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
+exec python3 - "$repo" "$@" <<'PY'
+import argparse, hashlib, json, os, pathlib, shutil, sqlite3, subprocess, sys, tarfile, tempfile, time
+parser = argparse.ArgumentParser()
+parser.add_argument('ref', nargs='?', default='origin/main')
+parser.add_argument('--prefix', default=str(pathlib.Path.home() / '.local/share/sluice'))
+args = parser.parse_args(sys.argv[2:])
+repo = pathlib.Path(sys.argv[1])
+prefix = pathlib.Path(args.prefix).resolve()
+home = pathlib.Path(os.environ.get('SLUICE_HOME', str(pathlib.Path.home() / '.sluice'))).resolve()
+install = pathlib.Path(os.environ.get('SLUICE_INSTALL_DIR', str(prefix / 'install'))).resolve()
+fixture = os.environ.get('SLUICE_DEPLOY_PROCESS_FIXTURE') == '1'
+if os.environ.get('SLUICE_TEST') == '1' or fixture:
+    for p in [prefix, home, install]:
+        for protected in [pathlib.Path.home() / '.sluice', pathlib.Path.home() / '.local/bin', pathlib.Path.home() / '.local/share/sluice']:
+            if p == protected or protected in p.parents:
+                sys.exit('Tests refuse live installation paths')
+if install == home or home in install.parents:
+    sys.exit('Installation control directory must be outside the home')
+sha = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--verify', args.ref + '^{commit}'], text=True).strip()
+prefix.mkdir(parents=True, exist_ok=True)
+# Build a source snapshot, not the dirty worktree and not an installed Python tool.
+with tempfile.TemporaryDirectory(prefix='.source-', dir=prefix) as source:
+    archive = subprocess.Popen(['git', '-C', str(repo), 'archive', sha], stdout=subprocess.PIPE)
+    with tarfile.open(fileobj=archive.stdout, mode='r|') as tar: tar.extractall(source, filter='data')
+    if archive.wait(): sys.exit('git archive failed')
+    result = subprocess.check_output([str(pathlib.Path(source) / 'scripts/build-release'), str(prefix)], text=True, env=dict(os.environ, SLUICE_BUILD_GIT_SHA=sha))
+    release = pathlib.Path(result.strip().splitlines()[-1])
+program = release / 'bin/sluice'
+env = dict(os.environ, SLUICE_HOME=str(home), SLUICE_INSTALL_DIR=str(install))
+def control(*arguments):
+    return json.loads(subprocess.check_output([str(program), 'install', *arguments], env=env, text=True))
+def publish(name, value):
+    path = install / name
+    temporary = path.with_suffix('.tmp')
+    with temporary.open('w') as f:
+        json.dump(value, f); f.flush(); os.fsync(f.fileno())
+    temporary.replace(path)
+    fd = os.open(install, os.O_RDONLY | os.O_DIRECTORY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+def start_time(pid):
+    try: return pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[19]
+    except FileNotFoundError: return None
+def stop_process(record):
+    pid = record['pid']
+    if start_time(pid) != record['start']: return
+    os.kill(pid, 15)
+    deadline = time.monotonic() + 15
+    while start_time(pid) == record['start']:
+        state = pathlib.Path('/proc', str(pid), 'stat').read_text().rsplit(')', 1)[1].split()[0]
+        if state == 'Z': return
+        if time.monotonic() > deadline: raise RuntimeError('managed process did not stop: ' + str(pid))
+        time.sleep(.05)
+def start_process(arguments, name):
+    log = (install / (name + '.log')).open('ab')
+    child = subprocess.Popen([str(program), *arguments], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    log.close()
+    return dict(pid=child.pid, start=start_time(child.pid), command=arguments, release=str(release))
+# An exclusive fence waits only for shared admission/activation decisions. It
+# does not wait for guardians. Errors after this point deliberately stay fenced.
+control('fence', 'deploy ' + sha)
+previous = json.loads((install / 'services.json').read_text()) if (install / 'services.json').exists() else {}
+if fixture:
+    for record in previous.values(): stop_process(record)
+else:
+    if previous:
+        for record in previous.values():
+            unit = record['unit']
+            subprocess.run(['systemctl', '--user', 'stop', unit], check=True)
+    # The automatic coordinator has a deterministic home identity. It must also
+    # stop so its pinned execution host cannot keep scheduling the old release.
+    unit = 'sluice-test-coordinator-' + hashlib.sha256(os.fsencode(home)).hexdigest()[:16] + '.service'
+    subprocess.run(['systemctl', '--user', 'stop', unit], check=True)
+control('select', str(release), str(home))
+commands = {'coordinator': ['coordinator', '--maintenance'], 'serve': ['serve', '--no-runner', '--port', os.environ.get('SLUICE_DEPLOY_PORT', '3065')], 'loop': ['loop']}
+services = {}
+try:
+    for name, arguments in commands.items():
+        if fixture:
+            services[name] = start_process(arguments, name)
+        else:
+            digest = hashlib.sha256(os.fsencode(install)).hexdigest()[:16]
+            unit = ('sluice-test-' if os.environ.get('SLUICE_TEST') == '1' else 'sluice-') + digest + '-' + name
+            subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--service-type=exec', '--property=Restart=no', '--unit', unit,
+                '--setenv=SLUICE_HOME=' + str(home), '--setenv=SLUICE_INSTALL_DIR=' + str(install), '--', str(program), *arguments], check=True)
+            services[name] = dict(unit=unit + '.service', release=str(release))
+        publish('services.json', services)
+        if name == 'coordinator':
+            import socket
+            deadline = time.monotonic() + 15
+            while True:
+                try:
+                    with socket.socket(socket.AF_UNIX) as sock: sock.connect(str(home / 'coordinator.sock'))
+                    break
+                except OSError:
+                    if time.monotonic() > deadline: raise RuntimeError('maintenance coordinator did not become ready')
+                    time.sleep(.05)
+    time.sleep(.2)
+    if fixture:
+        for record in services.values():
+            if start_time(record['pid']) != record['start']: raise RuntimeError('managed process exited during restart')
+    else:
+        for record in services.values(): subprocess.run(['systemctl', '--user', 'is-active', '--quiet', record['unit']], check=True)
+    subprocess.run([str(program), 'doctor', '--json'], env=env, check=True, stdout=sys.stderr)
+    control('unfence')
+except Exception:
+    print('Deploy failed; installation remains fenced. Inspect services.json before recovery.', file=sys.stderr)
+    raise
+# A live guardian's /proc executable is the strongest pin. Retain all release
+# identities recorded in nonterminal home rows too, including uncertain launch.
+pinned = {str(release)}
+if (home / 'sluice.db').exists():
+    with sqlite3.connect('file:' + str(home / 'sluice.db') + '?mode=ro', uri=True) as db:
+        for (release_id,) in db.execute("SELECT release_id FROM runs r JOIN attempts a USING(attempt_id) WHERE a.phase<>'terminal' OR r.finished_at IS NULL"):
+            candidate = prefix / 'releases' / release_id
+            if candidate.is_dir(): pinned.add(str(candidate))
+for proc in pathlib.Path('/proc').iterdir():
+    if not proc.name.isdecimal(): continue
+    try:
+        exe = (proc / 'exe').resolve(strict=True)
+        if exe.is_relative_to(prefix / 'releases'): pinned.add(str(exe.parent.parent))
+    except (OSError, RuntimeError): pass
+releases = sorted((p for p in (prefix / 'releases').iterdir() if p.is_dir() and not p.name.startswith('.')), key=lambda p: p.stat().st_mtime_ns, reverse=True)
+for old in releases[3:]:
+    if str(old) not in pinned: shutil.rmtree(old)
+print('deployed ' + str(release))
+PY

@@ -23,3 +23,4 @@ mod sidecar;
 
 pub mod dispatch_ext;
 pub mod docs;
+pub mod install;

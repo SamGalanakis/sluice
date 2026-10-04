@@ -1,4 +1,5 @@
-//! `sluice doctor` (SPEC §9): host prerequisites and engine diagnostics. The
+//! `sluice doctor` (SPEC §9): host prerequisites, engine diagnostics, and the
+//! installation and pinned release checks, without broker activation. The
 //! report gates `serve`/`loop` on this machine — nothing degrades silently.
 use crate::modes::ModeFuture;
 use serde_json::{Value, json};
@@ -66,9 +67,13 @@ pub fn run(mode: crate::cli::Mode, _home: PathBuf) -> ModeFuture {
         };
         let report = HostCheck::new(tmux_prefix()).run().await;
         let engines = engines();
+        let release = crate::release::doctor()?;
         if json {
             let mut value = serde_json::to_value(&report).map_err(storage)?;
             value["engines"] = Value::Array(engines);
+            for key in ["installation", "manifest", "manifest_ok", "error"] {
+                value[key] = release[key].clone();
+            }
             println!("{}", serde_json::to_string_pretty(&value).map_err(storage)?);
         } else {
             for check in &report.checks {
@@ -87,6 +92,18 @@ pub fn run(mode: crate::cli::Mode, _home: PathBuf) -> ModeFuture {
                 );
             }
             println!(
+                "{} {:<24} {}",
+                if release["manifest_ok"] == true {
+                    "ok "
+                } else {
+                    "FAIL"
+                },
+                "Release",
+                release["error"]["message"]
+                    .as_str()
+                    .unwrap_or("selected release manifest verified"),
+            );
+            println!(
                 "{}",
                 if report.ready {
                     "ready"
@@ -94,6 +111,12 @@ pub fn run(mode: crate::cli::Mode, _home: PathBuf) -> ModeFuture {
                     "not ready — fix the FAIL checks"
                 }
             );
+        }
+        if release["manifest_ok"] == false {
+            return Err(PublicError::Invalid {
+                message: "selected release manifest verification failed".into(),
+                errors: vec![],
+            });
         }
         Ok(())
     })

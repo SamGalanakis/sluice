@@ -145,7 +145,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let direct = request.direct;
         let (accepted, admission) = tokio::sync::oneshot::channel();
         self.spawn(async move {
-            let admitted = writer.write(RetrySafety::NonIdempotent, move |tx| {
+            let admitted = crate::install::admission_write(&writer,RetrySafety::NonIdempotent, move |tx| {
                 guard_admission(tx)?;
                 if let Some(project)=project {messages::resolve_project(tx.sql(),&sluice_model::ids::ProjectSelector::Id(project))?;}
                 let at = timestamp(tx)?;
@@ -205,7 +205,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let writer = self.writer.clone();
 
         self.spawn(async move {
-            let admitted = writer.write(RetrySafety::NonIdempotent, move |tx| {
+            let admitted = crate::install::admission_write(&writer,RetrySafety::NonIdempotent, move |tx| {
                 guard_admission(tx)?;
                 let pending: bool = tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM calls WHERE call_id=?1 AND project_id IS ?2 AND status='pending' AND direct=0)", (call.to_string(), project.map(|p| p.to_string())), |r| r.get(0))?;
                 if !pending { return Ok(None); }
@@ -251,7 +251,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let writer = self.writer.clone();
         let guardian = Arc::clone(&self.guardian);
         self.spawn(async move {
-            let admitted = writer.write(RetrySafety::NonIdempotent, move |tx| {
+            let admitted = crate::install::admission_write(&writer,RetrySafety::NonIdempotent, move |tx| {
                 crate::drain::ensure_admission(tx, &crate::drain::Admission::Capacity { project, resource: resource.clone() })?;
                 let concurrent: bool = tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM attempts WHERE project_id=?1 AND phase<>'terminal' AND json_extract(request,'$.capacity.resource')=?2)", (project.to_string(), &resource), |r| r.get(0))?;
                 if concurrent { return Ok(None); }
@@ -392,7 +392,7 @@ fn admit_tx(
     let hash = InputsHash::of(&inputs)?;
     let frozen = serde_json::json!({"function":function,"inputs":inputs});
     tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'reserved',?3,?4,?5)", (attempt.to_string(), project.map(|p|p.to_string()), frozen.to_string(), hash.to_string(), &at))?;
-    tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,release_id,created_at) VALUES (?1,?2,?3,?4,?5)", (call.to_string(), project.map(|p|p.to_string()), attempt.to_string(), &function.release_id, &at))?;
+    tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,release_id,created_at) VALUES (?1,?2,?3,?4,?5)", (call.to_string(), project.map(|p|p.to_string()), attempt.to_string(), &crate::install::release_id(&function.release_id), &at))?;
     if let Some(job) = function
         .bundle
         .0
@@ -448,7 +448,7 @@ pub async fn claim(
     call: AdmittedCall,
     identity: sluice_store::attempts::GuardianIdentity,
 ) -> Result<bool, PublicError> {
-    writer.write(RetrySafety::Idempotent, move |tx| {
+    crate::install::admission_write(writer, RetrySafety::Idempotent, move |tx| {
         let n = tx.sql().execute("UPDATE attempts SET phase='claimed' WHERE attempt_id=?1 AND project_id IS ?2 AND phase='reserved' AND spawn_attempted=1 AND cancel_requested=0 AND EXISTS(SELECT 1 FROM runs WHERE run_id=?3 AND attempt_id=?1)", (call.attempt.to_string(), call.project.map(|p| p.to_string()), call.call.to_string()))?;
         if n == 0 { return Ok(false); }
         tx.sql().execute("UPDATE runs SET unit_name=?2,boot_id=?3,guardian_pid=?4,guardian_start=?5,cgroup=?6,socket_challenge=?7 WHERE run_id=?1", (call.call.to_string(), identity.unit_name, identity.boot_id, identity.pid, identity.start, identity.cgroup, identity.socket_challenge))?;

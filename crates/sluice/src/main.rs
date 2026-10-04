@@ -5,6 +5,8 @@ use sluice_process::host::{OWNER_HOME, guard_scratch_home};
 use std::{path::PathBuf, process::ExitCode};
 
 fn dispatch() -> Result<(), PublicError> {
+    sluice::install::early_dispatch()?;
+    sluice::release::early_dispatch()?;
     if let Some(result) = modes::import_python_home::early_dispatch() {
         return result;
     }
