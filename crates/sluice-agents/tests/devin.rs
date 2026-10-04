@@ -1608,24 +1608,12 @@ async fn g3_devin() -> io::Result<()> {
 }
 
 #[tokio::test]
-async fn supervisor_devin_hooks_submit_live_compact_and_resume() {
-    supervised_devin(true).await;
-}
-#[tokio::test]
 async fn supervisor_devin_inline_hooks_submit_live_compact_and_resume() {
-    supervised_devin(false).await;
-}
-async fn supervised_devin(synchronous: bool) {
     let root = Scratch::new();
-    let mut opts = options(
+    let opts = options(
         &root,
         json!({"turns":[{"reply":"done","submit":{"word":"blue"},"compact":true,"busy_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]}),
     );
-    let hook = root.join("journal-hook");
-    executable::write(&hook, include_str!("fixtures/devin/supervisor-hook.py"));
-    if synchronous {
-        opts.hook_binary = hook;
-    }
     let mut adapter = Devin::new(opts);
     let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
         .await

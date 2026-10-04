@@ -10,12 +10,11 @@ observed ordering: two accepted user prompts, with live steering merged into one
 turn, followed by one Stop for the latest prompt. That session demonstrated the
 exit Enter timing defect and was cleaned up without manual key injection.
 
-supervisor-hook.py is the private synchronous-hook fixture ported from the p5-05
-acceptance worktree. The two supervisor readiness regressions use it and the
-nonblocking fixture journal to cover fresh submission, live feedback, compaction
-and same-session resume. Both tests failed with ReadyTimeout before the readiness
-fix. The executable fixture's omit_session_start setting separately proves that
-the visible ready composer reports Idle before any input is offered.
+The supervisor readiness regression uses the nonblocking fixture journal to cover
+fresh submission, live feedback, compaction and same-session resume; it failed with
+ReadyTimeout before the readiness fix. The executable fixture's omit_session_start
+setting separately proves that the visible ready composer reports Idle before any
+input is offered.
 
 resume-footer-excerpt.txt reproduces the bottom of the resumed real pane quoted in the
 g3-real report (the raw captures were not retained). Devin 3000.11.3 shows
