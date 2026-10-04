@@ -911,7 +911,12 @@ fn run_query(
         .collect::<Result<_, PublicError>>()?;
     tokio::task::block_in_place(|| sluice_store::query::query(&home, &sql, Some(&params), limit))
 }
+/// An `id:` selector is the id itself and never reads the store: a run's task names its project
+/// that way, so its submit does not depend on this binary reading the home's schema.
 async fn project_id(home: &Path, selector: &ProjectSelector) -> Result<ProjectId, PublicError> {
+    if let ProjectSelector::Id(id) = selector {
+        return Ok(*id);
+    }
     let selector = selector.clone();
     reads(home)?
         .snapshot(move |sql| sluice_store::messages::resolve_project(sql, &selector))

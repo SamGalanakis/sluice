@@ -296,10 +296,7 @@ impl AgentFactory for Factory {
                 .unwrap_or_default(),
             run: invocation.run.to_string(),
             listen: true,
-            header: format!(
-                "Use the pinned callback executable {}. SLUICE_PROJECT_ID and SLUICE_RUN_ID identify this invocation.",
-                std::env::current_exe().map_err(invalid)?.display()
-            ),
+            header: callback_header(&std::env::current_exe().map_err(invalid)?),
             ..Default::default()
         };
         for (name, ty) in crate::python::output_types(&self.context.outputs).map_err(invalid)? {
@@ -794,4 +791,23 @@ impl SupervisorHost for RunHost {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
+}
+
+/// Which `sluice` an agent runs. The installation's launcher on PATH always runs the selected
+/// release, whose schema matches the home's; this run's own binary may be an older release that
+/// cannot read the store after a deploy. Without a launcher on PATH (a checkout), and in test
+/// mode (the launcher would point at the live installation's home), the agent uses this binary.
+fn callback_header(this: &std::path::Path) -> String {
+    let path = std::env::var_os("SLUICE_HOST_PATH").or_else(|| std::env::var_os("PATH"));
+    let launcher = std::env::var_os("SLUICE_TEST").is_none()
+        && path
+            .iter()
+            .flat_map(std::env::split_paths)
+            .any(|dir| dir.join("sluice").is_file());
+    let tool = if launcher {
+        "Run every sluice command as plain `sluice` from PATH, never a path under releases/.".into()
+    } else {
+        format!("Run every sluice command with {}.", this.display())
+    };
+    format!("{tool} SLUICE_PROJECT_ID and SLUICE_RUN_ID identify this invocation.")
 }

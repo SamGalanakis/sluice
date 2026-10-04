@@ -673,6 +673,27 @@ fn a_bare_id_an_id_selector_and_the_name_reach_the_same_project() {
         let message = stderr(&submit)["message"].as_str().unwrap().to_owned();
         assert_eq!(message, "stale submission", "{selector}");
     }
+    // A run's task names its project by id, so its submit never reads the store: a binary
+    // pinned to another schema still reaches the coordinator. A name still needs the store.
+    let mark = |version: i64| {
+        rusqlite::Connection::open(home.path().join("sluice.db"))
+            .unwrap()
+            .execute("UPDATE home_meta SET schema_version=?1", [version])
+            .unwrap();
+    };
+    mark(99);
+    for (selector, refusal) in [
+        (format!("id:{id}"), "stale submission"),
+        ("demo".into(), "unsupported schema version 99; expected 1"),
+    ] {
+        let submit = tool(
+            home.path(),
+            "step_submit",
+            &json!({"project": selector, "step": "work", "run": run, "outputs": {}}).to_string(),
+        );
+        assert_eq!(stderr(&submit)["message"], refusal, "{selector}");
+    }
+    mark(1);
     let posted = tool(
         home.path(),
         "messages",
