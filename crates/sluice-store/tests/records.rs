@@ -474,3 +474,39 @@ async fn filter_values_are_bound_and_literal_thread_names_round_trip() {
     .await;
     assert!(empty.records.is_empty());
 }
+
+#[tokio::test]
+async fn legacy_message_payload_keeps_both_timestamps_in_strict_log_reply() {
+    let (_h, w, r, p, _q) = setup().await;
+    let message = w
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            message_post(tx, post(p, "legacy"), &NoPlanInputs)
+        })
+        .await
+        .unwrap();
+    let id = message.id;
+    let posted_at = message.at.clone();
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute(
+            "UPDATE records SET at='record timestamp', payload=json_set(json_remove(payload,'$.posted_at'),'$.at',?1) WHERE seq=?2",
+            params![posted_at, id.0],
+        )?;
+        tx.changed(Some(p), "log");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let page = read(&r, Some(p), RecordFilter::default()).await;
+    assert_eq!(page.records[0].at, "record timestamp");
+    assert_eq!(
+        page.records[0].event,
+        Event::Message(Box::new(message.clone()))
+    );
+    let wire = serde_json::to_vec(&page).unwrap();
+    let decoded: RecordPage = sluice_model::rpc::decode_json(&wire).unwrap();
+    assert_eq!(decoded, page);
+    let value: serde_json::Value = sluice_model::rpc::decode_json(&wire).unwrap();
+    assert_eq!(value["records"][0]["at"], "record timestamp");
+    assert_eq!(value["records"][0]["posted_at"], message.at);
+    w.shutdown().await.unwrap();
+}

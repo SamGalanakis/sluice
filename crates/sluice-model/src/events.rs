@@ -95,7 +95,11 @@ pub enum Event {
         author: Option<String>,
     },
     #[serde(rename = "message")]
-    Message(Box<Message>),
+    Message(
+        #[serde(with = "message_event")]
+        #[schemars(with = "message_event::Fields")]
+        Box<Message>,
+    ),
     #[serde(rename = "project.pause")]
     ProjectPause {
         paused: bool,
@@ -168,6 +172,45 @@ pub enum Event {
         work: WorkGeneration,
         steps: Vec<UnitStep>,
     },
+}
+
+mod message_event {
+    use super::*;
+
+    // Standalone messages keep `at`; flattened events reserve it for Record.
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(remote = "Message", deny_unknown_fields)]
+    pub(super) struct Fields {
+        id: MessageId,
+        thread: String,
+        from: String,
+        to: Option<String>,
+        title: Option<String>,
+        body: String,
+        needs_reply: bool,
+        reply_to: Option<MessageId>,
+        answer: Option<MessageAnswer>,
+        ui: Option<String>,
+        input: Option<String>,
+        data: Option<JsonValue>,
+        run: Option<RunId>,
+        #[serde(rename = "posted_at", alias = "at")]
+        at: String,
+        claimed_by: Option<RunId>,
+    }
+
+    pub(super) fn serialize<S: serde::Serializer>(
+        message: &Message,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Fields::serialize(message, serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Box<Message>, D::Error> {
+        Fields::deserialize(deserializer).map(Box::new)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
