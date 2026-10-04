@@ -14,34 +14,90 @@ use std::{
     time::Duration,
 };
 use tokio::net::UnixStream;
+/// How long a client waits for the coordinator to answer an ordinary request.
+/// Long polls (`log_wait`, `next`), waiting `fn_call`s and `backup` get their own
+/// wait on top ([`reply_limit`]).
+pub const REPLY_TIMEOUT: Duration = Duration::from_secs(120);
+/// The longest a `backup` may copy the database before its client gives up.
+const BACKUP_SECONDS: u64 = 3600;
 #[derive(Clone)]
 pub struct CoordinatorClient {
     pub path: PathBuf,
+    /// The wait for an ordinary reply; [`REPLY_TIMEOUT`] unless a caller changes it.
+    pub reply_timeout: Duration,
+}
+/// How long a client waits for the reply to `command`: the ordinary limit plus the
+/// time the command itself may legitimately hold the request.
+pub fn reply_limit(base: Duration, command: &CommandRequest) -> Duration {
+    let held = match command {
+        CommandRequest::LogWait(wait) => wait.timeout_seconds,
+        CommandRequest::Next(next) => next.timeout_seconds.saturating_add(next.settle_max_seconds),
+        CommandRequest::FnCall(call) => call
+            .wait_seconds
+            .unwrap_or(if call.direct {
+                crate::calls::MAX_WAIT_SECONDS
+            } else {
+                0
+            })
+            .min(crate::calls::MAX_WAIT_SECONDS),
+        CommandRequest::Backup { .. } => BACKUP_SECONDS,
+        _ => 0,
+    };
+    base.saturating_add(Duration::from_secs(held))
 }
 impl CoordinatorClient {
     pub fn new(home: &Path) -> Self {
         Self {
             path: home.join("coordinator.sock"),
+            reply_timeout: REPLY_TIMEOUT,
         }
+    }
+    /// One request and its reply within `limit`, connect included. A coordinator
+    /// that stays silent (still starting, adopting runs, or wedged) is a clear
+    /// error, never an endless wait.
+    async fn exchange<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        request: &T,
+        limit: Duration,
+    ) -> Result<(UnixStream, R), PublicError> {
+        let exchange = async {
+            let mut stream = UnixStream::connect(&self.path).await.map_err(storage)?;
+            socket::write_frame(&mut stream, request)
+                .await
+                .map_err(storage)?;
+            let reply: R = socket::read_frame(&mut stream).await.map_err(storage)?;
+            Ok((stream, reply))
+        };
+        tokio::time::timeout(limit, exchange)
+            .await
+            .unwrap_or_else(|_| {
+                Err(PublicError::Busy {
+                    message: format!(
+                        "the coordinator at {} did not answer within {} s; it may still be \
+                         starting or adopting runs, and the request may still take effect",
+                        self.path.display(),
+                        limit.as_secs()
+                    ),
+                    retryable: true,
+                })
+            })
     }
     /// The returned connection owns the lease. EOF releases it at the broker.
     pub async fn acquire_scheduler(&self) -> Result<UnixStream, PublicError> {
-        let mut stream = UnixStream::connect(&self.path).await.map_err(storage)?;
         let request_id = RequestId(InvocationId::new().to_string());
-        socket::write_frame(
-            &mut stream,
-            &Request {
-                protocol: PROTOCOL_VERSION,
-                request_id: request_id.clone(),
-                run_capability: None,
-                command: RuntimeCommand::AcquireScheduler {
-                    owner: InvocationId::new().to_string(),
+        let (stream, reply): (_, Reply<CommandReply>) = self
+            .exchange(
+                &Request {
+                    protocol: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    run_capability: None,
+                    command: RuntimeCommand::AcquireScheduler {
+                        owner: InvocationId::new().to_string(),
+                    },
                 },
-            },
-        )
-        .await
-        .map_err(storage)?;
-        let reply: Reply<CommandReply> = socket::read_frame(&mut stream).await.map_err(storage)?;
+                self.reply_timeout,
+            )
+            .await?;
         if reply.request_id != request_id || reply.protocol != PROTOCOL_VERSION {
             return Err(storage("lease reply identity mismatch"));
         }
@@ -57,19 +113,18 @@ fn storage(e: impl std::fmt::Display) -> PublicError {
 impl RuntimeApi for CoordinatorClient {
     async fn command(&self, command: CommandRequest) -> Result<CommandReply, PublicError> {
         let request_id = RequestId(InvocationId::new().to_string());
-        let mut stream = UnixStream::connect(&self.path).await.map_err(storage)?;
-        socket::write_frame(
-            &mut stream,
-            &RpcRequest {
-                protocol: PROTOCOL_VERSION,
-                request_id: request_id.clone(),
-                run_capability: None,
-                command,
-            },
-        )
-        .await
-        .map_err(storage)?;
-        let reply: RpcReply = socket::read_frame(&mut stream).await.map_err(storage)?;
+        let limit = reply_limit(self.reply_timeout, &command);
+        let (_, reply): (_, RpcReply) = self
+            .exchange(
+                &RpcRequest {
+                    protocol: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    run_capability: None,
+                    command,
+                },
+                limit,
+            )
+            .await?;
         if reply.protocol != PROTOCOL_VERSION || reply.request_id != request_id {
             return Err(storage("RPC reply identity mismatch"));
         }
@@ -79,20 +134,18 @@ impl RuntimeApi for CoordinatorClient {
         }
     }
     async fn changes(&self, cursor: ChangeCursor) -> Result<ChangeBatch, PublicError> {
-        let mut stream = UnixStream::connect(&self.path).await.map_err(storage)?;
         let request_id = RequestId(InvocationId::new().to_string());
-        socket::write_frame(
-            &mut stream,
-            &Request {
-                protocol: PROTOCOL_VERSION,
-                request_id: request_id.clone(),
-                run_capability: None,
-                command: RuntimeCommand::Changes(cursor),
-            },
-        )
-        .await
-        .map_err(storage)?;
-        let reply: Reply<ChangeBatch> = socket::read_frame(&mut stream).await.map_err(storage)?;
+        let (_, reply): (_, Reply<ChangeBatch>) = self
+            .exchange(
+                &Request {
+                    protocol: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    run_capability: None,
+                    command: RuntimeCommand::Changes(cursor),
+                },
+                self.reply_timeout,
+            )
+            .await?;
         if reply.protocol != PROTOCOL_VERSION || reply.request_id != request_id {
             return Err(storage("changes reply identity mismatch"));
         }

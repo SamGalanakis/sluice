@@ -115,3 +115,87 @@ async fn undecodable_requests_get_error_replies() {
     stop.cancel();
     server.await.unwrap().unwrap();
 }
+
+/// A coordinator that accepts and never answers (still starting, adopting runs, or
+/// wedged) is a clear retryable error for every client request, never an endless wait.
+#[tokio::test]
+async fn a_silent_coordinator_is_a_bounded_error_not_a_hang() {
+    use sluice_model::{
+        RuntimeApi, commands::CommandRequest, events::ChangeCursor, ids::RecordSeq,
+    };
+    use sluice_runtime::client::CoordinatorClient;
+    let home = home::ScratchHome::new().unwrap();
+    let listener = tokio::net::UnixListener::bind(home.path().join("coordinator.sock")).unwrap();
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            open.push(stream);
+        }
+    });
+    let mut client = CoordinatorClient::new(home.path());
+    client.reply_timeout = Duration::from_millis(200);
+    let silent = |error: PublicError| {
+        assert!(
+            matches!(&error, PublicError::Busy { message, retryable: true } if message.contains("did not answer within")),
+            "{error:?}"
+        );
+    };
+    let began = std::time::Instant::now();
+    silent(
+        client
+            .command(CommandRequest::ProjectsList)
+            .await
+            .unwrap_err(),
+    );
+    silent(
+        client
+            .changes(ChangeCursor {
+                after: RecordSeq(0),
+                projects: vec![],
+            })
+            .await
+            .unwrap_err(),
+    );
+    silent(client.acquire_scheduler().await.unwrap_err());
+    assert!(began.elapsed() < Duration::from_secs(5));
+    held.abort();
+}
+
+#[test]
+fn long_polls_keep_their_own_wait_on_top_of_the_reply_limit() {
+    use sluice_runtime::client::reply_limit;
+    let base = Duration::from_secs(120);
+    let command = |value: Value| serde_json::from_value(value).unwrap();
+    assert_eq!(
+        reply_limit(base, &command(json!({"command":"projects_list"}))),
+        base
+    );
+    assert_eq!(
+        reply_limit(
+            base,
+            &command(
+                json!({"command":"log_wait","args":{"read":{"project":null,"since_seq":null,"kinds":null,"threads":null,"limit":10},"timeout_seconds":300,"questions_only":false}})
+            )
+        ),
+        base + Duration::from_secs(300)
+    );
+    assert_eq!(
+        reply_limit(
+            base,
+            &command(
+                json!({"command":"fn_call","args":{"name":"core.echo","inputs":{},"project":null,"wait_seconds":null,"direct":true,"author":null}})
+            )
+        ),
+        base + Duration::from_secs(sluice_runtime::calls::MAX_WAIT_SECONDS)
+    );
+    assert_eq!(
+        reply_limit(
+            base,
+            &command(
+                json!({"command":"fn_call","args":{"name":"core.echo","inputs":{},"project":null,"wait_seconds":7,"direct":false,"author":null}})
+            )
+        ),
+        base + Duration::from_secs(7)
+    );
+}
