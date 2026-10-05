@@ -164,10 +164,18 @@ pub async fn context(
     let signatures = catalog(&registry);
     let step_id = step.clone();
     let home_dir = home.to_path_buf();
-    reads
+    let (mut context, note) = reads
         .snapshot(move |sql| build(sql, &home_dir, project, &signatures, &step_id, run))
         .await
-        .map_err(|e| e.into_public(true))
+        .map_err(|e| e.into_public(true))?;
+    // The work tree needs git, outside the read snapshot; git absent or slow only says so.
+    if let Some(mut note) = note {
+        note.worktree = sluice_agents::git::worktree_of(context["inputs"]["cwd"].as_str()).await;
+        let mut value = serde_json::to_value(&note).map_err(storage)?;
+        value["note"] = json!(note.text());
+        context["attempt"] = value;
+    }
+    Ok(context)
 }
 
 fn build(
@@ -177,7 +185,7 @@ fn build(
     signatures: &Catalog,
     step: &StepId,
     run: Option<RunId>,
-) -> Result<Value, sluice_store::StoreError> {
+) -> Result<(Value, Option<sluice_model::attempt::AttemptNote>), sluice_store::StoreError> {
     let plan = plan_at(sql, project, signatures).map_err(sluice_store::StoreError::from)?;
     let state = plans::read_state(sql, project)?;
     let name: String = sql.query_row(
@@ -391,7 +399,20 @@ fn build(
     if !leases.is_empty() {
         context["leases"] = json!(leases);
     }
-    Ok(context)
+    if let Some(finishing) = sluice_store::attempts::finishing(sql, project)?.remove(step) {
+        context["finishing"] = serde_json::to_value(finishing).map_err(storage_error)?;
+    }
+    // Which attempt this is and how the one before it ended (a scattered step's runs each
+    // have their own).
+    let note = if declaration.scatter.is_none() {
+        let current = reported.filter(|_| status == StepStatus::Running);
+        Some(sluice_store::attempts::attempt_note(
+            sql, project, step, current,
+        )?)
+    } else {
+        None
+    };
+    Ok((context, note))
 }
 
 fn storage_error(e: serde_json::Error) -> sluice_store::StoreError {
@@ -528,6 +549,14 @@ pub fn render(context: &Value) -> String {
         head.push_str(&format!(" · run {run}"));
     }
     let mut lines = vec![head];
+    if let Some(finishing) = context["finishing"].as_object() {
+        lines.push(format!(
+            "finishing: submitted {} (seq {}), release {}",
+            finishing["since"].as_str().unwrap_or("?"),
+            finishing["submission_seq"],
+            finishing["release"].as_str().unwrap_or("?"),
+        ));
+    }
     if let Some(queued) = context["queued"].as_str() {
         lines.push(queued.to_string());
     }
@@ -636,6 +665,10 @@ pub fn render(context: &Value) -> String {
         context["thread"].as_str().unwrap_or("?"),
         context["ask"].as_str().unwrap_or("?"),
     ));
+    if let Some(note) = context["attempt"]["note"].as_str() {
+        lines.push(String::new());
+        lines.push(note.to_owned());
+    }
     lines.join("\n")
 }
 fn compact(value: &Value) -> String {

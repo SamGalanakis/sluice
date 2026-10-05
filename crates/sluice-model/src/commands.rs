@@ -303,6 +303,19 @@ pub struct StepSubmit {
     pub author: Option<String>,
 }
 
+/// Settle a running step whose run has submitted (it is finishing) on that submission: its
+/// agent is stopped as a cancel stops it, and the step succeeds with the outputs the done
+/// signal would have given it. Only a bare agent fn's step; anything else is refused.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepSettle {
+    pub project: ProjectSelector,
+    pub step: StepId,
+    #[serde(default)]
+    pub reason: String,
+    pub author: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MessageAnswer {
@@ -946,6 +959,7 @@ pub enum CommandRequest {
     StepRetry(StepRetry),
     StepCancel(StepCancel),
     StepSubmit(StepSubmit),
+    StepSettle(StepSettle),
     Ask(Ask),
     Say(Say),
     Reply(Reply),

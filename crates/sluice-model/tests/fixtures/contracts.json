@@ -779,6 +779,26 @@
       "author": "fixture"
     }
   ],
+  "StepSettle": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "reason": "",
+      "author": null
+    },
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "step": "work-1",
+      "reason": "its release predates the done signal",
+      "author": "fixture"
+    }
+  ],
   "MessageAnswer": [
     {
       "action": "fixture",
@@ -2519,6 +2539,18 @@
       }
     },
     {
+      "command": "step_settle",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "step": "work-1",
+        "reason": "fixture",
+        "author": null
+      }
+    },
+    {
       "command": "ask",
       "args": {
         "project": {
@@ -3525,6 +3557,13 @@
         "model": "sol"
       },
       "author": null
+    },
+    {
+      "kind": "step.settle",
+      "step": "work-1",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "author": "fixture",
+      "reason": "fixture"
     },
     {
       "kind": "step.status",

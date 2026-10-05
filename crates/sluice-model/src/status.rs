@@ -29,6 +29,16 @@ pub struct StepFacts {
     pub running_for: Option<i64>,
     /// Seconds since its last change (status record, run start or finish).
     pub changed_ago: Option<i64>,
+    /// A running step whose run has submitted: it is only finishing.
+    pub finishing: Option<crate::attempt::Finishing>,
+}
+
+/// A unit row's finishing step (SPEC §12.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FinishingStep {
+    pub step: String,
+    #[serde(flatten)]
+    pub finishing: crate::attempt::Finishing,
 }
 
 /// The last message on a step's thread (`step-<id>`).
@@ -49,6 +59,9 @@ pub struct UnitRow {
     pub blocked: String,
     pub last: String,
     pub line: String,
+    /// Its running steps that have submitted and are only finishing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub finishing: Vec<FinishingStep>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -375,13 +388,31 @@ pub fn line(row: &UnitRow) -> String {
     } else {
         format!("\"{}\"", row.last)
     };
-    let tail = [row.blocked.as_str(), last.as_str()]
+    let finishing = if row.finishing.is_empty() {
+        String::new()
+    } else {
+        let prefix = format!("{}-", row.unit);
+        format!(
+            "finishing {}",
+            row.finishing
+                .iter()
+                .map(|f| f.step.strip_prefix(&prefix).unwrap_or(&f.step))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
+    let note = if row.blocked.is_empty() {
+        finishing.as_str()
+    } else {
+        row.blocked.as_str()
+    };
+    let tail = [note, last.as_str()]
         .into_iter()
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("  ");
-    let keep = if !row.blocked.is_empty() {
-        len(&row.blocked) + 2
+    let keep = if !note.is_empty() {
+        len(note) + 2
     } else if !last.is_empty() {
         (len(&last) + 2).min(16)
     } else {
@@ -501,6 +532,8 @@ pub fn units_view(
                     '‖'
                 } else if *status == StepStatus::Pending && fact(id).queued.is_some() {
                     '≡'
+                } else if *status == StepStatus::Running && fact(id).finishing.is_some() {
+                    '▷'
                 } else {
                     step_mark(status)
                 };
@@ -524,6 +557,18 @@ pub fn units_view(
                 cut(&format!("{q}{body}"), LAST)
             })
             .unwrap_or_default();
+        let finishing = unit
+            .steps
+            .iter()
+            .zip(&statuses)
+            .filter(|(_, s)| **s == StepStatus::Running)
+            .filter_map(|(id, _)| {
+                fact(id).finishing.clone().map(|finishing| FinishingStep {
+                    step: id.to_string(),
+                    finishing,
+                })
+            })
+            .collect();
         let mut row = UnitRow {
             unit: name.to_string(),
             state: unit_state,
@@ -533,6 +578,7 @@ pub fn units_view(
             blocked,
             last,
             line: String::new(),
+            finishing,
         };
         row.line = line(&row);
         view.rows.push(row);
@@ -560,6 +606,7 @@ mod tests {
             blocked: String::new(),
             last: String::new(),
             line: String::new(),
+            finishing: vec![],
         }
     }
 
@@ -608,6 +655,29 @@ mod tests {
         assert_eq!(
             text,
             "fig-4202    ‖   –  devin  fo· wo· la· cl· rm·  after fig-4200-work (failed)"
+        );
+    }
+
+    #[test]
+    fn a_finishing_step_is_named_in_the_line() {
+        let mut r = row(
+            "fig-4203",
+            UnitState::Running,
+            Some(3 * 60),
+            "codex",
+            "fork✓ work▷ landed·",
+        );
+        r.finishing = vec![FinishingStep {
+            step: "fig-4203-work".into(),
+            finishing: crate::attempt::Finishing {
+                since: "2026-10-05T10:00:00Z".into(),
+                submission_seq: Some(42),
+                release: "0123456789ab".into(),
+            },
+        }];
+        assert_eq!(
+            line(&r),
+            "fig-4203    ▶  3m  codex  fork✓ work▷ landed·  finishing work"
         );
     }
 }

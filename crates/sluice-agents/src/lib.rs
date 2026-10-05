@@ -159,26 +159,109 @@ impl<F: AgentFactory> AgentFnHost<F> {
             .map_err(|e| bad(e.to_string()))?
             .submissions;
         let mut outputs = request.outputs(result, &fields)?;
-        if matches!(request.name.as_str(), "agent.codex" | "agent.devin") {
-            let source = run_dir.join(format!("{}.log", request.engine));
-            let path = match invocation.inputs.0.get("log").map(JsonValue::as_value) {
-                Some(Value::String(path)) if !path.is_empty() => {
-                    let path = PathBuf::from(path);
-                    std::fs::copy(&source, &path)
-                        .map_err(|e| bad(format!("copy engine log: {e}")))?;
-                    path
-                }
-                None | Some(Value::Null) | Some(Value::String(_)) => source,
-                _ => return Err(bad("log must be a string")),
-            };
-            outputs.0.insert(
-                "log".into(),
-                JsonValue::try_from(Value::String(path.to_string_lossy().into_owned()))
-                    .map_err(|e| bad(e.to_string()))?,
-            );
-        }
+        engine_log(&request, &run_dir, &invocation.inputs, &mut outputs)?;
         Ok(outputs)
     }
+}
+/// `agent.codex` and `agent.devin` return their engine log: copied to the `log` input's path
+/// when one is given, else the run's own.
+fn engine_log(
+    request: &AgentBuiltinRequest,
+    run_dir: &std::path::Path,
+    inputs: &JsonMap,
+    outputs: &mut JsonMap,
+) -> Result<(), AgentFailure> {
+    if !matches!(request.name.as_str(), "agent.codex" | "agent.devin") {
+        return Ok(());
+    }
+    let source = run_dir.join(format!("{}.log", request.engine));
+    let path = match inputs.0.get("log").map(JsonValue::as_value) {
+        Some(Value::String(path)) if !path.is_empty() => {
+            let path = PathBuf::from(path);
+            std::fs::copy(&source, &path).map_err(|e| bad(format!("copy engine log: {e}")))?;
+            path
+        }
+        None | Some(Value::Null) | Some(Value::String(_)) => source,
+        _ => return Err(bad("log must be a string")),
+    };
+    outputs.0.insert(
+        "log".into(),
+        JsonValue::try_from(Value::String(path.to_string_lossy().into_owned()))
+            .map_err(|e| bad(e.to_string()))?,
+    );
+    Ok(())
+}
+
+/// The outputs the done signal gives a bare agent fn's run (`name`, frozen `inputs`) that has
+/// submitted `submission`, derived after the fact for `step_settle`: the session, last
+/// message and git baseline its supervisor checkpointed in `run_dir` (`native.json`, read by
+/// field so an older release's checkpoint reads too), the git facts of its `cwd` now, and the
+/// model its `model` input composes. An `Err` says why they cannot be derived.
+pub async fn settled_outputs(
+    name: &str,
+    inputs: &JsonMap,
+    run_dir: &std::path::Path,
+    submission: &BTreeMap<String, Value>,
+) -> Result<JsonMap, String> {
+    if !AGENT_BUILTINS.contains(&name) {
+        return Err(format!("{name} is not an agent fn"));
+    }
+    // A run launched before the model object took the retired string form; its frozen
+    // result has no `model` output, so the request is built without it.
+    let request = match AgentBuiltinRequest::build(name, inputs, &prompt::PromptContext::default())
+    {
+        Ok(request) => request,
+        Err(first) => {
+            let mut bare = inputs.clone();
+            bare.0.shift_remove("model");
+            bare.0.shift_remove("effort");
+            let mut request =
+                AgentBuiltinRequest::build(name, &bare, &prompt::PromptContext::default())
+                    .map_err(|_| first.message.clone())?;
+            request.model = None;
+            request
+        }
+    };
+    let checkpoint: Value = match std::fs::read(run_dir.join("native.json")) {
+        Ok(bytes) => decode_json::<JsonValue>(&bytes)
+            .map_err(|e| format!("its supervisor's checkpoint does not read: {e}"))?
+            .into_value(),
+        Err(e) => {
+            return Err(format!(
+                "its supervisor left no checkpoint in {} ({e})",
+                run_dir.display()
+            ));
+        }
+    };
+    let session = checkpoint["session"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or("its supervisor recorded no session")?
+        .to_owned();
+    let final_text = checkpoint["final_text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let git = git::facts(&request.cwd, checkpoint["head_before"].as_str())
+        .await
+        .map_err(|e| format!("git facts of {}: {e}", request.cwd.display()))?;
+    let model = request
+        .model
+        .clone()
+        .or_else(|| model::default_for(&request.engine))
+        .and_then(|choice| model::compose(&request.engine, &choice).ok())
+        .map(|resolved| resolved.id);
+    let result = AgentResult {
+        final_text,
+        report: None,
+        session,
+        git,
+        notes: vec![],
+        model,
+    };
+    let mut outputs = request.outputs(result, submission).map_err(|e| e.message)?;
+    engine_log(&request, run_dir, inputs, &mut outputs).map_err(|e| e.message)?;
+    Ok(outputs)
 }
 impl<F: AgentFactory> FnHost for AgentFnHost<F> {
     async fn invoke(&self, invocation: FnInvocation) -> Result<JsonMap, PublicError> {

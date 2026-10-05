@@ -8,6 +8,10 @@ use crate::{
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use sluice_model::{
+    attempt::{
+        AttemptNote, Ended, Finishing, GitSeen, PreviousAttempt, VALUE_CUT, cut_strings,
+        short_release,
+    },
     commands::{
         CompletionActionConflict, CompletionActionOutcome, CompletionActionTarget,
         RegisterCompletionAction, StepStatus, StepSubmit,
@@ -901,6 +905,19 @@ pub fn complete_frozen(
         return Err(plans::conflict("completion submission version changed"));
     }
     let mut outputs = request.outputs;
+    let mut kind = request.kind;
+    // A run settled on its submission (step_settle) succeeds with the outputs recorded then,
+    // unless it finished by itself first; its stop is not a cancel.
+    let settle = frozen
+        .get("settle")
+        .filter(|v| v.is_object() && submission.is_some());
+    if let Some(settle) = settle
+        && !matches!(kind, CompletionKind::Succeeded)
+    {
+        outputs = serde_json::from_value(settle["outputs"].clone())?;
+        kind = CompletionKind::Succeeded;
+    }
+    let cancelled = cancelled && settle.is_none();
     let submitted = submission.is_some();
     if let Some((_, submitted)) = submission {
         let submitted: JsonMap = serde_json::from_str(&submitted)?;
@@ -914,7 +931,7 @@ pub fn complete_frozen(
             message: "cancel requested".into(),
         })
     } else {
-        match &request.kind {
+        match &kind {
             CompletionKind::Succeeded => None,
             CompletionKind::Rejected { message } => Some(PublicError::FnFailure {
                 message: message.clone(),
@@ -996,7 +1013,7 @@ pub fn complete_frozen(
         }
     }
     let validation = check_schema(&schema, &outputs);
-    let rejected = !cancelled && matches!(request.kind, CompletionKind::Rejected { .. });
+    let rejected = !cancelled && matches!(kind, CompletionKind::Rejected { .. });
     if error.is_none()
         && let Err(validation) = validation
     {
@@ -1250,4 +1267,363 @@ pub fn lost(
         hooks,
     )?;
     Ok(result)
+}
+
+/// Each running step of the project whose current runs have all stored a valid submission
+/// (SPEC §6.4): its agent's work is done and it is only finishing. `since` is the latest
+/// submission, `release` the run that made it.
+pub fn finishing(
+    sql: &rusqlite::Connection,
+    project: ProjectId,
+) -> Result<std::collections::BTreeMap<StepId, Finishing>> {
+    let mut q = sql.prepare_cached(
+        "SELECT s.step_id,r.release_id,m.at,(SELECT max(seq) FROM records WHERE run_id=r.run_id AND kind='step.submit')
+         FROM steps s JOIN json_each(s.run_ids) j JOIN runs r ON r.run_id=j.value LEFT JOIN submissions m ON m.run_id=r.run_id
+         WHERE s.project_id=?1 AND s.status='running' ORDER BY s.step_id,m.at",
+    )?;
+    let rows = q
+        .query_map([project.to_string()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut out: std::collections::BTreeMap<StepId, Option<Finishing>> = Default::default();
+    for (step, release, at, seq) in rows {
+        let step: StepId = step
+            .parse()
+            .map_err(|e| StoreError::InvalidDatabase(format!("{e}")))?;
+        let entry = out.entry(step).or_insert_with(|| {
+            Some(Finishing {
+                since: String::new(),
+                submission_seq: None,
+                release: String::new(),
+            })
+        });
+        match (entry.as_mut(), at) {
+            (Some(finishing), Some(at)) => {
+                finishing.since = at;
+                finishing.submission_seq = seq;
+                finishing.release = short_release(release.as_deref().unwrap_or_default());
+            }
+            _ => *entry = None,
+        }
+    }
+    Ok(out
+        .into_iter()
+        .filter_map(|(step, finishing)| finishing.map(|f| (step, f)))
+        .collect())
+}
+
+/// A call's run that has submitted and is not finished: the call is only finishing.
+pub fn call_finishing(sql: &rusqlite::Connection, call: RunId) -> Result<Option<Finishing>> {
+    Ok(sql
+        .query_row(
+            "SELECT r.release_id,m.at,(SELECT max(seq) FROM records WHERE run_id=r.run_id AND kind='step.submit')
+             FROM runs r JOIN submissions m ON m.run_id=r.run_id WHERE r.run_id=?1 AND r.finished_at IS NULL",
+            [call.to_string()],
+            |r| {
+                Ok(Finishing {
+                    release: short_release(r.get::<_, Option<String>>(0)?.as_deref().unwrap_or_default()),
+                    since: r.get(1)?,
+                    submission_seq: r.get(2)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Which attempt at `step` this is and how the one before it ended (SPEC §7.4): for
+/// `current`, the run its `prev_run` names; without it, the latest finished run of the step's
+/// generation, which its next attempt would follow. The work tree is the caller's: it needs
+/// git.
+pub fn attempt_note(
+    sql: &rusqlite::Connection,
+    project: ProjectId,
+    step: &StepId,
+    current: Option<RunId>,
+) -> Result<AttemptNote> {
+    let (previous, attempt) = match current {
+        Some(run) => {
+            let row: Option<(Option<String>, i64, i64, String)> = sql
+                .query_row(
+                    "SELECT prev_run,generation,item_index,created_at FROM runs WHERE run_id=?1 AND project_id=?2 AND step_id=?3",
+                    params![run.to_string(), project.to_string(), step.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .optional()?;
+            let Some((prev, generation, item, created)) = row else {
+                return Ok(AttemptNote {
+                    number: 1,
+                    previous: None,
+                    worktree: None,
+                });
+            };
+            let earlier: i64 = sql.query_row(
+                "SELECT count(*) FROM runs WHERE project_id=?1 AND step_id=?2 AND generation=?3 AND item_index=?4
+                 AND (created_at<?5 OR (created_at=?5 AND run_id<?6))",
+                params![project.to_string(), step.as_str(), generation, item, created, run.to_string()],
+                |r| r.get(0),
+            )?;
+            (prev, earlier + 1)
+        }
+        None => {
+            let generation: Option<i64> = sql
+                .query_row(
+                    "SELECT generation FROM steps WHERE project_id=?1 AND step_id=?2",
+                    params![project.to_string(), step.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(generation) = generation else {
+                return Ok(AttemptNote {
+                    number: 1,
+                    previous: None,
+                    worktree: None,
+                });
+            };
+            let latest: Option<String> = sql
+                .query_row(
+                    "SELECT r.run_id FROM runs r JOIN attempts a USING(attempt_id)
+                     WHERE r.project_id=?1 AND r.step_id=?2 AND r.generation=?3 AND r.item_index=-1 AND a.phase='terminal'
+                     ORDER BY r.created_at DESC,r.run_id DESC LIMIT 1",
+                    params![project.to_string(), step.as_str(), generation],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let count: i64 = sql.query_row(
+                "SELECT count(*) FROM runs WHERE project_id=?1 AND step_id=?2 AND generation=?3 AND item_index=-1",
+                params![project.to_string(), step.as_str(), generation],
+                |r| r.get(0),
+            )?;
+            (latest, count + 1)
+        }
+    };
+    let previous = previous
+        .map(|run| previous_attempt(sql, project, step, &run))
+        .transpose()?
+        .flatten();
+    Ok(AttemptNote {
+        number: attempt as u64,
+        previous,
+        worktree: None,
+    })
+}
+
+fn previous_attempt(
+    sql: &rusqlite::Connection,
+    project: ProjectId,
+    step: &StepId,
+    run: &str,
+) -> Result<Option<PreviousAttempt>> {
+    type Row = (
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let row: Option<Row> = sql
+        .query_row(
+            "SELECT r.started_at,r.created_at,r.finished_at,r.result,json_extract(a.request,'$.settle')
+             FROM runs r JOIN attempts a USING(attempt_id) WHERE r.run_id=?1 AND r.project_id=?2",
+            params![run, project.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let Some((started, created, finished, result, settle)) = row else {
+        return Ok(None);
+    };
+    let result: Option<Value> = result.map(|r| serde_json::from_str(&r)).transpose()?;
+    let settle: Option<Value> = settle.map(|s| serde_json::from_str(&s)).transpose()?;
+    let error = result
+        .as_ref()
+        .map(|r| r["error"].clone())
+        .filter(|e| e.is_object());
+    let kind = error
+        .as_ref()
+        .and_then(|e| e["error"].as_str())
+        .unwrap_or_default();
+    let status = result
+        .as_ref()
+        .and_then(|r| r["status"].as_str())
+        .unwrap_or_default();
+    let ended = match (status, kind) {
+        ("succeeded", _) if settle.is_some() => Ended::Settled,
+        ("succeeded", _) => Ended::Succeeded,
+        (_, "cancelled") => Ended::Cancelled,
+        (_, "process_lost") => Ended::Lost,
+        ("failed", _) => Ended::Failed,
+        _ => Ended::Unknown,
+    };
+    let (mut by, mut reason) = (None, None);
+    if let Some(settle) = &settle
+        && ended == Ended::Settled
+    {
+        by = settle["author"].as_str().map(str::to_owned);
+        reason = settle["reason"].as_str().map(str::to_owned);
+    }
+    if ended == Ended::Cancelled {
+        // The log may have trimmed it; then who cancelled is unknown.
+        let cancel: Option<String> = sql
+            .query_row(
+                "SELECT payload FROM records WHERE project_id=?1 AND step_id=?2 AND kind='step.cancel'
+                 AND julianday(at)>=julianday(?3) AND julianday(at)<=julianday(coalesce(?4,'now')) ORDER BY seq DESC LIMIT 1",
+                params![project.to_string(), step.as_str(), created, finished],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(cancel) = cancel {
+            let cancel: Value = serde_json::from_str(&cancel)?;
+            by = cancel["author"]
+                .as_str()
+                .filter(|a| !a.is_empty())
+                .map(str::to_owned);
+            reason = cancel["reason"].as_str().map(str::to_owned);
+        }
+    }
+    let submitted: Option<String> = sql
+        .query_row(
+            "SELECT outputs FROM submissions WHERE run_id=?1",
+            [run],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let submitted: Option<Value> = submitted.map(|s| serde_json::from_str(&s)).transpose()?;
+    let outputs = result
+        .as_ref()
+        .and_then(|r| r["outputs"].as_object().cloned())
+        .unwrap_or_default();
+    let git = outputs.get("git").and_then(GitSeen::from_output);
+    let shown: serde_json::Map<String, Value> = outputs
+        .into_iter()
+        .filter(|(name, value)| name != "git" && !value.is_null())
+        .collect();
+    Ok(Some(PreviousAttempt {
+        run: run.to_owned(),
+        started,
+        finished,
+        ended,
+        error: error.map(|e| cut_strings(&e, VALUE_CUT)),
+        by,
+        reason,
+        outputs: (submitted.is_none() && !shown.is_empty())
+            .then(|| cut_strings(&Value::Object(shown), VALUE_CUT)),
+        submitted: submitted.map(|s| cut_strings(&s, VALUE_CUT)),
+        git,
+    }))
+}
+
+/// `step_settle` (SPEC §7.5): the step's one current run is finishing on a valid submission;
+/// record the outputs the done signal would have given it and ask its guardian to stop the
+/// payload, as a cancel does. Its completion then settles the step with them (see
+/// `complete_frozen`). `outputs` were derived and checked against the frozen schema by the
+/// caller. Refused (`conflict`) when the run moved on or is no longer finishing.
+pub fn settle(
+    tx: &mut WriteTransaction<'_>,
+    id: &AttemptIdentity,
+    outputs: &JsonMap,
+    author: String,
+    reason: String,
+) -> Result<()> {
+    if current_callback(tx, id)?.is_none_or(|phase| phase == "terminal") {
+        return Err(plans::conflict(format!(
+            "run {} of step {} is no longer the step's current run",
+            id.run, id.step
+        )));
+    }
+    let (cancel, settled, submitted, runs): (bool, bool, bool, String) = tx.sql().query_row(
+        "SELECT a.cancel_requested,json_type(a.request,'$.settle') IS NOT NULL,EXISTS(SELECT 1 FROM submissions WHERE run_id=?2),
+         (SELECT run_ids FROM steps WHERE project_id=?3 AND step_id=?4)
+         FROM attempts a WHERE a.attempt_id=?1",
+        params![id.attempt.to_string(), id.run.to_string(), id.project.to_string(), id.step.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    if settled {
+        return Err(plans::conflict(format!(
+            "step {} is already being settled on its submission",
+            id.step
+        )));
+    }
+    if cancel {
+        return Err(plans::conflict(format!(
+            "step {} is being cancelled; retry it once it has failed",
+            id.step
+        )));
+    }
+    if !submitted || serde_json::from_str::<Vec<RunId>>(&runs)? != [id.run] {
+        return Err(plans::conflict(format!(
+            "step {} is no longer finishing on run {}",
+            id.step, id.run
+        )));
+    }
+    let at = plans::now()?;
+    tx.sql().execute(
+        "UPDATE attempts SET cancel_requested=1,request=json_set(request,'$.settle',json(?2)) WHERE attempt_id=?1",
+        params![
+            id.attempt.to_string(),
+            json!({"outputs":outputs,"author":author,"reason":reason,"at":at}).to_string()
+        ],
+    )?;
+    tx.append_record(
+        Some(id.project),
+        Event::StepSettle {
+            step: id.step.clone(),
+            run: id.run,
+            author,
+            reason,
+        },
+    )?;
+    tx.changed(Some(id.project), "status");
+    Ok(())
+}
+
+/// The identity of `step`'s one current, unfinished run and its frozen request, for
+/// `step_settle`; None when the step does not have exactly one.
+pub fn current_run(
+    sql: &rusqlite::Connection,
+    project: ProjectId,
+    step: &StepId,
+) -> Result<Option<(AttemptIdentity, Value)>> {
+    let row: Option<(String, String, i64, i64, String)> = sql
+        .query_row(
+            "SELECT r.run_id,r.attempt_id,r.generation,r.work_generation,a.request
+             FROM steps s JOIN runs r ON r.project_id=s.project_id AND r.step_id=s.step_id AND r.generation=s.generation
+               AND r.work_generation=s.work_generation AND r.run_id=json_extract(s.run_ids,'$[0]')
+             JOIN attempts a ON a.attempt_id=r.attempt_id
+             WHERE s.project_id=?1 AND s.step_id=?2 AND s.status='running' AND json_array_length(s.run_ids)=1
+               AND r.finished_at IS NULL AND a.phase<>'terminal'",
+            params![project.to_string(), step.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let Some((run, attempt, generation, work, request)) = row else {
+        return Ok(None);
+    };
+    let parse = |e: String| StoreError::InvalidDatabase(e);
+    Ok(Some((
+        identity_from_row(
+            project,
+            step.clone(),
+            attempt.parse().map_err(|e| parse(format!("{e}")))?,
+            run.parse().map_err(|e| parse(format!("{e}")))?,
+            generation,
+            work,
+        ),
+        serde_json::from_str(&request)?,
+    )))
+}
+
+/// Check `outputs` against a run's frozen result schema (its fn's outputs and the step's
+/// declared ones), as its completion will.
+pub fn check_frozen_outputs(frozen: &Value, outputs: &JsonMap) -> Result<()> {
+    let mut schema = frozen["returns"].clone();
+    if let (Some(schema), Some(declared)) = (schema.as_object_mut(), frozen["declared"].as_object())
+    {
+        schema.extend(declared.clone());
+    }
+    check_schema(&schema, outputs)
 }

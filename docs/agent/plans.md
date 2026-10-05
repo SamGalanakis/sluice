@@ -89,8 +89,26 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   the agent fns) and the submitted ones, so its dependents start right away. There is no
   second submission (`conflict`); to send the step more work, `step_retry` it with a message,
   which reopens it as a new run.
+- Until its run ends, a step that has submitted is **finishing**: `status`, `step_context` and
+  `call_status` show `finishing: {since, submission_seq, release}` (when it submitted, its
+  `step.submit` record, the run's pinned release); the units view marks it `▷` and its line
+  says `finishing <step>`. Messages to it, a second submission and `step_set_output` are
+  refused meanwhile. A run pinned to a release from before the done signal does not stop its
+  agent on submit: it waits until the agent has been idle through its grace. Settle such a
+  run on its submission with `step_settle(project, step, reason)`: the runner stops the agent
+  and the step succeeds with the submission plus the agent fn's own outputs (`session`,
+  `final`, `model`, `git`), exactly as the done signal would have. Only a step that runs an
+  agent fn itself; a fn that composes an agent returns its own outputs, so for it (and
+  whenever `step_settle` cannot derive them) `step_cancel` the step and `step_set_output`
+  what it should have.
 - A run that ends without a valid submission (its agent exited, or stopped after its
   nudges) fails the step with `exited_without_submit`, carrying the agent's `session`.
+- Each agent's task starts with `## Previous attempt`: "None: this is the first attempt at
+  this step.", or which attempt it is, how the one before ended (failed with its error,
+  cancelled by whom and why, settled), what it submitted (or output), the git head it left and
+  whether it left changes, and the `git status` of its `cwd` now (count and up to 20 paths).
+  `step_context` (`sluice me`) carries the same as `attempt: {number, previous?, worktree?,
+  note}`. Look at what an earlier attempt left before redoing or undoing it.
 - Every agent function takes `session` and returns `session`: bind a later step's `session` to
   an earlier step's `session` output to continue that same agent (or `fn_call` it with the
   session to follow up by hand). An unbound `session` may still resume the previous attempt's
@@ -373,6 +391,8 @@ a reason (a step already paused keeps its own); `status` shows it as `paused` an
 A plan may also set `"paused": "<reason>"` on a step directly. `project_update(project, paused=true)` holds the whole project.
 `step_cancel(project, steps=[...], reason=...)` stops running steps; each fails with the error
 `{"error": "cancelled", "message": <reason>}` and `step_retry` runs it again.
+`step_settle(project, step, reason)` stops a finishing step's agent instead and succeeds it on
+its submission (agent steps, above).
 
 ## Resources: limiting what runs at once
 Every ready step starts at once, unless it asks for a project's **resources**. Declare them on

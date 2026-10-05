@@ -56,6 +56,13 @@ pub enum Event {
         outputs: JsonMap,
         author: Option<String>,
     },
+    #[serde(rename = "step.settle")]
+    StepSettle {
+        step: StepId,
+        run: RunId,
+        author: String,
+        reason: String,
+    },
     #[serde(rename = "step.status")]
     StepStatus {
         step: StepId,

@@ -63,6 +63,9 @@ pub struct CallStatus {
     pub outputs: Option<JsonMap>,
     pub error: Option<PublicError>,
     pub direct: bool,
+    /// Its run has submitted and is only finishing (SPEC §6.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finishing: Option<sluice_model::attempt::Finishing>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdmittedCall {
@@ -518,7 +521,7 @@ pub async fn call_status(
         let mut stmt=sql.prepare("SELECT status,inputs,outputs,error,direct FROM calls WHERE call_id=?1 AND project_id IS ?2")?;
         let mut rows=stmt.query((call.to_string(),project.map(|p|p.to_string())))?;
         let r=rows.next()?.ok_or_else(||PublicError::NotFound{message:format!("no call {call} in this scope")})?;
-        Ok(CallStatus{call,project_id:project,status:serde_json::from_value(serde_json::Value::String(r.get(0)?))?,inputs:serde_json::from_str(&r.get::<_,String>(1)?)?,outputs:r.get::<_,Option<String>>(2)?.map(|s|serde_json::from_str(&s)).transpose()?,error:r.get::<_,Option<String>>(3)?.map(|s|serde_json::from_str(&s)).transpose()?,direct:r.get(4)?})
+        Ok(CallStatus{call,project_id:project,status:serde_json::from_value(serde_json::Value::String(r.get(0)?))?,inputs:serde_json::from_str(&r.get::<_,String>(1)?)?,outputs:r.get::<_,Option<String>>(2)?.map(|s|serde_json::from_str(&s)).transpose()?,error:r.get::<_,Option<String>>(3)?.map(|s|serde_json::from_str(&s)).transpose()?,direct:r.get(4)?,finishing:sluice_store::attempts::call_finishing(sql,call)?})
     }).await.map_err(public)
 }
 /// Explicit 30-day terminal-row cleanup. Feed retention cannot delete calls.

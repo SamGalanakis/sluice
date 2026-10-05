@@ -1657,3 +1657,59 @@ fn step_wait_and_the_log_filters_take_flags_strings_and_run_defaults() {
     );
     assert_eq!(stderr(&out)["error"], "invalid");
 }
+
+/// step_settle gets the schema-driven treatment: --help from its schema, flags, and the
+/// nearest tool or field for a typo.
+#[test]
+fn step_settle_takes_flags_help_and_suggestions() {
+    let home = ScratchHome::new().unwrap();
+    let home = home.path();
+    let help = tool_with(home, &["step_settle", "--help"], &[], None);
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    assert!(
+        help.starts_with("usage: sluice tool step_settle "),
+        "{help}"
+    );
+    assert!(
+        help.contains("Settle a finishing step on its submission"),
+        "{help}"
+    );
+    assert!(help.contains("  --step <string>  (required)"), "{help}");
+    assert!(
+        help.contains("  --reason <string>  (default \"\")"),
+        "{help}"
+    );
+    let message = refused(&tool_with(home, &["step_setle"], &[], None));
+    assert!(
+        message.starts_with("unknown tool step_setle; did you mean step_settle"),
+        "{message}"
+    );
+    let message = refused(&tool_with(
+        home,
+        &["step_settle", "--projet", "p", "--step", "w"],
+        &[],
+        None,
+    ));
+    assert_eq!(
+        message,
+        "step_settle takes no argument 'projet'; did you mean project?"
+    );
+    // Flags decode into the command: an unknown project is not_found, not a bad request.
+    let out = tool_with(
+        home,
+        &[
+            "step_settle",
+            "--project",
+            "nope",
+            "--step",
+            "w",
+            "--reason",
+            "old release",
+        ],
+        &[],
+        None,
+    );
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not_found"));
+}

@@ -490,6 +490,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             },
             CommandRequest::StepSubmit(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let version=attempts::step_submit(tx,request)?;if version.is_none(){return Err(conflict("stale submission").into());}Ok(CommandReply::Ack)}).await,
             CommandRequest::Submission{run}=>data(self.submissions(run).await?),
+            CommandRequest::StepSettle(request)=>self.step_settle(request).await,
             CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_) => {
                 let post = message_post(request)?;
                 self.writer().write(RetrySafety::NonIdempotent, move |tx| post_message(tx, &catalog, post).map(CommandReply::Receipt)).await
@@ -505,6 +506,112 @@ impl<H: ExecutionHost> Coordinator<H> {
             CommandRequest::LogRead(request)=>self.reads().snapshot(move|sql|{let project=request.project.as_ref().map(|p|messages_project(sql,p)).transpose()?;Ok(CommandReply::Records(records::read_records(sql,project,&records::RecordFilter::from(&request))?.into_page()?))}).await.map_err(|e|e.into_public(true)),
             _ => Err(PublicError::not_implemented("command dispatch extension")),
         }
+    }
+    /// `step_settle` (SPEC §7.5): settle a step that is finishing (its one current run has a
+    /// valid submission) on that submission. Only a bare agent fn's step: the outputs are the
+    /// ones its done signal would have given, derived from what its supervisor checkpointed
+    /// and git now, and checked against the run's frozen schema before anything is written.
+    /// Its guardian then stops the agent as a cancel does, and the completion succeeds with
+    /// them.
+    pub async fn step_settle(&self, request: StepSettle) -> Result<CommandReply, PublicError> {
+        let catalog = self.inner.catalog.clone();
+        let StepSettle {
+            project,
+            step,
+            reason,
+            author,
+        } = request;
+        let refuse = |message: String| PublicError::Invalid {
+            errors: vec![message.clone()],
+            message,
+        };
+        let id = step.clone();
+        let (project, identity, frozen, submission) = self
+            .reads()
+            .snapshot(move |sql| {
+                let project = messages_project(sql, &project)?;
+                let ctx = context(sql, project, &catalog)?;
+                let spec = ctx.plan.steps().get(&id).ok_or_else(|| PublicError::NotFound {
+                    message: format!("no step {id}"),
+                })?;
+                let status = plans::read_state(sql, project)?.status(&id);
+                if status != StepStatus::Running {
+                    return Err(refuse(format!(
+                        "step {id} is {}, not finishing: step_settle settles a running step whose run has submitted",
+                        serde_json::to_value(&status)?.as_str().unwrap_or("not running")
+                    ))
+                    .into());
+                }
+                if spec.scatter.is_some() {
+                    return Err(refuse(format!(
+                        "step {id} is scattered and step_settle settles one run: step_cancel it, then step_set_output its outputs"
+                    ))
+                    .into());
+                }
+                let Some((identity, frozen)) = attempts::current_run(sql, project, &id)? else {
+                    return Err(refuse(format!("step {id} has no current run to settle")).into());
+                };
+                let submission: Option<String> = sql
+                    .query_row(
+                        "SELECT outputs FROM submissions WHERE run_id=?1",
+                        [identity.run.to_string()],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let Some(submission) = submission else {
+                    return Err(refuse(format!(
+                        "step {id} is running and its run {} has not submitted: it is not finishing (step_cancel stops it)",
+                        identity.run
+                    ))
+                    .into());
+                };
+                let submission: JsonMap = serde_json::from_str(&submission)?;
+                Ok((project, identity, frozen, submission))
+            })
+            .await
+            .map_err(|e| e.into_public(true))?;
+        let name = frozen["declaration"]["run"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let by_hand = "step_cancel it, then step_set_output the outputs it should have";
+        if !sluice_agents::AGENT_BUILTINS.contains(&name.as_str()) {
+            return Err(refuse(format!(
+                "step {step} runs {name}, not an agent fn: its own outputs are the fn's to return and sluice cannot derive them from the submission; {by_hand}"
+            )));
+        }
+        let inputs: JsonMap = serde_json::from_value(frozen["inputs"].clone()).map_err(storage)?;
+        let fields = submission
+            .0
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_value().clone()))
+            .collect();
+        let run_dir = self.home().join("runs").join(identity.run.to_string());
+        let outputs = sluice_agents::settled_outputs(&name, &inputs, &run_dir, &fields)
+            .await
+            .map_err(|why| {
+                refuse(format!(
+                    "cannot derive the outputs step {step}'s done signal would give: {why}; {by_hand}"
+                ))
+            })?;
+        attempts::check_frozen_outputs(&frozen, &outputs).map_err(|e| match e.into_public(false) {
+            PublicError::Invalid { errors, .. } => PublicError::Invalid {
+                message: format!(
+                    "the outputs derived for step {step} do not fit its run's outputs; {by_hand}"
+                ),
+                errors,
+            },
+            other => other,
+        })?;
+        let run = identity.run;
+        let author = author.unwrap_or_else(|| "cli".into());
+        let settled = outputs.clone();
+        self.writer()
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                attempts::settle(tx, &identity, &settled, author, reason)
+            })
+            .await?;
+        data(json!({"project":project,"step":step,"run":run,"outputs":outputs}))
     }
     pub async fn submissions(&self, run: RunId) -> Result<SubmissionSnapshot, PublicError> {
         self.reads()

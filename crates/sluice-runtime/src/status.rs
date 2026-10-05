@@ -94,8 +94,9 @@ pub(crate) fn status(
     let queued = queued(sql, id, plan)?;
     let resources = resources_value(sql, id, plan)?;
     let paused = state.paused.is_paused();
+    let mut finishing = sluice_store::attempts::finishing(sql, id)?;
     if query.view == StatusView::Units {
-        let facts = facts(sql, id, &queued)?;
+        let facts = facts(sql, id, &queued, finishing)?;
         let last = last_messages(sql, id)?;
         let view = status::units_view(
             plan,
@@ -155,6 +156,9 @@ pub(crate) fn status(
                     row.insert("paused".into(), json!(reason));
                 }
             }
+            if let Some(finishing) = finishing.remove(&step) {
+                row.insert("finishing".into(), serde_json::to_value(finishing)?);
+            }
             if state.status(&step) == StepStatus::Pending {
                 let mut waiting = wait_reasons(plan, &state, spec);
                 if let Some((blocked, reason)) = queued.get(&step) {
@@ -203,7 +207,8 @@ pub fn unit_rows(
 ) -> sluice_store::Result<status::UnitsView> {
     let state = plans::read_state(sql, id)?;
     let queued = queued(sql, id, plan)?;
-    let facts = facts(sql, id, &queued)?;
+    let finishing = sluice_store::attempts::finishing(sql, id)?;
+    let facts = facts(sql, id, &queued, finishing)?;
     let last = last_messages(sql, id)?;
     let all = wanted.is_some_and(|w| w.contains(&sluice_model::commands::UnitState::Settled));
     Ok(status::units_view(
@@ -216,10 +221,14 @@ fn facts(
     sql: &Connection,
     id: ProjectId,
     queued: &BTreeMap<StepId, (Vec<String>, String)>,
+    finishing: BTreeMap<StepId, sluice_model::attempt::Finishing>,
 ) -> sluice_store::Result<indexmap::IndexMap<StepId, StepFacts>> {
     let mut facts = indexmap::IndexMap::<StepId, StepFacts>::new();
     for (step, (_, reason)) in queued {
         facts.entry(step.clone()).or_default().queued = Some(reason.clone());
+    }
+    for (step, finishing) in finishing {
+        facts.entry(step).or_default().finishing = Some(finishing);
     }
     let ago = |sql: &Connection, query: &str| -> sluice_store::Result<Vec<(StepId, i64)>> {
         let mut q = sql.prepare(query)?;

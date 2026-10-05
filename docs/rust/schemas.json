@@ -3086,6 +3086,88 @@
       }
     }
   },
+  "StepSettle": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StepSettle",
+    "description": "Settle a running step whose run has submitted (it is finishing) on that submission: its\nagent is stopped as a cancel stops it, and the step succeeds with the outputs the done\nsignal would have given it. Only a bare agent fn's step; anything else is refused.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "step": {
+        "$ref": "#/$defs/StepId"
+      },
+      "reason": {
+        "type": "string",
+        "default": ""
+      },
+      "author": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "step"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepId": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      }
+    }
+  },
   "MessageAnswer": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "MessageAnswer",
@@ -6334,6 +6416,34 @@
               "step": {
                 "$ref": "#/$defs/StepId"
               },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "author": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "step.settle"
+              }
+            },
+            "required": [
+              "kind",
+              "step",
+              "run",
+              "author",
+              "reason"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/StepId"
+              },
               "from": {
                 "anyOf": [
                   {
@@ -8000,6 +8110,34 @@
               "step",
               "run",
               "outputs"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/StepId"
+              },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "author": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "step.settle"
+              }
+            },
+            "required": [
+              "kind",
+              "step",
+              "run",
+              "author",
+              "reason"
             ]
           },
           {
@@ -10602,6 +10740,23 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "step_settle"
+              },
+              "args": {
+                "$ref": "#/$defs/StepSettle"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "ask"
               },
               "args": {
@@ -12370,6 +12525,33 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepSettle": {
+        "description": "Settle a running step whose run has submitted (it is finishing) on that submission: its\nagent is stopped as a cancel stops it, and the step succeeds with the outputs the done\nsignal would have given it. Only a bare agent fn's step; anything else is refused.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "reason": {
+            "type": "string",
+            "default": ""
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "step"
+        ]
       },
       "Ask": {
         "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
@@ -14844,6 +15026,34 @@
               "step": {
                 "$ref": "#/$defs/StepId"
               },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "author": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "step.settle"
+              }
+            },
+            "required": [
+              "kind",
+              "step",
+              "run",
+              "author",
+              "reason"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/StepId"
+              },
               "from": {
                 "anyOf": [
                   {
@@ -16368,6 +16578,34 @@
           "step",
           "run",
           "outputs"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "author": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "step.settle"
+          }
+        },
+        "required": [
+          "kind",
+          "step",
+          "run",
+          "author",
+          "reason"
         ]
       },
       {
@@ -18157,6 +18395,34 @@
               "step",
               "run",
               "outputs"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/StepId"
+              },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "author": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "step.settle"
+              }
+            },
+            "required": [
+              "kind",
+              "step",
+              "run",
+              "author",
+              "reason"
             ]
           },
           {
@@ -20440,6 +20706,23 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "step_settle"
+          },
+          "args": {
+            "$ref": "#/$defs/StepSettle"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "ask"
           },
           "args": {
@@ -22208,6 +22491,33 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepSettle": {
+        "description": "Settle a running step whose run has submitted (it is finishing) on that submission: its\nagent is stopped as a cancel stops it, and the step succeeds with the outputs the done\nsignal would have given it. Only a bare agent fn's step; anything else is refused.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "reason": {
+            "type": "string",
+            "default": ""
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "step"
+        ]
       },
       "Ask": {
         "description": "A question that needs a reply. `to` is a step of the project's current plan,\n`orchestrator` or `owner`; the thread and sender are derived, never given.",
@@ -24622,6 +24932,34 @@
               "step",
               "run",
               "outputs"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/StepId"
+              },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "author": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "step.settle"
+              }
+            },
+            "required": [
+              "kind",
+              "step",
+              "run",
+              "author",
+              "reason"
             ]
           },
           {
@@ -27414,6 +27752,34 @@
               "step": {
                 "$ref": "#/$defs/StepId"
               },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "author": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "step.settle"
+              }
+            },
+            "required": [
+              "kind",
+              "step",
+              "run",
+              "author",
+              "reason"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/StepId"
+              },
               "from": {
                 "anyOf": [
                   {
@@ -29135,6 +29501,35 @@
           "step",
           "run",
           "outputs"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "author": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "step.settle"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "step",
+          "run",
+          "author",
+          "reason"
         ]
       },
       {

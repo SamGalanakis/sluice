@@ -60,6 +60,7 @@ fn ports() -> PromptContext {
             ),
         ]),
         listen: true,
+        previous: None,
     }
 }
 fn inputs(value: serde_json::Value) -> JsonMap {
@@ -850,4 +851,99 @@ async fn fn_host_dispatches_agent_builtin_and_refuses_concurrent_composition() {
         &serde_json::json!("composed answer")
     );
     assert_eq!(host.factory.calls.load(Ordering::Relaxed), 1);
+}
+/// The note on the step's previous attempt heads the task, before the task itself.
+#[test]
+fn the_previous_attempt_note_heads_the_task() {
+    let mut context = ports();
+    context.previous =
+        Some("## Previous attempt\nNone: this is the first attempt at this step.".into());
+    let text = build("Fix it", &BTreeMap::new(), &context);
+    let note = text.find("## Previous attempt").unwrap();
+    let task = text.find("## Task\n\nFix it").unwrap();
+    assert!(text.starts_with("Step work: repair the bug"), "{text}");
+    assert!(note < task, "{text}");
+    assert!(text.contains("first attempt"), "{text}");
+}
+fn git_in(repo: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .current_dir(repo)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+/// The work tree summary: clean, dirty (count and the first 20 paths), not a repository, and
+/// git absent, which never fails: it says so.
+#[tokio::test]
+async fn the_work_tree_summary_counts_dirty_paths_and_survives_git_absent() {
+    use sluice_model::attempt::WorkTreeState;
+    let scratch = Scratch::new();
+    let plain = scratch.0.join("plain");
+    fs::create_dir(&plain).unwrap();
+    let git = std::path::Path::new("git");
+    let wait = Duration::from_secs(10);
+    assert_eq!(sluice_agents::git::worktree(git, &plain, wait).await, None);
+    let repo = scratch.0.join("repo");
+    fs::create_dir(&repo).unwrap();
+    git_in(&repo, &["init", "-q"]);
+    fs::write(repo.join("kept.txt"), "kept\n").unwrap();
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-q", "-m", "first"]);
+    assert_eq!(
+        sluice_agents::git::worktree(git, &repo, wait).await,
+        Some(WorkTreeState::Clean)
+    );
+    fs::write(repo.join("kept.txt"), "changed\n").unwrap();
+    for n in 0..25 {
+        fs::write(repo.join(format!("new-{n:02}.txt")), "x").unwrap();
+    }
+    let Some(WorkTreeState::Dirty { count, paths }) =
+        sluice_agents::git::worktree(git, &repo, wait).await
+    else {
+        panic!("dirty");
+    };
+    assert_eq!(count, 26);
+    assert_eq!(paths.len(), 20);
+    assert!(paths.contains(&"M kept.txt".to_owned()), "{paths:?}");
+    assert!(paths.contains(&"?? new-00.txt".to_owned()), "{paths:?}");
+    let absent = scratch.0.join("no-git-here");
+    assert_eq!(
+        sluice_agents::git::worktree(&absent, &repo, wait).await,
+        Some(WorkTreeState::Unavailable {
+            reason: "git is not installed or not on PATH".into()
+        })
+    );
+    let note = sluice_model::attempt::AttemptNote {
+        number: 1,
+        previous: None,
+        worktree: Some(sluice_model::attempt::WorkTree {
+            cwd: repo.display().to_string(),
+            state: WorkTreeState::Dirty {
+                count,
+                paths: paths.clone(),
+            },
+        }),
+    };
+    assert!(
+        note.text().contains(&format!(
+            "has 26 uncommitted paths now: {}",
+            paths.join(", ")
+        )),
+        "{}",
+        note.text()
+    );
+    assert!(note.text().ends_with(" and 6 more."), "{}", note.text());
 }

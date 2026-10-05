@@ -1,5 +1,6 @@
 //! sluice-model: shared pure contracts.
 
+pub mod attempt;
 pub mod commands;
 pub mod edit;
 pub mod error;

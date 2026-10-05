@@ -545,6 +545,11 @@ fn contract_step_submit() {
 }
 
 #[test]
+fn contract_step_settle() {
+    contract::<StepSettle>("StepSettle");
+}
+
+#[test]
 fn contract_message_answer() {
     contract::<MessageAnswer>("MessageAnswer");
 }

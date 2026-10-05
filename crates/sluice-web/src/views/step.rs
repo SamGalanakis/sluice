@@ -127,6 +127,8 @@ pub struct StepView {
     pub done: usize,
     pub manual: bool,
     pub revision: u64,
+    /// Running, and its run has submitted: only finishing (SPEC §6.4).
+    pub finishing: Option<sluice_model::attempt::Finishing>,
 }
 pub fn status_name(status: &StepStatus) -> &'static str {
     match status {
@@ -262,6 +264,7 @@ impl StepView {
             done: 0,
             manual: false,
             revision: 0,
+            finishing: None,
         }
     }
     pub fn href(&self) -> String {
@@ -303,6 +306,8 @@ impl StepView {
             "queued".into()
         } else if self.mark == "external" {
             "outside".into()
+        } else if self.finishing.is_some() && self.status == "running" {
+            "finishing".into()
         } else if let Some(total) = self.total {
             format!("{}/{total}", self.done)
         } else {

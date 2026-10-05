@@ -866,6 +866,11 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             "step_submit",
             json!({"project":f.project,"step":"work","run":run,"outputs":{"ready":true}}),
         ),
+        (
+            "StepSettle",
+            "step_settle",
+            json!({"step":"work","reason":"test"}),
+        ),
         ("Messages", "messages", json!({"view":"questions"})),
         (
             "MarkRead",
@@ -1000,6 +1005,7 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
                 | "StepSetOutput"
                 | "StepRetry"
                 | "StepCancel"
+                | "StepSettle"
                 | "Ask"
                 | "Say"
                 | "Reply"

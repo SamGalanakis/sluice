@@ -327,6 +327,16 @@ impl AgentFactory for Factory {
                 },
             );
         }
+        if let Some(step) = &invocation.step {
+            prompt.previous = launch_note(
+                &self.home,
+                invocation.project,
+                step,
+                invocation.run,
+                &invocation.inputs,
+            )
+            .await;
+        }
         let request = sluice_agents::AgentBuiltinRequest::build(
             &invocation.name,
             &invocation.inputs,
@@ -807,6 +817,38 @@ impl SupervisorHost for RunHost {
 /// release, whose schema matches the home's; this run's own binary may be an older release that
 /// cannot read the store after a deploy. Without a launcher on PATH (a checkout), and in test
 /// mode (the launcher would point at the live installation's home), the agent uses this binary.
+/// The note on the step's previous attempt that heads the agent's task (SPEC §7.4), derived
+/// at launch from the store and the step's `cwd`. Never fails the launch: a store it cannot
+/// read leaves the note out (and says so on stderr); a git it cannot run is in the note.
+async fn launch_note(
+    home: &Path,
+    project: ProjectId,
+    step: &StepId,
+    run: RunId,
+    inputs: &JsonMap,
+) -> Option<String> {
+    let reads = match sluice_store::ReadPool::open(home, 1) {
+        Ok(reads) => reads,
+        Err(error) => {
+            eprintln!("previous-attempt note left out: {error}");
+            return None;
+        }
+    };
+    let id = step.clone();
+    let note = reads
+        .snapshot(move |sql| sluice_store::attempts::attempt_note(sql, project, &id, Some(run)))
+        .await;
+    let mut note = match note {
+        Ok(note) => note,
+        Err(error) => {
+            eprintln!("previous-attempt note left out: {error}");
+            return None;
+        }
+    };
+    let cwd = inputs.0.get("cwd").and_then(|v| v.as_value().as_str());
+    note.worktree = sluice_agents::git::worktree_of(cwd).await;
+    Some(note.text())
+}
 fn callback_header(this: &std::path::Path) -> String {
     let path = std::env::var_os("SLUICE_HOST_PATH").or_else(|| std::env::var_os("PATH"));
     let launcher = std::env::var_os("SLUICE_TEST").is_none()

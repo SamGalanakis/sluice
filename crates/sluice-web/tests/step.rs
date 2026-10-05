@@ -279,3 +279,48 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
         .unwrap();
     assert!(!step.outputs[0].available);
 }
+
+#[tokio::test]
+async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawer() {
+    use sluice_model::ids::{AttemptId, RunId};
+    let (_home, writer, state, project) = fixture().await;
+    let run = RunId::new();
+    writer.write(RetrySafety::NonIdempotent, move |tx| {
+        let attempt = AttemptId::new();
+        tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES(?1,?2,'work','executing','{}','fixture','now')", (attempt.to_string(),project.to_string()))?;
+        tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,release_id,created_at,started_at) VALUES(?1,?2,?3,'work','0123456789abcdef0123456789abcdef01234567-89abcdef','2026-10-05T09:00:00Z','2026-10-05T09:00:00Z')", (run.to_string(),project.to_string(),attempt.to_string()))?;
+        tx.sql().execute("UPDATE steps SET status='running',run_ids=?2 WHERE project_id=?1 AND step_id='work'", (project.to_string(),json!([run]).to_string()))?;
+        tx.changed(Some(project), "project");
+        Ok(())
+    }).await.unwrap();
+    let work = "work".parse().unwrap();
+    let registry = Registry(Arc::new(Exact));
+    let (_, board) = views::board::snapshot(&state, project, Some(&registry))
+        .await
+        .unwrap();
+    assert_eq!(board.units[0].steps[0].caption(), "");
+    writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("INSERT INTO submissions(run_id,project_id,step_id,outputs,at) VALUES(?1,?2,'work','{\"ready\":true}','2026-10-05T09:30:00Z')", (run.to_string(),project.to_string()))?;
+        tx.changed(Some(project), "project");
+        Ok(())
+    }).await.unwrap();
+    let (_, board) = views::board::snapshot(&state, project, Some(&registry))
+        .await
+        .unwrap();
+    assert_eq!(board.units[0].steps[0].caption(), "finishing");
+    let (_, _, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
+        .await
+        .unwrap();
+    let html = step.body().unwrap();
+    let html = html.as_str();
+    assert!(
+        html.contains("<span class=\"tag\">finishing</span>"),
+        "{html}"
+    );
+    assert!(html.contains("<h3>Finishing</h3>"), "{html}");
+    assert!(html.contains("datetime=\"2026-10-05T09:30:00Z\""), "{html}");
+    assert!(
+        html.contains("release <code style=\"white-space:nowrap\">0123456789ab</code>"),
+        "{html}"
+    );
+}

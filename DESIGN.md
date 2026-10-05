@@ -242,6 +242,8 @@ Each status keeps its drawn glyph; colour repeats it.
 - **Running**: the logo's blue (a spinning ring).
 - **External** (a ready `core.external` step): live work outside sluice, so running's blue,
   told apart by its glyph (an arrow leaving a box) and the caption "outside".
+- **Finishing** (a running step whose run has submitted): still running, so running's blue and
+  spinning ring, told apart by the caption "finishing" and, in the drawer, a "finishing" badge.
 - **Succeeded** and set by hand (`manual`, a ring and dot): kelly green.
 - **Stale**, a question awaiting a reply and a running step gone quiet: harvest gold, the
   attention voice.
@@ -430,15 +432,17 @@ On the board, opening a card with script loads the step into a right-hand drawer
 page from 1200px, `min(680px, 45vw)`; over the page on a scrim below that; full width on a
 phone) and puts the card's ring on; without script the card's link opens the step's own page.
 The step reads top down:
-- its id (22px) with badges: the status glyph and word, "blocked", "quiet", "done/total runs"
-  when scattered; its doc; "Running <time>" or "Ended <time ago>"; a meta line of the fn in mono
+- its id (22px) with badges: the status glyph and word, "finishing", "blocked", "quiet",
+  "done/total runs" when scattered; its doc; "Running <time>" or "Ended <time ago>"; a meta line of the fn in mono
   and its tags as badges;
 - the actions, one POST form carrying the plan revision: Pause or Unpause (where pausing acts:
   pending, failed, stale, or any paused step), Retry with a folded "Feedback for retry" textarea
   (succeeded, failed, stale), Cancel (pending or running); then a link "Thread · n messages" and
   a gold "n awaiting reply" tag;
 - facts: "Waits on" (each reason) and "After" (its gate entries);
-- sections under small heads, in need order: Queued, Skipped, Error (the error in a mono box),
+- sections under small heads, in need order: Queued, Skipped, Finishing (when it submitted,
+  as a relative time, the record's seq and the release in mono, then a meta note that
+  `step_settle` settles a run that lingers), Error (the error in a mono box),
   Outside sluice (an external step's doc and how to settle it), Outputs, Inputs, Runs.
 - Outputs and Inputs are field lists: the name (with its type after it, shown by the Types
   switch at the Outputs head or the display preference) in a narrow column of meta, the value

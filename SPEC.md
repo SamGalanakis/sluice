@@ -454,6 +454,20 @@ required declared output (and without returning it) fails the step with
 `exited_without_submit` (`session` when the agent's is known), unless it failed otherwise
 first.
 
+A running step whose current runs have all stored a valid submission is **finishing** until
+its run ends: its agent's work is done, messages to it are refused (§8) and so are a second
+submission and `step_set_output`. `status` (both views), `step_context` and `call_status`
+(for a call's run that has submitted) show it as `finishing: {since, submission_seq, release}`:
+the time the (latest) submission was stored, its `step.submit` record's seq (null once the log
+has trimmed it), and the run's pinned release in short form (a `<git-sha>-<sha256>` release id
+as its git sha's first 12 characters; any other id whole). With the done signal finishing
+lasts as long as stopping the session takes. A run whose guardian is pinned to a release from
+before the done signal does not end its agent on submit: that supervisor waits until the agent
+has been idle through its grace, so the step can stay finishing for a long time; `step_settle`
+(§7.5) settles it on its submission. No `grace_until` is shown: when the grace started (the
+agent's last turn going idle) lives only in that supervisor's memory, and the grace itself in
+its environment, so sluice cannot compute it honestly.
+
 ### 6.5 Work done outside sluice
 
 A step running `core.external` (open, no inputs or outputs of its own) is never started: once
@@ -605,12 +619,59 @@ skipped steps. The reply is `{project, steps, rearmed, stopped_at}`. `message` (
 bytes) is posted to each retried step's thread in the same transaction, so its next run is
 assigned it. Pauses are kept.
 
+**The previous attempt.** Each run of a step is an attempt at it; a retry, a re-arm, a
+send-back (a retry with a message, or a `Rejected` completion action) or any other relaunch
+starts a new one, and its `prev_run` (§7.8) names the one before. sluice derives a note about
+that previous attempt from what it keeps anyway (the run, its result, its submission, the
+`step.cancel` or `step.settle` record) and stores nothing new. The note says:
+
+- which attempt this is (1 for the first: "None: this is the first attempt at this step.");
+- how the previous one ended: succeeded, failed (its error kind, agent kind and message),
+  cancelled (by whom and why, while the log still has the `step.cancel` record), lost, or
+  settled on its submission (by whom and why);
+- its submission's fields, or when it submitted nothing its outputs, every string cut to 200
+  characters and the line to 1,200;
+- when its outputs include a `git` value (the agent fns' result), the head it ended at, the
+  commits since its baseline and whether it left uncommitted changes;
+- when the step's inputs bind a `cwd` that is a git work tree, `git status --porcelain` of it
+  now: how many entries and the first 20 (`M path`, `?? path`). git runs with a 3-second limit;
+  git absent, failing or too slow is said in the note (`unavailable: <why>`) and never fails
+  the launch or the call.
+
+`step_context` carries it as `attempt: {number, previous?, worktree?, note}` (`previous`:
+`{run, started, finished, ended, error?, by?, reason?, submitted?, outputs?, git?}`;
+`worktree`: `{cwd, git: "clean" | "dirty" | "unavailable", count?, paths?, reason?}`; `note`:
+the text), for a running step about its current run, otherwise about the attempt its next run
+would follow; a scattered step has none. Every agent's task starts with `note` (§15), computed
+at launch.
+
 ### 7.5 Cancel
 
 `step_cancel(project, steps?, tags?, reason?, expected_rev?)` asks running steps to stop (their
 guardians stop the payload) and fails a pending `core.external` step at once. A cancelled step
 fails with the error `{"error": "cancelled", "message": <reason>}` and a `step.cancel` record.
 Reply `{"ok": true}`.
+
+`step_settle(project, step, reason?)` settles a finishing step (§6.4) on its submission, for
+the owner or the orchestrator (a run's callbacks may not). It is refused (`invalid`, saying
+why) unless the step is running, not scattered, and its one current run has stored a valid
+submission, and unless the step runs an agent fn itself (`agent.run`, `agent.codex`,
+`agent.devin`, `agent.claude`, `agent.review`, `decide.llm`). Its outputs are the ones the done
+signal would have given: the submission plus the agent fn's own, derived from what the run's
+supervisor checkpointed (`runs/<run>/native.json`: the session, the agent's last message, the
+git baseline, read by field so an older release's checkpoint reads too), the git facts of its
+`cwd` now, the model its `model` input composes (a retired string `model` leaves `model` out,
+as the run's frozen outputs then lack it) and, for `agent.codex` and `agent.devin`, the engine
+log as their `log` output. They are checked against the run's frozen outputs before anything
+is written; when they cannot be derived or do not fit, the call is refused (`invalid`) with
+the way by hand. A fn that composes an agent (`ctx.builtin("agent.run")`) completes with what
+it returns, which sluice cannot derive from the submission: it is refused with the same way by
+hand, `step_cancel` and then `step_set_output` with the outputs it should have. Otherwise one
+transaction records the outputs on the attempt, sets its cancel intent (the guardian stops the
+payload as for a cancel) and writes a `step.settle` record; a second `step_settle` is a
+`conflict`. The run's completion then succeeds with those outputs, whatever it reports
+(cancelled, lost or failed), unless it succeeded on its own first, which keeps its own result.
+Reply `{project, step, run, outputs}`.
 
 ### 7.6 Resources and leases
 
@@ -813,6 +874,7 @@ seqs have gaps. Kinds:
 | `step.retry` | `rev, author, reason, step, work` |
 | `step.cancel` | `step, author, reason` |
 | `step.submit` | `step, run, outputs, author` |
+| `step.settle` | `step, run, author, reason` |
 | `step.status` | `step, from, to, error, run_ids, needs` |
 | `step.lease` | `step, run, lease, resource, amount, state, reason` |
 | `step.queued` | `step, needs, resources, reason` |
@@ -994,7 +1056,7 @@ unknown step `not_found`.
 | `fn_get` | `name`, `project?` | the fn.json plus `scope` and `path` (null for a builtin) |
 | `fn_save` | `fn`, `main_py`, `project?` | `{name, scope, path, generation}` |
 | `fn_call` | `name`, `inputs={}`, `project?`, `wait?` (seconds, default 0), `direct=false`, `author?` | `{call, project_id, status, inputs, outputs, error, direct}`; `direct` runs it now through a guardian and ignores `wait` |
-| `call_status` | `call`, `project?` | as `fn_call` |
+| `call_status` | `call`, `project?` | as `fn_call`, plus `finishing?` (§6.4) |
 | `recipe_list` | `project` | `[{name, doc, params, scope}]`, a broken file as `{name, scope, error}` |
 
 An `icon` is a text icon (at most 16 characters), an absolute or `~/` path to an SVG, PNG,
@@ -1043,14 +1105,15 @@ it; `steps` lists the removed steps.
 | `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |
 | `step_cancel` | `project`, `steps?`, `tags?`, `reason`, `expected_rev?`, `author?` | `{ok: true}` |
 | `step_submit` | `project`, `step`, `run`, `outputs`, `author?` | `{ok: true}` |
+| `step_settle` | `project`, `step`, `reason=""`, `author?` | `{project, step, run, outputs}` (§7.5) |
 | `status` | `project`, `steps?`, `tags?`, `brief=false`, `all=false`, `view="steps"`, `state?` | below |
 | `step_context` | `project`, `step` | below |
 | `plan_view` | `project`, `format="mermaid"`, `all=false` | text |
 | `verify` | `project?` | `[{where, message}]` |
 
 `status`, steps view: `{project, rev, board_rev, paused, inputs, outputs, resources, steps: {id: {status,
-outputs, error, run_ids, done, total, instances, manual, paused?, queued?, waiting?}},
-done_units?}`.
+outputs, error, run_ids, done, total, instances, manual, paused?, queued?, waiting?,
+finishing?}}, done_units?}`; a finishing step (§6.4) stays `running` and carries `finishing`.
 Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
 `all`. `brief` cuts strings over 200 characters (`… [n more characters]`). `resources` maps
 each to `{capacity, held, queued, error}`. `paused` is `true` or the pause's reason. Every
@@ -1059,14 +1122,16 @@ pending step that is not about to start has `waiting`, the reasons in order: `pa
 input <name> has no value`), each gate not satisfied (`after <entry> (<why>)`), the resource
 shortfall (`queued: needs lane 1 (4/4 held)`, with `queued` listing the resources), and for a
 `core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, board_rev, paused, resources?,
-units: [{unit, state, age, engine, steps, blocked, last, line}], done_units?}`, `state` one of
+units: [{unit, state, age, engine, steps, blocked, last, line, finishing?}], done_units?}`;
+`finishing` lists the unit's finishing steps `[{step, since, submission_seq, release}]`, whose
+mark in `steps` is `▷` and which `line` names (`finishing <step>`) when nothing blocks it; `state` one of
 `running`, `failed`, `settled`, `blocked`, `queued`, `pending`, filterable with `state`
 (`state` is refused in the steps view).
 
 `step_context` (also `sluice me`): `{project, project_id, step, fn, doc, status, started,
 finished, elapsed, run, inputs, upstream: [{step, fn, status, outputs, error}], messages (open
 questions on its thread), submit: {outputs, command, note}, thread, ask, needs?, queued?,
-leases?}`; `submit.command` and `ask` are ready-to-run `sluice tool` lines; `submit.note` is
+leases?, finishing?, attempt?}` (`finishing` §6.4, `attempt` §7.4); `submit.command` and `ask` are ready-to-run `sluice tool` lines; `submit.note` is
 "Submit only when you are finished: submitting ends your session."
 
 `plan_view`: Mermaid `flowchart TD` with one subgraph per unit, nodes labelled `id / fn /
@@ -1115,7 +1180,7 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
 | `/projects/id/<p>` | the board; query `order=live\|plan`, `show=all\|active\|attention\|done`, `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units) |
 | `/projects/id/<p>/units/<u>` | one unit's board |
-| `/projects/id/<p>/steps/<s>` | one step: status, actions, error, outputs, inputs, runs |
+| `/projects/id/<p>/steps/<s>` | one step: status, actions, finishing, error, outputs, inputs, runs |
 | `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel`, `revision`, `message` (retry feedback) |
 | `/inbox`, `/questions`, `/history` | the message views across projects |
 | `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project; `thread?thread=<name>` |
@@ -1130,6 +1195,10 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 | `/projects/id/<p>/icon` | the project's image icon |
 | `POST /settings` | display preferences (theme, value types) |
 | `/static/<name>` | assets |
+
+A finishing step (§6.4) keeps its running glyph; its card's caption reads "finishing", and its
+drawer and page add a "finishing" badge and a Finishing section: when it submitted, the
+`step.submit` record's seq, its release, and that `step_settle` settles a run that lingers.
 
 Every page has a `…/stream` twin that patches the page live over Datastar SSE. Pages render
 fully without JavaScript; every value is HTML-escaped and markdown bodies are rendered on the
@@ -1253,7 +1322,8 @@ sluice tool status '{"project": "demo"}' --brief
 
 `agent.claude`, `agent.codex`, `agent.devin`, `agent.review` and `agent.run` run a supervised
 interactive session of the engine CLI in the run's private tmux, in `cwd`. The supervisor
-writes the task (the prompt or spec, the step's inputs under `## Inputs`, the outputs to submit
+writes the task (for a step's run, first the note on the step's previous attempt under `##
+Previous attempt` (§7.4) and then `## Task`; the prompt or spec, the step's inputs under `## Inputs`, the outputs to submit
 with the exact `step_submit` command under `## Outputs you must submit` and "Submit only when
 you are finished: submitting ends your session." with the `--outputs-file` form that needs no
 shell quoting, and, unless `listen: false`, how to `ask` the orchestrator, `say` to it and

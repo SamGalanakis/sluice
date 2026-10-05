@@ -1481,3 +1481,328 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
     };
     assert_eq!(status.as_value()["board_rev"], 1);
 }
+
+/// A tool's data reply.
+async fn data_of(b: &Coordinator<Fake>, command: Value) -> Value {
+    match b.command(request(command)).await.unwrap() {
+        CommandReply::Data(data) => data.into_value(),
+        other => panic!("{other:?}"),
+    }
+}
+/// The finished journal of `l`'s run, its submissions frozen as the guardian freezes them.
+async fn journal(b: &Coordinator<Fake>, l: &Launch, result: PayloadResult) -> CompletionJournal {
+    let submitted = b.submissions(l.identity.run).await.unwrap();
+    CompletionJournal {
+        protocol: 1,
+        identity: l.identity.clone(),
+        completion_id: format!("done-{}", l.identity.run),
+        result,
+        starts: vec![],
+        exits: vec![],
+        cleanup: vec![CleanupEvidence {
+            cgroup: "fake".into(),
+            empty: true,
+            escalated: false,
+        }],
+        submissions: submitted.fields,
+        submission_version: submitted.version,
+        delivery_acks: vec![],
+    }
+}
+/// The fake guardian claims and starts `l`.
+async fn run_started(b: &Coordinator<Fake>, l: &Launch) {
+    b.guardian(C::Claim(guardian(l)), Some(&l.capability))
+        .await
+        .unwrap();
+    b.guardian(
+        C::Started {
+            identity: l.identity.clone(),
+            invocation: l.invocation.invocation,
+            executor: executor(),
+        },
+        Some(&l.capability),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_running_step_that_has_submitted_is_finishing_in_status_step_context_and_call_status() {
+    let (_home, b, f, p) = setup().await;
+    b.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&b, p, "s").await.unwrap();
+    let l = f.0.lock().unwrap()[0].clone();
+    run_started(&b, &l).await;
+    let selector = json!({"kind":"id","value":p});
+    let status = json!({"command":"status","args":{"project":selector,"selection":{"steps":null,"tags":null}}});
+    let units = json!({"command":"status","args":{"project":selector,"selection":{"steps":null,"tags":null},"view":"units"}});
+    let context = json!({"command":"step_context","args":{"project":selector,"step":"work"}});
+    let before = data_of(&b, status.clone()).await;
+    assert_eq!(before["steps"]["work"]["status"], "running");
+    assert!(
+        before["steps"]["work"].get("finishing").is_none(),
+        "{before}"
+    );
+    assert!(
+        data_of(&b, context.clone())
+            .await
+            .get("finishing")
+            .is_none()
+    );
+    b.command(request(json!({"command":"step_submit","args":{"project":p,"step":"work","run":l.identity.run,"outputs":{"submitted":true},"author":"fixture"}}))).await.unwrap();
+    let run = l.identity.run.to_string();
+    let (at, seq): (String, i64) = b
+        .reads()
+        .snapshot(move |sql| {
+            Ok((
+                sql.query_row("SELECT at FROM submissions WHERE run_id=?1", [&run], |r| {
+                    r.get(0)
+                })?,
+                sql.query_row(
+                    "SELECT seq FROM records WHERE run_id=?1 AND kind='step.submit'",
+                    [&run],
+                    |r| r.get(0),
+                )?,
+            ))
+        })
+        .await
+        .unwrap();
+    let expected = json!({"since":at,"submission_seq":seq,"release":"runtime-v1"});
+    let after = data_of(&b, status).await;
+    assert_eq!(after["steps"]["work"]["status"], "running");
+    assert_eq!(after["steps"]["work"]["finishing"], expected, "{after}");
+    let rows = data_of(&b, units).await;
+    let row = &rows["units"][0];
+    assert_eq!(
+        row["finishing"],
+        json!([{"step":"work","since":at,"submission_seq":seq,"release":"runtime-v1"}]),
+        "{rows}"
+    );
+    assert_eq!(row["steps"], "work▷");
+    assert!(
+        row["line"].as_str().unwrap().contains("finishing work"),
+        "{row}"
+    );
+    assert_eq!(data_of(&b, context).await["finishing"], expected);
+    // A call's run that has submitted is finishing too. Nothing stores a call's submission
+    // today (step_submit names a step), so the row is written here.
+    let call = RunId::new();
+    let attempt = AttemptId::new();
+    b.writer()
+        .write(sluice_store::RetrySafety::Idempotent, move |tx| {
+            tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'executing','{}','h','now')", (attempt.to_string(), p.to_string()))?;
+            tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,release_id,created_at) VALUES (?1,?2,?3,'0123456789abcdef0123456789abcdef01234567-89abcdef','now')", (call.to_string(), p.to_string(), attempt.to_string()))?;
+            tx.sql().execute("INSERT INTO calls(call_id,project_id,run_id,fn,status,inputs,created_at) VALUES (?1,?2,?1,'fixture.wait','running','{}','now')", (call.to_string(), p.to_string()))?;
+            tx.changed(Some(p), "calls");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let call_status = json!({"command":"call_status","args":{"call":call,"project":selector}});
+    let running = data_of(&b, call_status.clone()).await;
+    assert_eq!(running["status"], "running");
+    assert!(running.get("finishing").is_none(), "{running}");
+    b.writer()
+        .write(sluice_store::RetrySafety::Idempotent, move |tx| {
+            tx.sql().execute("INSERT INTO submissions(run_id,project_id,outputs,at) VALUES (?1,?2,'{\"x\":1}','2026-10-05T10:00:00Z')", (call.to_string(), p.to_string()))?;
+            tx.changed(Some(p), "calls");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        data_of(&b, call_status).await["finishing"],
+        json!({"since":"2026-10-05T10:00:00Z","submission_seq":null,"release":"0123456789ab"})
+    );
+}
+
+/// A coordinator whose plan's `work` runs `agent.run` (codex) in a fresh git repository.
+async fn agent_setup() -> (
+    home::ScratchHome,
+    Coordinator<Fake>,
+    Fake,
+    ProjectId,
+    std::path::PathBuf,
+) {
+    let home = home::ScratchHome::new().unwrap();
+    let repo = home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "first"]);
+    let mut catalog = Catalog::fixtures();
+    let agent = sluice_runtime::builtins::descriptor::find("agent.run").unwrap();
+    catalog.0.insert(
+        "agent.run".into(),
+        sluice_model::plan::FnSignature {
+            inputs: agent
+                .inputs
+                .iter()
+                .map(|(n, t)| ((*n).into(), t.clone()))
+                .collect(),
+            outputs: agent
+                .outputs
+                .iter()
+                .map(|(n, t)| ((*n).into(), t.clone()))
+                .collect(),
+            open: true,
+            ..Default::default()
+        },
+    );
+    let fake = Fake::default();
+    let broker = Coordinator::open(home.path().into(), catalog, fake.clone())
+        .await
+        .unwrap();
+    let CommandReply::Project(p)=broker.command(request(json!({"command":"project_create","args":{"name":"p","description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap()else{panic!("project")};
+    broker.command(request(json!({"command":"plan_patch","args":{"project":json!({"kind":"id","value":p.project_id}),"rev":1,"ops":[{"op":"add","path":"/steps/work","value":{"run":"agent.run","in":{"engine":{"default":"codex"},"cwd":{"default":repo},"spec":{"default":"Fix it"}},"outputs":{"summary":"string"}}}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+    (home, broker, fake, p.project_id, repo)
+}
+fn git(repo: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(repo)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().into()
+}
+fn settle(p: ProjectId) -> CommandRequest {
+    request(
+        json!({"command":"step_settle","args":{"project":{"kind":"id","value":p},"step":"work","reason":"its release predates the done signal","author":"owner"}}),
+    )
+}
+
+#[tokio::test]
+async fn step_settle_stops_a_finishing_agent_and_succeeds_with_its_done_signal_outputs() {
+    let (home, b, f, p, repo) = agent_setup().await;
+    b.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&b, p, "s").await.unwrap();
+    let l = f.0.lock().unwrap()[0].clone();
+    run_started(&b, &l).await;
+    // Running, but nothing submitted: it is not finishing.
+    let refused = b.command(settle(p)).await;
+    assert!(
+        matches!(&refused, Err(PublicError::Invalid { message, .. }) if message.contains("has not submitted")),
+        "{refused:?}"
+    );
+    // What its supervisor checkpointed, as a release from before the done signal leaves it.
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+    let run_dir = home.path().join("runs").join(l.identity.run.to_string());
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(
+        run_dir.join("native.json"),
+        json!({"session":"codex-session-1","final_text":"Fixed it.","head_before":before,"state":"Idle"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(repo.join("a.txt"), "b\n").unwrap();
+    git(&repo, &["commit", "-q", "-am", "fix"]);
+    let after = git(&repo, &["rev-parse", "HEAD"]);
+    b.command(request(json!({"command":"step_submit","args":{"project":p,"step":"work","run":l.identity.run,"outputs":{"summary":"fixed"},"author":"fixture"}}))).await.unwrap();
+    let CommandReply::Data(settled) = b.command(settle(p)).await.unwrap() else {
+        panic!("settle reply")
+    };
+    let settled = settled.into_value();
+    let outputs = settled["outputs"].clone();
+    // {project, step, run, outputs}, as its description says.
+    assert_eq!(
+        (&settled["project"], &settled["step"], &settled["run"]),
+        (&json!(p), &json!("work"), &json!(l.identity.run))
+    );
+    assert_eq!(outputs["summary"], "fixed");
+    assert_eq!(outputs["final"], "Fixed it.");
+    assert_eq!(outputs["session"], "codex-session-1");
+    assert_eq!(outputs["report"], Value::Null);
+    assert!(
+        outputs["model"].as_str().unwrap().starts_with("gpt-"),
+        "{outputs}"
+    );
+    assert_eq!(
+        outputs["git"],
+        json!({"head_before":before,"head_after":after,"commits":1,"dirty":false})
+    );
+    // Its guardian is told to stop it, as a cancel tells it; a second settle is refused.
+    assert!(matches!(
+        b.guardian(C::CancelIntent(l.identity.clone()), Some(&l.capability))
+            .await
+            .unwrap(),
+        R::CancelIntent(true)
+    ));
+    let again = b.command(settle(p)).await;
+    assert!(
+        matches!(&again, Err(PublicError::Conflict { message, .. }) if message.contains("already being settled")),
+        "{again:?}"
+    );
+    b.complete(journal(&b, &l, PayloadResult::Cancelled("cancel intent".into())).await)
+        .await
+        .unwrap();
+    let status = data_of(&b, json!({"command":"status","args":{"project":{"kind":"id","value":p},"selection":{"steps":null,"tags":null},"all":true}})).await;
+    let work = &status["steps"]["work"];
+    assert_eq!(work["status"], "succeeded", "{work}");
+    assert_eq!(work["error"], Value::Null);
+    assert_eq!(work["outputs"], outputs);
+    let CommandReply::Records(page) = b.command(request(json!({"command":"log_read","args":{"project":{"kind":"id","value":p},"since_seq":null,"kinds":["step.settle"],"threads":null,"limit":10}}))).await.unwrap() else {
+        panic!("records")
+    };
+    let record = serde_json::to_value(&page.records[0]).unwrap();
+    assert_eq!(
+        (&record["kind"], &record["author"], &record["run"]),
+        (
+            &json!("step.settle"),
+            &json!("owner"),
+            &json!(l.identity.run)
+        )
+    );
+}
+
+#[tokio::test]
+async fn step_settle_refuses_a_fn_that_composes_its_agent_with_the_way_by_hand() {
+    // fixture.submit stands for a project fn that runs an agent (ctx.builtin("agent.run")):
+    // its outputs are what it returns, which sluice cannot derive from the submission.
+    let (_home, b, f, p) = setup().await;
+    b.acquire_scheduler("s".into()).await.unwrap();
+    reconcile_project(&b, p, "s").await.unwrap();
+    let l = f.0.lock().unwrap()[0].clone();
+    run_started(&b, &l).await;
+    b.command(request(json!({"command":"step_submit","args":{"project":p,"step":"work","run":l.identity.run,"outputs":{"submitted":true},"author":"fixture"}}))).await.unwrap();
+    let refused = b.command(settle(p)).await;
+    assert!(
+        matches!(&refused, Err(PublicError::Invalid { message, .. })
+            if message.contains("not an agent fn") && message.contains("step_cancel") && message.contains("step_set_output")),
+        "{refused:?}"
+    );
+    assert!(matches!(
+        b.guardian(C::CancelIntent(l.identity.clone()), Some(&l.capability))
+            .await
+            .unwrap(),
+        R::CancelIntent(false)
+    ));
+    // A step that is not running is not finishing either.
+    b.complete(
+        journal(
+            &b,
+            &l,
+            PayloadResult::Succeeded(decode_json(br#"{"value":1}"#).unwrap()),
+        )
+        .await,
+    )
+    .await
+    .unwrap();
+    let refused = b.command(settle(p)).await;
+    assert!(
+        matches!(&refused, Err(PublicError::Invalid { message, .. }) if message.contains("is succeeded, not finishing")),
+        "{refused:?}"
+    );
+}

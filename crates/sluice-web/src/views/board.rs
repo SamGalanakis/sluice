@@ -504,6 +504,7 @@ pub fn load_board(
         let (manual, total, done): (bool, Option<i64>, i64) = (r.get(1)?, r.get(2)?, r.get(3)?);
         cards.insert(r.get::<_, String>(0)?, (manual, total, done));
     }
+    let finishing = sluice_store::attempts::finishing(c, project)?;
     for unit in &mut board.units {
         if let Some((message, at)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
@@ -515,6 +516,7 @@ pub fn load_board(
                 step.total = total.map(|n| n as usize);
                 step.done = *done as usize;
             }
+            step.finishing = finishing.get(&step.id).cloned();
             step.revision = revision as u64;
         }
         if let Some(id) = detail

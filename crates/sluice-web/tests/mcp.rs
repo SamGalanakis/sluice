@@ -77,6 +77,7 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "step_remove",
         "step_pause",
         "step_cancel",
+        "step_settle",
         "plan_history",
         "plan_set_input",
         "step_set_input",
@@ -373,7 +374,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 46);
+    assert_eq!(tools.len(), 47);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await
@@ -481,7 +482,7 @@ async fn rmcp_client_initializes_lists_and_reads_over_process_stdio() {
             .unwrap()
             .success()
     );
-    eprintln!("stdio fixture PID {pid} reaped; 46 tools");
+    eprintln!("stdio fixture PID {pid} reaped; 47 tools");
 }
 
 #[tokio::test]

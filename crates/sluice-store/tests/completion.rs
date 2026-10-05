@@ -35,6 +35,11 @@ mod support {
                 "empty" => (json!({}), json!({}), false),
                 "file" => (json!({"brief":"string"}), json!({"value":"Any"}), false),
                 "core.external" => (json!({}), json!({}), true),
+                "agentish" => (
+                    json!({"cwd":"string?"}),
+                    json!({"session":"string?","git":"Any?"}),
+                    true,
+                ),
                 _ => return None,
             };
             Some(FnSignature {
@@ -896,4 +901,285 @@ async fn frozen_completion_persists_action_conflict_when_current_plan_is_invalid
     assert_eq!(f.counts().await, counts);
     assert_eq!(f.state().await.status(&id("work")), StepStatus::Succeeded);
     assert_eq!(f.state().await.status(&id("land")), StepStatus::Failed);
+}
+
+/// A plan whose `work` runs an agent-like open fn that declares `summary`.
+async fn agentish() -> Fixture {
+    Fixture::new(json!({"steps":{"work":{"run":"agentish","outputs":{"summary":"string"}}}})).await
+}
+async fn submit(f: &Fixture, run: &Reservation, outputs: serde_json::Value) {
+    let request = StepSubmit {
+        project: f.context.project,
+        step: id("work"),
+        run: run.identity.run,
+        outputs: map(outputs),
+        author: Some("agent".into()),
+    };
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            step_submit(tx, request)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+}
+async fn note(f: &Fixture, run: Option<&Reservation>) -> sluice_model::attempt::AttemptNote {
+    let project = f.context.project;
+    let current = run.map(|r| r.identity.run);
+    f.reads
+        .snapshot(move |sql| attempt_note(sql, project, &id("work"), current))
+        .await
+        .unwrap()
+}
+async fn finish_with(
+    f: &Fixture,
+    run: &Reservation,
+    kind: CompletionKind,
+    outputs: serde_json::Value,
+) -> CompletionResult {
+    let context = f.context.clone();
+    let identity = run.identity.clone();
+    f.writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            let version: Option<i64> = rusqlite::OptionalExtension::optional(tx.sql().query_row(
+                "SELECT version FROM submissions WHERE run_id=?1",
+                [identity.run.to_string()],
+                |r| r.get(0),
+            ))?;
+            complete(
+                tx,
+                &context,
+                Complete {
+                    completion_id: identity.run.to_string(),
+                    identity,
+                    kind,
+                    outputs: map(outputs),
+                    processes_gone: true,
+                    submission_version: version.map(|v| v as u64),
+                },
+                &mut Hooks::default(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_note_of_a_first_attempt_says_so() {
+    let f = agentish().await;
+    let pending = note(&f, None).await;
+    assert_eq!((pending.number, &pending.previous), (1, &None));
+    let run = f.reserve("work", json!({})).await;
+    let first = note(&f, Some(&run)).await;
+    assert_eq!((first.number, &first.previous), (1, &None));
+    assert!(first.text().contains("first attempt"), "{}", first.text());
+}
+
+#[tokio::test]
+async fn the_note_after_a_failure_names_the_error_and_what_it_submitted() {
+    let f = agentish().await;
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    submit(&f, &run, json!({"summary":"half done"})).await;
+    finish_with(
+        &f,
+        &run,
+        CompletionKind::Failed(PublicError::AgentFailure {
+            kind: "StallCap".into(),
+            message: "no transcript progress while non-idle".into(),
+            session: Some("s-1".into()),
+        }),
+        json!({}),
+    )
+    .await;
+    // What the next attempt would follow, before it starts.
+    let pending = note(&f, None).await;
+    assert_eq!(pending.number, 2);
+    f.retry(&["work"], None).await;
+    let next = f.reserve("work", json!({})).await;
+    let second = note(&f, Some(&next)).await;
+    assert_eq!(second.number, 2);
+    let previous = second.previous.as_ref().unwrap();
+    assert_eq!(previous.run, run.identity.run.to_string());
+    assert_eq!(previous.ended, sluice_model::attempt::Ended::Failed);
+    assert_eq!(previous.error.as_ref().unwrap()["kind"], "StallCap");
+    assert_eq!(previous.submitted, Some(json!({"summary":"half done"})));
+    let text = second.text();
+    assert!(text.contains("This is attempt 2 at this step."), "{text}");
+    assert!(
+        text.contains("failed: agent_failure StallCap: no transcript progress while non-idle"),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"It submitted: {"summary":"half done"}"#),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn the_note_after_a_cancel_names_who_cancelled_and_why() {
+    let f = agentish().await;
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    let context = f.context.clone();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            plans::step_cancel(
+                tx,
+                &context,
+                StepCancel {
+                    expected_rev: None,
+                    project: sluice_model::ids::ProjectSelector::Id(context.project),
+                    selection: StepSelection {
+                        steps: Some(vec![id("work")]),
+                        tags: None,
+                    },
+                    reason: "wrong branch".into(),
+                    author: Some("owner".into()),
+                },
+            )
+        })
+        .await
+        .unwrap();
+    finish_with(
+        &f,
+        &run,
+        CompletionKind::Cancelled {
+            message: "cancel intent".into(),
+        },
+        json!({}),
+    )
+    .await;
+    f.retry(&["work"], None).await;
+    let next = f.reserve("work", json!({})).await;
+    let note = note(&f, Some(&next)).await;
+    let previous = note.previous.as_ref().unwrap();
+    assert_eq!(previous.ended, sluice_model::attempt::Ended::Cancelled);
+    assert_eq!(
+        (previous.by.as_deref(), previous.reason.as_deref()),
+        (Some("owner"), Some("wrong branch"))
+    );
+    let text = note.text();
+    assert!(
+        text.contains("was cancelled by owner (wrong branch)."),
+        "{text}"
+    );
+    assert!(
+        text.contains("It submitted nothing and left no outputs."),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn the_note_reports_the_git_head_and_dirt_the_previous_run_left() {
+    let f = agentish().await;
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    submit(&f, &run, json!({"summary":"done"})).await;
+    let git = json!({"head_before":"1111111111111111111111111111111111111111","head_after":"2222222222222222222222222222222222222222","commits":3,"dirty":true});
+    finish_with(
+        &f,
+        &run,
+        CompletionKind::Succeeded,
+        json!({"session":"s-2","git":git}),
+    )
+    .await;
+    f.retry(&["work"], Some("again, smaller")).await;
+    let next = f.reserve("work", json!({})).await;
+    let note = note(&f, Some(&next)).await;
+    let previous = note.previous.as_ref().unwrap();
+    assert_eq!(previous.ended, sluice_model::attempt::Ended::Succeeded);
+    let seen = previous.git.as_ref().unwrap();
+    assert_eq!(
+        (seen.head.as_str(), seen.commits, seen.dirty),
+        (
+            "2222222222222222222222222222222222222222",
+            Some(3),
+            Some(true)
+        )
+    );
+    let text = note.text();
+    assert!(
+        text.contains("Its git: head 222222222222, 3 commits since 111111111111, uncommitted changes when it ended."),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_submitted_run_is_finishing_and_a_settled_one_succeeds_with_the_recorded_outputs() {
+    let f = agentish().await;
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    let project = f.context.project;
+    let finishing = || async {
+        f.reads
+            .snapshot(move |sql| finishing(sql, project))
+            .await
+            .unwrap()
+    };
+    assert!(finishing().await.is_empty());
+    let identity = run.identity.clone();
+    let outputs = map(json!({"summary":"fixed","session":"s-3"}));
+    let settled = outputs.clone();
+    // Not finishing until it has submitted: refused, nothing written.
+    let refused = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            settle(
+                tx,
+                &identity,
+                &settled,
+                "owner".into(),
+                "old release".into(),
+            )
+        })
+        .await;
+    assert!(
+        matches!(&refused, Err(PublicError::Conflict { message, .. }) if message.contains("no longer finishing")),
+        "{refused:?}"
+    );
+    submit(&f, &run, json!({"summary":"fixed"})).await;
+    let found = finishing().await;
+    let entry = &found[&id("work")];
+    assert_eq!(entry.release, "fixture");
+    assert!(entry.submission_seq.is_some() && !entry.since.is_empty());
+    let identity = run.identity.clone();
+    let settled = outputs.clone();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            settle(
+                tx,
+                &identity,
+                &settled,
+                "owner".into(),
+                "old release".into(),
+            )
+        })
+        .await
+        .unwrap();
+    let result = finish_with(
+        &f,
+        &run,
+        CompletionKind::Cancelled {
+            message: "cancel intent".into(),
+        },
+        json!({}),
+    )
+    .await;
+    assert_eq!(result.status, StepStatus::Succeeded);
+    assert_eq!(result.error, None);
+    assert_eq!(result.outputs, outputs);
+    let state = f.state().await;
+    assert_eq!(state.status(&id("work")), StepStatus::Succeeded);
+    assert!(finishing().await.is_empty());
+    f.retry(&["work"], None).await;
+    let next = f.reserve("work", json!({})).await;
+    let note = note(&f, Some(&next)).await;
+    assert!(
+        note.text()
+            .contains("was settled on its submission by owner (old release)."),
+        "{}",
+        note.text()
+    );
 }

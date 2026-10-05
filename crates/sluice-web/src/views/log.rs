@@ -101,6 +101,7 @@ pub const KIND_OPTIONS: &[&str] = &[
     "step.retry",
     "step.cancel",
     "step.submit",
+    "step.settle",
     "step.status",
     "step.lease",
     "step.queued",

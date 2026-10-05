@@ -83,6 +83,9 @@ if __name__ == "__main__":
   `ctx.builtin('agent.run', ...)` then returns its result (`session`, `final`, `git`) to the
   fn, and the step completes with what the fn returns, the submission joined in. Tell the agent both, the command, and "Submit only when you are finished:
   submitting ends your session."; the `agent.*` builtins (and `ctx.header`) show how.
+  An agent it runs gets the step's `## Previous attempt` note at the top of its task, as a
+  builtin step's agent does. `step_settle` does not settle a step running such a fn (sluice
+  cannot know what the fn would return): `step_cancel` it and `step_set_output` its outputs.
 - An open function can require outputs of its agent on every step: `"submits": {"summary":
   {"type": "string", "doc": "What it did"}}` in fn.json. Each step running it declares them
   as if it listed them under its `outputs` (so `step/summary` is a typed ref, and a required

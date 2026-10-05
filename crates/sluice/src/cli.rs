@@ -350,6 +350,7 @@ const TOOLS: &[(&str, &str)] = &[
         "step_submit",
         "a run's outputs, submitted by the step itself",
     ),
+    ("step_settle", "settle a finishing step on its submission"),
     (
         "step_context",
         "where a step stands, for its agent (sluice me)",
@@ -445,6 +446,7 @@ fn fill_author(request: &mut CommandRequest, author: &str) {
         CommandRequest::StepRetry(r) => fill(&mut r.author),
         CommandRequest::StepCancel(r) => fill(&mut r.author),
         CommandRequest::StepSubmit(r) => fill(&mut r.author),
+        CommandRequest::StepSettle(r) => fill(&mut r.author),
         CommandRequest::FnCall(r) => fill(&mut r.author),
         CommandRequest::Drain { author: a, .. } | CommandRequest::Release { author: a } => fill(a),
         CommandRequest::ProjectCreate { author: a, .. } => fill(a),

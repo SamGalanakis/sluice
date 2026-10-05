@@ -21,6 +21,10 @@ pub struct PromptContext {
     pub inputs: BTreeMap<String, Port>,
     pub outputs: BTreeMap<String, Port>,
     pub listen: bool,
+    /// The note on the step's previous attempt (or that this is its first), put at the top
+    /// of the task.
+    #[serde(default)]
+    pub previous: Option<String>,
 }
 /// What every agent is told about its submission, in its task and its step context.
 pub const SUBMIT_ENDS_SESSION: &str =
@@ -64,6 +68,10 @@ pub fn build(task: &str, values: &BTreeMap<String, Value>, ctx: &PromptContext) 
     if !header.is_empty() {
         text.push_str(&header);
         text.push_str("\n\n");
+    }
+    if let Some(note) = ctx.previous.as_deref().filter(|n| !n.trim().is_empty()) {
+        text.push_str(note.trim_end());
+        text.push_str("\n\n## Task\n\n");
     }
     text.push_str(task);
     if !ctx.inputs.is_empty() {

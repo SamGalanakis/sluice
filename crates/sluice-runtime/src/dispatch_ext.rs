@@ -167,8 +167,8 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                 .await
                 .map_err(public)?,
         )?,
-        CommandRequest::StepContext { project, step } => data(
-            broker
+        CommandRequest::StepContext { project, step } => {
+            let (mut out, note) = broker
                 .reads()
                 .snapshot(move |sql| {
                     let id = messages::resolve_project(sql, &project)?;
@@ -176,8 +176,14 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                     step_context(sql, &ctx, &step)
                 })
                 .await
-                .map_err(public)?,
-        )?,
+                .map_err(public)?;
+            if let Some(mut note) = note {
+                note.worktree =
+                    sluice_agents::git::worktree_of(out["inputs"]["cwd"].as_str()).await;
+                out["attempt"] = attempt_value(&note).map_err(storage)?;
+            }
+            data(out)?
+        }
         CommandRequest::PlanView {
             project,
             format,
@@ -640,11 +646,20 @@ fn upstream_outputs(outputs: &JsonMap) -> Value {
 fn shell_json(value: &Value) -> String {
     format!("'{}'", value.to_string().replace('\'', "'\\''"))
 }
+/// `step_context`'s `attempt`: which attempt this is, the one before it and the work tree,
+/// with the note the agent's task starts with.
+pub fn attempt_value(note: &sluice_model::attempt::AttemptNote) -> serde_json::Result<Value> {
+    let mut value = serde_json::to_value(note)?;
+    value["note"] = json!(note.text());
+    Ok(value)
+}
+/// The context and, unless the step is scattered, its attempt note without the work tree
+/// (the caller adds it: that needs git, outside the read snapshot).
 fn step_context(
     sql: &Connection,
     ctx: &plans::PlanContext,
     id: &StepId,
-) -> sluice_store::Result<Value> {
+) -> sluice_store::Result<(Value, Option<sluice_model::attempt::AttemptNote>)> {
     let step = ctx
         .plan
         .steps()
@@ -760,7 +775,21 @@ fn step_context(
     if !leases.is_empty() {
         out["leases"] = json!(leases);
     }
-    Ok(out)
+    if let Some(finishing) = sluice_store::attempts::finishing(sql, ctx.project)?.remove(id) {
+        out["finishing"] = serde_json::to_value(finishing)?;
+    }
+    let note = if step.scatter.is_none() {
+        let current = run.filter(|_| state.status(id) == StepStatus::Running);
+        Some(sluice_store::attempts::attempt_note(
+            sql,
+            ctx.project,
+            id,
+            current,
+        )?)
+    } else {
+        None
+    };
+    Ok((out, note))
 }
 
 fn html(text: &str) -> String {

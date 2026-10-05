@@ -887,6 +887,77 @@ fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {
     .unwrap();
     assert_eq!(launch["prev_run"], first);
 }
+/// An agent's task starts with its step's previous attempt (the first says so) and the git
+/// status of its cwd when it launched.
+#[test]
+fn an_agent_task_starts_with_its_previous_attempt_and_its_dirty_work_tree() {
+    let g = Gate::new();
+    let repo = g.temp.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "first",
+        ],
+    ] {
+        assert!(
+            Command::new("/usr/bin/git")
+                .current_dir(&repo)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    std::fs::write(repo.join("left.txt"), "left by hand").unwrap();
+    g.script(json!({"fatal":true}));
+    g.plan(json!({"work":{"run":"agent.run","in":bindings(json!({"engine":"fake","cwd":repo,"spec":"Submit summary and finish"})),"outputs":{"summary":"string"}}}));
+    let _lease = g.lease();
+    let failed = g.terminal("work");
+    assert_eq!(failed["status"], "failed", "{failed}");
+    let first = g.run("work");
+    let task =
+        |run: &str| std::fs::read_to_string(g.home.join("runs").join(run).join("task.md")).unwrap();
+    let text = task(&first);
+    let note = text.find("## Previous attempt").expect("note");
+    assert!(
+        note < text.find("Submit summary and finish").unwrap(),
+        "{text}"
+    );
+    assert!(
+        text.contains("None: this is the first attempt at this step."),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "The working directory {} has 1 uncommitted path now: ?? left.txt.",
+            repo.display()
+        )),
+        "{text}"
+    );
+    g.script(json!({"outputs":{"summary":"done"}}));
+    g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":null,"reason":"again","author":"test"}}));
+    g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != first.as_str());
+    let second = g.run("work");
+    assert_eq!(g.terminal("work")["status"], "succeeded");
+    let text = task(&second);
+    assert!(
+        text.contains(&format!(
+            "This is attempt 2 at this step. The previous one (run {first}, "
+        )),
+        "{text}"
+    );
+    assert!(text.contains(") failed: agent_failure"), "{text}");
+    assert!(text.contains("It submitted nothing"), "{text}");
+}
 #[test]
 fn python_agent_wrapper_retries_transient_in_same_run_and_lands_outer_outputs() {
     let g = Gate::new();
