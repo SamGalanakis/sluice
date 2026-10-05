@@ -2,12 +2,16 @@
 use super::protocol;
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     fs,
     io::{self, Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
 };
 
 /// The `hook_failures: "continue"` setting: like CLI 3000.11.3, log a hook command that
@@ -82,10 +86,22 @@ fn arg(args: &[String], name: &str) -> Option<String> {
         .and_then(|i| args.get(i + 1))
         .cloned()
 }
-fn draw(draft: &str, collapsed: bool, wrap: usize, dialog: bool, bypass: bool) -> io::Result<()> {
+/// `busy`: a turn is working, drawn as 3000.11.3 does with a spinner row and the busy
+/// placeholder; `queued`: inputs submitted meanwhile, waiting for the turn's end.
+fn draw(
+    draft: &str,
+    collapsed: bool,
+    wrap: usize,
+    dialog: bool,
+    bypass: bool,
+    busy: bool,
+    queued: &[String],
+) -> io::Result<()> {
     let rule = "─".repeat(100);
     let region = if dialog {
         "Select a menu item".into()
+    } else if draft.is_empty() && busy {
+        "❯ Guide Devin while it works".into()
     } else if draft.is_empty() {
         "❯ Ask Devin to build features, fix bugs, or work on your code".into()
     } else if collapsed {
@@ -104,9 +120,22 @@ fn draw(draft: &str, collapsed: bool, wrap: usize, dialog: bool, bypass: bool) -
     } else {
         format!("❯ {}", draft.lines().next().unwrap_or(""))
     };
+    let mut status = String::new();
+    for text in queued {
+        status.push_str(&format!(
+            "  \u{21b3} {} \u{b7} queued \u{b7} send now\r\n",
+            protocol::needle(text)
+        ));
+    }
+    if !queued.is_empty() {
+        status.push_str("Press Enter to send queued messages now\r\n");
+    }
+    if busy {
+        status.push_str("\u{28e3}\u{2867} Running tools \u{b7} 3s (esc twice to interrupt)\r\n");
+    }
     // 3000.11.3 layout: Normal mode has no indicator; bypass is a row above the composer.
     print!(
-        "\x1b[H\x1b[2J{}{rule}\r\n{region}\r\n{rule}\r\nSWE-2 High \u{b7} Context: 0k / 262k tokens (0%)",
+        "\x1b[H\x1b[2J{status}{}{rule}\r\n{region}\r\n{rule}\r\nSWE-2 High \u{b7} Context: 0k / 262k tokens (0%)",
         if bypass {
             "\x1b[33m(bypass permissions on)\x1b[0m\r\n"
         } else {
@@ -219,26 +248,78 @@ pub fn main(args: &[String]) -> io::Result<()> {
     let mut collapsed = false;
     let mut drop_enters = settings["drop_enters"].as_u64().unwrap_or(0);
     let wrap = settings["wrap"].as_u64().unwrap_or(0) as usize;
-    let mut index = 0usize;
     let mut cursor = 0usize;
+    let mut turns = Turns {
+        config: &config,
+        settings: &settings,
+        sid: &sid,
+        cwd: &cwd,
+        export: &export,
+        prompts: &prompts,
+        index: 0,
+        work: VecDeque::new(),
+        running: false,
+        drop_queued: false,
+        queue: VecDeque::new(),
+    };
     if let Some(pane) = settings["ready_pane"].as_str() {
         print!("\x1b[H\x1b[2J{}", pane.replace('\n', "\r\n"));
         io::stdout().flush()?;
     } else if let Some(ms) = settings["restore_ms"].as_u64().filter(|_| bypass) {
         // A resumed session's mode is restored after the composer first appears.
-        draw(&draft, collapsed, wrap, dialog, false)?;
+        draw(&draft, collapsed, wrap, dialog, false, false, &[])?;
         std::thread::sleep(Duration::from_millis(ms));
-        draw(&draft, collapsed, wrap, dialog, bypass)?;
+        draw(&draft, collapsed, wrap, dialog, bypass, false, &[])?;
     } else {
-        draw(&draft, collapsed, wrap, dialog, bypass)?;
+        draw(&draft, collapsed, wrap, dialog, bypass, false, &[])?;
     }
-    loop {
+    // Input arrives while a turn works on after its Stop, so it is read on its own thread.
+    let (sender, input) = mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
         let mut buf = [0u8; 65536];
-        let n = io::stdin().read(&mut buf)?;
-        if n == 0 {
+        loop {
+            match io::stdin().read(&mut buf) {
+                Ok(0) | Err(_) => {
+                    let _ = sender.send(Vec::new());
+                    return;
+                }
+                Ok(n) => {
+                    if sender.send(buf[..n].to_vec()).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let mut first = true;
+    loop {
+        if turns.advance(bypass)? == Flow::Exit {
             return Ok(());
         }
-        bytes.extend_from_slice(&buf[..n]);
+        if !first {
+            draw(
+                &draft,
+                collapsed,
+                wrap,
+                dialog,
+                bypass,
+                turns.running,
+                turns.queue.make_contiguous(),
+            )?;
+        }
+        first = false;
+        let chunk = match turns.work.front().map(|(at, ..)| *at) {
+            Some(at) => match input.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                Ok(chunk) => chunk,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            },
+            None => input.recv().unwrap_or_default(),
+        };
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        bytes.extend_from_slice(&chunk);
         while cursor < bytes.len() {
             if in_paste {
                 let Some(end) = bytes[cursor..].windows(6).position(|w| w == b"\x1b[201~") else {
@@ -298,77 +379,12 @@ pub fn main(args: &[String]) -> io::Result<()> {
                     if !bypass {
                         return Err(io::Error::other("resumed fixture requires tool approval"));
                     }
-                    let mut file = fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&prompts)?;
-                    writeln!(file, "{}", json!({"text":draft}))?;
-                    let turn = settings["turns"]
-                        .get(index)
-                        .cloned()
-                        .unwrap_or_else(|| json!({"reply":"ok"}));
-                    let prompt_id = index.to_string();
-                    index += 1;
-                    if !turn["omit_ack"].as_bool().unwrap_or(false) {
-                        hook(
-                            &config,
-                            "UserPromptSubmit",
-                            &sid,
-                            json!({"prompt":draft,"prompt_id":prompt_id}),
-                        )?;
-                    }
-                    draft.clear();
+                    let text = std::mem::take(&mut draft);
                     collapsed = false;
-                    if turn["tool"].as_bool().unwrap_or(false) {
-                        hook(
-                            &config,
-                            "PreToolUse",
-                            &sid,
-                            json!({"tool_name":"exec", "tool_input":{"command":"echo done"}, "prompt_id":prompt_id}),
-                        )?;
-                    }
-                    if turn["compact"].as_bool().unwrap_or(false) {
-                        hook(
-                            &config,
-                            "PostCompaction",
-                            &sid,
-                            json!({"prompt_id":prompt_id}),
-                        )?;
-                    }
-                    if let Some(ms) = turn["busy_ms"].as_u64() {
-                        std::thread::sleep(Duration::from_millis(ms));
-                    }
-                    if let Some(submit) = turn.get("submit") {
-                        super::super::atomic_private(
-                            &cwd.join("submission.json"),
-                            &serde_json::to_vec(submit)?,
-                        )?;
-                    }
-                    if let Some(commit) = turn["commit"].as_str() {
-                        fs::write(cwd.join("work.txt"), commit)?;
-                        for args in [vec!["add", "work.txt"], vec!["commit", "-qm", commit]] {
-                            if !Command::new("git").args(args).status()?.success() {
-                                return Err(io::Error::other("fixture commit failed"));
-                            }
-                        }
-                    }
-                    let reply = turn["reply"].as_str().unwrap_or("ok");
-                    if turn["exit_before_stop"].as_bool().unwrap_or(false) {
-                        return Ok(());
-                    }
-                    hook(
-                        &config,
-                        "Stop",
-                        &sid,
-                        json!({"prompt_id":prompt_id,"last_assistant_message":reply,"error":turn.get("error")}),
-                    )?;
-                    super::super::atomic_private(
-                        &export,
-                        &serde_json::to_vec(
-                            &json!({"session_id":sid,"steps":[{"source":"agent","message":reply}]}),
-                        )?,
-                    )?;
-                    if turn["exit"].as_bool().unwrap_or(false) {
+                    // Like 3000.11.3, input submitted while a turn works waits for its end.
+                    if turns.running {
+                        turns.queue.push_back(text);
+                    } else if turns.start(text, false, bypass)? == Flow::Exit {
                         return Ok(());
                     }
                 }
@@ -378,6 +394,166 @@ pub fn main(args: &[String]) -> io::Result<()> {
         }
         bytes.drain(..cursor);
         cursor = 0;
-        draw(&draft, collapsed, wrap, dialog, bypass)?;
+    }
+}
+
+#[derive(PartialEq)]
+enum Flow {
+    Continue,
+    Exit,
+}
+
+/// The scripted turns. A turn's `after_stop` events keep it working after its Stop, the way a
+/// Fusion lead works on after its sidekick's Stop: `{"ms": delay after the previous event,
+/// "hook": "PreToolUse" | "PostToolUse" | "Stop", "reply"?, "touch"?: file in cwd}`.
+struct Turns<'a> {
+    config: &'a Value,
+    settings: &'a Value,
+    sid: &'a str,
+    cwd: &'a std::path::Path,
+    export: &'a std::path::Path,
+    prompts: &'a std::path::Path,
+    index: usize,
+    work: VecDeque<(Instant, Value, String)>,
+    running: bool,
+    drop_queued: bool,
+    queue: VecDeque<String>,
+}
+impl Turns<'_> {
+    fn start(&mut self, text: String, queued: bool, bypass: bool) -> io::Result<Flow> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.prompts)?;
+        writeln!(file, "{}", json!({"text":text,"queued":queued}))?;
+        let turn = self.settings["turns"]
+            .get(self.index)
+            .cloned()
+            .unwrap_or_else(|| json!({"reply":"ok"}));
+        let prompt_id = self.index.to_string();
+        self.index += 1;
+        // A silent turn takes the input and never reports anything.
+        if turn["silent"].as_bool().unwrap_or(false) {
+            return Ok(Flow::Continue);
+        }
+        if !turn["omit_ack"].as_bool().unwrap_or(false) {
+            hook(
+                self.config,
+                "UserPromptSubmit",
+                self.sid,
+                json!({"prompt":text,"prompt_id":prompt_id}),
+            )?;
+        }
+        draw(
+            "",
+            false,
+            0,
+            false,
+            bypass,
+            true,
+            self.queue.make_contiguous(),
+        )?;
+        if turn["tool"].as_bool().unwrap_or(false) {
+            hook(
+                self.config,
+                "PreToolUse",
+                self.sid,
+                json!({"tool_name":"exec", "tool_input":{"command":"echo done"}, "prompt_id":prompt_id}),
+            )?;
+        }
+        if turn["compact"].as_bool().unwrap_or(false) {
+            hook(
+                self.config,
+                "PostCompaction",
+                self.sid,
+                json!({"prompt_id":prompt_id}),
+            )?;
+        }
+        if let Some(ms) = turn["busy_ms"].as_u64() {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+        if let Some(submit) = turn.get("submit") {
+            super::super::atomic_private(
+                &self.cwd.join("submission.json"),
+                &serde_json::to_vec(submit)?,
+            )?;
+        }
+        if let Some(commit) = turn["commit"].as_str() {
+            fs::write(self.cwd.join("work.txt"), commit)?;
+            for args in [vec!["add", "work.txt"], vec!["commit", "-qm", commit]] {
+                if !Command::new("git").args(args).status()?.success() {
+                    return Err(io::Error::other("fixture commit failed"));
+                }
+            }
+        }
+        let reply = turn["reply"].as_str().unwrap_or("ok");
+        if turn["exit_before_stop"].as_bool().unwrap_or(false) {
+            return Ok(Flow::Exit);
+        }
+        self.stop(&prompt_id, reply, turn.get("error"))?;
+        if turn["exit"].as_bool().unwrap_or(false) {
+            return Ok(Flow::Exit);
+        }
+        let mut at = Instant::now();
+        for event in turn["after_stop"].as_array().into_iter().flatten() {
+            at += Duration::from_millis(event["ms"].as_u64().unwrap_or(0));
+            self.work.push_back((at, event.clone(), prompt_id.clone()));
+        }
+        self.running = !self.work.is_empty();
+        self.drop_queued = turn["drop_queued"].as_bool().unwrap_or(false);
+        Ok(Flow::Continue)
+    }
+    fn stop(&self, prompt_id: &str, reply: &str, error: Option<&Value>) -> io::Result<()> {
+        hook(
+            self.config,
+            "Stop",
+            self.sid,
+            json!({"prompt_id":prompt_id,"last_assistant_message":reply,"error":error}),
+        )?;
+        super::super::atomic_private(
+            self.export,
+            &serde_json::to_vec(
+                &json!({"session_id":self.sid,"steps":[{"source":"agent","message":reply}]}),
+            )?,
+        )
+    }
+    /// Fires the running turn's due events; when none remain, the turn ends and the first
+    /// queued input starts the next.
+    fn advance(&mut self, bypass: bool) -> io::Result<Flow> {
+        loop {
+            while let Some((at, ..)) = self.work.front()
+                && *at <= Instant::now()
+            {
+                let (_, event, prompt_id) = self.work.pop_front().expect("due event");
+                if let Some(file) = event["touch"].as_str() {
+                    fs::write(self.cwd.join(file), "")?;
+                }
+                match event["hook"].as_str() {
+                    Some("Stop") => {
+                        self.stop(&prompt_id, event["reply"].as_str().unwrap_or("ok"), None)?
+                    }
+                    Some(name @ ("PreToolUse" | "PostToolUse")) => hook(
+                        self.config,
+                        name,
+                        self.sid,
+                        json!({"tool_name":"exec","tool_input":{"command":"echo working"},"tool_response":{"success":true},"prompt_id":prompt_id}),
+                    )?,
+                    _ => {}
+                }
+            }
+            if !self.work.is_empty() || !self.running {
+                return Ok(Flow::Continue);
+            }
+            self.running = false;
+            if self.drop_queued {
+                self.queue.clear();
+            }
+            let Some(text) = self.queue.pop_front() else {
+                return Ok(Flow::Continue);
+            };
+            if self.start(text, true, bypass)? == Flow::Exit {
+                return Ok(Flow::Exit);
+            }
+        }
     }
 }

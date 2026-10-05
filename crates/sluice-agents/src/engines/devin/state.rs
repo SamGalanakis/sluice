@@ -28,7 +28,12 @@ pub struct DevinOptions {
     /// Explicit host and callback inputs, also used by private pane launches.
     pub environment: BTreeMap<String, String>,
     pub ready_timeout: Duration,
+    /// How long a pasted input may go unacknowledged while Devin shows no sign of life: no
+    /// hook, no working pane and no sight of the input queued.
     pub delivery_timeout: Duration,
+    /// How long a Stop must stand with no later hook before it ends the turn. Fusion journals
+    /// its sidekick's Stop under the lead's prompt and the lead's blocked call returns at once.
+    pub turn_quiet: Duration,
 }
 impl Default for DevinOptions {
     fn default() -> Self {
@@ -51,6 +56,7 @@ impl Default for DevinOptions {
             environment: super::super::environment::host_environment(),
             ready_timeout: Duration::from_secs(180),
             delivery_timeout: Duration::from_secs(20),
+            turn_quiet: Duration::from_secs(10),
         }
     }
 }
@@ -59,10 +65,20 @@ struct Pending {
     id: InputId,
     text: String,
     pasted: bool,
+    /// When the input was pasted or, before that, offered.
     since: Instant,
+    /// The last sight of Devin holding a pasted input queued or working toward it.
+    alive: Option<Instant>,
     last_enter: Option<Instant>,
     dialog: Option<String>,
     last_escape: Option<Instant>,
+}
+
+/// A Stop for the open prompt that has not yet ended the turn.
+struct PendingStop {
+    prompt: String,
+    at: Instant,
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +101,8 @@ pub struct Devin {
     started: BTreeSet<String>,
     stopped: BTreeSet<String>,
     active_prompt: Option<String>,
+    stop: Option<PendingStop>,
+    last_hook: Option<Instant>,
     inject_transient: bool,
     exit_requested: bool,
     exit_enter: Option<Instant>,
@@ -105,6 +123,8 @@ impl Devin {
             started: BTreeSet::new(),
             stopped: BTreeSet::new(),
             active_prompt: None,
+            stop: None,
+            last_hook: None,
             inject_transient: false,
             exit_requested: false,
             exit_enter: None,
@@ -133,6 +153,7 @@ impl Devin {
             self.observation.session_id = Some(sid.clone());
         }
         self.observation.progress += 1;
+        self.last_hook = Some(Instant::now());
         match hook.hook_event_name.as_str() {
             "UserPromptSubmit" => {
                 let key = hook
@@ -143,6 +164,7 @@ impl Devin {
                     self.observation.turns_started += 1;
                 }
                 self.active_prompt = Some(key);
+                self.stop = None;
                 self.observation.status = EngineStatus::Busy;
                 self.observation.error = None;
                 if let Some(pending) = &self.pending
@@ -159,46 +181,31 @@ impl Devin {
                     }
                 }
             }
+            // A Stop ends the turn only once nothing follows it (`settle_turn`): Fusion journals
+            // its sidekick's Stop under the lead's prompt, and the lead works on.
             "Stop" => {
                 let key = hook
                     .prompt_id
                     .clone()
                     .or_else(|| self.active_prompt.clone())
                     .unwrap_or_else(|| format!("event-{}", self.observation.progress));
-                if !self.stopped.insert(key.clone()) {
-                    return Ok(());
-                }
-                self.observation.turns_completed += 1;
                 if self.active_prompt.as_ref().is_none_or(|p| p == &key) {
-                    self.active_prompt = None;
-                    self.observation.status = EngineStatus::Idle;
                     if let Some(text) = hook.last_assistant_message {
                         self.observation.final_text = text;
                     }
-                    self.observation.error = hook.error.filter(|e| !e.is_empty()).map(|e| {
-                        let lower = e.to_lowercase();
-                        let kind = if [
-                            "capacity issues",
-                            "rate limit",
-                            "rate_limit",
-                            "overloaded",
-                            "http status 529",
-                            "http status 429",
-                            "http status 503",
-                        ]
-                        .iter()
-                        .any(|s| lower.contains(s))
-                        {
-                            EngineErrorKind::Transient
-                        } else {
-                            EngineErrorKind::Fatal
-                        };
-                        error(kind, e)
+                    self.stop = Some(PendingStop {
+                        prompt: key,
+                        at: Instant::now(),
+                        error: hook.error.filter(|e| !e.is_empty()),
                     });
                     self.log(&self.observation.final_text)?;
+                } else if self.stopped.insert(key) {
+                    // A late Stop for an older prompt cannot end the open turn.
+                    self.observation.turns_completed += 1;
                 }
             }
             "PostCompaction" => {
+                self.working_on(hook.prompt_id.as_deref());
                 let key = format!("{:?}:{:?}", hook.prompt_id, hook.summary);
                 if !self.compaction_events.insert(key) {
                     return Ok(());
@@ -208,6 +215,7 @@ impl Devin {
             }
             "SessionEnd" => self.observation.status = EngineStatus::Exited,
             "PreToolUse" => {
+                self.working_on(hook.prompt_id.as_deref());
                 let detail = ["command", "path", "file_path", "prompt"]
                     .iter()
                     .find_map(|k| hook.tool_input.get(k).and_then(|v| v.as_str()))
@@ -219,6 +227,7 @@ impl Devin {
                 ))?;
             }
             "PostToolUse" => {
+                self.working_on(hook.prompt_id.as_deref());
                 if let Some(e) = hook.tool_response.get("error").and_then(|v| v.as_str()) {
                     self.log(&format!("tool error {e}"))?;
                 }
@@ -235,6 +244,68 @@ impl Devin {
                 ));
             }
         }
+        Ok(())
+    }
+
+    /// Tool or compaction activity: the agent is working, whatever Stop came before. A pending
+    /// Stop was not the turn's end, and a turn already ended is open again.
+    fn working_on(&mut self, prompt: Option<&str>) {
+        self.stop = None;
+        if self.observation.status == EngineStatus::Idle && self.observation.turns_started > 0 {
+            if let Some(prompt) = prompt {
+                self.stopped.remove(prompt);
+                self.active_prompt = Some(prompt.into());
+            }
+            self.observation.status = EngineStatus::Busy;
+        }
+    }
+    fn end_turn(&mut self) {
+        let Some(stop) = self.stop.take() else {
+            return;
+        };
+        if self.stopped.insert(stop.prompt) {
+            self.observation.turns_completed += 1;
+        }
+        self.active_prompt = None;
+        if self.observation.status != EngineStatus::Exited {
+            self.observation.status = EngineStatus::Idle;
+        }
+        self.observation.error = stop.error.map(|e| {
+            let lower = e.to_lowercase();
+            let kind = if [
+                "capacity issues",
+                "rate limit",
+                "rate_limit",
+                "overloaded",
+                "http status 529",
+                "http status 429",
+                "http status 503",
+            ]
+            .iter()
+            .any(|s| lower.contains(s))
+            {
+                EngineErrorKind::Transient
+            } else {
+                EngineErrorKind::Fatal
+            };
+            error(kind, e)
+        });
+    }
+    /// A pending Stop ends the turn once no hook has followed it for `turn_quiet` and the
+    /// pane, when there is one, no longer shows Devin working.
+    async fn settle_turn(&mut self, context: &EngineContext) -> Result<(), EngineError> {
+        let Some(stop) = &self.stop else {
+            return Ok(());
+        };
+        if self.observation.status != EngineStatus::Exited {
+            if stop.at.elapsed() < self.options.turn_quiet {
+                return Ok(());
+            }
+            if context.tmux_binary.is_some() && protocol::working(&self.capture(context).await?) {
+                return Ok(());
+            }
+        }
+        self.end_turn();
         Ok(())
     }
 
@@ -435,6 +506,8 @@ impl Devin {
     fn exited(&mut self) -> Result<EngineObservation, EngineError> {
         self.read_hooks()?;
         self.observation.status = EngineStatus::Exited;
+        // Nothing follows an exited session's last Stop.
+        self.end_turn();
         self.read_export()?;
         Ok(self.observation.clone())
     }
@@ -451,6 +524,7 @@ impl Devin {
         {
             self.observation.status = EngineStatus::Idle;
         }
+        self.settle_turn(context).await?;
         self.advance_delivery(context).await?;
         if self.exit_requested
             && self.observation.status != EngineStatus::Exited
@@ -484,24 +558,11 @@ impl Devin {
             return Ok(());
         }
         let pasted = pending.pasted;
-        let expired = pending.since.elapsed()
-            >= if pasted {
-                self.options.delivery_timeout
-            } else {
-                self.options.ready_timeout
-            };
-        if expired {
-            if pasted {
-                self.observation.error = Some(error(
-                    EngineErrorKind::UnknownAcceptance,
-                    "Devin prompt acceptance unknown; reconcile before replay",
-                ));
-            } else {
-                self.observation.not_accepted.push(pending.id.clone());
-                self.pending = self.queued.pop_front();
-                if let Some(p) = &mut self.pending {
-                    p.since = Instant::now();
-                }
+        if !pasted && pending.since.elapsed() >= self.options.ready_timeout {
+            self.observation.not_accepted.push(pending.id.clone());
+            self.pending = self.queued.pop_front();
+            if let Some(p) = &mut self.pending {
+                p.since = Instant::now();
             }
             return Ok(());
         }
@@ -550,11 +611,28 @@ impl Devin {
             )
             .await?;
         } else {
-            let pending = self.pending.as_ref().unwrap();
+            // A pasted input is unknown only once Devin shows no sign of life for the whole
+            // timeout: input submitted while it works waits in its queue until the turn ends,
+            // and a Fusion lead can think for minutes between hooks.
+            let queued = protocol::input_queued(&pane);
+            let pending = self.pending.as_mut().unwrap();
+            if queued || protocol::working(&pane) {
+                pending.alive = Some(Instant::now());
+            }
+            let quiet = [Some(pending.since), pending.alive, self.last_hook]
+                .into_iter()
+                .flatten()
+                .max()
+                .expect("paste time");
+            if quiet.elapsed() >= self.options.delivery_timeout {
+                self.observation.error = Some(error(
+                    EngineErrorKind::UnknownAcceptance,
+                    "Devin prompt acceptance unknown; reconcile before replay",
+                ));
+                return Ok(());
+            }
             let draft = protocol::draft_visible(&pane, &protocol::needle(&pending.text))
                 || protocol::composer_region(&pane).contains("[Pasted text #");
-            let queued =
-                pane.to_lowercase().contains("queued") && pane.to_lowercase().contains("send now");
             if (draft || queued)
                 && pending
                     .last_enter
@@ -741,6 +819,8 @@ impl EngineAdapter for Devin {
         self.started.clear();
         self.stopped.clear();
         self.active_prompt = None;
+        self.stop = None;
+        self.last_hook = None;
         self.prepared = Some(context.clone());
         self.restore_mode = session
             .filter(|_| context.tmux_binary.is_some())
@@ -862,6 +942,7 @@ impl EngineAdapter for Devin {
                     text: protocol::delivered_text(&text),
                     pasted: false,
                     since: Instant::now(),
+                    alive: None,
                     last_enter: None,
                     dialog: None,
                     last_escape: None,

@@ -1342,6 +1342,14 @@ or when the engine exits first, the run fails with kind `ExitedWithoutSubmit` an
 `exited_without_submit`. A step with nothing to submit ends a settle after its agent goes idle,
 or when its reported background work ends (at most `SLUICE_AGENT_WORK_MIN`).
 
+A Devin turn ends at a `Stop` hook that no other hook follows for 10 s, once the pane no longer
+shows Devin working (the `(esc twice to interrupt)` spinner or the `Guide Devin while it works`
+placeholder). A tool or compaction hook after a `Stop` keeps the turn open, or reopens it: in
+Fusion the sidekick's turn end fires `Stop` under the lead's prompt and the lead works on. Input
+pasted into Devin is accepted by the `UserPromptSubmit` that carries it. Input pasted while
+Devin works waits in its queue until the turn ends. It fails the run as `UnknownAcceptance` only
+after 20 s with no hook, no working pane and no sight of it queued.
+
 Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
 (600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
 `SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),

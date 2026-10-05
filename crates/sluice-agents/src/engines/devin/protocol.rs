@@ -208,6 +208,28 @@ pub fn composer_ready(pane: &str) -> bool {
     .iter()
     .any(|s| pane.contains(s))
 }
+/// Devin is mid-turn: 3000.11.3 draws a spinner line ending `(esc twice to interrupt)` (`(esc
+/// again to interrupt)` after one Escape) above the composer and the `Guide Devin while it works`
+/// placeholder in it, also while a Fusion lead waits on its sidekick. Only the bottom rows count,
+/// so a quoted indicator in the transcript cannot match.
+pub fn working(pane: &str) -> bool {
+    let pane = strip_ansi(pane);
+    let rows: Vec<_> = pane.lines().filter(|l| !l.trim().is_empty()).collect();
+    let bottom = rows[rows.len().saturating_sub(10)..]
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    ["to interrupt)", "Guide Devin while it works"]
+        .iter()
+        .any(|s| bottom.contains(s))
+}
+/// Input submitted while Devin works waits in its queue, shown with `queued` and `send now`
+/// until the turn ends; Enter on the empty composer sends it at once by interrupting the turn.
+pub fn input_queued(pane: &str) -> bool {
+    let pane = pane.to_lowercase();
+    pane.contains("queued") && pane.contains("send now")
+}
 /// Permission state shown around an empty composer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionMode {

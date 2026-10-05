@@ -563,6 +563,11 @@ impl Machine {
             // The busy turn ended without completing, so the steered input needs a turn of its own.
             self.steered = false;
             self.awaiting = Some(now);
+        } else if self.awaiting.is_some() && o.status == EngineStatus::Busy {
+            // The engine went back to work before taking the input, which now waits behind that
+            // work as steered input does.
+            self.awaiting = None;
+            self.steered = true;
         }
         let new_turn = o.turns_completed > self.base_turns;
         let complete = new_turn

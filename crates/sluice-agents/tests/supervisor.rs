@@ -1213,6 +1213,42 @@ fn input_sent_to_an_idle_engine_still_times_out_when_no_turn_starts() {
     );
 }
 #[test]
+fn input_sent_to_an_idle_engine_waits_while_the_engine_goes_back_to_work() {
+    let (mut machine, _) = steering(EngineStatus::Idle);
+    // The engine resumes its own work before taking the input, for five minutes.
+    for second in 11..=310 {
+        let working = EngineObservation {
+            progress: second,
+            ..observation(EngineStatus::Busy, 1, 1)
+        };
+        assert_eq!(
+            machine
+                .update(Duration::from_secs(second), &working, &[])
+                .unwrap(),
+            Action::None,
+            "second {second}"
+        );
+    }
+    assert!(machine.pending());
+    // That work ends without taking the input: the turn-start wait begins only now.
+    let idle = observation(EngineStatus::Idle, 1, 1);
+    for second in [311, 370] {
+        assert_eq!(
+            machine
+                .update(Duration::from_secs(second), &idle, &[])
+                .unwrap(),
+            Action::None
+        );
+    }
+    assert_eq!(
+        machine
+            .update(Duration::from_secs(371), &idle, &[])
+            .unwrap_err()
+            .kind,
+        FailureKind::TurnStartTimeout
+    );
+}
+#[test]
 fn a_steered_turn_that_ends_without_completing_starts_the_turn_start_wait() {
     let (mut machine, id) = steering(EngineStatus::Busy);
     assert_eq!(

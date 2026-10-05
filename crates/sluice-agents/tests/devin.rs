@@ -102,6 +102,8 @@ fn options(root: &Scratch, script: Value) -> DevinOptions {
         ]),
         ready_timeout: Duration::from_secs(5),
         delivery_timeout: Duration::from_secs(4),
+        // Most tests read a Stop as the turn's end at once; the post-Stop tests set their own.
+        turn_quiet: Duration::ZERO,
     }
 }
 fn context(root: &Scratch, name: &str, tmux: bool) -> EngineContext {
@@ -361,6 +363,8 @@ struct DevinHost {
     directory: PathBuf,
     submissions: BTreeMap<String, Value>,
     messages: Vec<DeliveryMessage>,
+    /// Messages stay unseen until this file exists in `directory`.
+    release: Option<&'static str>,
     acks: Vec<MessageId>,
     cleanups: u32,
 }
@@ -371,12 +375,15 @@ impl SupervisorHost for DevinHost {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
+        let released = self
+            .release
+            .is_none_or(|file| self.directory.join(file).exists());
         Ok(HostSnapshot {
             submissions: self.submissions.clone(),
             messages: self
                 .messages
                 .iter()
-                .filter(|m| m.id > after)
+                .filter(|m| released && m.id > after)
                 .cloned()
                 .collect(),
             ..HostSnapshot::default()
@@ -1091,6 +1098,34 @@ fn devin_permission_mode_reads_the_release_indicator_near_the_composer() {
     );
 }
 
+#[test]
+fn devin_working_pane_reads_the_release_spinner_and_busy_placeholder() {
+    use protocol::{input_queued, working};
+    // Real panes: a Fusion lead blocked on its sidekick, a SWE-2 turn typing its last
+    // message, and the idle composer after a turn.
+    let fusion = include_str!("fixtures/devin/real-fusion-busy-pane.txt");
+    assert!(working(fusion));
+    assert!(working(include_str!(
+        "fixtures/devin/real-fresh-bypass-pane.txt"
+    )));
+    let idle = include_str!("fixtures/devin/resume-footer-excerpt.txt");
+    assert!(!working(idle));
+    // Either indicator alone is work; an indicator quoted in the transcript is not.
+    assert!(working(&fusion.replace("Guide Devin while it works", "")));
+    assert!(working(&fusion.replace(
+        "(esc twice to interrupt)",
+        "(esc again to interrupt)"
+    )));
+    assert!(!working(&format!(
+        "Running tools \u{b7} 1s (esc twice to interrupt)\nGuide Devin while it works\n{}{idle}",
+        "transcript\n".repeat(12)
+    )));
+    assert!(!input_queued(fusion));
+    assert!(input_queued(&format!(
+        "  \u{21b3} Addressed live message \u{b7} queued \u{b7} send now\n{fusion}"
+    )));
+}
+
 #[tokio::test]
 async fn devin_resume_accepts_reported_real_footer_without_toggling() {
     resumed_bypass(json!({"ready_pane":include_str!("fixtures/devin/resume-footer-excerpt.txt")}))
@@ -1280,6 +1315,286 @@ async fn devin_captured_live_steering_has_two_starts_and_one_completion() {
     assert_eq!(obs.status, EngineStatus::Idle);
 }
 
+/// Fusion journals its sidekick's Stop under the lead's prompt, and the lead's blocked call
+/// returns right after it (run 01a10a48: Stop, then PostToolUse `sidekick` and more tools).
+#[tokio::test]
+async fn devin_tool_activity_after_a_stop_keeps_the_turn_open() {
+    let root = Scratch::new();
+    let mut opts = options(&root, json!({}));
+    opts.turn_quiet = Duration::from_millis(300);
+    let mut adapter = Devin::new(opts);
+    let ctx = context(&root, "run", false);
+    adapter.prepare(&ctx, None).await.unwrap();
+    let quiet = || tokio::time::sleep(Duration::from_millis(400));
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"UserPromptSubmit","prompt_id":"lead"}),
+    );
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"Stop","prompt_id":"lead","last_assistant_message":"sidekick report","error":"sidekick failed"}),
+    );
+    let stopped = adapter.observe(&ctx).await.unwrap();
+    assert_eq!(
+        (stopped.status, stopped.turns_completed),
+        (EngineStatus::Busy, 0)
+    );
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"PostToolUse","prompt_id":"lead","tool_name":"sidekick"}),
+    );
+    quiet().await;
+    let working = adapter.observe(&ctx).await.unwrap();
+    assert_eq!(
+        (working.status, working.turns_completed),
+        (EngineStatus::Busy, 0)
+    );
+    assert!(working.error.is_none());
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"Stop","prompt_id":"lead","last_assistant_message":"lead done"}),
+    );
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Busy
+    );
+    quiet().await;
+    let idle = adapter.observe(&ctx).await.unwrap();
+    assert_eq!((idle.status, idle.turns_completed), (EngineStatus::Idle, 1));
+    assert_eq!(idle.final_text, "lead done");
+    assert!(idle.error.is_none());
+    // Work after an ended turn opens it again, and its next Stop ends it again.
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"PreToolUse","prompt_id":"lead","tool_name":"exec"}),
+    );
+    assert_eq!(
+        adapter.observe(&ctx).await.unwrap().status,
+        EngineStatus::Busy
+    );
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"Stop","prompt_id":"lead","last_assistant_message":"lead done again"}),
+    );
+    quiet().await;
+    let again = adapter.observe(&ctx).await.unwrap();
+    assert_eq!(
+        (again.status, again.turns_completed),
+        (EngineStatus::Idle, 2)
+    );
+    adapter.close().await.unwrap();
+}
+
+/// A lead's tool calls after its sidekick's Stop, `gap_ms` apart.
+fn post_stop_work(tools: usize, gap_ms: u64) -> Vec<Value> {
+    (0..tools)
+        .map(|i| json!({"ms":gap_ms,"hook":if i % 2 == 0 {"PostToolUse"} else {"PreToolUse"}}))
+        .collect()
+}
+fn fixture_prompts(root: &Scratch) -> Vec<Value> {
+    fs::read_to_string(root.join("prompts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+fn capture(ctx: &EngineContext) -> String {
+    let out = Command::new(ctx.tmux_binary.as_ref().unwrap())
+        .current_dir(&ctx.run_dir)
+        .args(["-S", "tmux.sock", "capture-pane", "-p", "-t", "%0"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+async fn supervise_fixture(
+    adapter: &mut Devin,
+    cfg: SupervisorConfig,
+    host: &mut DevinHost,
+) -> Result<sluice_agents::supervisor::AgentResult, sluice_agents::supervisor::AgentFailure> {
+    let tmux = sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
+        .await
+        .unwrap();
+    sluice_agents::supervisor::supervise(
+        cfg,
+        adapter,
+        host,
+        &mut Default::default(),
+        Some(&tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn supervisor_devin_nudges_only_once_post_stop_work_ends() {
+    let root = Scratch::new();
+    let mut work = post_stop_work(10, 150);
+    work.push(json!({"ms":150,"hook":"Stop","reply":"lead done"}));
+    let mut opts = options(
+        &root,
+        json!({"turns":[{"reply":"sidekick report","after_stop":work},{"reply":"submitted","submit":{"word":"blue"}}]}),
+    );
+    opts.turn_quiet = Duration::from_millis(300);
+    let mut adapter = Devin::new(opts);
+    let cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    supervise_fixture(&mut adapter, cfg, &mut host)
+        .await
+        .unwrap();
+    assert_eq!(host.submissions["word"], json!("blue"));
+    assert_eq!(Checkpoint::read(&dir).unwrap().unwrap().nudges, 1);
+    let prompts = fixture_prompts(&root);
+    assert_eq!(prompts.len(), 2);
+    assert!(
+        prompts[1]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Your turn ended")
+    );
+    // The nudge met an idle composer: it was never pasted behind the lead's work.
+    assert_eq!(prompts[1]["queued"], json!(false));
+}
+
+/// The failed Fusion run's timeline: the sidekick's Stop, the lead's tool calls for longer than
+/// the delivery timeout, input pasted meanwhile and taken when the lead's turn ends.
+#[tokio::test]
+async fn supervisor_devin_message_pasted_during_post_stop_work_is_accepted_late() {
+    let root = Scratch::new();
+    let mut work = vec![json!({"ms":100,"hook":"PostToolUse","touch":"release"})];
+    work.extend(post_stop_work(14, 150));
+    work.push(json!({"ms":150,"hook":"Stop","reply":"lead done"}));
+    let mut opts = options(
+        &root,
+        json!({"turns":[{"reply":"sidekick report","after_stop":work},{"reply":"message taken","submit":{"word":"blue"}}]}),
+    );
+    opts.delivery_timeout = Duration::from_millis(600);
+    opts.turn_quiet = Duration::from_millis(300);
+    let mut adapter = Devin::new(opts);
+    let cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        messages: vec![supervisor_message(1)],
+        release: Some("release"),
+        ..Default::default()
+    };
+    supervise_fixture(&mut adapter, cfg, &mut host)
+        .await
+        .unwrap();
+    assert_eq!(host.submissions["word"], json!("blue"));
+    assert_eq!(host.acks, vec![MessageId(1)]);
+    let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+    assert_eq!(checkpoint.nudges, 0);
+    assert!(checkpoint.delivery.all_acknowledged());
+    let prompts = fixture_prompts(&root);
+    assert_eq!(prompts.len(), 2);
+    assert!(
+        prompts[1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Keep word blue")
+    );
+    assert_eq!(prompts[1]["queued"], json!(true));
+}
+
+#[tokio::test]
+async fn devin_queued_paste_waits_out_a_turn_working_without_hooks() {
+    let root = Scratch::new();
+    let mut opts = options(
+        &root,
+        json!({"turns":[{"reply":"sidekick report","after_stop":[{"ms":100,"hook":"PostToolUse"},{"ms":2500,"hook":"Stop","reply":"lead done"}]},{"reply":"message taken"}]}),
+    );
+    opts.delivery_timeout = Duration::from_millis(600);
+    opts.turn_quiet = Duration::from_millis(300);
+    let mut adapter = Devin::new(opts);
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let _pane = Pane::start(&ctx, launch).await;
+    deliver(&mut adapter, &ctx, InputId::Task, "Lead a sidekick").await;
+    // SessionStart, the task, the sidekick's Stop and the lead's returning call: the lead now
+    // thinks for 2.5 s without a hook.
+    poll(&mut adapter, &ctx, |o| o.progress >= 4).await;
+    let message = InputId::Message { id: MessageId(1) };
+    adapter
+        .execute(
+            &ctx,
+            EngineCommand::Steer {
+                id: message.clone(),
+                text: "Addressed while the lead works".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let pasted = Instant::now();
+    let mut seen_queued = false;
+    loop {
+        let o = adapter.observe(&ctx).await.unwrap();
+        assert!(
+            o.error.is_none(),
+            "{:?} after {:?}",
+            o.error,
+            pasted.elapsed()
+        );
+        seen_queued |= protocol::input_queued(&capture(&ctx));
+        if o.acknowledged.contains(&message) {
+            break;
+        }
+        assert!(pasted.elapsed() < Duration::from_secs(10), "{o:?}");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert!(seen_queued);
+    assert!(pasted.elapsed() > Duration::from_secs(1));
+    let prompts = fixture_prompts(&root);
+    assert_eq!(prompts.len(), 2);
+    assert_eq!(prompts[1]["queued"], json!(true));
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn devin_input_lost_behind_work_is_unknown_only_once_devin_falls_silent() {
+    let root = Scratch::new();
+    let mut opts = options(
+        &root,
+        json!({"turns":[{"reply":"sidekick report","after_stop":post_stop_work(10, 150),"drop_queued":true}]}),
+    );
+    opts.delivery_timeout = Duration::from_millis(600);
+    opts.turn_quiet = Duration::from_millis(300);
+    let mut adapter = Devin::new(opts);
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let _pane = Pane::start(&ctx, launch).await;
+    deliver(&mut adapter, &ctx, InputId::Task, "Lead a sidekick").await;
+    poll(&mut adapter, &ctx, |o| o.progress >= 4).await;
+    let message = InputId::Message { id: MessageId(1) };
+    adapter
+        .execute(
+            &ctx,
+            EngineCommand::Steer {
+                id: message.clone(),
+                text: "Lost behind the lead's work".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let pasted = Instant::now();
+    let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+    assert_eq!(
+        failed.error.unwrap().kind,
+        EngineErrorKind::UnknownAcceptance
+    );
+    // Only after all of the turn's hooks: SessionStart, the task, the Stop and ten tool calls.
+    let journal = fs::read_to_string(ctx.run_dir.join("devin-hooks.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 13);
+    assert!(pasted.elapsed() > Duration::from_secs(1));
+    assert!(!failed.acknowledged.contains(&message));
+    assert_eq!(fixture_prompts(&root).len(), 1);
+    adapter.close().await.unwrap();
+}
+
 /// With SLUICE_G3_DEVIN_EVIDENCE set, saves the latest real pane and the pane behind each
 /// permission-mode verdict change, for redacted replay fixtures.
 fn g3_capture(ctx: &EngineContext, verdict: &mut Option<protocol::PermissionMode>) {
@@ -1455,6 +1770,7 @@ async fn g3_devin() -> io::Result<()> {
         ]),
         ready_timeout: Duration::from_secs(60),
         delivery_timeout: Duration::from_secs(30),
+        turn_quiet: Duration::from_secs(10),
     });
     let ctx = context(&root, "g3_devin-fresh", true);
     for args in [
