@@ -4,7 +4,7 @@ use sluice_agents::engines::{
     DeliveryOutcome, EngineAdapter, EngineCommand, EngineContext, EngineErrorKind, EngineStatus,
     InputId,
     codex::{
-        Codex, CodexOptions, profile,
+        Codex, CodexOptions, auth, profile,
         protocol::{Rpc, redact},
     },
 };
@@ -394,20 +394,17 @@ async fn private_home_permissions_credentials_and_mapping_are_isolated() {
             & 0o777,
         0o600
     );
-    assert!(!private.join("auth.json").is_symlink());
+    // The run's credentials are the owner's file itself, never a copy.
     assert_eq!(
-        fs::metadata(private.join("auth.json"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
+        fs::read_link(private.join("auth.json")).unwrap(),
+        scratch.path().join("owner/auth.json")
     );
     let doc = fs::read_to_string(private.join("config.toml"))
         .unwrap()
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
     assert_eq!(doc["mcp_servers"]["x"]["enabled"].as_bool(), Some(false));
+    assert_eq!(doc["cli_auth_credentials_store"].as_str(), Some("file"));
     assert!(
         fs::read_to_string(scratch.path().join("owner/config.toml"))
             .unwrap()
@@ -685,22 +682,22 @@ fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 #[tokio::test]
-#[ignore = "g3_codex uses copied credentials and one labelled scratch session"]
+#[ignore = "g3_codex uses the owner's credentials and one labelled scratch session"]
 async fn g3_codex() {
     let scratch = Scratch::new();
     let owner = std::env::var_os("SLUICE_CODEX_G3_SOURCE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap()).join(".codex"));
     if !owner.join("auth.json").is_file() {
-        println!("g3_codex PENDING: no privately copyable auth.json");
+        println!("g3_codex PENDING: no Codex auth.json");
         return;
     }
     let source = scratch.path().join("credentials");
     fs::create_dir(&source).unwrap();
     fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).unwrap();
-    let auth = fs::read(owner.join("auth.json")).unwrap();
-    fs::write(source.join("auth.json"), auth).unwrap();
-    fs::set_permissions(source.join("auth.json"), fs::Permissions::from_mode(0o600)).unwrap();
+    // Linked, never copied: Codex rotates the refresh token, so a refresh in a copy would
+    // revoke the owner's.
+    std::os::unix::fs::symlink(owner.join("auth.json"), source.join("auth.json")).unwrap();
     let mut config = toml_edit::DocumentMut::new();
     if let Ok(text) = fs::read_to_string(owner.join("config.toml")) {
         let doc = text.parse::<toml_edit::DocumentMut>().unwrap();
@@ -1394,4 +1391,238 @@ async fn supervisor_codex_short_rate_limit_backs_off_until_its_reset() {
             .iter()
             .any(|e| e.id == InputId::Continue { attempt: 2 })
     );
+}
+
+/// A fake `auth.json` in Codex's shape: no real token anywhere.
+fn fake_auth(account: &str, day: u32, refresh: &str) -> String {
+    serde_json::to_string_pretty(&json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": "fake-id",
+            "access_token": "fake-access",
+            "refresh_token": refresh,
+            "account_id": account,
+        },
+        "last_refresh": format!("2026-10-{day:02}T00:00:00.123456789Z"),
+    }))
+    .unwrap()
+}
+fn refresh_token(path: &Path) -> String {
+    let auth: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    auth["tokens"]["refresh_token"].as_str().unwrap().into()
+}
+fn private_copy(path: &Path, bytes: &str) {
+    fs::remove_file(path).unwrap();
+    fs::write(path, bytes).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+/// Starts a fresh session, closes it and returns its private home.
+async fn closed_session(adapter: &mut Codex, context: &EngineContext) -> PathBuf {
+    start(adapter, context).await;
+    text(adapter, context, InputId::Task, "first").await;
+    completed(adapter, context, 1).await;
+    let private = adapter.private_home().unwrap().to_path_buf();
+    adapter.close().await.unwrap();
+    private
+}
+async fn resume(adapter: &mut Codex, context: &mut EngineContext, scratch: &Scratch) {
+    context.run_dir = scratch.path().join("resume");
+    adapter
+        .prepare(context, Some("fixture-thread"))
+        .await
+        .unwrap();
+    adapter
+        .execute(
+            context,
+            EngineCommand::Resume {
+                session: "fixture-thread".into(),
+            },
+        )
+        .await
+        .unwrap();
+}
+#[tokio::test]
+async fn codex_writes_in_place_through_the_link_and_every_home_sees_them() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "normal");
+    let owner = scratch.path().join("owner/auth.json");
+    fs::write(&owner, fake_auth("acct", 1, "rt-1")).unwrap();
+    start(&mut adapter, &context).await;
+    let private = adapter.private_home().unwrap().join("auth.json");
+    adapter.close().await.unwrap();
+    // Codex 0.160.0 saves a refresh with open(O_WRONLY|O_CREAT|O_TRUNC) on $CODEX_HOME/auth.json.
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&private)
+        .unwrap();
+    std::io::Write::write_all(&mut file, fake_auth("acct", 2, "rt-2").as_bytes()).unwrap();
+    drop(file);
+    assert!(private.is_symlink());
+    assert_eq!(refresh_token(&owner), "rt-2");
+    // The owner's own Codex refreshes: the run reads it on its next reload.
+    fs::write(&owner, fake_auth("acct", 3, "rt-3")).unwrap();
+    assert_eq!(refresh_token(&private), "rt-3");
+}
+#[tokio::test]
+async fn resumed_session_relinks_its_stale_copy_and_never_downgrades_the_owner() {
+    let scratch = Scratch::new();
+    let (mut adapter, mut context) = setup(&scratch, "normal");
+    let private = closed_session(&mut adapter, &context).await;
+    let owner = scratch.path().join("owner/auth.json");
+    // A home made by an earlier release: its own copy, refreshed before the owner's.
+    fs::write(&owner, fake_auth("acct", 10, "rt-owner")).unwrap();
+    private_copy(
+        &private.join("auth.json"),
+        &fake_auth("acct", 5, "rt-stale"),
+    );
+    resume(&mut adapter, &mut context, &scratch).await;
+    assert_eq!(adapter.private_home(), Some(private.as_path()));
+    assert_eq!(fs::read_link(private.join("auth.json")).unwrap(), owner);
+    assert_eq!(
+        fs::read_to_string(&owner).unwrap(),
+        fake_auth("acct", 10, "rt-owner")
+    );
+    adapter.close().await.unwrap();
+}
+#[tokio::test]
+async fn resumed_session_hands_a_newer_copy_to_the_owner_before_linking() {
+    let scratch = Scratch::new();
+    let (mut adapter, mut context) = setup(&scratch, "normal");
+    let private = closed_session(&mut adapter, &context).await;
+    let owner = scratch.path().join("owner/auth.json");
+    fs::write(&owner, fake_auth("acct", 10, "rt-used")).unwrap();
+    fs::set_permissions(&owner, fs::Permissions::from_mode(0o600)).unwrap();
+    // The run refreshed after the owner did: its copy holds the only live refresh token.
+    private_copy(
+        &private.join("auth.json"),
+        &fake_auth("acct", 20, "rt-live"),
+    );
+    // Another home's copy is newer still but for another account: never adopted.
+    let other = scratch.path().join("home/codex-native-homes/other");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("auth.json"), fake_auth("acct-2", 30, "rt-other")).unwrap();
+    resume(&mut adapter, &mut context, &scratch).await;
+    assert_eq!(fs::read_link(private.join("auth.json")).unwrap(), owner);
+    assert_eq!(fs::read_link(other.join("auth.json")).unwrap(), owner);
+    assert_eq!(refresh_token(&owner), "rt-live");
+    assert_eq!(
+        fs::metadata(&owner).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    adapter.close().await.unwrap();
+}
+#[test]
+fn every_private_copy_is_replaced_and_the_newest_for_the_account_wins() {
+    let scratch = Scratch::new();
+    let owner_home = scratch.path().join("owner");
+    let homes = scratch.path().join("homes");
+    fs::create_dir_all(&owner_home).unwrap();
+    fs::create_dir_all(&homes).unwrap();
+    // The owner keeps the file behind a symlink of their own: it stays one.
+    fs::write(owner_home.join("real.json"), fake_auth("acct", 3, "rt-3")).unwrap();
+    std::os::unix::fs::symlink("real.json", owner_home.join("auth.json")).unwrap();
+    let copies = [
+        ("a", fake_auth("acct", 1, "rt-1")),
+        ("b", fake_auth("acct", 5, "rt-5")),
+        ("c", fake_auth("acct", 4, "rt-4")),
+        ("d", fake_auth("other", 9, "rt-other")),
+        ("e", "not json".to_string()),
+    ];
+    for (name, bytes) in &copies {
+        fs::create_dir(homes.join(name)).unwrap();
+        fs::write(homes.join(name).join("auth.json"), bytes).unwrap();
+    }
+    let fresh = homes.join("pending-run");
+    fs::create_dir(&fresh).unwrap();
+    auth::share(&owner_home, &homes, &fresh).unwrap();
+    for name in ["a", "b", "c", "d", "e", "pending-run"] {
+        assert_eq!(
+            fs::read_link(homes.join(name).join("auth.json")).unwrap(),
+            owner_home.join("auth.json"),
+            "{name}"
+        );
+    }
+    assert!(owner_home.join("auth.json").is_symlink());
+    assert_eq!(refresh_token(&owner_home.join("real.json")), "rt-5");
+    // No temporary file is left beside either.
+    assert_eq!(fs::read_dir(&owner_home).unwrap().count(), 2);
+    assert_eq!(
+        fs::read_dir(&homes)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().file_type().unwrap().is_file())
+            .map(|e| e.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        vec![std::ffi::OsString::from(auth::LOCK)]
+    );
+    // A second launch has nothing left to convert and changes nothing.
+    let before = fs::read(owner_home.join("real.json")).unwrap();
+    auth::share(&owner_home, &homes, &fresh).unwrap();
+    assert_eq!(fs::read(owner_home.join("real.json")).unwrap(), before);
+}
+#[test]
+fn a_copy_is_never_trusted_when_the_owner_has_no_credentials() {
+    let scratch = Scratch::new();
+    let owner_home = scratch.path().join("owner");
+    let homes = scratch.path().join("homes");
+    let home = homes.join("session");
+    fs::create_dir_all(&owner_home).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    fs::write(home.join("auth.json"), fake_auth("acct", 5, "rt-5")).unwrap();
+    auth::share(&owner_home, &homes, &home).unwrap();
+    // The owner logged out: the run is logged out too, and nothing is resurrected.
+    assert_eq!(
+        fs::read_link(home.join("auth.json")).unwrap(),
+        owner_home.join("auth.json")
+    );
+    assert!(!owner_home.join("auth.json").exists());
+}
+#[test]
+fn concurrent_launches_write_back_the_newest_and_never_an_older_one() {
+    for owner_day in [1, 28] {
+        let scratch = Scratch::new();
+        let owner_home = scratch.path().join("owner");
+        let homes = scratch.path().join("homes");
+        fs::create_dir_all(&owner_home).unwrap();
+        fs::create_dir_all(&homes).unwrap();
+        fs::write(
+            owner_home.join("auth.json"),
+            fake_auth("acct", owner_day, "rt-owner"),
+        )
+        .unwrap();
+        let days = [7, 3, 19, 11, 2, 23, 5, 13, 17, 9, 21, 15];
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(days.len()));
+        let threads: Vec<_> = days
+            .iter()
+            .map(|&day| {
+                let (owner_home, homes, barrier) =
+                    (owner_home.clone(), homes.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let home = homes.join(format!("run-{day}"));
+                    fs::create_dir(&home).unwrap();
+                    barrier.wait();
+                    // Each run's copy appears, whole, while other launches convert theirs.
+                    let temp = home.join("auth.json.new");
+                    fs::write(&temp, fake_auth("acct", day, &format!("rt-{day}"))).unwrap();
+                    fs::rename(&temp, home.join("auth.json")).unwrap();
+                    auth::share(&owner_home, &homes, &home).unwrap();
+                    assert_eq!(
+                        fs::read_link(home.join("auth.json")).unwrap(),
+                        owner_home.join("auth.json")
+                    );
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let expected = if owner_day > 23 {
+            "rt-owner".to_string()
+        } else {
+            "rt-23".to_string()
+        };
+        assert_eq!(refresh_token(&owner_home.join("auth.json")), expected);
+    }
 }

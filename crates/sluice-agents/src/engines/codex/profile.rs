@@ -106,6 +106,9 @@ pub fn private_config(
         }
     }
     doc["check_for_update_on_startup"] = value(false);
+    // The private home's auth.json links the owner's file: a keyring entry is keyed by the
+    // private home's path, and saving there would delete the link.
+    doc["cli_auth_credentials_store"] = value("file");
     if search {
         doc["web_search"] = value("live");
     } else {

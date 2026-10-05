@@ -1340,6 +1340,15 @@ of `cwd`. A failed session is an `agent_failure` error with its `kind` and `sess
 retry a transient failure up to 3 times, 600 s apart, resuming the session; a rate limit whose
 reset the engine reported waits until just after that reset instead.
 
+Codex runs with a private `CODEX_HOME` under `<home>/codex-native-homes/`, whose `auth.json` is a
+symlink to the owner's (`$CODEX_HOME/auth.json`, by default `~/.codex/auth.json`), never a copy,
+with `cli_auth_credentials_store = "file"`. Codex rotates its refresh token at each refresh,
+writes that file in place and reloads it before refreshing, so one refresh, in any run or in the
+owner's own Codex, serves them all. Each launch or resume, under `codex-native-homes/.auth.lock`,
+replaces any copy an earlier release left in a private home with the link; a copy for the owner's
+account refreshed later than the owner's file (`last_refresh`) is written to the owner's file
+first, and an older one never is.
+
 The agent is done when it submits: the supervisor stops the session as soon as the run's
 valid submission is stored, busy or not, and returns the result (§6.4); `final` is the agent's
 last message so far, which a busy agent may not have finished. An idle agent that has not submitted is nudged

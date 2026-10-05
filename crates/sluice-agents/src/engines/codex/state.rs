@@ -726,14 +726,9 @@ impl Codex {
             homes.join(format!("pending-{run}"))
         };
         private_dir(&private).map_err(local)?;
-        let auth_source = self.options.source_home.join("auth.json");
-        if auth_source.exists() {
-            super::super::atomic_private(
-                &private.join("auth.json"),
-                &fs::read(auth_source).map_err(local)?,
-            )
-            .map_err(local)?;
-        }
+        // One credential store for the owner and every run: Codex rotates its refresh token, so
+        // a private copy would revoke every other one.
+        super::auth::share(&self.options.source_home, &homes, &private).map_err(local)?;
         super::super::atomic_private(&private.join("config.toml"), config.as_bytes())
             .map_err(local)?;
         self.private_home = Some(private.clone());

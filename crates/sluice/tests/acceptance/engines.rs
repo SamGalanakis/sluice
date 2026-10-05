@@ -36,9 +36,18 @@ pub fn credentials(root: &Path, engine: &str) -> Result<BTreeMap<String, String>
     let owner = &PathBuf::from(std::env::var_os("HOME").ok_or("HOME is absent")?);
     match engine {
         "codex" => {
-            let auth = fs::read(owner.join(".codex/auth.json"))
-                .map_err(|_| "no privately copyable Codex auth.json")?;
-            private_write(&home.join(".codex/auth.json"), &auth);
+            if !owner.join(".codex/auth.json").is_file() {
+                return Err("no Codex auth.json".into());
+            }
+            // Linked, never copied: Codex rotates the refresh token, so a refresh in a copy
+            // would revoke the owner's.
+            fs::create_dir_all(home.join(".codex")).map_err(|e| e.to_string())?;
+            fs::set_permissions(home.join(".codex"), fs::Permissions::from_mode(0o700)).unwrap();
+            std::os::unix::fs::symlink(
+                owner.join(".codex/auth.json"),
+                home.join(".codex/auth.json"),
+            )
+            .map_err(|e| e.to_string())?;
             let out = Command::new(workspace().join(".venv/bin/python"))
                 .arg(workspace().join("crates/sluice/tests/acceptance/fixtures/private_config.py"))
                 .arg(owner.join(".codex/config.toml"))
