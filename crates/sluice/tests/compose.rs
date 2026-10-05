@@ -440,12 +440,26 @@ fn native_factory(engine: &str) {
     });
     let first = Checkpoint::read(&directory).unwrap().unwrap();
     let session = first.session.clone().unwrap();
-    if engine == "claude" {
-        // A shutdown callback already accepted by the guardian can outlive the old pane.
+    // A shutdown callback already accepted by the guardian can outlive the old pane. Nobody
+    // waits for its reply, so the guardian's next exchange removes it: read it as it lands.
+    let stale_reply = (engine == "claude").then(|| {
         let journal = directory.join("engine-hooks");
         std::fs::create_dir_all(&journal).unwrap();
         std::fs::write(journal.join("stale.request.json"), json!({"run":run,"engine":"claude","event":"SessionEnd","payload":{"hook_event_name":"SessionEnd","session_id":session,"cwd":cwd,"transcript_path":g.temp.path().join("owner/.claude/projects/fixture").join(format!("{session}.jsonl"))}}).to_string()).unwrap();
-    }
+        let path = journal.join("stale.reply.json");
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    return Some(bytes);
+                }
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    });
     g.wait(|_| {
         Checkpoint::read(&directory)
             .ok()
@@ -585,9 +599,12 @@ fn native_factory(engine: &str) {
             assert_eq!(env[key], g.env[key]);
         }
     }
-    if engine == "claude" {
+    if let Some(stale_reply) = stale_reply {
         let reply: Value = serde_json::from_slice(
-            &std::fs::read(directory.join("engine-hooks/stale.reply.json")).unwrap(),
+            &stale_reply
+                .join()
+                .unwrap()
+                .expect("the stale hook was answered"),
         )
         .unwrap();
         assert!(

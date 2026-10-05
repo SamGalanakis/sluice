@@ -558,7 +558,7 @@ impl AgentFactory for Factory {
         // logical supervisor owns that journal only while it is executing.
         if directory != outer_dir {
             use std::os::unix::fs::symlink;
-            for name in ["engine-hooks", "control.sock"] {
+            for name in [sluice_process::hook_journal::DIRECTORY, "control.sock"] {
                 let path = directory.join(name);
                 if !path.exists() && std::fs::symlink_metadata(&path).is_err() {
                     symlink(outer_dir.join(name), path).map_err(invalid)?;

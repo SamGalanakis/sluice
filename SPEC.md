@@ -189,6 +189,12 @@ delivery acknowledgements), holds one watch on the coordinator for cancellation 
 and reports the start and the completion until the coordinator acknowledges them. A payload is
 a Python fn (§5.4), an agent session in the private tmux, or a built-in fn.
 
+The guardian hands each engine hook to the agent supervisor through the run's
+`engine-hooks/` journal and waits up to three seconds for its decision. The journal keeps only
+the hooks in flight, however many a run has: the supervisor removes a hook's request once its
+reply is durable, the guardian the reply once it has read it, and each side clears what a crash
+left on its next pass. Past 1024 hooks in flight a hook is refused.
+
 Stopping a run sends TERM to its processes, waits five seconds, then kills the payload cgroup
 recursively and proves it empty before any resource it held is released. The guardian, not the
 coordinator, owns the payload: a coordinator restart or a deploy leaves running payloads alone.

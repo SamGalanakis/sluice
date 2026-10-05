@@ -1046,40 +1046,7 @@ impl PayloadInvocation for OsInvocation {
         &mut self,
         request: EngineHookRequest,
     ) -> Result<EngineHookReply, PublicError> {
-        let directory = self.run_dir.join("engine-hooks");
-        fs::create_dir_all(&directory).map_err(|e| PublicError::Storage {
-            message: e.to_string(),
-        })?;
-        if fs::read_dir(&directory)
-            .map_err(|e| PublicError::Storage {
-                message: e.to_string(),
-            })?
-            .count()
-            >= 4096
-        {
-            return Err(PublicError::BadRequest {
-                message: "engine hook journal bound exceeded".into(),
-            });
-        }
-        let id = InvocationId::new().to_string();
-        atomic_json(&directory, &format!("{id}.request.json"), &request).map_err(|e| {
-            PublicError::Storage {
-                message: e.to_string(),
-            }
-        })?;
-        let path = directory.join(format!("{id}.reply.json"));
-        loop {
-            if let Some(reply) =
-                read_json::<Result<EngineHookReply, PublicError>>(&path).map_err(|e| {
-                    PublicError::Storage {
-                        message: e.to_string(),
-                    }
-                })?
-            {
-                return reply;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        crate::hook_journal::exchange(&self.run_dir, &request).await
     }
 
     fn id(&self) -> InvocationId {

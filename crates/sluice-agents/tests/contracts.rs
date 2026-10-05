@@ -323,7 +323,9 @@ fn hook_journal_claims_before_decision_and_never_replays_claimed_requests() {
     process_hooks(&mut engine, run, &scratch.0).unwrap();
     process_hooks(&mut engine, run, &scratch.0).unwrap();
     assert_eq!(engine.hooks.len(), 1);
-    assert!(journal.join("one.claimed.json").exists());
+    // The claim goes once the reply is durable; the reply is the guardian's to remove.
+    assert!(!journal.join("one.request.json").exists());
+    assert!(!journal.join("one.claimed.json").exists());
     let reply: Result<EngineHookReply, PublicError> =
         sluice_model::rpc::decode_json(&fs::read(journal.join("one.reply.json")).unwrap()).unwrap();
     assert_eq!(reply.unwrap().exit_code, 2);
@@ -334,7 +336,9 @@ fn hook_journal_claims_before_decision_and_never_replays_claimed_requests() {
     .unwrap();
     process_hooks(&mut engine, run, &scratch.0).unwrap();
     assert_eq!(engine.hooks.len(), 1);
+    // An uncertain claim is never decided again; the next pass discards it.
     assert!(!journal.join("crashed.reply.json").exists());
+    assert!(!journal.join("crashed.claimed.json").exists());
 }
 #[test]
 fn hook_journal_refuses_wrong_run_and_bounds_exit_code() {
@@ -360,6 +364,174 @@ fn hook_journal_refuses_wrong_run_and_bounds_exit_code() {
         sluice_model::rpc::decode_json(&fs::read(journal.join("wrong.reply.json")).unwrap())
             .unwrap();
     assert!(reply.is_err());
+}
+
+fn hook_request(run: RunId) -> EngineHookRequest {
+    EngineHookRequest {
+        engine: "fake".into(),
+        run,
+        event: "Stop".into(),
+        payload: JsonValue::try_from(serde_json::json!({"turn":"t"})).unwrap(),
+    }
+}
+fn answering_engine() -> ScriptedEngine {
+    let mut engine = ScriptedEngine::new(vec![]);
+    engine.hook_reply = Some(HookReply {
+        stdout: None,
+        exit_code: 0,
+    });
+    engine
+}
+fn journal_names(journal: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(journal)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+/// The supervisor's side as an agent payload runs it: a journal pass every millisecond.
+struct HookServer {
+    stop: Arc<AtomicBool>,
+    thread: std::thread::JoinHandle<io::Result<ScriptedEngine>>,
+}
+impl HookServer {
+    fn start(run: RunId, run_dir: PathBuf) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut engine = answering_engine();
+            while !flag.load(Ordering::SeqCst) {
+                process_hooks(&mut engine, run, &run_dir)?;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(engine)
+        });
+        Self { stop, thread }
+    }
+    fn stop(self) -> ScriptedEngine {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread.join().unwrap().unwrap()
+    }
+}
+async fn exchange_once(run_dir: &std::path::Path, run: RunId, n: usize) -> EngineHookReply {
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        sluice_process::hook_journal::exchange(run_dir, &hook_request(run)),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("hook {n} got no reply"))
+    .unwrap_or_else(|error| panic!("hook {n} refused: {error:?}"))
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_journal_serves_more_hooks_than_any_bound_over_one_run() {
+    let scratch = Scratch::new();
+    let run = RunId::new();
+    let server = HookServer::start(run, scratch.0.clone());
+    // An older release kept two files per hook and refused the 2049th at 4096 entries.
+    for n in 0..4200 {
+        assert_eq!(exchange_once(&scratch.0, run, n).await.exit_code, 0);
+    }
+    let engine = server.stop();
+    assert_eq!(engine.hooks.len(), 4200);
+    // Every exchange is complete and nobody can need its files again.
+    assert_eq!(
+        journal_names(&scratch.0.join("engine-hooks")),
+        Vec::<String>::new()
+    );
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_journal_recovers_from_crashes_and_an_older_release_leftovers() {
+    let scratch = Scratch::new();
+    let run = RunId::new();
+    let journal = scratch.0.join("engine-hooks");
+    fs::create_dir(&journal).unwrap();
+    let request = serde_json::to_vec(&hook_request(run)).unwrap();
+    let reply = serde_json::to_vec(&Ok::<_, PublicError>(EngineHookReply {
+        stdout: None,
+        exit_code: 0,
+    }))
+    .unwrap();
+    // An older release kept every finished exchange: its claim and its reply.
+    for n in 0..3000 {
+        fs::write(journal.join(format!("old-{n:04}.claimed.json")), &request).unwrap();
+        fs::write(journal.join(format!("old-{n:04}.reply.json")), &reply).unwrap();
+    }
+    // A supervisor crashed while deciding, and another while writing a reply.
+    fs::write(journal.join("deciding.claimed.json"), &request).unwrap();
+    fs::write(journal.join("writing.claimed.json"), &request).unwrap();
+    fs::write(journal.join("writing.reply.tmp"), &reply[..4]).unwrap();
+    // A supervisor crashed between its durable reply and removing the claim.
+    fs::write(journal.join("replied.claimed.json"), &request).unwrap();
+    fs::write(journal.join("replied.reply.json"), &reply).unwrap();
+    // A supervisor starting on these keeps only the replies, which are the guardian's.
+    let mut engine = answering_engine();
+    process_hooks(&mut engine, run, &scratch.0).unwrap();
+    assert!(
+        engine.hooks.is_empty(),
+        "an uncertain claim is never decided again"
+    );
+    let names = journal_names(&journal);
+    assert_eq!(names.len(), 3001);
+    assert!(names.iter().all(|name| name.ends_with(".reply.json")));
+    // A guardian exchange removes them: it waits on one hook at a time, so nobody reads them.
+    // This one's decision times out before the supervisor's next pass, between the reply's
+    // write and its read.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            sluice_process::hook_journal::exchange(&scratch.0, &hook_request(run)),
+        )
+        .await
+        .is_err()
+    );
+    let names = journal_names(&journal);
+    assert_eq!(names.len(), 1);
+    assert!(names[0].ends_with(".request.json"), "{names:?}");
+    // The abandoned request is still decided, once, and its reply is never read ...
+    process_hooks(&mut engine, run, &scratch.0).unwrap();
+    process_hooks(&mut engine, run, &scratch.0).unwrap();
+    assert_eq!(engine.hooks.len(), 1);
+    let names = journal_names(&journal);
+    assert_eq!(names.len(), 1);
+    assert!(names[0].ends_with(".reply.json"), "{names:?}");
+    // ... so the next exchange removes it, and leaves nothing behind itself.
+    let server = HookServer::start(run, scratch.0.clone());
+    assert_eq!(exchange_once(&scratch.0, run, 0).await.exit_code, 0);
+    assert_eq!(server.stop().hooks.len(), 1);
+    assert_eq!(journal_names(&journal), Vec::<String>::new());
+}
+#[tokio::test]
+async fn hook_journal_refuses_a_runaway_of_hooks_in_flight() {
+    use sluice_process::hook_journal::MAX_IN_FLIGHT;
+    let scratch = Scratch::new();
+    let run = RunId::new();
+    let journal = scratch.0.join("engine-hooks");
+    fs::create_dir(&journal).unwrap();
+    let request = serde_json::to_vec(&hook_request(run)).unwrap();
+    // Nobody claims: every request stays in flight. One more is being decided.
+    for n in 0..MAX_IN_FLIGHT - 1 {
+        fs::write(journal.join(format!("{n:04}.request.json")), &request).unwrap();
+    }
+    fs::write(journal.join("deciding.claimed.json"), &request).unwrap();
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        sluice_process::hook_journal::exchange(&scratch.0, &hook_request(run)),
+    )
+    .await
+    .expect("a runaway is refused at once")
+    .unwrap_err();
+    let PublicError::BadRequest { message } = error else {
+        panic!("{error:?}");
+    };
+    assert!(
+        message.contains(&format!(
+            "{MAX_IN_FLIGHT} hooks in flight ({} unclaimed, 1 claimed without a reply;",
+            MAX_IN_FLIGHT - 1
+        )),
+        "{message}"
+    );
+    assert_eq!(journal_names(&journal).len(), MAX_IN_FLIGHT);
 }
 
 struct HookHost {

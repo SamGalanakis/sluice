@@ -15,6 +15,7 @@ use sluice_model::{
     rpc::decode_json,
 };
 use sluice_process::{
+    hook_journal,
     identity::ProcessIdentity,
     locks::{FileLock, LockAttempt},
     socket::{AssignedRange, DeliveryMessage},
@@ -1462,7 +1463,8 @@ async fn command_output(command: std::process::Command) -> io::Result<std::proce
 }
 
 /// Claim-before-call is the at-most-once boundary. A claimed request without a reply is
-/// uncertain after a crash; neither the guardian nor supervisor executes it again.
+/// uncertain after a crash; neither the guardian nor supervisor executes it again. Each pass
+/// first settles the claims a crash or an older release left (see `hook_journal`).
 pub fn process_hooks<E: EngineAdapter>(
     engine: &mut E,
     run: RunId,
@@ -1471,22 +1473,11 @@ pub fn process_hooks<E: EngineAdapter>(
     process_hooks_inner(engine, Some(run), directory)
 }
 fn pending_hooks(directory: &Path) -> io::Result<bool> {
-    match fs::read_dir(directory.join("engine-hooks")) {
-        Ok(entries) => {
-            for entry in entries {
-                if entry?
-                    .file_name()
-                    .to_string_lossy()
-                    .ends_with(".request.json")
-                {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
+    Ok(
+        !hook_journal::Listing::read(&hook_journal::path(directory))?
+            .requests
+            .is_empty(),
+    )
 }
 fn process_hooks_inner<E: EngineAdapter>(
     engine: &mut E,
@@ -1494,33 +1485,13 @@ fn process_hooks_inner<E: EngineAdapter>(
     directory: &Path,
 ) -> io::Result<()> {
     use sluice_model::error::PublicError;
-    use sluice_process::socket::{EngineHookReply, EngineHookRequest};
-    let journal = directory.join("engine-hooks");
-    let mut paths = match fs::read_dir(&journal) {
-        Ok(entries) => entries
-            .map(|entry| entry.map(|e| e.path()))
-            .collect::<io::Result<Vec<_>>>()?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    paths.sort();
-    if paths.len() > 4096 {
-        return Err(io::Error::other("engine hook journal bound exceeded"));
-    }
-    for path in paths
-        .into_iter()
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with(".request.json"))
-        })
-        .take(128)
-    {
-        let name = path.file_name().expect("journal name").to_string_lossy();
-        let id = name.strip_suffix(".request.json").expect("request");
-        let request: EngineHookRequest =
-            decode_json(&fs::read(&path)?).map_err(io::Error::other)?;
-        fs::rename(&path, journal.join(format!("{id}.claimed.json")))?;
-        fs::File::open(&journal)?.sync_all()?;
+    use sluice_process::socket::EngineHookReply;
+    let journal = hook_journal::path(directory);
+    let listing = hook_journal::settle_claims(&journal)?;
+    for id in listing.requests.iter().take(128) {
+        let Some(request) = hook_journal::claim(&journal, id)? else {
+            continue;
+        };
         let result: Result<EngineHookReply, PublicError> = if request.engine
             != engine.profile().engine
             || Some(request.run) != run
@@ -1562,51 +1533,21 @@ fn process_hooks_inner<E: EngineAdapter>(
                     })
                 })
         };
-        let bytes = serde_json::to_vec(&result).map_err(io::Error::other)?;
-        if bytes.len() > 1024 * 1024 {
-            return Err(io::Error::other("hook reply too large"));
-        }
-        let tmp = journal.join(format!("{id}.reply.tmp"));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        fs::rename(tmp, journal.join(format!("{id}.reply.json")))?;
-        fs::File::open(&journal)?.sync_all()?;
+        hook_journal::answer(&journal, id, &result)?;
     }
     Ok(())
 }
 
 fn hooks_need_context(directory: &Path) -> io::Result<bool> {
-    let entries = match fs::read_dir(directory.join("engine-hooks")) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    for entry in entries {
-        let path = entry?.path();
-        if path
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().ends_with(".request.json"))
-        {
-            let request: sluice_process::socket::EngineHookRequest =
-                decode_json(&fs::read(path)?).map_err(io::Error::other)?;
-            if request.event == "SessionStart"
-                && request
-                    .payload
-                    .as_value()
-                    .get("source")
-                    .and_then(Value::as_str)
-                    == Some("compact")
-            {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
+    Ok(hook_journal::requests(directory)?.iter().any(|request| {
+        request.event == "SessionStart"
+            && request
+                .payload
+                .as_value()
+                .get("source")
+                .and_then(Value::as_str)
+                == Some("compact")
+    }))
 }
 async fn refresh_me<H: SupervisorHost>(host: &mut H, directory: &Path) {
     let path = directory.join("me.md");

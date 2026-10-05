@@ -2,6 +2,7 @@
 
 pub mod cgroup;
 pub mod guardian;
+pub mod hook_journal;
 pub mod host;
 pub mod identity;
 pub mod journal;
