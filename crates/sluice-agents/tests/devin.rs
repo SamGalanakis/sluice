@@ -142,7 +142,14 @@ impl Pane {
             sluice_process::tmux::ApprovedTmux::load(&workspace().join("target/private-tmux"))
                 .await
                 .unwrap();
-        assert_eq!(Some(artifact.binary()), context.tmux_binary.as_deref());
+        // Resolved on both sides: a checkout may link target/private-tmux to another one's.
+        assert_eq!(
+            artifact.binary().canonicalize().ok(),
+            context
+                .tmux_binary
+                .as_deref()
+                .and_then(|p| p.canonicalize().ok())
+        );
         let server = artifact
             .server_command(&context.run_dir, None)
             .unwrap()
