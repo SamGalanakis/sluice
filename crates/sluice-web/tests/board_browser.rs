@@ -228,3 +228,93 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
     server.abort();
     let _ = server.await;
 }
+
+/// Each drawn edge, and whether it leaves its source's foot and ends on its dependent's top.
+const EDGES: &str = r#"(() => {
+  const plane = document.querySelector('.plane').getBoundingClientRect();
+  return [...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => {
+    const a = document.querySelector(`[data-node="${p.dataset.from}"]`).getBoundingClientRect();
+    const z = document.querySelector(`[data-node="${p.dataset.to}"]`).getBoundingClientRect();
+    const n = p.getAttribute('d').match(/-?[\d.]+/g).map(Number);
+    const [x1, y1, x2, y2] = [n[0], n[1], n.at(-2), n.at(-1)];
+    return {from: p.dataset.from, to: p.dataset.to,
+            lands: x1 >= a.left - plane.left - 1 && x1 <= a.right - plane.left + 1
+              && Math.abs(y1 - (a.bottom - plane.top)) < 1.5
+              && x2 >= z.left - plane.left - 1 && x2 <= z.right - plane.left + 1
+              && Math.abs(y2 + 7 - (z.top - plane.top)) < 1.5};
+  });
+})()"#;
+const BOXES: &str = r#"[...document.querySelectorAll('.boxes.units > .box')].map(b => {
+  const r = b.getBoundingClientRect(); return {id: b.id, left: r.left, top: r.top, bottom: r.bottom, width: r.width}; })"#;
+
+/// The plan's units as a grid keyed off the plan pane's width: units of one lane side by side
+/// where the pane is wide, stacked on a phone; the edges inside each land on their cards after
+/// layout and after a resize, and nothing scrolls sideways.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_plan_grid_lays_units_side_by_side_and_edges_land_on_their_cards() {
+    let f = Fixture::new().await;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let lanes = f.id;
+    tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{lanes}")).unwrap();
+        browser
+            .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
+            .unwrap();
+        for width in [1440, 1300, 2560, 1440] {
+            browser.viewport(width, "light").unwrap();
+            browser
+                .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length === 2")
+                .unwrap();
+            let boxes = browser.eval(BOXES).unwrap();
+            let boxes = boxes.as_array().unwrap();
+            assert_eq!(boxes.len(), 2, "{width}: {boxes:?}");
+            let (a, b) = (&boxes[0], &boxes[1]);
+            assert!(
+                near(&a["top"], b["top"].as_f64().unwrap()),
+                "{width}: one grid row {boxes:?}"
+            );
+            assert!(
+                b["left"].as_f64().unwrap()
+                    > a["left"].as_f64().unwrap() + a["width"].as_f64().unwrap(),
+                "{width}: side by side {boxes:?}"
+            );
+            assert!(
+                a["width"].as_f64().unwrap() >= 296.0,
+                "{width}: a cell holds a card {boxes:?}"
+            );
+            let edges = browser.eval(EDGES).unwrap();
+            assert!(
+                edges.as_array().unwrap().iter().all(|e| e["lands"] == true),
+                "{width}: {edges}"
+            );
+            let scroll = browser
+                .eval("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                .unwrap();
+            assert_eq!(scroll, 0, "{width}: sideways scroll");
+        }
+        browser.viewport(390, "light").unwrap();
+        let boxes = browser.eval(BOXES).unwrap();
+        let boxes = boxes.as_array().unwrap();
+        assert!(
+            boxes[1]["top"].as_f64().unwrap() >= boxes[0]["bottom"].as_f64().unwrap(),
+            "phone: stacked {boxes:?}"
+        );
+        assert_eq!(
+            browser
+                .eval("document.querySelectorAll('svg.edges path').length")
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            browser.eval("window.browserErrors").unwrap(),
+            serde_json::json!([])
+        );
+    })
+    .await
+    .unwrap();
+    server.abort();
+    let _ = server.await;
+}

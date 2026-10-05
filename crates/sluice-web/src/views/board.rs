@@ -58,8 +58,37 @@ pub struct Relation {
     pub kind: RelationKind,
     pub label: String,
     pub tolerant: bool,
+    /// Its ends are not in one unit's box (a plan input or output is in none): the board shows
+    /// it as a chip on the dependent (`Xref`), not as an edge drawn across other boxes.
+    pub cross: bool,
+}
+impl Endpoint {
+    /// The unit whose box holds this end; a plan input or output is in no box.
+    fn unit<'a>(&'a self, unit_of: &BTreeMap<&StepId, &'a UnitName>) -> Option<&'a UnitName> {
+        match self {
+            Self::Step(id) => unit_of.get(id).copied(),
+            Self::Unit(name) => Some(name),
+            Self::Input(_) | Self::Output(_) => None,
+        }
+    }
 }
 pub fn relations(plan: &Plan) -> Vec<Relation> {
+    let unit_of: BTreeMap<&StepId, &UnitName> = plan
+        .units()
+        .values()
+        .flat_map(|u| u.steps.iter().map(move |s| (s, &u.name)))
+        .collect();
+    let mut out = relation_ends(plan);
+    for relation in &mut out {
+        let (from, to) = (
+            relation.from.unit(&unit_of),
+            relation.to.unit(&unit_of),
+        );
+        relation.cross = from.is_none() || from != to;
+    }
+    out
+}
+fn relation_ends(plan: &Plan) -> Vec<Relation> {
     let mut out = vec![];
     let endpoint = |reference: &sluice_model::gates::ValueRef| {
         let parts = reference.parts().expect("compiled reference");
@@ -86,6 +115,7 @@ pub fn relations(plan: &Plan) -> Vec<Relation> {
                     kind: RelationKind::Handoff,
                     label: format!("{label} → {input}"),
                     tolerant: false,
+                    cross: false,
                 });
             }
         }
@@ -123,6 +153,7 @@ pub fn relations(plan: &Plan) -> Vec<Relation> {
                 kind,
                 label,
                 tolerant,
+                cross: false,
             });
         }
     }
@@ -134,9 +165,201 @@ pub fn relations(plan: &Plan) -> Vec<Relation> {
             kind: RelationKind::Handoff,
             label,
             tolerant: false,
+            cross: false,
         });
     }
     out
+}
+impl RelationKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Handoff => "handoff",
+            Self::Ordering => "ordering",
+            Self::Condition => "condition",
+            Self::NegatedCondition => "negated_condition",
+            Self::Unit => "unit",
+        }
+    }
+}
+/// A relation between boxes, shown on its dependent as a chip, "← source", that links to the
+/// source and lights it when hovered or focused. Its words keep the edge's kind: `if` (and
+/// `if not`) for a condition, `unit:` for a unit gate, the output after a handoff's step, `?`
+/// when a skip counts (dashed, as that edge is).
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct Xref {
+    /// The source's and the dependent's node keys (`s:<step>`, `u:<unit>`, `i:<input>`, ...).
+    pub from: String,
+    pub to: String,
+    pub kind: RelationKind,
+    pub tolerant: bool,
+    /// Said before the rest by a screen reader, not shown: "After ", "Handoff from ".
+    pub said: &'static str,
+    /// Muted before the source: "if ", "if not ", "unit:".
+    pub lead: String,
+    /// The source: a step, a unit or a plan input.
+    pub name: String,
+    /// Muted after the source: a handoff's or condition's output ("/text"), or "?".
+    pub tail: String,
+    /// The whole relation, in words.
+    pub title: String,
+    pub href: String,
+    /// A source step, which opens in the drawer.
+    pub opens: String,
+}
+impl Xref {
+    fn new(project: ProjectId, relation: &Relation) -> Self {
+        let skip = if relation.tolerant { "?" } else { "" };
+        let skips = if relation.tolerant {
+            ", even if it is skipped"
+        } else {
+            ""
+        };
+        let (name, href, opens, step) = match &relation.from {
+            Endpoint::Step(id) => (
+                id.to_string(),
+                format!("/projects/id/{project}/steps/{id}"),
+                id.to_string(),
+                true,
+            ),
+            Endpoint::Unit(id) => (
+                id.to_string(),
+                format!("/projects/id/{project}/units/{id}"),
+                String::new(),
+                false,
+            ),
+            Endpoint::Input(id) | Endpoint::Output(id) => {
+                (id.to_string(), format!("#in-{id}"), String::new(), false)
+            }
+        };
+        // A step's output follows its id; a plan input's reference is its own name.
+        let output = |path: &str| {
+            if step {
+                (name.clone(), format!("/{path}"))
+            } else {
+                (path.to_owned(), String::new())
+            }
+        };
+        let (said, lead, (name, tail), title) = match relation.kind {
+            RelationKind::Handoff => {
+                let (path, into) = relation
+                    .label
+                    .split_once(" → ")
+                    .map_or((relation.label.as_str(), None), |(p, i)| (p, Some(i)));
+                let (shown, tail) = output(path);
+                let source = if step {
+                    format!("{shown}{tail}")
+                } else {
+                    format!("plan input {shown}")
+                };
+                let title = match (into, &relation.to) {
+                    (Some(input), _) => format!("Handoff: {source} → {input}"),
+                    (None, Endpoint::Output(out)) => format!("Plan output {out}: {source}"),
+                    (None, _) => format!("Handoff: {source}"),
+                };
+                let said = if step {
+                    "Handoff from "
+                } else {
+                    "Handoff from plan input "
+                };
+                (said, String::new(), (shown, tail), title)
+            }
+            RelationKind::Ordering => (
+                "After ",
+                String::new(),
+                (name.clone(), skip.to_owned()),
+                format!("After {name}{skips}"),
+            ),
+            RelationKind::Unit => (
+                "After ",
+                "unit:".to_owned(),
+                (name.clone(), skip.to_owned()),
+                format!("After unit {name}{skips}"),
+            ),
+            RelationKind::Condition | RelationKind::NegatedCondition => {
+                let negated = relation.kind == RelationKind::NegatedCondition;
+                let path = if negated {
+                    relation
+                        .label
+                        .strip_prefix("not ")
+                        .unwrap_or(&relation.label)
+                } else {
+                    &relation.label
+                };
+                let (shown, tail) = output(path);
+                let truth = if negated { "false" } else { "true" };
+                let title = format!("If {shown}{tail} is {truth}");
+                let lead = if negated { "if not " } else { "if " };
+                ("", lead.to_owned(), (shown, tail), title)
+            }
+        };
+        Self {
+            from: relation.from.key(),
+            to: relation.to.key(),
+            kind: relation.kind.clone(),
+            tolerant: relation.tolerant,
+            said,
+            lead,
+            name,
+            tail,
+            title,
+            href,
+            opens,
+        }
+    }
+    pub fn html(&self) -> Result<TrustedHtml, askama::Error> {
+        #[derive(Template)]
+        #[template(
+            source = "<a class=\"xref k-{{ x.kind.name() }}{% if x.tolerant %} tolerant{% endif %}\" href=\"{{ x.href }}\"{% if !x.opens.is_empty() %} data-opens=\"{{ x.opens }}\"{% endif %} data-from=\"{{ x.from }}\" data-to=\"{{ x.to }}\" title=\"{{ x.title }}\"><span class=\"xa\" aria-hidden=\"true\">←</span><span class=\"vh\">{{ x.said }}</span>{% if !x.lead.is_empty() %}<span class=\"xm\">{{ x.lead }}</span>{% endif %}<span class=\"xn\">{{ x.name }}</span>{% if !x.tail.is_empty() %}<span class=\"xm\">{{ x.tail }}</span>{% endif %}</a>",
+            ext = "html"
+        )]
+        struct Chip<'a> {
+            x: &'a Xref,
+        }
+        TrustedHtml::from_template(&Chip { x: self })
+    }
+}
+/// On a source card (or a unit's label): how many dependents it has in other boxes, "→ n".
+pub fn feeds_html(n: impl std::borrow::Borrow<usize>) -> String {
+    let n = *n.borrow();
+    format!(
+        "<span class=\"xout\" title=\"{n} in other units after it\"><span aria-hidden=\"true\">→ {n}</span><span class=\"vh\">, {n} in other units after it</span></span>"
+    )
+}
+/// The chips of the relations between boxes, by their dependent's node key (one chip for the
+/// relations a dependent shows alike), and how many dependents each source has in other boxes.
+type Crossings = (
+    BTreeMap<String, Vec<Xref>>,
+    BTreeMap<String, BTreeSet<String>>,
+);
+fn crossings(project: ProjectId, relations: &[Relation]) -> Crossings {
+    let mut chips = BTreeMap::<String, Vec<Xref>>::new();
+    let mut feeds = BTreeMap::<String, BTreeSet<String>>::new();
+    for relation in relations.iter().filter(|r| r.cross) {
+        let chip = Xref::new(project, relation);
+        feeds
+            .entry(chip.from.clone())
+            .or_default()
+            .insert(chip.to.clone());
+        let on = chips.entry(chip.to.clone()).or_default();
+        match on.iter_mut().find(|c| {
+            (&c.from, &c.kind, c.tolerant, &c.lead, &c.name, &c.tail)
+                == (
+                    &chip.from,
+                    &chip.kind,
+                    chip.tolerant,
+                    &chip.lead,
+                    &chip.name,
+                    &chip.tail,
+                )
+        }) {
+            Some(same) => {
+                same.title.push_str("; ");
+                same.title.push_str(&chip.title);
+            }
+            None => on.push(chip),
+        }
+    }
+    (chips, feeds)
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct UnitView {
@@ -149,10 +372,29 @@ pub struct UnitView {
     pub blocked: Vec<String>,
     pub last_message: String,
     pub changed: String,
+    /// Each step's chips for its relations to other boxes, by step id.
+    pub xrefs: BTreeMap<String, Vec<Xref>>,
+    /// How many dependents in other boxes each step has, by step id, and the unit itself.
+    pub feeds: BTreeMap<String, usize>,
+    pub unit_feeds: usize,
 }
 impl UnitView {
     pub fn key(&self) -> String {
         format!("u:{}", self.id)
+    }
+    /// How many lanes the box lays side by side: its widest row's cards. A box of one lane
+    /// takes a cell of the board's grid; a wider one spans the grid's row.
+    pub fn lanes(&self) -> usize {
+        self.rows.iter().map(Vec::len).max().unwrap_or(0)
+    }
+    pub fn xrefs_of(&self, step: &StepView) -> &[Xref] {
+        self.xrefs
+            .get(step.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+    pub fn feeds_of(&self, step: &StepView) -> usize {
+        self.feeds.get(step.id.as_str()).copied().unwrap_or(0)
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&UnitTemplate { unit: self })
@@ -200,6 +442,8 @@ pub struct ProjectView {
     pub project: super::ProjectView,
     pub units: Vec<UnitView>,
     pub relations: Vec<Relation>,
+    /// Each plan output's chips for the relations that feed it, by output name.
+    pub output_xrefs: BTreeMap<String, Vec<Xref>>,
     pub inputs: Vec<FieldView>,
     pub outputs: Vec<FieldView>,
     pub revision: u64,
@@ -238,6 +482,8 @@ impl ProjectView {
                 blocked.insert(id.clone());
             }
         }
+        let relations = relations(plan);
+        let (mut chips, feeds) = crossings(project.id, &relations);
         let units = plan
             .units()
             .values()
@@ -257,6 +503,16 @@ impl ProjectView {
                 for step in &steps {
                     rows.entry(depth[&step.id]).or_default().push(step.clone());
                 }
+                let xrefs = steps
+                    .iter()
+                    .filter_map(|s| Some((s.id.to_string(), chips.remove(&s.key())?)))
+                    .collect();
+                let feeds_of = |key: &str| feeds.get(key).map_or(0, BTreeSet::len);
+                let step_feeds = steps
+                    .iter()
+                    .map(|s| (s.id.to_string(), feeds_of(&s.key())))
+                    .filter(|(_, n)| *n > 0)
+                    .collect();
                 UnitView {
                     id: unit.name.clone(),
                     tagged: unit.tagged,
@@ -267,8 +523,16 @@ impl ProjectView {
                     rows: rows.into_values().collect(),
                     last_message: String::new(),
                     changed: project.changed.clone(),
+                    xrefs,
+                    feeds: step_feeds,
+                    unit_feeds: feeds_of(&format!("u:{}", unit.name)),
                 }
             })
+            .collect::<Vec<_>>();
+        let output_xrefs = plan
+            .outputs()
+            .keys()
+            .filter_map(|n| Some((n.clone(), chips.remove(&format!("o:{n}"))?)))
             .collect();
         Self {
             inputs: plan
@@ -302,7 +566,8 @@ impl ProjectView {
                 .collect(),
             project,
             units,
-            relations: relations(plan),
+            relations,
+            output_xrefs,
             revision,
             query: String::new(),
             order: "live".into(),
@@ -327,6 +592,12 @@ impl ProjectView {
     /// and the rest, which the page folds.
     pub fn about(&self) -> (TrustedHtml, Option<TrustedHtml>) {
         crate::markdown::render_folded(&self.project.description)
+    }
+    pub fn output_xrefs_of(&self, output: &FieldView) -> &[Xref] {
+        self.output_xrefs
+            .get(&output.name)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
     pub fn edges_json(&self) -> String {
         serde_json::to_string(&self.relations).expect("typed relations serialize")

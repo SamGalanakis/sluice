@@ -403,19 +403,45 @@ Top down:
    the plan's. The search keeps the steps whose id, doc or unit id holds every word of it (any
    case, any order); a unit with none hides, and an empty board says "Clear the search to see
    every unit."
-3. **The board**: the plan inputs as dashed chips, one box per unit, the plan outputs as dashed
-   chips. A box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no
-   border) is labelled with the unit's id in meta and lays its cards in rows by dependency depth.
-   A done unit folds to one line, a `<details>`: the success glyph, the unit id, "n steps ·
-   done" and a chevron; it opens to its cards. A board with no units to show reads "No units
-   match this view." The plan pane is a size container named `plan`: what lays out the plan
-   keys off the pane's width, which the splitter changes, never the window's.
+3. **The board**: first the legend (none when no unit is shown), one quiet line in meta under
+   the tools, each kind with its mark: a short line for "handoff · after · condition · not", a
+   dashed one for "?", a box swatch for "unit", a sample chip "← step" for "in another unit".
+   Then the plan inputs as dashed chips, one box per unit, the plan outputs as dashed chips. A
+   box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no border) is
+   labelled with the unit's id in meta and lays its cards in rows by dependency depth. A done
+   unit folds to one line, a `<details>`: the success glyph, the unit id, "n steps · done" and
+   a chevron; it opens to its cards. A board with no units to show reads "No units match this
+   view." The plan pane is a size container named `plan`: what lays out the plan keys off the
+   pane's width, which the splitter changes, never the window's.
+   - **The grid**: from 720px of pane (more than a phone's pane ever has) the boxes are a
+     grid, `repeat(auto-fill, minmax(296px, 1fr))` with a 14px gap, read left to right then down in the server's order (Live first or Plan
+     order). The cell's minimum holds the widest card on a large live plan (222px) with the
+     box's padding. A unit of one lane (no row of it holds two cards) takes a cell; a unit
+     with cards side by side spans the row; a done unit folded to its line takes a cell, top
+     aligned, and spans the row again when it opens with lanes side by side. Boxes in one row
+     share its height, so the grid reads as tiles.
 4. **Edges** (the `<sluice-board>` element draws them in an SVG over the measured cards, from the
-   server's typed relations): a handoff a solid line, an `after` step entry a dashed ordering
-   line, a ref entry a condition line labelled with the output (`not <output>` for `!`), a `?`
-   entry dashed, a `unit:` entry drawn to the unit's box. The legend under the board reads
-   "Handoff · after · condition · not · dashed ? · unit". Below 720px there are no edges and no
-   legend; each box stacks its lanes, each reading straight down.
+   server's typed relations): only a relation within one box is drawn. A handoff is a solid
+   line, an `after` step entry an ordering line, a ref entry a condition line labelled with
+   the output (`not <output>` for `!`), a `?` entry dashed; the names show while a card is
+   traced. The edges are drawn on the client and kept across the stream's patches
+   (`data-ignore-morph`), redrawn when the cards move, a box opens or the board resizes.
+   - **Chips**: a relation whose ends are in two boxes (the server marks it `cross`; a plan
+     input or output is in no box, so its relations are chips too) is not drawn across the
+     page. Its dependent shows a chip under its card (beside a plan output's chip), "← source":
+     12px text at 500, the 5px corner and a strong hairline, the arrow and kind words in
+     muted ink, the source in ink. The words keep the kind: `← source/text` a handoff (its
+     output), `← source` an after, `← if source/ok` and `← if not source/ok` a condition,
+     `← unit:build` a unit gate, a trailing `?` and a dashed hairline when a skip counts. Its
+     accessible name says the kind ("After source", "Handoff from source/text") and its title
+     the whole relation. A chip is a link: to the source step (in the drawer with script, its
+     page without), the source unit's page, or the plan input's chip. Hovering or focusing it
+     traces its source: every chip from that source lights with its dependent, the source's
+     card (and a source unit's box, ringed in ink) stays crisp, the rest recede. A card under
+     chips sends its own edges from below them. A source card counts what follows it in other
+     boxes, "→ n" in meta after its caption (a unit, after its id).
+   Below 720px there are no edges and no legend; each box stacks its lanes, each reading
+   straight down, a card's chips under it.
 5. **Under the board**: Result (each plan output's value, or "No value yet.") and Plan inputs
    (value or "No value yet.", and the input's doc).
 
@@ -427,10 +453,12 @@ project's live data. It is the owner's instrument for that project, never a seco
   line: the card colour with a hairline and the 14px corner, 14 by 16px padding, sticky 16px
   from the top and at most the window's height, scrolling on its own. Its head is "Board"
   (section voice, `heading-accent`, Lucide `layout-dashboard`). Its width is
-  `clamp(400px, 30%, 720px)` until the splitter sets one. A small segmented control at the
-  right above it, "Plan" (Lucide `workflow`), "Both" (`columns-2`, the default) and "Board"
+  `clamp(400px, 30%, 720px)` until the splitter sets one. A small segmented control,
+  "Plan" (Lucide `workflow`), "Both" (`columns-2`, the default) and "Board"
   (`layout-dashboard`), shows the plan alone, both, or the board alone across the page (its
   tables then keep to their content's width); the choice is remembered per project. With the
+  plan shown it sits on the summary line's row at the plan's right edge (the line keeps room
+  for it and centres on it); with the board alone, at the right above the board. With the
   step drawer open the drawer takes the side: the plan shows, the board and the switch step
   away until it closes.
 - **The splitter** (script only): a 32px track between plan and board, a `role="separator"`
@@ -545,7 +573,8 @@ list, question cards, the danger card; 10px (`--radius-md`) for controls, the sw
 menu, and code blocks; 5px (`--radius-sm`) for inline code, tags and menu items. A pill (999px)
 is only for the step cards, the progress bar, the inbox badge, the Types switch's track and a
 boolean value: a card is a token of work, not a panel. Plan input and output chips are dashed,
-since they are ends, not work.
+since they are ends, not work; a relation chip ("← source") is a fact, so it takes the tag's
+5px corner.
 
 ## Components
 
@@ -566,8 +595,9 @@ since they are ends, not work.
   head and switch and its error boxes, the splitter's grip and the search field's magnifier and
   clear. A new icon is fetched from Lucide at that version, never
   drawn; the mark and favicon are the owner's, and a project's own icon is the user's.
-- **Tracing**: hovering or focusing a card lights its edges; the other cards lose their border
-  and fill and their text turns muted ink.
+- **Tracing**: hovering or focusing a card lights its edges and the chips to and from it; the
+  other cards and chips lose their border and fill and their text turns muted ink. A chip
+  traces its source.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input
   hairline. The progress bar is an 8px pill, 200px wide (120 on a phone); on a project page
   it grows with its summary line, up to 480px.

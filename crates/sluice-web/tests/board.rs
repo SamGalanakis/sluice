@@ -26,6 +26,7 @@ fn fixture() -> (Plan, StateSnapshot, views::ProjectView) {
         "yes":{"run":"core.external","after":["start/ok"],"tags":["unit:review"]},
         "no":{"run":"core.external","after":["!start/ok"],"tags":["unit:review"]},
         "cleanup":{"run":"core.external","after":["start?"],"tags":["unit:review"]},
+        "summary":{"run":"core.external","after":["order"],"tags":["unit:review"]},
         "unit-gate":{"run":"core.external","after":["unit:build"]},
         "unit-tolerant":{"run":"core.external","after":["unit:build?"]},
         "enabled-work":{"run":"core.external","after":["enabled"]},
@@ -191,4 +192,115 @@ fn paused_and_queued_work_have_distinct_wait_projection() {
             .filter(|s| s.status == "pending")
             .all(|s| s.mark == "paused" && !s.blocked)
     );
+}
+
+/// A relation whose ends are in two boxes (or in none: a plan input or output) is marked
+/// `cross` and shown as a chip on its dependent, linking to its source; one within a box is
+/// drawn as before.
+#[test]
+fn relations_between_boxes_are_marked_and_shown_as_chips_on_their_dependents() {
+    let (plan, state, project) = fixture();
+    let id = project.id;
+    let view = ProjectView::new(project, &plan, &state, 1);
+    let edges: serde_json::Value = serde_json::from_str(&view.edges_json()).unwrap();
+    let cross = |from: &str, to: &str| {
+        edges
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["from"]["id"] == from && e["to"]["id"] == to)
+            .map(|e| {
+                e["cross"]
+                    .as_bool()
+                    .expect("every relation says whether it crosses")
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(cross("order", "summary"), [false]); // within review: drawn
+    assert_eq!(cross("start", "handoff"), [true]); // build to review
+    assert_eq!(cross("start", "yes"), [true]);
+    assert_eq!(cross("build", "unit-gate"), [true]); // a unit gate
+    assert_eq!(cross("enabled", "enabled-work"), [true]); // a plan input is in no box
+    assert_eq!(cross("start", "result"), [true]); // nor is a plan output
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    let chip = |from: &str, to: &str| {
+        let at = html
+            .find(&format!("data-from=\"{from}\" data-to=\"{to}\""))
+            .unwrap_or_else(|| panic!("a chip {from} -> {to}"));
+        let start = html[..at].rfind("<a class=\"xref").unwrap();
+        &html[start..start + html[start..].find("</a>").unwrap()]
+    };
+    let handoff = chip("s:start", "s:handoff");
+    assert!(handoff.contains("class=\"xref k-handoff\""), "{handoff}");
+    assert!(handoff.contains(&format!("href=\"/projects/id/{id}/steps/start\"")));
+    assert!(handoff.contains("data-opens=\"start\""));
+    assert!(handoff.contains("title=\"Handoff: start/text → data\""));
+    assert!(handoff.contains("<span class=\"vh\">Handoff from </span>"));
+    assert!(handoff.contains("<span class=\"xn\">start</span><span class=\"xm\">/text</span>"));
+    let not = chip("s:start", "s:no");
+    assert!(not.contains("k-negated_condition"), "{not}");
+    assert!(not.contains("<span class=\"xm\">if not </span><span class=\"xn\">start</span><span class=\"xm\">/ok</span>"));
+    let tolerant = chip("s:start", "s:cleanup");
+    assert!(
+        tolerant.contains("class=\"xref k-ordering tolerant\""),
+        "{tolerant}"
+    );
+    assert!(tolerant.contains("<span class=\"xm\">?</span>"));
+    let unit = chip("u:build", "s:unit-gate");
+    assert!(
+        unit.contains(&format!("href=\"/projects/id/{id}/units/build\"")),
+        "{unit}"
+    );
+    assert!(unit.contains("<span class=\"xm\">unit:</span><span class=\"xn\">build</span>"));
+    assert!(!unit.contains("data-opens"));
+    let input = chip("i:enabled", "s:enabled-work");
+    assert!(input.contains("href=\"#in-enabled\""), "{input}");
+    assert!(html.contains("id=\"in-enabled\""));
+    assert!(chip("s:start", "o:result").contains("title=\"Plan output result: start/text\""));
+    // A chip sits under its card, the two in one stack; a card with none is as before.
+    let card = html.find("id=\"n-handoff\"").unwrap();
+    assert!(html[..card].ends_with("<div class=\"stack\"><a "));
+    assert!(!html[..html.find("id=\"n-summary\"").unwrap()].ends_with("<div class=\"stack\"><a "));
+    // No chip for a relation within a box.
+    assert!(!html.contains("data-from=\"s:order\" data-to=\"s:summary\""));
+    // A source counts its dependents in other boxes: start feeds five steps and the output;
+    // the build unit, two unit gates.
+    let start = &html[html.find("id=\"n-start\"").unwrap()..];
+    let start = &start[..start.find("</a>").unwrap()];
+    assert!(
+        start.contains("<span aria-hidden=\"true\">→ 6</span>"),
+        "{start}"
+    );
+    let label = &html[html.find("id=\"unit-build\"").unwrap()..];
+    let label = &label[..label.find("</p>").unwrap()];
+    assert!(label.contains("→ 2"), "{label}");
+}
+/// A unit of one lane takes one cell of the board's grid; a unit with cards side by side
+/// spans the grid's row. The legend leads the board, and the drawn edges survive a patch.
+#[test]
+fn layout_marks_wide_units_and_leads_the_board_with_its_legend() {
+    let (plan, state, project) = fixture();
+    let view = ProjectView::new(project, &plan, &state, 1);
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(html.contains("<section id=\"unit-review\" class=\"box wide\""));
+    assert!(html.contains("<section id=\"unit-build\" class=\"box\""));
+    assert!(html.contains("<div class=\"boxes boxed units\">"));
+    let board = html.find("<sluice-board").unwrap();
+    let legend = html.find("<p class=\"legend\">").expect("a legend");
+    let plane = html.find("<div class=\"plane\"").unwrap();
+    assert!(
+        board < legend && legend < plane,
+        "the legend leads the board"
+    );
+    assert!(html[legend..plane].contains("in another unit"));
+    assert!(html.contains("<svg class=\"edges\" aria-hidden=\"true\" data-ignore-morph></svg>"));
+    // With no unit to show there is nothing to read the legend by.
+    let (plan, state, project) = fixture();
+    let mut empty = ProjectView::new(project, &plan, &state, 1);
+    empty.units.clear();
+    let html = empty.body().unwrap();
+    assert!(html.as_str().contains("No units match this view."));
+    assert!(!html.as_str().contains("class=\"legend\""));
 }

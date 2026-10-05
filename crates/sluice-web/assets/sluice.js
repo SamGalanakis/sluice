@@ -78,9 +78,12 @@ let still = false;
 document.addEventListener("pointermove", (evt) => {
   if (!still || !(evt.movementX || evt.movementY)) return;
   still = false;
-  const n = evt.target.closest?.(".node[data-node]"), host = n?.closest("sluice-board");
-  if (host) trace(host, n);
+  const n = evt.target.closest?.(TRACES), host = n?.closest("sluice-board");
+  if (host) trace(host, traceKey(n));
 }, { passive: true });
+// What traces when hovered or focused: a card, or a chip (which traces its source).
+const TRACES = ".node[data-node], .xref[data-from]";
+const traceKey = (el) => (el.matches(".xref") ? el.dataset.from : el.dataset.node);
 // not inside a folded box (a closed <details> hides its content, which keeps its boxes)
 const shown = (n) => (n.checkVisibility ? n.checkVisibility() : n.getClientRects().length > 0);
 
@@ -151,9 +154,11 @@ function drawEdges(host, data) {
   const boxes = $$(".box", plane), rect = new Map();
   for (const n of $$("[data-node]", plane)) {
     if (!shown(n)) continue;
-    const r = n.getBoundingClientRect();
+    // a card with chips under it: its edges leave from under the chips
+    const r = n.getBoundingClientRect(), foot = n.parentElement?.classList.contains("stack")
+      ? n.parentElement.getBoundingClientRect() : r;
     rect.set(n.dataset.node, { left: r.left - box.left, right: r.right - box.left,
-                               top: r.top - box.top, bottom: r.bottom - box.top,
+                               top: r.top - box.top, bottom: foot.bottom - box.top,
                                width: r.width, box: boxes.indexOf(n.closest(".box")) });
   }
   // Route within a unit, or through all intervening rows for a cross-unit relation.
@@ -205,7 +210,7 @@ function drawEdges(host, data) {
     pts.push([x2, y2]);
     let d = `M${f(x1)} ${f(y1)}`;
     if (tip <= y1) {
-      const side = Math.max(8, box.width - 8);
+      const side = Math.max(8, Math.min(box.width, hi) - 8);
       d += `C${f(side)} ${f(y1 + 16)} ${f(side)} ${f(y2 - 16)} ${f(x2)} ${f(y2)}`;
     }
     for (let i = 1; tip > y1 && i < pts.length; i++) {
@@ -240,8 +245,7 @@ function drawEdges(host, data) {
   svg.replaceChildren(wires, names);
 }
 
-function trace(host, node) {
-  const key = node.dataset.node;
+function trace(host, key) {
   const near = new Set([key]);
   for (const el of $$("[data-from]", host)) {
     const from = el.dataset.from === key, to = el.dataset.to === key;
@@ -250,7 +254,9 @@ function trace(host, node) {
     el.classList.toggle("on", on);
     if (from || to) near.add(el.dataset.from).add(el.dataset.to);
   }
-  for (const n of $$(".node", host)) n.classList.toggle("near", near.has(n.dataset.node));
+  for (const n of $$(".node, .box[data-node]", host)) {
+    n.classList.toggle("near", near.has(n.dataset.node));
+  }
   const plane = $(".plane", host);
   if (plane && !plane.classList.contains("tracing")) plane.classList.add("tracing");
 }
@@ -305,6 +311,9 @@ function boardEdges(host, edges) {
     [e.kind, ...(e.tolerant ? ["tolerant"] : [])]]);
 }
 
+// Only a relation within one box is drawn; one between boxes is a chip on its dependent.
+const drawn = (edges) => boardEdges(null, (Array.isArray(edges) ? edges : []).filter((e) => !e.cross));
+
 function openBoxes() {
   try { return JSON.parse(sessionStorage.getItem(BOXES) || "{}") || {}; } catch { return {}; }
 }
@@ -317,7 +326,7 @@ function restoreBoxes(host) {
 }
 
 // These classes change highlighting or animation, without changing card geometry.
-const presentation = new Set(["tracing", "near", "open", "flip"]);
+const presentation = new Set(["tracing", "near", "open", "flip", "on"]);
 const layoutClasses = (value) => (value || "").split(/\s+/)
   .filter((c) => c && !presentation.has(c)).sort().join(" ");
 
@@ -334,9 +343,10 @@ rocket("sluice-board", {
       if (!active || frame || document.documentElement.classList.contains("resizing")) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
-        drawEdges(host, boardEdges(host, props.edges));
-        const held = still ? null : $(".node:hover, .node:focus-visible", host);  // new paths: keep it lit
-        if (held) trace(host, held);
+        drawEdges(host, drawn(props.edges));
+        const held = still ? null
+          : $(":is(.node, .xref):is(:hover, :focus-visible)", host);  // new paths: keep it lit
+        if (held) trace(host, traceKey(held));
       });
     };
     observeProps(redraw, "edges");
@@ -374,17 +384,18 @@ rocket("sluice-board", {
                             attributes: true, attributeFilter: ["class", "data-box-version"],
                             attributeOldValue: true });
     const card = (evt) => evt.target.closest?.(".node[data-node]");
-    const over = (evt) => { const n = card(evt); if (n && !still) trace(host, n); };
+    const tracer = (evt) => evt.target.closest?.(TRACES);
+    const over = (evt) => { const n = tracer(evt); if (n && !still) trace(host, traceKey(n)); };
     const out = (evt) => {
-      const n = card(evt);
+      const n = tracer(evt);
       if (!n || n.contains(evt.relatedTarget)) return;
-      const focused = document.activeElement?.closest?.(".node[data-node]");
-      if (focused && host.contains(focused)) trace(host, focused); else untrace(host);
+      const focused = document.activeElement?.closest?.(TRACES);
+      if (focused && host.contains(focused)) trace(host, traceKey(focused)); else untrace(host);
     };
     // tracing follows the keyboard's focus, not a focus given back after a click
     const focus = (evt) => {
-      const n = card(evt);
-      if (n && !still && n.matches(":focus-visible")) trace(host, n); else untrace(host);
+      const n = tracer(evt);
+      if (n && !still && n.matches(":focus-visible")) trace(host, traceKey(n)); else untrace(host);
     };
     const keys = (evt) => {
       still = false;
@@ -423,7 +434,7 @@ rocket("sluice-board", {
     });
   },
   onFirstRender({ host, props }) {
-    drawEdges(host, boardEdges(host, props.edges));
+    drawEdges(host, drawn(props.edges));
   },
 });
 
@@ -484,8 +495,11 @@ function setupDrawer(host) {
         stream?.abort();
         $("#drawer-stream", host).replaceChildren();
         mergePatch({step: "", sver: ""});
+        // back to the card (beside the drawer, the page brought it into view); a phone's sheet
+        // did not, so a chip that opened it takes the focus back
         const card = last && document.getElementById(`n-${last}`);
-        (card || opener)?.focus({ preventScroll: true });
+        const chip = PHONE.matches && opener?.matches(".xref") ? opener : null;
+        (chip || card || opener)?.focus({ preventScroll: true });
         for (const board of $$("sluice-board")) untrace(board);
         opener = null;
         last = "";
@@ -516,12 +530,12 @@ function setupDrawer(host) {
       }
     };
     const click = (evt) => {
-      const a = evt.target.closest?.("a[data-step]");
+      const a = evt.target.closest?.("a[data-step], a[data-opens]");  // a card, or a chip's source
       if (!a || evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey
           || evt.altKey) return;
       evt.preventDefault();
       if (!drawer.contains(a)) opener = a;
-      location.hash = `step:${encodeURIComponent(a.dataset.step)}`;
+      location.hash = `step:${encodeURIComponent(a.dataset.step || a.dataset.opens)}`;
     };
     const escape = (evt) => {
       if (evt.key === "Tab" && currentStep() && OVER.matches) {
