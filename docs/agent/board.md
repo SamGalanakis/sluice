@@ -1,8 +1,9 @@
 # The board: a project's live instrument panel
 
 Each project can have a **board**: a small page you write, drawn on the dashboard beside the
-plan (on a wide screen a column to its right; on a phone its own section behind a Plan · Board
-switch). It is for what the owner should see at a glance about *this* project: a lane
+plan (on a wide screen a column to its right, 320px wide or more, which the owner can widen or
+show alone across the page; on a phone its own section behind a Plan · Board switch), so lay it
+out to read at any of those widths. It is for what the owner should see at a glance about *this* project: a lane
 overview, a few numbers, a chart, the step that matters, a button to ask you for something.
 Its live parts are filled from the project each time the page draws and again whenever the
 project changes, so you write it once and it stays current.

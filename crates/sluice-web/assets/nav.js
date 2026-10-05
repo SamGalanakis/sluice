@@ -68,8 +68,13 @@ try {
 // The stream uses Datastar's own retry and cancellation ownership. The status
 // stays visible until the version marker acknowledges an entire rendered batch.
 const streamState = document.querySelector("#stream-state");
+// A page that points its stream at a new query (the board's search) ends the old request on
+// purpose: its end is not a lost connection.
+let restarts = 0;
+window.addEventListener("sluice-stream-restart", () => { restarts++; });
 document.addEventListener("datastar-fetch", (event) => {
   if (event.detail.el !== document.querySelector("main[data-init]")) return;
+  if (restarts && event.detail.type === "finished") { restarts--; return; }
   if (["error", "retrying", "retries-failed", "finished"].includes(event.detail.type)) {
     datastar?.mergePatch({ stale: true });
   }

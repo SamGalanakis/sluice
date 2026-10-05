@@ -23,7 +23,7 @@
 {% for (id,name) in themes %}<label><input type="radio" name="theme" value="{{ id }}"{% if viewer.theme_id() == *id %} checked{% endif %}>{{ crate::views::icons::icon(crate::views::icons::Icon::Check, 16, "tick")|safe }}<span>{{ name }}</span><span class="swatch" data-theme="{{ id }}" aria-hidden="true">Aa</span></label>{% endfor %}
 </fieldset><input type="hidden" name="types" value="0"><label class="check"><input type="checkbox" name="types" value="1"{% if viewer.types %} checked{% endif %}>Show value types</label><button class="save" type="submit">Save</button></form></div></details>
 </nav>
-<main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="@get('{{ stream }}', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000})"{% endif %}>
+<main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="@get('{{ stream }}', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: 'cleanup'})"{% endif %}>
 <p id="stream-state" class="stream-state attn" role="status" aria-live="polite" style="display:none" data-show="$stale">Updates paused. Reconnecting… <button type="button" class="stream-retry">Reconnect</button></p>
 {{ body|safe }}
 </main><script type="module" src="{{ nav_url }}"></script></body></html>

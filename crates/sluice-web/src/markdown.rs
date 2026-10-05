@@ -85,3 +85,36 @@ pub fn render(text: &str) -> TrustedHtml {
     comrak::format_html(root, &options, &mut html).expect("writing HTML to String is infallible");
     TrustedHtml::owned(html)
 }
+
+/// `text` as its lead and the rest: the lead is its first block (a heading takes the block
+/// after it too), the rest everything after, or `None` when nothing follows. Each part is
+/// rendered as `render` renders a whole text.
+pub fn render_folded(text: &str) -> (TrustedHtml, Option<TrustedHtml>) {
+    let arena = Arena::new();
+    let mut options = Options::default();
+    options.extension.table = true;
+    let root = parse_document(&arena, text, &options);
+    let mut blocks = root.children();
+    let lead_end = match blocks.next() {
+        None => return (render(text), None),
+        Some(first) => {
+            let heading = matches!(first.data.borrow().value, NodeValue::Heading(_));
+            let last = if heading {
+                blocks.next().unwrap_or(first)
+            } else {
+                first
+            };
+            last.data.borrow().sourcepos.end.line
+        }
+    };
+    if blocks.next().is_none() {
+        return (render(text), None);
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let cut = lead_end.min(lines.len());
+    let rest = lines[cut..].join("\n");
+    if rest.trim().is_empty() {
+        return (render(text), None);
+    }
+    (render(&lines[..cut].join("\n")), Some(render(&rest)))
+}

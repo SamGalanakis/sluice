@@ -1184,7 +1184,7 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 |---|---|
 | `/` | projects: each with its status glyph, progress and what stops it; archived ones folded. "Runner stopped" heads it while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
-| `/projects/id/<p>` | the board; query `order=live\|plan`, `show=all\|active\|attention\|done`, `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units) |
+| `/projects/id/<p>` | the board; query `order=live\|plan` (units by attention, running, ready, held, done; or the plan's order), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed or stale step, done), `q=` (a search: the steps whose id, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it |
 | `/projects/id/<p>/units/<u>` | one unit's board |
 | `/projects/id/<p>/steps/<s>` | one step: status, actions, finishing, error, outputs, inputs, runs |
 | `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel`, `revision`, `message` (retry feedback) |

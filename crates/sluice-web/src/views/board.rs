@@ -206,6 +206,10 @@ pub struct ProjectView {
     pub query: String,
     pub order: String,
     pub show: String,
+    /// The board's search (`q`): the words a shown step's id, doc or unit must all contain.
+    pub q: String,
+    /// With a search, how many steps it matched.
+    pub matched: usize,
     /// The project's board, drawn beside the plan (`docs("board")`), when it has one.
     pub panel: Option<super::panel::Panel>,
 }
@@ -303,11 +307,26 @@ impl ProjectView {
             query: String::new(),
             order: "live".into(),
             show: "all".into(),
+            q: String::new(),
+            matched: 0,
             panel: None,
         }
     }
     pub fn href(&self) -> String {
         self.project.href()
+    }
+    /// The board under the same order and show, without its search: the search's clear link.
+    pub fn clear_href(&self) -> String {
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query
+            .append_pair("order", &self.order)
+            .append_pair("show", &self.show);
+        format!("{}?{}", self.href(), query.finish())
+    }
+    /// The project's description: its first block (a heading takes the block after it too),
+    /// and the rest, which the page folds.
+    pub fn about(&self) -> (TrustedHtml, Option<TrustedHtml>) {
+        crate::markdown::render_folded(&self.project.description)
     }
     pub fn edges_json(&self) -> String {
         serde_json::to_string(&self.relations).expect("typed relations serialize")
@@ -689,6 +708,8 @@ pub struct BoardQuery {
     pub order: Option<String>,
     pub show: Option<String>,
     pub tag: Option<String>,
+    /// Words a step's id, doc or unit must all contain (any order, any case).
+    pub q: Option<String>,
     pub format: Option<String>,
     pub all: Option<bool>,
     pub datastar: Option<String>,
@@ -720,17 +741,46 @@ impl BoardQuery {
         });
         view.order = order.into();
         view.show = show.into();
+        let q: String = self.q.as_deref().unwrap_or("").trim().chars().take(200).collect();
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("order", order).append_pair("show", show);
         if let Some(tag) = &self.tag {
             query.append_pair("tag", tag);
         }
+        if !q.is_empty() {
+            query.append_pair("q", &q);
+        }
         view.query = query.finish();
         if order == "live" {
             view.units.sort_by_key(UnitView::rank);
         }
+        if !q.is_empty() {
+            view.matched = search(&mut view.units, &q);
+        }
+        view.q = q;
         Ok(())
     }
+}
+/// Keep the steps whose id, doc or unit id holds every word of `q` (case-insensitive, in any
+/// order), and the units with one; rows left empty go. Returns how many steps matched.
+fn search(units: &mut Vec<UnitView>, q: &str) -> usize {
+    let words: Vec<String> = q.split_whitespace().map(str::to_lowercase).collect();
+    let mut matched = 0;
+    units.retain_mut(|unit| {
+        let unit_id = unit.id.as_str().to_lowercase();
+        let hit = |step: &StepView| {
+            let text = format!("{} {} {unit_id}", step.id.as_str(), step.doc).to_lowercase();
+            words.iter().all(|w| text.contains(w.as_str()))
+        };
+        unit.steps.retain(|s| hit(s));
+        for row in &mut unit.rows {
+            row.retain(|s| hit(s));
+        }
+        unit.rows.retain(|row| !row.is_empty());
+        matched += unit.steps.len();
+        !unit.steps.is_empty()
+    });
+    matched
 }
 pub(crate) fn error_response(e: PublicError) -> Response {
     let code = match e {

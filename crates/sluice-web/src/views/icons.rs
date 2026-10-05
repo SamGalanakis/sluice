@@ -36,6 +36,10 @@ icons! {
     TriangleAlert => "triangle-alert",
     LayoutDashboard => "layout-dashboard",
     Workflow => "workflow",
+    Columns2 => "columns-2",
+    GripVertical => "grip-vertical",
+    Search => "search",
+    X => "x",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.

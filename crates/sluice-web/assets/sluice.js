@@ -328,8 +328,10 @@ rocket("sluice-board", {
   setup({ host, props, observeProps, cleanup }) {
     let frame = 0, active = true;
     const listeners = new AbortController();
+    // while the board's splitter is dragged the plan's edges hide and wait: one redraw at the
+    // end ("sluice-resized"), not one per frame
     const redraw = () => {
-      if (!active || frame) return;
+      if (!active || frame || document.documentElement.classList.contains("resizing")) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
         drawEdges(host, boardEdges(host, props.edges));
@@ -408,6 +410,7 @@ rocket("sluice-board", {
       try { sessionStorage.setItem(BOXES, JSON.stringify(open)); } catch { /* no storage */ }
     }, { capture: true, signal: listeners.signal });
     PHONE.addEventListener("change", redraw);
+    window.addEventListener("sluice-resized", redraw, { signal: listeners.signal });
     restoreBoxes(host);
     markOpen(currentStep());
     cleanup(() => {

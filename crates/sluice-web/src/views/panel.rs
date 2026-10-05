@@ -28,7 +28,7 @@ use sluice_model::{
 };
 use sluice_store::query::{self, QueryCell, QueryLimits};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -380,6 +380,19 @@ fn placeholders(sql: &str) -> Result<usize, String> {
 
 // ---- drawing -------------------------------------------------------------------------------
 
+/// The units tool's step marks (`sluice_model::status`), in the order the key lists them.
+const MARKS: [(char, &str); 9] = [
+    ('✓', "succeeded"),
+    ('▶', "running"),
+    ('▷', "finishing"),
+    ('·', "pending"),
+    ('≡', "queued"),
+    ('‖', "paused"),
+    ('✗', "failed"),
+    ('~', "stale"),
+    ('–', "skipped"),
+];
+
 fn esc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -390,6 +403,26 @@ fn esc(text: &str) -> String {
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
             c => out.push(c),
+        }
+    }
+    out
+}
+/// `text` escaped, each word with a hyphen inside it (a step id, a unit, `FIG-5004`) kept on
+/// one line: a narrow board breaks between ids, never inside one.
+fn prose(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    for (i, word) in text.split(' ').enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        let chars: Vec<char> = word.chars().collect();
+        let joined = chars
+            .windows(3)
+            .any(|w| w[1] == '-' && w[0].is_alphanumeric() && w[2].is_alphanumeric());
+        if joined {
+            let _ = write!(out, "<span class=\"ou-id\">{}</span>", esc(word));
+        } else {
+            out.push_str(&esc(word));
         }
     }
     out
@@ -499,7 +532,7 @@ impl Draw<'_> {
                     self.out,
                     "<p class=\"ou-text{}\">{}</p>",
                     if muted { " muted" } else { "" },
-                    esc(c.str_arg(0).unwrap_or(""))
+                    prose(c.str_arg(0).unwrap_or(""))
                 );
             }
             "Callout" => {
@@ -515,7 +548,7 @@ impl Draw<'_> {
                 let _ = write!(
                     self.out,
                     "<div>{}</div></div>",
-                    esc(c.str_arg(0).unwrap_or(""))
+                    prose(c.str_arg(0).unwrap_or(""))
                 );
             }
             "Table" => {
@@ -674,7 +707,7 @@ impl Draw<'_> {
         for row in rows {
             self.out.push_str("<tr>");
             for cell in row {
-                let _ = write!(self.out, "<td>{}</td>", esc(cell));
+                let _ = write!(self.out, "<td>{}</td>", prose(cell));
             }
             self.out.push_str("</tr>");
         }
@@ -693,7 +726,10 @@ impl Draw<'_> {
             Err(message) => return self.component_error(c, message),
         };
         let base = format!("/projects/id/{}", self.project);
-        self.out.push_str("<div class=\"scroll ou-table-wrap\"><table class=\"ou-table board-units\"><thead><tr><th scope=\"col\">Unit</th><th scope=\"col\">State</th><th scope=\"col\">Steps</th><th scope=\"col\">Waiting on</th></tr></thead><tbody>");
+        // Explicit roles: a narrow board lays each row out as a grid, which must not cost the
+        // table its semantics.
+        self.out.push_str("<div class=\"scroll ou-table-wrap\"><table class=\"ou-table board-units\" role=\"table\"><thead role=\"rowgroup\"><tr role=\"row\"><th scope=\"col\" role=\"columnheader\">Unit</th><th scope=\"col\" role=\"columnheader\">State</th><th scope=\"col\" role=\"columnheader\">Steps</th><th scope=\"col\" role=\"columnheader\">Waiting on</th></tr></thead><tbody role=\"rowgroup\">");
+        let mut marks = BTreeSet::new();
         for row in &data.rows {
             let glyph = match row.state {
                 UnitState::Running => "running",
@@ -716,9 +752,22 @@ impl Draw<'_> {
                 .map(|s| cut(s, 90))
                 .collect::<Vec<_>>()
                 .join(" · ");
+            // each step's short id and mark kept whole; the marks wrap between steps
+            let steps = row
+                .steps
+                .split(' ')
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    if let Some(mark) = s.chars().last() {
+                        marks.insert(mark);
+                    }
+                    format!("<span class=\"u-mark\">{}</span>", esc(s))
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
             let _ = write!(
                 self.out,
-                "<tr><td><a href=\"{base}/units/{0}\">{0}</a></td><td class=\"u-state\">{1}<span>{2}</span>{3}</td><td class=\"u-steps\">{4}</td><td class=\"u-wait\">{5}</td></tr>",
+                "<tr role=\"row\"><td class=\"u-unit\" role=\"cell\"><a href=\"{base}/units/{0}\">{0}</a></td><td class=\"u-state\" role=\"cell\">{1}<span>{2}</span>{3}</td><td class=\"u-steps\" role=\"cell\">{4}</td><td class=\"u-wait\" role=\"cell\">{5}</td></tr>",
                 esc(&row.unit),
                 super::home::glyph(glyph),
                 esc(&state),
@@ -727,11 +776,26 @@ impl Draw<'_> {
                 } else {
                     format!(" <span class=\"meta\">{}</span>", esc(age.trim()))
                 },
-                esc(&row.steps),
-                esc(&waiting)
+                steps,
+                prose(&waiting)
             );
         }
         self.out.push_str("</tbody></table></div>");
+        // the key to the marks the table shows, in one line
+        let key: Vec<String> = MARKS
+            .iter()
+            .filter(|(mark, _)| marks.contains(mark))
+            .map(|(mark, word)| {
+                format!("<span class=\"u-k\"><span class=\"u-km\" aria-hidden=\"true\">{mark}</span> {word}</span>")
+            })
+            .collect();
+        if !key.is_empty() {
+            let _ = write!(
+                self.out,
+                "<p class=\"meta u-key\"><span class=\"vh\">Step marks: </span>{}</p>",
+                key.join(" ")
+            );
+        }
         let mut notes = vec![];
         if data.rows.is_empty() {
             notes.push("No units match.".to_owned());

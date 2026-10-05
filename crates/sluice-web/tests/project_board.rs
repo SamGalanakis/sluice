@@ -323,3 +323,154 @@ fn the_board_docs_and_the_question_drawer_name_the_same_vocabulary() {
         );
     }
 }
+
+/// The cards a page draws on the plan, by step id, in page order.
+fn cards(html: &str) -> Vec<&str> {
+    let plan = between(html, "<sluice-board", "</sluice-board>");
+    plan.split("data-step=\"")
+        .skip(1)
+        .map(|rest| &rest[..rest.find('"').unwrap()])
+        .collect()
+}
+
+#[tokio::test]
+async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with_show() {
+    let f = Fixture::new().await;
+    let base = format!("/projects/id/{}", f.id);
+    let page = |query: &str| {
+        let path = format!("{base}?{query}");
+        let f = &f;
+        async move {
+            let (status, html) = f.get(&path).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {html}");
+            html
+        }
+    };
+    // By id: each unit keeps only its matching steps; the count says how many.
+    let html = page("q=review").await;
+    assert_eq!(cards(&html), ["beta-review", "alpha-review"], "live order");
+    assert!(html.contains("2 steps match “review”."), "{html}");
+    // By doc, in any case: a unit with no match is hidden whole.
+    let html = page("q=PARSER").await;
+    assert_eq!(cards(&html), ["beta-review"]);
+    assert!(!html.contains("id=\"unit-alpha\""), "{html}");
+    assert!(html.contains("1 step matches “PARSER”."));
+    // By unit id; words in any order, across id, doc and unit.
+    assert_eq!(
+        cards(&page("q=alpha&order=plan").await),
+        ["alpha-build", "alpha-review"]
+    );
+    assert_eq!(cards(&page("q=output+beta").await), ["beta-review"]);
+    // With show: attention keeps the failed unit, and the search narrows it.
+    assert_eq!(cards(&page("q=build&show=attention").await), ["beta-build"]);
+    let none = page("q=build&show=done").await;
+    assert!(cards(&none).is_empty());
+    assert!(none.contains("No step matches “build”."), "{none}");
+    assert!(
+        none.contains(&format!(
+            "<a href=\"{base}?order=live&#38;show=done\" data-clear-q>Clear the search</a>"
+        )),
+        "{none}"
+    );
+    // The field keeps the search, escaped; the page's stream asks for the same view.
+    let html = page("q=%3Cb%3E+x&show=active").await;
+    assert!(html.contains("value=\"&#60;b&#62; x\""), "{html}");
+    assert!(html.contains("“&#60;b&#62; x”"), "{html}");
+    assert!(
+        html.contains(&format!(
+            "@get('{base}/stream?order=live&#38;show=active&#38;q=%3Cb%3E+x'"
+        )),
+        "{html}"
+    );
+    // Without a search there is no count, and every card shows.
+    let html = page("").await;
+    assert_eq!(cards(&html).len(), 4);
+    assert!(html.contains("<p class=\"match-note meta\" role=\"status\"></p>"));
+    // The live stream draws the board under the same search.
+    use futures_util::StreamExt;
+    let response = f
+        .router()
+        .oneshot(
+            Request::get(format!(
+                "{base}/stream?q=parser&datastar=%7B%22ver%22%3A%22old%22%7D"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body().into_data_stream();
+    let first = String::from_utf8(body.next().await.unwrap().unwrap().to_vec()).unwrap();
+    assert!(first.contains("selector #project-board"), "{first}");
+    assert!(
+        first.contains("data-step=\"beta-review\"") && !first.contains("data-step=\"alpha-build\""),
+        "{first}"
+    );
+    assert!(first.contains("1 step matches “parser”."), "{first}");
+}
+
+#[tokio::test]
+async fn the_board_side_has_a_separator_and_the_page_works_without_script() {
+    let f = Fixture::new().await;
+    let (_, html) = f.get(&format!("/projects/id/{}", f.id)).await;
+    // The splitter: a focusable vertical separator that controls the board pane.
+    let side = between(&html, "<div class=\"board-side\">", "</aside>");
+    let splitter = between(side, "<div class=\"splitter\"", ">");
+    for attr in [
+        "role=\"separator\"",
+        "aria-orientation=\"vertical\"",
+        "aria-controls=\"board-pane\"",
+        "aria-label=\"Board width\"",
+        "aria-valuemin=\"320\"",
+        "aria-valuemax=",
+        "aria-valuenow=",
+        "tabindex=\"0\"",
+    ] {
+        assert!(splitter.contains(attr), "{attr}: {splitter}");
+    }
+    assert!(side.contains("<aside id=\"board-pane\""), "{side}");
+    // Plan · Both · Board.
+    let switch = between(&html, "<div class=\"view-switch\"", "</div>");
+    assert_eq!(switch.matches("data-view-tab=").count(), 3, "{switch}");
+    assert!(switch.contains("data-view-tab=\"both\""));
+    // Without script: the tools are a GET form with its Apply button, and the description's
+    // rest is a closed <details> after its lead paragraph.
+    let tools = between(&html, "<form class=\"board-tools\"", "</form>");
+    assert!(
+        tools.contains("method=\"get\"")
+            && tools.contains("<button class=\"apply\">Apply</button>")
+    );
+    assert!(
+        tools.contains("name=\"q\"")
+            && tools.contains("name=\"order\"")
+            && tools.contains("name=\"show\"")
+    );
+    let about = between(&html, "<div class=\"about\">", "<form");
+    assert!(
+        about.starts_with(
+            "<div class=\"about\"><div class=\"md\"><p>Lanes: two units of &lt;work&gt;.</p>"
+        ),
+        "{about}"
+    );
+    let more = between(about, "<details class=\"about-more\"", "</details>");
+    assert!(!more.contains(" open"), "folded by default: {more}");
+    assert!(
+        more.contains("<span class=\"am-more\">More</span>"),
+        "{more}"
+    );
+    assert!(
+        more.contains("How work is done here:") && more.contains("<li>reviews follow builds</li>")
+    );
+    assert!(
+        !about[..about.find("<details").unwrap()].contains("How work"),
+        "{about}"
+    );
+    // The stylesheet hides Apply and shows the splitter only with script.
+    let (_, css) = f.get("/static/style.css").await;
+    assert!(css.contains("@media (scripting: enabled) { .board-tools .apply { display: none; } }"));
+    assert!(css.contains(".splitter { display: none;"));
+    // A project with a one-paragraph description has nothing to fold.
+    let (_, plain) = f.get(&format!("/projects/id/{}", f.plain)).await;
+    assert!(!plain.contains("about-more") && !plain.contains("class=\"splitter\""));
+}

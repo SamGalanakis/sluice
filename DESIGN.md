@@ -163,12 +163,15 @@ components:
     backgroundColor: "{colors.secondary-fill}"
     rounded: "{rounded.pill}"
     height: "8px"
-    width: "200px"
+    width: "clamp(200px, 32%, 480px)"
   board-column:
     backgroundColor: "{colors.card}"
     rounded: "{rounded.lg}"
     padding: "14px 16px 16px"
-    width: "400px"
+    width: "clamp(400px, 30%, 720px)"
+  splitter:
+    textColor: "{colors.muted-ink}"
+    width: "32px"
   view-switch-current:
     backgroundColor: "{colors.secondary-fill}"
     textColor: "{colors.ink}"
@@ -205,8 +208,8 @@ the board.
 The pages are server-rendered by `crates/sluice-web` (askama templates in `templates/`, views in
 `src/views/`), styled by `assets/style.css` and `assets/settings.css`, and kept live by Datastar
 streams; `assets/sluice.js` adds the drawer, edge drawing, tracing and live times, `nav.js` the
-menus, `inbox.js` and `openui.js` the answer forms, `board.js` the project board's Plan · Board
-switch and its buttons. Every page works without JavaScript.
+menus, `inbox.js` and `openui.js` the answer forms, `board.js` the project page's view switch,
+splitter, description fold, board tools and the board's buttons. Every page works without JavaScript.
 
 ## Colors
 
@@ -330,9 +333,11 @@ meta in muted ink, sentence case. Nothing is uppercase; no kickers or eyebrows.
 a 24px gutter, 16px at 720px and below). The top nav's content aligns to the same edges (the
 mark on the left edge, the display preferences icon ending on the right), so nav, titles, lists
 and cards share one left edge at every width. Nothing makes the page scroll sideways. The one
-widening: from 1280px a plan page with a board grows the column by the board's width and gap
-(`--board-w` 400px, 480px from 2200px; `--board-gap` 32px), nav included, so the plan keeps its
-960px and the board's right edge is the nav's.
+widening: from 1280px a project page with a board takes the window's width up to 2400px
+(`--page-max`, with a 32px gutter), nav included, so the nav's edges are the plan's left and
+the board's right: the plan (at least 560px, `--plan-min`), the splitter's 32px track
+(`--board-gap`) and the board (`--board-w`). With the step drawer open the gutter is 24px again
+and the drawer takes the side.
 
 **The One Click Rule.** The board is names and states. Everything else (inputs, outputs,
 errors, runs) is one click away on the step's page, or under the board for the plan as a
@@ -378,20 +383,33 @@ scheduler lease, one attention line heads the list: "Runner stopped · nothing n
 
 ### Board (`/projects/id/<p>`)
 Top down:
-1. **Summary line**: the progress bar (succeeded, running, failed, the rest), "N steps · n
-   succeeded · n running · n failed", and a Paused tag; then "Paused: no step starts." or
-   "Archived: listed apart from other projects." when so; then the project's description as
-   markdown.
-2. **Board tools**: a GET form, Order (Live first, Plan order) and Show (All, Active,
-   Attention, Done) selects with an Apply button, and a Mermaid link (the plan as `plan_view`
-   draws it: a Mermaid `flowchart TD` with a subgraph per unit). Live first orders units by attention (a failed or
-   stale step), running, ready, held, done; Plan order keeps the plan's.
+1. **Summary line**: the progress bar (succeeded, running, failed, the rest; it grows with the
+   line, 200 to 480px, so a few failures among hundreds still read), "N steps · n succeeded ·
+   n running · n failed", and a Paused tag; then "Paused: no step starts." or "Archived: listed
+   apart from other projects." when so; then, 12px below, the project's description as
+   markdown: its first block (a heading takes the block after it too) and the rest folded in a
+   `<details>` under a quiet "More" (a chevron; "Less" when open), closed by default and
+   remembered per project. Without script the fold still works: it is native.
+2. **Board tools**, 24px below the description: a GET form (`role="search"`): a search field
+   ("Find a step", Lucide `search`, a clear `x` while it holds text), Order (Live first, Plan
+   order) and Show (All, Active, Attention, Done) selects, Apply, and Mermaid (the plan as
+   `plan_view` draws it: a Mermaid `flowchart TD` with a subgraph per unit) as a secondary
+   control with a button's look. With script each applies as it changes and the search as one
+   types (200ms), without reloading: the address follows (`history.replaceState`) and the
+   page's stream restarts under the new query; Apply is for a page without script only. Escape
+   or the `x` clears the search. With a search a meta line under the tools says how many steps
+   match ("12 steps match “land”", "No step matches “x”.", a polite status). Live first orders
+   units by attention (a failed or stale step), running, ready, held, done; Plan order keeps
+   the plan's. The search keeps the steps whose id, doc or unit id holds every word of it (any
+   case, any order); a unit with none hides, and an empty board says "Clear the search to see
+   every unit."
 3. **The board**: the plan inputs as dashed chips, one box per unit, the plan outputs as dashed
    chips. A box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no
    border) is labelled with the unit's id in meta and lays its cards in rows by dependency depth.
    A done unit folds to one line, a `<details>`: the success glyph, the unit id, "n steps ·
-   done" and a chevron; it opens to its cards. A unit with no visible steps reads "No units match
-   this view."
+   done" and a chevron; it opens to its cards. A board with no units to show reads "No units
+   match this view." The plan pane is a size container named `plan`: what lays out the plan
+   keys off the pane's width, which the splitter changes, never the window's.
 4. **Edges** (the `<sluice-board>` element draws them in an SVG over the measured cards, from the
    server's typed relations): a handoff a solid line, an `after` step entry a dashed ordering
    line, a ref entry a condition line labelled with the output (`not <output>` for `!`), a `?`
@@ -404,20 +422,41 @@ Top down:
 ### The project's board (beside the plan)
 A project may carry a board (`docs("board")`): an OpenUI program the server draws with the
 project's live data. It is the owner's instrument for that project, never a second plan.
-- **Wide (1280px and up):** a right-hand column (`board-pane`) beside the plan, top-aligned
-  with the summary line: the card colour with a hairline and the 14px corner, 14 by 16px
-  padding, sticky 16px from the top and at most the window's height, scrolling on its own. Its
-  head is "Board" (section voice, `heading-accent`, Lucide `layout-dashboard`). With the step
-  drawer open the drawer takes the side and the board steps away until it closes.
-- **Narrow (below 1280px):** a small segmented control first, "Plan" (Lucide `workflow`) and
-  "Board" (`layout-dashboard`), the current one in the secondary fill (44px tall at 720px and
-  below), then one section at a time; the choice is remembered per project. Without script
-  there is no switch and the board follows the plan, flat on the canvas under its head.
+- **Wide (1280px and up):** the page spans the window (see the One Column Rule): the plan, a
+  splitter, and the board as a right-hand column (`board-pane`) top-aligned with the summary
+  line: the card colour with a hairline and the 14px corner, 14 by 16px padding, sticky 16px
+  from the top and at most the window's height, scrolling on its own. Its head is "Board"
+  (section voice, `heading-accent`, Lucide `layout-dashboard`). Its width is
+  `clamp(400px, 30%, 720px)` until the splitter sets one. A small segmented control at the
+  right above it, "Plan" (Lucide `workflow`), "Both" (`columns-2`, the default) and "Board"
+  (`layout-dashboard`), shows the plan alone, both, or the board alone across the page (its
+  tables then keep to their content's width); the choice is remembered per project. With the
+  step drawer open the drawer takes the side: the plan shows, the board and the switch step
+  away until it closes.
+- **The splitter** (script only): a 32px track between plan and board, a `role="separator"`
+  (`aria-orientation="vertical"`, `aria-controls="board-pane"`, its values the board's width
+  in px) in the tab order. At rest a Lucide `grip-vertical` in muted ink at the board's middle;
+  on hover a 2px hairline (`border-strong`) the board's height and the grip in ink; focused or
+  dragged the line is the ring's blue and the grip ringed. Drag (pointer capture, one layout
+  per frame; the plan's edges hide and redraw once at the end), ←/→ 16px (64px with Shift),
+  Home/End to the least (320px) and greatest (the lesser of 65% of the page and what leaves the
+  plan 560px), double-click to reset. The width is remembered per project
+  (`sluice.boardw.<project>`); the page's grid keeps a remembered width within bounds.
+- **Narrow (below 1280px):** the same switch first, "Plan" and "Board" only, the current one in
+  the secondary fill (44px tall at 720px and below), then one section at a time; the choice is
+  remembered per project, apart from the wide one. Without script there is no switch and no
+  splitter: from 1280px both show side by side at the default width; below, the board follows
+  the plan, flat on the canvas under its head.
 - **No board:** nothing at all: no column, no switch; the plan keeps the whole column.
 - **Its parts** keep the question forms' look (`ou-*`): headings in Archivo, text at 15/22,
-  callouts, tables at 13px with hairline rows. Units is a table of unit (a link), state (the
-  status glyph and word, then its age in meta), the steps' marks in data mono and what it waits
-  on in muted ink. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
+  callouts, tables at 13px with hairline rows; a word with a hyphen inside it (a step or
+  unit id, `FIG-5004`) never breaks, so a narrow board breaks between ids. The board pane is a
+  size container named `board`. Units is a table of unit (a link), state (the status glyph and
+  word, then its age in meta), the steps' marks in data mono (each step whole, wrapping between
+  steps) and what it waits on in muted ink; under it a one-line key to the marks it shows
+  (✓ succeeded, ▶ running, ▷ finishing, · pending, ≡ queued, ‖ paused, ✗ failed, ~ stale,
+  – skipped). In a board under 600px each row is a block: the unit and its state on one line,
+  its marks under them, then what it waits on. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
   under it in meta. Output is its name in meta over the value. Metric is a number in Archivo
   800 at 28/34 over its label, on the box tone; metrics in a row share it. Chart is an inline
   SVG at most 520px wide: bars and the line in the accent, labels in ink and values in muted
@@ -524,18 +563,23 @@ since they are ends, not work.
   and 2-unit round stroke, in `currentColor` so it takes its control's ink, hover and focus, and
   `aria-hidden` (the control carries the name). 20px in the nav (the inbox tray, project
   settings, display preferences), 16px for status glyphs, chevrons, the theme tick, the board's
-  head and switch and its error boxes. A new icon is fetched from Lucide at that version, never
+  head and switch and its error boxes, the splitter's grip and the search field's magnifier and
+  clear. A new icon is fetched from Lucide at that version, never
   drawn; the mark and favicon are the owner's, and a project's own icon is the user's.
 - **Tracing**: hovering or focusing a card lights its edges; the other cards lose their border
   and fill and their text turns muted ink.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input
-  hairline. The progress bar is an 8px pill, 200px wide (120 on a phone).
+  hairline. The progress bar is an 8px pill, 200px wide (120 on a phone); on a project page
+  it grows with its summary line, up to 480px.
+- **Splitter**: see The project's board; the one control that resizes, a grip on a hairline
+  that lights only when used.
 - **Live updates**: each page's stream patches only what changed; while it reconnects a gold
   line says "Updates paused. Reconnecting…" with a Reconnect button. Times tick live (`data-since`,
   `data-ago`), and a running step's quiet tag appears after 15 minutes without a write.
 
 ### Touch
-At 720px and below every control is at least 44px tall: the board tools, the segmented
+At 720px and below every control is at least 44px tall: the board tools (the search field and
+its clear too), the description's More, the segmented
 controls, the log's filter labels and pager links, the menu rows, and in the drawer the links of
 its facts and its thread link; the Types switch keeps its size on a 44px target.
 

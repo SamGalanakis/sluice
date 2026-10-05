@@ -1,4 +1,4 @@
-use sluice_web::markdown::{allowed_url, render};
+use sluice_web::markdown::{allowed_url, render, render_folded};
 #[test]
 fn headings_tables_code_lists_and_html_have_safe_structure() {
     let html = render(
@@ -66,5 +66,22 @@ fn allowlist_accepts_only_relative_fragment_and_explicit_allowed_schemes() {
         "%00safe",
     ] {
         assert!(!allowed_url(url), "{url}");
+    }
+}
+#[test]
+fn a_text_folds_after_its_first_block_and_a_heading_keeps_the_block_after_it() {
+    let (lead, more) = render_folded("One <b>line</b>.\n\n```\nfenced\n\nstill fenced\n```\n\n- a");
+    assert_eq!(lead.as_str(), "<p>One &lt;b&gt;line&lt;/b&gt;.</p>\n");
+    let more = more.unwrap();
+    assert!(
+        more.as_str().contains("fenced\n\nstill fenced") && more.as_str().contains("<li>a</li>")
+    );
+    let (lead, more) = render_folded("# Title\n\nFirst.\n\nSecond.");
+    assert!(lead.as_str().contains("<h4>Title</h4>") && lead.as_str().contains("First."));
+    assert_eq!(more.unwrap().as_str(), "<p>Second.</p>\n");
+    for whole in ["Just one.", "", "Two\nlines, one block."] {
+        let (lead, more) = render_folded(whole);
+        assert!(more.is_none(), "{whole}");
+        assert_eq!(lead.as_str(), render(whole).as_str());
     }
 }

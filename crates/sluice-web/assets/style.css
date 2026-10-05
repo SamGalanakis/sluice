@@ -1211,20 +1211,76 @@ main > .phead + * { margin-top: 0; }
 #nav-inbox { gap: 6px; }
 @media (max-width: 720px) { .inbox-word { display: none; } .picker button { min-height: 44px; } }
 
-/* ---- the project's board (docs("board")): an OpenUI program drawn on the server. From 1280px
-   it is a right-hand column beside the plan (the column widens to hold both, nav included, so
-   their edges stay shared) that scrolls on its own; below that, a section the Plan · Board
-   switch shows in turn (both, one after the other, without script). Without a board the plan
-   keeps the page. With the step drawer open, the drawer takes the side instead. ----------- */
-:root { --board-w: 400px; --board-gap: 32px; }
+/* ==== page shell: the project page, its plan and its board ======================================
+   (Plan beside the project's Board; docs("board") is an OpenUI program drawn on the server.)
+   From 1280px a project page with a board takes the window's width up to --page-max, nav
+   included, so their edges stay shared: the plan (at least --plan-min) | the splitter | the
+   board (--board-w; the splitter sets it per project, within 320px and the lesser of 65% of
+   the page and what leaves the plan its least). The Plan · Both · Board switch shows one or
+   both; below 1280px it is Plan · Board, one at a time; without script both show, one after
+   the other below 1280px, and there is no switch and no splitter. With the step drawer open
+   the drawer takes the side. Each pane is a size container (`plan`, `board`): what is in
+   them keys off the pane, never the window. =================================================== */
+:root {
+  --space-xs: 4px; --space-sm: 8px; --space-md: 12px; --space-lg: 16px; --space-xl: 24px;
+  --board-w: 400px;     /* the board's width (the settings preview draws at it) */
+  --board-gap: 32px;    /* the splitter's track between plan and board */
+  --board-min: 320px;
+  --plan-min: 560px;
+  --page-max: 2400px;   /* the widest a project page with a board grows */
+}
 .project-page { min-width: 0; }
-.plan-pane { min-width: 0; }
-.board-pane { min-width: 0; margin-top: 32px; }
-.board-h { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.plan-pane { min-width: 0; container: plan / inline-size; }
+.board-side { min-width: 0; }
+.board-pane { min-width: 0; margin-top: 32px; container: board / inline-size; }
+.board-h { display: flex; align-items: center; gap: var(--space-sm); margin: 0 0 var(--space-md); }
 .board-h .icon { color: var(--heading-accent); flex: none; }
-.view-switch { display: none; justify-self: start; width: fit-content; gap: 2px; margin: 0 0 16px;
-               padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-md);
-               background: var(--card); }
+
+/* -- the summary, the description and the board's tools, top down -- */
+.plan-pane > .attn-note { margin-top: var(--space-sm); }
+.plan-pane > .about { margin-top: var(--space-md); }
+.plan-pane .sumline .bar { width: clamp(200px, 32%, 480px); }  /* the slivers read */
+.about-more > summary { display: inline-flex; align-items: center; gap: 2px; margin-top: 2px;
+                        list-style: none; font-size: 13px; line-height: 18px; font-weight: 500;
+                        color: var(--muted-foreground); border-radius: var(--radius-sm); }
+.about-more > summary::-webkit-details-marker { display: none; }
+.about-more > summary:hover { color: var(--foreground); }
+.about-more > summary:hover > span { text-decoration: underline; text-underline-offset: 3px;
+                                     text-decoration-color: var(--border-strong); }
+.about-more[open] > summary { margin-bottom: var(--space-sm); }
+.about-more[open] .chev { transform: rotate(180deg); }
+.about-more .am-less, .about-more[open] .am-more { display: none; }
+.about-more[open] .am-less { display: inline; }
+.plan-pane > .board-tools { margin: var(--space-xl) 0 var(--space-md); }
+.board-tools label { display: inline-flex; align-items: center; gap: 6px;
+                     color: var(--muted-foreground); font-weight: 500; }
+.board-tools .q-field { position: relative; display: flex; align-items: center;
+                        flex: 1 1 220px; min-width: 180px; max-width: 320px; }
+.board-tools .q-icon { position: absolute; left: 9px; color: var(--muted-foreground);
+                       pointer-events: none; }
+.board-tools input[type=search] { width: 100%; height: 30px; padding: 0 30px 0 31px;
+                                  font-size: 13px; caret-color: var(--accent); }
+.board-tools input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none;
+                                                                display: none; }
+.board-tools .q-clear { position: absolute; right: 3px; display: grid; place-items: center;
+                        width: 24px; height: 24px; border-radius: var(--radius-sm);
+                        color: var(--muted-foreground); }
+.board-tools .q-clear:hover { color: var(--foreground); background: var(--muted); }
+.board-tools .q-field:has(input:placeholder-shown) .q-clear { display: none; }
+/* the plan as Mermaid: a secondary control, a button's look */
+.board-tools .tool-link { display: inline-flex; align-items: center; height: 30px; padding: 0 12px;
+                          border: 1px solid var(--input); border-radius: var(--radius-md);
+                          background: var(--card); color: var(--foreground); font-weight: 500;
+                          text-decoration: none; }
+.board-tools .tool-link:hover { background: var(--muted); }
+@media (scripting: enabled) { .board-tools .apply { display: none; } }  /* each applies as it changes */
+.match-note { margin: calc(-1 * var(--space-xs)) 0 var(--space-md); }
+.match-note:empty { display: none; }
+
+/* -- the switch -- */
+.view-switch { display: none; justify-self: start; width: fit-content; gap: 2px;
+               margin: 0 0 var(--space-lg); padding: 2px; border: 1px solid var(--border);
+               border-radius: var(--radius-md); background: var(--card); }
 .view-switch button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
                       padding: 2px 12px 2px 10px; border: 0; border-radius: var(--radius-sm);
                       background: transparent; color: var(--muted-foreground);
@@ -1232,32 +1288,79 @@ main > .phead + * { margin-top: 0; }
 .view-switch button:hover { color: var(--foreground); background: transparent; }
 .view-switch button[aria-pressed="true"] { color: var(--foreground); background: var(--secondary);
                                            box-shadow: 0 0 0 1px var(--border-strong); }
+
+/* -- the splitter: a grip on a hairline that lights when it is used -- */
+.splitter { display: none; position: relative; justify-content: center; align-items: center;
+            cursor: col-resize; touch-action: none; color: var(--muted-foreground);
+            -webkit-user-select: none; user-select: none; }
+.splitter::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px);
+                    width: 2px; border-radius: 1px; background: transparent;
+                    transition: background 120ms; }
+.splitter .grip { position: relative; box-sizing: content-box; padding: 6px 0;
+                  border-radius: var(--radius-sm); background: var(--background); }
+.splitter:hover { color: var(--foreground); }
+.splitter:hover::before { background: var(--border-strong); }
+.splitter:focus-visible { outline: none; }
+.splitter:focus-visible::before, html.resizing .splitter::before { background: var(--ring); }
+.splitter:focus-visible .grip { color: var(--foreground); outline: 2px solid var(--ring);
+                                outline-offset: 1px; }
+html.resizing, html.resizing * { cursor: col-resize !important; -webkit-user-select: none;
+                                 user-select: none; }
+html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag ends */
+
 @media (max-width: 1279px) and (scripting: enabled) {
   .has-panel > .view-switch { display: flex; }
+  .view-switch [data-view-tab="both"] { display: none; }
   .project-page[data-view="board"] > .plan-pane,
-  .project-page:not([data-view="board"]) > .board-pane { display: none; }
+  .project-page:not([data-view="board"]) > .board-side { display: none; }
   .board-pane { margin-top: 0; }
   .board-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
              white-space: nowrap; }  /* the switch names the section */
 }
 @media (min-width: 1280px) {
-  html:not(.drawer-open):has(.project-page.has-panel) {
-    --column: calc(960px + var(--board-gap) + var(--board-w)); }
-  html:not(.drawer-open) .project-page.has-panel {
-    display: grid; grid-template-columns: minmax(0, 1fr) var(--board-w);
-    column-gap: var(--board-gap); align-items: start; }
-  .project-page.has-panel > .plan-pane { grid-column: 1; grid-row: 1; }
-  .project-page.has-panel > .board-pane {
-    grid-column: 2; grid-row: 1; margin-top: 0; position: sticky; top: 16px;
-    max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain;
-    box-sizing: border-box; padding: 14px 16px 16px; background: var(--card);
+  html:has(.project-page.has-panel) { --column: var(--page-max); }
+  html:not(.drawer-open):has(.project-page.has-panel) { --gutter: 32px; }  /* the drawer's side keeps the nav its room */
+  /* the default board width; the splitter's, inline on the page, wins */
+  .project-page.has-panel { --board-w: clamp(400px, 30%, 720px);
+    --board-track: max(var(--board-min), min(var(--board-w), 65%,
+                                              100% - var(--plan-min) - var(--board-gap))); }
+  .has-panel > .view-switch { display: flex; }
+  @media (scripting: none) { .has-panel > .view-switch { display: none; } }
+  html:not(.drawer-open) .project-page.has-panel:not([data-view="plan"], [data-view="board"]) {
+    display: grid; align-items: start;
+    grid-template-columns: minmax(var(--plan-min), 1fr) calc(var(--board-gap) + var(--board-track)); }
+  /* a layout control here: at the right, over the board it shows or hides */
+  .project-page.has-panel > .view-switch { grid-column: 1 / -1; margin-left: auto; }
+  html:not(.drawer-open) .project-page.has-panel:not([data-view="plan"], [data-view="board"]) > .board-side {
+    position: sticky; top: 16px; display: grid;
+    grid-template-columns: var(--board-gap) minmax(0, 1fr); }
+  .board-side > .board-pane { grid-column: 2; }  /* beside the splitter's track, script or not */
+  .project-page.has-panel:not([data-view="plan"], [data-view="board"]) .board-pane {
+    max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+  @media (scripting: enabled) {
+    .project-page.has-panel:not([data-view="plan"], [data-view="board"]) .splitter { display: flex; } }
+  .project-page.has-panel .board-pane {
+    margin-top: 0; box-sizing: border-box; padding: 14px 16px 16px; background: var(--card);
     border: 1px solid var(--border); border-radius: var(--radius); }
-  html.drawer-open .board-pane { display: none; }
+  /* the board alone: its tables keep to their content rather than spread across the page */
+  .project-page[data-view="board"] .board-pane .ou-table { width: auto; max-width: 100%; }
+  .project-page[data-view="plan"] > .board-side,
+  .project-page[data-view="board"] > .plan-pane { display: none; }
+  /* the drawer takes the side: the plan shows, the board and the switch step away */
+  html.drawer-open .project-page.has-panel > .plan-pane { display: block; }
+  html.drawer-open .project-page.has-panel > :is(.board-side, .view-switch) { display: none; }
 }
-@media (min-width: 2200px) { :root { --board-w: 480px; } }
 @media (max-width: 720px) {
   .view-switch button { min-height: 44px; padding: 0 14px 0 12px; }
+  .plan-pane .sumline .bar { width: 120px; }
+  .about-more > summary { min-height: 44px; margin-top: 0; }
+  .board-tools .q-field { flex-basis: 100%; max-width: none; }
+  .board-tools input[type=search], .board-tools .tool-link { height: 44px; }
+  .board-tools .q-clear { right: 0; width: 44px; height: 44px; }
+  .board-tools input[type=search] { padding-right: 44px; }
 }
+
+/* ==== end of page shell ======================================================================= */
 
 /* the board's parts: the question vocabulary's look, plus its live parts */
 .board-ui { margin: 0; gap: 12px; }
@@ -1278,7 +1381,6 @@ main > .phead + * { margin-top: 0; }
 .ou-table td { overflow-wrap: break-word; vertical-align: baseline; }
 .board-units td { padding: 6px 8px 6px 0; }
 .board-units th { padding-left: 0; }
-.board-units td:first-child { overflow-wrap: normal; }  /* a unit name breaks at its hyphens */
 .board-units .u-state { white-space: nowrap; }
 .board-units .u-state > span:not(.g) { margin-left: 4px; }
 .board-units .u-state .g { vertical-align: -3px; }
@@ -1318,3 +1420,28 @@ main > .phead + * { margin-top: 0; }
 .ou-error-box p { margin: 2px 0 0; font-family: var(--font-mono); font-size: 12px; }
 .board-status { margin-top: 10px; }
 .board-status:empty { display: none; }
+
+/* ==== page shell, continued: the board's parts in a narrow board (after the parts' own rules,
+   which these refine) ========================================================================= */
+/* -- the board's Units table in a narrow board: each row a block, its marks wrapping under it,
+   then what it waits on; ids never break at their hyphens -- */
+.ou-id, .u-mark { white-space: nowrap; }
+.board-units td.u-unit { overflow-wrap: normal; }
+.board-units td.u-unit a { white-space: nowrap; }
+.u-key { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 6px; }
+.u-k { white-space: nowrap; }
+.u-km { font: 12px/18px var(--font-mono); color: var(--foreground); }
+@container board (max-width: 600px) {
+  .board-units, .board-units tbody { display: block; }
+  .board-units thead { position: absolute; width: 1px; height: 1px; overflow: hidden;
+                       clip-path: inset(50%); }
+  .board-units tr { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+                    column-gap: var(--space-md); row-gap: 2px; padding: 7px 0;
+                    border-bottom: 1px solid var(--border); }
+  .board-units td { padding: 0; border: 0; }
+  .board-units td.u-unit { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                           white-space: nowrap; }
+  .board-units td:is(.u-steps, .u-wait) { grid-column: 1 / -1; }
+  .board-units td.u-wait:empty { display: none; }
+}
+/* ==== end of page shell, continued ============================================================ */

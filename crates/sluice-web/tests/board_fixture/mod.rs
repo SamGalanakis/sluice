@@ -85,6 +85,9 @@ go = Button("Retry the lane", "retry_lane", {force: true})
 skip = Button("Skip", "skip", null, "secondary")
 "#;
 
+/// The lanes project's description: a lead paragraph, then more the page folds.
+pub const DESCRIPTION: &str = "Lanes: two units of <work>.\n\nHow work is done here:\n\n- one lane per unit\n- reviews follow builds";
+
 pub struct Fixture {
     pub _home: tempfile::TempDir,
     pub writer: Writer,
@@ -97,7 +100,7 @@ impl Fixture {
     pub async fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
         let writer = Writer::open(home.path()).unwrap();
-        let create = |name: &'static str| {
+        let create = |name: &'static str, description: &'static str| {
             let writer = writer.clone();
             async move {
                 writer
@@ -106,7 +109,7 @@ impl Fixture {
                             tx,
                             CreateProject {
                                 name: name.parse().unwrap(),
-                                description: String::new(),
+                                description: description.into(),
                                 icon: None,
                                 resources: None,
                                 author: "owner".into(),
@@ -120,15 +123,15 @@ impl Fixture {
                     .project_id
             }
         };
-        let id = create("lanes").await;
-        let plain = create("plain").await;
+        let id = create("lanes", DESCRIPTION).await;
+        let plain = create("plain", "").await;
         writer
             .write(RetrySafety::NonIdempotent, move |tx| {
                 let doc = json!({"steps":{
                     "alpha-build":{"run":"custom.open","outputs":{"summary":"string"},"tags":["unit:alpha"]},
                     "alpha-review":{"run":"custom.open","in":{"s":{"source":"alpha-build/summary"}},"tags":["unit:alpha"]},
                     "beta-build":{"run":"custom.open","tags":["unit:beta"]},
-                    "beta-review":{"run":"custom.open","after":["beta-build"],"tags":["unit:beta"]}}});
+                    "beta-review":{"run":"custom.open","doc":"Check the Parser output","after":["beta-build"],"tags":["unit:beta"]}}});
                 let plan = Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &Registry).unwrap();
                 tx.sql().execute("DELETE FROM plans WHERE project_id=?1", [id.to_string()])?;
                 sluice_store::plans::initialize_plan(tx, id, &plan)?;
