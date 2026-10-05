@@ -314,6 +314,25 @@ impl StepView {
             String::new()
         }
     }
+    /// The outputs with a value, drawn as fields; the rest are named on one line.
+    pub fn outputs_set(&self) -> Vec<&FieldView> {
+        self.outputs.iter().filter(|f| f.available).collect()
+    }
+    pub fn outputs_unset(&self) -> Vec<&FieldView> {
+        self.outputs.iter().filter(|f| !f.available).collect()
+    }
+    /// "7 outputs not set yet", "1 output not set yet".
+    pub fn unset_words(&self) -> String {
+        let n = self.outputs_unset().len();
+        format!(
+            "{n} {} not set yet",
+            if n == 1 { "output" } else { "outputs" }
+        )
+    }
+    /// A failed step's next move is Retry: the primary button.
+    pub fn retry_first(&self) -> bool {
+        self.status == "failed"
+    }
     pub fn retryable(&self) -> bool {
         matches!(self.status.as_str(), "succeeded" | "failed" | "stale")
     }

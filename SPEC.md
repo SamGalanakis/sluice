@@ -1184,9 +1184,9 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 |---|---|
 | `/` | projects: each with its status glyph, progress and what stops it; archived ones folded. "Runner stopped" heads it while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
-| `/projects/id/<p>` | the board; query `order=live\|plan` (units by attention, running, ready, held, done; or the plan's order), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed or stale step, done), `q=` (a search: the steps whose id, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it |
+| `/projects/id/<p>` | the board; query `order=live\|plan` (units by attention, running, ready, held, done; or the plan's order), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed or stale step, done), `q=` (a search: the steps whose id, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it. A done unit (every step succeeded or skipped) is one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards; two or more in a row (under `order=live` every one, after the live work) sit on one shelf, "n done units · m steps", closed unless `show=done` or a search matches in it, which draws the shelf and the matching units open |
 | `/projects/id/<p>/units/<u>` | one unit's board |
-| `/projects/id/<p>/steps/<s>` | one step: status, actions, finishing, error, outputs, inputs, runs |
+| `/projects/id/<p>/steps/<s>` | one step: status, actions (Retry first and primary on a failed step), finishing, error, outputs (those not set yet named on one line), inputs, runs |
 | `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel`, `revision`, `message` (retry feedback) |
 | `/inbox`, `/questions`, `/history` | the message views across projects |
 | `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project; `thread?thread=<name>` |
@@ -1228,8 +1228,9 @@ remains. A Button answers `{action, params, values}`; the text box answers with 
 plan page: from 1280 px wide a right-hand column beside the plan (the page's column widens so
 nav, plan and board keep shared edges; the column scrolls on its own; with the step drawer open
 the drawer takes the side instead); below that a section after the plan, shown in turn with the
-plan by a Plan · Board switch that remembers its choice per project in `localStorage` (without
-script both show, the plan first). Without a board the page is as before. The program is
+plan by a Plan · Board switch that remembers its choice per project in `localStorage` (until one
+is picked a phone shows the board, a wider window the plan; without script both show, the plan
+first). Without a board the page is as before. The program is
 checked again and drawn on the server: the question components draw as the inbox draws them,
 and the data components are filled when the page renders and with every live patch:
 `Units(state?)` (the units view's rows), `StepStatus(step)`, `Output(step, field)`,

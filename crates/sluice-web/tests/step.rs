@@ -72,6 +72,56 @@ fn detail_preserves_missing_null_default_bindings_and_escapes_error() {
     assert!(html.as_str().contains("&#60;script&#62;"));
     assert!(view.retryable());
 }
+/// A failed step's drawer: Retry is the primary action; outputs not set yet are named on one
+/// line, the set ones drawn as fields with each doc under its name.
+#[test]
+fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_line() {
+    let plan = Plan::parse_json(br#"{"steps":{"w":{"run":"core.external","outputs":{"summary":{"type":"string","doc":"What changed"},"ready":"boolean","evidence":"string"}}}}"#, &Signatures).unwrap();
+    let mut state = StateSnapshot::default();
+    state.steps.insert(
+        "w".parse().unwrap(),
+        StepState {
+            status: StepStatus::Failed,
+            error: Some("engine stopped".into()),
+            ..Default::default()
+        },
+    );
+    let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(
+        html.contains("<button name=\"action\" value=\"retry\" class=\"primary\">Retry</button>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<span class=\"quiet\">3 outputs not set yet:</span>"),
+        "{html}"
+    );
+    assert!(!html.contains("Not set yet."), "{html}");
+    assert!(!html.contains("<span class=\"f-name\">summary"), "{html}");
+    assert!(
+        html.contains("<span class=\"f-uname\" title=\"What changed\">summary"),
+        "{html}"
+    );
+    // with one set, it is a field (its doc under its name) and the others one line
+    let w = state
+        .steps
+        .get_mut(&"w".parse::<sluice_model::ids::StepId>().unwrap())
+        .unwrap();
+    w.outputs
+        .0
+        .insert("summary".into(), json!("Fixed it").try_into().unwrap());
+    w.status = StepStatus::Succeeded;
+    let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(html.contains("<span class=\"f-name\">summary</span> <span class=\"f-type\">&#34;string&#34;</span><span class=\"f-about\"><span class=\"f-doc\">What changed</span></span></dt><dd class=\"f-v\"><span class=\"v\">Fixed it</span></dd>"), "{html}");
+    assert!(html.contains("2 outputs not set yet:"), "{html}");
+    assert!(
+        html.contains("<button name=\"action\" value=\"retry\">Retry</button>"),
+        "not primary unless failed"
+    );
+}
 struct Catalog;
 impl views::CatalogSource for Catalog {
     fn catalog(&self, _: Option<ProjectId>) -> Result<views::FunctionCatalog, PublicError> {

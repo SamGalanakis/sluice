@@ -178,6 +178,44 @@ impl Fixture {
             commands: Arc::default(),
         }
     }
+    /// Another project, `name`, with the plan `doc` and the given steps' statuses.
+    pub async fn project(
+        &self,
+        name: &'static str,
+        doc: Value,
+        statuses: &[(&'static str, &'static str)],
+    ) -> ProjectId {
+        let statuses = statuses.to_vec();
+        self.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                let id = projects::project_create(
+                    tx,
+                    CreateProject {
+                        name: name.parse().unwrap(),
+                        description: String::new(),
+                        icon: None,
+                        resources: None,
+                        author: "owner".into(),
+                    },
+                    &EmptyPlanInitializer,
+                    &NoResourceSettings,
+                )?
+                .project_id;
+                let plan = Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &Registry).unwrap();
+                tx.sql()
+                    .execute("DELETE FROM plans WHERE project_id=?1", [id.to_string()])?;
+                sluice_store::plans::initialize_plan(tx, id, &plan)?;
+                for (step, status) in &statuses {
+                    tx.sql().execute(
+                        "UPDATE steps SET status=?3 WHERE project_id=?1 AND step_id=?2",
+                        (id.to_string(), step, status),
+                    )?;
+                }
+                Ok(id)
+            })
+            .await
+            .unwrap()
+    }
     pub fn router(&self) -> Router {
         let mut pages = PageState::new(self.dashboard.clone());
         pages.messages = Some(MessageState {

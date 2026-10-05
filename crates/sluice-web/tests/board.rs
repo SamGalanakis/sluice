@@ -7,7 +7,7 @@ use sluice_model::{
 };
 use sluice_web::views::{
     self, Counts,
-    board::{Endpoint, ProjectView, RelationKind},
+    board::{BoardQuery, Endpoint, ProjectView, RelationKind},
 };
 struct Signatures;
 impl SignatureProvider for Signatures {
@@ -355,6 +355,152 @@ fn a_chip_says_where_its_source_is_when_a_done_unit_folds_its_card_away() {
     assert!(
         html.as_str()
             .contains("title=\"Handoff: a/text → x (in done unit one)\""),
+        "{}",
+        html.as_str()
+    );
+}
+
+/// Done units read as one line each, "d2 · fork✓ rm–" in the lane strings' marks, and a run of
+/// them (two or more) gathers on a closed shelf, "2 done units · 4 steps": under Live first
+/// one shelf after the live work, under Plan order each run in its place. A search that
+/// matches in a done unit draws the shelf and the unit open, under ids of their own, so a
+/// shelf the page had closed opens to the matches.
+#[test]
+fn done_units_fold_to_lines_on_a_shelf_and_a_search_opens_them() {
+    let plan = Plan::parse_json(
+        &serde_json::to_vec(&json!({"steps":{
+            "d1-fork":{"run":"core.external","tags":["unit:d1"]},
+            "d1-rm":{"run":"core.external","after":["d1-fork"],"tags":["unit:d1"]},
+            "live-work":{"run":"core.external","tags":["unit:live"]},
+            "d2-fork":{"run":"core.external","tags":["unit:d2"]},
+            "d2-rm":{"run":"core.external","after":["d2-fork"],"tags":["unit:d2"]},
+            "d3-fork":{"run":"core.external","tags":["unit:d3"]},
+            "d3-rm":{"run":"core.external","after":["d3-fork"],"tags":["unit:d3"]}}}))
+        .unwrap(),
+        &Signatures,
+    )
+    .unwrap();
+    let (_, mut state, project) = fixture();
+    state.steps.clear();
+    for (id, status) in [
+        ("d1-fork", StepStatus::Succeeded),
+        ("d1-rm", StepStatus::Succeeded),
+        ("d2-fork", StepStatus::Succeeded),
+        ("d2-rm", StepStatus::Skipped),
+        ("d3-fork", StepStatus::Succeeded),
+        ("d3-rm", StepStatus::Succeeded),
+    ] {
+        state.steps.insert(
+            id.parse().unwrap(),
+            StepState {
+                status,
+                ..Default::default()
+            },
+        );
+    }
+    let query = |order: &str, q: &str| BoardQuery {
+        order: Some(order.into()),
+        q: Some(q.into()),
+        ..Default::default()
+    };
+    let draw = |query: BoardQuery| {
+        let mut view = ProjectView::new(project.clone(), &plan, &state, 1);
+        query.apply(&mut view).unwrap();
+        view.body().unwrap().as_str().to_owned()
+    };
+    // Live first: the live unit, then one closed shelf of the three done units.
+    let html = draw(query("live", ""));
+    let live = html.find("id=\"unit-live\"").unwrap();
+    let shelf = html.find("<details id=\"shelf-d1\" class=\"done-shelf\" data-box=\"shelf:d1\" data-preserve-attr=\"open\">").expect("a closed shelf");
+    assert!(live < shelf, "the shelf after the live work");
+    assert!(html[shelf..].contains("3 done units · 6 steps"), "{html}");
+    for unit in ["d1", "d2", "d3"] {
+        assert!(
+            html[shelf..].contains(&format!("id=\"unit-{unit}\"")),
+            "{unit} on the shelf"
+        );
+        assert!(html.contains(&format!("<details id=\"fold-{unit}\" class=\"fold-box\" data-box=\"{unit}\" data-preserve-attr=\"open\">")));
+    }
+    // One line a unit: its glyph, id and lane string, the steps said in words too.
+    assert!(html.contains("<span class=\"sid\">d2</span><span class=\"fb-meta\"><span class=\"fb-lane\" aria-hidden=\"true\" title=\"fork✓ rm–\">fork<span class=\"lm\">✓</span> rm<span class=\"lm\">–</span></span><span class=\"vh\">, 2 steps done, 1 skipped</span></span>"), "{html}");
+    // Plan order: a lone done unit stays a line in place; the run after the live unit shelves.
+    let html = draw(query("plan", ""));
+    let d1 = html.find("id=\"unit-d1\"").unwrap();
+    let live = html.find("id=\"unit-live\"").unwrap();
+    let shelf = html.find("id=\"shelf-d2\"").expect("a shelf of d2 and d3");
+    assert!(d1 < live && live < shelf, "{html}");
+    assert!(
+        !html[..live].contains("done-shelf"),
+        "one done unit is not a shelf"
+    );
+    assert!(html[shelf..].contains("2 done units · 4 steps"));
+    // A search matching in done units opens the shelf and them, under ids of their own.
+    let html = draw(query("live", "rm"));
+    assert!(html.contains("<details id=\"shelf-d1-open\" class=\"done-shelf\" data-box=\"shelf:d1\" open data-forced data-preserve-attr=\"open\">"), "{html}");
+    assert!(html.contains("<details id=\"hit-d2\" class=\"fold-box\" data-box=\"d2\" open data-forced data-preserve-attr=\"open\">"), "{html}");
+    assert!(html.contains("data-step=\"d2-rm\""));
+    // Show: Done asks for them: its shelf is open too.
+    let mut view = ProjectView::new(project.clone(), &plan, &state, 1);
+    BoardQuery {
+        show: Some("done".into()),
+        ..Default::default()
+    }
+    .apply(&mut view)
+    .unwrap();
+    assert!(
+        view.body()
+            .unwrap()
+            .as_str()
+            .contains("id=\"shelf-d1-open\"")
+    );
+}
+
+/// The legend says what each line means: a value (handoff, condition) solid, order alone
+/// dotted, an order a skip satisfies dashed.
+#[test]
+fn the_legend_tells_a_value_from_an_order() {
+    let (plan, state, project) = fixture();
+    let html = ProjectView::new(project, &plan, &state, 1).body().unwrap();
+    let html = html.as_str();
+    assert!(html.contains("<i class=\"lg-line\" aria-hidden=\"true\"></i><span class=\"vh\">A solid line: </span>handoff · condition"), "{html}");
+    assert!(html.contains("<i class=\"lg-line dotted\" aria-hidden=\"true\"></i><span class=\"vh\">a dotted line: </span>after"));
+    assert!(html.contains("<i class=\"lg-line dashed\" aria-hidden=\"true\"></i><span class=\"vh\">a dashed line: </span>after, even if skipped (?)"));
+}
+
+/// A lash lane's later steps (gated by conditions, afters and handoffs from earlier ones) read
+/// their own status on a done unit's line: every step succeeded is a ✓, never the pending dot.
+#[test]
+fn a_done_lanes_line_marks_every_step_by_its_own_status() {
+    let plan = Plan::parse_json(
+        &serde_json::to_vec(&json!({"steps":{
+            "l-fork":{"run":"core.external","outputs":{"path":"string"},"tags":["unit:l"]},
+            "l-work":{"run":"core.external","in":{"cwd":{"source":"l-fork/path"}},"outputs":{"ready":"boolean","evidence":"string"},"tags":["unit:l"]},
+            "l-land":{"run":"core.external","in":{"fork":{"source":"l-fork/path"},"ready":{"source":"l-work/ready"}},"outputs":{"landed":"boolean","landed_sha":"string"},"tags":["unit:l"]},
+            "l-landed":{"run":"core.external","in":{"sha":{"source":"l-land/landed_sha"}},"after":["l-land/landed"],"tags":["unit:l","exit"]},
+            "l-close":{"run":"core.external","in":{"evidence":{"source":"l-work/evidence"}},"after":["l-land/landed","l-landed"],"tags":["unit:l"]},
+            "l-rm":{"run":"core.external","in":{"path":{"source":"l-fork/path"}},"after":["l-close"],"tags":["unit:l"]}}}))
+        .unwrap(),
+        &Signatures,
+    )
+    .unwrap();
+    let (_, mut state, project) = fixture();
+    state.steps.clear();
+    for id in ["l-fork", "l-work", "l-land", "l-landed", "l-close", "l-rm"] {
+        state.steps.insert(
+            id.parse().unwrap(),
+            StepState {
+                status: StepStatus::Succeeded,
+                ..Default::default()
+            },
+        );
+    }
+    let view = ProjectView::new(project, &plan, &state, 1);
+    let unit = &view.units[0];
+    assert!(unit.done);
+    assert_eq!(unit.lane(), "fork✓ work✓ land✓ landed✓ close✓ rm✓");
+    let html = view.body().unwrap();
+    assert!(
+        html.as_str().contains("land<span class=\"lm\">✓</span> landed<span class=\"lm\">✓</span> close<span class=\"lm\">✓</span> rm<span class=\"lm\">✓</span>"),
         "{}",
         html.as_str()
     );

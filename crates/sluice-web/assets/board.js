@@ -2,7 +2,8 @@
 // sections show (side by side from 1280px, one after the other below), the board's tools apply
 // with their Apply button and a Button posts the page. With script:
 // - the view switch: Plan · Both · Board from 1280px, Plan · Board below; each remembered per
-//   project (localStorage), wide and narrow apart;
+//   project (localStorage), wide and narrow apart; until one is picked a phone shows the board
+//   (its live lanes are the quick check), the window between a phone and 1280px the plan;
 // - the splitter between plan and board: drag, arrow keys (16px, 64px with Shift), Home/End,
 //   double-click to reset; the board's width remembered per project;
 // - the description's "More", remembered per project;
@@ -11,6 +12,7 @@
 //   draw the board as filtered;
 // - a board Button's say is sent without leaving the page, the answer shown under the board.
 const WIDE = matchMedia("(min-width: 1280px)");
+const PHONE = matchMedia("(max-width: 720px)");  // a phone opens on the board, its quick check
 const MIN_BOARD = 320, MIN_PLAN = 560, STEP = 16, BIG_STEP = 64;
 
 const store = {
@@ -33,7 +35,8 @@ function viewOf(p) {
   const m = mode();
   const views = m === "wide" ? ["plan", "both", "board"] : ["plan", "board"];
   const v = chosen[m] ?? store.get(viewKey(m, p.dataset.project));
-  return views.includes(v) ? v : m === "wide" ? "both" : "plan";
+  if (views.includes(v)) return v;
+  return m === "wide" ? "both" : PHONE.matches ? "board" : "plan";
 }
 
 /** Put the page in its view and the switch, splitter and description in step with it. */
@@ -60,6 +63,7 @@ document.addEventListener("click", event => {
   frameSplitter();
 });
 WIDE.addEventListener("change", () => { sync(); frameSplitter(); });
+PHONE.addEventListener("change", sync);
 
 // ---- the splitter -----------------------------------------------------------------------------
 

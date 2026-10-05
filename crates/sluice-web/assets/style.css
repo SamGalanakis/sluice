@@ -527,6 +527,11 @@ form.switch button:hover { color: var(--foreground); }
 .stuck a { white-space: nowrap; }  /* a step's id never breaks at its hyphens */
 .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; }
 .d-actions .tag { margin-left: -6px; }  /* with the thread link it counts for */
+/* its buttons apart, the thread link after them; on a failed step Retry, the primary, leads;
+   the retry's feedback folds on a line of its own */
+.d-actions form { display: contents; }
+.d-actions form > details { order: 1; flex-basis: 100%; }
+.d-actions form > button.primary { order: -1; }
 .d-thread { font-size: 13px; color: var(--muted-foreground); }
 .d-thread:hover { color: var(--foreground); }
 details.about > summary { list-style: none; cursor: pointer; color: var(--muted-foreground); }
@@ -590,7 +595,11 @@ sluice-drawer { display: contents; }
 .fb-meta { flex: 1 1 auto; min-width: 0; font-size: 13px; line-height: 18px;
            color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis;
            white-space: nowrap; }
-.fold-box .chev { margin-left: auto; }
+.fb-lane { font: 12px/18px var(--font-mono); color: var(--muted-foreground); }
+/* each mark in ink and heavier, a size up: a ✓ must never pass for the pending dot */
+.fb-lane .lm { color: var(--foreground); font-weight: 700; font-size: 13px; margin-left: 1px; }
+.fold-box > summary > .xout { margin-left: 2px; }
+.fold-box .chev { margin-left: auto; flex: none; }
 .fold-box[open] .chev { transform: rotate(180deg); }
 .fold-box[open] > summary { margin-bottom: 0; }
 .fold-box > .rows, .fold-box > :where(.box-content) > .rows { padding: 8px 18px 16px; }
@@ -636,7 +645,9 @@ sluice-drawer { display: contents; }
          pointer-events: none; z-index: 0; }
 .wires path { fill: none; stroke: var(--edge); stroke-width: 1.5;
               transition: opacity 150ms, stroke 150ms; }
-.wires path.order { stroke-dasharray: 4 4; }
+.wires path[data-kind="ordering"] { stroke-dasharray: 0.5 3.5; stroke-linecap: round;
+                                     stroke-width: 1.75; }  /* order alone: dotted */
+.wires path.order { stroke-dasharray: 5 4; stroke-linecap: butt; }  /* a skip satisfies it: dashed */
 .wires path.head { fill: var(--edge-head); stroke: none; }
 .names text { font: 500 12px var(--font-sans); fill: var(--foreground); text-anchor: middle;
               opacity: 0; paint-order: stroke; stroke: var(--background); stroke-width: 6px;
@@ -780,14 +791,17 @@ dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
 .f-v > .v.id { flex: 2 1 0; min-width: min(14ch, 100%); max-width: max-content; }
 .f-doc { flex-basis: 100%; font-size: 13px; line-height: 18px; color: var(--muted-foreground);
          max-width: 72ch; }
-/* a long value: the name's row holds where it comes from and its doc, the value spans below */
-.f.wide { grid-template-rows: auto auto; }
-.f.wide > .f-k { grid-area: 1 / 1; position: relative; z-index: 1; }
-.f.wide > .f-v { grid-area: 1 / 1 / 3 / -1; display: grid; grid-template-columns: subgrid;
-                 grid-template-rows: subgrid; }
-.f.wide .f-about { grid-area: 1 / 2; display: flex; flex-wrap: wrap; align-items: baseline;
-                   gap: 2px 10px; min-width: 0; }
-.f.wide .f-v > :last-child { grid-area: 2 / 1 / 3 / -1; margin-top: 6px; min-width: 0; }
+/* a field's doc and where its value comes from, under its name: every value starts at one x */
+.f-about { flex-basis: 100%; display: flex; flex-direction: column; align-items: flex-start;
+           min-width: 0; margin-top: 1px; white-space: normal; overflow-wrap: anywhere; }
+.f-about .f-doc { font: 400 12.5px/17px var(--font-sans); }
+/* outputs not set yet: one line naming them */
+.f-unset { margin: 0; font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+.f-unset .f-uname { white-space: nowrap; }
+.show-types .f-unset .f-type { display: inline; }
+/* a long value: its name, doc and source across the row, the value spanning below */
+.f.wide > .f-k { grid-column: 1 / -1; }
+.f.wide > .f-v { grid-column: 1 / -1; display: block; margin-top: 6px; }
 .f-v .v.prose p, .f-v .v.md > :last-child { margin: 0; }
 .f-v .v.code pre, .f-v .clip.code pre { font-size: 12.5px; line-height: 19px; padding: 10px 12px;
                                         background: var(--muted); border: 1px solid var(--border);
@@ -1335,10 +1349,13 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 /* the board alone: of the plan's pane only the summary line's switch stays, over the board */
 @media (scripting: enabled) {
   .has-panel .view-switch { display: flex; }
-  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > :not(.sumline),
-  html:not(.drawer-open) .project-page[data-view="board"] .sumline > :not(.view-switch) { display: none; }
+  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > :not(.sumline) { display: none; }
   html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > .sumline {
     margin-bottom: var(--space-lg); }
+}
+/* above a phone the board alone keeps only the switch; a phone keeps the summary over it */
+@media (min-width: 721px) and (scripting: enabled) {
+  html:not(.drawer-open) .project-page[data-view="board"] .sumline > :not(.view-switch) { display: none; }
 }
 @media (max-width: 1279px) and (scripting: enabled) {
   .view-switch [data-view-tab="both"] { display: none; }
@@ -1357,7 +1374,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 }
 @media (min-width: 1280px) {
   /* the default board width; the splitter's, inline on the page, wins */
-  .project-page.has-panel { --board-w: clamp(400px, 30%, 720px);
+  .project-page.has-panel { --board-w: clamp(400px, 36%, 1040px);
     --board-track: max(var(--board-min), min(var(--board-w), 65%,
                                               100% - var(--plan-min) - var(--board-gap))); }
   html:not(.drawer-open) .project-page.has-panel:not([data-view="plan"], [data-view="board"]) {
@@ -1374,17 +1391,19 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
   .project-page.has-panel .board-pane {
     margin-top: 0; box-sizing: border-box; padding: 14px 16px 16px; background: var(--card);
     border: 1px solid var(--border); border-radius: var(--radius); }
-  /* the board alone: its tables keep to their content rather than spread across the page */
-  .project-page[data-view="board"] .board-pane .ou-table { width: auto; max-width: 100%; }
+  /* the board alone: its parts share one left and right edge, the page's width up to a measure
+     a row can still be read across (prose keeps its own 72ch) */
+  .project-page[data-view="board"] .board-scroll { max-width: 1680px; }
+  .project-page[data-view="board"] .board-pane .ou-table { width: 100%; }
   .project-page[data-view="plan"] > .board-side { display: none; }
   /* the drawer takes the side: the plan shows, the board and the switch step away */
   html.drawer-open .project-page.has-panel :is(.board-side, .view-switch) { display: none; }
 }
 @media (max-width: 720px) {
   .view-switch button { min-height: 44px; padding: 0 14px 0 12px; }
-  /* first, on a line of its own */
-  .sumline > .view-switch { order: -2; margin-left: 0; }
-  .has-panel .sumline::before { content: ""; order: -1; flex-basis: 100%; }
+  /* after the summary, on a line of its own */
+  .sumline > .view-switch { order: 2; margin-left: 0; }
+  .has-panel .sumline::before { content: ""; order: 1; flex-basis: 100%; }
   .plan-pane .sumline .bar { width: 120px; }
   .about-more > summary { min-height: 44px; margin-top: 0; }
   .board-tools .q-field { flex-basis: 100%; max-width: none; }
@@ -1417,8 +1436,9 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-units .u-state { white-space: nowrap; }
 .board-units .u-state > span:not(.g) { margin-left: 4px; }
 .board-units .u-state .g { vertical-align: -3px; }
-.board-units .u-steps { font: 12px/18px var(--font-mono); overflow-wrap: normal; }  /* breaks between steps */
-.board-units .u-wait { color: var(--muted-foreground); }
+.board-units .u-steps { font: 12px/18px var(--font-mono); overflow-wrap: normal;
+                        white-space: nowrap; }  /* a lane on one line; the table scrolls if it must */
+.board-units .u-wait { color: var(--muted-foreground); overflow-wrap: anywhere; }
 .board-step { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0;
               max-width: 100%; }
 .board-step .board-chip { max-width: 100%; }
@@ -1468,13 +1488,18 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
   .board-units, .board-units tbody { display: block; }
   .board-units thead { position: absolute; width: 1px; height: 1px; overflow: hidden;
                        clip-path: inset(50%); }
-  .board-units tr { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  /* the unit, its state and its marks on one line where they fit (the marks take the next
+     line whole when they do not, breaking between steps only past the board's width), then
+     what it waits on */
+  .board-units tr { display: flex; flex-wrap: wrap; align-items: baseline;
                     column-gap: var(--space-md); row-gap: 2px; padding: 7px 0;
                     border-bottom: 1px solid var(--border); }
   .board-units td { padding: 0; border: 0; }
-  .board-units td.u-unit { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  .board-units td.u-unit { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
                            white-space: nowrap; }
-  .board-units td:is(.u-steps, .u-wait) { grid-column: 1 / -1; }
+  .board-units td.u-state { flex: none; }
+  .board-units td.u-steps { flex: 0 1 auto; min-width: 0; white-space: normal; }
+  .board-units td.u-wait { flex: 1 1 100%; }
   .board-units td.u-wait:empty { display: none; }
 }
 /* ==== end of page shell, continued ============================================================ */
@@ -1501,6 +1526,31 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
   /* a folded line in a cell: the id keeps what it needs, the count gives way first */
   .boxes.units .fold-box > summary .sid { flex: 0 1 auto; max-width: none; }
   .boxes.units .fold-box > summary .fb-meta { flex: 1 1 0; }
+}
+/* the done shelf: a run of done units (under Live first, every one, at the end) on one line,
+   "175 done units · 967 steps", closed until opened (and open for a search that matches in it,
+   or Show: Done); open, each unit its own line in a grid of wider cells, so its lane string
+   reads. A unit traced from a chip while the shelf is closed rings the shelf's line. */
+.done-shelf { min-width: 0; }
+.done-shelf > summary { display: flex; align-items: center; gap: 8px; min-height: 44px;
+                        padding: 8px 14px 8px 18px; list-style: none; cursor: pointer;
+                        border-radius: var(--radius); background: var(--box);
+                        color: var(--foreground); font: 500 14px/20px var(--font-sans); }
+.done-shelf > summary::-webkit-details-marker { display: none; }
+.done-shelf > summary:hover { background: var(--secondary); }
+.done-shelf > summary .chev { margin-left: auto; flex: none; }
+.done-shelf[open] > summary .chev { transform: rotate(180deg); }
+.done-shelf[open] > summary { margin-bottom: 10px; }
+.done-shelf > .boxes.units { gap: 8px 14px; }
+.plane.tracing .done-shelf.near > summary { box-shadow: inset 0 0 0 1.5px var(--foreground); }
+@container plan (min-width: 720px) {
+  .boxes.units > .done-shelf { grid-column: 1 / -1; }
+  .done-shelf > .boxes.units {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); }
+}
+@media (max-width: 720px) {
+  .fold-box > summary > .xout { grid-column: 2; }
+  .done-shelf > summary { padding: 8px 10px 8px 12px; }
 }
 /* a card's inputs from other boxes: chips on its top edge, part of its entry (4px to the card,
    the row gap to anything above), each a link to its source. A row's cards line up at its
@@ -1537,6 +1587,7 @@ a.xref:hover, .xref.on { border-color: var(--foreground); background: var(--card
 .legend .lg { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .lg-line { width: 22px; border-top: 1.5px solid var(--edge-head); }
 .lg-line.dashed { border-top-style: dashed; }
+.lg-line.dotted { border-top: 2px dotted var(--edge-head); }
 .lg-box { width: 14px; height: 10px; border-radius: 3px; background: var(--box);
           box-shadow: inset 0 0 0 1px var(--border-strong); }
 sluice-board:has(.boxes > .empty) > .legend { display: none; }  /* nothing to read it by */

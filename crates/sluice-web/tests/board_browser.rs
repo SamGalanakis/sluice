@@ -94,12 +94,15 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                         g["right"].as_f64().unwrap(),
                     );
                     let plan = &g["plan"];
-                    assert!(plan.is_object(), "{label}: {g}");
                     match (slug, width) {
+                        // a phone opens on the board, under the summary line and its switch
                         ("board", 390) => {
-                            assert!(g["tabs"].is_object() && g["board"].is_null(), "{label}: {g}");
+                            assert!(g["tabs"].is_object() && g["board"].is_object() && plan.is_null(), "{label}: {g}");
+                            assert_eq!(g["view"], "board", "{label}: {g}");
+                            assert!(g["tabs"]["top"].as_f64().unwrap() > g["sum"]["top"].as_f64().unwrap(), "{label}: the switch after the summary {g}");
                         }
                         ("board", _) => {
+                            assert!(plan.is_object(), "{label}: {g}");
                             // From 1280px the page takes the window (to 2400px): the plan, the
                             // splitter, the board; the switch offers Plan · Both · Board.
                             let board = &g["board"];
@@ -117,6 +120,7 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                             assert!(plan["width"].as_f64().unwrap() >= 560.0, "{label}: {g}");
                         }
                         _ => {
+                            assert!(plan.is_object(), "{label}: {g}");
                             assert!(g["tabs"].is_null() && g["board"].is_null(), "{label}: {g}");
                             assert!(near(&plan["width"], g["right"].as_f64().unwrap() - g["left"].as_f64().unwrap()), "{label}: {g}");
                         }
@@ -148,27 +152,28 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         assert_eq!(since, "1h", "{since}");
         assert_eq!(browser.eval("document.querySelector('#t-since').textContent").unwrap(), "1h");
         browser.eval("document.querySelector('#t-since').remove()").unwrap();
-        // On a phone the switch shows one section at a time and remembers the choice.
+        // On a phone the switch shows one section at a time (the board until one is picked)
+        // and remembers the choice.
         browser
             .navigate(&format!("{base}/projects/id/{lanes}"))
             .unwrap();
         browser.wait(ready).unwrap();
         browser.viewport(390, "light").unwrap();
         browser
-            .eval("document.querySelector('[data-view-tab=board]').click()")
+            .eval("document.querySelector('[data-view-tab=plan]').click()")
             .unwrap();
         let g = browser.eval(GEOMETRY).unwrap();
-        check(&g, "board tab");
-        assert!(g["plan"].is_null() && g["board"].is_object(), "{g}");
+        check(&g, "plan tab");
+        assert!(g["plan"].is_object() && g["board"].is_null(), "{g}");
         assert_eq!(
             browser
-                .eval("document.querySelector('[data-view-tab=board]').getAttribute('aria-pressed')")
+                .eval("document.querySelector('[data-view-tab=plan]').getAttribute('aria-pressed')")
                 .unwrap(),
             "true"
         );
         for theme in ["light", "dark"] {
             browser.viewport(390, theme).unwrap();
-            shoot(&mut browser, &format!("project-board-tab-390-{theme}"));
+            shoot(&mut browser, &format!("project-plan-tab-390-{theme}"));
         }
         browser
             .navigate(&format!("{base}/projects/id/{lanes}"))
@@ -176,11 +181,8 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         browser.wait(ready).unwrap();
         browser.viewport(390, "light").unwrap();
         let g = browser.eval(GEOMETRY).unwrap();
-        assert_eq!(g["view"], "board", "remembered {g}");
-        assert!(g["plan"].is_null() && g["board"].is_object(), "{g}");
-        browser
-            .eval("document.querySelector('[data-view-tab=plan]').click()")
-            .unwrap();
+        assert_eq!(g["view"], "plan", "remembered {g}");
+        assert!(g["plan"].is_object() && g["board"].is_null(), "{g}");
         // The splitter: End and Home take the board to its bounds, the width is remembered,
         // a double-click forgets it; Board shows the board alone.
         browser.viewport(1440, "light").unwrap();
@@ -489,6 +491,70 @@ async fn chromium_chips_sit_on_their_cards_top_edge_and_rest_alike() {
             browser.eval("window.browserErrors").unwrap(),
             serde_json::json!([])
         );
+    })
+    .await
+    .unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+/// One path a pair of cards, named with every relation between them (a handoff and an after
+/// on the same pair are one line), drawn as its strongest relation: a value solid, order alone
+/// dotted. An after whose order a longer path already gives is not drawn. Arrowheads still land
+/// on their cards.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_one_path_a_pair_and_no_after_that_a_path_already_gives() {
+    let f = Fixture::new().await;
+    let id = f
+        .project(
+            "edges",
+            serde_json::json!({"steps":{
+                "lane-fork":{"run":"custom.open","outputs":{"path":"string"},"tags":["unit:lane"]},
+                "lane-work":{"run":"custom.open","in":{"cwd":{"source":"lane-fork/path"}},"after":["lane-fork"],"tags":["unit:lane"]},
+                "lane-land":{"run":"custom.open","in":{"fork":{"source":"lane-fork/path"}},"after":["lane-work"],"tags":["unit:lane"]},
+                "lane-rm":{"run":"custom.open","after":["lane-fork","lane-land"],"tags":["unit:lane"]}}}),
+            &[("lane-fork", "succeeded")],
+        )
+        .await;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
+        browser
+            .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
+            .unwrap();
+        browser.viewport(1440, "light").unwrap();
+        browser
+            .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length > 0")
+            .unwrap();
+        let paths = browser
+            .eval("[...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => [p.dataset.from, p.dataset.to, p.dataset.kind, p.querySelector('title')?.textContent ?? ''])")
+            .unwrap();
+        let mut paths: Vec<Vec<String>> = serde_json::from_value(paths).unwrap();
+        paths.sort();
+        let want: Vec<Vec<String>> = [
+            ["s:lane-fork", "s:lane-land", "handoff", "path → fork"],
+            ["s:lane-fork", "s:lane-work", "handoff", "path → cwd · after"],
+            ["s:lane-land", "s:lane-rm", "ordering", "after"],
+            ["s:lane-work", "s:lane-land", "ordering", "after"],
+        ]
+        .iter()
+        .map(|p| p.iter().map(|s| s.to_string()).collect())
+        .collect();
+        assert_eq!(paths, want, "fork→rm is implied by fork→work→land→rm");
+        let dash = browser
+            .eval("[...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => getComputedStyle(p).strokeDasharray)")
+            .unwrap();
+        let dash: Vec<String> = serde_json::from_value(dash).unwrap();
+        assert_eq!(dash.iter().filter(|d| *d == "none").count(), 2, "{dash:?}");
+        let edges = browser.eval(EDGES).unwrap();
+        assert!(
+            edges.as_array().unwrap().iter().all(|e| e["lands"] == true && e["onChip"] == false),
+            "{edges}"
+        );
+        assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));
     })
     .await
     .unwrap();

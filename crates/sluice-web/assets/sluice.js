@@ -72,8 +72,10 @@ function markOpen(sid) {
     return;
   }
   if (!card.classList.contains("open")) card.classList.add("open");
-  const box = card.closest("details.fold-box:not([open])");  // a finished box opens to it
-  if (box) box.open = true;
+  // a finished box opens to it, and the shelf it is on
+  for (let d = card.closest("details:not([open])"); d; d = d.parentElement?.closest("details:not([open])")) {
+    d.open = true;
+  }
 }
 
 const PHONE = matchMedia("(max-width: 720px)");  // one card per line, no edges; drawer a sheet
@@ -189,7 +191,8 @@ function drawEdges(host, data) {
     }
     return rowsOf.get(key);
   };
-  const ends = (Array.isArray(data) ? data : []).filter(([a, b]) => rect.has(a) && rect.has(b));
+  // of the cards shown (a search may leave a step out), one path a pair (see merge)
+  const ends = merge((Array.isArray(data) ? data : []).filter(([a, b]) => rect.has(a) && rect.has(b)));
   const cx = (key) => rect.get(key).left + rect.get(key).width / 2;
   const spread = (key, others) => {
     const r = rect.get(key), sorted = [...others].sort((p, q) => cx(p.other) - cx(q.other));
@@ -271,7 +274,10 @@ function drawEdges(host, data) {
     const attrs = { "data-from": a, "data-to": b, d };
     if (kinds.includes("tolerant")) attrs.class = "order";
     attrs["data-kind"] = kinds[0];
-    wires.append(svgEl("path", attrs));
+    const wire = svgEl("path", attrs), title = svgEl("title", {});
+    title.textContent = label;
+    wire.append(title);
+    wires.append(wire);
     wires.append(svgEl("path", { "data-from": a, "data-to": b, class: "head",
                                  d: end.dir
                                    ? `M${f(hx)} ${f(end.y - HEAD_W)}L${f(end.x)} ${f(end.y)}`
@@ -280,7 +286,7 @@ function drawEdges(host, data) {
                                      + `L${f(x2 + HEAD_W)} ${f(y2)}z` }));
     // its names twice: by the far end from whichever card is traced, so the names of a card's
     // edges spread out over the cards around it instead of piling up on it
-    const pair = JSON.stringify([a, b]);
+    const pair = JSON.stringify([a, b]);  // one path a pair (see merge), so one lane of names
     const lane = labelLanes.get(pair) || 0;
     labelLanes.set(pair, lane + 1);
     const near = [[pts[0], pts[1], "from"], [pts[pts.length - 2], pts[pts.length - 1], "to"]];
@@ -312,6 +318,14 @@ function trace(host, key) {
   for (const n of $$(".node, .box[data-node]", host)) {
     n.classList.toggle("near", near.has(n.dataset.node));
   }
+  // a unit folded away on the closed shelf of done units: the shelf's line stands in for it
+  const shelves = new Set();
+  for (const k of near) {
+    const box = k.startsWith("u:") && $(`.box[data-node="${CSS.escape(k)}"]`, host);
+    const shelf = box && !shown(box) && box.closest("details.done-shelf");
+    if (shelf) shelves.add(shelf);
+  }
+  for (const s of $$("details.done-shelf", host)) s.classList.toggle("near", shelves.has(s));
   const plane = $(".plane", host);
   if (plane && !plane.classList.contains("tracing")) plane.classList.add("tracing");
 }
@@ -366,6 +380,55 @@ function boardEdges(host, edges) {
     [e.kind, ...(e.tolerant ? ["tolerant"] : [])]]);
 }
 
+// A relation in words, as the chips say it: "summary → spec", "after", "if ok", "if not ok".
+function words(label, kinds) {
+  if (kinds[0] === "ordering") return kinds.includes("tolerant") ? "after, even if skipped" : "after";
+  if (kinds[0] === "condition" || kinds[0] === "negated_condition") return `if ${label}`;
+  return label;
+}
+// One path per pair of cards, its names every relation between them: a handoff and a gate on
+// the same pair are one line. The line is drawn as its strongest relation: a value (handoff,
+// condition) solid, order alone dotted, an order a skip satisfies dashed. An `after` whose
+// order another path already gives (its source reaches its dependent through other edges in
+// the box) is dropped: the order it states is drawn, and the drawer's After lists it.
+function merge(list) {
+  const pairs = new Map();
+  for (const [a, b, label, kinds] of list) {
+    const key = `${a}\n${b}`;
+    if (!pairs.has(key)) pairs.set(key, { a, b, words: [], kinds: new Set(), tolerant: true });
+    const p = pairs.get(key), said = words(label, kinds);
+    if (!p.words.includes(said)) p.words.push(said);
+    p.kinds.add(kinds[0]);
+    if (!kinds.includes("tolerant")) p.tolerant = false;
+  }
+  const next = new Map();
+  for (const p of pairs.values()) {
+    if (!next.has(p.a)) next.set(p.a, []);
+    next.get(p.a).push(p.b);
+  }
+  // `b` reached from `a` by a path of two edges or more
+  const implied = (a, b) => {
+    const seen = new Set(), todo = (next.get(a) || []).filter((n) => n !== b);
+    while (todo.length) {
+      const n = todo.pop();
+      if (n === b) return true;
+      if (seen.has(n)) continue;
+      seen.add(n);
+      todo.push(...(next.get(n) || []));
+    }
+    return false;
+  };
+  const out = [];
+  for (const p of pairs.values()) {
+    const orderOnly = p.kinds.size === 1 && p.kinds.has("ordering");
+    if (orderOnly && !p.tolerant && implied(p.a, p.b)) continue;
+    const kind = ["handoff", "condition", "negated_condition", "ordering"].find((k) => p.kinds.has(k))
+      ?? [...p.kinds][0];
+    out.push([p.a, p.b, p.words.join(" · "), [kind, ...(p.tolerant ? ["tolerant"] : [])]]);
+  }
+  return out;
+}
+
 // Only a relation within one box is drawn; one between boxes is a chip on its dependent.
 const drawn = (edges) => boardEdges(null, (Array.isArray(edges) ? edges : []).filter((e) => !e.cross));
 
@@ -374,7 +437,7 @@ function openBoxes() {
 }
 function restoreBoxes(host) {
   const open = openBoxes();
-  for (const d of $$("details.fold-box[data-box]", host)) {
+  for (const d of $$("details[data-box]", host)) {
     if (open[`${location.pathname}:${d.dataset.box}`] && !d.open) d.open = true;
 
   }
@@ -475,9 +538,9 @@ rocket("sluice-board", {
     host.addEventListener("keydown", keys, { signal: listeners.signal });
     host.addEventListener("toggle", (evt) => {
       const d = evt.target;
-      if (!d.matches?.("details.fold-box[data-box]")) return;
-
+      if (!d.matches?.("details[data-box]")) return;
       redraw();
+      if (d.hasAttribute("data-forced")) return;  // opened for a search or a filter, not by hand
       const open = openBoxes(), k = `${location.pathname}:${d.dataset.box}`;
       if (d.open) open[k] = 1; else delete open[k];
       try { sessionStorage.setItem(BOXES, JSON.stringify(open)); } catch { /* no storage */ }

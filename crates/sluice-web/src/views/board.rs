@@ -380,6 +380,25 @@ pub struct UnitView {
     /// How many dependents in other boxes each step has, by step id, and the unit itself.
     pub feeds: BTreeMap<String, usize>,
     pub unit_feeds: usize,
+    /// A done unit a search matched in: drawn open, its matching cards in view.
+    pub open: bool,
+}
+/// A run of units as the board draws them: one unit, or a shelf of consecutive done units
+/// (two or more), folded to one line ("175 done units · 967 steps").
+pub struct Group<'a> {
+    pub units: &'a [UnitView],
+    pub shelf: bool,
+    /// The shelf drawn open: the view asks for done units (Show: Done) or a search matched in it.
+    pub open: bool,
+}
+impl Group<'_> {
+    /// The shelf's key, after its first unit: what remembers it open in a tab.
+    pub fn key(&self) -> &str {
+        self.units.first().map_or("", |u| u.id.as_str())
+    }
+    pub fn steps(&self) -> usize {
+        self.units.iter().map(|u| u.steps.len()).sum()
+    }
 }
 impl UnitView {
     pub fn key(&self) -> String {
@@ -398,6 +417,57 @@ impl UnitView {
     }
     pub fn feeds_of(&self, step: &StepView) -> usize {
         self.feeds.get(step.id.as_str()).copied().unwrap_or(0)
+    }
+    /// The unit's steps as the board's lane strings write them: each step's id without the
+    /// unit's prefix and its mark, `fork✓ work✓ land✓` (✓ succeeded, – skipped).
+    pub fn lane(&self) -> String {
+        let prefix = format!("{}-", self.id);
+        self.steps
+            .iter()
+            .map(|s| {
+                let short = s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str());
+                let mark = match s.status.as_str() {
+                    "succeeded" => '✓',
+                    "running" => '▶',
+                    "failed" => '✗',
+                    "stale" => '~',
+                    "skipped" => '–',
+                    _ if s.paused => '‖',
+                    _ => '·',
+                };
+                format!("{short}{mark}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    /// The lane string drawn: each mark in a span of its own (`.lm`), in ink and weight, so a
+    /// ✓ never reads as the pending dot beside the muted step names.
+    pub fn lane_html(&self) -> String {
+        self.lane()
+            .split(' ')
+            .map(|step| {
+                let mut chars = step.chars();
+                let mark = chars.next_back().unwrap_or(' ');
+                let name = chars
+                    .as_str()
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                format!("{name}<span class=\"lm\">{mark}</span>")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    /// The one line's words for a screen reader: "6 steps done" ("…, 1 skipped").
+    pub fn done_words(&self) -> String {
+        let skipped = self.steps.iter().filter(|s| s.status == "skipped").count();
+        let n = self.steps.len();
+        let steps = if n == 1 { "step" } else { "steps" };
+        if skipped > 0 {
+            format!("{n} {steps} done, {skipped} skipped")
+        } else {
+            format!("{n} {steps} done")
+        }
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&UnitTemplate { unit: self })
@@ -529,6 +599,7 @@ impl ProjectView {
                     xrefs,
                     feeds: step_feeds,
                     unit_feeds: feeds_of(&format!("u:{}", unit.name)),
+                    open: false,
                 }
             })
             .collect::<Vec<_>>();
@@ -612,6 +683,24 @@ impl ProjectView {
     }
     pub fn href(&self) -> String {
         self.project.href()
+    }
+    /// The units in the order shown, consecutive done units (two or more) gathered on a shelf:
+    /// under Live first that is one shelf at the end; under Plan order each run in its place.
+    pub fn groups(&self) -> Vec<Group<'_>> {
+        let open = self.show == "done" || !self.q.is_empty();
+        let mut out = vec![];
+        let mut i = 0;
+        while i < self.units.len() {
+            let run = self.units[i..].iter().take_while(|u| u.done).count();
+            let n = run.max(1);
+            out.push(Group {
+                units: &self.units[i..i + n],
+                shelf: run >= 2,
+                open,
+            });
+            i += n;
+        }
+        out
     }
     /// The board under the same order and show, without its search: the search's clear link.
     pub fn clear_href(&self) -> String {
@@ -1019,7 +1108,8 @@ pub struct BoardQuery {
     pub datastar: Option<String>,
 }
 impl BoardQuery {
-    fn apply(&self, view: &mut ProjectView) -> Result<(), PublicError> {
+    /// Filter, order and search `view` as the page's query asks.
+    pub fn apply(&self, view: &mut ProjectView) -> Result<(), PublicError> {
         let order = self.order.as_deref().unwrap_or("live");
         let show = self.show.as_deref().unwrap_or("all");
         if !["live", "plan"].contains(&order)
@@ -1060,6 +1150,10 @@ impl BoardQuery {
         }
         if !q.is_empty() {
             view.matched = search(&mut view.units, &q);
+            // a done unit with a match opens to it, as does its shelf
+            for unit in &mut view.units {
+                unit.open = unit.done;
+            }
         }
         view.q = q;
         view.mark_away();

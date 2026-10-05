@@ -168,7 +168,7 @@ components:
     backgroundColor: "{colors.card}"
     rounded: "{rounded.lg}"
     padding: "14px 16px 16px"
-    width: "clamp(400px, 30%, 720px)"
+    width: "clamp(400px, 36%, 1040px)"
   splitter:
     textColor: "{colors.muted-ink}"
     width: "32px"
@@ -411,16 +411,33 @@ Top down:
    case, any order); a unit with none hides, and an empty board says "Clear the search to see
    every unit."
 3. **The board**: first the legend (none when no unit is shown), one quiet line in meta under
-   the tools, each kind with its mark: a short line for "handoff · after · condition · not", a
-   dashed one for "?", a box swatch for "unit", a sample chip "after step" for "from another
-   unit".
+   the tools, each kind with its mark: a solid line for "handoff · condition" (a value passes),
+   a dotted one for "after" (order alone), a dashed one for "after, even if skipped (?)", a box
+   swatch for "unit", a sample chip "after step" for "from another unit".
    Then the plan inputs as dashed chips, one box per unit, the plan outputs as dashed chips. A
    box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no border) is
-   labelled with the unit's id in meta and lays its cards in rows by dependency depth. A done
-   unit folds to one line, a `<details>`: the success glyph, the unit id, "n steps · done" and
-   a chevron; it opens to its cards. A board with no units to show reads "No units match this
-   view." The plan pane is a size container named `plan`: what lays out the plan keys off the
-   pane's width, which the splitter changes, never the window's.
+   labelled with the unit's id in meta and lays its cards in rows by dependency depth. Live
+   units, failed ones and any with a step not done keep the full graph. A done unit (every step
+   succeeded or skipped) folds to one line, a `<details>`: the success glyph, the unit id, its
+   steps as the board's lane strings write them (`fork✓ work✓ land✓ rm–`, data mono 12px in
+   muted ink, the step's id without the unit's prefix and its mark, each mark in ink at 700
+   and 13px so a ✓ never passes for the pending dot; ellipsized, whole in its
+   title; a screen reader hears "6 steps done") and a chevron; the line or its chevron opens it
+   to its cards. On a phone the lane string takes a second line under the id.
+   - **The done shelf**: two or more done units in a row sit on one shelf, a `<details
+     class="done-shelf">` across the grid's row: the success glyph, "175 done units · 967
+     steps" (14px, 500) on the box tone with the 14px corner, and a chevron. Under Live first
+     every done unit is on one shelf after the live work; under Plan order each run of them is
+     a shelf in its place, and a lone done unit stays a line in the grid. The shelf is closed
+     by default and remembered per tab; it opens to its units' lines in a grid of wider cells
+     (`minmax(360px, 1fr)`, 8px apart), so a lane string mostly reads whole. A search that
+     matches in a done unit, or Show: Done, draws the shelf and the matching units open (under
+     ids of their own, so a shelf the page had closed opens to the matches); opening a step on
+     the shelf in the drawer opens the shelf and its unit.
+
+   A board with no units to show reads "No units match this view." The plan pane is a size
+   container named `plan`: what lays out the plan keys off the pane's width, which the
+   splitter changes, never the window's.
    - **The grid**: from 720px of pane (more than a phone's pane ever has) the boxes are a
      grid, `repeat(auto-fill, minmax(296px, 1fr))` with a 14px gap, read left to right then down in the server's order (Live first or Plan
      order). The cell's minimum holds the widest card on a large live plan (222px) with the
@@ -429,10 +446,16 @@ Top down:
      aligned, and spans the row again when it opens with lanes side by side. Boxes in one row
      share its height, so the grid reads as tiles.
 4. **Edges** (the `<sluice-board>` element draws them in an SVG over the measured cards, from the
-   server's typed relations): only a relation within one box is drawn. A handoff is a solid
-   line, an `after` step entry an ordering line, a ref entry a condition line labelled with
-   the output (`not <output>` for `!`), a `?` entry dashed; the names show while a card is
-   traced. The edges are drawn on the client and kept across the stream's patches
+   server's typed relations): only a relation within one box is drawn, one path a pair of
+   cards, however many relations join them (a handoff and an `after` on one pair are one line).
+   The path is drawn as its strongest relation: a value (a handoff, or a condition, which reads
+   an output) solid at 1.5px; order alone (`after`) dotted, round dots 4px apart; an `after?`,
+   which a skip satisfies, dashed 5/4. Its names are every relation between the pair, in the
+   chips' words ("text → data · after", "if ok", "if not ok"), in its `<title>` and shown while
+   a card is traced. An `after` whose order another path already gives (its source reaches its
+   dependent through two edges or more in the box) is not drawn: the order it states is on the
+   board already, and the drawer's After lists it; an `after?` is kept, since its skip rule is
+   its own. The edges are drawn on the client and kept across the stream's patches
    (`data-ignore-morph`), redrawn when the cards move, a box opens or the board resizes.
    - **Chips**: a relation whose ends are in two boxes (the server marks it `cross`; a plan
      input or output is in no box, so its relations are chips too) is not drawn across the
@@ -478,10 +501,12 @@ project's live data. It is the owner's instrument for that project, never a seco
   "Written 2h ago" (the program's last `project.board` record; the time in UTC without
   script), and "; the plan has changed since" when a plan edit came after it, since the
   board's own words may then be behind while its live parts are not. Its width is
-  `clamp(400px, 30%, 720px)` until the splitter sets one. A small segmented control,
+  `clamp(400px, 36%, 1040px)` until the splitter sets one (about 495px at 1440, 864px at
+  2560), so its Units table keeps a lane's marks on one line beside the unit and its state. A small segmented control,
   "Plan" (Lucide `workflow`), "Both" (`columns-2`, the default) and "Board"
   (`layout-dashboard`), shows the plan alone, both, or the board alone across the page (its
-  tables then keep to their content's width); the choice is remembered per project. It is part of
+  parts then take the pane's width up to 1680px, every table as wide as the rest so they share
+  one right edge; prose keeps its 72ch); the choice is remembered per project. It is part of
   the summary line, at its right end, as wide as its words; with the board alone, the summary
   line keeps only it, at the right above the board. With the
   step drawer open the drawer takes the side: the plan shows, the board and the switch step
@@ -497,9 +522,10 @@ project's live data. It is the owner's instrument for that project, never a seco
   (`sluice.boardw.<project>`); the page's grid keeps a remembered width within bounds.
 - **Narrow (below 1280px):** the same switch in the same place, "Plan" and "Board" only, the
   current one in the secondary fill, then one section at a time (the head says "Board" only
-  when the program has no title, the switch naming it already); on a phone it comes first,
-  on a line of its own and 44px tall; the choice is remembered per project, apart from the
-  wide one. Without script there is no switch and no
+  when the program has no title, the switch naming it already); on a phone it follows the
+  summary line's bar and counts, on a line of its own and 44px tall, and the board is shown
+  until a choice is made (its Units table is the quick check); between a phone and 1280px the
+  plan is. The choice is remembered per project, apart from the wide one. Without script there is no switch and no
   splitter: from 1280px both show side by side at the default width; below, the board follows
   the plan, flat on the canvas under its head.
 - **No board:** nothing at all: no column, no switch; the plan keeps the whole column.
@@ -507,11 +533,13 @@ project's live data. It is the owner's instrument for that project, never a seco
   callouts, tables at 13px with hairline rows; a word with a hyphen inside it (a step or
   unit id, `FIG-5004`) never breaks, so a narrow board breaks between ids. The board pane is a
   size container named `board`. Units is a table of unit (a link), state (the status glyph and
-  word, then its age in meta), the steps' marks in data mono (each step whole, wrapping between
-  steps) and what it waits on in muted ink; under it a one-line key to the marks it shows
+  word, then its age in meta), the steps' marks in data mono (on one line; the table scrolls
+  sideways in its own wrap before a lane breaks) and what it waits on in muted ink (breaking
+  anywhere, so a long path never widens the table); under it a one-line key to the marks it shows
   (✓ succeeded, ▶ running, ▷ finishing, · pending, ≡ queued, ‖ paused, ✗ failed, ~ stale,
-  – skipped). In a board under 600px each row is a block: the unit and its state on one line,
-  its marks under them, then what it waits on. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
+  – skipped). In a board under 600px each row is a block: the unit, its state and its marks on
+  one line where they fit (the marks take the next line whole when they do not, breaking
+  between steps only past the board's width), then what it waits on. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
   under it in meta. Output is its name in meta over the value. Metric is a number in Archivo
   800 at 28/34 over its label, on the box tone; metrics in a row share it. Chart is an inline
   SVG at most 520px wide: bars and the line in the accent, labels in ink and values in muted
@@ -531,18 +559,22 @@ The step reads top down:
   and its tags as badges;
 - the actions, one POST form carrying the plan revision: Pause or Unpause (where pausing acts:
   pending, failed, stale, or any paused step), Retry with a folded "Feedback for retry" textarea
-  (succeeded, failed, stale), Cancel (pending or running); then a link "Thread · n messages" and
-  a gold "n awaiting reply" tag;
+  (succeeded, failed, stale; on a failed step Retry is the primary button and comes first),
+  Cancel (pending or running), 14px apart; then a link "Thread · n messages" and a gold "n
+  awaiting reply" tag on the same line, the feedback's fold on a line of its own under them;
 - facts: "Waits on" (each reason) and "After" (its gate entries);
 - sections under small heads, in need order: Queued, Skipped, Finishing (when it submitted,
   as a relative time, the record's seq and the release in mono, then a meta note that
   `step_settle` settles a run that lingers), Error (the error in a mono box),
   Outside sluice (an external step's doc and how to settle it), Outputs, Inputs, Runs.
 - Outputs and Inputs are field lists: the name (with its type after it, shown by the Types
-  switch at the Outputs head or the display preference) in a narrow column of meta, the value
-  beside it, "From <source>" linking to the source step; a value reads by its kind (text, a
-  tabular number, a `true`/`false` pill, a muted "none"); a long value folds. An unset output
-  reads "Not set yet.", an unset input "No value yet."
+  switch at the Outputs head or the display preference) in a narrow column of meta, its doc
+  and "From <source>" (linking to the source step) under the name at 12.5px, the value beside
+  it, so every value starts at one x; a value reads by its kind (text, a tabular number, a
+  `true`/`false` pill, a muted "none"); a long value folds, its name, doc and source across the
+  row above it. The outputs not set yet are named on one line after the set ones, "7 outputs
+  not set yet: summary, final, …" (each name's doc its title); an unset input reads "No value
+  yet."
 - Runs: one row per run, numbered, with the step's glyph, the run id in mono, "Started … ·
   ended …", the engine and session, and the run's result; the current run last on the muted
   fill.
@@ -625,7 +657,8 @@ tag's 5px corner.
 - **Tracing**: hovering or focusing a card lights its edges and the chips to and from it; the
   other cards lose their border and fill and their text turns muted ink, the other chips keep
   a faint hairline and mute their words. A chip traces its source; a card folded away in a done
-  unit is stood in for by that unit's line, ringed in ink. Tracing follows the
+  unit is stood in for by that unit's line, ringed in ink, and a unit on the closed done shelf by
+  the shelf's line, ringed the same way. Tracing follows the
   keyboard's focus, never a focus given back after a click or by the drawer's close, so when
   the pointer leaves with nothing focused from the keyboard, nothing stays lit.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input
