@@ -329,7 +329,11 @@ main { display: grid; padding: 20px 0 48px;
 main > *, #graph > * { grid-column: col; }
 
 /* ---- nav: a band of the theme's deepest colour, its three stripes under it --------------- */
-nav.top { position: relative; display: flex; align-items: stretch; height: 52px; font-size: 15px;
+/* a size container (`nav`): what it holds keys off the band's own width, which the drawer
+   beside the page narrows as a phone does; the sections take a row of their own when the band
+   cannot hold them (see "the band when it is narrow") */
+nav.top { position: relative; display: flex; flex-wrap: wrap; align-items: stretch;
+          min-height: 52px; font-size: 15px; container: nav / inline-size;
           padding: 0 max(var(--gutter), calc((100% - var(--column)) / 2));
           margin-bottom: calc(3 * var(--stripe)); background: var(--nav-bg); color: var(--nav-ink); }
 nav.top::after { content: ""; position: absolute; top: 100%; left: 0; right: 0;
@@ -337,7 +341,9 @@ nav.top::after { content: ""; position: absolute; top: 100%; left: 0; right: 0;
                  background: linear-gradient(var(--stripe-1) 0 var(--stripe),
                                              var(--stripe-2) 0 calc(2 * var(--stripe)),
                                              var(--stripe-3) 0); }
-nav.top .links { display: flex; align-items: stretch; min-width: 0; overflow-x: auto;
+nav.top > :not(.links) { min-height: 52px; }
+/* the sections take the room left; never what wraps the band (a basis of 0) */
+nav.top .links { display: flex; flex: 1 1 0; align-items: stretch; min-width: 0; overflow-x: auto;
                 scrollbar-width: none; }
 nav.top .links > a, #nav-inbox { position: relative; isolation: isolate; display: flex;
             align-items: center; padding: 0 var(--nav-pad); text-decoration: none;
@@ -368,8 +374,9 @@ nav.top .mark { display: block; flex: none; }
 /* ---- the project switcher: its button is the project's name --------------------------- */
 details.switcher { position: relative; display: flex; align-items: center; flex: none;
                    margin-right: 12px; }
+/* its label gives way before a section does: what the band leaves after the rest (`cqi`) */
 details.switcher > summary { display: flex; align-items: center; gap: 6px; height: 34px;
-  max-width: 260px; padding: 0 10px;
+  max-width: clamp(120px, 100cqi - 780px, 260px); padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--nav-ink) 32%, transparent);
   border-radius: var(--radius-md); list-style: none; cursor: pointer; color: var(--nav-ink);
   font: 700 15px/20px var(--font-display); font-stretch: 105%;
@@ -1104,15 +1111,6 @@ main > .phead + * { margin-top: 0; }
   body { font-size: 15px; }
   main { padding: 16px 0 40px; }
   h1 { font-size: 24px; line-height: 30px; }
-  nav.top a.brand { display: none; }  /* the switcher's menu leads to All projects */
-  details.switcher { margin-right: 4px; }
-  details.switcher > summary { max-width: 120px; gap: 4px; padding: 0 6px 0 8px; }
-  nav.top { font-size: 14px; }
-  nav.top .links { --nav-pad: 5px; padding-right: 18px;  /* the last section scrolls clear */
-                   mask-image: linear-gradient(to right, black calc(100% - 18px), transparent); }
-  #nav-inbox .t { position: absolute; width: 1px; height: 1px; overflow: hidden;
-                  clip-path: inset(50%); white-space: nowrap; }
-  #nav-inbox .badge { margin-left: 2px; }
   .prefs .themes label, .prefs label.check { min-height: 44px; }
   /* no edges on a phone: a lane reads straight down, its cards close together */
   .board { --row-gap: 10px; }
@@ -1209,7 +1207,30 @@ main > .phead + * { margin-top: 0; }
 #functions { min-width: 0; }
 #functions .fn-head { overflow-wrap: anywhere; }
 #nav-inbox { gap: 6px; }
-@media (max-width: 720px) { .inbox-word { display: none; } .picker button { min-height: 44px; } }
+@media (max-width: 720px) { .picker button { min-height: 44px; } }
+
+/* ---- the band when it is narrow: on a phone, or beside the open drawer ------------------
+   First it is compact: the brand gives way to the switcher (whose menu leads to All
+   projects), Inbox is its tray and badge, the sections close up. Below that the sections take
+   a second row of the band, spread across it, so none hides behind a sideways scroll. */
+@container nav (max-width: 880px) {
+  nav.top a.brand { display: none; }
+  details.switcher { margin-right: 4px; }
+  details.switcher > summary { max-width: clamp(100px, 100cqi - 500px, 140px); gap: 4px;
+                               padding: 0 6px 0 8px; }
+  nav.top .links { --nav-pad: 6px; font-size: 14px; }
+  .inbox-word { display: none; }
+  #nav-inbox .badge { margin-left: 2px; }
+}
+@container nav (max-width: 640px) {
+  details.switcher > summary { max-width: 180px; }
+  nav.top .links { order: 1; flex-basis: 100%; min-height: 44px;
+                   margin: 0 calc(-1 * var(--nav-pad)); }
+  nav.top .links > a::before { inset: 6px 2px; }
+}
+@container nav (max-width: 420px) {
+  nav.top .links { justify-content: space-between; }  /* a phone's row: spread across it */
+}
 
 /* ==== page shell: the project page, its plan and its board ======================================
    (Plan beside the project's Board; docs("board") is an OpenUI program drawn on the server.)
@@ -1233,8 +1254,11 @@ main > .phead + * { margin-top: 0; }
 .plan-pane { min-width: 0; container: plan / inline-size; }
 .board-side { min-width: 0; }
 .board-pane { min-width: 0; margin-top: 32px; container: board / inline-size; }
-.board-h { display: flex; align-items: center; gap: var(--space-sm); margin: 0 0 var(--space-md); }
+/* the board's head: the program's own title (else "Board"), when it was written under it */
+.board-head { margin: 0 0 var(--space-md); }
+.board-h { display: flex; align-items: center; gap: var(--space-sm); margin: 0; }
 .board-h .icon { color: var(--heading-accent); flex: none; }
+.board-age { margin-top: 2px; }
 
 /* -- the summary, the description and the board's tools, top down -- */
 .plan-pane > .attn-note { margin-top: var(--space-sm); }
@@ -1277,10 +1301,10 @@ main > .phead + * { margin-top: 0; }
 .match-note { margin: calc(-1 * var(--space-xs)) 0 var(--space-md); }
 .match-note:empty { display: none; }
 
-/* -- the switch -- */
-.view-switch { display: none; justify-self: start; width: fit-content; gap: 2px;
-               margin: 0 0 var(--space-lg); padding: 2px; border: 1px solid var(--border);
-               border-radius: var(--radius-md); background: var(--card); }
+/* -- the switch: on the summary line, at its right end, as wide as its words -- */
+.view-switch { display: none; flex: none; gap: 2px; margin-left: auto; padding: 2px;
+               border: 1px solid var(--border); border-radius: var(--radius-md);
+               background: var(--card); }
 .view-switch button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
                       padding: 2px 12px 2px 10px; border: 0; border-radius: var(--radius-sm);
                       background: transparent; color: var(--muted-foreground);
@@ -1308,29 +1332,37 @@ html.resizing, html.resizing * { cursor: col-resize !important; -webkit-user-sel
                                  user-select: none; }
 html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag ends */
 
+/* the board alone: of the plan's pane only the summary line's switch stays, over the board */
+@media (scripting: enabled) {
+  .has-panel .view-switch { display: flex; }
+  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > :not(.sumline),
+  html:not(.drawer-open) .project-page[data-view="board"] .sumline > :not(.view-switch) { display: none; }
+  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > .sumline {
+    margin-bottom: var(--space-lg); }
+}
 @media (max-width: 1279px) and (scripting: enabled) {
-  .has-panel > .view-switch { display: flex; }
   .view-switch [data-view-tab="both"] { display: none; }
-  .project-page[data-view="board"] > .plan-pane,
   .project-page:not([data-view="board"]) > .board-side { display: none; }
   .board-pane { margin-top: 0; }
-  .board-h { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
-             white-space: nowrap; }  /* the switch names the section */
+  .board-h.generic { position: absolute; width: 1px; height: 1px; overflow: hidden;
+                     clip-path: inset(50%); white-space: nowrap; }  /* the switch names it */
+}
+/* a project page with a board spans the window above a phone's width, so its edges hold when
+   the board joins the plan at 1280px */
+@media (min-width: 721px) {
+  html:has(.project-page.has-panel) { --column: var(--page-max); --gutter: 32px; }
+}
+@media (min-width: 1200px) {
+  html.drawer-open:has(.project-page.has-panel) { --gutter: 24px; }  /* the drawer's side keeps the nav its room */
 }
 @media (min-width: 1280px) {
-  html:has(.project-page.has-panel) { --column: var(--page-max); }
-  html:not(.drawer-open):has(.project-page.has-panel) { --gutter: 32px; }  /* the drawer's side keeps the nav its room */
   /* the default board width; the splitter's, inline on the page, wins */
   .project-page.has-panel { --board-w: clamp(400px, 30%, 720px);
     --board-track: max(var(--board-min), min(var(--board-w), 65%,
                                               100% - var(--plan-min) - var(--board-gap))); }
-  .has-panel > .view-switch { display: flex; }
-  @media (scripting: none) { .has-panel > .view-switch { display: none; } }
   html:not(.drawer-open) .project-page.has-panel:not([data-view="plan"], [data-view="board"]) {
     display: grid; align-items: start;
     grid-template-columns: minmax(var(--plan-min), 1fr) calc(var(--board-gap) + var(--board-track)); }
-  /* a layout control here: at the right, over the board it shows or hides */
-  .project-page.has-panel > .view-switch { grid-column: 1 / -1; margin-left: auto; }
   html:not(.drawer-open) .project-page.has-panel:not([data-view="plan"], [data-view="board"]) > .board-side {
     position: sticky; top: 16px; display: grid;
     grid-template-columns: var(--board-gap) minmax(0, 1fr); }
@@ -1344,14 +1376,15 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
     border: 1px solid var(--border); border-radius: var(--radius); }
   /* the board alone: its tables keep to their content rather than spread across the page */
   .project-page[data-view="board"] .board-pane .ou-table { width: auto; max-width: 100%; }
-  .project-page[data-view="plan"] > .board-side,
-  .project-page[data-view="board"] > .plan-pane { display: none; }
+  .project-page[data-view="plan"] > .board-side { display: none; }
   /* the drawer takes the side: the plan shows, the board and the switch step away */
-  html.drawer-open .project-page.has-panel > .plan-pane { display: block; }
-  html.drawer-open .project-page.has-panel > :is(.board-side, .view-switch) { display: none; }
+  html.drawer-open .project-page.has-panel :is(.board-side, .view-switch) { display: none; }
 }
 @media (max-width: 720px) {
   .view-switch button { min-height: 44px; padding: 0 14px 0 12px; }
+  /* first, on a line of its own */
+  .sumline > .view-switch { order: -2; margin-left: 0; }
+  .has-panel .sumline::before { content: ""; order: -1; flex-basis: 100%; }
   .plan-pane .sumline .bar { width: 120px; }
   .about-more > summary { min-height: 44px; margin-top: 0; }
   .board-tools .q-field { flex-basis: 100%; max-width: none; }
@@ -1474,7 +1507,9 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
    foot, so a card under chips sits level with its neighbours. */
 .stack { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0;
          max-width: 100%; }
-.xrefs { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 6px; min-width: 0;
+/* one chip a line, so the column keeps near its card's width and an edge into the card finds
+   room beside it */
+.xrefs { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0;
          max-width: 100%; }
 .boxes .row { align-items: flex-end; }
 .xref { position: relative; z-index: 2; display: inline-block; box-sizing: border-box;
@@ -1506,18 +1541,6 @@ a.xref:hover, .xref.on { border-color: var(--foreground); background: var(--card
           box-shadow: inset 0 0 0 1px var(--border-strong); }
 sluice-board:has(.boxes > .empty) > .legend { display: none; }  /* nothing to read it by */
 .legend .lg-chip { padding: 1px 6px 1px 5px; font-style: normal; }
-/* the Plan · Both · Board switch on the summary line's row, at the plan's right, rather than
-   alone in a band above it (its behaviour is the page shell's; only where it sits changes). In
-   the board alone it stays above the board. */
-@media (min-width: 1280px) and (scripting: enabled) {
-  .project-page.has-panel:not([data-view="board"]) { position: relative; }
-  .project-page.has-panel:not([data-view="board"]) > .view-switch {
-    position: absolute; top: 0; right: 0; z-index: 3; margin: 0; }
-  html:not(.drawer-open) .project-page.has-panel:not([data-view="plan"], [data-view="board"]) > .view-switch {
-    right: calc(var(--board-gap) + var(--board-track)); }
-  .project-page.has-panel:not([data-view="board"]) > .plan-pane > .sumline {
-    min-height: 36px; padding-right: calc(var(--switch-w) + var(--space-lg)); --switch-w: 236px; }
-}
 @media (max-width: 720px) {
   /* phones: lanes stack as before (the phone rules above are the window's); a card's chips
      stay on its top edge */

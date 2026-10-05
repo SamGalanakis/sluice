@@ -47,11 +47,47 @@ const QUERY_TTL: Duration = Duration::from_secs(30);
 #[derive(Clone, Debug, Serialize)]
 pub struct Panel {
     pub rev: u64,
+    /// The program's own title: a level-1 Heading that leads it, drawn as the board's head
+    /// instead of "Board" (and not again under it).
+    pub title: Option<String>,
+    /// When the program was last set (its `project.board` record), and whether the plan has
+    /// changed since: what the board's own words may be behind.
+    pub written: Option<String>,
+    pub plan_changed: bool,
     pub html: String,
 }
 impl Panel {
     pub fn html(&self) -> TrustedHtml {
         TrustedHtml::owned(self.html.clone())
+    }
+    /// The board's head: its title (the program's, else "Board"), and with `age` when it was
+    /// written, "the plan has changed since" when it has. The time reads "2h ago" with script.
+    pub fn head(&self, age: bool) -> TrustedHtml {
+        let mut out = format!(
+            "<div class=\"board-head\"><h2 id=\"board-h\" class=\"board-h{}\">{}{}</h2>",
+            if self.title.is_some() { "" } else { " generic" },
+            icon(Icon::LayoutDashboard, 16, ""),
+            esc(self.title.as_deref().unwrap_or("Board"))
+        );
+        if let Some(at) = self.written.as_deref().filter(|_| age) {
+            let shown = match (at.get(..10), at.get(11..16)) {
+                (Some(day), Some(time)) => format!("{day} {time} UTC"),
+                _ => at.to_owned(),
+            };
+            let _ = write!(
+                out,
+                "<p class=\"meta board-age\">Written <time data-ago datetime=\"{}\">{}</time>{}.</p>",
+                esc(at),
+                esc(&shown),
+                if self.plan_changed {
+                    "; the plan has changed since"
+                } else {
+                    ""
+                }
+            );
+        }
+        out.push_str("</div>");
+        TrustedHtml::owned(out)
     }
 }
 
@@ -77,6 +113,8 @@ struct UnitsData {
 /// What one render needs from the store, gathered in one read snapshot.
 pub(crate) struct Loaded {
     rev: u64,
+    written: Option<String>,
+    plan_changed: bool,
     board: Result<Board, Vec<Problem>>,
     units: BTreeMap<Vec<String>, Result<UnitsData, String>>,
     outputs: BTreeMap<(String, String), Option<Value>>,
@@ -139,8 +177,26 @@ pub(crate) fn gather(
     };
     let steps = || view.units.iter().flat_map(|u| &u.steps);
     let board = openui::check_board(&program);
+    // the program's last write, and whether a plan edit came after it (by record order)
+    let written: Option<(i64, String)> = c
+        .query_row(
+            "SELECT seq,at FROM records WHERE project_id=?1 AND kind='project.board' ORDER BY seq DESC LIMIT 1",
+            [project.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let plan_changed = match &written {
+        Some((seq, _)) => c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM plan_edits WHERE project_id=?1 AND seq>?2)",
+            rusqlite::params![project.to_string(), seq],
+            |r| r.get(0),
+        )?,
+        None => false,
+    };
     let mut loaded = Loaded {
         rev: rev as u64,
+        written: written.map(|(_, at)| at),
+        plan_changed,
         units: BTreeMap::new(),
         outputs: BTreeMap::new(),
         steps: BTreeMap::new(),
@@ -231,9 +287,12 @@ pub(crate) async fn draw(
         Ok(board) => run_queries(state, project, board, &loaded.token, cache).await?,
         Err(_) => BTreeMap::new(),
     };
-    let html = render(project, &loaded, &queries);
+    let (html, title) = render(project, &loaded, &queries);
     Ok(Some(Panel {
         rev: loaded.rev,
+        title,
+        written: loaded.written.clone(),
+        plan_changed: loaded.plan_changed,
         html,
     }))
 }
@@ -439,6 +498,8 @@ fn cut(text: &str, width: usize) -> String {
 
 struct Draw<'a> {
     project: ProjectId,
+    /// The root Stack's leading Heading is the board's head: not drawn again.
+    skip_lead: bool,
     loaded: &'a Loaded,
     queries: &'a BTreeMap<String, QueryOutcome>,
     buttons: usize,
@@ -446,9 +507,25 @@ struct Draw<'a> {
     out: String,
 }
 
-fn render(project: ProjectId, loaded: &Loaded, queries: &BTreeMap<String, QueryOutcome>) -> String {
+/// A program's title: a level-1 Heading leading its root Stack (a column).
+fn lead_title(root: &Component) -> Option<String> {
+    let first = (root.name == "Stack" && root.str_arg(1) != Some("row"))
+        .then(|| root.components_arg(0).into_iter().next())??;
+    (first.name == "Heading" && first.num_arg(1) == Some(1.0))
+        .then(|| first.str_arg(0).map(str::to_owned))?
+        .filter(|t| !t.trim().is_empty())
+}
+
+/// The board drawn, and its title when the program leads with one (see `lead_title`).
+fn render(
+    project: ProjectId,
+    loaded: &Loaded,
+    queries: &BTreeMap<String, QueryOutcome>,
+) -> (String, Option<String>) {
+    let title = loaded.board.as_ref().ok().and_then(|b| lead_title(&b.root));
     let mut d = Draw {
         project,
+        skip_lead: title.is_some(),
         loaded,
         queries,
         buttons: 0,
@@ -479,7 +556,7 @@ fn render(project: ProjectId, loaded: &Loaded, queries: &BTreeMap<String, QueryO
     d.out.push_str(
         "<p class=\"board-status ou-status\" role=\"status\" aria-live=\"polite\" data-ignore-morph></p></form>",
     );
-    d.out
+    (d.out, title)
 }
 
 impl Draw<'_> {
@@ -515,7 +592,11 @@ impl Draw<'_> {
                     "<div class=\"ou-stack {}\">",
                     if row { "ou-row" } else { "ou-col" }
                 );
-                self.children(c.components_arg(0));
+                let mut items = c.components_arg(0);
+                if std::mem::take(&mut self.skip_lead) && !items.is_empty() {
+                    items.remove(0);
+                }
+                self.children(items);
                 self.out.push_str("</div>");
             }
             "Heading" => {

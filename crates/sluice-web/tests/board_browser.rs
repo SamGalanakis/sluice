@@ -19,7 +19,9 @@ const GEOMETRY: &str = r#"(() => {
   return {scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth,
           left: page.left, right: page.right,
           navLeft: n.left + parseFloat(css.paddingLeft), navRight: n.right - parseFloat(css.paddingRight),
-          plan: box('#plan-pane'), board: box('#board-pane'), tabs: box('.view-switch'), split: box('.splitter'),
+          plan: document.querySelector('#plan-pane sluice-board')?.checkVisibility() ? box('#plan-pane') : null,
+          board: box('#board-pane'), sum: box('#plan-pane .sumline'),
+          navFits: (l => l.scrollWidth <= l.clientWidth)(nav.querySelector('.links')), tabs: box('.view-switch'), split: box('.splitter'),
           view: document.querySelector('#project-board').dataset.view ?? null,
           clipped: [...document.querySelectorAll('#board-pane *')].filter(e => {
             const r = e.getBoundingClientRect(); return r.width > 0 && r.right > document.documentElement.clientWidth + 0.5; }).length,
@@ -48,6 +50,10 @@ fn check(g: &Value, label: &str) {
         "{label}: not centred {g}"
     );
     assert_eq!(g["clipped"], 0, "{label}: clipped {g}");
+    assert_eq!(
+        g["navFits"], true,
+        "{label}: a section hides in the nav {g}"
+    );
     assert_eq!(g["errors"], serde_json::json!([]), "{label}: {g}");
 }
 
@@ -119,6 +125,29 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                 }
             }
         }
+        // Across 1280px the page keeps its edges and the switch its place: at the summary
+        // line's right end, on its row, as wide as its words.
+        browser
+            .navigate(&format!("{base}/projects/id/{lanes}"))
+            .unwrap();
+        browser.wait(ready).unwrap();
+        for width in [1279, 1280] {
+            browser.viewport(width, "light").unwrap();
+            let g = browser.eval(GEOMETRY).unwrap();
+            let label = format!("cliff {width}");
+            check(&g, &label);
+            assert!(near(&g["left"], 32.0) && near(&g["right"], g["width"].as_f64().unwrap() - 32.0), "{label}: {g}");
+            let (tabs, sum, plan) = (&g["tabs"], &g["sum"], &g["plan"]);
+            assert!(near(&tabs["right"], plan["right"].as_f64().unwrap()), "{label}: {g}");
+            assert!(tabs["top"].as_f64().unwrap() >= sum["top"].as_f64().unwrap() - 1.0, "{label}: {g}");
+        }
+        // A step's own times are sluice.js's: a running time is a duration, never "… ago".
+        let since = browser
+            .eval("(() => { const t = document.createElement('time'); t.id = 't-since'; const at = new Date(Date.now() - 3600e3).toISOString(); t.dataset.since = at; t.setAttribute('datetime', at); document.querySelector('main').append(t); return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => { document.dispatchEvent(new CustomEvent('datastar-signal-patch', {detail: {}})); r(t.textContent); }))); })()")
+            .unwrap();
+        assert_eq!(since, "1h", "{since}");
+        assert_eq!(browser.eval("document.querySelector('#t-since').textContent").unwrap(), "1h");
+        browser.eval("document.querySelector('#t-since').remove()").unwrap();
         // On a phone the switch shows one section at a time and remembers the choice.
         browser
             .navigate(&format!("{base}/projects/id/{lanes}"))
@@ -234,22 +263,22 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
 const EDGES: &str = r#"(() => {
   const plane = document.querySelector('.plane').getBoundingClientRect();
   const chips = [...document.querySelectorAll('.plane .xref')].map(c => c.getBoundingClientRect());
+  const meets = (h, r, d = 0) => h.right > r.left - d && h.left < r.right + d && h.bottom > r.top - d && h.top < r.bottom + d;
   return [...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => {
     const a = document.querySelector(`[data-node="${p.dataset.from}"]`).getBoundingClientRect();
-    const node = document.querySelector(`[data-node="${p.dataset.to}"]`), z = node.getBoundingClientRect();
-    const entry = (node.parentElement.classList.contains('stack') ? node.parentElement : node).getBoundingClientRect();
+    const z = document.querySelector(`[data-node="${p.dataset.to}"]`).getBoundingClientRect();
+    const head = p.nextElementSibling.getBoundingClientRect();
     const n = p.getAttribute('d').match(/-?[\d.]+/g).map(Number);
-    const [x1, y1, x2, y2] = [n[0], n[1], n.at(-2), n.at(-1)];
+    const [x1, y1] = [n[0], n[1]];
     let over = false;
     for (let s = 0; s < p.getTotalLength() && !over; s += 2) {
       const q = p.getPointAtLength(s), x = q.x + plane.left, y = q.y + plane.top;
       over = chips.some(r => x > r.left + 1 && x < r.right - 1 && y > r.top + 1 && y < r.bottom - 1);
     }
-    return {from: p.dataset.from, to: p.dataset.to, over,
+    // it leaves its source's foot, and its arrowhead meets the card itself, never a chip
+    return {from: p.dataset.from, to: p.dataset.to, over, onChip: chips.some(r => meets(head, r, -0.5)),
             lands: x1 >= a.left - plane.left - 1 && x1 <= a.right - plane.left + 1
-              && Math.abs(y1 - (a.bottom - plane.top)) < 1.5
-              && x2 >= z.left - plane.left - 1 && x2 <= z.right - plane.left + 1
-              && Math.abs(y2 + 7 - (entry.top - plane.top)) < 1.5};
+              && Math.abs(y1 - (a.bottom - plane.top)) < 1.5 && meets(head, z, 1.5)};
   });
 })()"#;
 const BOXES: &str = r#"[...document.querySelectorAll('.boxes.units > .box')].map(b => {
@@ -299,7 +328,7 @@ async fn chromium_plan_grid_lays_units_side_by_side_and_edges_land_on_their_card
                     .as_array()
                     .unwrap()
                     .iter()
-                    .all(|e| e["lands"] == true && e["over"] == false),
+                    .all(|e| e["lands"] == true && e["over"] == false && e["onChip"] == false),
                 "{width}: {edges}"
             );
             let scroll = browser
@@ -416,7 +445,7 @@ async fn chromium_chips_sit_on_their_cards_top_edge_and_rest_alike() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|e| e["lands"] == true && e["over"] == false),
+                .all(|e| e["lands"] == true && e["over"] == false && e["onChip"] == false),
             "{edges}"
         );
         // a chip opens its source in the drawer; Escape closes it and gives the focus back (to

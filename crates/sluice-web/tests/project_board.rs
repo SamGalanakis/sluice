@@ -355,6 +355,12 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
     assert_eq!(cards(&html), ["beta-review"]);
     assert!(!html.contains("id=\"unit-alpha\""), "{html}");
     assert!(html.contains("1 step matches “PARSER”."));
+    // A chip whose source the search left out says so in its title.
+    assert!(
+        html.contains("title=\"After alpha-review (not shown in this view)\""),
+        "{html}"
+    );
+    assert!(!page("").await.contains("not shown in this view"));
     // By unit id; words in any order, across id, doc and unit.
     assert_eq!(
         cards(&page("q=alpha&order=plan").await),
@@ -473,4 +479,67 @@ async fn the_board_side_has_a_separator_and_the_page_works_without_script() {
     // A project with a one-paragraph description has nothing to fold.
     let (_, plain) = f.get(&format!("/projects/id/{}", f.plain)).await;
     assert!(!plain.contains("about-more") && !plain.contains("class=\"splitter\""));
+}
+
+/// The board's head is the program's own title when a level-1 Heading leads it (drawn once,
+/// not again under "Board"), else "Board"; under it, when the program was written, and that
+/// the plan has changed since when a plan edit came after it.
+#[tokio::test]
+async fn the_board_head_takes_the_programs_title_and_says_when_it_was_written() {
+    let f = Fixture::new().await;
+    let path = format!("/projects/id/{}", f.id);
+    let (_, html) = f.get(&path).await;
+    let board = between(&html, "<aside id=\"board-pane\"", "</aside>");
+    let head = between(board, "<div class=\"board-head\">", "</div>");
+    assert!(
+        head.contains("<h2 id=\"board-h\" class=\"board-h\">") && head.contains("Lanes</h2>"),
+        "{head}"
+    );
+    assert!(!board.contains("class=\"ou-h\">Lanes<"), "{board}");
+    assert!(
+        head.contains("Written <time data-ago datetime=\""),
+        "{head}"
+    );
+    assert!(!head.contains("the plan has changed since"), "{head}");
+    // A plan edit after the board: its words may be behind.
+    let id = f.id;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "INSERT INTO plan_edits(project_id,rev,seq,at,author,reason,ops) VALUES (?1,99,(SELECT max(seq)+1 FROM records),'2099-01-01T00:00:00Z','orch','later','[]')",
+                [id.to_string()],
+            )?;
+            tx.changed(Some(id), "plan");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (_, html) = f.get(&path).await;
+    let head = between(&html, "<div class=\"board-head\">", "</div>").to_owned();
+    assert!(head.contains("; the plan has changed since.</p>"), "{head}");
+    // A program without a title of its own: "Board", which the narrow switch already names.
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::board_set(
+                tx,
+                &ProjectSelector::Id(id),
+                projects::SetBoard {
+                    program: Some("root = Stack([Heading(\"Two\", 2), Units()])".into()),
+                    expected_rev: None,
+                    reason: None,
+                    author: "orch".into(),
+                },
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (_, html) = f.get(&path).await;
+    let head = between(&html, "<div class=\"board-head\">", "</div>").to_owned();
+    assert!(
+        head.contains("class=\"board-h generic\">") && head.contains("Board</h2>"),
+        "{head}"
+    );
+    assert!(!head.contains("the plan has changed since"), "{head}");
+    assert!(html.contains("class=\"ou-h\">Two</h4>"), "{html}");
 }

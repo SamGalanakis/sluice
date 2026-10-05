@@ -98,7 +98,8 @@ function tick() {
     const time = Date.parse(element.dataset.started);
     if (Number.isFinite(time)) element.textContent = duration((Date.now() - time) / 1000);
   }
-  for (const element of document.querySelectorAll("time[datetime]")) {
+  // a step's own times (`data-since`, `data-ago`) are sluice.js's: a running time is a duration
+  for (const element of document.querySelectorAll("time[datetime]:not([data-since], [data-ago])")) {
     const time = Date.parse(element.dateTime);
     if (Number.isFinite(time)) element.textContent = `${duration((Date.now() - time) / 1000)} ago`;
   }

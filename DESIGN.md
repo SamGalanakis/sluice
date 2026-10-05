@@ -333,11 +333,12 @@ meta in muted ink, sentence case. Nothing is uppercase; no kickers or eyebrows.
 a 24px gutter, 16px at 720px and below). The top nav's content aligns to the same edges (the
 mark on the left edge, the display preferences icon ending on the right), so nav, titles, lists
 and cards share one left edge at every width. Nothing makes the page scroll sideways. The one
-widening: from 1280px a project page with a board takes the window's width up to 2400px
-(`--page-max`, with a 32px gutter), nav included, so the nav's edges are the plan's left and
-the board's right: the plan (at least 560px, `--plan-min`), the splitter's 32px track
-(`--board-gap`) and the board (`--board-w`). With the step drawer open the gutter is 24px again
-and the drawer takes the side.
+widening: above a phone's width (from 721px) a project page with a board takes the window's
+width up to 2400px (`--page-max`, with a 32px gutter), nav included, so its edges hold when the
+board joins the plan at 1280px; from there the nav's edges are the plan's left and the board's
+right: the plan (at least 560px, `--plan-min`), the splitter's 32px track (`--board-gap`) and
+the board (`--board-w`). With the step drawer open beside the page (from 1200px) the gutter is
+24px again and the drawer takes the side.
 
 **The One Click Rule.** The board is names and states. Everything else (inputs, outputs,
 errors, runs) is one click away on the step's page, or under the board for the plan as a
@@ -351,7 +352,8 @@ whole.
   **display preferences** sliders at the right edge. Every page links `/static/favicon.svg`, the
   same mark.
 - **Project switcher**: a `<details>` whose summary is the chosen project's name ("All
-  projects" when none) and a chevron; its menu lists All projects, then every live project with
+  projects" when none) and a chevron, its label clipping at what the band leaves after the
+  rest (120 to 260px), so a long name gives way before a section does; its menu lists All projects, then every live project with
   its status glyph and icon, then the archived ones under "Archived". `nav.js` closes it on a
   click elsewhere or Escape.
 - **Sections**: in a project Plan, Inbox, Questions, Log, History, Functions; without one Log
@@ -368,8 +370,13 @@ whole.
   themes (each its name and a swatch: "Aa" on the theme's canvas cut by its band and stripes,
   a tick on the chosen one), then "Show value types". It is a form posting to `/settings`
   (cookies `sluice_theme`, `sluice_types`); without script its Save button sends it.
-- **Phone** (720px and below): the brand gives way to the switcher (its label clips at 120px),
-  the sections scroll sideways inside themselves, and Inbox shows only its tray and badge.
+- **A narrow band** (on a phone, or beside the open drawer): the band is a size container
+  (`nav`), so it keys off its own width, never the window's. Under 880px of content it is
+  compact: the brand gives way to the switcher (its label clips at 140px; the switcher's menu
+  leads to All projects), Inbox shows only its tray and badge, the sections close up (14px,
+  6px apart). Under 640px the sections take a second row of the band (44px tall, the current
+  one's bar on the band's bottom edge, spread across it under 420px), so none hides behind a
+  sideways scroll; the first row is the switcher, the gear, Inbox and display preferences.
 
 ### Projects (`/`)
 One list of the live projects, each a row: its status glyph, icon and name (a link), when it
@@ -430,25 +437,29 @@ Top down:
    - **Chips**: a relation whose ends are in two boxes (the server marks it `cross`; a plan
      input or output is in no box, so its relations are chips too) is not drawn across the
      page. Its dependent wears a chip on its top edge, part of the card's entry: the chips
-     come before the card in the page and sit 4px above it (they wrap, centred, when there
+     come before the card in the page and sit 4px above it (one a line, centred, when there
      are several), with the row gap between them and anything above, so they never read as
      the previous row's. A plan output's chips sit above it the same way. A row's cards line
      up at its foot, so a card under chips stays level with its neighbours. The chip says
      what it is, as an input to its card: `after source` an after, `after unit:build` a unit
-     gate, `if source/ok` and `if not source/ok` a condition, `source/text` a handoff (its
-     output), a trailing `?` and a dashed hairline when a skip counts; no arrow. 12px text at
+     gate, `if source/ok` and `if not source/ok` a condition, `from source/text` a handoff
+     (its output, "from" as the step's page says of an input's source), a trailing `?` and a dashed hairline when a skip counts; no arrow. 12px text at
      500, the 5px corner and a strong hairline on half the card colour, the kind words in
      muted ink, the source in ink. Every chip at rest looks the same; the states are
      deliberate and apart: hovered, or lit by a trace from its source, an ink hairline on the
      card colour; focused, the ring as well, 1px out so it clears the card; receded while
      another source is traced, still a chip (a faint hairline, its words muted). Its
      accessible name says the kind ("after source", "Handoff from source/text") and its title
-     the whole relation. A chip is a link: to the source step (in the drawer with script, its
+     the whole relation, and where its source is when its card is not on the board as drawn
+     ("in done unit build", "not shown in this view"). A chip is a link: to the source step (in the drawer with script, its
      page without), the source unit's page, or the plan input's chip. Hovering or focusing it
      traces its source: every chip from that source lights with its dependent, the source's
-     card (and a source unit's box, ringed in ink) stays crisp, the rest recede. An edge
-     within the box arrives at a card on its chips' top edge, and an edge that passes the row
-     keeps clear of the chips as of the card. A source card counts what follows it in other
+     card (and a source unit's box, ringed in ink) stays crisp, the rest recede; a source folded
+     away in a done unit rings that unit's line instead. An edge within the box arrives on the
+     card itself, never on a chip: on the free shoulders of its top beside the chips (from
+     the side its source is on), or, when the chips cover the top, beside the chips and into
+     the pill's end, its head pointing across. An edge that passes the row keeps clear of the
+     chips as of the card. A source card counts what follows it in other
      boxes, "→ n" in meta after its caption (a unit, after its id).
    Below 720px there are no edges and no legend; each box stacks its lanes, each reading
    straight down, a card's chips on its top edge.
@@ -461,14 +472,18 @@ project's live data. It is the owner's instrument for that project, never a seco
 - **Wide (1280px and up):** the page spans the window (see the One Column Rule): the plan, a
   splitter, and the board as a right-hand column (`board-pane`) top-aligned with the summary
   line: the card colour with a hairline and the 14px corner, 14 by 16px padding, sticky 16px
-  from the top and at most the window's height, scrolling on its own. Its head is "Board"
-  (section voice, `heading-accent`, Lucide `layout-dashboard`). Its width is
+  from the top and at most the window's height, scrolling on its own. Its head (section voice,
+  `heading-accent`, Lucide `layout-dashboard`) is the program's own title when a level-1
+  Heading leads it (drawn there once, not again under it), else "Board"; under it in meta,
+  "Written 2h ago" (the program's last `project.board` record; the time in UTC without
+  script), and "; the plan has changed since" when a plan edit came after it, since the
+  board's own words may then be behind while its live parts are not. Its width is
   `clamp(400px, 30%, 720px)` until the splitter sets one. A small segmented control,
   "Plan" (Lucide `workflow`), "Both" (`columns-2`, the default) and "Board"
   (`layout-dashboard`), shows the plan alone, both, or the board alone across the page (its
-  tables then keep to their content's width); the choice is remembered per project. With the
-  plan shown it sits on the summary line's row at the plan's right edge (the line keeps room
-  for it and centres on it); with the board alone, at the right above the board. With the
+  tables then keep to their content's width); the choice is remembered per project. It is part of
+  the summary line, at its right end, as wide as its words; with the board alone, the summary
+  line keeps only it, at the right above the board. With the
   step drawer open the drawer takes the side: the plan shows, the board and the switch step
   away until it closes.
 - **The splitter** (script only): a 32px track between plan and board, a `role="separator"`
@@ -480,9 +495,11 @@ project's live data. It is the owner's instrument for that project, never a seco
   Home/End to the least (320px) and greatest (the lesser of 65% of the page and what leaves the
   plan 560px), double-click to reset. The width is remembered per project
   (`sluice.boardw.<project>`); the page's grid keeps a remembered width within bounds.
-- **Narrow (below 1280px):** the same switch first, "Plan" and "Board" only, the current one in
-  the secondary fill (44px tall at 720px and below), then one section at a time; the choice is
-  remembered per project, apart from the wide one. Without script there is no switch and no
+- **Narrow (below 1280px):** the same switch in the same place, "Plan" and "Board" only, the
+  current one in the secondary fill, then one section at a time (the head says "Board" only
+  when the program has no title, the switch naming it already); on a phone it comes first,
+  on a line of its own and 44px tall; the choice is remembered per project, apart from the
+  wide one. Without script there is no switch and no
   splitter: from 1280px both show side by side at the default width; below, the board follows
   the plan, flat on the canvas under its head.
 - **No board:** nothing at all: no column, no switch; the plan keeps the whole column.
@@ -601,13 +618,14 @@ tag's 5px corner.
   `crates/sluice-web/assets/icons/` and inlined by `views::icons::icon`: Lucide's 24-unit grid
   and 2-unit round stroke, in `currentColor` so it takes its control's ink, hover and focus, and
   `aria-hidden` (the control carries the name). 20px in the nav (the inbox tray, project
-  settings, display preferences), 16px for status glyphs, chevrons, the theme tick, the board's
+  settings, display preferences) and for the drawer's close (`x`), 16px for status glyphs, chevrons, the theme tick, the board's
   head and switch and its error boxes, the splitter's grip and the search field's magnifier and
   clear. A new icon is fetched from Lucide at that version, never
   drawn; the mark and favicon are the owner's, and a project's own icon is the user's.
 - **Tracing**: hovering or focusing a card lights its edges and the chips to and from it; the
   other cards lose their border and fill and their text turns muted ink, the other chips keep
-  a faint hairline and mute their words. A chip traces its source. Tracing follows the
+  a faint hairline and mute their words. A chip traces its source; a card folded away in a done
+  unit is stood in for by that unit's line, ringed in ink. Tracing follows the
   keyboard's focus, never a focus given back after a click or by the drawer's close, so when
   the pointer leaves with nothing focused from the keyboard, nothing stays lit.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input
@@ -616,8 +634,9 @@ tag's 5px corner.
 - **Splitter**: see The project's board; the one control that resizes, a grip on a hairline
   that lights only when used.
 - **Live updates**: each page's stream patches only what changed; while it reconnects a gold
-  line says "Updates paused. Reconnecting…" with a Reconnect button. Times tick live (`data-since`,
-  `data-ago`), and a running step's quiet tag appears after 15 minutes without a write.
+  line says "Updates paused. Reconnecting…" with a Reconnect button. Times tick live (`data-since` a
+  duration, `data-ago` "2h ago"; `sluice.js` owns both and reads them at once, as a patch
+  brings them; `nav.js` ticks only the messages' times), and a running step's quiet tag appears after 15 minutes without a write.
 
 ### Touch
 At 720px and below every control is at least 44px tall: the board tools (the search field and

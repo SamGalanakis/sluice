@@ -236,8 +236,7 @@ fn relations_between_boxes_are_marked_and_shown_as_chips_on_their_dependents() {
     assert!(handoff.contains(&format!("href=\"/projects/id/{id}/steps/start\"")));
     assert!(handoff.contains("data-opens=\"start\""));
     assert!(handoff.contains("title=\"Handoff: start/text → data\""));
-    assert!(handoff.contains("<span class=\"vh\">Handoff from </span>"));
-    assert!(handoff.contains("<span class=\"xn\">start</span><span class=\"xm\">/text</span>"));
+    assert!(handoff.contains("<span class=\"vh\">Handoff </span><span class=\"xm\">from </span><span class=\"xn\">start</span><span class=\"xm\">/text</span>"));
     let not = chip("s:start", "s:no");
     assert!(not.contains("k-negated_condition"), "{not}");
     assert!(not.contains("<span class=\"xm\">if not </span><span class=\"xn\">start</span><span class=\"xm\">/ok</span>"));
@@ -329,4 +328,34 @@ fn layout_marks_wide_units_and_leads_the_board_with_its_legend() {
     let html = empty.body().unwrap();
     assert!(html.as_str().contains("No units match this view."));
     assert!(!html.as_str().contains("class=\"legend\""));
+}
+
+/// A chip whose source's card is folded away in a done unit says where it is.
+#[test]
+fn a_chip_says_where_its_source_is_when_a_done_unit_folds_its_card_away() {
+    let plan = Plan::parse_json(
+        &serde_json::to_vec(&json!({"steps":{
+            "a":{"run":"core.external","outputs":{"text":"string"},"tags":["unit:one"]},
+            "b":{"run":"core.external","in":{"x":{"source":"a/text"}},"tags":["unit:two"]}}}))
+        .unwrap(),
+        &Signatures,
+    )
+    .unwrap();
+    let (_, mut state, project) = fixture();
+    state.steps.clear();
+    state.steps.insert(
+        "a".parse().unwrap(),
+        StepState {
+            status: StepStatus::Succeeded,
+            ..Default::default()
+        },
+    );
+    let view = ProjectView::new(project, &plan, &state, 1);
+    let html = view.body().unwrap();
+    assert!(
+        html.as_str()
+            .contains("title=\"Handoff: a/text → x (in done unit one)\""),
+        "{}",
+        html.as_str()
+    );
 }

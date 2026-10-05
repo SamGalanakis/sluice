@@ -44,7 +44,13 @@ function tick() {
   }
 
 }
+tick();
 setInterval(tick, 5000);
+// a time a patch brings (the drawer's step, the board's head) reads as one at once
+let ticking = 0;
+new MutationObserver(() => {
+  if (!ticking) ticking = requestAnimationFrame(() => { ticking = 0; tick(); });
+}).observe(document.querySelector("main") ?? document.body, { childList: true, subtree: true });
 
 // ---- the open step ---------------------------------------------------------------------------
 
@@ -154,13 +160,16 @@ function drawEdges(host, data) {
   const boxes = $$(".box", plane), rect = new Map();
   for (const n of $$("[data-node]", plane)) {
     if (!shown(n)) continue;
-    // a card with chips on its top edge: its edges arrive on the chips, its entry, and a
-    // passing edge keeps clear of them as of the card
-    const r = n.getBoundingClientRect(), whole = n.parentElement?.classList.contains("stack")
-      ? n.parentElement.getBoundingClientRect() : r;
+    // a card with chips on its top edge: a passing edge keeps clear of them as of the card,
+    // and an edge into it arrives on the card itself, beside its chips (see `arrive`)
+    const r = n.getBoundingClientRect(), stacked = n.parentElement?.classList.contains("stack");
+    const whole = stacked ? n.parentElement.getBoundingClientRect() : r;
+    const xs = stacked && $(":scope > .xrefs", n.parentElement)?.getBoundingClientRect();
     rect.set(n.dataset.node, { left: r.left - box.left, right: r.right - box.left,
                                top: whole.top - box.top, bottom: r.bottom - box.top,
-                               width: r.width, box: boxes.indexOf(n.closest(".box")),
+                               cardTop: r.top - box.top, width: r.width,
+                               chips: xs ? [xs.left - box.left, xs.right - box.left] : null,
+                               box: boxes.indexOf(n.closest(".box")),
                                span: [Math.min(r.left, whole.left) - box.left,
                                       Math.max(r.right, whole.right) - box.left] });
   }
@@ -193,15 +202,45 @@ function drawEdges(host, data) {
     outs.get(a).push({other: b, index});
     ins.get(b).push({other: a, index});
   }
+  // Where each edge into a card ends: spread along its top; on a card under chips, on the top's
+  // free shoulders beside them (from the side its source is on), or, when the chips cover the
+  // top, on the pill's ends, spread down them: an arrowhead never meets a chip.
+  const arrive = (key, others) => {
+    const r = rect.get(key), at = new Map();
+    if (!r.chips) {
+      for (const [index, x] of spread(key, others)) at.set(index, { x, y: r.cardTop - 1, dir: 0 });
+      return at;
+    }
+    const mid = (r.left + r.right) / 2, sorted = [...others].sort((p, q) => cx(p.other) - cx(q.other));
+    const west = sorted.filter((o) => cx(o.other) < mid), east = sorted.filter((o) => cx(o.other) >= mid);
+    const lo = [r.left + 14, r.chips[0] - 6], hi = [r.chips[1] + 6, r.right - 14];
+    const fits = ([a, b]) => b - a >= 4;
+    const place = (group, [a, b]) => group.forEach((o, i) =>
+      at.set(o.index, { x: a + (b - a) * (i + 1) / (group.length + 1), y: r.cardTop - 1, dir: 0 }));
+    if (fits(lo) || fits(hi)) {
+      if (!fits(hi)) place(sorted, lo);
+      else if (!fits(lo)) place(sorted, hi);
+      else { place(west, lo); place(east, hi); }
+      return at;
+    }
+    const h = r.bottom - r.cardTop;
+    for (const [group, dir] of [[west, 1], [east, -1]]) {
+      group.forEach((o, i) => at.set(o.index, { x: dir > 0 ? r.left - 1 : r.right + 1,
+        y: r.cardTop + h * (i + 1) / (group.length + 1), dir,
+        lane: dir > 0 ? Math.min(r.chips[0], r.left) - 10 : Math.max(r.chips[1], r.right) + 10 }));
+    }
+    return at;
+  };
   const outX = new Map([...outs].map(([k, v]) => [k, spread(k, v)]));
-  const inX = new Map([...ins].map(([k, v]) => [k, spread(k, v)]));
+  const inX = new Map([...ins].map(([k, v]) => [k, arrive(k, v)]));
   const used = new Map(), labelLanes = new Map();
   const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
   const f = (n) => n.toFixed(1);
   for (const [index, [a, b, label, kinds]] of ends.entries()) {
     const x1 = outX.get(a).get(index), y1 = rect.get(a).bottom;
-    const x2 = inX.get(b).get(index), tip = rect.get(b).top - 1;
-    const y2 = tip - HEAD_H;  // the line ends straight down, into the head's base
+    const end = inX.get(b).get(index), x2 = end.dir ? end.lane : end.x;
+    const tip = rect.get(b).top - 1;  // the dependent's entry: the top of its chips, or its own
+    const y2 = (end.dir ? end.y - 8 : end.y) - (end.dir ? 0 : HEAD_H);  // straight down, into the head
     const pts = [[x1, y1]];
     const { rows, lo, hi, key } = route(a, b);
     rows.forEach((row, i) => {
@@ -210,6 +249,7 @@ function drawEdges(host, data) {
       const x = passAt(row, x1 + (x2 - x1) * t, lo, hi, used, `${key}:${i}`);
       pts.push([x, row.top - 4], [x, row.bottom + 4]);
     });
+    if (tip < end.y - 2 && tip > y1) pts.push([x2, tip - 2]);  // to beside the chips, then down
     pts.push([x2, y2]);
     let d = `M${f(x1)} ${f(y1)}`;
     if (tip <= y1) {
@@ -225,13 +265,19 @@ function drawEdges(host, data) {
         d += `C${f(xa)} ${f(ya + dy)} ${f(xb)} ${f(yb - dy)} ${f(xb)} ${f(yb)}`;
       }
     }
+    // into the pill's end: a turn from beside the chips, the head pointing across
+    const hx = end.dir ? end.x - end.dir * HEAD_H : x2;
+    if (end.dir) d += `Q${f(x2)} ${f(end.y)} ${f(hx)} ${f(end.y)}`;
     const attrs = { "data-from": a, "data-to": b, d };
     if (kinds.includes("tolerant")) attrs.class = "order";
     attrs["data-kind"] = kinds[0];
     wires.append(svgEl("path", attrs));
     wires.append(svgEl("path", { "data-from": a, "data-to": b, class: "head",
-                                 d: `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(tip)}`
-                                    + `L${f(x2 + HEAD_W)} ${f(y2)}z` }));
+                                 d: end.dir
+                                   ? `M${f(hx)} ${f(end.y - HEAD_W)}L${f(end.x)} ${f(end.y)}`
+                                     + `L${f(hx)} ${f(end.y + HEAD_W)}z`
+                                   : `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(end.y)}`
+                                     + `L${f(x2 + HEAD_W)} ${f(y2)}z` }));
     // its names twice: by the far end from whichever card is traced, so the names of a card's
     // edges spread out over the cards around it instead of piling up on it
     const pair = JSON.stringify([a, b]);
@@ -256,6 +302,12 @@ function trace(host, key) {
     const on = end ? (from && end === "to") || (to && end === "from") : from || to;
     el.classList.toggle("on", on);
     if (from || to) near.add(el.dataset.from).add(el.dataset.to);
+  }
+  // a card folded away in a done unit: its unit's line stands in for it, ringed
+  for (const k of [...near]) {
+    const card = k.startsWith("s:") && $(`.node[data-node="${CSS.escape(k)}"]`, host);
+    const box = card && !shown(card) && card.closest(".box[data-node]");
+    if (box) near.add(box.dataset.node);
   }
   for (const n of $$(".node, .box[data-node]", host)) {
     n.classList.toggle("near", near.has(n.dataset.node));

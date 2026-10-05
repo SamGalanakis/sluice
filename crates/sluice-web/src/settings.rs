@@ -638,7 +638,9 @@ async fn board_preview(
     }
     .await;
     match result {
-        Ok(Some(panel)) => Html(panel.html).into_response(),
+        Ok(Some(panel)) => {
+            Html(format!("{}{}", panel.head(false).as_str(), panel.html)).into_response()
+        }
         Ok(None) => Html(String::new()).into_response(),
         Err(e) => error_response(e),
     }

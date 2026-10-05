@@ -6,7 +6,10 @@ show alone across the page; on a phone its own section behind a Plan · Board sw
 out to read at any of those widths. It is for what the owner should see at a glance about *this* project: a lane
 overview, a few numbers, a chart, the step that matters, a button to ask you for something.
 Its live parts are filled from the project each time the page draws and again whenever the
-project changes, so you write it once and it stays current.
+project changes, so you write it once and it stays current. A level-1 `Heading` that opens the
+root `Stack` is the board's own title: the dashboard draws it as the column's head (else the
+head says "Board"). Under the head the dashboard says when you last set the board and whether
+the plan has changed since, so the board needs no "updated at" line of its own.
 
 ## Setting it
 - `board_set(project, program, expected_rev?, reason?)` → `{rev}`. `program` is an OpenUI Lang

@@ -184,7 +184,7 @@ impl RelationKind {
 /// A relation between boxes, shown on its dependent as a chip above its card ("after source")
 /// that links to the source and lights it when hovered or focused. Its words say the kind, as
 /// an input to the card: `after` for an ordering entry (`after unit:` for a unit gate), `if`
-/// (and `if not`) for a condition, the output after a handoff's step, `?` when a skip counts
+/// (and `if not`) for a condition, `from` and the output for a handoff, `?` when a skip counts
 /// (dashed, as that edge is).
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Xref {
@@ -193,10 +193,10 @@ pub struct Xref {
     pub to: String,
     pub kind: RelationKind,
     pub tolerant: bool,
-    /// Said before the rest by a screen reader, not shown: "Handoff from " (the other kinds
-    /// say theirs in the shown words).
+    /// Said before the rest by a screen reader, not shown: "Handoff " (the other kinds say
+    /// theirs in the shown words).
     pub said: &'static str,
-    /// Muted before the source: "after ", "after unit:", "if ", "if not ".
+    /// Muted before the source: "from ", "after ", "after unit:", "if ", "if not ".
     pub lead: String,
     /// The source: a step, a unit or a plan input.
     pub name: String,
@@ -207,6 +207,9 @@ pub struct Xref {
     pub href: String,
     /// A source step, which opens in the drawer.
     pub opens: String,
+    /// Where a source step is when its card is not on the board as drawn ("in done unit
+    /// build", "not shown in this view"), said after the title; empty when it is shown.
+    pub away: String,
 }
 impl Xref {
     fn new(project: ProjectId, relation: &Relation) -> Self {
@@ -258,12 +261,9 @@ impl Xref {
                     (None, Endpoint::Output(out)) => format!("Plan output {out}: {source}"),
                     (None, _) => format!("Handoff: {source}"),
                 };
-                let said = if step {
-                    "Handoff from "
-                } else {
-                    "Handoff from plan input "
-                };
-                (said, String::new(), (shown, tail), title)
+                // "from", as the drawer says of an input's source
+                let said = if step { "Handoff " } else { "Plan input handoff " };
+                (said, "from ".to_owned(), (shown, tail), title)
             }
             RelationKind::Ordering => (
                 "",
@@ -306,12 +306,13 @@ impl Xref {
             title,
             href,
             opens,
+            away: String::new(),
         }
     }
     pub fn html(&self) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "<a class=\"xref k-{{ x.kind.name() }}{% if x.tolerant %} tolerant{% endif %}\" href=\"{{ x.href }}\"{% if !x.opens.is_empty() %} data-opens=\"{{ x.opens }}\"{% endif %} data-from=\"{{ x.from }}\" data-to=\"{{ x.to }}\" title=\"{{ x.title }}\">{% if !x.said.is_empty() %}<span class=\"vh\">{{ x.said }}</span>{% endif %}{% if !x.lead.is_empty() %}<span class=\"xm\">{{ x.lead }}</span>{% endif %}<span class=\"xn\">{{ x.name }}</span>{% if !x.tail.is_empty() %}<span class=\"xm\">{{ x.tail }}</span>{% endif %}</a>",
+            source = "<a class=\"xref k-{{ x.kind.name() }}{% if x.tolerant %} tolerant{% endif %}\" href=\"{{ x.href }}\"{% if !x.opens.is_empty() %} data-opens=\"{{ x.opens }}\"{% endif %} data-from=\"{{ x.from }}\" data-to=\"{{ x.to }}\" title=\"{{ x.title }}{% if !x.away.is_empty() %} ({{ x.away }}){% endif %}\">{% if !x.said.is_empty() %}<span class=\"vh\">{{ x.said }}</span>{% endif %}{% if !x.lead.is_empty() %}<span class=\"xm\">{{ x.lead }}</span>{% endif %}<span class=\"xn\">{{ x.name }}</span>{% if !x.tail.is_empty() %}<span class=\"xm\">{{ x.tail }}</span>{% endif %}</a>",
             ext = "html"
         )]
         struct Chip<'a> {
@@ -536,7 +537,7 @@ impl ProjectView {
             .keys()
             .filter_map(|n| Some((n.clone(), chips.remove(&format!("o:{n}"))?)))
             .collect();
-        Self {
+        let mut view = Self {
             inputs: plan
                 .inputs()
                 .iter()
@@ -577,6 +578,36 @@ impl ProjectView {
             q: String::new(),
             matched: 0,
             panel: None,
+        };
+        view.mark_away();
+        view
+    }
+    /// Say on each chip where its source is when the board as drawn does not show its card: in
+    /// a done unit (folded to its line) or left out by the view's filter or search.
+    fn mark_away(&mut self) {
+        let mut shown = BTreeMap::<String, Option<String>>::new();
+        for unit in &self.units {
+            shown.insert(unit.key(), None);
+            for step in &unit.steps {
+                let done = unit.done.then(|| unit.id.to_string());
+                shown.insert(step.key(), done);
+            }
+        }
+        let chips = self
+            .units
+            .iter_mut()
+            .flat_map(|u| u.xrefs.values_mut())
+            .chain(self.output_xrefs.values_mut())
+            .flatten();
+        for chip in chips {
+            if !(chip.from.starts_with("s:") || chip.from.starts_with("u:")) {
+                continue;
+            }
+            chip.away = match shown.get(&chip.from) {
+                None => "not shown in this view".into(),
+                Some(Some(unit)) => format!("in done unit {unit}"),
+                Some(None) => String::new(),
+            };
         }
     }
     pub fn href(&self) -> String {
@@ -1031,6 +1062,7 @@ impl BoardQuery {
             view.matched = search(&mut view.units, &q);
         }
         view.q = q;
+        view.mark_away();
         Ok(())
     }
 }
