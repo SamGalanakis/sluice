@@ -112,9 +112,9 @@ function bands(boxes) {
     const last = out[out.length - 1];
     if (last && r.top < last.bottom - 2) {
       last.bottom = Math.max(last.bottom, r.bottom);
-      last.spans.push([r.left, r.right]);
+      last.spans.push(r.span);
     } else {
-      out.push({ top: r.top, bottom: r.bottom, spans: [[r.left, r.right]] });
+      out.push({ top: r.top, bottom: r.bottom, spans: [r.span] });
     }
   }
   return out;
@@ -154,12 +154,15 @@ function drawEdges(host, data) {
   const boxes = $$(".box", plane), rect = new Map();
   for (const n of $$("[data-node]", plane)) {
     if (!shown(n)) continue;
-    // a card with chips under it: its edges leave from under the chips
-    const r = n.getBoundingClientRect(), foot = n.parentElement?.classList.contains("stack")
+    // a card with chips on its top edge: its edges arrive on the chips, its entry, and a
+    // passing edge keeps clear of them as of the card
+    const r = n.getBoundingClientRect(), whole = n.parentElement?.classList.contains("stack")
       ? n.parentElement.getBoundingClientRect() : r;
     rect.set(n.dataset.node, { left: r.left - box.left, right: r.right - box.left,
-                               top: r.top - box.top, bottom: foot.bottom - box.top,
-                               width: r.width, box: boxes.indexOf(n.closest(".box")) });
+                               top: whole.top - box.top, bottom: r.bottom - box.top,
+                               width: r.width, box: boxes.indexOf(n.closest(".box")),
+                               span: [Math.min(r.left, whole.left) - box.left,
+                                      Math.max(r.right, whole.right) - box.left] });
   }
   // Route within a unit, or through all intervening rows for a cross-unit relation.
   const rowsOf = new Map();
@@ -336,6 +339,12 @@ rocket("sluice-board", {
   props: ({ json }) => ({ edges: json.default([]) }),
   setup({ host, props, observeProps, cleanup }) {
     let frame = 0, active = true;
+    // tracing follows the keyboard's focus, not a focus given back after a click or by the
+    // drawer's close: `kept` is the card or chip it traced, the one a pointer leaving (or a
+    // redraw) goes back to. Any other focus traces nothing, so a trace never stays on with
+    // nothing held.
+    let kept = null;
+    const focusKept = () => (kept === document.activeElement && host.contains(kept) ? kept : null);
     const listeners = new AbortController();
     // while the board's splitter is dragged the plan's edges hide and wait: one redraw at the
     // end ("sluice-resized"), not one per frame
@@ -344,8 +353,7 @@ rocket("sluice-board", {
       frame = requestAnimationFrame(() => {
         frame = 0;
         drawEdges(host, drawn(props.edges));
-        const held = still ? null
-          : $(":is(.node, .xref):is(:hover, :focus-visible)", host);  // new paths: keep it lit
+        const held = still ? null : $(":is(.node, .xref):hover", host) || focusKept();  // keep it lit
         if (held) trace(host, traceKey(held));
       });
     };
@@ -389,13 +397,13 @@ rocket("sluice-board", {
     const out = (evt) => {
       const n = tracer(evt);
       if (!n || n.contains(evt.relatedTarget)) return;
-      const focused = document.activeElement?.closest?.(TRACES);
-      if (focused && host.contains(focused)) trace(host, traceKey(focused)); else untrace(host);
+      const back = focusKept();
+      if (back) trace(host, traceKey(back)); else untrace(host);
     };
-    // tracing follows the keyboard's focus, not a focus given back after a click
     const focus = (evt) => {
       const n = tracer(evt);
-      if (n && !still && n.matches(":focus-visible")) trace(host, traceKey(n)); else untrace(host);
+      kept = n && !still && n.matches(":focus-visible") ? n : null;
+      if (kept) trace(host, traceKey(kept)); else untrace(host);
     };
     const keys = (evt) => {
       still = false;
@@ -408,7 +416,9 @@ rocket("sluice-board", {
     host.addEventListener("pointerout", out, { signal: listeners.signal });
     host.addEventListener("focusin", focus, { signal: listeners.signal });
     host.addEventListener("focusout", (evt) => {
-      if (!host.contains(evt.relatedTarget)) untrace(host);
+      if (host.contains(evt.relatedTarget)) return;
+      kept = null;
+      untrace(host);
     }, { signal: listeners.signal });
     host.addEventListener("keydown", keys, { signal: listeners.signal });
     host.addEventListener("toggle", (evt) => {

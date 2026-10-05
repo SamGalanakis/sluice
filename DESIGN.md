@@ -405,7 +405,8 @@ Top down:
    every unit."
 3. **The board**: first the legend (none when no unit is shown), one quiet line in meta under
    the tools, each kind with its mark: a short line for "handoff · after · condition · not", a
-   dashed one for "?", a box swatch for "unit", a sample chip "← step" for "in another unit".
+   dashed one for "?", a box swatch for "unit", a sample chip "after step" for "from another
+   unit".
    Then the plan inputs as dashed chips, one box per unit, the plan outputs as dashed chips. A
    box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no border) is
    labelled with the unit's id in meta and lays its cards in rows by dependency depth. A done
@@ -428,20 +429,29 @@ Top down:
    (`data-ignore-morph`), redrawn when the cards move, a box opens or the board resizes.
    - **Chips**: a relation whose ends are in two boxes (the server marks it `cross`; a plan
      input or output is in no box, so its relations are chips too) is not drawn across the
-     page. Its dependent shows a chip under its card (beside a plan output's chip), "← source":
-     12px text at 500, the 5px corner and a strong hairline, the arrow and kind words in
-     muted ink, the source in ink. The words keep the kind: `← source/text` a handoff (its
-     output), `← source` an after, `← if source/ok` and `← if not source/ok` a condition,
-     `← unit:build` a unit gate, a trailing `?` and a dashed hairline when a skip counts. Its
-     accessible name says the kind ("After source", "Handoff from source/text") and its title
+     page. Its dependent wears a chip on its top edge, part of the card's entry: the chips
+     come before the card in the page and sit 4px above it (they wrap, centred, when there
+     are several), with the row gap between them and anything above, so they never read as
+     the previous row's. A plan output's chips sit above it the same way. A row's cards line
+     up at its foot, so a card under chips stays level with its neighbours. The chip says
+     what it is, as an input to its card: `after source` an after, `after unit:build` a unit
+     gate, `if source/ok` and `if not source/ok` a condition, `source/text` a handoff (its
+     output), a trailing `?` and a dashed hairline when a skip counts; no arrow. 12px text at
+     500, the 5px corner and a strong hairline on half the card colour, the kind words in
+     muted ink, the source in ink. Every chip at rest looks the same; the states are
+     deliberate and apart: hovered, or lit by a trace from its source, an ink hairline on the
+     card colour; focused, the ring as well, 1px out so it clears the card; receded while
+     another source is traced, still a chip (a faint hairline, its words muted). Its
+     accessible name says the kind ("after source", "Handoff from source/text") and its title
      the whole relation. A chip is a link: to the source step (in the drawer with script, its
      page without), the source unit's page, or the plan input's chip. Hovering or focusing it
      traces its source: every chip from that source lights with its dependent, the source's
-     card (and a source unit's box, ringed in ink) stays crisp, the rest recede. A card under
-     chips sends its own edges from below them. A source card counts what follows it in other
+     card (and a source unit's box, ringed in ink) stays crisp, the rest recede. An edge
+     within the box arrives at a card on its chips' top edge, and an edge that passes the row
+     keeps clear of the chips as of the card. A source card counts what follows it in other
      boxes, "→ n" in meta after its caption (a unit, after its id).
    Below 720px there are no edges and no legend; each box stacks its lanes, each reading
-   straight down, a card's chips under it.
+   straight down, a card's chips on its top edge.
 5. **Under the board**: Result (each plan output's value, or "No value yet.") and Plan inputs
    (value or "No value yet.", and the input's doc).
 
@@ -573,8 +583,8 @@ list, question cards, the danger card; 10px (`--radius-md`) for controls, the sw
 menu, and code blocks; 5px (`--radius-sm`) for inline code, tags and menu items. A pill (999px)
 is only for the step cards, the progress bar, the inbox badge, the Types switch's track and a
 boolean value: a card is a token of work, not a panel. Plan input and output chips are dashed,
-since they are ends, not work; a relation chip ("← source") is a fact, so it takes the tag's
-5px corner.
+since they are ends, not work; a relation chip ("after source") is a fact, so it takes the
+tag's 5px corner.
 
 ## Components
 
@@ -596,8 +606,10 @@ since they are ends, not work; a relation chip ("← source") is a fact, so it t
   clear. A new icon is fetched from Lucide at that version, never
   drawn; the mark and favicon are the owner's, and a project's own icon is the user's.
 - **Tracing**: hovering or focusing a card lights its edges and the chips to and from it; the
-  other cards and chips lose their border and fill and their text turns muted ink. A chip
-  traces its source.
+  other cards lose their border and fill and their text turns muted ink, the other chips keep
+  a faint hairline and mute their words. A chip traces its source. Tracing follows the
+  keyboard's focus, never a focus given back after a click or by the drawer's close, so when
+  the pointer leaves with nothing focused from the keyboard, nothing stays lit.
 - **Buttons**: primary is the deep blue under cream; others are card-coloured with an input
   hairline. The progress bar is an 8px pill, 200px wide (120 on a phone); on a project page
   it grows with its summary line, up to 480px.

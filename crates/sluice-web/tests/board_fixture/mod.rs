@@ -130,8 +130,8 @@ impl Fixture {
                 let doc = json!({"steps":{
                     "alpha-build":{"run":"custom.open","outputs":{"summary":"string"},"tags":["unit:alpha"]},
                     "alpha-review":{"run":"custom.open","in":{"s":{"source":"alpha-build/summary"}},"tags":["unit:alpha"]},
-                    "beta-build":{"run":"custom.open","tags":["unit:beta"]},
-                    "beta-review":{"run":"custom.open","doc":"Check the Parser output","after":["beta-build"],"tags":["unit:beta"]}}});
+                    "beta-build":{"run":"custom.open","after":["alpha-build"],"tags":["unit:beta"]},
+                    "beta-review":{"run":"custom.open","doc":"Check the Parser output","after":["beta-build","alpha-review"],"tags":["unit:beta"]}}});
                 let plan = Plan::parse_json(&serde_json::to_vec(&doc).unwrap(), &Registry).unwrap();
                 tx.sql().execute("DELETE FROM plans WHERE project_id=?1", [id.to_string()])?;
                 sluice_store::plans::initialize_plan(tx, id, &plan)?;

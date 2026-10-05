@@ -181,10 +181,11 @@ impl RelationKind {
         }
     }
 }
-/// A relation between boxes, shown on its dependent as a chip, "← source", that links to the
-/// source and lights it when hovered or focused. Its words keep the edge's kind: `if` (and
-/// `if not`) for a condition, `unit:` for a unit gate, the output after a handoff's step, `?`
-/// when a skip counts (dashed, as that edge is).
+/// A relation between boxes, shown on its dependent as a chip above its card ("after source")
+/// that links to the source and lights it when hovered or focused. Its words say the kind, as
+/// an input to the card: `after` for an ordering entry (`after unit:` for a unit gate), `if`
+/// (and `if not`) for a condition, the output after a handoff's step, `?` when a skip counts
+/// (dashed, as that edge is).
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Xref {
     /// The source's and the dependent's node keys (`s:<step>`, `u:<unit>`, `i:<input>`, ...).
@@ -192,9 +193,10 @@ pub struct Xref {
     pub to: String,
     pub kind: RelationKind,
     pub tolerant: bool,
-    /// Said before the rest by a screen reader, not shown: "After ", "Handoff from ".
+    /// Said before the rest by a screen reader, not shown: "Handoff from " (the other kinds
+    /// say theirs in the shown words).
     pub said: &'static str,
-    /// Muted before the source: "if ", "if not ", "unit:".
+    /// Muted before the source: "after ", "after unit:", "if ", "if not ".
     pub lead: String,
     /// The source: a step, a unit or a plan input.
     pub name: String,
@@ -264,14 +266,14 @@ impl Xref {
                 (said, String::new(), (shown, tail), title)
             }
             RelationKind::Ordering => (
-                "After ",
-                String::new(),
+                "",
+                "after ".to_owned(),
                 (name.clone(), skip.to_owned()),
                 format!("After {name}{skips}"),
             ),
             RelationKind::Unit => (
-                "After ",
-                "unit:".to_owned(),
+                "",
+                "after unit:".to_owned(),
                 (name.clone(), skip.to_owned()),
                 format!("After unit {name}{skips}"),
             ),
@@ -309,7 +311,7 @@ impl Xref {
     pub fn html(&self) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "<a class=\"xref k-{{ x.kind.name() }}{% if x.tolerant %} tolerant{% endif %}\" href=\"{{ x.href }}\"{% if !x.opens.is_empty() %} data-opens=\"{{ x.opens }}\"{% endif %} data-from=\"{{ x.from }}\" data-to=\"{{ x.to }}\" title=\"{{ x.title }}\"><span class=\"xa\" aria-hidden=\"true\">←</span><span class=\"vh\">{{ x.said }}</span>{% if !x.lead.is_empty() %}<span class=\"xm\">{{ x.lead }}</span>{% endif %}<span class=\"xn\">{{ x.name }}</span>{% if !x.tail.is_empty() %}<span class=\"xm\">{{ x.tail }}</span>{% endif %}</a>",
+            source = "<a class=\"xref k-{{ x.kind.name() }}{% if x.tolerant %} tolerant{% endif %}\" href=\"{{ x.href }}\"{% if !x.opens.is_empty() %} data-opens=\"{{ x.opens }}\"{% endif %} data-from=\"{{ x.from }}\" data-to=\"{{ x.to }}\" title=\"{{ x.title }}\">{% if !x.said.is_empty() %}<span class=\"vh\">{{ x.said }}</span>{% endif %}{% if !x.lead.is_empty() %}<span class=\"xm\">{{ x.lead }}</span>{% endif %}<span class=\"xn\">{{ x.name }}</span>{% if !x.tail.is_empty() %}<span class=\"xm\">{{ x.tail }}</span>{% endif %}</a>",
             ext = "html"
         )]
         struct Chip<'a> {

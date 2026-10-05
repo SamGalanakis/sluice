@@ -229,19 +229,27 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
     let _ = server.await;
 }
 
-/// Each drawn edge, and whether it leaves its source's foot and ends on its dependent's top.
+/// Each drawn edge, and whether it leaves its source's foot and ends on its dependent's entry
+/// (the top of the chips on its top edge, or its own top), and whether it runs over a chip.
 const EDGES: &str = r#"(() => {
   const plane = document.querySelector('.plane').getBoundingClientRect();
+  const chips = [...document.querySelectorAll('.plane .xref')].map(c => c.getBoundingClientRect());
   return [...document.querySelectorAll('svg.edges .wires path:not(.head)')].map(p => {
     const a = document.querySelector(`[data-node="${p.dataset.from}"]`).getBoundingClientRect();
-    const z = document.querySelector(`[data-node="${p.dataset.to}"]`).getBoundingClientRect();
+    const node = document.querySelector(`[data-node="${p.dataset.to}"]`), z = node.getBoundingClientRect();
+    const entry = (node.parentElement.classList.contains('stack') ? node.parentElement : node).getBoundingClientRect();
     const n = p.getAttribute('d').match(/-?[\d.]+/g).map(Number);
     const [x1, y1, x2, y2] = [n[0], n[1], n.at(-2), n.at(-1)];
-    return {from: p.dataset.from, to: p.dataset.to,
+    let over = false;
+    for (let s = 0; s < p.getTotalLength() && !over; s += 2) {
+      const q = p.getPointAtLength(s), x = q.x + plane.left, y = q.y + plane.top;
+      over = chips.some(r => x > r.left + 1 && x < r.right - 1 && y > r.top + 1 && y < r.bottom - 1);
+    }
+    return {from: p.dataset.from, to: p.dataset.to, over,
             lands: x1 >= a.left - plane.left - 1 && x1 <= a.right - plane.left + 1
               && Math.abs(y1 - (a.bottom - plane.top)) < 1.5
               && x2 >= z.left - plane.left - 1 && x2 <= z.right - plane.left + 1
-              && Math.abs(y2 + 7 - (z.top - plane.top)) < 1.5};
+              && Math.abs(y2 + 7 - (entry.top - plane.top)) < 1.5};
   });
 })()"#;
 const BOXES: &str = r#"[...document.querySelectorAll('.boxes.units > .box')].map(b => {
@@ -287,7 +295,11 @@ async fn chromium_plan_grid_lays_units_side_by_side_and_edges_land_on_their_card
             );
             let edges = browser.eval(EDGES).unwrap();
             assert!(
-                edges.as_array().unwrap().iter().all(|e| e["lands"] == true),
+                edges
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|e| e["lands"] == true && e["over"] == false),
                 "{width}: {edges}"
             );
             let scroll = browser
@@ -307,6 +319,142 @@ async fn chromium_plan_grid_lays_units_side_by_side_and_edges_land_on_their_card
                 .eval("document.querySelectorAll('svg.edges path').length")
                 .unwrap(),
             0
+        );
+        assert_eq!(
+            browser.eval("window.browserErrors").unwrap(),
+            serde_json::json!([])
+        );
+    })
+    .await
+    .unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+/// Every chip on the board: whether it sits in its card's stack before the card, on the card's
+/// top edge (at most 6px above it), and its look: hairline, fill and ink (a focused chip's ring
+/// is a state of its own, not its look).
+const CHIPS: &str = r#"[...document.querySelectorAll('.plane .xref')].map(c => {
+  const stack = c.closest('.stack'), card = stack?.lastElementChild, s = getComputedStyle(c);
+  const r = c.getBoundingClientRect(), k = card?.getBoundingClientRect();
+  return {from: c.dataset.from, to: c.dataset.to, text: c.textContent,
+          first: !!stack && stack.firstElementChild.contains(c) && card.matches('[data-node]')
+            && card.dataset.node === c.dataset.to
+            && !!(c.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING),
+          gap: k ? k.top - r.bottom : null,
+          look: [s.borderTopColor, s.borderTopStyle, s.backgroundColor, s.color, s.boxShadow].join(' | ')};
+})"#;
+const CENTRE: &str = r#"(sel => { const e = document.querySelector(sel); e.scrollIntoView({block: 'center'});
+  const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })"#;
+
+fn pointer(browser: &mut Chrome, kind: &str, x: f64, y: f64) {
+    let mut event = serde_json::json!({"type": kind, "x": x, "y": y});
+    if kind != "mouseMoved" {
+        event["button"] = "left".into();
+        event["clickCount"] = 1.into();
+    }
+    browser.send("Input.dispatchMouseEvent", event).unwrap();
+}
+/// Waits two frames and for every transition to run out.
+fn settle(browser: &mut Chrome) {
+    browser
+        .wait("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
+        .unwrap();
+    browser
+        .wait("document.getAnimations().length === 0")
+        .unwrap();
+}
+/// Moves the pointer onto the element `selector` names (scrolled into view), in a few steps.
+fn hover(browser: &mut Chrome, selector: &str) -> (f64, f64) {
+    let at = browser
+        .eval(&format!("{CENTRE}({})", serde_json::json!(selector)))
+        .unwrap();
+    let (x, y) = (at[0].as_f64().unwrap(), at[1].as_f64().unwrap());
+    for step in [8.0, 4.0, 0.0] {
+        pointer(browser, "mouseMoved", x - step, y - step);
+    }
+    (x, y)
+}
+
+/// A card's inputs from other units are chips on its top edge, read before it, each saying its
+/// kind ("after alpha-build"); edges arriving at the card land on them and none runs over a
+/// chip. Every chip at rest looks the same, and stays so after a chip opened the drawer and
+/// the drawer closed: the focus it gives back (to the source card, or the chip) traces nothing
+/// once the pointer has left, so no chip is left lit with nothing held.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_chips_sit_on_their_cards_top_edge_and_rest_alike() {
+    let f = Fixture::new().await;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let lanes = f.id;
+    tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{lanes}")).unwrap();
+        browser
+            .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
+            .unwrap();
+        browser.viewport(1440, "light").unwrap();
+        browser
+            .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length === 2")
+            .unwrap();
+        let chips = browser.eval(CHIPS).unwrap();
+        let chips = chips.as_array().unwrap();
+        let texts: Vec<_> = chips.iter().map(|c| c["text"].as_str().unwrap()).collect();
+        assert_eq!(texts, ["after alpha-build", "after alpha-review"], "{chips:?}");
+        for chip in chips {
+            assert_eq!(chip["first"], true, "a chip before its card: {chip}");
+            let gap = chip["gap"].as_f64().unwrap();
+            assert!((0.0..=6.0).contains(&gap), "on its card's top edge: {chip}");
+        }
+        let rest = chips[0]["look"].clone();
+        assert!(chips.iter().all(|c| c["look"] == rest), "one look at rest: {chips:?}");
+        // beta-review's own edge, from beta-build, lands on its chip, not across it
+        let edges = browser.eval(EDGES).unwrap();
+        assert!(
+            edges
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["lands"] == true && e["over"] == false),
+            "{edges}"
+        );
+        // a chip opens its source in the drawer; Escape closes it and gives the focus back (to
+        // the source card, or the chip); the pointer passes over a card and leaves the board
+        let chip = r#".xref[data-from="s:alpha-review"]"#;
+        let (x, y) = hover(&mut browser, chip);
+        pointer(&mut browser, "mousePressed", x, y);
+        pointer(&mut browser, "mouseReleased", x, y);
+        browser
+            .wait("location.hash === '#step:alpha-review'")
+            .unwrap();
+        browser
+            .send(
+                "Input.dispatchKeyEvent",
+                serde_json::json!({"type": "keyDown", "key": "Escape", "code": "Escape",
+                                   "windowsVirtualKeyCode": 27}),
+            )
+            .unwrap();
+        browser
+            .wait("location.hash === '' && document.getElementById('drawer').hidden && document.activeElement?.matches('#n-alpha-review, .xref')")
+            .unwrap();
+        settle(&mut browser);  // the page reflows as the drawer leaves
+        hover(&mut browser, "#n-beta-build");
+        browser
+            .wait("document.querySelector('.plane').classList.contains('tracing')")
+            .unwrap();
+        for step in [40.0, 20.0, 4.0] {
+            pointer(&mut browser, "mouseMoved", step, step);
+        }
+        settle(&mut browser);  // the chips' and cards' transitions run out
+        let lit = browser
+            .eval("[document.querySelector('.plane').classList.contains('tracing'), document.querySelectorAll('.plane .on').length]")
+            .unwrap();
+        assert_eq!(lit, serde_json::json!([false, 0]), "a trace left on");
+        let after = browser.eval(CHIPS).unwrap();
+        assert!(
+            after.as_array().unwrap().iter().all(|c| c["look"] == rest),
+            "one look at rest after the drawer: {after}"
         );
         assert_eq!(
             browser.eval("window.browserErrors").unwrap(),

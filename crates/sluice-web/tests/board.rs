@@ -195,8 +195,8 @@ fn paused_and_queued_work_have_distinct_wait_projection() {
 }
 
 /// A relation whose ends are in two boxes (or in none: a plan input or output) is marked
-/// `cross` and shown as a chip on its dependent, linking to its source; one within a box is
-/// drawn as before.
+/// `cross` and shown as a chip on its dependent's top edge, saying its kind ("after start")
+/// and linking to its source; one within a box is drawn as before.
 #[test]
 fn relations_between_boxes_are_marked_and_shown_as_chips_on_their_dependents() {
     let (plan, state, project) = fixture();
@@ -246,22 +246,46 @@ fn relations_between_boxes_are_marked_and_shown_as_chips_on_their_dependents() {
         tolerant.contains("class=\"xref k-ordering tolerant\""),
         "{tolerant}"
     );
-    assert!(tolerant.contains("<span class=\"xm\">?</span>"));
+    // An ordering entry says what it is: "after start?", read as such (no hidden prefix).
+    assert!(
+        tolerant.contains("title=\"After start, even if it is skipped\"><span class=\"xm\">after </span><span class=\"xn\">start</span><span class=\"xm\">?</span>"),
+        "{tolerant}"
+    );
     let unit = chip("u:build", "s:unit-gate");
     assert!(
         unit.contains(&format!("href=\"/projects/id/{id}/units/build\"")),
         "{unit}"
     );
-    assert!(unit.contains("<span class=\"xm\">unit:</span><span class=\"xn\">build</span>"));
+    assert!(
+        unit.ends_with("\"><span class=\"xm\">after unit:</span><span class=\"xn\">build</span>"),
+        "{unit}"
+    );
     assert!(!unit.contains("data-opens"));
     let input = chip("i:enabled", "s:enabled-work");
     assert!(input.contains("href=\"#in-enabled\""), "{input}");
     assert!(html.contains("id=\"in-enabled\""));
     assert!(chip("s:start", "o:result").contains("title=\"Plan output result: start/text\""));
-    // A chip sits under its card, the two in one stack; a card with none is as before.
-    let card = html.find("id=\"n-handoff\"").unwrap();
-    assert!(html[..card].ends_with("<div class=\"stack\"><a "));
-    assert!(!html[..html.find("id=\"n-summary\"").unwrap()].ends_with("<div class=\"stack\"><a "));
+    // No chip points sideways: the words say the kind.
+    assert!(!html.contains("←"), "an arrow glyph on a chip");
+    // A card's chips come first in its stack, on its top edge, read before it; a card with
+    // none is as before.
+    for (to, card) in [("s:handoff", "n-handoff"), ("s:cleanup", "n-cleanup")] {
+        let card = html.find(&format!("id=\"{card}\"")).unwrap();
+        let stack = html[..card].rfind("<div class=\"stack\">").unwrap();
+        let chips = &html[stack..card];
+        assert!(
+            chips.starts_with("<div class=\"stack\"><div class=\"xrefs\"><a class=\"xref")
+                && chips.ends_with("</a></div><a "),
+            "{chips}"
+        );
+        assert!(chips.contains(&format!("data-to=\"{to}\"")), "{chips}");
+    }
+    let summary = html.find("id=\"n-summary\"").unwrap();
+    assert!(!html[..summary].ends_with("</a></div><a "));
+    // A plan output's chips sit above it, as a card's do.
+    let output = html.find("data-node=\"o:result\"").unwrap();
+    let stack = html[..output].rfind("<div class=\"stack\">").unwrap();
+    assert!(html[stack..output].contains("data-to=\"o:result\""));
     // No chip for a relation within a box.
     assert!(!html.contains("data-from=\"s:order\" data-to=\"s:summary\""));
     // A source counts its dependents in other boxes: start feeds five steps and the output;
@@ -294,7 +318,9 @@ fn layout_marks_wide_units_and_leads_the_board_with_its_legend() {
         board < legend && legend < plane,
         "the legend leads the board"
     );
-    assert!(html[legend..plane].contains("in another unit"));
+    assert!(html[legend..plane].contains(
+        "<span class=\"xm\">after </span><span class=\"xn\">step</span></i><span class=\"vh\">a chip: </span>from another unit"
+    ));
     assert!(html.contains("<svg class=\"edges\" aria-hidden=\"true\" data-ignore-morph></svg>"));
     // With no unit to show there is nothing to read the legend by.
     let (plan, state, project) = fixture();
