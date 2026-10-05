@@ -34,8 +34,109 @@ pub struct ClaudeState {
     wakeup: Option<f64>,
     context_tokens: u64,
     summaries: VecDeque<String>,
+    /// `None` is `account::DEFAULT_THRESHOLD`.
+    quota_threshold: Option<Duration>,
 }
 impl ClaudeState {
+    /// A limit that resets further away than this fails the run as `QuotaExhausted`.
+    pub fn set_quota_threshold(&mut self, threshold: Duration) {
+        self.quota_threshold = Some(threshold);
+    }
+    /// An API error that is an account problem, classified from its category (the transcript
+    /// entry's `error`, the `StopFailure` hook's `error`) first:
+    /// - `authentication_failed` (`Not logged in · Please run /login`, `Login expired · …`,
+    ///   `OAuth token revoked · …`) is an auth failure, except Claude's own `Authentication
+    ///   error · This may be a temporary network issue, …`, which stays transient;
+    ///   `oauth_org_not_allowed`, `account_on_hold`, `verification_required` and
+    ///   `cloud_credential_error` bar the account the same way;
+    /// - a rejected plan limit in `quotaLimits` (`rateLimitType`, `resetsAt`) is a usage limit
+    ///   with that reset; `billing_error` is one with no reset; a `rate_limit` error whose text
+    ///   starts with Claude's usage-limit wording is one, with the legacy epoch if any.
+    ///
+    /// With no category (or `invalid_request` / `unknown`), text that starts with Claude's
+    /// login wording is an auth failure. `None` leaves the error to `classify`.
+    fn api_account(
+        &self,
+        category: Option<&str>,
+        limits: &Value,
+        message: &str,
+    ) -> Option<EngineError> {
+        let barred = |problem: &str, advice: &str| {
+            Some(
+                account::Auth {
+                    engine: account::Engine::Claude,
+                    problem: format!("{problem} ({})", category.unwrap_or_default()),
+                    advice: Some(advice.into()),
+                    text: message.into(),
+                }
+                .error(),
+            )
+        };
+        match category {
+            Some("authentication_failed")
+                if message
+                    .trim_start()
+                    .starts_with("Authentication error \u{b7} This may be a temporary") =>
+            {
+                return Some(failure(EngineErrorKind::Transient, message));
+            }
+            Some("authentication_failed") => {
+                return Some(account::Auth::login(account::Engine::Claude, message).error());
+            }
+            Some("oauth_org_not_allowed") => {
+                return barred(
+                    "the organization disabled subscription access for Claude Code",
+                    "use an Anthropic API key or ask the org admin to enable access",
+                );
+            }
+            Some("account_on_hold") => {
+                return barred(
+                    "account on hold",
+                    "resolve the hold at https://claude.ai/restricted",
+                );
+            }
+            Some("verification_required") => {
+                return barred(
+                    "organization verification required",
+                    "complete the verification Claude asks for",
+                );
+            }
+            Some("cloud_credential_error") => {
+                return barred(
+                    "cloud credentials unavailable",
+                    "check or refresh the cloud provider's credentials on this host",
+                );
+            }
+            None | Some("invalid_request" | "unknown") if protocol::auth_text(message) => {
+                return Some(account::Auth::login(account::Engine::Claude, message).error());
+            }
+            _ => {}
+        }
+        let (resets_at, kind) = if limits["status"] == "rejected" {
+            (
+                limits["resetsAt"].as_u64(),
+                limits["rateLimitType"].as_str(),
+            )
+        } else if category == Some("billing_error") {
+            (None, None)
+        } else if matches!(category, None | Some("rate_limit")) {
+            (protocol::usage_limit(message)?, None)
+        } else {
+            return None;
+        };
+        Some(
+            account::Limit {
+                what: kind.map(|kind| format!("{} reached", limit_name(kind))),
+                window: kind.map(str::to_owned),
+                resets_at,
+                ..account::Limit::new(account::Engine::Claude, account::Cap::Usage, message)
+            }
+            .classify(
+                account::now(),
+                self.quota_threshold.unwrap_or(account::DEFAULT_THRESHOLD),
+            ),
+        )
+    }
     pub fn pending(&mut self, id: InputId, text: String) -> bool {
         if self.observation.acknowledged.contains(&id) || self.pending.iter().any(|(i, _)| *i == id)
         {
@@ -113,12 +214,25 @@ impl ClaudeState {
                 self.background = hook.background_tasks.clone();
                 self.crons = hook.session_crons.clone();
                 if hook.hook_event_name == "StopFailure" {
-                    self.observation.error = Some(classify(&format!(
-                        "{} {} {}",
-                        hook.error.as_deref().unwrap_or_default(),
-                        hook.error_details.as_deref().unwrap_or_default(),
-                        hook.last_assistant_message.as_deref().unwrap_or_default()
-                    )));
+                    let text = hook
+                        .last_assistant_message
+                        .as_deref()
+                        .or(hook.error_details.as_deref())
+                        .unwrap_or_default();
+                    match self.api_account(hook.error.as_deref(), &Value::Null, text) {
+                        // The transcript's entry for this error, read first, carries its
+                        // reset; the hook's text does not.
+                        Some(_) if self.observation.error.is_some() => {}
+                        Some(limit) => self.observation.error = Some(limit),
+                        None => {
+                            self.observation.error = Some(classify(&format!(
+                                "{} {} {}",
+                                hook.error.as_deref().unwrap_or_default(),
+                                hook.error_details.as_deref().unwrap_or_default(),
+                                hook.last_assistant_message.as_deref().unwrap_or_default()
+                            )))
+                        }
+                    }
                 }
             }
             "SubagentStart" => {
@@ -151,7 +265,10 @@ impl ClaudeState {
                 let message = text_of(content);
                 self.summary(format!("error {message}"), main);
                 if main {
-                    self.observation.error = Some(classify(&message));
+                    self.observation.error = Some(
+                        self.api_account(entry["error"].as_str(), &entry["quotaLimits"], &message)
+                            .unwrap_or_else(|| classify(&message)),
+                    );
                 }
                 return;
             }
@@ -339,6 +456,17 @@ impl ClaudeState {
         self.observation.clone()
     }
 }
+/// Names Claude's `rateLimitType`: `weekly limit`.
+fn limit_name(kind: &str) -> &'static str {
+    match kind {
+        "five_hour" => "5-hour session limit",
+        "seven_day_opus" => "weekly Opus limit",
+        "seven_day_sonnet" => "weekly Sonnet limit",
+        "overage" | "extra_usage" => "usage credit limit",
+        k if k.starts_with("seven_day") => "weekly limit",
+        _ => "plan limit",
+    }
+}
 fn text_of(value: &Value) -> String {
     if let Some(text) = value.as_str() {
         return text.into();
@@ -462,6 +590,11 @@ impl Claude {
     }
     pub fn with_environment(mut self, environment: BTreeMap<String, String>) -> Self {
         self.environment = environment;
+        self
+    }
+    /// A limit that resets further away than this fails the run as `QuotaExhausted`.
+    pub fn with_quota_threshold(mut self, threshold: Duration) -> Self {
+        self.state.set_quota_threshold(threshold);
         self
     }
     /// One injected transient after a completed turn, for the labelled acceptance gate.
@@ -862,7 +995,11 @@ impl EngineAdapter for Claude {
         let mut context = context.clone();
         context.cwd = fs::canonicalize(&context.cwd).map_err(io_error)?;
         context.run_dir = fs::canonicalize(&context.run_dir).map_err(io_error)?;
-        self.state = ClaudeState::default();
+        let threshold = self.state.quota_threshold;
+        self.state = ClaudeState {
+            quota_threshold: threshold,
+            ..ClaudeState::default()
+        };
         self.pane = None;
         self.tails.clear();
         self.seen.clear();
@@ -1030,6 +1167,17 @@ impl EngineAdapter for Claude {
         });
         self.transcripts()?;
         let capture = self.capture().await?;
+        // Logged out, Claude opens on its login screen instead of the composer: no input can
+        // be accepted until the owner signs in.
+        if !dead && self.state.observation.error.is_none() && protocol::login_screen(&capture) {
+            self.state.observation.error = Some(
+                account::Auth {
+                    problem: "not logged in (Claude shows its login screen)".into(),
+                    ..account::Auth::login(account::Engine::Claude, protocol::login_text(&capture))
+                }
+                .error(),
+            );
+        }
         if !dead {
             self.advance_delivery(&capture).await?;
         }

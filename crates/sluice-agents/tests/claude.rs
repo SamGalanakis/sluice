@@ -1088,3 +1088,392 @@ async fn supervisor_missing_session_lock_and_cwd() {
 async fn supervisor_predecessor_cwd_mismatch_starts_fresh() {
     acceptance::scenario("predecessor_cwd_mismatch", "claude").await;
 }
+
+/// The redacted real API error entries 2.1.284 wrote for usage and rate limits.
+fn real_limits() -> Vec<Value> {
+    include_str!("fixtures/claude/real-usage-limits.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+/// The real API error entries 2.1.284 wrote when it could not authenticate.
+fn real_auth() -> Vec<Value> {
+    include_str!("fixtures/claude/real-auth-errors.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+fn prompted() -> ClaudeState {
+    let mut state = ClaudeState::default();
+    state
+        .hook(&hook("UserPromptSubmit", json!({"prompt":"p"})))
+        .unwrap();
+    state
+}
+fn transcript_error(entry: &Value) -> Option<EngineError> {
+    let mut state = prompted();
+    state.transcript(entry, true);
+    snapshot(&mut state, "idle", 0).error
+}
+fn text_entry(category: &str, text: &str) -> Value {
+    json!({"type":"assistant","isApiErrorMessage":true,"error":category,"message":{"content":[{"type":"text","text":text}]}})
+}
+#[test]
+fn claude_usage_limits_fail_as_quota_exhausted_and_short_or_plain_rate_limits_stay_transient() {
+    let real = real_limits();
+    let now = account::now();
+    // The weekly limit, resetting in three days (the capture's own reset has passed).
+    let mut weekly = real[0].clone();
+    weekly["quotaLimits"]["resetsAt"] = json!(now + 3 * 86400);
+    let error = transcript_error(&weekly).unwrap();
+    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+    assert!(
+        error
+            .message
+            .starts_with("claude: weekly limit reached (seven_day); resets 20"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.ends_with(
+            " — wait for the reset or buy usage credits at https://claude.ai/settings/usage, then step_retry (or run the step on another engine). Claude said: You've hit your weekly limit \u{b7} resets Sep 22, 1am (Europe/Berlin)"
+        ),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("(in 2d 23h)") || error.message.contains("(in 3d)"),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.retry_at, None);
+    // The 5-hour session limit an hour from its reset is a hard cap too.
+    let mut session = real[1].clone();
+    session["quotaLimits"]["resetsAt"] = json!(now + 3600);
+    assert_eq!(
+        transcript_error(&session).unwrap().kind,
+        EngineErrorKind::QuotaExhausted
+    );
+    // Ten minutes from its reset it is a short limit that retries just after the reset.
+    session["quotaLimits"]["resetsAt"] = json!(now + 600);
+    let error = transcript_error(&session).unwrap();
+    assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
+    assert!(
+        error
+            .message
+            .starts_with("claude: 5-hour session limit reached (five_hour); resets 20"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains(
+            " — retrying just after the reset. Claude said: You've hit your session limit"
+        ),
+        "{}",
+        error.message
+    );
+    let retry_at = error.retry_at.unwrap();
+    assert!((now + 600..=now + 605).contains(&retry_at), "{retry_at}");
+    // A smaller threshold makes the same limit a hard cap.
+    let mut state = prompted();
+    state.set_quota_threshold(Duration::from_secs(300));
+    state.transcript(&session, true);
+    assert_eq!(
+        snapshot(&mut state, "idle", 0).error.unwrap().kind,
+        EngineErrorKind::QuotaExhausted
+    );
+    // Out of usage credits, or a model's limit with no reset: hard caps.
+    for entry in [&real[2], &real[3], &real[5]] {
+        let error = transcript_error(entry).unwrap();
+        assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+        assert!(
+            error.message.starts_with(
+                "claude: usage limit reached — buy usage credits at https://claude.ai/settings/usage, or wait for it to reset, then step_retry"
+            ),
+            "{}",
+            error.message
+        );
+    }
+    // An ordinary 429 stays transient with the fixed backoff.
+    let error = transcript_error(&real[4]).unwrap();
+    assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
+    assert_eq!(error.retry_at, None);
+    // A billing error is a hard cap whatever its text.
+    let billing = text_entry("billing_error", "API Error: credit balance is too low");
+    assert_eq!(
+        transcript_error(&billing).unwrap().kind,
+        EngineErrorKind::QuotaExhausted
+    );
+}
+#[test]
+fn claude_stop_failure_text_is_a_fallback_and_the_transcript_reset_wins() {
+    let now = account::now();
+    let text = "You've hit your session limit \u{b7} resets 5:10pm (Europe/Berlin)";
+    let failure = || {
+        hook(
+            "StopFailure",
+            json!({"error":"rate_limit","last_assistant_message":text}),
+        )
+    };
+    let mut entry = real_limits()[1].clone();
+    entry["quotaLimits"]["resetsAt"] = json!(now + 300);
+    // The hook alone: Claude's limit wording with no reset is a hard cap.
+    let mut state = prompted();
+    state.hook(&failure()).unwrap();
+    let error = snapshot(&mut state, "idle", 0).error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+    assert!(
+        error.message.ends_with(&format!("Claude said: {text}")),
+        "{}",
+        error.message
+    );
+    // The transcript's entry for the same error then gives its reset, five minutes away.
+    state.transcript(&entry, true);
+    assert_eq!(
+        snapshot(&mut state, "idle", 1).error.unwrap().kind,
+        EngineErrorKind::Transient
+    );
+    // Read in the other order, the hook keeps the entry's classification.
+    let mut state = prompted();
+    state.transcript(&entry, true);
+    state.hook(&failure()).unwrap();
+    assert_eq!(
+        snapshot(&mut state, "idle", 0).error.unwrap().kind,
+        EngineErrorKind::Transient
+    );
+    // The older `Claude AI usage limit reached|<epoch>` carries its reset.
+    let mut state = prompted();
+    let legacy = format!("Claude AI usage limit reached|{}", now + 7200);
+    state
+        .hook(&hook(
+            "StopFailure",
+            json!({"error":"rate_limit","last_assistant_message":legacy}),
+        ))
+        .unwrap();
+    let error = snapshot(&mut state, "idle", 0).error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted);
+    assert!(
+        error.message.contains("(in 2h)") || error.message.contains("(in 1h 59m)"),
+        "{}",
+        error.message
+    );
+}
+#[test]
+fn claude_auth_failures_fail_as_auth_failed_from_their_category_or_login_wording() {
+    let real = real_auth();
+    let expected = [
+        "claude: not logged in (token expired)",
+        "claude: not logged in (token expired)",
+        "claude: not logged in (no credentials)",
+        "claude: not logged in (unauthorized)",
+    ];
+    for (entry, head) in real.iter().zip(expected) {
+        let error = transcript_error(entry).unwrap();
+        assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+        assert_eq!(
+            error.message,
+            format!(
+                "{head} — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: {}",
+                entry["message"]["content"][0]["text"].as_str().unwrap()
+            )
+        );
+        assert_eq!(error.retry_at, None);
+    }
+    let error = transcript_error(&real[4]).unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
+    assert!(error.message.starts_with("claude: the organization disabled subscription access for Claude Code (oauth_org_not_allowed) — use an Anthropic API key or ask the org admin to enable access, then step_retry. Claude said: Your organization"), "{}", error.message);
+    let error = transcript_error(&real[5]).unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
+    assert!(
+        error.message.starts_with(
+            "claude: account on hold (account_on_hold) — resolve the hold at https://claude.ai/restricted, then step_retry."
+        ),
+        "{}",
+        error.message
+    );
+    // The StopFailure hook says the same when it comes first.
+    let mut state = prompted();
+    state
+        .hook(&hook(
+            "StopFailure",
+            json!({"error":"authentication_failed","last_assistant_message":"OAuth token revoked \u{b7} Please run /login"}),
+        ))
+        .unwrap();
+    let error = snapshot(&mut state, "idle", 0).error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
+    assert!(
+        error
+            .message
+            .starts_with("claude: not logged in (token revoked) — run `claude auth login`")
+    );
+    // Without a category, Claude's login wording at the start of the error is enough.
+    let mut state = prompted();
+    state.transcript(&json!({"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"Login expired \u{b7} Please run /login"}]}}), true);
+    assert_eq!(
+        snapshot(&mut state, "idle", 0).error.unwrap().kind,
+        EngineErrorKind::AuthFailed
+    );
+    // Claude's own temporary authentication error stays transient.
+    let flaky = text_entry(
+        "authentication_failed",
+        "Authentication error \u{b7} This may be a temporary network issue, please try again",
+    );
+    assert_eq!(
+        transcript_error(&flaky).unwrap().kind,
+        EngineErrorKind::Transient
+    );
+}
+#[test]
+fn claude_limit_and_login_words_in_tool_output_and_prose_do_not_fail() {
+    for words in [
+        "You've hit your weekly limit \u{b7} resets Sep 22, 1am (Europe/Berlin)",
+        "Not logged in \u{b7} Please run /login",
+    ] {
+        let mut state = prompted();
+        state.transcript(&json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat notes"}}]}}), true);
+        state.transcript(&json!({"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":words,"tool_use_id":"t1"}]}}), true);
+        state.transcript(
+            &json!({"type":"assistant","message":{"content":[{"type":"text","text":words}]}}),
+            true,
+        );
+        state
+            .hook(&hook("Stop", json!({"last_assistant_message":words})))
+            .unwrap();
+        let s = snapshot(&mut state, "idle", 0);
+        assert_eq!(s.error, None);
+        assert_eq!(s.final_text, words);
+        // An API error of another category that quotes the words, or that does not start
+        // with them, is not an account failure.
+        for entry in [
+            text_entry("server_error", words),
+            text_entry("invalid_request", &format!("API Error: 400 {words}")),
+        ] {
+            let kind = transcript_error(&entry).unwrap().kind;
+            assert!(
+                !matches!(
+                    kind,
+                    EngineErrorKind::QuotaExhausted | EngineErrorKind::AuthFailed
+                ),
+                "{entry}: {kind:?}"
+            );
+        }
+    }
+}
+#[test]
+fn claude_login_screen_is_read_only_without_a_composer() {
+    let screen = " Select login method:\n\n \u{276f} 1. Claude account with subscription \u{b7} Pro, Max, Team, or Enterprise\n\n   2. Anthropic Console account \u{b7} API usage billing\n";
+    assert!(protocol::login_screen(screen));
+    assert_eq!(
+        protocol::login_text(screen),
+        "Select login method: \u{276f} 1. Claude account with subscription \u{b7} Pro, Max, Team, or Enterprise 2. Anthropic Console account \u{b7} API usage billing"
+    );
+    // The same words above a ready composer are transcript text.
+    let quoted = format!(
+        "{screen}{}\n\u{276f} \n{}\n",
+        "─".repeat(70),
+        "─".repeat(70)
+    );
+    assert!(!protocol::login_screen(&quoted));
+    assert!(!protocol::login_screen(
+        "● Select login method: is the screen you get when logged out"
+    ));
+}
+#[tokio::test]
+async fn fake_usage_limit_is_quota_exhausted_a_plain_429_transient_and_quoted_words_nothing() {
+    let weekly = "You've hit your weekly limit \u{b7} resets Oct 9, 1am (Europe/Berlin)";
+    let mut h = Harness::new(json!({"turns":[{"error":weekly,"error_type":"rate_limit","quota":{"status":"rejected","rateLimitType":"seven_day","resets_in_s":259200,"overageStatus":"rejected"}}]})).await;
+    h.launch(None).await;
+    let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+    assert!(
+        error
+            .message
+            .starts_with("claude: weekly limit reached (seven_day); resets 20"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.ends_with(&format!("Claude said: {weekly}")),
+        "{}",
+        error.message
+    );
+    h.cleanup().await;
+
+    let mut h = Harness::new(json!({"turns":[{"error":"API Error: Request rejected (429) \u{b7} This request would exceed your account's rate limit. Please try again later.","error_type":"rate_limit"}]})).await;
+    h.launch(None).await;
+    let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
+    assert_eq!(error.retry_at, None);
+    h.cleanup().await;
+
+    let mut h = Harness::new(json!({"turns":[{"tool":{"name":"Bash","input":{"command":"cat notes"}},"tool_error":weekly,"reply":weekly}]})).await;
+    h.launch(None).await;
+    let s = h.turn(InputId::Task, "p", 1).await;
+    assert_eq!(s.error, None);
+    assert_eq!(s.final_text, weekly);
+    h.cleanup().await;
+}
+#[tokio::test]
+async fn fake_auth_failure_is_auth_failed_with_any_key_masked() {
+    let mut h = Harness::new(json!({"turns":[{"error":"Not logged in \u{b7} Please run /login","error_type":"authentication_failed"}]})).await;
+    h.launch(None).await;
+    let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+    assert_eq!(
+        error.message,
+        "claude: not logged in (no credentials) — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: Not logged in \u{b7} Please run /login"
+    );
+    h.cleanup().await;
+
+    // A user-supplied key Claude echoes back is masked in the message.
+    let key = "sk-ant-api03-Zq8xV4mN2pL7kR9tY3wE6uI1oP5aS0dF";
+    let mut h = Harness::new(json!({"turns":[{"error":format!("Invalid API key \u{b7} Fix external API key \u{b7} x-api-key {key} was rejected"),"error_type":"invalid_request"}]})).await;
+    h.launch(None).await;
+    let error = h.turn(InputId::Task, "p", 1).await.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+    assert!(!error.message.contains("Zq8xV4mN2pL7"), "{}", error.message);
+    assert!(
+        error.message.ends_with(
+            "Claude said: Invalid API key \u{b7} Fix external API key \u{b7} x-api-key [redacted] was rejected"
+        ),
+        "{}",
+        error.message
+    );
+    h.cleanup().await;
+}
+#[tokio::test]
+async fn fake_login_screen_fails_as_auth_failed_before_any_input_is_taken() {
+    let mut h = Harness::new(json!({"login":true})).await;
+    h.launch(None).await;
+    let started = Instant::now();
+    let outcome = h
+        .adapter
+        .execute(
+            &h.context,
+            EngineCommand::DeliverText {
+                id: InputId::Task,
+                text: "p".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, DeliveryOutcome::Pending);
+    let error = loop {
+        let s = h.poll().await;
+        if let Some(error) = s.error {
+            assert!(s.acknowledged.is_empty());
+            break error;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "{s:?}");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+    assert!(
+        error.message.starts_with(
+            "claude: not logged in (Claude shows its login screen) — run `claude auth login` on this host (or /login inside `claude`), then step_retry. Claude said: Select login method:"
+        ),
+        "{}",
+        error.message
+    );
+    h.cleanup().await;
+}

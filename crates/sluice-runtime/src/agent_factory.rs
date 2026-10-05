@@ -65,6 +65,7 @@ impl EngineAdapter for Adapter {
                     .map_err(|e| EngineError {
                         kind: EngineErrorKind::Fatal,
                         message: e.to_string(),
+                        retry_at: None,
                     })?
                     .unwrap_or_default();
                 Ok(sessions.get(session).map(|cwd| SessionMetadata {
@@ -185,6 +186,7 @@ impl EngineAdapter for FixtureFaultEngine {
                         observed.error = Some(EngineError {
                             kind: EngineErrorKind::Transient,
                             message: "fixture transient after completed turn".into(),
+                            retry_at: None,
                         });
                     }
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -192,6 +194,7 @@ impl EngineAdapter for FixtureFaultEngine {
                         return Err(EngineError {
                             kind: EngineErrorKind::Fatal,
                             message: error.to_string(),
+                            retry_at: None,
                         });
                     }
                 }
@@ -208,6 +211,7 @@ fn invalid(e: impl std::fmt::Display) -> AgentFailure {
         kind: FailureKind::Invalid,
         message: e.to_string(),
         session: None,
+        retry_at: None,
     }
 }
 fn public(error: AgentFailure) -> sluice_model::error::PublicError {
@@ -414,6 +418,7 @@ impl AgentFactory for Factory {
                 }
             }
         }
+        let quota_threshold = account::threshold_from_env().map_err(invalid)?;
         let engine = match request.engine.as_str() {
             "fake" => {
                 let binary = std::env::var_os("SLUICE_FAKE_ENGINE_BIN")
@@ -443,6 +448,7 @@ impl AgentFactory for Factory {
                     self.home.clone(),
                 );
                 options.environment = environment.clone();
+                options.quota_threshold = quota_threshold;
                 Adapter::Codex(Box::new(codex::Codex::new(options)))
             }
             "claude" => Adapter::Claude(Box::new(
@@ -460,7 +466,8 @@ impl AgentFactory for Factory {
                     invocation.run,
                 )
                 .with_mcp(std::env::var("SLUICE_CLAUDE_MCP_CONFIG").ok())
-                .with_environment(environment.clone()),
+                .with_environment(environment.clone())
+                .with_quota_threshold(quota_threshold),
             )),
             "devin" => Adapter::Devin(Box::new(devin::Devin::new(devin::DevinOptions {
                 hook_binary: bin.clone(),

@@ -3,8 +3,9 @@ use super::super::{
     EngineLaunch, EngineObservation, EngineProfile, EngineStatus, InputId, SessionMetadata,
 };
 use super::{
+    super::account::{self, Auth, Cap, Engine, Limit},
     profile::{self, error},
-    protocol::{Rpc, rpc_error},
+    protocol::{Rpc, auth_text, plain_rpc_error, rpc_error, usage_limit_text},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -30,6 +31,8 @@ pub struct CodexOptions {
     pub search: bool,
     pub request_timeout: Duration,
     pub environment: BTreeMap<String, String>,
+    /// A limit that resets further away than this fails the run as `QuotaExhausted`.
+    pub quota_threshold: Duration,
 }
 impl CodexOptions {
     pub fn new(binary: PathBuf, source_home: PathBuf, sluice_home: PathBuf) -> Self {
@@ -40,6 +43,7 @@ impl CodexOptions {
             search: false,
             request_timeout: Duration::from_secs(30),
             environment: super::super::environment::host_environment(),
+            quota_threshold: account::DEFAULT_THRESHOLD,
         }
     }
 }
@@ -64,6 +68,15 @@ pub struct Codex {
     delivery: BTreeMap<InputId, DeliveryOutcome>,
     subscribed: bool,
     tui: bool,
+    /// The account's rate-limit windows from `account/rateLimits/updated`, by
+    /// `<limitId>/primary|secondary`. Updates are sparse: a missing window keeps the last one.
+    windows: BTreeMap<String, Value>,
+    /// Each limit's last reported `credits`: while credits remain, a used-up window does not
+    /// stop the account, so it gives no reset.
+    credits: BTreeMap<String, Value>,
+    /// This turn's limit error, classified again once every drained event is applied, since
+    /// the rate-limit update that carries its reset may follow it.
+    limit_error: Option<(Cap, String)>,
 }
 impl Codex {
     pub fn new(options: CodexOptions) -> Self {
@@ -82,6 +95,9 @@ impl Codex {
             delivery: BTreeMap::new(),
             subscribed: false,
             tui: false,
+            windows: BTreeMap::new(),
+            credits: BTreeMap::new(),
+            limit_error: None,
         }
     }
     pub fn private_home(&self) -> Option<&Path> {
@@ -194,7 +210,140 @@ impl Codex {
         for event in events {
             self.event(&event)?;
         }
+        if let Some((cap, message)) = self.limit_error.clone() {
+            self.observation.error = Some(self.limit(cap, message));
+        }
         Ok(())
+    }
+    /// The latest reset among the windows Codex reports used up (100 %) that still lie
+    /// ahead, with that window's name: the reset of the limit just reached. A limit whose
+    /// credits carry on past its windows is left out (seen live: a weekly window at 100 % with
+    /// `hasCredits` true while turns kept running).
+    fn exhausted_window(&self) -> Option<(u64, String)> {
+        let now = account::now();
+        self.windows
+            .iter()
+            .filter(|(_, w)| w["usedPercent"].as_f64().is_some_and(|p| p >= 100.0))
+            .filter_map(|(key, w)| {
+                let limit = key.rsplit_once('/').map_or(key.as_str(), |(id, _)| id);
+                let credits = &self.credits.get(limit).cloned().unwrap_or_default();
+                if credits["hasCredits"] == true || credits["unlimited"] == true {
+                    return None;
+                }
+                let at = w["resetsAt"].as_u64().filter(|at| *at > now)?;
+                let mut name = w["windowDurationMins"]
+                    .as_u64()
+                    .map_or_else(|| "window".into(), account::window);
+                if limit != "codex" {
+                    name.push_str(&format!(" of limit {limit}"));
+                }
+                Some((at, name))
+            })
+            .max_by_key(|(at, _)| *at)
+    }
+    fn limit(&self, cap: Cap, message: String) -> EngineError {
+        let window = self.exhausted_window();
+        Limit {
+            resets_at: window.as_ref().map(|(at, _)| *at),
+            window: window.map(|(_, name)| name),
+            ..Limit::new(Engine::Codex, cap, message)
+        }
+        .classify(account::now(), self.options.quota_threshold)
+    }
+    /// A turn's error (`TurnError`), structured first: `codexErrorInfo` `unauthorized`, or an
+    /// HTTP failure carrying status 401, is an auth failure; `usageLimitExceeded` a usage limit
+    /// and `rateLimitExceeded` a rate limit. Failing those, Codex's own wording in the message.
+    /// Other errors keep the RPC classification.
+    fn turn_error(&mut self, value: &Value) -> EngineError {
+        let message = value["message"].as_str().unwrap_or("Codex turn failed");
+        let info = &value["codexErrorInfo"];
+        let status = info
+            .as_object()
+            .and_then(|o| o.values().next())
+            .and_then(|v| v["httpStatusCode"].as_u64());
+        if info == "unauthorized" || status == Some(401) || auth_text(message) {
+            return Auth::login(Engine::Codex, message).error();
+        }
+        let cap = match info.as_str() {
+            Some("usageLimitExceeded") => Some(Cap::Usage),
+            Some("rateLimitExceeded") => Some(Cap::Rate),
+            _ if usage_limit_text(message) => Some(Cap::Usage),
+            _ => None,
+        };
+        match cap {
+            Some(cap) => {
+                self.limit_error = Some((cap, message.into()));
+                self.limit(cap, message.into())
+            }
+            None => rpc_error(value),
+        }
+    }
+    /// `account/rateLimits/updated`: records the windows and credits and, when Codex says a
+    /// limit is reached (`rateLimitReachedType`) with no credits to carry on, fails the run at
+    /// once if that limit is a hard cap. A short one is left to the turn's own error, which
+    /// then backs off until its reset.
+    fn rate_limits(&mut self, snapshot: &Value) {
+        let id = snapshot["limitId"].as_str().unwrap_or("codex").to_owned();
+        for side in ["primary", "secondary"] {
+            if snapshot[side].is_object() {
+                self.windows
+                    .insert(format!("{id}/{side}"), snapshot[side].clone());
+            }
+        }
+        if snapshot["credits"].is_object() {
+            self.credits.insert(id.clone(), snapshot["credits"].clone());
+        }
+        let Some(reached) = snapshot["rateLimitReachedType"].as_str() else {
+            return;
+        };
+        let credits = self.credits.get(&id).cloned().unwrap_or_default();
+        if credits["hasCredits"] == true || credits["unlimited"] == true {
+            return;
+        }
+        let name = snapshot["limitName"].as_str().unwrap_or(&id);
+        let text = format!("account/rateLimits/updated: {reached} (limit {name})");
+        let owner = reached.starts_with("workspace_owner");
+        let (cap, what, advice) = match reached {
+            "workspace_owner_credits_depleted" | "workspace_member_credits_depleted" => (
+                Cap::Usage,
+                "workspace out of credits",
+                if owner {
+                    "add credits to the workspace at https://chatgpt.com/codex/settings/usage"
+                } else {
+                    "ask the workspace owner to add credits"
+                },
+            ),
+            "workspace_owner_usage_limit_reached" | "workspace_member_usage_limit_reached" => (
+                Cap::Usage,
+                "workspace usage limit reached",
+                if owner {
+                    "raise the workspace's usage limit"
+                } else {
+                    "ask the workspace owner to raise your usage limit"
+                },
+            ),
+            _ => (Cap::Rate, "rate limit reached", ""),
+        };
+        let window = if reached.ends_with("credits_depleted") {
+            None
+        } else {
+            self.exhausted_window()
+        };
+        // A reached rate limit with no used-up window says nothing about its reset.
+        if cap == Cap::Rate && window.is_none() {
+            return;
+        }
+        let failure = Limit {
+            what: Some(what.into()),
+            advice: (!advice.is_empty()).then(|| advice.into()),
+            resets_at: window.as_ref().map(|(at, _)| *at),
+            window: window.map(|(_, name)| name),
+            ..Limit::new(Engine::Codex, cap, text)
+        }
+        .classify(account::now(), self.options.quota_threshold);
+        if failure.kind == EngineErrorKind::QuotaExhausted {
+            self.observation.error = Some(failure);
+        }
     }
     fn count_start(&mut self, turn: &str) {
         if self.started.insert(turn.into()) {
@@ -249,7 +398,8 @@ impl Codex {
                         self.turn = None;
                         self.observation.status = EngineStatus::Idle;
                         if !params["turn"]["error"].is_null() {
-                            self.observation.error = Some(rpc_error(&params["turn"]["error"]));
+                            self.observation.error =
+                                Some(self.turn_error(&params["turn"]["error"]));
                         } else if params["turn"]["status"] == "failed" {
                             self.observation.error =
                                 Some(error(EngineErrorKind::Fatal, "Codex turn failed"));
@@ -280,8 +430,15 @@ impl Codex {
                 }
             }
             "error" => {
-                self.observation.error = Some(rpc_error(params.get("error").unwrap_or(params)));
+                let value = params.get("error").unwrap_or(params);
+                // While Codex retries an error itself it is not this run's limit.
+                self.observation.error = Some(if params["willRetry"].as_bool() == Some(true) {
+                    plain_rpc_error(value)
+                } else {
+                    self.turn_error(value)
+                });
             }
+            "account/rateLimits/updated" => self.rate_limits(&params["rateLimits"]),
             _ => {}
         }
         self.observation.progress += 1;
@@ -348,6 +505,16 @@ impl Codex {
         text: String,
     ) -> Result<DeliveryOutcome, EngineError> {
         self.events()?;
+        // Codex already said a hard cap is reached or it cannot authenticate: no turn can run,
+        // so none is started.
+        if let Some(failure) = self.observation.error.clone().filter(|e| {
+            matches!(
+                e.kind,
+                EngineErrorKind::QuotaExhausted | EngineErrorKind::AuthFailed
+            )
+        }) {
+            return Err(failure);
+        }
         let session = self
             .observation
             .session_id
@@ -355,6 +522,7 @@ impl Codex {
             .ok_or_else(|| local("Codex session has not started"))?;
         self.delivery.insert(id.clone(), DeliveryOutcome::Uncertain);
         self.observation.error = None;
+        self.limit_error = None;
         let input = json!([{"type":"text","text":text}]);
         if let Some(turn) = self.turn.clone() {
             match self
@@ -645,6 +813,22 @@ impl Codex {
         }
         self.rpc()?.request("initialize", json!({"clientInfo":{"name":"sluice","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
         self.rpc()?.notify("initialized").await?;
+        // Codex with no credentials at all cannot run a turn: say so before starting one. The
+        // read is local (no token refresh); an app-server without it is not refused.
+        match self.rpc()?.request("account/read", json!({})).await {
+            Ok(reply) if reply["account"].is_null() && reply["requiresOpenaiAuth"] == true => {
+                return Err(Auth {
+                    problem: "not logged in (no credentials)".into(),
+                    ..Auth::login(
+                        Engine::Codex,
+                        "account/read: no account, and the model provider requires OpenAI auth",
+                    )
+                }
+                .error());
+            }
+            Err(e) if e.kind == EngineErrorKind::UnknownAcceptance => return Err(e),
+            _ => {}
+        }
         self.tui = context.tmux_binary.is_some();
         Ok(self.tui.then(|| EngineLaunch {
             argv: profile::tui_argv(&self.options.binary, &socket, session),
@@ -700,6 +884,9 @@ impl EngineAdapter for Codex {
         self.compacted.clear();
         self.delivery.clear();
         self.subscribed = false;
+        self.windows.clear();
+        self.credits.clear();
+        self.limit_error = None;
         let result = self.prepare_inner(context, session).await;
         if result.is_err() {
             let _ = self.close().await;

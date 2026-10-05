@@ -72,6 +72,7 @@ pub(crate) fn error(kind: EngineErrorKind, message: impl Into<String>) -> Engine
     EngineError {
         kind,
         message: message.into(),
+        retry_at: None,
     }
 }
 

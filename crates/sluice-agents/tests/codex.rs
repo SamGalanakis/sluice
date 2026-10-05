@@ -1093,3 +1093,305 @@ async fn imported_home_with_executable_symlink_is_still_rejected() {
     assert!(imported.join("tmp/arg0/apply_patch").is_symlink());
     assert!(adapter.server_pid().is_none());
 }
+
+/// Polls until the observation carries an error, within `limit`.
+async fn errored(
+    adapter: &mut Codex,
+    context: &EngineContext,
+    limit: Duration,
+) -> sluice_agents::engines::EngineObservation {
+    let deadline = Instant::now() + limit;
+    loop {
+        let observation = adapter.observe(context).await.unwrap();
+        if observation.error.is_some() {
+            return observation;
+        }
+        assert!(Instant::now() < deadline, "{observation:?}");
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+fn ends_in_days(message: &str, a: &str, b: &str) -> bool {
+    message.contains(a) || message.contains(b)
+}
+
+#[tokio::test]
+async fn codex_limit_reached_update_fails_the_open_turn_at_once() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "limit-reached");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "task").await;
+    // Codex reports the weekly window used up and the limit reached, and the turn stays open.
+    let observation = errored(&mut adapter, &context, Duration::from_secs(5)).await;
+    assert_eq!(observation.status, EngineStatus::Busy);
+    assert_eq!(observation.turns_completed, 0);
+    let error = observation.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+    assert!(
+        error
+            .message
+            .starts_with("codex: rate limit reached (weekly window); resets 20"),
+        "{}",
+        error.message
+    );
+    assert!(
+        ends_in_days(&error.message, "(in 5d 23h) — ", "(in 6d) — "),
+        "{}",
+        error.message
+    );
+    assert!(error.message.contains(
+        " — wait for the reset or buy credits at https://chatgpt.com/codex/settings/usage, then step_retry (or run the step on another engine). Codex said: account/rateLimits/updated: rate_limit_reached (limit codex)"
+    ), "{}", error.message);
+    assert_eq!(error.retry_at, None);
+    // No further turn starts into a hard cap.
+    let refused = adapter
+        .execute(
+            &context,
+            EngineCommand::DeliverText {
+                id: InputId::Nudge { ordinal: 1 },
+                text: "again".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.kind, EngineErrorKind::QuotaExhausted);
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_usage_limit_error_without_a_reset_is_quota_exhausted() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "usage-limit");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "task").await;
+    let error = completed(&mut adapter, &context, 1).await.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
+    assert_eq!(
+        error.message,
+        format!(
+            "codex: usage limit reached — buy credits at https://chatgpt.com/codex/settings/usage, or wait for it to reset, then step_retry (or run the step on another engine). Codex said: {}",
+            sluice_agents::engines::codex::protocol::USAGE_LIMIT_FIXTURE
+        )
+    );
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_short_rate_limit_stays_transient_with_its_reset() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "rate-limit-soon");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "task").await;
+    let error = completed(&mut adapter, &context, 1).await.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
+    assert!(
+        error
+            .message
+            .starts_with("codex: rate limited (5-hour window); resets 20"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains(
+            " — retrying just after the reset. Codex said: Rate limit reached for gpt-6.1-sol."
+        ),
+        "{}",
+        error.message
+    );
+    let now = sluice_agents::engines::account::now();
+    let retry_at = error
+        .retry_at
+        .expect("a reported reset sets the retry time");
+    assert!(
+        (now + 1..=now + 5).contains(&retry_at),
+        "{retry_at} vs {now}"
+    );
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_limit_and_login_words_in_items_and_ordinary_rate_limit_updates_do_not_fail() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "limit-words");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "task").await;
+    let observation = completed(&mut adapter, &context, 1).await;
+    assert_eq!(observation.error, None);
+    assert_eq!(
+        observation.final_text,
+        sluice_agents::engines::codex::protocol::ACCOUNT_WORDS_FIXTURE
+    );
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_revoked_token_fails_as_auth_failed_and_starts_no_further_turn() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "unauthorized");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "task").await;
+    let error = errored(&mut adapter, &context, Duration::from_secs(5))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+    assert_eq!(
+        error.message,
+        format!(
+            "codex: not logged in (token revoked) — run `codex login` on this host, then step_retry. Codex said: {}",
+            sluice_agents::engines::codex::protocol::REVOKED_FIXTURE
+        )
+    );
+    assert_eq!(error.retry_at, None);
+    let refused = adapter
+        .execute(
+            &context,
+            EngineCommand::DeliverText {
+                id: InputId::Nudge { ordinal: 1 },
+                text: "again".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.kind, EngineErrorKind::AuthFailed);
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_401_text_fails_as_auth_failed_with_the_token_masked() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "unauthorized-401");
+    start(&mut adapter, &context).await;
+    text(&mut adapter, &context, InputId::Task, "task").await;
+    let error = errored(&mut adapter, &context, Duration::from_secs(5))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+    assert_eq!(
+        error.message,
+        format!(
+            "codex: not logged in (no credentials) — run `codex login` on this host, then step_retry. Codex said: {}, sent Authorization: Bearer [redacted]",
+            sluice_agents::engines::codex::protocol::UNAUTHORIZED_FIXTURE
+        )
+    );
+    assert!(!error.message.contains("eyJ"), "{}", error.message);
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_without_credentials_fails_as_auth_failed_before_any_turn() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "logged-out");
+    let error = adapter.prepare(&context, None).await.unwrap_err();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+    assert!(
+        error.message.starts_with(
+            "codex: not logged in (no credentials) — run `codex login` on this host, then step_retry. Codex said: account/read"
+        ),
+        "{}",
+        error.message
+    );
+    let wire = fs::read_to_string(context.run_dir.join("codex-wire.jsonl")).unwrap();
+    assert!(wire.contains("account/read"));
+    assert!(!wire.contains("thread/start"));
+    assert!(adapter.server_pid().is_none());
+}
+
+/// Runs the supervisor on a Codex scenario that fails at once, and checks it neither retried
+/// nor replayed and kept the session.
+async fn supervisor_fails_at_once(
+    scenario: &str,
+    kind: sluice_agents::supervisor::FailureKind,
+) -> sluice_agents::supervisor::AgentFailure {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, scenario);
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd;
+    cfg.run_dir = context.run_dir;
+    cfg.limits.stall = Duration::from_secs(10);
+    cfg.limits.wall = Duration::from_secs(30);
+    let stall = cfg.limits.stall;
+    let directory = cfg.run_dir.clone();
+    let mut host = acceptance::Host::submitted();
+    let started = Instant::now();
+    let failure = acceptance::run(cfg, &mut adapter, &mut host)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.kind, kind, "{failure}");
+    assert!(started.elapsed() < stall / 2, "{:?}", started.elapsed());
+    assert_eq!(failure.session.as_deref(), Some("fixture-thread"));
+    assert!(failure.to_string().contains("session: fixture-thread"));
+    let checkpoint = sluice_agents::supervisor::Checkpoint::read(&directory)
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.internal_attempt, 1);
+    assert_eq!(checkpoint.delivery.entries.len(), 1);
+    assert_eq!(checkpoint.delivery.entries[0].tries, 1);
+    assert!(adapter.server_pid().is_none());
+    assert_eq!(host.cleanups, 1);
+    failure
+}
+
+#[tokio::test]
+async fn supervisor_codex_limit_reached_fails_at_once_without_retry() {
+    let failure = supervisor_fails_at_once(
+        "limit-reached",
+        sluice_agents::supervisor::FailureKind::QuotaExhausted,
+    )
+    .await;
+    assert!(
+        failure
+            .message
+            .starts_with("codex: rate limit reached (weekly window); resets ")
+    );
+}
+
+#[tokio::test]
+async fn supervisor_codex_auth_failure_fails_at_once_without_retry() {
+    let failure = supervisor_fails_at_once(
+        "unauthorized",
+        sluice_agents::supervisor::FailureKind::AuthFailed,
+    )
+    .await;
+    assert!(
+        failure
+            .message
+            .starts_with("codex: not logged in (token revoked) — run `codex login`")
+    );
+}
+
+#[tokio::test]
+async fn supervisor_codex_short_rate_limit_backs_off_until_its_reset() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "rate-limit-soon");
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd;
+    cfg.run_dir = context.run_dir;
+    cfg.limits.stall = Duration::from_secs(10);
+    cfg.limits.wall = Duration::from_secs(60);
+    // The fixed backoff would outlast the test; the reported reset is two seconds away.
+    cfg.retry.backoff = Duration::from_secs(600);
+    let directory = cfg.run_dir.clone();
+    let mut host = acceptance::Host::submitted();
+    // The agent submits in the resumed session, after the backoff.
+    host.submit_when.as_mut().unwrap().0 = sluice_agents::supervisor::State::Backoff;
+    let started = Instant::now();
+    let result = acceptance::run(cfg, &mut adapter, &mut host).await.unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(result.session, "fixture-thread");
+    assert!(
+        (Duration::from_secs(2)..Duration::from_secs(30)).contains(&elapsed),
+        "{elapsed:?}"
+    );
+    let checkpoint = sluice_agents::supervisor::Checkpoint::read(&directory)
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.internal_attempt, 2);
+    assert!(
+        checkpoint
+            .delivery
+            .entries
+            .iter()
+            .any(|e| e.id == InputId::Continue { attempt: 2 })
+    );
+}

@@ -224,13 +224,18 @@ pub fn working(pane: &str) -> bool {
         .iter()
         .any(|s| bottom.contains(s))
 }
-/// Devin stopped on its quota-exhausted notice: 3000.11.3 prints a `⚠︎ Quota exhausted` title
-/// row with the indented explanation (`Your weekly usage quota has been exhausted. Visit
+/// Devin stopped on an account notice: out of quota, 3000.11.3 prints a `⚠︎ Quota exhausted`
+/// title row with the indented explanation (`Your weekly usage quota has been exhausted. Visit
 /// <usage URL> ... (trace ID: ...)`) under it, sends no further hook and leaves the composer
-/// idle. Only the transcript's last entry right above that idle composer counts, with no
-/// spinner, so the words quoted in tool output (gutter-prefixed), in an earlier entry or in a
-/// draft cannot match. Returns the notice's text.
-pub fn quota_exhausted(pane: &str) -> Option<String> {
+/// idle. Its other account titles (from the binary's strings) are `Usage limit reached`,
+/// `Usage paused` and `Authentication required` (`Your session is no longer authenticated. Run
+/// `/login` to re-authenticate here (or `devin auth login`), then send a message to continue`).
+/// Only the transcript's last entry right above that idle composer counts, with no spinner, so
+/// the words quoted in tool output (gutter-prefixed), in an earlier entry or in a draft cannot
+/// match. Returns the failure with Devin's text: a usage limit (Devin shows no reset, so it is
+/// always a hard cap) or an auth failure.
+pub fn account_notice(pane: &str) -> Option<crate::engines::EngineError> {
+    use crate::engines::account::{Auth, Cap, Engine, Limit};
     let pane = strip_ansi(pane);
     if working(&pane) {
         return None;
@@ -265,22 +270,58 @@ pub fn quota_exhausted(pane: &str) -> Option<String> {
         .rposition(|l| l.trim().is_empty())
         .map_or(0, |i| i + 1);
     let entry = &above[start..end];
-    let title = entry.iter().position(|l| {
-        l.trim()
+    const TITLES: [&str; 4] = [
+        "quota exhausted",
+        "usage limit reached",
+        "usage paused",
+        "authentication required",
+    ];
+    let (row, title) = entry.iter().enumerate().find_map(|(i, l)| {
+        let title = l
+            .trim()
             .trim_start_matches(['⚠', '\u{fe0e}', '\u{fe0f}'])
             .trim()
-            .eq_ignore_ascii_case("quota exhausted")
+            .to_lowercase();
+        TITLES.contains(&title.as_str()).then_some((i, title))
     })?;
-    let detail = entry[title + 1..]
+    let detail = entry[row + 1..]
         .iter()
         .take_while(|l| l.starts_with(char::is_whitespace))
         .map(|l| l.trim())
         .collect::<Vec<_>>()
         .join(" ");
-    detail
-        .to_lowercase()
-        .contains("usage quota")
-        .then(|| format!("Devin quota exhausted: {detail}"))
+    let lower = detail.to_lowercase();
+    match title.as_str() {
+        "authentication required" => Some(
+            Auth::login(
+                Engine::Devin,
+                if detail.is_empty() {
+                    "Authentication required"
+                } else {
+                    &detail
+                },
+            )
+            .error(),
+        ),
+        "quota exhausted" if !lower.contains("usage quota") => None,
+        _ => {
+            let period = ["weekly", "monthly", "daily"]
+                .into_iter()
+                .find(|p| lower.contains(&format!("{p} usage quota")));
+            let what = match (title.as_str(), period) {
+                ("quota exhausted", Some(period)) => format!("{period} usage quota exhausted"),
+                ("quota exhausted", None) => "usage quota exhausted".into(),
+                (title, _) => title.into(),
+            };
+            Some(
+                Limit {
+                    what: Some(what),
+                    ..Limit::new(Engine::Devin, Cap::Usage, detail)
+                }
+                .classify(0, crate::engines::account::DEFAULT_THRESHOLD),
+            )
+        }
+    }
 }
 /// Input submitted while Devin works waits in its queue, shown with `queued` and `send now`
 /// until the turn ends; Enter on the empty composer sends it at once by interrupting the turn.

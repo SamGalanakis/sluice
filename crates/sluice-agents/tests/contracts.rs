@@ -815,6 +815,7 @@ impl AgentFactory for CompositionFactory {
             end.error = Some(EngineError {
                 kind: EngineErrorKind::Transient,
                 message: "capacity".into(),
+                retry_at: None,
             });
         }
         let engine = ScriptedEngine::new(vec![
@@ -1118,4 +1119,138 @@ async fn the_work_tree_summary_counts_dirty_paths_and_survives_git_absent() {
         note.text()
     );
     assert!(note.text().ends_with(" and 6 more."), "{}", note.text());
+}
+
+#[test]
+fn account_limits_split_at_the_threshold_and_render_their_reset() {
+    use sluice_agents::engines::account::{self, Cap, Engine, Limit};
+    let now = 1_791_000_000;
+    let limit = |cap, resets_at| Limit {
+        window: Some(account::window(10080)),
+        resets_at,
+        ..Limit::new(Engine::Codex, cap, "limit text")
+    };
+    let threshold = account::DEFAULT_THRESHOLD;
+    // No known reset: a usage limit is a hard cap, a rate limit keeps the fixed backoff.
+    let hard = limit(Cap::Usage, None).classify(now, threshold);
+    assert_eq!(hard.kind, EngineErrorKind::QuotaExhausted);
+    assert_eq!(
+        hard.message,
+        "codex: usage limit reached (weekly window) — buy credits at https://chatgpt.com/codex/settings/usage, or wait for it to reset, then step_retry (or run the step on another engine). Codex said: limit text"
+    );
+    let short = limit(Cap::Rate, None).classify(now, threshold);
+    assert_eq!(short.kind, EngineErrorKind::Transient);
+    assert_eq!(short.retry_at, None);
+    assert_eq!(
+        short.message,
+        "codex: rate limited (weekly window) — retrying after the standard backoff. Codex said: limit text"
+    );
+    // A known reset decides for either cap: beyond the threshold it is a hard cap.
+    for cap in [Cap::Usage, Cap::Rate] {
+        let far = limit(cap, Some(now + 15 * 60 + 1)).classify(now, threshold);
+        assert_eq!(far.kind, EngineErrorKind::QuotaExhausted);
+        assert_eq!(far.retry_at, None);
+        let near = limit(cap, Some(now + 15 * 60)).classify(now, threshold);
+        assert_eq!(near.kind, EngineErrorKind::Transient);
+        assert_eq!(near.retry_at, Some(now + 15 * 60 + account::RESET_MARGIN));
+        // A reset already past retries at once.
+        let past = limit(cap, Some(now - 10)).classify(now, threshold);
+        assert_eq!(past.retry_at, Some(now + account::RESET_MARGIN));
+    }
+    let weekly = limit(Cap::Rate, Some(now + 6 * 86400 + 3 * 3600)).classify(now, threshold);
+    assert_eq!(
+        weekly.message,
+        "codex: rate limit reached (weekly window); resets 2026-10-09T07:00Z (in 6d 3h) — wait for the reset or buy credits at https://chatgpt.com/codex/settings/usage, then step_retry (or run the step on another engine). Codex said: limit text"
+    );
+    assert_eq!(account::stamp(1_791_000_000), "2026-10-03T04:00Z");
+    assert_eq!(account::relative(now + 40, now), "in 40s");
+    assert_eq!(account::relative(now + 125, now), "in 2m");
+    assert_eq!(account::relative(now + 3 * 3600, now), "in 3h");
+    assert_eq!(account::relative(now + 7500, now), "in 2h 5m");
+    assert_eq!(account::relative(now + 2 * 86400, now), "in 2d");
+    assert_eq!(account::relative(now, now), "now");
+    assert_eq!(account::window(300), "5-hour window");
+    assert_eq!(account::window(43200), "30-day window");
+    assert_eq!(
+        account::parse_threshold("2.5").unwrap(),
+        std::time::Duration::from_secs(150)
+    );
+    assert!(account::parse_threshold("-1").is_err());
+    assert!(account::parse_threshold("soon").is_err());
+}
+
+#[test]
+fn account_auth_messages_name_the_problem_and_the_fix() {
+    use sluice_agents::engines::account::{Auth, Engine, login_problem};
+    let error = Auth::login(
+        Engine::Codex,
+        "Your access token could not be refreshed. Please log out and sign in again.",
+    )
+    .error();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed);
+    assert_eq!(
+        error.message,
+        "codex: not logged in (token could not be refreshed) — run `codex login` on this host, then step_retry. Codex said: Your access token could not be refreshed. Please log out and sign in again."
+    );
+    assert_eq!(error.retry_at, None);
+    for (text, problem) in [
+        (
+            "Failed to authenticate: OAuth session expired",
+            "not logged in (token expired)",
+        ),
+        (
+            "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+            "not logged in (signed out or switched account elsewhere)",
+        ),
+        (
+            "Your session is no longer authenticated. Run `/login`",
+            "not logged in (session no longer authenticated)",
+        ),
+        (
+            "Invalid API key \u{b7} Fix external API key",
+            "not logged in (invalid API key)",
+        ),
+        ("Something else", "not logged in (unauthorized)"),
+    ] {
+        assert_eq!(login_problem(text), problem, "{text}");
+    }
+    // An empty engine text leaves no `said` clause.
+    let bare = Auth::login(Engine::Devin, "").error();
+    assert_eq!(
+        bare.message,
+        "devin: not logged in (unauthorized) — run `devin auth login` on this host (or /login inside `devin`), then step_retry."
+    );
+}
+
+#[test]
+fn account_messages_mask_token_like_text_and_keep_ids() {
+    use sluice_agents::engines::account::{Auth, Cap, Engine, Limit, redact};
+    let jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    let text = format!(
+        "unexpected status 401 Unauthorized: Authorization: Bearer {jwt}, key sk-proj-AbCdEfGh1234567890IjKl, access_token=ya29.a0AfH6SMBx1234abcd, \"refresh_token\": \"rt_0123456789abcdefXYZ\", raw 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddccbbaa, trace ID: 202f291a871d718834e52771c111f102, request id: req_07f626009a4646dfb34bb8ac40e63cb7, cf-ray: a3f548979a7d55c4-PRG, session 01a10b56-8977-7302-9e37-9379c79804d8."
+    );
+    let masked = redact(&text);
+    for secret in [
+        "eyJhbGci",
+        "sk-proj-AbCd",
+        "ya29.a0AfH6",
+        "rt_0123456789",
+        "9f8e7d6c5b4a3928",
+    ] {
+        assert!(!masked.contains(secret), "{secret} in {masked}");
+    }
+    assert_eq!(
+        masked,
+        "unexpected status 401 Unauthorized: Authorization: Bearer [redacted], key [redacted], access_token=[redacted], \"refresh_token\": \"[redacted]\", raw [redacted], trace ID: 202f291a871d718834e52771c111f102, request id: req_07f626009a4646dfb34bb8ac40e63cb7, cf-ray: a3f548979a7d55c4-PRG, session 01a10b56-8977-7302-9e37-9379c79804d8."
+    );
+    // Both kinds of account message carry the masked text only.
+    let auth = Auth::login(Engine::Claude, &text).error();
+    let limit = Limit::new(Engine::Devin, Cap::Usage, &text).classify(0, std::time::Duration::ZERO);
+    for message in [auth.message, limit.message] {
+        assert!(message.ends_with(&masked), "{message}");
+        assert!(!message.contains("eyJ"), "{message}");
+    }
+    // Prose, URLs and short words pass untouched.
+    let prose = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Apr 8th, 2026 10:13 AM.";
+    assert_eq!(redact(prose), prose);
 }

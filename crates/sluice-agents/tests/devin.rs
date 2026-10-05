@@ -1128,13 +1128,19 @@ fn devin_working_pane_reads_the_release_spinner_and_busy_placeholder() {
 
 #[test]
 fn devin_quota_exhausted_notice_is_the_last_entry_above_an_idle_composer() {
-    use protocol::quota_exhausted;
+    let quota_exhausted = |pane: &str| {
+        protocol::account_notice(pane).map(|failure| {
+            assert_eq!(failure.kind, EngineErrorKind::QuotaExhausted);
+            failure.message
+        })
+    };
     // A live Fusion pane out of weekly quota: the notice follows each prompt and the composer
     // stays idle; Devin sent no hook after the prompt.
     let real = include_str!("fixtures/devin/real-quota-exhausted-pane.txt");
     let notice = quota_exhausted(real).unwrap();
     assert!(
-        notice.starts_with("Devin quota exhausted: Your weekly usage quota has been exhausted.")
+        notice.starts_with("devin: weekly usage quota exhausted — buy usage or turn on auto-reload at https://app.devin.ai/settings/usage, or wait for it to reset, then step_retry (or run the step on another engine). Devin said: Your weekly usage quota has been exhausted."),
+        "{notice}"
     );
     assert!(notice.contains("Visit https://app.devin.ai/settings/usage to purchase"));
     assert!(notice.ends_with("(trace ID: e9458d5f1c1f53d495a3c90d6af85159)"));
@@ -1198,6 +1204,106 @@ fn devin_quota_exhausted_notice_is_the_last_entry_above_an_idle_composer() {
     ] {
         assert_eq!(quota_exhausted(pane), None);
     }
+}
+
+#[test]
+fn devin_authentication_required_notice_is_the_last_entry_above_an_idle_composer() {
+    // The real quota pane with its last notice swapped for 3000.11.3's auth notice.
+    let real = include_str!("fixtures/devin/real-quota-exhausted-pane.txt");
+    let last = real.rfind(" \u{26a0}\u{fe0e} Quota exhausted").unwrap();
+    let (before, rows) = real.split_at(last);
+    let end = rows.find("\n\n").unwrap();
+    let auth = format!(
+        "{before} \u{26a0}\u{fe0e} Authentication required\n   Your session is no longer authenticated. Run `/login` to re-authenticate here (or\n   `devin auth login`), then send a message to continue{}",
+        &rows[end..]
+    );
+    let failure = protocol::account_notice(&auth).unwrap();
+    assert_eq!(failure.kind, EngineErrorKind::AuthFailed);
+    assert_eq!(
+        failure.message,
+        "devin: not logged in (session no longer authenticated) — run `devin auth login` on this host (or /login inside `devin`), then step_retry. Devin said: Your session is no longer authenticated. Run `/login` to re-authenticate here (or `devin auth login`), then send a message to continue"
+    );
+    // The same notice quoted in tool output or an agent message, or as an earlier entry.
+    for quoted in [
+        " \u{2502} \u{26a0}\u{fe0e} Authentication required",
+        " \u{25cf} \u{26a0}\u{fe0e} Authentication required",
+    ] {
+        let pane = auth.replacen(" \u{26a0}\u{fe0e} Authentication required", quoted, 1);
+        assert_eq!(protocol::account_notice(&pane), None, "{quoted}");
+    }
+    let rule = "\u{2500}".repeat(20);
+    let later = auth.replacen(
+        &format!("\n\n{rule}"),
+        &format!("\n\n\u{276d} Continue the task\n\n{rule}"),
+        1,
+    );
+    assert_ne!(later, auth);
+    assert_eq!(protocol::account_notice(&later), None);
+    let idle = "Ask Devin to build features, fix bugs, or work on your code";
+    assert_eq!(
+        protocol::account_notice(&auth.replace(idle, "Guide Devin while it works")),
+        None
+    );
+}
+
+#[tokio::test]
+async fn devin_authentication_required_after_a_taken_prompt_fails_the_turn() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({"turns":[{"auth":true}]})));
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let _pane = Pane::start(&ctx, launch).await;
+    deliver(&mut adapter, &ctx, InputId::Task, "Start the task").await;
+    let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+    let error = failed.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error}");
+    assert!(
+        error.message.starts_with(
+            "devin: not logged in (session no longer authenticated) — run `devin auth login`"
+        ),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        (failed.status, failed.turns_started, failed.turns_completed),
+        (EngineStatus::Busy, 1, 0)
+    );
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn supervisor_devin_authentication_required_fails_at_once_without_retry() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({"turns":[{"auth":true}]})));
+    let cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let stall = cfg.limits.stall;
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    let started = Instant::now();
+    let failure = supervise_fixture(&mut adapter, cfg, &mut host)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.kind,
+        sluice_agents::supervisor::FailureKind::AuthFailed,
+        "{failure}"
+    );
+    assert!(started.elapsed() < stall / 2, "{:?}", started.elapsed());
+    assert!(
+        failure
+            .message
+            .contains("run `devin auth login` on this host")
+    );
+    assert_eq!(failure.session.as_deref(), Some("fixture-devin-session"));
+    assert_eq!(host.cleanups, 1);
+    let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+    assert_eq!(checkpoint.internal_attempt, 1);
+    assert_eq!(checkpoint.delivery.entries.len(), 1);
+    assert_eq!(checkpoint.delivery.entries[0].tries, 1);
+    assert_eq!(fixture_prompts(&root).len(), 1);
 }
 
 #[tokio::test]

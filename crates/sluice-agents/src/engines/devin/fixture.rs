@@ -412,7 +412,9 @@ enum Flow {
 /// Fusion lead works on after its sidekick's Stop: `{"ms": delay after the previous event,
 /// "hook": "PreToolUse" | "PostToolUse" | "Stop", "reply"?, "touch"?: file in cwd}`. A `quota`
 /// turn takes its prompt and then, like 3000.11.3 out of usage quota, shows the
-/// quota-exhausted notice above an idle composer and sends no further hook.
+/// quota-exhausted notice above an idle composer and sends no further hook; an `auth` turn
+/// does the same with the `Authentication required` notice of a session no longer
+/// authenticated.
 struct Turns<'a> {
     config: &'a Value,
     settings: &'a Value,
@@ -452,6 +454,15 @@ impl Turns<'_> {
                 self.sid,
                 json!({"prompt":text,"prompt_id":prompt_id}),
             )?;
+        }
+        if turn["auth"].as_bool().unwrap_or(false) {
+            self.notice = format!(
+                "\u{276d} {}\r\n\r\n \u{26a0}\u{fe0e} Authentication required\r\n   {}\r\n   {}\r\n\r\n",
+                protocol::needle(&text),
+                "Your session is no longer authenticated. Run `/login` to re-authenticate here (or",
+                "`devin auth login`), then send a message to continue"
+            );
+            return Ok(Flow::Continue);
         }
         if turn["quota"].as_bool().unwrap_or(false) {
             self.notice = format!(

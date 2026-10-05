@@ -1337,7 +1337,8 @@ shell quoting, and, unless `listen: false`, how to `ask` the orchestrator, `say`
 engine's hooks, nudges a stalled session, and ends it when the agent is done. The result carries
 `session` (pass it back to resume) and `git` facts `{head_before, head_after, commits, dirty}`
 of `cwd`. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns
-retry up to 3 times, 600 s apart.
+retry a transient failure up to 3 times, 600 s apart, resuming the session; a rate limit whose
+reset the engine reported waits until just after that reset instead.
 
 The agent is done when it submits: the supervisor stops the session as soon as the run's
 valid submission is stored, busy or not, and returns the result (§6.4); `final` is the agent's
@@ -1356,20 +1357,84 @@ pasted into Devin is accepted by the `UserPromptSubmit` that carries it. Input p
 Devin works waits in its queue until the turn ends. It fails the run as `UnknownAcceptance` only
 after 20 s with no hook, no working pane and no sight of it queued.
 
-Devin out of usage quota prints a `⚠︎ Quota exhausted` notice (`Your weekly usage quota has been
-exhausted. Visit https://app.devin.ai/settings/usage ... (trace ID: ...)`) after the prompt it
-took, sends no further hook and leaves its composer idle. While a turn is open or input is pasted,
-each observation reads the pane, and when that notice is the last entry right above the idle
-composer (not tool output, an earlier entry or a quote) the run fails at once with `agent_failure`
-kind `QuotaExhausted`, the notice's text as its message and the session kept, instead of at the
-stall cap. It is not transient: the supervisor neither retries it nor replays input; retry the step
-once quota is added, with its `session` bound to resume.
+An engine's account problems end the run at once, typed: a hard usage cap with `agent_failure`
+kind `QuotaExhausted`, an auth failure (logged out, a token expired or revoked, the account
+barred) with kind `AuthFailed`. Neither is transient: the supervisor neither retries nor replays
+input, and the failure keeps the session, so the step can be retried with its `session` bound
+once the owner has acted (after the reset or with quota added; after signing in again on this
+host), or run on another engine. A hard cap is a usage, plan, spend or credit limit whose reset
+is unknown, or any limit whose reset is more than `SLUICE_AGENT_QUOTA_RESET_MIN` (15) away. A
+short rate limit (its reset within the threshold, or a rate limit with no known reset) stays
+transient; with a known reset the retry starts just after it (2 s) instead of 600 s later.
+
+The message says what happened and what to do, then gives the engine's own text: `<engine>:
+<what happened>[ (<window>)][; resets <YYYY-MM-DDTHH:MMZ> (in <relative>)] — <what to do>, then
+step_retry. <Engine> said: <text>`, for example ``codex: not logged in (token revoked) — run
+`codex login` on this host, then step_retry. Codex said: Your access token could not be
+refreshed because your refresh token was revoked. …``, `claude: weekly limit reached
+(seven_day); resets 2026-10-08T23:00Z (in 3d) — wait for the reset or buy usage credits at
+https://claude.ai/settings/usage, then step_retry (or run the step on another engine). Claude
+said: …` or `devin: weekly usage quota exhausted — buy usage or turn on auto-reload at
+https://app.devin.ai/settings/usage, or wait for it to reset, then step_retry (…). Devin said:
+…`. A short rate limit's message ends its head with `— retrying just after the reset` (or `after
+the standard backoff`). The engine's text is cut to 1000 characters and anything token-like in it
+is masked as `[redacted]`: a run with a credential prefix (`sk-`, `eyJ`, `ghp_`, `ya29.`, …), one
+of 40 or more characters with letters and digits, or one with a digit after a credential word
+(`Bearer`, `token=`, `api_key`, …); a 32-hex trace id, a `req_…` request id or a UUID stays. The
+run's log (`stderr.log`) records the same text under the kind (`agent failed: AuthFailed: …`),
+and each transient backoff with its wait. Each engine's signals, structured first:
+
+- Codex: a turn's error (`turn/completed` or `turn/failed`, or an `error` notification Codex
+  will not retry) with `codexErrorInfo` `unauthorized`, or an HTTP failure with
+  `httpStatusCode` 401, is an auth failure; `usageLimitExceeded` is a usage limit and
+  `rateLimitExceeded` a rate limit, their reset taken from the used-up window (`usedPercent` 100,
+  `windowDurationMins`, `resetsAt`) of the latest `account/rateLimits/updated`, unless that
+  limit's `credits` still carry on (`hasCredits` or `unlimited`). That update with
+  `rateLimitReachedType` set and no credits fails the run at once, even with the turn still
+  open: a `workspace_*_credits_depleted` or `workspace_*_usage_limit_reached` type is a usage
+  limit, `rate_limit_reached` a rate limit. After either failure no further turn starts. At
+  launch `account/read` with no account while the provider requires OpenAI auth fails as
+  `AuthFailed` before any turn. Failing the structured fields, an error object's message in
+  Codex's own words: `You've hit your usage limit. … try again at …`, `Quota exceeded. Check your
+  plan and billing details.`, `Your workspace is out of credits.` and the like are a usage limit
+  with no known reset; `Your access token could not be refreshed …`, `Your authentication session
+  could not be refreshed …`, `unexpected status 401 Unauthorized: …` and the like are an auth
+  failure.
+- Claude: the API error's category, from the transcript's error entry (`isApiErrorMessage`,
+  `error`) or `StopFailure`'s `error`: `authentication_failed` is an auth failure (except
+  Claude's own `Authentication error · This may be a temporary network issue`, which stays
+  transient), as are `oauth_org_not_allowed`, `account_on_hold`, `verification_required` and
+  `cloud_credential_error` with their own fix; `billing_error` is a usage limit with no reset;
+  `quotaLimits` `{status: "rejected", rateLimitType, resetsAt}` (`five_hour`, `seven_day`,
+  `seven_day_opus`, …) is a usage limit with that reset; a `rate_limit` error whose text starts
+  with Claude's limit wording (`You've hit your …`, `You've reached your …`, `You're out of usage
+  credits`, `Claude AI usage limit reached|<epoch>`, …) is a usage limit. With no category (or
+  `invalid_request`, `unknown`), text starting with Claude's login wording (`Not logged in`,
+  `Login expired`, `OAuth token revoked`, `Invalid API key`, `Please run /login`, …) is an auth
+  failure. The entry, when read, decides over the hook. Any other 429 stays transient. Logged
+  out, Claude opens on its login screen (`Select login method:`, with no composer): the run
+  fails as `AuthFailed` before any input is taken.
+- Devin, out of quota or no longer authenticated, prints a notice after the prompt it took
+  (`⚠︎ Quota exhausted` with `Your weekly usage quota has been exhausted. Visit
+  https://app.devin.ai/settings/usage ... (trace ID: ...)`, `Usage limit reached`, `Usage
+  paused`; `Authentication required` with `Your session is no longer authenticated. Run /login
+  …`), sends no further hook and leaves its composer idle. While a turn is open or input is
+  pasted, each observation reads the pane, and when such a notice is the last entry right above
+  the idle composer (not tool output, an earlier entry or a quote) it is a usage limit with no
+  reset or an auth failure, so the run fails at once instead of at the stall cap.
+
+Only an engine's error channels are read (Codex's error objects, rate-limit updates and account,
+Claude's API error entry, `StopFailure` and login screen, Devin's last pane entry), and text only
+at its start, so the words in tool output or the agent's own prose never match. `sluice doctor`
+probes each engine's version only, in a scratch home that holds no credential, so it does not
+report auth.
 
 Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
 (600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
 `SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),
 `SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_WAIT_MIN` (90), `SLUICE_AGENT_DIALOG_S` (60),
-`SLUICE_AGENT_QUIET_MIN` (45), `SLUICE_AGENT_WORK_MIN` (10), `SLUICE_AGENT_NUDGES`.
+`SLUICE_AGENT_QUIET_MIN` (45), `SLUICE_AGENT_WORK_MIN` (10), `SLUICE_AGENT_NUDGES`,
+`SLUICE_AGENT_QUOTA_RESET_MIN` (15; 0 makes every limit with a known reset a hard cap).
 
 ### 15.1 Choosing a model
 

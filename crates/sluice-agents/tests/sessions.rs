@@ -213,6 +213,7 @@ async fn commit_transient_commit_retains_run_session_baseline_and_delivery_once_
             Some(EngineError {
                 kind: EngineErrorKind::Transient,
                 message: "capacity".into(),
+                retry_at: None,
             }),
         ),
         frame(
@@ -423,6 +424,7 @@ async fn only_reported_missing_session_allows_fresh_fallback_and_records_note() 
         initial.error = Some(EngineError {
             kind,
             message: "session not found".into(),
+            retry_at: None,
         });
         let frames = vec![
             initial,

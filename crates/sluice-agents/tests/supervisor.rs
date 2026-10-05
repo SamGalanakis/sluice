@@ -400,6 +400,7 @@ async fn a_submission_wins_over_a_later_transient() {
         frames[2].observation.error = Some(EngineError {
             kind: EngineErrorKind::Transient,
             message: "capacity".into(),
+            retry_at: None,
         });
         frames[2].observation.waiting = Some("shell".into());
         let mut engine = ScriptedEngine::new(frames);
@@ -530,6 +531,7 @@ async fn cancellation_during_backoff_is_immediate_and_never_resumes() {
     frames[2].observation.error = Some(EngineError {
         kind: EngineErrorKind::Transient,
         message: "rate limit".into(),
+        retry_at: None,
     });
     let mut engine = ScriptedEngine::new(frames);
     let mut host = Host::new();
@@ -890,6 +892,7 @@ fn a_valid_submission_ends_the_session_at_once_and_only_unsubmitted_agents_get_g
     failed.error = Some(EngineError {
         kind: EngineErrorKind::Fatal,
         message: "boom".into(),
+        retry_at: None,
     });
     for o in [busy, waiting, failed, observation(EngineStatus::Idle, 1, 1)] {
         for reports_waiting in [true, false] {
@@ -974,6 +977,7 @@ fn engine_error_precedes_queued_live_delivery_and_early_exit_never_finishes() {
     o.error = Some(EngineError {
         kind: EngineErrorKind::Transient,
         message: "capacity".into(),
+        retry_at: None,
     });
     assert_eq!(
         machine.update(Duration::ZERO, &o, &[]).unwrap(),

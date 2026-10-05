@@ -258,6 +258,7 @@ pub fn launch_model(
         .map_err(|message| EngineError {
             kind: EngineErrorKind::CapabilityMismatch,
             message,
+            retry_at: None,
         })
 }
 
@@ -561,6 +562,7 @@ pub(crate) async fn listing(
     let fail = |message: String| EngineError {
         kind: EngineErrorKind::Fatal,
         message: format!("could not list {what}: {message}"),
+        retry_at: None,
     };
     command
         .kill_on_drop(true)

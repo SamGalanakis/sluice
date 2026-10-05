@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod account;
 pub mod claude;
 pub mod codex;
 pub mod devin;
@@ -62,9 +63,13 @@ pub enum EngineErrorKind {
     MissingSession,
     CapabilityMismatch,
     UnknownAcceptance,
-    /// The engine's account is out of usage quota: no turn can run until the owner adds
-    /// quota, so retrying or replaying input here cannot help.
+    /// The engine hit a hard usage cap (a usage, plan or credit limit, or any limit whose reset
+    /// is further away than the engine's quota threshold): no turn can run until it resets or
+    /// the owner adds quota, so retrying or replaying input here cannot help. See `account`.
     QuotaExhausted,
+    /// The engine cannot authenticate (logged out, a token expired or revoked, the account
+    /// barred): no turn can run until the owner signs in again on this host. See `account`.
+    AuthFailed,
     Fatal,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +77,10 @@ pub enum EngineErrorKind {
 pub struct EngineError {
     pub kind: EngineErrorKind,
     pub message: String,
+    /// For a `Transient` rate limit whose reset the engine reported: the Unix second, just
+    /// after that reset, at which a retry should start instead of the fixed backoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<u64>,
 }
 impl std::fmt::Display for EngineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -167,6 +176,7 @@ pub trait EngineAdapter: Send {
         Err(EngineError {
             kind: EngineErrorKind::CapabilityMismatch,
             message: "engine hooks are unsupported".into(),
+            retry_at: None,
         })
     }
     fn profile(&self) -> EngineProfile;

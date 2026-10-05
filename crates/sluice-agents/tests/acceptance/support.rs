@@ -324,6 +324,7 @@ pub async fn scenario(name: &str, engine_name: &str) {
             frames[2].observation.error = Some(EngineError {
                 kind: EngineErrorKind::Transient,
                 message: "fixture capacity".into(),
+                retry_at: None,
             });
             host.submit_when = None;
             if name == "retry_exhaustion" {
@@ -503,6 +504,7 @@ pub async fn session_policy(engine_name: &str) {
             observation(EngineStatus::Starting, 0, 0),
         );
         initial.error = Some(EngineError {
+            retry_at: None,
             kind: if case == "gone" {
                 EngineErrorKind::MissingSession
             } else {
@@ -615,6 +617,7 @@ pub async fn transient_commits(engine_name: &str) {
     frames[2].observation.error = Some(EngineError {
         kind: EngineErrorKind::Transient,
         message: "capacity after commit".into(),
+        retry_at: None,
     });
     frames.push(frame(
         Some(EngineCommand::Resume {

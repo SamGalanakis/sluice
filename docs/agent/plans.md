@@ -103,10 +103,30 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   what it should have.
 - A run that ends without a valid submission (its agent exited, or stopped after its
   nudges) fails the step with `exited_without_submit`, carrying the agent's `session`.
-- A Devin run that hits Devin's usage quota fails the step at once with `agent_failure` kind
-  `QuotaExhausted`; its message is Devin's notice (usage URL and trace id) and it carries the
-  `session`. Nothing retries it: once quota is added, `step_retry` with the step's `session`
-  bound to it to resume, or run the step on another engine.
+- An engine's account problem fails the step at once with `agent_failure`, carrying the
+  `session`, and nothing inside the run retries it:
+  - kind `QuotaExhausted`: a hard usage cap (Codex, Claude or Devin: a usage, plan or credit
+    limit, or any limit resetting more than 15 minutes away);
+  - kind `AuthFailed`: the engine cannot authenticate on this host (logged out, a token expired
+    or revoked, the account barred).
+
+  The message says what happened, what the owner must do and when it resets if known, then the
+  engine's own text (secrets masked), e.g. ``codex: not logged in (token revoked) — run `codex
+  login` on this host, then step_retry. Codex said: …`` or `claude: weekly limit reached
+  (seven_day); resets 2026-10-08T23:00Z (in 3d) — wait for the reset or buy usage credits at
+  …, then step_retry (or run the step on another engine). Claude said: …`. What to do as the
+  orchestrator:
+  - Do not `step_retry` it until the cause is fixed: a retry before then fails the same way and
+    spends a launch. Expect other steps on that engine to fail the same way until then.
+  - Tell the owner with the message as given, by `ask(project, to="owner", ...)`
+    (`docs("inbox")`) or in your reply in the conversation: only the owner can sign in again on
+    the host or add quota.
+  - Once the owner says it is fixed (`AuthFailed`), or after the reset or once quota is added
+    (`QuotaExhausted`), `step_retry` with the step's `session` bound to it to resume the same
+    agent. Or, if the work cannot wait, rerun the step on another engine.
+
+  A short rate limit is not either kind: it stays `transient` and is retried inside the run,
+  just after its reset when the engine reported one.
 - Each agent's task starts with `## Previous attempt`: "None: this is the first attempt at
   this step.", or which attempt it is, how the one before ended (failed with its error,
   cancelled by whom and why, settled), what it submitted (or output), the git head it left and

@@ -168,8 +168,10 @@ pub enum FailureKind {
     SessionCwd,
     CapabilityMismatch,
     UnknownAcceptance,
-    /// The engine reported its usage quota exhausted; never retried here.
+    /// The engine hit a hard usage cap (see `engines::account`); never retried or replayed here.
     QuotaExhausted,
+    /// The engine cannot authenticate (see `engines::account`); never retried or replayed here.
+    AuthFailed,
     EngineExited,
     Cancelled,
     Cleanup,
@@ -181,6 +183,10 @@ pub struct AgentFailure {
     pub kind: FailureKind,
     pub message: String,
     pub session: Option<String>,
+    /// A `Transient` rate limit's reported reset: the Unix second the retry starts at, in
+    /// place of the policy's fixed backoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<u64>,
 }
 impl std::fmt::Display for AgentFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -200,6 +206,7 @@ fn failure(kind: FailureKind, message: impl Into<String>) -> AgentFailure {
         kind,
         message: message.into(),
         session: None,
+        retry_at: None,
     }
 }
 fn invalid(error: impl std::fmt::Display) -> AgentFailure {
@@ -207,17 +214,23 @@ fn invalid(error: impl std::fmt::Display) -> AgentFailure {
 }
 impl From<EngineError> for AgentFailure {
     fn from(e: EngineError) -> Self {
-        failure(
+        let retry_at = e.retry_at;
+        let failure = failure(
             match e.kind {
                 EngineErrorKind::Transient => FailureKind::Transient,
                 EngineErrorKind::MissingSession => FailureKind::MissingSession,
                 EngineErrorKind::CapabilityMismatch => FailureKind::CapabilityMismatch,
                 EngineErrorKind::UnknownAcceptance => FailureKind::UnknownAcceptance,
                 EngineErrorKind::QuotaExhausted => FailureKind::QuotaExhausted,
+                EngineErrorKind::AuthFailed => FailureKind::AuthFailed,
                 EngineErrorKind::Fatal => FailureKind::EngineExited,
             },
             e.message,
-        )
+        );
+        AgentFailure {
+            retry_at,
+            ..failure
+        }
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -745,6 +758,13 @@ impl Machine {
     }
 }
 
+/// A rate limit that reported its reset waits until just after it; any other transient
+/// waits the policy's fixed backoff.
+fn backoff(error: &AgentFailure, fixed: Duration) -> Duration {
+    error.retry_at.map_or(fixed, |at| {
+        Duration::from_secs(at.saturating_sub(crate::engines::account::now()))
+    })
+}
 fn clock_ms() -> io::Result<u64> {
     u64::try_from(
         SystemTime::now()
@@ -1004,11 +1024,13 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                     if matches!(config.retry.owner, RetryOwner::OuterHelper) { return Err(error); }
                     if machine.checkpoint.internal_attempt > config.retry.additional_tries { return Err(error); }
                     if machine.checkpoint.session.is_none() { return Err(failure(FailureKind::UnknownAcceptance, "transient without a recorded session cannot start a fresh worker")); }
+                    let wait = backoff(&error, config.retry.backoff);
+                    eprintln!("agent transient, resuming in {}s: {}", wait.as_secs(), error.message);
                     tokio::select! {
                         biased;
                         _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "cancelled during transient backoff")),
                         _ = tokio::time::sleep_until(deadline) => return Err(failure(FailureKind::WallCap, "wall-clock cap during backoff")),
-                        _ = tokio::time::sleep(config.retry.backoff) => {},
+                        _ = tokio::time::sleep(wait) => {},
                     }
                     machine.checkpoint.internal_attempt += 1;
                     machine.checkpoint.compactions = 0;
@@ -1026,6 +1048,13 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
     if let Err(mut error) = cleanup.and(outcome) {
         error.session.clone_from(&machine.checkpoint.session);
         let _ = machine.checkpoint.save(&config.run_dir);
+        // The run's log carries the step error's own text, under its kind.
+        if matches!(
+            error.kind,
+            FailureKind::QuotaExhausted | FailureKind::AuthFailed
+        ) {
+            eprintln!("agent failed: {error}");
+        }
         return Err(error);
     }
     machine.checkpoint.state = State::Done;
@@ -1281,12 +1310,10 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 persist(machine, config, host).await?;
             }
             Action::Retry => {
-                return Err(failure(
-                    FailureKind::Transient,
-                    o.error
-                        .map(|e| e.message)
-                        .unwrap_or_else(|| "engine transient".into()),
-                ));
+                return Err(match o.error {
+                    Some(error) => error.into(),
+                    None => failure(FailureKind::Transient, "engine transient"),
+                });
             }
             Action::Finish => {
                 let _ = bounded(

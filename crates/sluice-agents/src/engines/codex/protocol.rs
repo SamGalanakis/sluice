@@ -213,7 +213,70 @@ fn transport(e: impl std::fmt::Display) -> EngineError {
         format!("Codex transport: {e}"),
     )
 }
+/// Codex's own wording, as 0.160.0 prints it in an error object's `message`, at its start or
+/// after a prefix such as `Error running remote compact task: `. Only error objects are read,
+/// never an item, so the same words in tool output or the agent's prose cannot match.
+fn says(message: &str, phrases: &[&str]) -> bool {
+    let message = message.trim_start().replace('\u{2019}', "'");
+    phrases
+        .iter()
+        .any(|p| message.starts_with(p) || message.contains(&format!(": {p}")))
+}
+/// A usage, plan or credit limit in Codex's words (`You've hit your usage limit. Visit
+/// https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Apr 8th,
+/// 2026 10:13 AM.`).
+pub fn usage_limit_text(message: &str) -> bool {
+    says(
+        message,
+        &[
+            "You've hit your usage limit",
+            "You've reached your usage limit",
+            "Usage limit reached",
+            "Quota exceeded. Check your plan and billing details.",
+            "Your workspace is out of credits.",
+            "You're out of credits.",
+            "You hit your spend cap",
+            "To use Codex with your ChatGPT plan, upgrade to",
+        ],
+    )
+}
+/// An auth failure in Codex's words (`Your access token could not be refreshed because your
+/// refresh token was revoked. Please log out and sign in again.`, `unexpected status 401
+/// Unauthorized: Missing bearer or basic authentication in header, …`).
+pub fn auth_text(message: &str) -> bool {
+    says(
+        message,
+        &[
+            "Your access token could not be refreshed",
+            "Your authentication session could not be refreshed",
+            "Your session has ended. Please log in again",
+            "unexpected status 401 Unauthorized",
+            "Token data is not available",
+            "ChatGPT account ID not available, please re-run `codex login`",
+            "Not signed in. Please run 'codex login'",
+            "Not logged in",
+        ],
+    )
+}
+/// A JSON-RPC or turn error object, from its text alone: an auth failure or a usage limit in
+/// Codex's words (a hard cap: its reset is unknown here), else `plain_rpc_error`. The adapter
+/// reads a turn error's structured `codexErrorInfo` first.
 pub fn rpc_error(value: &Value) -> EngineError {
+    use super::super::account::{Auth, Cap, Engine, Limit, now};
+    let message = value
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("Codex RPC error");
+    if auth_text(message) {
+        return Auth::login(Engine::Codex, message).error();
+    }
+    if usage_limit_text(message) {
+        return Limit::new(Engine::Codex, Cap::Usage, message).classify(now(), Duration::ZERO);
+    }
+    plain_rpc_error(value)
+}
+/// An error object classified by keywords only, as for an error Codex retries itself.
+pub fn plain_rpc_error(value: &Value) -> EngineError {
     let message = value
         .get("message")
         .and_then(Value::as_str)
@@ -265,6 +328,8 @@ pub fn redact(value: &Value) -> Value {
                             | "sandbox"
                             | "direction"
                             | "phase"
+                            | "codexErrorInfo"
+                            | "rateLimitReachedType"
                     );
                     let value = if value.is_string() {
                         if safe {
@@ -349,6 +414,12 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
                 }
                 json!({"turnId":active})
             }
+            "account/read" if scenario == "logged-out" => {
+                json!({"account":null,"requiresOpenaiAuth":true})
+            }
+            "account/read" => {
+                json!({"account":{"type":"chatgpt","email":null,"planType":"pro"},"requiresOpenaiAuth":true})
+            }
             "turn/interrupt" | "thread/unsubscribe" => json!({}),
             _ => {
                 failure = Some(json!({"code":-32601,"message":"method not found"}));
@@ -376,10 +447,43 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
             let events: Vec<Value> =
                 serde_json::from_str(include_str!("../../../tests/fixtures/codex/turn.json"))
                     .map_err(io::Error::other)?;
+            let limited = scenario == "rate-limit-soon" && !rate_limited_before()?;
+            for event in limit_events(scenario, &active, limited)? {
+                ws.send(Message::Text(event.to_string().into()))
+                    .await
+                    .map_err(io::Error::other)?;
+            }
+            if matches!(
+                scenario,
+                "limit-reached" | "usage-limit" | "unauthorized" | "unauthorized-401"
+            ) {
+                // Out of quota or logged out the turn does no work; `limit-reached` sends
+                // nothing more.
+                continue;
+            }
             for mut event in events {
                 if scenario == "transient" && event["method"] == "turn/completed" {
                     event["params"]["turn"]["status"] = json!("failed");
                     event["params"]["turn"]["error"] = json!({"message":"rate limit", "code":429});
+                }
+                if limited {
+                    if event["method"] != "turn/completed" {
+                        continue;
+                    }
+                    event["params"]["turn"]["status"] = json!("failed");
+                    event["params"]["turn"]["error"] = json!({"message":"Rate limit reached for gpt-6.1-sol. Please try again in 2s.","codexErrorInfo":"rateLimitExceeded","additionalDetails":null});
+                }
+                if scenario == "limit-words" && event["method"] == "item/completed" {
+                    // Codex's own limit and login wording, quoted by the agent and printed by a
+                    // command.
+                    let words = ACCOUNT_WORDS_FIXTURE;
+                    match event["params"]["item"]["type"].as_str() {
+                        Some("agentMessage") => event["params"]["item"]["text"] = json!(words),
+                        Some("commandExecution") => {
+                            event["params"]["item"]["aggregatedOutput"] = json!(words)
+                        }
+                        _ => {}
+                    }
                 }
                 event["params"]["turnId"] = json!(active);
                 if event["params"].get("turn").is_some() {
@@ -397,6 +501,81 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The auth failure 0.160.0 sent live when the refresh token was revoked (a lash lane's rollout,
+/// 2026-10-05, `codex_error_info` `unauthorized`).
+pub const REVOKED_FIXTURE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
+/// The 401 0.160.0 sent live with no credentials, `codex_error_info` `other` (ids redacted);
+/// `unauthorized-401` adds a bearer token to it, which the message must mask.
+pub const UNAUTHORIZED_FIXTURE: &str = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a3f548979a7d55c4-PRG, request id: req_07f626009a4646dfb34bb8ac40e63cb7";
+/// The usage-limit message 0.160.0 sends (the shape of the live rollouts' errors).
+pub const USAGE_LIMIT_FIXTURE: &str = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 12th, 2026 3:04 PM.";
+/// Codex's usage-limit and revoked-token wording together, as an agent might quote them.
+pub const ACCOUNT_WORDS_FIXTURE: &str = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 12th, 2026 3:04 PM. Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
+/// The limit events a scenario sends right after `turn/start`'s reply, shaped as 0.160.0's
+/// `account/rateLimits/updated` (`RateLimitSnapshot`) and `error` (`ErrorNotification`):
+/// - `limit-reached`: the weekly window used up, resetting in six days, with
+///   `rateLimitReachedType`; the turn then stays open with no further event.
+/// - `usage-limit`: `usageLimitExceeded` with no window, then the failed turn.
+/// - `rate-limit-soon`: the 5-hour window used up, resetting in two seconds; the turn then
+///   fails with `rateLimitExceeded`, once per Codex home.
+/// - `limit-words`: an ordinary update (70 % used, nothing reached) and one with a window used
+///   up but no limit reached, as when credits carry on.
+/// - `unauthorized`: the live revoked-token failure (`unauthorized`), then the failed turn;
+///   `unauthorized-401` the live 401 text with `other`, a bearer token appended.
+fn limit_events(scenario: &str, turn: &str, limited: bool) -> io::Result<Vec<Value>> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs();
+    let update = |used: u64, minutes: u64, resets: u64, reached: Value| json!({"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","limitName":null,"normalModelSlug":null,"primary":{"usedPercent":used,"windowDurationMins":minutes,"resetsAt":now + resets},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},"individualLimit":null,"spendControlReached":null,"planType":"pro","rateLimitReachedType":reached}}});
+    let started = json!({"method":"turn/started","params":{"threadId":"fixture-thread","turn":{"id":turn,"items":[],"status":"inProgress","error":null}}});
+    Ok(match scenario {
+        "limit-reached" => vec![
+            started,
+            update(100, 10080, 6 * 86400, json!("rate_limit_reached")),
+        ],
+        "usage-limit" => {
+            let error = json!({"message":USAGE_LIMIT_FIXTURE,"codexErrorInfo":"usageLimitExceeded","additionalDetails":null});
+            vec![
+                started,
+                json!({"method":"error","params":{"error":error,"willRetry":false,"threadId":"fixture-thread","turnId":turn}}),
+                json!({"method":"turn/completed","params":{"threadId":"fixture-thread","turn":{"id":turn,"items":[],"status":"failed","error":error}}}),
+            ]
+        }
+        "unauthorized" | "unauthorized-401" => {
+            let error = if scenario == "unauthorized" {
+                json!({"message":REVOKED_FIXTURE,"codexErrorInfo":"unauthorized","additionalDetails":null})
+            } else {
+                json!({"message":format!("{UNAUTHORIZED_FIXTURE}, sent Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJlLWZpeHR1cmU"),"codexErrorInfo":"other","additionalDetails":null})
+            };
+            vec![
+                started,
+                json!({"method":"thread/status/changed","params":{"threadId":"fixture-thread","status":{"type":"systemError"}}}),
+                json!({"method":"error","params":{"error":error,"willRetry":false,"threadId":"fixture-thread","turnId":turn}}),
+                json!({"method":"turn/completed","params":{"threadId":"fixture-thread","turn":{"id":turn,"items":[],"status":"failed","error":error}}}),
+            ]
+        }
+        "rate-limit-soon" if limited => {
+            vec![update(100, 300, 2, json!("rate_limit_reached"))]
+        }
+        "limit-words" => vec![
+            update(70, 10080, 6 * 86400, Value::Null),
+            update(100, 10080, 6 * 86400, Value::Null),
+        ],
+        _ => vec![],
+    })
+}
+/// `rate-limit-soon` limits only the first turn in a Codex home, so the retry resumes.
+fn rate_limited_before() -> io::Result<bool> {
+    let marker =
+        Path::new(&std::env::var_os("CODEX_HOME").unwrap_or_default()).join("fixture-rate-limited");
+    if marker.exists() {
+        return Ok(true);
+    }
+    std::fs::write(marker, b"")?;
+    Ok(false)
 }
 
 /// `codex debug models` as the real CLI printed it (each model's slug and reasoning efforts),

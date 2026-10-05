@@ -13,6 +13,7 @@ pub fn failure(kind: EngineErrorKind, message: impl Into<String>) -> EngineError
     EngineError {
         kind,
         message: message.into(),
+        retry_at: None,
     }
 }
 pub fn io_error(error: io::Error) -> EngineError {
@@ -246,6 +247,78 @@ pub fn paste_payload(text: &str) -> Vec<u8> {
 }
 pub fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
+}
+/// Claude Code's own wording for a hard usage limit, the error-level prefixes 2.1.284 keeps
+/// for its usage-limit notices (`You've hit your weekly limit · resets Sep 22, 1am
+/// (Europe/Berlin)`, `You're out of usage credits. …`), and the older
+/// `Claude AI usage limit reached|<epoch>`. Returns the reset when the text carries one. Only
+/// an API error's own text is read (an `isApiErrorMessage` entry or a `StopFailure`), and only
+/// its start, so tool output and the agent's prose cannot match. The fast-mode cooldown
+/// (`You've hit your fast limit`) is short and not a usage limit.
+pub fn usage_limit(message: &str) -> Option<Option<u64>> {
+    const LIMITS: [&str; 12] = [
+        "You've hit your",
+        "You've reached your",
+        "You're out of usage credits",
+        "Your org is out of usage",
+        "Your seat type doesn't include usage credits",
+        "Your seat type doesn't include usage",
+        "Your usage allocation has been disabled by your admin",
+        "Your group's usage limit is set to $0",
+        "You're out of extra usage",
+        "Your seat type doesn't include extra usage",
+        "This service is disabled for your org",
+        "Claude AI usage limit reached",
+    ];
+    let text = message.trim_start().replace('\u{2019}', "'");
+    if let Some(rest) = text.strip_prefix("Claude AI usage limit reached") {
+        return Some(rest.strip_prefix('|').and_then(|at| at.trim().parse().ok()));
+    }
+    let fable = text.starts_with("Fable")
+        && text
+            .split('.')
+            .next()
+            .is_some_and(|s| s.len() <= 80 && s.ends_with(" requires usage credits"));
+    ((LIMITS.iter().any(|limit| text.starts_with(limit))
+        && !text.starts_with("You've hit your fast limit"))
+        || fable)
+        .then_some(None)
+}
+/// Claude Code's login wording at the start of an API error's text (2.1.284: `Not logged in ·
+/// Please run /login`, `Login expired · Please run /login`, `OAuth token revoked · Please run
+/// /login`, `Failed to authenticate: OAuth session expired and could not be refreshed`,
+/// `Invalid API key · Fix external API key`, `Please run /login · API Error: 403 …`).
+pub fn auth_text(message: &str) -> bool {
+    const LOGIN: [&str; 10] = [
+        "Not logged in",
+        "Login expired",
+        "OAuth token revoked",
+        "OAuth token has expired",
+        "Failed to authenticate",
+        "Invalid API key",
+        "Invalid auth token",
+        "Please run /login",
+        "Authentication required \u{b7} Sign in again",
+        "Your account does not have access to Claude",
+    ];
+    let text = message.trim_start();
+    LOGIN.iter().any(|login| text.starts_with(login))
+}
+/// Claude Code logged out opens on its login screen: a `Select login method:` row with the
+/// `Claude account with subscription` choice, and no composer.
+pub fn login_screen(pane: &str) -> bool {
+    !composer_ready(pane)
+        && pane.lines().any(|l| l.trim() == "Select login method:")
+        && pane.contains("Claude account with subscription")
+}
+/// The login screen's own rows, for the failure's message.
+pub fn login_text(pane: &str) -> String {
+    pane.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 pub fn read_json(path: &Path) -> Option<Value> {
     let file = File::open(path).ok()?;

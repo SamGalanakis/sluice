@@ -110,6 +110,7 @@ impl<F: AgentFactory> AgentFnHost<F> {
                 kind: FailureKind::Invalid,
                 message: "concurrent agent composition within one run is refused".into(),
                 session: None,
+                retry_at: None,
             });
         }
         let _admission = Admission(&self.active);
@@ -284,6 +285,7 @@ fn bad(message: impl Into<String>) -> AgentFailure {
         kind: FailureKind::Invalid,
         message: message.into(),
         session: None,
+        retry_at: None,
     }
 }
 #[derive(Debug, Clone)]
@@ -620,6 +622,7 @@ impl EngineAdapter for ScriptedEngine {
         self.hook_reply.clone().ok_or_else(|| EngineError {
             kind: EngineErrorKind::CapabilityMismatch,
             message: "fixture hooks unsupported".into(),
+            retry_at: None,
         })
     }
 }
@@ -844,6 +847,7 @@ impl FixtureEngine {
         let fail = |e: String| EngineError {
             kind: EngineErrorKind::UnknownAcceptance,
             message: e,
+            retry_at: None,
         };
         let mut bytes = serde_json::to_vec(&request).map_err(|e| fail(e.to_string()))?;
         bytes.push(b'\n');
@@ -900,6 +904,7 @@ impl EngineAdapter for FixtureEngine {
         sluice_process::host::guard_scratch_home(&self.home).map_err(|e| EngineError {
             kind: EngineErrorKind::Fatal,
             message: e.to_string(),
+            retry_at: None,
         })?;
         let mut command = tokio::process::Command::new(&self.binary);
         command
@@ -914,6 +919,7 @@ impl EngineAdapter for FixtureEngine {
         let mut child = command.spawn().map_err(|e| EngineError {
             kind: EngineErrorKind::Fatal,
             message: e.to_string(),
+            retry_at: None,
         })?;
         self.input = child.stdin.take();
         self.output = child.stdout.take().map(tokio::io::BufReader::new);

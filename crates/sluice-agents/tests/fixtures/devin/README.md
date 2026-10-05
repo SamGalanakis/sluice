@@ -42,3 +42,7 @@ after Devin ran out of weekly usage quota (its run then stalled until the 30-min
 paths redacted to /scratch. Each prompt it took was followed by the `⚠︎ Quota exhausted` notice and
 no further hook, under an idle composer. The executable fixture's `quota` turn draws that notice
 after its prompt's UserPromptSubmit and sends nothing more.
+Its `auth` turn draws the `⚠︎ Authentication required` notice the same way, with the explanation
+3000.11.3's binary carries (`Your session is no longer authenticated. Run /login to
+re-authenticate here (or devin auth login), then send a message to continue`); no live capture of
+that notice exists.

@@ -276,8 +276,26 @@ impl Fake {
                 .as_str()
                 .or(turn["reply"].as_str())
                 .unwrap_or("ok");
-            self.entry(json!({"type":"assistant","isApiErrorMessage":turn.get("error").is_some(),"message":{"content":[{"type":"text","text":text}]}}))?;
-            self.hook(if turn.get("error").is_some() { "StopFailure" } else { "Stop" }, json!({"error":turn["error"],"last_assistant_message":text,
+            // An API error entry as 2.1.284 writes it: `error` is its category and a rejected
+            // plan limit carries `quotaLimits` (`resets_in_s` becomes `resetsAt`).
+            let mut entry = json!({"type":"assistant","isApiErrorMessage":turn.get("error").is_some(),"message":{"content":[{"type":"text","text":text}]}});
+            if let Some(kind) = turn.get("error_type") {
+                entry["error"] = kind.clone();
+            }
+            if let Some(quota) = turn.get("quota").and_then(Value::as_object) {
+                let mut quota = quota.clone();
+                if let Some(after) = quota.remove("resets_in_s").and_then(|s| s.as_u64()) {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(io::Error::other)?
+                        .as_secs();
+                    quota.insert("resetsAt".into(), json!(now + after));
+                }
+                entry["quotaLimits"] = Value::Object(quota);
+                entry["apiErrorStatus"] = json!(429);
+            }
+            self.entry(entry)?;
+            self.hook(if turn.get("error").is_some() { "StopFailure" } else { "Stop" }, json!({"error":turn.get("error_type").unwrap_or(&turn["error"]),"last_assistant_message":text,
                 "background_tasks":if self.background.0.is_empty(){json!([])}else{json!([{"id":"b1","type":"shell","status":"running","description":"sleep"}])},"session_crons":[]}))?;
             self.status(if self.background.0.is_empty() {
                 "idle"
@@ -405,6 +423,14 @@ pub fn main(args: Vec<String>) -> io::Result<()> {
                 break;
             }
         }
+    }
+    if fake.config["login"].as_bool() == Some(true) {
+        // Logged out, 2.1.284 opens on its login screen and waits there.
+        println!(
+            "\x1b[H\x1b[2J Select login method:\r\n\r\n \u{276f} 1. Claude account with subscription \u{b7} Pro, Max, Team, or Enterprise\r\n\r\n   2. Anthropic Console account \u{b7} API usage billing\r\n"
+        );
+        while receiver.recv().is_ok() {}
+        return Ok(());
     }
     fake.entry(json!({"type":"permission-mode"}))?;
     fake.status("idle")?;
