@@ -1356,6 +1356,15 @@ pasted into Devin is accepted by the `UserPromptSubmit` that carries it. Input p
 Devin works waits in its queue until the turn ends. It fails the run as `UnknownAcceptance` only
 after 20 s with no hook, no working pane and no sight of it queued.
 
+Devin out of usage quota prints a `⚠︎ Quota exhausted` notice (`Your weekly usage quota has been
+exhausted. Visit https://app.devin.ai/settings/usage ... (trace ID: ...)`) after the prompt it
+took, sends no further hook and leaves its composer idle. While a turn is open or input is pasted,
+each observation reads the pane, and when that notice is the last entry right above the idle
+composer (not tool output, an earlier entry or a quote) the run fails at once with `agent_failure`
+kind `QuotaExhausted`, the notice's text as its message and the session kept, instead of at the
+stall cap. It is not transient: the supervisor neither retries it nor replays input; retry the step
+once quota is added, with its `session` bound to resume.
+
 Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
 (600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
 `SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),

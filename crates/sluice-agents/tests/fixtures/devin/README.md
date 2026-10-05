@@ -36,3 +36,9 @@ call returns right after it (14 of 14 Fusion Stops in the live home's journals),
 fixture's `after_stop` events keep a turn working after its Stop, under that busy pane, and queue
 input submitted meanwhile until the turn ends (`queued`, `send now`, as the 3000.11.3 binary's
 strings name them; no queued pane was captured).
+
+real-quota-exhausted-pane.txt is the bottom of a live Fusion pane captured read-only on 2026-10-05
+after Devin ran out of weekly usage quota (its run then stalled until the 30-minute stall cap), with
+paths redacted to /scratch. Each prompt it took was followed by the `⚠︎ Quota exhausted` notice and
+no further hook, under an idle composer. The executable fixture's `quota` turn draws that notice
+after its prompt's UserPromptSubmit and sends nothing more.

@@ -168,6 +168,8 @@ pub enum FailureKind {
     SessionCwd,
     CapabilityMismatch,
     UnknownAcceptance,
+    /// The engine reported its usage quota exhausted; never retried here.
+    QuotaExhausted,
     EngineExited,
     Cancelled,
     Cleanup,
@@ -211,7 +213,8 @@ impl From<EngineError> for AgentFailure {
                 EngineErrorKind::MissingSession => FailureKind::MissingSession,
                 EngineErrorKind::CapabilityMismatch => FailureKind::CapabilityMismatch,
                 EngineErrorKind::UnknownAcceptance => FailureKind::UnknownAcceptance,
-                _ => FailureKind::EngineExited,
+                EngineErrorKind::QuotaExhausted => FailureKind::QuotaExhausted,
+                EngineErrorKind::Fatal => FailureKind::EngineExited,
             },
             e.message,
         )

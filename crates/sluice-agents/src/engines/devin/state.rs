@@ -525,6 +525,7 @@ impl Devin {
             self.observation.status = EngineStatus::Idle;
         }
         self.settle_turn(context).await?;
+        self.probe_quota(context).await?;
         self.advance_delivery(context).await?;
         if self.exit_requested
             && self.observation.status != EngineStatus::Exited
@@ -549,6 +550,26 @@ impl Devin {
             ));
         }
         Ok(observation)
+    }
+    /// Devin out of quota shows a notice and goes silent, its turn open: no Stop follows the
+    /// prompt it took. Each observation of a working turn, or of input pasted for one, reads
+    /// the pane for that notice, so the run fails at once instead of at the stall cap. A
+    /// resumed session's old notice cannot match before this invocation's input is pasted.
+    async fn probe_quota(&mut self, context: &EngineContext) -> Result<(), EngineError> {
+        let armed = self.observation.status == EngineStatus::Busy
+            || self.pending.as_ref().is_some_and(|p| p.pasted);
+        if !armed
+            || context.tmux_binary.is_none()
+            || self.exit_requested
+            || self.observation.error.is_some()
+        {
+            return Ok(());
+        }
+        if let Some(notice) = protocol::quota_exhausted(&self.capture(context).await?) {
+            self.log(&notice)?;
+            self.observation.error = Some(error(EngineErrorKind::QuotaExhausted, notice));
+        }
+        Ok(())
     }
     async fn advance_delivery(&mut self, context: &EngineContext) -> Result<(), EngineError> {
         let Some(pending) = &self.pending else {

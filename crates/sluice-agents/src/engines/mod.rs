@@ -62,6 +62,9 @@ pub enum EngineErrorKind {
     MissingSession,
     CapabilityMismatch,
     UnknownAcceptance,
+    /// The engine's account is out of usage quota: no turn can run until the owner adds
+    /// quota, so retrying or replaying input here cannot help.
+    QuotaExhausted,
     Fatal,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

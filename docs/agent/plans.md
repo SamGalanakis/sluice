@@ -103,6 +103,10 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   what it should have.
 - A run that ends without a valid submission (its agent exited, or stopped after its
   nudges) fails the step with `exited_without_submit`, carrying the agent's `session`.
+- A Devin run that hits Devin's usage quota fails the step at once with `agent_failure` kind
+  `QuotaExhausted`; its message is Devin's notice (usage URL and trace id) and it carries the
+  `session`. Nothing retries it: once quota is added, `step_retry` with the step's `session`
+  bound to it to resume, or run the step on another engine.
 - Each agent's task starts with `## Previous attempt`: "None: this is the first attempt at
   this step.", or which attempt it is, how the one before ended (failed with its error,
   cancelled by whom and why, settled), what it submitted (or output), the git head it left and

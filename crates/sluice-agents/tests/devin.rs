@@ -1126,6 +1126,153 @@ fn devin_working_pane_reads_the_release_spinner_and_busy_placeholder() {
     )));
 }
 
+#[test]
+fn devin_quota_exhausted_notice_is_the_last_entry_above_an_idle_composer() {
+    use protocol::quota_exhausted;
+    // A live Fusion pane out of weekly quota: the notice follows each prompt and the composer
+    // stays idle; Devin sent no hook after the prompt.
+    let real = include_str!("fixtures/devin/real-quota-exhausted-pane.txt");
+    let notice = quota_exhausted(real).unwrap();
+    assert!(
+        notice.starts_with("Devin quota exhausted: Your weekly usage quota has been exhausted.")
+    );
+    assert!(notice.contains("Visit https://app.devin.ai/settings/usage to purchase"));
+    assert!(notice.ends_with("(trace ID: e9458d5f1c1f53d495a3c90d6af85159)"));
+    let coloured = real.replace(
+        "Quota exhausted",
+        "\x1b[1;33mQuota\x1b[0m exhausted\x1b]8;;\x07",
+    );
+    assert_eq!(quota_exhausted(&coloured).as_deref(), Some(notice.as_str()));
+    // A narrower pane wraps the explanation over indented rows.
+    let wrapped = real.replace(" Visit https", "\n   Visit https");
+    assert_eq!(quota_exhausted(&wrapped).as_deref(), Some(notice.as_str()));
+    // The bypass indicator drawn as its own row above the composer is not an entry.
+    let rule = "\u{2500}".repeat(20);
+    let indicator = real.replacen(&rule, &format!("(bypass permissions on)\n{rule}"), 1);
+    assert_eq!(
+        quota_exhausted(&indicator).as_deref(),
+        Some(notice.as_str())
+    );
+
+    // The same words as the transcript's last entry but in tool output or an agent message.
+    let last = real.rfind(" \u{26a0}\u{fe0e} Quota exhausted").unwrap();
+    let (before, notice_rows) = real.split_at(last);
+    for quoted in [
+        " \u{25cf} Ran cat notes.md\n \u{2502} \u{26a0}\u{fe0e} Quota exhausted\n \u{2502}   Your",
+        " \u{25cf} Ran cat notes.md\n \u{2514} \u{26a0}\u{fe0e} Quota exhausted\n     Your",
+        " \u{25cf} \u{26a0}\u{fe0e} Quota exhausted\n   Your",
+    ] {
+        let pane = format!(
+            "{before}{}",
+            notice_rows.replacen(" \u{26a0}\u{fe0e} Quota exhausted\n   Your", quoted, 1)
+        );
+        assert_ne!(pane, real);
+        assert_eq!(quota_exhausted(&pane), None, "{quoted}");
+    }
+    // The notice is an earlier entry: Devin took the next prompt.
+    let later = real.replacen(
+        &format!("\n\n{rule}"),
+        &format!("\n\n\u{276d} Continue the task\n\n{rule}"),
+        1,
+    );
+    assert_ne!(later, real);
+    assert_eq!(quota_exhausted(&later), None);
+    // Devin is working, or a draft sits in the composer.
+    let idle = "Ask Devin to build features, fix bugs, or work on your code";
+    assert_eq!(
+        quota_exhausted(&real.replace(idle, "Guide Devin while it works")),
+        None
+    );
+    assert_eq!(quota_exhausted(&real.replace(idle, "/exit")), None);
+    // The title alone, without its explanation, is not the notice.
+    assert_eq!(
+        quota_exhausted(&real.replace("usage quota", "allowance")),
+        None
+    );
+    for pane in [
+        include_str!("fixtures/devin/real-fusion-busy-pane.txt"),
+        include_str!("fixtures/devin/real-fresh-bypass-pane.txt"),
+        include_str!("fixtures/devin/real-resume-bypass-pane.txt"),
+        include_str!("fixtures/devin/resume-footer-excerpt.txt"),
+        include_str!("fixtures/devin/composer.txt"),
+    ] {
+        assert_eq!(quota_exhausted(pane), None);
+    }
+}
+
+#[tokio::test]
+async fn devin_quota_exhausted_notice_after_a_taken_prompt_fails_the_turn() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({"turns":[{"quota":true}]})));
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let _pane = Pane::start(&ctx, launch).await;
+    deliver(&mut adapter, &ctx, InputId::Task, "Start the task").await;
+    let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+    let error = failed.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error}");
+    assert!(
+        error
+            .message
+            .contains("https://app.devin.ai/settings/usage")
+    );
+    assert!(error.message.ends_with("(trace ID: fixture-trace)"));
+    // Devin sent no Stop: the turn it took is still open.
+    assert_eq!(
+        (failed.status, failed.turns_started, failed.turns_completed),
+        (EngineStatus::Busy, 1, 0)
+    );
+    assert_eq!(failed.session_id.as_deref(), Some("fixture-devin-session"));
+    adapter.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn supervisor_devin_quota_exhausted_fails_at_once_without_retry() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({"turns":[{"quota":true}]})));
+    let cfg = supervisor_config(&root);
+    let dir = cfg.run_dir.clone();
+    let stall = cfg.limits.stall;
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    let started = Instant::now();
+    let failure = supervise_fixture(&mut adapter, cfg, &mut host)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.kind,
+        sluice_agents::supervisor::FailureKind::QuotaExhausted,
+        "{failure}"
+    );
+    assert!(started.elapsed() < stall / 2, "{:?}", started.elapsed());
+    assert!(
+        failure
+            .message
+            .contains("Your weekly usage quota has been exhausted")
+    );
+    assert!(
+        failure
+            .message
+            .contains("https://app.devin.ai/settings/usage")
+    );
+    assert!(failure.message.contains("(trace ID: fixture-trace)"));
+    // The session stays on the failure, so a later retry resumes it.
+    assert_eq!(failure.session.as_deref(), Some("fixture-devin-session"));
+    assert!(
+        failure
+            .to_string()
+            .contains("session: fixture-devin-session")
+    );
+    assert_eq!(host.cleanups, 1);
+    let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
+    assert_eq!(checkpoint.internal_attempt, 1);
+    assert_eq!(checkpoint.delivery.entries.len(), 1);
+    assert_eq!(checkpoint.delivery.entries[0].tries, 1);
+    assert_eq!(fixture_prompts(&root).len(), 1);
+}
+
 #[tokio::test]
 async fn devin_resume_accepts_reported_real_footer_without_toggling() {
     resumed_bypass(json!({"ready_pane":include_str!("fixtures/devin/resume-footer-excerpt.txt")}))

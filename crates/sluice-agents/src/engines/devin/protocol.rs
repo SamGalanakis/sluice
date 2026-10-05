@@ -224,6 +224,64 @@ pub fn working(pane: &str) -> bool {
         .iter()
         .any(|s| bottom.contains(s))
 }
+/// Devin stopped on its quota-exhausted notice: 3000.11.3 prints a `⚠︎ Quota exhausted` title
+/// row with the indented explanation (`Your weekly usage quota has been exhausted. Visit
+/// <usage URL> ... (trace ID: ...)`) under it, sends no further hook and leaves the composer
+/// idle. Only the transcript's last entry right above that idle composer counts, with no
+/// spinner, so the words quoted in tool output (gutter-prefixed), in an earlier entry or in a
+/// draft cannot match. Returns the notice's text.
+pub fn quota_exhausted(pane: &str) -> Option<String> {
+    let pane = strip_ansi(pane);
+    if working(&pane) {
+        return None;
+    }
+    let lines: Vec<_> = pane.lines().collect();
+    let rules: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.contains("────"))
+        .map(|(i, _)| i)
+        .collect();
+    let [.., top, bottom] = rules[..] else {
+        return None;
+    };
+    let composer = lines[top + 1..bottom]
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !composer.contains("Ask Devin to build features, fix bugs, or work on your code") {
+        return None;
+    }
+    // The last entry above the composer: the non-blank rows after the last blank row, past a
+    // mode indicator row such as `(bypass permissions on)`.
+    let above = &lines[..top];
+    let end = above.iter().rposition(|l| {
+        let l = l.trim();
+        !l.is_empty() && !(l.starts_with('(') && l.ends_with(" on)"))
+    })? + 1;
+    let start = above[..end]
+        .iter()
+        .rposition(|l| l.trim().is_empty())
+        .map_or(0, |i| i + 1);
+    let entry = &above[start..end];
+    let title = entry.iter().position(|l| {
+        l.trim()
+            .trim_start_matches(['⚠', '\u{fe0e}', '\u{fe0f}'])
+            .trim()
+            .eq_ignore_ascii_case("quota exhausted")
+    })?;
+    let detail = entry[title + 1..]
+        .iter()
+        .take_while(|l| l.starts_with(char::is_whitespace))
+        .map(|l| l.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    detail
+        .to_lowercase()
+        .contains("usage quota")
+        .then(|| format!("Devin quota exhausted: {detail}"))
+}
 /// Input submitted while Devin works waits in its queue, shown with `queued` and `send now`
 /// until the turn ends; Enter on the empty composer sends it at once by interrupting the turn.
 pub fn input_queued(pane: &str) -> bool {

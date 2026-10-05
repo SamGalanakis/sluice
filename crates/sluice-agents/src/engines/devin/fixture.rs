@@ -87,7 +87,9 @@ fn arg(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 /// `busy`: a turn is working, drawn as 3000.11.3 does with a spinner row and the busy
-/// placeholder; `queued`: inputs submitted meanwhile, waiting for the turn's end.
+/// placeholder; `queued`: inputs submitted meanwhile, waiting for the turn's end; `notice`:
+/// the transcript's last entry, such as the quota-exhausted notice.
+#[allow(clippy::too_many_arguments)]
 fn draw(
     draft: &str,
     collapsed: bool,
@@ -96,6 +98,7 @@ fn draw(
     bypass: bool,
     busy: bool,
     queued: &[String],
+    notice: &str,
 ) -> io::Result<()> {
     let rule = "─".repeat(100);
     let region = if dialog {
@@ -135,7 +138,7 @@ fn draw(
     }
     // 3000.11.3 layout: Normal mode has no indicator; bypass is a row above the composer.
     print!(
-        "\x1b[H\x1b[2J{status}{}{rule}\r\n{region}\r\n{rule}\r\nSWE-2 High \u{b7} Context: 0k / 262k tokens (0%)",
+        "\x1b[H\x1b[2J{notice}{status}{}{rule}\r\n{region}\r\n{rule}\r\nSWE-2 High \u{b7} Context: 0k / 262k tokens (0%)",
         if bypass {
             "\x1b[33m(bypass permissions on)\x1b[0m\r\n"
         } else {
@@ -261,17 +264,18 @@ pub fn main(args: &[String]) -> io::Result<()> {
         running: false,
         drop_queued: false,
         queue: VecDeque::new(),
+        notice: String::new(),
     };
     if let Some(pane) = settings["ready_pane"].as_str() {
         print!("\x1b[H\x1b[2J{}", pane.replace('\n', "\r\n"));
         io::stdout().flush()?;
     } else if let Some(ms) = settings["restore_ms"].as_u64().filter(|_| bypass) {
         // A resumed session's mode is restored after the composer first appears.
-        draw(&draft, collapsed, wrap, dialog, false, false, &[])?;
+        draw(&draft, collapsed, wrap, dialog, false, false, &[], "")?;
         std::thread::sleep(Duration::from_millis(ms));
-        draw(&draft, collapsed, wrap, dialog, bypass, false, &[])?;
+        draw(&draft, collapsed, wrap, dialog, bypass, false, &[], "")?;
     } else {
-        draw(&draft, collapsed, wrap, dialog, bypass, false, &[])?;
+        draw(&draft, collapsed, wrap, dialog, bypass, false, &[], "")?;
     }
     // Input arrives while a turn works on after its Stop, so it is read on its own thread.
     let (sender, input) = mpsc::channel::<Vec<u8>>();
@@ -305,6 +309,7 @@ pub fn main(args: &[String]) -> io::Result<()> {
                 bypass,
                 turns.running,
                 turns.queue.make_contiguous(),
+                &turns.notice,
             )?;
         }
         first = false;
@@ -405,7 +410,9 @@ enum Flow {
 
 /// The scripted turns. A turn's `after_stop` events keep it working after its Stop, the way a
 /// Fusion lead works on after its sidekick's Stop: `{"ms": delay after the previous event,
-/// "hook": "PreToolUse" | "PostToolUse" | "Stop", "reply"?, "touch"?: file in cwd}`.
+/// "hook": "PreToolUse" | "PostToolUse" | "Stop", "reply"?, "touch"?: file in cwd}`. A `quota`
+/// turn takes its prompt and then, like 3000.11.3 out of usage quota, shows the
+/// quota-exhausted notice above an idle composer and sends no further hook.
 struct Turns<'a> {
     config: &'a Value,
     settings: &'a Value,
@@ -418,6 +425,7 @@ struct Turns<'a> {
     running: bool,
     drop_queued: bool,
     queue: VecDeque<String>,
+    notice: String,
 }
 impl Turns<'_> {
     fn start(&mut self, text: String, queued: bool, bypass: bool) -> io::Result<Flow> {
@@ -432,6 +440,7 @@ impl Turns<'_> {
             .unwrap_or_else(|| json!({"reply":"ok"}));
         let prompt_id = self.index.to_string();
         self.index += 1;
+        self.notice.clear();
         // A silent turn takes the input and never reports anything.
         if turn["silent"].as_bool().unwrap_or(false) {
             return Ok(Flow::Continue);
@@ -444,6 +453,15 @@ impl Turns<'_> {
                 json!({"prompt":text,"prompt_id":prompt_id}),
             )?;
         }
+        if turn["quota"].as_bool().unwrap_or(false) {
+            self.notice = format!(
+                "\u{276d} {}\r\n\r\n \u{26a0}\u{fe0e} Quota exhausted\r\n   {}\r\n   {}\r\n\r\n",
+                protocol::needle(&text),
+                "Your weekly usage quota has been exhausted. Visit https://app.devin.ai/settings/usage",
+                "to purchase on-demand usage or turn on auto-reload. (trace ID: fixture-trace)"
+            );
+            return Ok(Flow::Continue);
+        }
         draw(
             "",
             false,
@@ -452,6 +470,7 @@ impl Turns<'_> {
             bypass,
             true,
             self.queue.make_contiguous(),
+            "",
         )?;
         if turn["tool"].as_bool().unwrap_or(false) {
             hook(
