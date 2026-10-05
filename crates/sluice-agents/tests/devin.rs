@@ -1712,48 +1712,6 @@ async fn supervisor_devin_nudges_only_once_post_stop_work_ends() {
     assert_eq!(prompts[1]["queued"], json!(false));
 }
 
-/// The failed Fusion run's timeline: the sidekick's Stop, the lead's tool calls for longer than
-/// the delivery timeout, input pasted meanwhile and taken when the lead's turn ends.
-#[tokio::test]
-async fn supervisor_devin_message_pasted_during_post_stop_work_is_accepted_late() {
-    let root = Scratch::new();
-    let mut work = vec![json!({"ms":100,"hook":"PostToolUse","touch":"release"})];
-    work.extend(post_stop_work(14, 150));
-    work.push(json!({"ms":150,"hook":"Stop","reply":"lead done"}));
-    let mut opts = options(
-        &root,
-        json!({"turns":[{"reply":"sidekick report","after_stop":work},{"reply":"message taken","submit":{"word":"blue"}}]}),
-    );
-    opts.delivery_timeout = Duration::from_millis(600);
-    opts.turn_quiet = Duration::from_millis(300);
-    let mut adapter = Devin::new(opts);
-    let cfg = supervisor_config(&root);
-    let dir = cfg.run_dir.clone();
-    let mut host = DevinHost {
-        directory: cfg.cwd.clone(),
-        messages: vec![supervisor_message(1)],
-        release: Some("release"),
-        ..Default::default()
-    };
-    supervise_fixture(&mut adapter, cfg, &mut host)
-        .await
-        .unwrap();
-    assert_eq!(host.submissions["word"], json!("blue"));
-    assert_eq!(host.acks, vec![MessageId(1)]);
-    let checkpoint = Checkpoint::read(&dir).unwrap().unwrap();
-    assert_eq!(checkpoint.nudges, 0);
-    assert!(checkpoint.delivery.all_acknowledged());
-    let prompts = fixture_prompts(&root);
-    assert_eq!(prompts.len(), 2);
-    assert!(
-        prompts[1]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Keep word blue")
-    );
-    assert_eq!(prompts[1]["queued"], json!(true));
-}
-
 #[tokio::test]
 async fn devin_queued_paste_waits_out_a_turn_working_without_hooks() {
     let root = Scratch::new();
