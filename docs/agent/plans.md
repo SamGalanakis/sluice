@@ -127,6 +127,22 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
 
   A short rate limit is not either kind: it stays `transient` and is retried inside the run,
   just after its reset when the engine reported one.
+- A Claude or Devin agent that stops before its first turn on a screen nobody can answer
+  (Claude's first-run setup, its API-key prompt, updated terms, managed-settings or MCP-server
+  approval, a required update; Devin's organization picker or workspace-trust prompt; or any
+  screen that stands unchanged for 20 s with no turn) fails the step at once with
+  `agent_failure` kind `BlockedScreen`, carrying the `session`. The message names the screen
+  and what the owner must do, then quotes it, e.g. ``claude: blocked on its first-run setup
+  (theme picker) — Claude Code's first-run setup is unfinished for the account it runs as: run
+  `claude` once on this host as that user and finish it (…), then step_retry. Claude showed:
+  Let's get started. | …``. Treat it as `AuthFailed`: tell the owner the message as given, do
+  not `step_retry` until they say it is answered, then retry with the `session` bound, or run
+  the step on another engine.
+- When an agent run fails before its engine completed a turn, or on a timeout or stall
+  (`TurnStartTimeout`, `ReadyTimeout`, `StallCap`, `WallCap`), its message ends with the last
+  rows of the engine's screen at the failure, under `pane at failure (last rows; whole screen:
+  <path>):`; the whole screen is in `pane-at-failure.txt` in the run's directory (secrets
+  masked). Read those rows before retrying: they usually say what the engine was waiting for.
 - Each agent's task starts with `## Previous attempt`: "None: this is the first attempt at
   this step.", or which attempt it is, how the one before ended (failed with its error,
   cancelled by whom and why, settled), what it submitted (or output), the git head it left and

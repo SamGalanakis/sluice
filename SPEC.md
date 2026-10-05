@@ -1433,17 +1433,64 @@ and each transient backoff with its wait. Each engine's signals, structured firs
   reset or an auth failure, so the run fails at once instead of at the stall cap.
 
 Only an engine's error channels are read (Codex's error objects, rate-limit updates and account,
-Claude's API error entry, `StopFailure` and login screen, Devin's last pane entry), and text only
-at its start, so the words in tool output or the agent's own prose never match. `sluice doctor`
-probes each engine's version only, in a scratch home that holds no credential, so it does not
-report auth.
+Claude's API error entry, `StopFailure` and login screen, Devin's last pane entry and login
+picker), and text only at its start, so the words in tool output or the agent's own prose never
+match. Logged out, Devin opens on its login picker (`How would you like to log in?`, `Log in with
+browser`): the run fails as `AuthFailed` before any input is taken, as Claude's login screen does.
+`sluice doctor` probes each engine's version only, in a scratch home that holds no credential, so
+it does not report auth.
+
+A pane-driven engine (Claude, Devin) that stops before its first turn on an interactive screen
+sluice does not answer can take no input, so the run fails at once with `agent_failure` kind
+`BlockedScreen`; like the account kinds it is neither retried nor replayed and keeps the session.
+The screens are read only while the engine's composer is not showing, before any turn of the
+invocation:
+
+- Claude 2.1.284: its first-run setup (the theme picker, `Let's get started.` / `Choose the text
+  style that looks best with your terminal`; `Security notes:`; `Use Claude Code's terminal
+  setup?`), setup's failed connectivity check (`Unable to connect to Anthropic services`), the
+  API-key prompt (`Do you want to use this API key?`), Anthropic's updated terms (`Updates to
+  Consumer Terms and Policies`), `Managed settings require approval`, a project's MCP servers
+  (`New MCP server found in this project`), `Allow external CLAUDE.md file imports?`, and a
+  required update (`… needs an update.`, `… older than the minimum version required by your
+  organization`), which Claude prints as it exits;
+- Devin 3000.11.3: its organization picker (`Select your Devin organization:`) and
+  workspace-trust prompt (`Do you trust the authors of …`).
+
+Sluice still answers Claude's folder-trust and bypass-permissions dialogs and closes Devin's menus
+(`Select a menu item`, `Select model`, `Search sessions`). Any other non-blank screen that stands
+unchanged before the first turn for `SLUICE_AGENT_SCREEN_S` (20 s) fails the same way: a normal
+start draws its composer within seconds, and a slower one (a connectivity check, MCP servers
+connecting, a long session loading) animates a spinner, which restarts the clock. The message says
+which screen and what the owner must do, then quotes the screen's non-empty rows joined by ` | `
+(cut to 1000 characters, anything token-like masked): `<engine>: blocked on <screen> — <what to
+do>, then step_retry. <Engine> showed: <rows>`, for example ``claude: blocked on its first-run
+setup (theme picker) — Claude Code's first-run setup is unfinished for the account it runs as:
+run `claude` once on this host as that user and finish it (…), then step_retry. Claude showed:
+Let's get started. | Choose the text style that looks best with your terminal | …``, or for an
+unknown one ``<engine>: blocked on a screen sluice does not recognize, unchanged for 20s before
+any turn — run `<engine>` once in the step's cwd on this host and answer it (or attach to the
+run's private pane while it waits), then step_retry. …``.
+
+When a pane-driven run fails before its engine completed a turn, or with a timeout or stall kind
+(`TurnStartTimeout`, `ReadyTimeout`, `StallCap`, `WallCap`), the supervisor keeps the pane before
+tearing it down: its screen and up to 50 rows above it, anything token-like masked, in
+`pane-at-failure.txt` (mode 0600) in the invocation's directory (`runs/<run>/`), and the message
+ends with `pane at failure (last rows; whole screen: <path>):` and the last 6 non-empty rows, each
+trimmed, on lines of their own. A `BlockedScreen` message, which already quotes its screen, ends
+with `pane at failure: <path>` instead. A cancellation keeps nothing, and a capture or write that
+fails leaves the failure as it was. The private tmux keeps an exited engine's dead pane
+(`remain-on-exit`) until the teardown, so what it printed as it exited is kept too. The run's log
+records every failure but a cancellation as `agent failed: <kind>: <message>`.
 
 Limits (minutes unless noted), overridable through environment variables: `SLUICE_AGENT_MAX_MIN`
 (600, the wall cap), `SLUICE_AGENT_STALL_MIN` (30), `SLUICE_AGENT_SETTLE_S` (10),
 `SLUICE_AGENT_GRACE_MIN` (10), `SLUICE_AGENT_POLL_S`, `SLUICE_AGENT_READY_S` (180),
 `SLUICE_AGENT_TURN_START_S` (60), `SLUICE_AGENT_WAIT_MIN` (90), `SLUICE_AGENT_DIALOG_S` (60),
 `SLUICE_AGENT_QUIET_MIN` (45), `SLUICE_AGENT_WORK_MIN` (10), `SLUICE_AGENT_NUDGES`,
-`SLUICE_AGENT_QUOTA_RESET_MIN` (15; 0 makes every limit with a known reset a hard cap).
+`SLUICE_AGENT_QUOTA_RESET_MIN` (15; 0 makes every limit with a known reset a hard cap),
+`SLUICE_AGENT_SCREEN_S` (20, seconds: how long an unrecognized screen may stand before the first
+turn).
 
 ### 15.1 Choosing a model
 

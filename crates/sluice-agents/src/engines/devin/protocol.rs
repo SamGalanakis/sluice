@@ -323,6 +323,65 @@ pub fn account_notice(pane: &str) -> Option<crate::engines::EngineError> {
         }
     }
 }
+/// The composer's box is drawn: a `❯` row between its two rules, with its placeholder or with
+/// a draft (pasted input, a typed `/bypass`) in place of it.
+pub fn composer_drawn(pane: &str) -> bool {
+    let pane = strip_ansi(pane);
+    let rules = pane.lines().filter(|s| s.contains("────")).count();
+    rules >= 2 && composer_region(&pane).contains('❯')
+}
+/// The menus the adapter closes itself (Escape) before pasting input.
+pub const ANSWERED_MENUS: [&str; 3] = ["Select a menu item", "Select model", "Search sessions"];
+/// A screen Devin 3000.11.3 stops on before its composer and sluice does not answer, as the
+/// failure that says what the owner must do; `None` without one or with the composer showing.
+/// The rows are Devin's own (from its binary): its login picker (`How would you like to log
+/// in?`, `Log in with browser`, `Paste a token manually`) is an auth failure; its organization
+/// picker (`Select your Devin organization:`) and workspace-trust prompt (`Do you trust the
+/// authors of …`, which `--respect-workspace-trust false` should keep away) are blocked
+/// screens.
+pub fn blocking_screen(pane: &str) -> Option<crate::engines::EngineError> {
+    use crate::engines::{
+        account::{Auth, Engine},
+        screen::{Screen, quote, row},
+    };
+    let pane = strip_ansi(pane);
+    if composer_ready(&pane) {
+        return None;
+    }
+    if row(&pane, "How would you like to log in?")
+        || (row(&pane, "Log in with browser") && pane.contains("Paste a token manually"))
+    {
+        return Some(
+            Auth {
+                problem: "not logged in (Devin shows its login screen)".into(),
+                ..Auth::login(Engine::Devin, quote(&pane))
+            }
+            .error(),
+        );
+    }
+    let (what, advice) = if row(&pane, "Select your Devin organization") {
+        (
+            "its organization picker",
+            "run `devin` once on this host and choose the organization (/org)",
+        )
+    } else if pane.contains("Do you trust the authors of") {
+        (
+            "its workspace-trust prompt",
+            "run `devin` once in the step's cwd on this host and answer it",
+        )
+    } else {
+        return None;
+    };
+    Some(
+        Screen {
+            engine: Engine::Devin,
+            what: what.into(),
+            advice: advice.into(),
+            pane,
+        }
+        .error(),
+    )
+}
 /// Input submitted while Devin works waits in its queue, shown with `queued` and `send now`
 /// until the turn ends; Enter on the empty composer sends it at once by interrupting the turn.
 pub fn input_queued(pane: &str) -> bool {

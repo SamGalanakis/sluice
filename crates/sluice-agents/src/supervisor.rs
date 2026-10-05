@@ -172,6 +172,9 @@ pub enum FailureKind {
     QuotaExhausted,
     /// The engine cannot authenticate (see `engines::account`); never retried or replayed here.
     AuthFailed,
+    /// The engine stopped on an interactive screen it cannot pass (see `engines::screen`);
+    /// never retried or replayed here.
+    BlockedScreen,
     EngineExited,
     Cancelled,
     Cleanup,
@@ -223,6 +226,7 @@ impl From<EngineError> for AgentFailure {
                 EngineErrorKind::UnknownAcceptance => FailureKind::UnknownAcceptance,
                 EngineErrorKind::QuotaExhausted => FailureKind::QuotaExhausted,
                 EngineErrorKind::AuthFailed => FailureKind::AuthFailed,
+                EngineErrorKind::BlockedScreen => FailureKind::BlockedScreen,
                 EngineErrorKind::Fatal => FailureKind::EngineExited,
             },
             e.message,
@@ -465,6 +469,8 @@ pub struct Machine {
     moved: Duration,
     progress: Option<u64>,
     boot_at: Duration,
+    /// The most turns this invocation's engine has reported completed.
+    completed: u64,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -504,7 +510,12 @@ impl Machine {
             moved: now,
             progress: None,
             boot_at: now,
+            completed: 0,
         }
+    }
+    /// The turns this invocation's engine has completed, as last observed.
+    pub fn turns_completed(&self) -> u64 {
+        self.completed
     }
     pub fn pending(&self) -> bool {
         !self.checkpoint.delivery.all_acknowledged()
@@ -533,6 +544,7 @@ impl Machine {
         o: &EngineObservation,
         background: &[String],
     ) -> Result<Action, AgentFailure> {
+        self.completed = self.completed.max(o.turns_completed);
         if now >= self.limits.wall {
             return Err(failure(FailureKind::WallCap, "wall-clock cap exceeded"));
         }
@@ -1016,13 +1028,16 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             };
             match result {
                 Ok(()) => return Ok(()),
-                Err(error) if error.kind == FailureKind::Transient => {
+                Err(mut error) if error.kind == FailureKind::Transient => {
                     machine.checkpoint.state = State::Backoff;
                     machine.checkpoint.delivery.recover();
                     persist(&machine, &config, host).await?;
+                    let last = matches!(config.retry.owner, RetryOwner::OuterHelper) || machine.checkpoint.internal_attempt > config.retry.additional_tries;
+                    if last && keeps_pane(error.kind, machine.turns_completed()) {
+                        keep_pane(&mut error, server.is_some(), tmux, &context.run_dir).await;
+                    }
                     clean(engine, host, &mut server, tmux, &context).await?;
-                    if matches!(config.retry.owner, RetryOwner::OuterHelper) { return Err(error); }
-                    if machine.checkpoint.internal_attempt > config.retry.additional_tries { return Err(error); }
+                    if last { return Err(error); }
                     if machine.checkpoint.session.is_none() { return Err(failure(FailureKind::UnknownAcceptance, "transient without a recorded session cannot start a fresh worker")); }
                     let wait = backoff(&error, config.retry.backoff);
                     eprintln!("agent transient, resuming in {}s: {}", wait.as_secs(), error.message);
@@ -1042,6 +1057,13 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             }
         }
     }.await;
+    let mut outcome = outcome;
+    // The pane goes with the teardown below, so its text is kept first.
+    if let Err(error) = &mut outcome
+        && keeps_pane(error.kind, machine.turns_completed())
+    {
+        keep_pane(error, server.is_some(), tmux, &context.run_dir).await;
+    }
     // This path runs on every ordinary error and cancellation. The guardian owns cleanup
     // when the whole future/process is destroyed. No success can precede this proof.
     let cleanup = clean(engine, host, &mut server, tmux, &context).await;
@@ -1049,10 +1071,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         error.session.clone_from(&machine.checkpoint.session);
         let _ = machine.checkpoint.save(&config.run_dir);
         // The run's log carries the step error's own text, under its kind.
-        if matches!(
-            error.kind,
-            FailureKind::QuotaExhausted | FailureKind::AuthFailed
-        ) {
+        if error.kind != FailureKind::Cancelled {
             eprintln!("agent failed: {error}");
         }
         return Err(error);
@@ -1069,6 +1088,79 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         notes: machine.checkpoint.notes,
         model: model.map(|m| m.id),
     })
+}
+/// Whether a failure keeps the pane's text: one before the engine completed a turn, or a
+/// timeout or stall; never a cancellation.
+fn keeps_pane(kind: FailureKind, turns_completed: u64) -> bool {
+    kind != FailureKind::Cancelled
+        && (turns_completed == 0
+            || matches!(
+                kind,
+                FailureKind::TurnStartTimeout
+                    | FailureKind::StallCap
+                    | FailureKind::ReadyTimeout
+                    | FailureKind::WallCap
+            ))
+}
+/// Keeps the private pane's text at a failure, before the teardown destroys it: its screen (and
+/// up to 50 rows above it) in `pane-at-failure.txt` (0600) in the invocation's directory, and
+/// its last non-empty rows at the end of the message, anything token-like masked in both. A blocked screen's
+/// message already quotes the screen, so it only names the file. A capture or write that
+/// fails leaves the failure as it was.
+async fn keep_pane(
+    error: &mut AgentFailure,
+    pane: bool,
+    tmux: Option<&ApprovedTmux>,
+    run_dir: &Path,
+) {
+    let (true, Some(artifact)) = (pane, tmux) else {
+        return;
+    };
+    let Ok(Ok(pane)) = tokio::time::timeout(
+        Duration::from_secs(5),
+        PrivateTmux::capture(artifact, run_dir),
+    )
+    .await
+    else {
+        return;
+    };
+    let text = screen::evidence(&pane);
+    let path = run_dir.join(screen::PANE_AT_FAILURE);
+    let written = write_private(&path, text.as_bytes()).is_ok();
+    let file = if written {
+        format!("{}", path.display())
+    } else {
+        "not saved".into()
+    };
+    let rows = screen::tail(&text);
+    if error.kind == FailureKind::BlockedScreen {
+        error
+            .message
+            .push_str(&format!("\npane at failure: {file}"));
+    } else if rows.is_empty() {
+        error
+            .message
+            .push_str(&format!("\npane at failure was blank ({file})"));
+    } else {
+        error.message.push_str(&format!(
+            "\npane at failure (last rows; whole screen: {file}):"
+        ));
+        for row in rows {
+            error.message.push_str("\n  ");
+            error.message.push_str(&row);
+        }
+    }
+}
+fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 /// The model this launch runs: the requested object or the engine's default, composed and
 /// checked against the engine's listing. An unknown id fails here, before anything starts.
@@ -1439,6 +1531,11 @@ impl PrivateTmux {
             options.args(["set-option", "-g", "default-terminal", term]);
             command_output(options).await?;
         }
+        // An engine that exits leaves its last screen (and its pane, dead) until the teardown,
+        // so the adapter reads its exit and a failure keeps what it showed.
+        let mut options = artifact.client_command(&context.run_dir)?;
+        options.args(["set-option", "-g", "remain-on-exit", "on"]);
+        command_output(options).await?;
         for (name, value) in env {
             if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
                 return Err(io::Error::other("invalid pane environment"));
@@ -1465,6 +1562,14 @@ impl PrivateTmux {
             prompt::shell_quote(&artifact.binary().to_string_lossy())
         );
         Ok(())
+    }
+    /// The engine pane's screen and up to 50 rows above it: when the engine exits, tmux
+    /// scrolls the dead pane's top row away to print `Pane is dead`.
+    pub async fn capture(artifact: &ApprovedTmux, directory: &Path) -> io::Result<String> {
+        let mut client = artifact.client_command(directory)?;
+        client.args(["capture-pane", "-p", "-S", "-50", "-t", "main"]);
+        let out = command_output(client).await?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
     pub async fn stop(&mut self, artifact: &ApprovedTmux, directory: &Path) -> io::Result<()> {
         let mut client = artifact.client_command(directory)?;

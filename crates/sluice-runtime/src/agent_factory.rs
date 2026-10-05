@@ -419,6 +419,7 @@ impl AgentFactory for Factory {
             }
         }
         let quota_threshold = account::threshold_from_env().map_err(invalid)?;
+        let screen_grace = screen::grace_from_env().map_err(invalid)?;
         let engine = match request.engine.as_str() {
             "fake" => {
                 let binary = std::env::var_os("SLUICE_FAKE_ENGINE_BIN")
@@ -468,11 +469,13 @@ impl AgentFactory for Factory {
                 .with_mcp(std::env::var("SLUICE_CLAUDE_MCP_CONFIG").ok())
                 .with_config_dir_passed(std::env::var_os("CLAUDE_CONFIG_DIR").is_some())
                 .with_environment(environment.clone())
-                .with_quota_threshold(quota_threshold),
+                .with_quota_threshold(quota_threshold)
+                .with_screen_grace(screen_grace),
             )),
             "devin" => Adapter::Devin(Box::new(devin::Devin::new(devin::DevinOptions {
                 hook_binary: bin.clone(),
                 environment,
+                screen_grace,
                 ..Default::default()
             }))),
             _ => return Err(invalid("unknown engine")),

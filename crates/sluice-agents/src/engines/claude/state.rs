@@ -456,6 +456,15 @@ impl ClaudeState {
         self.observation.clone()
     }
 }
+fn blocked_screen(what: String, advice: String, pane: &str) -> EngineError {
+    screen::Screen {
+        engine: account::Engine::Claude,
+        what,
+        advice,
+        pane: pane.into(),
+    }
+    .error()
+}
 /// Names Claude's `rateLimitType`: `weekly limit`.
 fn limit_name(kind: &str) -> &'static str {
     match kind {
@@ -546,6 +555,9 @@ pub struct Claude {
     outgoing: VecDeque<Delivery>,
     prepared_session: Option<String>,
     environment: BTreeMap<String, String>,
+    /// How long a screen sluice does not recognize may stand unchanged before any turn.
+    screen_grace: Duration,
+    watch: screen::Watch,
 }
 impl Claude {
     pub fn new(binary: PathBuf, home: PathBuf, hook_binary: PathBuf, run: RunId) -> Self {
@@ -568,6 +580,8 @@ impl Claude {
             outgoing: VecDeque::new(),
             prepared_session: None,
             environment: super::super::environment::host_environment(),
+            screen_grace: screen::DEFAULT_GRACE,
+            watch: screen::Watch::default(),
         }
     }
     pub fn from_environment() -> Result<Self, EngineError> {
@@ -609,6 +623,32 @@ impl Claude {
     pub fn with_quota_threshold(mut self, threshold: Duration) -> Self {
         self.state.set_quota_threshold(threshold);
         self
+    }
+    /// How long a screen sluice does not recognize may stand unchanged before any turn
+    /// (`screen::DEFAULT_GRACE`).
+    pub fn with_screen_grace(mut self, grace: Duration) -> Self {
+        self.screen_grace = grace;
+        self
+    }
+    /// Before any turn, the screen Claude stopped on instead of its composer: a known one at
+    /// once, any other once it has stood unchanged for the grace. The dialogs the adapter
+    /// answers, a blank pane and the composer are none.
+    fn blocked(&mut self, pane: &str) -> Option<EngineError> {
+        if let Some((what, advice)) = protocol::blocking_screen(pane) {
+            return Some(blocked_screen(what, advice, pane));
+        }
+        if pane.trim().is_empty()
+            || protocol::composer_ready(pane)
+            || protocol::answered_dialog(pane)
+        {
+            self.watch.reset();
+            return None;
+        }
+        self.watch
+            .stands(pane, self.screen_grace, std::time::Instant::now())
+            .then(|| {
+                screen::Screen::unknown(account::Engine::Claude, self.screen_grace, pane).error()
+            })
     }
     /// One injected transient after a completed turn, for the labelled acceptance gate.
     pub fn inject_transient(&mut self) {
@@ -1021,6 +1061,7 @@ impl EngineAdapter for Claude {
         self.outgoing.clear();
         self.prepared_session = session.map(str::to_owned);
         self.began = Instant::now();
+        self.watch.reset();
         if let Some(session) = session {
             let (path, meta) = self.find_session(session)?.ok_or_else(|| {
                 failure(EngineErrorKind::MissingSession, "claude: session not found")
@@ -1195,6 +1236,13 @@ impl EngineAdapter for Claude {
                 .error(),
             );
         }
+        if !dead
+            && self.state.observation.error.is_none()
+            && self.state.observation.turns_started == 0
+            && let Some(error) = self.blocked(&capture)
+        {
+            self.state.observation.error = Some(error);
+        }
         if !dead {
             self.advance_delivery(&capture).await?;
         }
@@ -1209,7 +1257,17 @@ impl EngineAdapter for Claude {
                 .as_secs_f64(),
         );
         if dead && observation.error.is_none() && exit != Some("0") {
-            observation.error = Some(classify(&capture));
+            // Claude prints a required update as it exits. tmux scrolls the dead pane's top
+            // row away to print `Pane is dead`, so the rows above the screen count too.
+            let target = self.pane.clone().unwrap_or_default();
+            let last = self
+                .tmux(&["capture-pane", "-p", "-S", "-50", "-t", &target])
+                .await
+                .unwrap_or_default();
+            observation.error = Some(match protocol::blocking_screen(&last) {
+                Some((what, advice)) => blocked_screen(what, advice, &last),
+                None => classify(&capture),
+            });
         }
         if self.transient_fault && observation.turns_completed > 0 {
             self.transient_fault = false;

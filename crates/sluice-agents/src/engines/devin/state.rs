@@ -34,6 +34,8 @@ pub struct DevinOptions {
     /// How long a Stop must stand with no later hook before it ends the turn. Fusion journals
     /// its sidekick's Stop under the lead's prompt and the lead's blocked call returns at once.
     pub turn_quiet: Duration,
+    /// How long a screen sluice does not recognize may stand unchanged before any turn.
+    pub screen_grace: Duration,
 }
 impl Default for DevinOptions {
     fn default() -> Self {
@@ -57,6 +59,7 @@ impl Default for DevinOptions {
             ready_timeout: Duration::from_secs(180),
             delivery_timeout: Duration::from_secs(20),
             turn_quiet: Duration::from_secs(10),
+            screen_grace: super::super::screen::DEFAULT_GRACE,
         }
     }
 }
@@ -107,6 +110,7 @@ pub struct Devin {
     exit_requested: bool,
     exit_enter: Option<Instant>,
     restore_mode: Option<Restore>,
+    watch: super::super::screen::Watch,
 }
 impl Devin {
     pub fn new(options: DevinOptions) -> Self {
@@ -129,6 +133,7 @@ impl Devin {
             exit_requested: false,
             exit_enter: None,
             restore_mode: None,
+            watch: Default::default(),
         }
     }
     /// One observation reports a transient without changing delivery or session evidence.
@@ -511,7 +516,45 @@ impl Devin {
         self.read_export()?;
         Ok(self.observation.clone())
     }
+    /// Before any turn, the screen Devin stopped on instead of its composer: a known one at
+    /// once, any other once it has stood unchanged for the grace. The menus the adapter closes,
+    /// a blank pane and the composer, empty or holding a draft, are none.
+    /// Returns whether it failed the run.
+    async fn probe_screen(&mut self, context: &EngineContext) -> Result<bool, EngineError> {
+        use super::super::{account::Engine, screen::Screen};
+        if self.observation.turns_started > 0
+            || self.observation.error.is_some()
+            || self.exit_requested
+            || context.tmux_binary.is_none()
+        {
+            return Ok(false);
+        }
+        let pane = protocol::strip_ansi(&self.capture(context).await?);
+        if let Some(failure) = protocol::blocking_screen(&pane) {
+            self.log(&failure.message)?;
+            self.observation.error = Some(failure);
+            return Ok(true);
+        } else if pane.trim().is_empty()
+            || protocol::composer_ready(&pane)
+            || protocol::composer_drawn(&pane)
+            || protocol::ANSWERED_MENUS.iter().any(|m| pane.contains(m))
+        {
+            self.watch.reset();
+        } else if self
+            .watch
+            .stands(&pane, self.options.screen_grace, std::time::Instant::now())
+        {
+            let failure = Screen::unknown(Engine::Devin, self.options.screen_grace, &pane).error();
+            self.log(&failure.message)?;
+            self.observation.error = Some(failure);
+            return Ok(true);
+        }
+        Ok(false)
+    }
     async fn drive(&mut self, context: &EngineContext) -> Result<EngineObservation, EngineError> {
+        if self.probe_screen(context).await? {
+            return Ok(self.observation.clone());
+        }
         if !self.restore_permission_mode(context).await? {
             let mut observation = self.observation.clone();
             observation.status = EngineStatus::Starting;
@@ -591,10 +634,7 @@ impl Devin {
         let pane = self.capture(context).await?;
         if !pasted {
             if !protocol::composer_ready(&pane) {
-                if ["Select a menu item", "Select model", "Search sessions"]
-                    .iter()
-                    .any(|m| pane.contains(m))
-                {
+                if protocol::ANSWERED_MENUS.iter().any(|m| pane.contains(m)) {
                     let pending = self.pending.as_mut().unwrap();
                     let confirmed = pending.dialog.as_ref() == Some(&pane);
                     pending.dialog = Some(pane);
@@ -843,6 +883,7 @@ impl EngineAdapter for Devin {
         self.active_prompt = None;
         self.stop = None;
         self.last_hook = None;
+        self.watch.reset();
         self.prepared = Some(context.clone());
         self.restore_mode = session
             .filter(|_| context.tmux_binary.is_some())

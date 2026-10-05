@@ -320,6 +320,95 @@ pub fn login_text(pane: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+/// The two dialogs the adapter answers itself, before the composer: the folder-trust prompt
+/// (`Yes, I trust this folder`) and the bypass-permissions warning (`WARNING: Claude Code
+/// running in Bypass Permissions mode`, `Yes, I accept`).
+pub fn answered_dialog(pane: &str) -> bool {
+    pane.contains("Yes, I trust this folder")
+        || (pane.contains("WARNING: Claude Code running in Bypass Permissions mode")
+            && pane.contains("Yes, I accept"))
+}
+/// A screen Claude Code 2.1.284 stops on before its composer and sluice does not answer, with
+/// what the owner must do; `None` without one, with the composer showing, or on the dialogs
+/// the adapter answers. The rows are Claude's own (from its bundle):
+/// - its first-run setup (`Onboarding`): the theme picker (`Let's get started.`, `Choose the
+///   text style that looks best with your terminal`), `Security notes:` (`Claude can make
+///   mistakes.`) and `Use Claude Code's terminal setup?`;
+/// - setup's connectivity check failing (`Unable to connect to Anthropic services`);
+/// - the API-key prompt (`Detected a custom API key in your environment`, `Do you want to use
+///   this API key?`);
+/// - the updated-terms notice (`Updates to Consumer Terms and Policies`, `We've updated our
+///   Consumer Terms and Privacy Policy.`);
+/// - `Managed settings require approval`;
+/// - a project's MCP servers (`New MCP server found in this project: …`, `… new MCP servers
+///   found in this project`);
+/// - `Allow external CLAUDE.md file imports?`;
+/// - a required update (`It looks like your version of Claude Code (…) needs an update.`,
+///   `Claude Code … is older than the minimum version required by your organization`), which
+///   Claude prints as it exits.
+///
+/// Its login screen (`Select login method:`) is an auth failure instead (`login_screen`).
+pub fn blocking_screen(pane: &str) -> Option<(String, String)> {
+    use crate::engines::screen::row;
+    if composer_ready(pane) || answered_dialog(pane) {
+        return None;
+    }
+    let setup = "Claude Code's first-run setup is unfinished for the account it runs as: run `claude` once on this host as that user and finish it (and if the host sets CLAUDE_CONFIG_DIR, check that it is the configured one)";
+    let (what, advice) = if row(
+        pane,
+        "Choose the text style that looks best with your terminal",
+    ) {
+        ("its first-run setup (theme picker)", setup)
+    } else if row(pane, "Security notes:") && pane.contains("Claude can make mistakes.") {
+        ("its first-run setup (security notes)", setup)
+    } else if row(pane, "Use Claude Code's terminal setup?") {
+        ("its first-run setup (terminal setup)", setup)
+    } else if row(pane, "Unable to connect to Anthropic services") {
+        (
+            "its first-run connectivity check (it cannot reach Anthropic)",
+            "check this host's network and proxy to Anthropic (https://code.claude.com/docs/en/network-config), then run `claude` once on this host and finish its setup",
+        )
+    } else if row(pane, "Do you want to use this API key?") {
+        (
+            "its API-key prompt (ANTHROPIC_API_KEY is set)",
+            "run `claude` once on this host and answer whether to use the key, or remove ANTHROPIC_API_KEY from the environment the run inherits",
+        )
+    } else if row(pane, "Updates to Consumer Terms and Policies")
+        || row(pane, "We've updated our Consumer Terms and Privacy Policy")
+    {
+        (
+            "Anthropic's updated terms",
+            "run `claude` once on this host and review and accept the updated terms",
+        )
+    } else if row(pane, "Managed settings require approval") {
+        (
+            "its approval of the organization's managed settings",
+            "run `claude` once on this host and approve the managed settings",
+        )
+    } else if pane.contains("New MCP server found in this project")
+        || pane.contains("new MCP servers found in this project")
+    {
+        (
+            "its approval of the project's MCP servers (.mcp.json)",
+            "run `claude` once in the step's cwd on this host and approve or reject the servers (or set enabledMcpjsonServers or enableAllProjectMcpServers in the project's settings)",
+        )
+    } else if row(pane, "Allow external CLAUDE.md file imports?") {
+        (
+            "its approval of CLAUDE.md imports from outside the directory",
+            "run `claude` once in the step's cwd on this host and answer it",
+        )
+    } else if pane.contains(") needs an update.")
+        || pane.contains("is older than the minimum version required by your organization")
+    {
+        (
+            "a required update (this Claude Code is older than the version it now requires)",
+            "update Claude Code on this host (`claude update`) together with sluice's pinned Claude profile",
+        )
+    } else {
+        return None;
+    };
+    Some((what.into(), advice.into()))
+}
 pub fn read_json(path: &Path) -> Option<Value> {
     let file = File::open(path).ok()?;
     if file.metadata().ok()?.len() > MAX_EVENT_BYTES as u64 {

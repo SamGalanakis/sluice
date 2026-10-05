@@ -420,9 +420,38 @@ pub fn main(args: Vec<String>) -> io::Result<()> {
                 if !selected {
                     return Err(io::Error::other("trust refused"));
                 }
+                append(&fake.run.join("fixture-dialogs.jsonl"), &json!("trust"))?;
                 break;
             }
         }
+    }
+    if fake.config["bypass"].as_bool() == Some(true) {
+        // 2.1.284's warning under --dangerously-skip-permissions, until accepted.
+        let warning = "\x1b[H\x1b[2J WARNING: Claude Code running in Bypass Permissions mode\r\n\r\n In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.\r\n\r\n";
+        println!("{warning} \u{276f} 1. No, exit\r\n   2. Yes, I accept\r\n");
+        let mut selected = false;
+        loop {
+            let bytes = receiver.recv().map_err(io::Error::other)?;
+            if bytes.windows(3).any(|b| b == b"\x1b[B") {
+                selected = true;
+                println!("{warning}   1. No, exit\r\n \u{276f} 2. Yes, I accept\r\n");
+            }
+            if bytes.contains(&b'\r') {
+                if !selected {
+                    return Err(io::Error::other("bypass refused"));
+                }
+                append(&fake.run.join("fixture-dialogs.jsonl"), &json!("bypass"))?;
+                break;
+            }
+        }
+    }
+    if let Some(screen) = fake.config["screen"].as_str() {
+        // A screen Claude stops on instead of its composer, such as its first-run setup; it
+        // stays until the run ends.
+        print!("\x1b[H\x1b[2J{}", screen.replace('\n', "\r\n"));
+        io::stdout().flush()?;
+        while receiver.recv().is_ok() {}
+        return Ok(());
     }
     if fake.config["login"].as_bool() == Some(true) {
         // Logged out, 2.1.284 opens on its login screen and waits there.

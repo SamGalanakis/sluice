@@ -1504,3 +1504,340 @@ async fn claude_is_told_its_config_dir_only_when_the_host_chose_one() {
         default.env.keys().collect::<Vec<_>>()
     );
 }
+
+/// Claude Code 2.1.284's first-run theme picker, as a run whose config dir was wrong showed it.
+const THEME_PICKER: &str = " Let's get started.\n\n Choose the text style that looks best with your terminal\n To change this later, run /theme\n\n \u{276f} 1. Auto (match terminal)\n   2. Dark mode \u{2714}\n   3. Light mode\n   4. Dark mode (colorblind-friendly)\n   5. Light mode (colorblind-friendly)\n   6. Dark mode (ANSI colors only)\n   7. Light mode (ANSI colors only)\n\n  1  function greet() {\n  2 -  console.log(\"Hello, World!\");\n  2 +  console.log(\"Hello, Claude!\");\n  3  }\n\n  Syntax highlighting enabled (ctrl+t to disable)\n";
+
+#[test]
+fn claude_blocking_screens_are_named_from_its_own_rows_and_never_with_the_composer() {
+    let named = |pane: &str| protocol::blocking_screen(pane).map(|(what, _)| what);
+    assert_eq!(
+        named(THEME_PICKER).as_deref(),
+        Some("its first-run setup (theme picker)")
+    );
+    for (pane, what) in [
+        (
+            " Security notes:\n\n 1. Claude can make mistakes.\n    You're responsible for Claude's actions",
+            "its first-run setup (security notes)",
+        ),
+        (
+            " Use Claude Code's terminal setup?\n\n For the optimal coding experience, enable the recommended settings",
+            "its first-run setup (terminal setup)",
+        ),
+        (
+            " Unable to connect to Anthropic services\n getaddrinfo ENOTFOUND api.anthropic.com",
+            "its first-run connectivity check (it cannot reach Anthropic)",
+        ),
+        (
+            " Detected a custom API key in your environment\n\n ANTHROPIC_API_KEY: sk-ant-...F0dF\n\n Do you want to use this API key?\n\n   1. Yes\n \u{276f} 2. No (recommended)",
+            "its API-key prompt (ANTHROPIC_API_KEY is set)",
+        ),
+        (
+            " Updates to Consumer Terms and Policies\n\n \u{276f} 1. Accept terms \u{b7} Help improve our AI models: ON",
+            "Anthropic's updated terms",
+        ),
+        (
+            "\u{256d}\u{2500}\u{2500}\u{2500}\n\u{2502} Managed settings require approval\n\u{2502} \u{276f} Yes, I trust these settings",
+            "its approval of the organization's managed settings",
+        ),
+        (
+            " New MCP server found in this project: search\n\n \u{276f} 1. Use this MCP server",
+            "its approval of the project's MCP servers (.mcp.json)",
+        ),
+        (
+            " Allow external CLAUDE.md file imports?\n\n This project's CLAUDE.md or .claude/rules imports files outside the current working directory.",
+            "its approval of CLAUDE.md imports from outside the directory",
+        ),
+        (
+            "It looks like your version of Claude Code (2.1.284) needs an update.\nA newer version (2.2.0 or higher) is required to continue.",
+            "a required update (this Claude Code is older than the version it now requires)",
+        ),
+    ] {
+        assert_eq!(named(pane).as_deref(), Some(what), "{pane}");
+    }
+    // The dialogs the adapter answers, its login screen (an auth failure) and the composer are
+    // not blocking screens, even when the composer's transcript quotes one.
+    for pane in [
+        "No, exit\n\u{276f} No, exit\n  Yes, I trust this folder",
+        " WARNING: Claude Code running in Bypass Permissions mode\n \u{276f} 1. No, exit\n   2. Yes, I accept",
+        " Select login method:\n\n \u{276f} 1. Claude account with subscription \u{b7} Pro, Max, Team, or Enterprise",
+        &format!(
+            "{THEME_PICKER}\n{}\n\u{276f} \n{}\n",
+            "\u{2500}".repeat(70),
+            "\u{2500}".repeat(70)
+        ),
+    ] {
+        assert_eq!(named(pane), None, "{pane}");
+    }
+    let error = sluice_agents::engines::screen::Screen {
+        engine: sluice_agents::engines::account::Engine::Claude,
+        what: "its first-run setup (theme picker)".into(),
+        advice: "finish it".into(),
+        pane: THEME_PICKER.into(),
+    }
+    .error();
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen);
+    assert!(
+        error.message.starts_with(
+            "claude: blocked on its first-run setup (theme picker) — finish it, then step_retry. Claude showed: Let's get started. | Choose the text style that looks best with your terminal | To change this later, run /theme | \u{276f} 1. Auto (match terminal) |"
+        ),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn pane_text_kept_at_a_failure_is_masked_and_its_tail_trimmed() {
+    use sluice_agents::engines::screen;
+    let key = "sk-ant-api03-Zq8xV4mN2pL7kR9tY3wE6uI1oP5aS0dF";
+    let pane = format!(
+        "  Welcome back   \n\n  export ANTHROPIC_API_KEY={key}\n  Authorization: Bearer abc123def456ghi789\n\n a\n b\n c\n d\n   e   \n\n\n"
+    );
+    let kept = screen::evidence(&pane);
+    assert!(!kept.contains("Zq8xV4mN2pL7"), "{kept}");
+    assert!(!kept.contains("abc123def456"), "{kept}");
+    assert!(
+        kept.contains("export ANTHROPIC_API_KEY=[redacted]"),
+        "{kept}"
+    );
+    assert!(kept.contains("Authorization: Bearer [redacted]"), "{kept}");
+    assert!(kept.ends_with("   e\n"), "{kept:?}");
+    assert_eq!(
+        screen::tail(&kept),
+        ["Authorization: Bearer [redacted]", "a", "b", "c", "d", "e"]
+    );
+    assert!(!screen::quote(&pane).contains("Zq8xV4mN2pL7"));
+    assert!(screen::tail("\n  \n").is_empty());
+}
+
+#[test]
+fn an_unrecognized_screen_stands_only_while_it_is_unchanged() {
+    use sluice_agents::engines::screen::Watch;
+    let grace = Duration::from_secs(20);
+    let start = Instant::now();
+    let mut watch = Watch::default();
+    assert!(!watch.stands("Press any key  \n", grace, start));
+    assert!(!watch.stands("Press any key", grace, start + Duration::from_secs(19)));
+    assert!(watch.stands("Press any key\n\n", grace, start + grace));
+    // A spinner, or a startup that progresses, restarts the clock.
+    let mut watch = Watch::default();
+    for (i, frame) in ["\u{280b} Loading", "\u{2819} Loading"]
+        .iter()
+        .cycle()
+        .take(30)
+        .enumerate()
+    {
+        assert!(!watch.stands(frame, grace, start + Duration::from_secs(i as u64)));
+    }
+    watch.reset();
+    assert!(!watch.stands("\u{2819} Loading", grace, start + Duration::from_secs(60)));
+    use sluice_agents::engines::screen::{DEFAULT_GRACE, parse_grace};
+    assert_eq!(DEFAULT_GRACE, grace);
+    assert_eq!(parse_grace("45").unwrap(), Duration::from_secs(45));
+    assert_eq!(parse_grace("0.5").unwrap(), Duration::from_millis(500));
+    for bad in ["0", "-1", "inf", "NaN", "x", ""] {
+        assert!(parse_grace(bad).is_err(), "{bad}");
+    }
+}
+
+async fn first_error(h: &mut Harness, within: Duration) -> (EngineError, Duration) {
+    let started = Instant::now();
+    let outcome = h
+        .adapter
+        .execute(
+            &h.context,
+            EngineCommand::DeliverText {
+                id: InputId::Task,
+                text: "p".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, DeliveryOutcome::Pending);
+    loop {
+        let s = h.poll().await;
+        if let Some(error) = s.error {
+            assert!(s.acknowledged.is_empty());
+            return (error, started.elapsed());
+        }
+        assert!(started.elapsed() < within, "{s:?}");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
+#[tokio::test]
+async fn fake_first_run_setup_fails_as_blocked_screen_at_once_with_its_text() {
+    let mut h = Harness::new(json!({"screen":THEME_PICKER})).await;
+    h.launch(None).await;
+    let (error, took) = first_error(&mut h, Duration::from_secs(10)).await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error:?}");
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(
+        error.message.starts_with(
+            "claude: blocked on its first-run setup (theme picker) — Claude Code's first-run setup is unfinished for the account it runs as: run `claude` once on this host as that user and finish it (and if the host sets CLAUDE_CONFIG_DIR, check that it is the configured one), then step_retry. Claude showed: Let's get started. | Choose the text style that looks best with your terminal |"
+        ),
+        "{}",
+        error.message
+    );
+    assert!(!h.context.run_dir.join("fixture-prompts.jsonl").exists());
+    h.cleanup().await;
+}
+
+#[tokio::test]
+async fn fake_trust_and_bypass_dialogs_are_still_answered_before_the_turn() {
+    let mut h = Harness::new(json!({"trust":true,"bypass":true,"turns":[{"reply":"ok"}]})).await;
+    h.launch(None).await;
+    let s = h.turn(InputId::Task, "p", 1).await;
+    assert_eq!(s.error, None);
+    assert_eq!(s.final_text, "ok");
+    assert_eq!(h.prompts(), vec!["p"]);
+    assert_eq!(
+        fs::read_to_string(h.context.run_dir.join("fixture-dialogs.jsonl")).unwrap(),
+        "\"trust\"\n\"bypass\"\n"
+    );
+    h.cleanup().await;
+}
+
+#[tokio::test]
+async fn fake_unrecognized_screen_fails_as_blocked_screen_after_the_grace() {
+    let mut h = Harness::new(
+        json!({"screen":" Something new is here.\n\n Press Enter to continue\u{2026}"}),
+    )
+    .await;
+    h.adapter = std::mem::replace(
+        &mut h.adapter,
+        Claude::new(
+            "claude".into(),
+            "/nowhere".into(),
+            "/nowhere".into(),
+            RunId::new(),
+        ),
+    )
+    .with_screen_grace(Duration::from_secs(2));
+    h.launch(None).await;
+    let (error, took) = first_error(&mut h, Duration::from_secs(10)).await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error:?}");
+    assert!(took >= Duration::from_secs(2), "{took:?}");
+    assert_eq!(
+        error.message,
+        "claude: blocked on a screen sluice does not recognize, unchanged for 2s before any turn — run `claude` once in the step's cwd on this host and answer it (or attach to the run's private pane while it waits), then step_retry. Claude showed: Something new is here. | Press Enter to continue\u{2026}"
+    );
+    h.cleanup().await;
+}
+
+/// A supervised Claude on the fixture's `config`, its limits short but a dialog nudge never due.
+async fn supervise_claude(
+    h: &Harness,
+    configure: impl FnOnce(&mut sluice_agents::supervisor::SupervisorConfig),
+) -> (
+    Result<sluice_agents::supervisor::AgentResult, sluice_agents::supervisor::AgentFailure>,
+    PathBuf,
+) {
+    let hook = h.scratch.0.join("journal-hook");
+    executable::write(&hook, include_str!("acceptance/hook.py"));
+    let fixture = built("fixture").canonicalize().unwrap();
+    let wrapper = h.scratch.0.join("supervised-claude");
+    executable::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexport SLUICE_HOME={}\nexport HOME={}\nexport SLUICE_FAKE_CLAUDE={}\nexec {} claude \"$@\"\n",
+            protocol::shell_quote(&h.scratch.0.to_string_lossy()),
+            protocol::shell_quote(&h.scratch.0.join("home").to_string_lossy()),
+            protocol::shell_quote(&h.scratch.0.join("config.json").to_string_lossy()),
+            protocol::shell_quote(&fixture.to_string_lossy())
+        ),
+    );
+    let mut cfg = acceptance::config(&h.scratch.0, "claude");
+    cfg.limits.wall = Duration::from_secs(15);
+    cfg.limits.ready = Duration::from_secs(5);
+    cfg.limits.turn_start = Duration::from_secs(2);
+    cfg.limits.stall = Duration::from_secs(10);
+    cfg.limits.dialog = Duration::from_secs(60);
+    configure(&mut cfg);
+    let mut adapter = Claude::new(wrapper, h.scratch.0.join("claude"), hook, cfg.run);
+    let directory = cfg.run_dir.clone();
+    let mut host = acceptance::Host {
+        directory: Some(directory.clone()),
+        ..Default::default()
+    };
+    let result = sluice_agents::supervisor::supervise(
+        cfg,
+        &mut adapter,
+        &mut host,
+        &mut Default::default(),
+        Some(&h.tmux),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await;
+    (result, directory)
+}
+
+/// The original failure: Claude sat on a screen the adapter did not know and the run failed
+/// `TurnStartTimeout` with nothing to say what was on it. The pane is kept before teardown.
+#[tokio::test]
+async fn supervisor_claude_turn_start_timeout_keeps_the_pane_at_failure() {
+    let key = "sk-ant-api03-Zq8xV4mN2pL7kR9tY3wE6uI1oP5aS0dF";
+    let h = Harness::new(json!({"screen":format!(" Welcome back!\n\n Your key: {key}\n\n Press Enter to continue\u{2026}")})).await;
+    let (result, directory) = supervise_claude(&h, |_| {}).await;
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.kind,
+        sluice_agents::supervisor::FailureKind::TurnStartTimeout,
+        "{error}"
+    );
+    let path = fs::canonicalize(&directory)
+        .unwrap()
+        .join("pane-at-failure.txt");
+    assert!(
+        error.message.ends_with(&format!(
+            "refusing blind replay\npane at failure (last rows; whole screen: {}):\n  Welcome back!\n  Your key: [redacted]\n  Press Enter to continue\u{2026}",
+            path.display()
+        )),
+        "{}",
+        error.message
+    );
+    let kept = fs::read_to_string(&path).unwrap();
+    assert!(kept.contains(" Your key: [redacted]\n"), "{kept}");
+    assert!(!kept.contains("Zq8xV4mN2pL7"), "{kept}");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!h.client(&["list-sessions"]).status.success());
+}
+
+/// Claude prints a required update as it exits; the dead pane stays until teardown, so the run
+/// fails typed, quoting it, and keeps the pane.
+#[tokio::test]
+async fn supervisor_claude_required_update_at_exit_fails_as_blocked_screen() {
+    let h = Harness::new(json!({"exit_at_start":1,"stderr":"It looks like your version of Claude Code (2.1.284) needs an update.\r\nA newer version (2.2.0 or higher) is required to continue."})).await;
+    let (result, directory) = supervise_claude(&h, |_| {}).await;
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.kind,
+        sluice_agents::supervisor::FailureKind::BlockedScreen,
+        "{error}"
+    );
+    assert!(
+        error.message.starts_with(
+            "claude: blocked on a required update (this Claude Code is older than the version it now requires) — update Claude Code on this host (`claude update`) together with sluice's pinned Claude profile, then step_retry. Claude showed: It looks like your version of Claude Code (2.1.284) needs an update. | A newer version (2.2.0 or higher) is required to continue."
+        ),
+        "{}",
+        error.message
+    );
+    let path = fs::canonicalize(&directory)
+        .unwrap()
+        .join("pane-at-failure.txt");
+    assert!(
+        error
+            .message
+            .ends_with(&format!("\npane at failure: {}", path.display())),
+        "{}",
+        error.message
+    );
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("needs an update.")
+    );
+}

@@ -15,6 +15,7 @@ pub mod claude;
 pub mod codex;
 pub mod devin;
 pub mod environment;
+pub mod screen;
 
 /// Writes a private (0600) file through a sibling temp file and a rename, so a concurrent
 /// reader sees the old file or the whole new one, never an empty or partial file.
@@ -70,6 +71,10 @@ pub enum EngineErrorKind {
     /// The engine cannot authenticate (logged out, a token expired or revoked, the account
     /// barred): no turn can run until the owner signs in again on this host. See `account`.
     AuthFailed,
+    /// The engine stopped, before its first turn, on an interactive screen sluice does not
+    /// answer (first-run setup, a terms or settings approval, an organization picker, or one
+    /// it does not recognize): no input can reach it until the owner answers it. See `screen`.
+    BlockedScreen,
     Fatal,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

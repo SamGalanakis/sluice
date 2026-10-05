@@ -104,6 +104,7 @@ fn options(root: &Scratch, script: Value) -> DevinOptions {
         delivery_timeout: Duration::from_secs(4),
         // Most tests read a Stop as the turn's end at once; the post-Stop tests set their own.
         turn_quiet: Duration::ZERO,
+        screen_grace: sluice_agents::engines::screen::DEFAULT_GRACE,
     }
 }
 fn context(root: &Scratch, name: &str, tmux: bool) -> EngineContext {
@@ -1982,6 +1983,7 @@ async fn g3_devin() -> io::Result<()> {
         ready_timeout: Duration::from_secs(60),
         delivery_timeout: Duration::from_secs(30),
         turn_quiet: Duration::from_secs(10),
+        screen_grace: sluice_agents::engines::screen::DEFAULT_GRACE,
     });
     let ctx = context(&root, "g3_devin-fresh", true);
     for args in [
@@ -2296,4 +2298,167 @@ async fn supervisor_missing_session_lock_and_cwd() {
 #[tokio::test]
 async fn supervisor_predecessor_cwd_mismatch_starts_fresh() {
     acceptance::scenario("predecessor_cwd_mismatch", "devin").await;
+}
+
+/// Launches the fixture on `pane` (drawn instead of the composer, no SessionStart), offers the
+/// task and returns the first failure with how long it took.
+async fn blocked_on(
+    pane: &str,
+    grace: Option<Duration>,
+) -> (sluice_agents::engines::EngineError, Duration) {
+    let root = Scratch::new();
+    let mut options = options(&root, json!({"ready_pane":pane,"omit_session_start":true}));
+    if let Some(grace) = grace {
+        options.screen_grace = grace;
+    }
+    let mut adapter = Devin::new(options);
+    let ctx = context(&root, "run", true);
+    let launch = adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let _pane = Pane::start(&ctx, launch).await;
+    adapter
+        .execute(&ctx, EngineCommand::StartFresh)
+        .await
+        .unwrap();
+    let started = Instant::now();
+    assert_eq!(
+        adapter
+            .execute(
+                &ctx,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "Start the task".into()
+                }
+            )
+            .await
+            .unwrap(),
+        DeliveryOutcome::Pending
+    );
+    let failed = poll(&mut adapter, &ctx, |o| o.error.is_some()).await;
+    let took = started.elapsed();
+    assert!(failed.acknowledged.is_empty());
+    assert_eq!(failed.turns_started, 0);
+    assert!(!root.join("prompts.jsonl").exists());
+    adapter.close().await.unwrap();
+    (failed.error.unwrap(), took)
+}
+
+#[tokio::test]
+async fn devin_setup_screens_fail_typed_at_once_before_any_input() {
+    let (error, took) = blocked_on(
+        "Select your Devin organization:\n\n\u{276f} Acme Corp\n  Personal",
+        None,
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error}");
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert_eq!(
+        error.message,
+        "devin: blocked on its organization picker — run `devin` once on this host and choose the organization (/org), then step_retry. Devin showed: Select your Devin organization: | \u{276f} Acme Corp | Personal"
+    );
+    let (error, _) = blocked_on(
+        "Do you trust the authors of /scratch/work?\n\n\u{276f} Yes, trust this folder\n  No, exit",
+        None,
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error}");
+    assert!(
+        error
+            .message
+            .starts_with("devin: blocked on its workspace-trust prompt — "),
+        "{}",
+        error.message
+    );
+    // Logged out, Devin opens on its login picker: an auth failure, as its notices are.
+    let (error, took) = blocked_on(
+        "How would you like to log in?\n\n\u{276f} Log in with browser\n  Recommended for most users\n  Paste a token manually\n  For SSH or remote sessions without browser access",
+        None,
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error}");
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(
+        error.message.starts_with(
+            "devin: not logged in (Devin shows its login screen) — run `devin auth login` on this host (or /login inside `devin`), then step_retry. Devin said: How would you like to log in? |"
+        ),
+        "{}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn devin_unrecognized_screen_fails_as_blocked_screen_after_the_grace() {
+    let (error, took) = blocked_on(
+        "Something new is here.\n\nPress Enter to continue",
+        Some(Duration::from_secs(2)),
+    )
+    .await;
+    assert_eq!(error.kind, EngineErrorKind::BlockedScreen, "{error}");
+    assert!(took >= Duration::from_secs(2), "{took:?}");
+    assert_eq!(
+        error.message,
+        "devin: blocked on a screen sluice does not recognize, unchanged for 2s before any turn — run `devin` once in the step's cwd on this host and answer it (or attach to the run's private pane while it waits), then step_retry. Devin showed: Something new is here. | Press Enter to continue"
+    );
+}
+
+/// Devin takes the pasted task but never submits it: the run fails `TurnStartTimeout`, and the
+/// pane, kept before teardown, shows the task still in its composer.
+#[tokio::test]
+async fn supervisor_devin_turn_start_timeout_keeps_the_pane_at_failure() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({"drop_enters":1000})));
+    let mut cfg = supervisor_config(&root);
+    cfg.limits.turn_start = Duration::from_secs(2);
+    let dir = cfg.run_dir.clone();
+    let mut host = DevinHost {
+        directory: cfg.cwd.clone(),
+        ..Default::default()
+    };
+    let failure = supervise_fixture(&mut adapter, cfg, &mut host)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.kind,
+        sluice_agents::supervisor::FailureKind::TurnStartTimeout,
+        "{failure}"
+    );
+    let path = fs::canonicalize(&dir).unwrap().join("pane-at-failure.txt");
+    let head = format!(
+        "refusing blind replay\npane at failure (last rows; whole screen: {}):\n",
+        path.display()
+    );
+    let at = failure.message.find(&head).expect(&failure.message);
+    let rows: Vec<_> = failure.message[at + head.len()..].lines().collect();
+    assert_eq!(rows.len(), 6, "{}", failure.message);
+    assert!(rows.iter().all(|row| row.starts_with("  ")), "{rows:?}");
+    assert!(
+        rows.contains(&"  \u{276f} Submit the declared word blue and finish."),
+        "{rows:?}"
+    );
+    assert!(rows[5].starts_with("  SWE-2 High"), "{rows:?}");
+    let kept = fs::read_to_string(&path).unwrap();
+    assert!(kept.contains("Submit the declared word blue and finish."));
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(host.cleanups, 1);
+}
+
+#[test]
+fn devin_composer_holding_a_draft_is_no_screen_to_wait_out() {
+    let rule = "\u{2500}".repeat(100);
+    let footer = "SWE-2 High \u{b7} Context: 0k / 262k tokens (0%)";
+    let empty = format!(
+        "{rule}\n\u{276f} Ask Devin to build features, fix bugs, or work on your code\n{rule}\n{footer}"
+    );
+    let draft = format!("{rule}\n\u{276f} Submit the declared word\n{rule}\n{footer}");
+    let pasted = format!("{rule}\n\u{276f} \n  [Pasted text #1 +40 lines]\n{rule}\n{footer}");
+    assert!(protocol::composer_ready(&empty) && protocol::composer_drawn(&empty));
+    for pane in [&draft, &pasted] {
+        assert!(!protocol::composer_ready(pane), "{pane}");
+        assert!(protocol::composer_drawn(pane), "{pane}");
+        assert!(protocol::blocking_screen(pane).is_none(), "{pane}");
+    }
+    let picker = "Select your Devin organization:\n\n\u{276f} Acme Corp\n  Personal";
+    assert!(!protocol::composer_drawn(picker));
 }
