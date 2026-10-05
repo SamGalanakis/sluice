@@ -1477,3 +1477,30 @@ async fn fake_login_screen_fails_as_auth_failed_before_any_input_is_taken() {
     );
     h.cleanup().await;
 }
+
+/// With no `CLAUDE_CONFIG_DIR` of the host's own, Claude is not told one: told the default
+/// `~/.claude`, it reads `~/.claude/.claude.json` rather than the owner's `~/.claude.json`, opens
+/// on its first-run setup and never starts a turn. A host that chose a directory still passes it.
+#[tokio::test]
+async fn claude_is_told_its_config_dir_only_when_the_host_chose_one() {
+    let mut h = Harness::new(json!({})).await;
+    let chosen = h.adapter.prepare(&h.context, None).await.unwrap().unwrap();
+    assert!(chosen.env.contains_key("CLAUDE_CONFIG_DIR"));
+    let mut h = Harness::new(json!({})).await;
+    h.adapter = std::mem::replace(
+        &mut h.adapter,
+        Claude::new(
+            "claude".into(),
+            "/nowhere".into(),
+            "/nowhere".into(),
+            RunId::new(),
+        ),
+    )
+    .with_config_dir_passed(false);
+    let default = h.adapter.prepare(&h.context, None).await.unwrap().unwrap();
+    assert!(
+        !default.env.contains_key("CLAUDE_CONFIG_DIR"),
+        "Claude must find the owner's ~/.claude.json: {:?}",
+        default.env.keys().collect::<Vec<_>>()
+    );
+}

@@ -466,6 +466,7 @@ impl AgentFactory for Factory {
                     invocation.run,
                 )
                 .with_mcp(std::env::var("SLUICE_CLAUDE_MCP_CONFIG").ok())
+                .with_config_dir_passed(std::env::var_os("CLAUDE_CONFIG_DIR").is_some())
                 .with_environment(environment.clone())
                 .with_quota_threshold(quota_threshold),
             )),

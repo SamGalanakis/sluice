@@ -527,6 +527,10 @@ struct Delivery {
 pub struct Claude {
     binary: PathBuf,
     home: PathBuf,
+    /// Whether Claude is told `CLAUDE_CONFIG_DIR`. Only when the host chose the directory: set to
+    /// the default `~/.claude`, Claude would read `~/.claude/.claude.json` instead of the owner's
+    /// `~/.claude.json` and open on its first-run setup, so no turn ever starts.
+    pass_config_dir: bool,
     hook_binary: PathBuf,
     run: RunId,
     mcp: Option<String>,
@@ -548,6 +552,7 @@ impl Claude {
         Self {
             binary,
             home,
+            pass_config_dir: true,
             hook_binary,
             run,
             mcp: None,
@@ -567,7 +572,9 @@ impl Claude {
     }
     pub fn from_environment() -> Result<Self, EngineError> {
         let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
-        let home = var("CLAUDE_CONFIG_DIR")
+        let configured = var("CLAUDE_CONFIG_DIR");
+        let pass_config_dir = configured.is_some();
+        let home = configured
             .or_else(|| var("HOME").map(|p| p.join(".claude")))
             .ok_or_else(|| failure(EngineErrorKind::Fatal, "claude: missing home"))?;
         let hook_binary = var("SLUICE_BIN")
@@ -582,7 +589,13 @@ impl Claude {
             hook_binary,
             run,
         )
-        .with_mcp(std::env::var("SLUICE_CLAUDE_MCP_CONFIG").ok()))
+        .with_mcp(std::env::var("SLUICE_CLAUDE_MCP_CONFIG").ok())
+        .with_config_dir_passed(pass_config_dir))
+    }
+    /// See `pass_config_dir`.
+    pub fn with_config_dir_passed(mut self, pass: bool) -> Self {
+        self.pass_config_dir = pass;
+        self
     }
     pub fn with_mcp(mut self, config: Option<String>) -> Self {
         self.mcp = config;
@@ -987,10 +1000,10 @@ impl EngineAdapter for Claude {
         for name in profile::SCRUB_ENV {
             command.env_remove(name);
         }
-        command
-            .arg("--version")
-            .env("CLAUDE_CONFIG_DIR", &self.home)
-            .env("DISABLE_AUTOUPDATER", "1");
+        if self.pass_config_dir {
+            command.env("CLAUDE_CONFIG_DIR", &self.home);
+        }
+        command.arg("--version").env("DISABLE_AUTOUPDATER", "1");
         profile::validate_version(&String::from_utf8_lossy(&Self::output(command).await?))?;
         let mut context = context.clone();
         context.cwd = fs::canonicalize(&context.cwd).map_err(io_error)?;
@@ -1064,11 +1077,15 @@ impl EngineAdapter for Claude {
         );
         self.context = Some(context);
         let mut env = self.environment.clone();
-        env.extend(BTreeMap::from([
-            (
+        if self.pass_config_dir {
+            env.insert(
                 "CLAUDE_CONFIG_DIR".into(),
                 self.home.to_string_lossy().into_owned(),
-            ),
+            );
+        } else {
+            env.remove("CLAUDE_CONFIG_DIR");
+        }
+        env.extend(BTreeMap::from([
             ("SLUICE_RUN_ID".into(), self.run.to_string()),
             (
                 "SLUICE_RUN_DIR".into(),
