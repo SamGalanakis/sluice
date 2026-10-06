@@ -11,7 +11,7 @@ mod support {
         edit::PreparedEdit,
         gates::{CachedResources, StateSnapshot},
         ids::*,
-        plan::{FnSignature, Plan, SignatureProvider, Snapshot},
+        plan::{FnSignature, Plan, SignatureProvider},
         rpc::{JsonMap, decode_json},
         types::Type,
     };
@@ -60,10 +60,6 @@ mod support {
         Plan::parse(&map(doc), &Signatures).unwrap()
     }
     pub fn edit(context: &PlanContext, doc: Value) -> PreparedEdit {
-        let snapshot = Snapshot {
-            revision: context.revision,
-            document: context.plan.document().clone(),
-        };
         let state = StateSnapshot::default();
         let recipes = Default::default();
         let limits = Default::default();
@@ -82,7 +78,8 @@ mod support {
         });
         sluice_model::edit::prepare_edit(
             &sluice_model::edit::EditSnapshot {
-                snapshot: &snapshot,
+                revision: context.revision,
+                plan: &context.plan,
                 state: &state,
                 signatures: &Signatures,
                 recipes: &recipes,
@@ -985,4 +982,54 @@ async fn open_extra_inputs_and_optional_declared_outputs_complete_without_submis
         .await;
     assert_eq!(result.status, StepStatus::Succeeded);
     assert_eq!(result.outputs, map(json!({"report":"done","note":null})));
+}
+
+#[tokio::test]
+async fn a_witness_holds_until_one_of_its_projects_witnessed_rows_changes() {
+    let f = Fixture::new(json!({"steps":{"a":{"run":"empty"},"b":{"run":"empty"}}})).await;
+    let project = f.context.project;
+    let other = ProjectId::new();
+    let write = |sql: &'static str, id: ProjectId| {
+        f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(sql, [id.to_string()])?;
+            tx.changed(Some(id), "status");
+            Ok(())
+        })
+    };
+    write(
+        "INSERT INTO projects(project_id,name,created_at) VALUES (?1,'q','now')",
+        other,
+    )
+    .await
+    .unwrap();
+    // Taken before the snapshot the witness is read in, as an edit takes it.
+    let mark = f.writer.row_mark();
+    let witness = f
+        .reads
+        .snapshot(move |c| Ok(plans::Witness::read_with_state(c, project)?.0))
+        .await
+        .unwrap();
+    let holds = || {
+        let witness = witness.clone();
+        f.writer.write(RetrySafety::Idempotent, move |tx| {
+            witness.holds_since(tx, project, mark)
+        })
+    };
+    assert!(holds().await.unwrap());
+    // Another project's row: not this project's, so the witness holds unread.
+    write("UPDATE projects SET name='r' WHERE project_id=?1", other)
+        .await
+        .unwrap();
+    assert!(holds().await.unwrap());
+    // This project's row, in a column the witness does not read: compared, and it holds.
+    write(
+        "UPDATE steps SET delivery_cursor=1 WHERE project_id=?1 AND step_id='a'",
+        project,
+    )
+    .await
+    .unwrap();
+    assert!(holds().await.unwrap());
+    // A column it reads: it no longer holds.
+    f.manual("a", json!({}), false).await;
+    assert!(!holds().await.unwrap());
 }

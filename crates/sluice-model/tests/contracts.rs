@@ -789,6 +789,7 @@ fn contract_prepared_edit() {
             inputs: None,
             prune: None,
             steps: None,
+            reconciled: Default::default(),
         };
         assert_eq!(serde_json::to_value(&prepared).unwrap(), *value);
         assert!(matches_schema(&schema, &schema, value));

@@ -88,14 +88,16 @@ impl Fixture {
         }
     }
     fn prepare(&self, edit: PlanEdit) -> Result<PreparedEdit, PublicError> {
-        prepare_edit(&self.context(None), edit)
+        prepare_edit(&self.context(&self.plan(), None), edit)
     }
     fn context<'a>(
         &'a self,
+        plan: &'a Plan,
         eligible: Option<&'a [UnitName]>,
     ) -> EditSnapshot<'a, IndexMap<String, FnSignature>> {
         EditSnapshot {
-            snapshot: &self.snapshot,
+            revision: self.snapshot.revision,
+            plan,
             state: &self.state,
             signatures: &self.signatures,
             recipes: &self.recipes,
@@ -744,7 +746,7 @@ fn prune_keeps_plan_output_and_rejects_unknown_not_done_and_unfiltered_age() {
     let eligible = [unit("a")];
     assert!(
         prepare_edit(
-            &f.context(Some(&eligible)),
+            &f.context(&f.plan(), Some(&eligible)),
             command(
                 "plan_prune",
                 json!({"units":null,"older_than_seconds":10}),
@@ -1068,7 +1070,7 @@ fn prune_resolves_unit_and_tag_union_then_age_and_reference_closure() {
         )
     };
     let eligible = [unit("u"), unit("v")];
-    let prepared = prepare_edit(&f.context(Some(&eligible)), request()).unwrap();
+    let prepared = prepare_edit(&f.context(&f.plan(), Some(&eligible)), request()).unwrap();
     let report = prepared.prune.as_ref().unwrap();
     assert_eq!(report.units, [unit("v")]);
     assert_eq!(report.steps, [id("b")]);
@@ -1080,7 +1082,7 @@ fn prune_resolves_unit_and_tag_union_then_age_and_reference_closure() {
         serialized["prune"]["kept"]["u"],
         json!({"kind":"step","value":"holder"})
     );
-    assert!(prepare_edit(&f.context(None), request()).is_err());
+    assert!(prepare_edit(&f.context(&f.plan(), None), request()).is_err());
     let empty = f
         .prepare(command(
             "plan_prune",

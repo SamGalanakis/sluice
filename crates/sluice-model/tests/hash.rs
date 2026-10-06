@@ -250,3 +250,86 @@ fn structural_data_comparison_matches_canonical_numeric_and_order_rules() {
         assert_eq!(data_equal(&left, &right).unwrap(), equal);
     }
 }
+
+fn json_value() -> impl Strategy<Value = Value> {
+    let leaf = prop_oneof![
+        Just(Value::Null),
+        any::<bool>().prop_map(Value::Bool),
+        (-3_i64..3).prop_map(|n| json!(n)),
+        prop_oneof![Just(0.0), Just(-0.0), Just(1.0), Just(1.5), Just(-2.25)]
+            .prop_map(|f| json!(f)),
+        "[ab\"\\\\\n]{0,3}".prop_map(Value::String),
+    ];
+    leaf.prop_recursive(4, 24, 4, |inner| {
+        prop_oneof![
+            proptest::collection::vec(inner.clone(), 0..4).prop_map(Value::Array),
+            proptest::collection::vec(("[abc]{1,2}", inner), 0..4)
+                .prop_map(|entries| Value::Object(entries.into_iter().collect())),
+        ]
+    })
+}
+/// The same value with every object's keys in reverse order.
+fn reordered(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(reordered).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .rev()
+                .map(|(k, v)| (k.clone(), reordered(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+    /// `data_equal` compares in place; it must agree with comparing canonical encodings.
+    #[test]
+    fn structural_comparison_agrees_with_canonical_encodings(left in json_value(), other in json_value(), same in any::<bool>()) {
+        let right = if same { reordered(&left) } else { other };
+        let canonical = canonical_json(&left).unwrap() == canonical_json(&right).unwrap();
+        prop_assert_eq!(sluice_model::hash::data_equal(&left, &right).unwrap(), canonical);
+    }
+}
+
+/// The inputs hash as specified: SHA-256 of the format envelope around `canonical_json`.
+fn specified(inputs: &serde_json::Map<String, Value>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut bytes = br#"{"format":"sluice-inputs-v1","inputs":"#.to_vec();
+    bytes.extend(canonical_json(&Value::Object(inputs.clone())).unwrap());
+    bytes.push(b'}');
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+    /// The hash is streamed; it must be the specified bytes' hash.
+    #[test]
+    fn streamed_hashes_are_the_specified_hashes(
+        entries in proptest::collection::vec(("[a-z\"\\\\]{1,3}", json_value(), proptest::option::of("[/a-z\"]{1,6}")), 0..5)
+    ) {
+        let mut values = serde_json::Map::new();
+        let mut bindings = IndexMap::new();
+        let mut as_objects = serde_json::Map::new();
+        for (name, value, file) in entries {
+            values.insert(name.clone(), value.clone());
+            match file {
+                Some(path) => {
+                    as_objects.insert(name.clone(), json!({"file": path}));
+                    bindings.insert(name, EffectiveInput::File(path));
+                }
+                None => {
+                    as_objects.insert(name.clone(), value.clone());
+                    bindings.insert(name, data(value));
+                }
+            }
+        }
+        let map: JsonMap = decode_json(&serde_json::to_vec(&values).unwrap()).unwrap();
+        prop_assert_eq!(InputsHash::of(&map).unwrap().to_string(), specified(&values));
+        prop_assert_eq!(InputsHash::from_bindings(&bindings).unwrap().to_string(), specified(&as_objects));
+    }
+}

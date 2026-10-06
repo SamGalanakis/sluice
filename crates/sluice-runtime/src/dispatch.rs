@@ -85,8 +85,13 @@ impl Catalog {
     }
 }
 impl SignatureProvider for Catalog {
+    /// Called once per step when a plan compiles: a project's view (no publication) is
+    /// read in place, never copied.
     fn signature(&self, name: &str) -> Option<FnSignature> {
-        self.for_project(None).0.get(name).cloned()
+        match &self.1 {
+            None => self.0.get(name).cloned(),
+            Some(_) => self.for_project(None).0.get(name).cloned(),
+        }
     }
 }
 impl VerificationRegistry for Catalog {

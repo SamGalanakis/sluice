@@ -10,7 +10,7 @@ mod support {
         edit::PreparedEdit,
         gates::{CachedResources, StateSnapshot},
         ids::*,
-        plan::{FnSignature, Plan, SignatureProvider, Snapshot},
+        plan::{FnSignature, Plan, SignatureProvider},
         rpc::{JsonMap, decode_json},
         types::Type,
     };
@@ -59,10 +59,6 @@ mod support {
         Plan::parse(&map(doc), &Signatures).unwrap()
     }
     pub fn edit(context: &PlanContext, doc: Value) -> PreparedEdit {
-        let snapshot = Snapshot {
-            revision: context.revision,
-            document: context.plan.document().clone(),
-        };
         let state = StateSnapshot::default();
         let recipes = Default::default();
         let limits = Default::default();
@@ -81,7 +77,8 @@ mod support {
         });
         sluice_model::edit::prepare_edit(
             &sluice_model::edit::EditSnapshot {
-                snapshot: &snapshot,
+                revision: context.revision,
+                plan: &context.plan,
                 state: &state,
                 signatures: &Signatures,
                 recipes: &recipes,

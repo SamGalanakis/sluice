@@ -1594,7 +1594,8 @@ fn prepared_edits_check_revision_running_protection_and_preserve_reused_ids() {
          limits: &IndexMap<String, sluice_model::plan::ResourceLimit>| {
             sluice_model::edit::prepare_edit(
                 &sluice_model::edit::EditSnapshot {
-                    snapshot,
+                    revision: snapshot.revision,
+                    plan: &sluice_model::plan::Plan::parse(&snapshot.document, signatures).unwrap(),
                     state,
                     signatures,
                     resources,

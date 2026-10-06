@@ -16,7 +16,7 @@ use sluice_model::{
     events::{ChangeBatch, ChangeCursor},
     gates::CachedResources,
     ids::*,
-    plan::{Plan, Snapshot},
+    plan::Plan,
     rpc::{self, JsonMap, RpcReply, RpcRequest, RpcResult, RunCapability},
 };
 use sluice_process::{
@@ -108,6 +108,8 @@ struct Inner<H: ExecutionHost> {
     connections: Arc<tokio::sync::Semaphore>,
     /// Held watches that gave their connection permit back, per run.
     watches: Arc<std::sync::Mutex<std::collections::HashMap<RunId, usize>>>,
+    /// Each project's plan as last compiled.
+    plans: Arc<PlanCache>,
 }
 /// Where the startup adoption pass stands, for requests that wait on it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -259,6 +261,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 adopting: Default::default(),
                 connections: Arc::new(tokio::sync::Semaphore::new(CONNECTIONS)),
                 watches: Default::default(),
+                plans: Default::default(),
             }),
         };
         artifacts::recover(broker.writer(), broker.home())
@@ -361,6 +364,9 @@ impl<H: ExecutionHost> Coordinator<H> {
     }
     pub fn catalog(&self) -> &Catalog {
         &self.inner.catalog
+    }
+    pub(crate) fn plan_cache(&self) -> Arc<PlanCache> {
+        self.inner.plans.clone()
     }
     pub fn calls(&self) -> &Calls<Catalog, CallLauncher<H>> {
         &self.inner.calls
@@ -483,8 +489,12 @@ impl<H: ExecutionHost> Coordinator<H> {
                     }
                     command => command,
                 };
-                let home = self.home().to_owned();
-                let reply = self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, &home, command)).await?;
+                let reply = if edit_project(&command).is_some() {
+                    self.plan_edit(command).await?
+                } else {
+                    let home = self.home().to_owned();
+                    self.writer().write(RetrySafety::NonIdempotent, move |tx| mutate_project(tx, &catalog, &home, command)).await?
+                };
                 if matches!(reply, CommandReply::Project(_)) { artifacts::recover(self.writer(), self.home()).await.map_err(|e|e.into_public(false))?; }
                 Ok(reply)
             },
@@ -494,11 +504,13 @@ impl<H: ExecutionHost> Coordinator<H> {
             CommandRequest::StepSettle(request)=>self.step_settle(request).await,
             CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_) => {
                 let post = message_post(request)?;
-                self.writer().write(RetrySafety::NonIdempotent, move |tx| post_message(tx, &catalog, post).map(CommandReply::Receipt)).await
+                let plans = self.inner.plans.clone();
+                self.writer().write(RetrySafety::NonIdempotent, move |tx| post_message(tx, &catalog, &plans, post).map(CommandReply::Receipt)).await
             }
             CommandRequest::MessagePost(request) => {
                 let post = bridge_post(request)?;
-                self.writer().write(RetrySafety::NonIdempotent, move |tx| Ok(CommandReply::Posted { id: post_message(tx, &catalog, post)?.id })).await
+                let plans = self.inner.plans.clone();
+                self.writer().write(RetrySafety::NonIdempotent, move |tx| Ok(CommandReply::Posted { id: post_message(tx, &catalog, &plans, post)?.id })).await
             }
             CommandRequest::Messages(request)=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&request.project)?;let identity=if request.owner {sluice_store::messages::OWNER_STREAM} else {sluice_store::messages::ORCHESTRATOR_STREAM};let messages=sluice_store::messages::messages(sql,id,request.view,request.thread.as_deref(),request.since,identity)?;Ok(CommandReply::Messages(MessagePage{project:projects_identity(sql,id)?,last_id:messages.last().map(|m|m.id),messages}))}).await.map_err(|e|e.into_public(true)),
             CommandRequest::AcquireLease(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|{let lease=resources::request_lease_keyed(tx,request.run,&request.resource,request.amount,&format!("callback/{}/{}",request.run,request.request_id))?;let state=resources::leases(tx.sql(),run_project(tx.sql(),request.run)?)?.into_iter().find(|l|l.id==lease).ok_or_else(||conflict("lease missing"))?.state;Ok(CommandReply::Lease{lease,state})}).await,
@@ -1057,84 +1069,40 @@ impl<H: ExecutionHost> Coordinator<H> {
         let command = request.command;
         let encoded = serde_json::to_value(&command).map_err(storage)?;
         let refresh = matches!(command, CommandRequest::AcquireLease(_));
-        let catalog = self.inner.catalog.clone();
-        let home = self.home().to_owned();
-        let reply = self
-            .callback_transaction(id.clone(), key, encoded, refresh, move |tx| {
-                let reply = match command.clone() {
-                    CommandRequest::StepSubmit(s) => {
-                        if attempts::step_submit(tx, s)?.is_none() {
-                            return Err(conflict("stale submission").into());
-                        }
-                        CommandReply::Ack
+        let mut tries = 0;
+        let reply = loop {
+            let catalog = self.inner.catalog.clone();
+            let plans = self.inner.plans.clone();
+            let home = self.home().to_owned();
+            // A plan edit is prepared outside the writer; if what it was prepared from
+            // has changed by the time the writer takes it, it is prepared again, and after
+            // EDIT_TRIES such tries it is prepared in the writer.
+            let outside = if tries < EDIT_TRIES {
+                OutsideEdit::prepare(self, &command).await
+            } else {
+                None
+            };
+            let (id, command) = (id.clone(), command.clone());
+            let attempt = self
+                .callback_attempt(
+                    id.clone(),
+                    key.clone(),
+                    encoded.clone(),
+                    refresh,
+                    move |tx| callback_mutation(tx, &id, command, &catalog, &plans, &home, outside),
+                )
+                .await?;
+            match attempt {
+                Some((reply, plan)) => {
+                    // The plan an edit committed, kept rather than freed in the writer.
+                    if let Some(plan) = plan {
+                        self.inner.plans.put(plan);
                     }
-                    CommandRequest::StepProgress(p) => {
-                        if Some(messages_project(tx.sql(), &p.project)?) != id.project {
-                            return Err(conflict("tool project differs from run").into());
-                        }
-                        CommandReply::Data(sluice_model::rpc::JsonValue::try_from(
-                            attempts::step_progress(tx, p)?,
-                        )?)
-                    }
-                    CommandRequest::Submission { run } => {
-                        let row: Option<String> = tx
-                            .sql()
-                            .query_row(
-                                "SELECT outputs FROM submissions WHERE run_id=?1",
-                                [run.to_string()],
-                                |r| r.get(0),
-                            )
-                            .optional()?;
-                        CommandReply::Data(serde_json::from_str(row.as_deref().unwrap_or("{}"))?)
-                    }
-                    CommandRequest::MessagePost(m) => CommandReply::Posted {
-                        id: post_message(tx, &catalog, bridge_post(m)?)?.id,
-                    },
-                    command @ (CommandRequest::Ask(_)
-                    | CommandRequest::Say(_)
-                    | CommandRequest::Reply(_)) => {
-                        CommandReply::Receipt(post_message(tx, &catalog, message_post(command)?)?)
-                    }
-                    CommandRequest::AcquireLease(l) => {
-                        let lease = resources::request_lease_keyed(
-                            tx,
-                            id.run,
-                            &l.resource,
-                            l.amount,
-                            &format!("callback/{}/{}", id.run, l.request_id),
-                        )?;
-                        resources::grant_leases(tx, run_project(tx.sql(), l.run)?)?;
-                        let state = resources::leases(tx.sql(), run_project(tx.sql(), l.run)?)?
-                            .into_iter()
-                            .find(|l| l.id == lease)
-                            .ok_or_else(|| conflict("lease missing"))?
-                            .state;
-                        CommandReply::Lease { lease, state }
-                    }
-                    CommandRequest::ReleaseLease(l) => {
-                        resources::release_lease(tx, l.lease, id.run)?;
-                        CommandReply::Ack
-                    }
-                    CommandRequest::RegisterCompletionAction(a) => {
-                        if !attempts::register_completion_action(tx, a, &Hooks)? {
-                            return Err(conflict("stale completion action").into());
-                        }
-                        CommandReply::Ack
-                    }
-                    command if project_mutation(&command) => {
-                        let encoded = serde_json::to_value(&command)?;
-                        let selector: ProjectSelector =
-                            serde_json::from_value(encoded["args"]["project"].clone())?;
-                        if Some(messages_project(tx.sql(), &selector)?) != id.project {
-                            return Err(conflict("tool project differs from run").into());
-                        }
-                        mutate_project(tx, &catalog, &home, command)?
-                    }
-                    _ => return Err(conflict("unsupported callback").into()),
-                };
-                Ok(reply)
-            })
-            .await?;
+                    break reply;
+                }
+                None => tries += 1,
+            }
+        };
         if matches!(reply, CommandReply::Project(_)) {
             artifacts::recover(self.writer(), self.home())
                 .await
@@ -1154,6 +1122,35 @@ impl<H: ExecutionHost> Coordinator<H> {
         F: FnOnce(&mut sluice_store::WriteTransaction<'_>) -> sluice_store::Result<CommandReply>
             + Send
             + 'static,
+    {
+        self.callback_attempt(id, key, command, refresh, move |tx| {
+            Ok(Some((mutate(tx)?, ())))
+        })
+        .await?
+        .map(|(reply, ())| reply)
+        .ok_or_else(|| PublicError::Storage {
+            message: "callback gave no reply".into(),
+        })
+    }
+    /// `callback_transaction` for a mutation that can find what it prepared outside the
+    /// writer changed: it answers None, nothing is written or cached, and the caller
+    /// prepares it again. Beside its reply (the one cached) it may hand back what it is
+    /// done with, to be freed or kept outside the writer; a cached reply has none.
+    async fn callback_attempt<F, T>(
+        &self,
+        id: AttemptKey,
+        key: String,
+        command: Value,
+        refresh: bool,
+        mutate: F,
+    ) -> Result<Option<(CommandReply, T)>, PublicError>
+    where
+        F: FnOnce(
+                &mut sluice_store::WriteTransaction<'_>,
+            ) -> sluice_store::Result<Option<(CommandReply, T)>>
+            + Send
+            + 'static,
+        T: Default + Send + 'static,
     {
         self.writer()
             .write(RetrySafety::Idempotent, move |tx| {
@@ -1175,21 +1172,56 @@ impl<H: ExecutionHost> Coordinator<H> {
                         return Err(conflict("callback request ID reused").into());
                     }
                     if !refresh || !current_run(tx.sql(), &id)? {
-                        return Ok(serde_json::from_value(saved["reply"].clone())?);
+                        return Ok(Some((
+                            serde_json::from_value(saved["reply"].clone())?,
+                            T::default(),
+                        )));
                     }
                 }
                 ensure_current(tx.sql(), &id)?;
                 if cache.len() >= 16384 {
                     return Err(conflict("callback cache limit").into());
                 }
-                let reply = mutate(tx)?;
+                let Some((reply, done)) = mutate(tx)? else {
+                    return Ok(None);
+                };
                 cache.insert(key, json!({"command":command,"reply":reply}));
                 tx.sql().execute(
                     "UPDATE attempts SET request=?2 WHERE attempt_id=?1",
                     (id.attempt.to_string(), frozen.to_string()),
                 )?;
                 tx.changed(id.project, "status");
-                Ok(reply)
+                Ok(Some((reply, done)))
+            })
+            .await
+    }
+    /// A plan edit command: prepared outside the writer and committed in it while what it
+    /// was prepared from holds; after EDIT_TRIES tries that found it changed, prepared and
+    /// committed in the writer.
+    async fn plan_edit(&self, command: CommandRequest) -> Result<CommandReply, PublicError> {
+        let catalog = self.inner.catalog.clone();
+        let home = self.home().to_owned();
+        for _ in 0..EDIT_TRIES {
+            let Some(outside) = OutsideEdit::prepare(self, &command).await else {
+                break;
+            };
+            let catalog = catalog.clone();
+            if let Some((reply, plan)) = self
+                .writer()
+                .write(RetrySafety::NonIdempotent, move |tx| {
+                    commit_outside(tx, &catalog, outside)
+                })
+                .await?
+            {
+                if let Some(plan) = plan {
+                    self.inner.plans.put(plan);
+                }
+                return Ok(reply);
+            }
+        }
+        self.writer()
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                mutate_project(tx, &catalog, &home, command)
             })
             .await
     }
@@ -2066,14 +2098,49 @@ fn bridge_post(request: MessagePost) -> Result<sluice_store::messages::Post, Pub
     );
     sluice_store::messages::bridge(request).map_err(|e| e.into_public(false))
 }
+/// Post a message in its writer transaction. The project's plan must compile, as an
+/// answer may set one of its inputs: the plan compiled last for its revision is taken
+/// when there is one, rather than compiled again while every other write waits.
 fn post_message(
     tx: &mut sluice_store::WriteTransaction<'_>,
     catalog: &Catalog,
+    plans: &PlanCache,
     post: sluice_store::messages::Post,
 ) -> sluice_store::Result<MessageReceipt> {
     let project = messages_project(tx.sql(), &post.project)?;
-    let ctx = context(tx.sql(), project, catalog)?;
-    Ok(sluice_store::messages::post(tx, post, &InputSetter(ctx))?.receipt)
+    let (revision, plan) = plans.compiled(
+        tx.sql(),
+        project,
+        catalog,
+        &catalog.for_project(Some(project)),
+    )?;
+    let inputs = CompiledInputs {
+        project,
+        revision,
+        plan,
+    };
+    Ok(sluice_store::messages::post(tx, post, &inputs)?.receipt)
+}
+/// `InputSetter` over a compiled plan that may be shared: the context it sets an input
+/// with is built only when an answer sets one.
+struct CompiledInputs {
+    project: ProjectId,
+    revision: Revision,
+    plan: Arc<Plan>,
+}
+impl sluice_store::messages::PlanInputSetter for CompiledInputs {
+    fn set_input(
+        &self,
+        tx: &mut sluice_store::WriteTransaction<'_>,
+        input: sluice_store::messages::InputAnswer<'_>,
+    ) -> sluice_store::Result<()> {
+        InputSetter(PlanContext {
+            project: self.project,
+            revision: self.revision,
+            plan: (*self.plan).clone(),
+        })
+        .set_input(tx, input)
+    }
 }
 /// A callback's message speaks only as its own run, in its own project.
 fn run_speaks(command: &CommandRequest, run: RunId, project: ProjectId) -> bool {
@@ -2097,7 +2164,7 @@ pub(crate) fn context(
     )?;
     let doc: JsonMap = serde_json::from_str(&doc)?;
     let catalog = catalog.for_project(Some(project));
-    let plan = Plan::parse(&doc, &catalog).map_err(|errors| PublicError::Invalid {
+    let plan = Plan::parse_owned(doc, &catalog).map_err(|errors| PublicError::Invalid {
         message: "invalid stored plan".into(),
         errors: errors.into_iter().map(|e| e.to_string()).collect(),
     })?;
@@ -2301,6 +2368,311 @@ fn ensure_current(sql: &Connection, id: &AttemptKey) -> sluice_store::Result<()>
     Ok(())
 }
 
+/// What a run's callback does in its writer transaction: None when the plan edit it
+/// prepared outside the writer finds what it was prepared from changed (nothing is
+/// written); else the reply, with the plan an edit committed.
+fn callback_mutation(
+    tx: &mut sluice_store::WriteTransaction<'_>,
+    id: &AttemptKey,
+    command: CommandRequest,
+    catalog: &Catalog,
+    plans: &PlanCache,
+    home: &Path,
+    outside: Option<OutsideEdit>,
+) -> sluice_store::Result<Option<(CommandReply, Option<CachedPlan>)>> {
+    let mut committed = None;
+    let reply = match command.clone() {
+        CommandRequest::StepSubmit(s) => {
+            if attempts::step_submit(tx, s)?.is_none() {
+                return Err(conflict("stale submission").into());
+            }
+            CommandReply::Ack
+        }
+        CommandRequest::StepProgress(p) => {
+            if Some(messages_project(tx.sql(), &p.project)?) != id.project {
+                return Err(conflict("tool project differs from run").into());
+            }
+            CommandReply::Data(sluice_model::rpc::JsonValue::try_from(
+                attempts::step_progress(tx, p)?,
+            )?)
+        }
+        CommandRequest::Submission { run } => {
+            let row: Option<String> = tx
+                .sql()
+                .query_row(
+                    "SELECT outputs FROM submissions WHERE run_id=?1",
+                    [run.to_string()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            CommandReply::Data(serde_json::from_str(row.as_deref().unwrap_or("{}"))?)
+        }
+        CommandRequest::MessagePost(m) => CommandReply::Posted {
+            id: post_message(tx, catalog, plans, bridge_post(m)?)?.id,
+        },
+        command @ (CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_)) => {
+            CommandReply::Receipt(post_message(tx, catalog, plans, message_post(command)?)?)
+        }
+        CommandRequest::AcquireLease(l) => {
+            let lease = resources::request_lease_keyed(
+                tx,
+                id.run,
+                &l.resource,
+                l.amount,
+                &format!("callback/{}/{}", id.run, l.request_id),
+            )?;
+            resources::grant_leases(tx, run_project(tx.sql(), l.run)?)?;
+            let state = resources::leases(tx.sql(), run_project(tx.sql(), l.run)?)?
+                .into_iter()
+                .find(|l| l.id == lease)
+                .ok_or_else(|| conflict("lease missing"))?
+                .state;
+            CommandReply::Lease { lease, state }
+        }
+        CommandRequest::ReleaseLease(l) => {
+            resources::release_lease(tx, l.lease, id.run)?;
+            CommandReply::Ack
+        }
+        CommandRequest::RegisterCompletionAction(a) => {
+            if !attempts::register_completion_action(tx, a, &Hooks)? {
+                return Err(conflict("stale completion action").into());
+            }
+            CommandReply::Ack
+        }
+        command if project_mutation(&command) => {
+            let encoded = serde_json::to_value(&command)?;
+            let selector: ProjectSelector =
+                serde_json::from_value(encoded["args"]["project"].clone())?;
+            if Some(messages_project(tx.sql(), &selector)?) != id.project {
+                return Err(conflict("tool project differs from run").into());
+            }
+            match outside {
+                Some(outside) => match commit_outside(tx, catalog, outside)? {
+                    Some((reply, plan)) => {
+                        committed = plan;
+                        reply
+                    }
+                    None => return Ok(None),
+                },
+                None => mutate_project(tx, catalog, home, command)?,
+            }
+        }
+        _ => return Err(conflict("unsupported callback").into()),
+    };
+    Ok(Some((reply, committed)))
+}
+
+/// How many times a plan edit is prepared outside the writer before it is prepared in it.
+pub(crate) const EDIT_TRIES: usize = 3;
+
+/// A plan edit prepared from a read snapshot, before its writer transaction: compiled,
+/// patched, validated, simulated and worked out down to the rows it writes, so the writer
+/// holds no other write back while a plan of thousands of steps is compiled. The writer
+/// takes this outcome (what to write, or the refusal) only when the snapshot's rows (the
+/// plan's revision, the project's pause, inputs, step rows and resources: `Witness`) and
+/// the project's fn signatures are as they were here: it is then the outcome it would
+/// have worked out itself.
+pub(crate) struct OutsideEdit {
+    selector: ProjectSelector,
+    project: ProjectId,
+    mark: sluice_store::RowMark,
+    witness: plans::Witness,
+    signatures: indexmap::IndexMap<String, sluice_model::plan::FnSignature>,
+    outcome: sluice_store::Result<Staged>,
+}
+enum Staged {
+    Preview(EditPreview),
+    Effect {
+        effect: Box<plans::EditEffect>,
+        /// The plan it commits, compiled.
+        plan: Option<CachedPlan>,
+        inputs: Option<edit::InputChanges>,
+        prune: Option<sluice_model::units::PruneSet>,
+    },
+}
+impl OutsideEdit {
+    /// Prepare a plan edit command from a read snapshot; None for any other command, or
+    /// when the snapshot cannot be read (the writer then prepares it, and refuses it, alone).
+    pub(crate) async fn prepare<H: ExecutionHost>(
+        broker: &Coordinator<H>,
+        command: &CommandRequest,
+    ) -> Option<Self> {
+        let selector = edit_project(command)?;
+        let edit = PlanEdit::try_from(command.clone()).ok()?;
+        let (catalog, home, cache) = (
+            broker.inner.catalog.clone(),
+            broker.home().to_owned(),
+            broker.inner.plans.clone(),
+        );
+        // Before the snapshot begins: every commit it cannot see is published after this.
+        let mark = broker.writer().row_mark();
+        broker
+            .reads()
+            .snapshot(move |sql| {
+                let id = messages_project(sql, &selector)?;
+                let signatures = catalog.for_project(Some(id));
+                let (revision, plan) = cache.compiled(sql, id, &catalog, &signatures)?;
+                let (witness, state) = plans::Witness::read_with_state(sql, id)?;
+                let limits = resource_limits(sql, id)?;
+                let prepared = edit::prepare_edit(
+                    &EditSnapshot {
+                        revision,
+                        plan: &plan,
+                        state: &state,
+                        signatures: &signatures,
+                        recipes: &crate::dispatch_ext::load_recipes(&home, id)?,
+                        resources: &CachedResources::default(),
+                        limits: &limits,
+                        prune_eligible: None,
+                    },
+                    edit,
+                );
+                let outcome = prepared.map_err(Into::into).and_then(|prepared| {
+                    if prepared.dry_run {
+                        return Ok(Staged::Preview(prepared.preview));
+                    }
+                    let (inputs, prune) = (prepared.inputs.clone(), prepared.prune.clone());
+                    let mut effect = plans::edit_effect(
+                        sql,
+                        id,
+                        prepared,
+                        plans::Current {
+                            revision,
+                            document: plan.document(),
+                            state: &state,
+                            prepared_with: true,
+                        },
+                    )?;
+                    let plan = effect.take_plan().map(|(revision, plan)| {
+                        CachedPlan::new(id, revision, signatures.0.clone(), plan)
+                    });
+                    Ok(Staged::Effect {
+                        effect: Box::new(effect),
+                        plan,
+                        inputs,
+                        prune,
+                    })
+                });
+                Ok(Self {
+                    selector,
+                    project: id,
+                    mark,
+                    witness,
+                    signatures: signatures.0,
+                    outcome,
+                })
+            })
+            .await
+            .ok()
+    }
+}
+/// Commit an edit prepared outside the writer, with the plan it commits, or None when
+/// what it was prepared from has changed (nothing is written).
+fn commit_outside(
+    tx: &mut sluice_store::WriteTransaction<'_>,
+    catalog: &Catalog,
+    outside: OutsideEdit,
+) -> sluice_store::Result<Option<(CommandReply, Option<CachedPlan>)>> {
+    crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+    let id = messages_project(tx.sql(), &outside.selector)?;
+    if id != outside.project
+        || outside.signatures != catalog.for_project(Some(id)).0
+        || !outside.witness.holds_since(tx, id, outside.mark)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(match outside.outcome? {
+        Staged::Preview(preview) => (CommandReply::Preview(preview), None),
+        Staged::Effect {
+            effect,
+            plan,
+            inputs,
+            prune,
+        } => (
+            edit_reply(plans::commit_effect(tx, *effect)?, inputs, prune),
+            plan,
+        ),
+    }))
+}
+
+/// A project's plan compiled at a revision with some fn signatures. A revision fixes the
+/// plan's document (every write of it moves the revision on), so the same revision and
+/// signatures compile the same plan.
+pub(crate) struct CachedPlan {
+    project: ProjectId,
+    revision: Revision,
+    signatures: indexmap::IndexMap<String, sluice_model::plan::FnSignature>,
+    plan: Arc<Plan>,
+}
+impl CachedPlan {
+    pub(crate) fn new(
+        project: ProjectId,
+        revision: Revision,
+        signatures: indexmap::IndexMap<String, sluice_model::plan::FnSignature>,
+        plan: Plan,
+    ) -> Self {
+        Self {
+            project,
+            revision,
+            signatures,
+            plan: Arc::new(plan),
+        }
+    }
+}
+/// Each project's plan as last compiled: the one an edit committed, or the one compiled
+/// from the store for an edit or a message. An edit or a message at the same revision
+/// then takes it instead of compiling the stored plan again.
+#[derive(Default)]
+pub(crate) struct PlanCache(std::sync::Mutex<std::collections::HashMap<ProjectId, CachedPlan>>);
+impl PlanCache {
+    /// The project's plan at its current revision, compiled with `signatures` (its view
+    /// of `catalog`): the cached one when it matches, else compiled from the store.
+    pub(crate) fn compiled(
+        &self,
+        sql: &Connection,
+        project: ProjectId,
+        catalog: &Catalog,
+        signatures: &Catalog,
+    ) -> sluice_store::Result<(Revision, Arc<Plan>)> {
+        let rev: i64 = sql.query_row(
+            "SELECT rev FROM plans WHERE project_id=?1",
+            [project.to_string()],
+            |r| r.get(0),
+        )?;
+        let revision = Revision(rev as u64);
+        if let Some(cached) = self.lock().get(&project)
+            && cached.revision == revision
+            && cached.signatures == signatures.0
+        {
+            return Ok((revision, cached.plan.clone()));
+        }
+        let ctx = context(sql, project, catalog)?;
+        let plan = Arc::new(ctx.plan);
+        if ctx.revision == revision {
+            self.put(CachedPlan {
+                project,
+                revision,
+                signatures: signatures.0.clone(),
+                plan: plan.clone(),
+            });
+        }
+        Ok((ctx.revision, plan))
+    }
+    pub(crate) fn put(&self, plan: CachedPlan) {
+        // Freeing a compiled plan of thousands of steps takes milliseconds: not on an
+        // async worker, nor in the writer.
+        if let Some(replaced) = self.lock().insert(plan.project, plan) {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => drop(runtime.spawn_blocking(move || drop(replaced))),
+                Err(_) => drop(std::thread::spawn(move || drop(replaced))),
+            }
+        }
+    }
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<ProjectId, CachedPlan>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 fn project_mutation(command: &CommandRequest) -> bool {
     matches!(
         command,
@@ -2427,13 +2799,10 @@ fn mutate_project(
             let id = messages_project(tx.sql(), &project)?;
             let ctx = context(tx.sql(), id, catalog)?;
             let state = plans::read_state(tx.sql(), id)?;
-            let snapshot = Snapshot {
-                revision: ctx.revision,
-                document: ctx.plan.document().clone(),
-            };
             let prepared = edit::prepare_edit(
                 &EditSnapshot {
-                    snapshot: &snapshot,
+                    revision: ctx.revision,
+                    plan: &ctx.plan,
                     state: &state,
                     signatures: &catalog.for_project(Some(id)),
                     recipes: &crate::dispatch_ext::load_recipes(home, id)?,

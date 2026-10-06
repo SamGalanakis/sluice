@@ -207,10 +207,17 @@ impl Plan {
     ) -> Result<Self, Vec<PathError>> {
         let document =
             decode_json(bytes).map_err(|error| vec![diagnostic("plan", error.to_string())])?;
-        Self::parse(&document, signatures)
+        parse_plan(document, signatures)
     }
     pub fn parse(
         document: &JsonMap,
+        signatures: &impl SignatureProvider,
+    ) -> Result<Self, Vec<PathError>> {
+        parse_plan(document.clone(), signatures)
+    }
+    /// `parse`, keeping the document it is given rather than a copy of it.
+    pub fn parse_owned(
+        document: JsonMap,
         signatures: &impl SignatureProvider,
     ) -> Result<Self, Vec<PathError>> {
         parse_plan(document, signatures)
@@ -268,19 +275,15 @@ impl Plan {
         ops: &[PatchOperation],
         signatures: &impl SignatureProvider,
     ) -> Result<Self, Vec<PathError>> {
-        let mut value = serde_json::to_value(&self.document)
-            .map_err(|error| vec![diagnostic("plan", error.to_string())])?;
+        // The document as a JSON object, moved rather than serialized out of a copy.
+        let mut value = Value::Object(
+            self.document
+                .0
+                .iter()
+                .map(|(key, value)| (key.clone(), value.as_value().clone()))
+                .collect(),
+        );
         for (index, operation) in ops.iter().enumerate() {
-            let before = value.clone();
-            let patch: json_patch::Patch = serde_json::from_value(
-                serde_json::to_value(std::slice::from_ref(operation))
-                    .map_err(|error| vec![diagnostic("ops", error.to_string())])?,
-            )
-            .map_err(|error| vec![diagnostic("ops", error.to_string())])?;
-            json_patch::patch(&mut value, &patch)
-                .map_err(|error| vec![diagnostic(&format!("ops[{index}]"), error.to_string())])?;
-            // serde_json::Map::remove uses swap removal with preserve_order.
-            // Restore ancestor maps only, leaving replacement subtrees in supplied order.
             let path = match operation {
                 PatchOperation::Add { path, .. }
                 | PatchOperation::Remove { path }
@@ -289,14 +292,25 @@ impl Plan {
                 | PatchOperation::Copy { path, .. }
                 | PatchOperation::Test { path, .. } => path,
             };
-            restore_ancestor_order(&before, &mut value, path);
+            // serde_json::Map::remove uses swap removal with preserve_order. Keep the key
+            // order of the maps above each touched path, not a copy of the whole plan, and
+            // restore those maps only, leaving replacement subtrees in supplied order.
+            let mut orders = ancestor_orders(&value, path);
             if let PatchOperation::Move { from, .. } = operation {
-                restore_ancestor_order(&before, &mut value, from);
+                orders.extend(ancestor_orders(&value, from));
+            }
+            let patch: json_patch::Patch = serde_json::from_value(
+                serde_json::to_value(std::slice::from_ref(operation))
+                    .map_err(|error| vec![diagnostic("ops", error.to_string())])?,
+            )
+            .map_err(|error| vec![diagnostic("ops", error.to_string())])?;
+            json_patch::patch(&mut value, &patch)
+                .map_err(|error| vec![diagnostic(&format!("ops[{index}]"), error.to_string())])?;
+            for (parent, keys) in orders {
+                restore_order(&mut value, &parent, &keys);
             }
         }
-        let document: JsonMap = serde_json::from_value(value)
-            .map_err(|error| vec![diagnostic("plan", error.to_string())])?;
-        Self::parse(&document, signatures)
+        Self::parse_owned(json_map(value)?, signatures)
     }
     pub fn validate_input_values(&self, inputs: &JsonMap) -> Result<(), Vec<PathError>> {
         let mut errors = Vec::new();
@@ -319,20 +333,49 @@ impl Plan {
     }
 }
 
-fn restore_ancestor_order(before: &Value, after: &mut Value, path: &str) {
-    for (offset, _) in path.match_indices('/') {
-        let parent = &path[..offset];
-        if let (Some(old), Some(new)) = (
-            before.pointer(parent).and_then(Value::as_object),
-            after.pointer_mut(parent).and_then(Value::as_object_mut),
-        ) {
-            let mut remaining = std::mem::take(new);
-            for key in old.keys() {
-                if let Some(value) = remaining.shift_remove(key) {
-                    new.insert(key.clone(), value);
-                }
+/// A patched document as a strict map, its values moved in rather than deserialized
+/// from a copy. Anything `JsonValue` would refuse is converted as before, for the same
+/// refusal.
+fn json_map(value: Value) -> Result<JsonMap, Vec<PathError>> {
+    match value {
+        Value::Object(map) if map.values().all(crate::rpc::strict_value) => Ok(JsonMap(
+            map.into_iter()
+                .map(|(key, value)| {
+                    (
+                        key,
+                        JsonValue::try_from(value).expect("checked strict JSON"),
+                    )
+                })
+                .collect(),
+        )),
+        value => serde_json::from_value(value)
+            .map_err(|error| vec![diagnostic("plan", error.to_string())]),
+    }
+}
+/// The key order of every map above `path`, outermost first.
+fn ancestor_orders(value: &Value, path: &str) -> Vec<(String, Vec<String>)> {
+    path.match_indices('/')
+        .filter_map(|(offset, _)| {
+            let parent = &path[..offset];
+            let map = value.pointer(parent)?.as_object()?;
+            Some((parent.to_owned(), map.keys().cloned().collect()))
+        })
+        .collect()
+}
+/// Put the map at `parent` back in `keys` order, keys it did not have after them.
+fn restore_order(value: &mut Value, parent: &str, keys: &[String]) {
+    if let Some(new) = value.pointer_mut(parent).and_then(Value::as_object_mut) {
+        let known: std::collections::HashSet<&str> = keys.iter().map(String::as_str).collect();
+        let added: Vec<String> = new
+            .keys()
+            .filter(|key| !known.contains(key.as_str()))
+            .cloned()
+            .collect();
+        let mut remaining = std::mem::take(new);
+        for key in keys.iter().chain(&added) {
+            if let Some(value) = remaining.swap_remove(key) {
+                new.insert(key.clone(), value);
             }
-            new.extend(remaining);
         }
     }
 }
@@ -359,7 +402,15 @@ fn closed(
     path: &str,
     errors: &mut Vec<PathError>,
 ) {
-    for key in raw.keys().filter(|key| !keys.contains(&key.as_str())) {
+    closed_keys(raw.keys(), keys, path, errors);
+}
+fn closed_keys<'k>(
+    present: impl Iterator<Item = &'k String>,
+    keys: &[&str],
+    path: &str,
+    errors: &mut Vec<PathError>,
+) {
+    for key in present.filter(|key| !keys.contains(&key.as_str())) {
         let path = if path.is_empty() {
             key.clone()
         } else {
@@ -711,21 +762,27 @@ fn parse_step(
     })
 }
 
+/// The document is read in place, top-level entry by entry, and kept by the plan.
 fn parse_plan(
-    document: &JsonMap,
+    document: JsonMap,
     signatures: &impl SignatureProvider,
 ) -> Result<Plan, Vec<PathError>> {
-    let value = serde_json::to_value(document).expect("strict JSON map");
-    crate::types::validate_json(&value, "plan")?;
-    let raw = value.as_object().expect("JSON map");
+    fn top<'d>(document: &'d JsonMap, key: &str) -> Option<&'d Value> {
+        document.0.get(key).map(JsonValue::as_value)
+    }
+    crate::types::validate_json_map(&document, "plan")?;
     let mut errors = Vec::new();
-    closed(raw, &["inputs", "outputs", "steps"], "", &mut errors);
-    let inputs = raw
-        .get("inputs")
+    closed_keys(
+        document.0.keys(),
+        &["inputs", "outputs", "steps"],
+        "",
+        &mut errors,
+    );
+    let inputs = top(&document, "inputs")
         .map(|value| declarations(value, "inputs", &mut errors))
         .unwrap_or_default();
     let mut steps = IndexMap::new();
-    match raw.get("steps") {
+    match top(&document, "steps") {
         None => errors.push(diagnostic("steps", "required, an object of id -> step")),
         Some(value) => {
             if let Some(map) = object(value, "steps", &mut errors) {
@@ -756,7 +813,7 @@ fn parse_plan(
         }
     }
     let mut plan = Plan {
-        document: document.clone(),
+        document,
         inputs,
         outputs: IndexMap::new(),
         steps,
@@ -764,8 +821,8 @@ fn parse_plan(
         dependencies: IndexMap::new(),
         order: vec![],
     };
-    if let Some(value) = raw.get("outputs")
-        && let Some(map) = object(value, "outputs", &mut errors)
+    if let Some(value) = top(&plan.document, "outputs").cloned()
+        && let Some(map) = object(&value, "outputs", &mut errors)
     {
         for (name, value) in map {
             let path = format!("outputs.{name}");
@@ -827,8 +884,7 @@ fn parse_plan(
     let mut compiled = Vec::new();
     for id in plan.steps.keys() {
         let mut gates = Vec::new();
-        if let Some(entries) = raw
-            .get("steps")
+        if let Some(entries) = top(&plan.document, "steps")
             .and_then(|steps| steps.get(id.as_str()))
             .and_then(|step| step.get("after"))
             .and_then(Value::as_array)
@@ -1180,24 +1236,24 @@ pub fn validate_changed_needs(
 /// Prepare an atomic plan patch and its shared dry-run preview. The coordinator
 /// must recheck expected revision when committing this result. No state is written.
 pub(crate) fn prepare_patch(
-    snapshot: &Snapshot,
+    revision: Revision,
+    before: &Plan,
     state: &crate::gates::StateSnapshot,
     edit: PlanPatchData,
     signatures: &impl SignatureProvider,
     resources: &crate::gates::CachedResources,
     limits: &IndexMap<String, ResourceLimit>,
-) -> Result<(Plan, EditPreview), PublicError> {
-    if edit.expected != snapshot.revision {
+) -> Result<(Plan, EditPreview, crate::gates::StateSnapshot), PublicError> {
+    if edit.expected != revision {
         return Err(PublicError::Conflict {
             message: "plan revision changed".into(),
-            current_rev: Some(snapshot.revision),
+            current_rev: Some(revision),
         });
     }
     let invalid = |errors: Vec<PathError>| PublicError::Invalid {
         message: "invalid plan edit".into(),
         errors: errors.iter().map(ToString::to_string).collect(),
     };
-    let before = Plan::parse(&snapshot.document, signatures).map_err(invalid)?;
     let after = before.patch(&edit.ops, signatures).map_err(invalid)?;
     let mut errors = vec![];
     for (id, step) in before.steps() {
@@ -1220,7 +1276,7 @@ pub(crate) fn prepare_patch(
             ));
         }
     }
-    if let Err(found) = validate_changed_needs(Some(&before), &after, limits) {
+    if let Err(found) = validate_changed_needs(Some(before), &after, limits) {
         errors.extend(found);
     }
     let mut projected = state.clone();
@@ -1238,7 +1294,7 @@ pub(crate) fn prepare_patch(
     if !errors.is_empty() {
         return Err(invalid(errors));
     }
-    let preview = crate::gates::simulate_edit(&before, state, &after, &projected, resources);
+    let preview = crate::gates::simulate_edit(before, state, &after, &projected, resources);
     Ok((
         after,
         EditPreview {
@@ -1249,5 +1305,6 @@ pub(crate) fn prepare_patch(
             would_stale: preview.would_stale,
             errors: preview.errors.iter().map(ToString::to_string).collect(),
         },
+        preview.reconciled,
     ))
 }

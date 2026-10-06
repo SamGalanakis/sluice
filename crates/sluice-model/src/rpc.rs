@@ -27,24 +27,25 @@ impl JsonValue {
         self.0
     }
 }
+/// Whether `JsonValue` takes this value: every integer fits i64 and every float is finite.
+pub(crate) fn strict_value(v: &Value) -> bool {
+    match v {
+        Value::Number(n) => {
+            if n.is_f64() {
+                n.as_f64().is_some_and(f64::is_finite)
+            } else {
+                n.as_i64().is_some()
+            }
+        }
+        Value::Array(a) => a.iter().all(strict_value),
+        Value::Object(o) => o.values().all(strict_value),
+        _ => true,
+    }
+}
 impl TryFrom<Value> for JsonValue {
     type Error = PublicError;
     fn try_from(value: Value) -> Result<Self, Self::Error> {
-        fn valid(v: &Value) -> bool {
-            match v {
-                Value::Number(n) => {
-                    if n.is_f64() {
-                        n.as_f64().is_some_and(f64::is_finite)
-                    } else {
-                        n.as_i64().is_some()
-                    }
-                }
-                Value::Array(a) => a.iter().all(valid),
-                Value::Object(o) => o.values().all(valid),
-                _ => true,
-            }
-        }
-        if valid(&value) {
+        if strict_value(&value) {
             Ok(Self(value))
         } else {
             Err(PublicError::BadRequest {

@@ -8,7 +8,7 @@ use crate::{
     error::PublicError,
     gates::{CachedResources, StateSnapshot},
     ids::{Revision, StepId, UnitName},
-    plan::{self, Plan, ResourceLimit, SignatureProvider, Snapshot, diagnostic},
+    plan::{self, Plan, ResourceLimit, SignatureProvider, diagnostic},
     recipe::{ExpansionOptions, RecipeEntry, reserved_tags},
     rpc::JsonValue,
     types::PathError,
@@ -72,7 +72,10 @@ impl PlanEdit {
 /// All inputs are immutable snapshots. For an age-filtered prune, the store must
 /// supply the units whose last finish time meets that request's cutoff.
 pub struct EditSnapshot<'a, P> {
-    pub snapshot: &'a Snapshot,
+    /// The plan's revision.
+    pub revision: Revision,
+    /// The plan at `revision`, compiled with `signatures`.
+    pub plan: &'a Plan,
     pub state: &'a StateSnapshot,
     pub signatures: &'a P,
     pub recipes: &'a IndexMap<String, RecipeEntry>,
@@ -103,6 +106,10 @@ pub struct PreparedEdit {
     /// The steps the edit was about, reported in the edit result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steps: Option<Vec<StepId>>,
+    /// The state the edit leaves once reconciled, worked out from the state it was
+    /// prepared with: the store's to reuse when it commits against that same state.
+    #[serde(skip)]
+    pub reconciled: StateSnapshot,
 }
 /// Prepare one complete candidate with immutable provider context. The store must
 /// recheck revision and running state before committing; dry runs return the preview.
@@ -120,22 +127,26 @@ pub fn prepare_edit(
         _ => {
             let options = edit.options().expect("convenience edit options");
             (
-                options.expected.unwrap_or(context.snapshot.revision),
+                options.expected.unwrap_or(context.revision),
                 options.dry_run,
                 options.author.clone(),
                 options.reason.clone(),
             )
         }
     };
-    if expected != context.snapshot.revision {
+    if expected != context.revision {
         return Err(PublicError::Conflict {
             message: "plan revision changed".into(),
-            current_rev: Some(context.snapshot.revision),
+            current_rev: Some(context.revision),
         });
     }
-    let plan = Plan::parse(&context.snapshot.document, context.signatures).map_err(invalid)?;
-    let document = serde_json::to_value(&context.snapshot.document).expect("JSON serializes");
-    let raw = document["steps"].as_object().expect("validated steps");
+    let plan = context.plan;
+    let raw = plan
+        .document()
+        .0
+        .get("steps")
+        .and_then(|steps| steps.as_value().as_object())
+        .expect("validated steps");
     let mut ops = vec![];
     let mut inputs_report = None;
     let mut prune_report = None;
@@ -147,14 +158,17 @@ pub fn prepare_edit(
                 // Apply the supplied patch first so root replacements and explicit
                 // pause fields are visible before staging newly introduced ids.
                 let candidate = plan.patch(&ops, context.signatures).map_err(invalid)?;
-                let candidate_raw =
-                    serde_json::to_value(candidate.document()).expect("JSON serializes");
+                let candidate_raw = candidate.document().0.get("steps").map(JsonValue::as_value);
                 for id in candidate
                     .steps()
                     .keys()
                     .filter(|id| !plan.steps().contains_key(*id))
                 {
-                    if candidate_raw["steps"][id.as_str()].get("paused").is_none() {
+                    if candidate_raw
+                        .and_then(|steps| steps.get(id.as_str()))
+                        .and_then(|step| step.get("paused"))
+                        .is_none()
+                    {
                         ops.push(add(&format!("{}/paused", step_path(id)), json!(true))?);
                     }
                 }
@@ -208,12 +222,7 @@ pub fn prepare_edit(
                 .0
                 .insert("unit".into(), JsonValue::try_from(json!(request.unit))?);
             let expanded = recipe
-                .expand(
-                    &params,
-                    &options,
-                    &context.snapshot.document,
-                    context.signatures,
-                )
+                .expand(&params, &options, plan.document(), context.signatures)
                 .map_err(|errors| {
                     if errors
                         .iter()
@@ -262,20 +271,20 @@ pub fn prepare_edit(
             }
         }
         PlanEdit::StepRemove(request) => {
-            for id in select(&plan, &request.selection)? {
+            for id in select(plan, &request.selection)? {
                 ops.push(PatchOperation::Remove {
                     path: step_path(&id),
                 });
             }
         }
-        PlanEdit::EdgeAdd(request) => ops = edges(&plan, raw, &request, true)?,
-        PlanEdit::EdgeRemove(request) => ops = edges(&plan, raw, &request, false)?,
+        PlanEdit::EdgeAdd(request) => ops = edges(plan, raw, &request, true)?,
+        PlanEdit::EdgeRemove(request) => ops = edges(plan, raw, &request, false)?,
         PlanEdit::StepSetInput(request) => {
             if request.inputs.0.is_empty() {
                 return Err(bad("inputs: expected at least one input"));
             }
             let mut report = InputChanges::default();
-            for id in select(&plan, &request.selection)? {
+            for id in select(plan, &request.selection)? {
                 if context.state.status(&id) == StepStatus::Running {
                     report.running.push(id);
                     continue;
@@ -359,9 +368,9 @@ pub fn prepare_edit(
             steps_report = Some(unit.steps.clone());
         }
         PlanEdit::StepPause(request) => {
-            let mut chosen = select(&plan, &request.selection)?;
+            let mut chosen = select(plan, &request.selection)?;
             if request.subtree {
-                chosen = downstream(&plan, &chosen);
+                chosen = downstream(plan, &chosen);
             }
             // The reason is kept on each step it pauses; without one, `true`, and a
             // step already paused keeps its own reason.
@@ -425,7 +434,7 @@ pub fn prepare_edit(
                         .is_none_or(|units| units.contains(name))
                 })
                 .collect();
-            let closure = prune_closed(&plan, context.state, &selected).map_err(invalid)?;
+            let closure = prune_closed(plan, context.state, &selected).map_err(invalid)?;
             ops.extend(closure.steps.iter().map(|id| PatchOperation::Remove {
                 path: step_path(id),
             }));
@@ -433,8 +442,9 @@ pub fn prepare_edit(
             prune_report = Some(closure);
         }
     }
-    let (plan, preview) = plan::prepare_patch(
-        context.snapshot,
+    let (plan, preview, reconciled) = plan::prepare_patch(
+        context.revision,
+        plan,
         context.state,
         plan::PlanPatchData { expected, ops },
         context.signatures,
@@ -452,6 +462,7 @@ pub fn prepare_edit(
         inputs: inputs_report,
         prune: prune_report,
         steps: steps_report,
+        reconciled,
     })
 }
 

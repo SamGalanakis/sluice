@@ -15,7 +15,7 @@ use sluice_model::{
     events::Event,
     gates::{self, CachedResources, Gate},
     ids::*,
-    plan::{Binding, Snapshot},
+    plan::Binding,
     recipe::{Recipe, RecipeEntry},
     rpc::JsonMap,
     types::{BoundValue, Type, check_value_at},
@@ -354,68 +354,163 @@ async fn edit_extension<H: ExecutionHost>(
         PlanEdit::PlanPrune(request) => (request.project.clone(), Some(request.older_than_seconds)),
         _ => return Err(bad("unsupported extension edit")),
     };
-    let catalog = broker.catalog().clone();
-    let home = broker.home().to_owned();
-    let (id, prepared, evidence) = broker
-        .reads()
-        .snapshot(move |sql| {
-            let id = messages::resolve_project(sql, &project)?;
-            let ctx = context(sql, id, &catalog)?;
-            let state = plans::read_state(sql, id)?;
-            let evidence = age
-                .map(|age| plans::prune_eligible_age(sql, &ctx, age))
-                .transpose()?;
-            let limits = resources::declarations(sql, id)?
-                .into_iter()
-                .map(|(name, resource)| {
-                    (
-                        name,
-                        match resource.declaration {
-                            resources::Capacity::Fixed(n) => {
-                                sluice_model::plan::ResourceLimit::Fixed(n)
-                            }
-                            resources::Capacity::Function(_) => {
-                                sluice_model::plan::ResourceLimit::Dynamic
-                            }
-                        },
-                    )
-                })
-                .collect();
-            let prepared = edit::prepare_edit(
-                &EditSnapshot {
-                    snapshot: &Snapshot {
-                        revision: ctx.revision,
-                        document: ctx.plan.document().clone(),
+    // Prepared and worked out down to its rows in a read snapshot; the writer commits it
+    // while the snapshot's rows hold (see `OutsideEdit`), and after EDIT_TRIES tries that
+    // found them changed, or for an age-filtered prune, applies the prepared edit itself.
+    for attempt in 0..=crate::coordinator::EDIT_TRIES {
+        let staged = attempt < crate::coordinator::EDIT_TRIES;
+        let (catalog, home, project, edit, cache) = (
+            broker.catalog().clone(),
+            broker.home().to_owned(),
+            project.clone(),
+            edit.clone(),
+            broker.plan_cache(),
+        );
+        let mark = broker.writer().row_mark();
+        let prepared = broker
+            .reads()
+            .snapshot(move |sql| {
+                let id = messages::resolve_project(sql, &project)?;
+                let signatures = catalog.for_project(Some(id));
+                let (revision, plan) = cache.compiled(sql, id, &catalog, &signatures)?;
+                let (witness, state) = plans::Witness::read_with_state(sql, id)?;
+                let evidence = age
+                    .map(|age| {
+                        let ctx = plans::PlanContext {
+                            project: id,
+                            revision,
+                            plan: (*plan).clone(),
+                        };
+                        plans::prune_eligible_age(sql, &ctx, age)
+                    })
+                    .transpose()?;
+                let limits = resources::declarations(sql, id)?
+                    .into_iter()
+                    .map(|(name, resource)| {
+                        (
+                            name,
+                            match resource.declaration {
+                                resources::Capacity::Fixed(n) => {
+                                    sluice_model::plan::ResourceLimit::Fixed(n)
+                                }
+                                resources::Capacity::Function(_) => {
+                                    sluice_model::plan::ResourceLimit::Dynamic
+                                }
+                            },
+                        )
+                    })
+                    .collect();
+                let prepared = edit::prepare_edit(
+                    &EditSnapshot {
+                        revision,
+                        plan: &plan,
+                        state: &state,
+                        signatures: &signatures,
+                        recipes: &load_recipes(&home, id)?,
+                        resources: &cached_resources(sql, id, &plan)?,
+                        limits: &limits,
+                        prune_eligible: evidence.as_ref().map(|e| e.units()),
                     },
-                    state: &state,
-                    signatures: &catalog.for_project(Some(id)),
-                    recipes: &load_recipes(&home, id)?,
-                    resources: &cached_resources(sql, id, &ctx.plan)?,
-                    limits: &limits,
-                    prune_eligible: evidence.as_ref().map(|e| e.units()),
-                },
-                edit,
-            )?;
-            Ok((id, prepared, evidence))
-        })
-        .await
-        .map_err(public)?;
-    if prepared.dry_run {
-        return Ok(CommandReply::Preview(prepared.preview));
+                    edit,
+                )?;
+                // A dry run writes nothing: it is answered from the snapshot.
+                if prepared.dry_run {
+                    return Ok(Err(prepared.preview));
+                }
+                if !staged || evidence.is_some() {
+                    return Ok(Ok(Prepared::Direct(id, Box::new(prepared), evidence)));
+                }
+                let prune = prepared.prune.clone();
+                let effect = plans::edit_effect(
+                    sql,
+                    id,
+                    prepared,
+                    plans::Current {
+                        revision,
+                        document: plan.document(),
+                        state: &state,
+                        prepared_with: true,
+                    },
+                )
+                .map(|mut effect| {
+                    let plan = effect.take_plan().map(|(revision, plan)| {
+                        crate::coordinator::CachedPlan::new(id, revision, signatures.0, plan)
+                    });
+                    (Box::new(effect), plan)
+                });
+                Ok(Ok(Prepared::Staged {
+                    id,
+                    witness,
+                    effect,
+                    prune,
+                }))
+            })
+            .await
+            .map_err(public)?;
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(preview) => return Ok(CommandReply::Preview(preview)),
+        };
+        let reply = broker
+            .writer()
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+                Ok(Some(match prepared {
+                    Prepared::Staged {
+                        id,
+                        witness,
+                        effect,
+                        prune,
+                    } => {
+                        if !witness.holds_since(tx, id, mark)? {
+                            return Ok(None);
+                        }
+                        let (effect, plan) = effect?;
+                        let result = plans::commit_effect(tx, *effect)?;
+                        (crate::coordinator::edit_reply(result, None, prune), plan)
+                    }
+                    Prepared::Direct(id, prepared, evidence) => {
+                        let prune = prepared.prune.clone();
+                        let result = if let Some(evidence) = evidence {
+                            plans::apply_prune(tx, id, *prepared, &evidence)?
+                        } else {
+                            plans::apply_edit(tx, id, *prepared)?
+                        };
+                        (crate::coordinator::edit_reply(result, None, prune), None)
+                    }
+                }))
+            })
+            .await?;
+        if let Some((reply, plan)) = reply {
+            if let Some(plan) = plan {
+                broker.plan_cache().put(plan);
+            }
+            return Ok(reply);
+        }
     }
-    broker
-        .writer()
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
-            let prune = prepared.prune.clone();
-            let result = if let Some(evidence) = evidence {
-                plans::apply_prune(tx, id, prepared, &evidence)?
-            } else {
-                plans::apply_edit(tx, id, prepared)?
-            };
-            Ok(crate::coordinator::edit_reply(result, None, prune))
-        })
-        .await
+    // The last try applies the edit directly, so it never comes back for another.
+    Err(PublicError::Storage {
+        message: "plan edit was not committed".into(),
+    })
+}
+/// A unit_add or plan_prune prepared from a read snapshot: worked out down to its rows
+/// for the writer to commit while the snapshot holds, or (an age-filtered prune, or the
+/// last try) for the writer to apply.
+enum Prepared {
+    Staged {
+        id: ProjectId,
+        witness: plans::Witness,
+        effect: sluice_store::Result<(
+            Box<plans::EditEffect>,
+            Option<crate::coordinator::CachedPlan>,
+        )>,
+        prune: Option<sluice_model::units::PruneSet>,
+    },
+    Direct(
+        ProjectId,
+        Box<edit::PreparedEdit>,
+        Option<plans::PruneEligibility>,
+    ),
 }
 
 async fn log_wait<H: ExecutionHost>(

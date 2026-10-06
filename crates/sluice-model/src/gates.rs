@@ -542,6 +542,8 @@ pub struct DryRun {
     pub would_skip: IndexMap<StepId, Vec<SkipReason>>,
     pub would_stale: Vec<StepId>,
     pub errors: Vec<PathError>,
+    /// The after state as reconcile leaves it.
+    pub reconciled: StateSnapshot,
 }
 /// Simulate a validated candidate edit using no execution or capacity callbacks.
 /// before_state/after_state allow plan-input and project-pause edits as well.
@@ -628,5 +630,6 @@ pub fn simulate_edit(
             result.would_queue.insert(id, short);
         }
     }
+    result.reconciled = after;
     result
 }

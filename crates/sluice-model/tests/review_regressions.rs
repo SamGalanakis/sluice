@@ -6,7 +6,7 @@ use sluice_model::{
     edit::{self, EditSnapshot, PlanEdit},
     gates::{CachedResources, evaluate_step, reconcile},
     ids::{Revision, StepId},
-    plan::{Snapshot, inputs_hash},
+    plan::inputs_hash,
     rpc::{JsonMap, decode_json},
 };
 
@@ -42,10 +42,8 @@ fn prepare(
 ) -> Result<edit::PreparedEdit, sluice_model::error::PublicError> {
     edit::prepare_edit(
         &EditSnapshot {
-            snapshot: &Snapshot {
-                revision: Revision(1),
-                document: p.document().clone(),
-            },
+            revision: Revision(1),
+            plan: p,
             state,
             signatures: &signatures(),
             recipes: &IndexMap::new(),

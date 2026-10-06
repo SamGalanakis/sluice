@@ -10,7 +10,7 @@ pub mod support {
         edit::PreparedEdit,
         gates::{CachedResources, StateSnapshot},
         ids::*,
-        plan::{FnSignature, Plan, SignatureProvider, Snapshot},
+        plan::{FnSignature, Plan, SignatureProvider},
         rpc::{JsonMap, decode_json},
         types::Type,
     };
@@ -59,10 +59,6 @@ pub mod support {
         Plan::parse(&map(doc), &Signatures).unwrap()
     }
     pub fn edit(context: &PlanContext, doc: Value) -> PreparedEdit {
-        let snapshot = Snapshot {
-            revision: context.revision,
-            document: context.plan.document().clone(),
-        };
         let state = StateSnapshot::default();
         let recipes = Default::default();
         let limits = Default::default();
@@ -81,7 +77,8 @@ pub mod support {
         });
         sluice_model::edit::prepare_edit(
             &sluice_model::edit::EditSnapshot {
-                snapshot: &snapshot,
+                revision: context.revision,
+                plan: &context.plan,
                 state: &state,
                 signatures: &Signatures,
                 recipes: &recipes,
@@ -852,13 +849,9 @@ async fn project_adapters_initialize_and_rename_with_real_resources() {
 async fn prepared_prune_rechecks_done_after_retry() {
     let f = Fixture::new(json!({"steps":{"work":{"run":"empty"}}})).await;
     f.manual("work", json!({}), false).await;
-    let snapshot = sluice_model::plan::Snapshot {
-        revision: f.context.revision,
-        document: f.context.plan.document().clone(),
-    };
     let state = f.state().await;
     let edit=sluice_model::edit::prepare_edit(&sluice_model::edit::EditSnapshot{
-        snapshot:&snapshot,state:&state,signatures:&Signatures,recipes:&Default::default(),limits:&Default::default(),resources:&Default::default(),prune_eligible:None
+        revision:f.context.revision,plan:&f.context.plan,state:&state,signatures:&Signatures,recipes:&Default::default(),limits:&Default::default(),resources:&Default::default(),prune_eligible:None
     },sluice_model::edit::PlanEdit::PlanPrune(serde_json::from_value(json!({"project":ProjectSelector::Id(f.context.project),"older_than_seconds":0,"edit":{"dry_run":false,"reason":"prune completed work"}})).unwrap())).unwrap();
     assert!(edit.prune.is_some());
     assert!(!edit.plan.steps().contains_key(&id("work")));
@@ -1502,14 +1495,11 @@ async fn age_filtered_prune_freezes_cutoff_and_current_results() {
                 assert!(excluded.units().is_empty());
                 let evidence = plans::prune_eligible(c, &context, cutoff)?;
                 assert_eq!(evidence.units(), &["done".parse::<UnitName>().unwrap()]);
-                let snapshot = sluice_model::plan::Snapshot {
-                    revision: context.revision,
-                    document: context.plan.document().clone(),
-                };
                 let state = plans::read_state(c, context.project)?;
                 let edit = sluice_model::edit::prepare_edit(
                     &sluice_model::edit::EditSnapshot {
-                        snapshot: &snapshot,
+                        revision: context.revision,
+                        plan: &context.plan,
                         state: &state,
                         signatures: &Signatures,
                         recipes: &Default::default(),

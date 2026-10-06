@@ -317,6 +317,11 @@ pub(crate) fn validate_json(value: &serde_json::Value, path: &str) -> Result<(),
             _ => {}
         }
     }
+    // Most values are valid: check without building a path per node, and walk again
+    // naming each fault only when there is one.
+    if strict(value, 0) {
+        return Ok(());
+    }
     let mut errors = Vec::new();
     visit(value, path, 0, &mut errors);
     if errors.is_empty() {
@@ -324,6 +329,31 @@ pub(crate) fn validate_json(value: &serde_json::Value, path: &str) -> Result<(),
     } else {
         Err(errors)
     }
+}
+/// What `validate_json` checks, without paths: true when it would find nothing in a value
+/// at this depth.
+pub(crate) fn strict(value: &serde_json::Value, depth: usize) -> bool {
+    use serde_json::Value;
+    if depth >= 128 {
+        return false;
+    }
+    match value {
+        Value::Number(n) if n.is_f64() => n.as_f64().is_some_and(f64::is_finite),
+        Value::Number(n) => n.as_i64().is_some(),
+        Value::Array(a) => a.iter().all(|v| strict(v, depth + 1)),
+        Value::Object(o) => o.values().all(|v| strict(v, depth + 1)),
+        _ => true,
+    }
+}
+/// `validate_json` of a map's value, without building that value.
+pub(crate) fn validate_json_map(
+    map: &crate::rpc::JsonMap,
+    path: &str,
+) -> Result<(), Vec<PathError>> {
+    if map.0.values().all(|v| strict(v.as_value(), 1)) {
+        return Ok(());
+    }
+    validate_json(&serde_json::to_value(map).expect("strict JSON map"), path)
 }
 
 pub fn check_value(t: &Type, value: &serde_json::Value) -> Result<(), Vec<PathError>> {

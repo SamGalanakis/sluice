@@ -16,5 +16,5 @@ pub mod writer;
 pub use reads::{DurableCursor, ReadPool, Subscription};
 pub use schema::{Result, StoreError};
 pub use writer::{
-    ChangeKey, ChangeNotification, RetrySafety, WriteTransaction, Writer, WriterOptions,
+    ChangeKey, ChangeNotification, RetrySafety, RowMark, WriteTransaction, Writer, WriterOptions,
 };

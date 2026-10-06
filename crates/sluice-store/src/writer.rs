@@ -16,7 +16,7 @@ use sluice_model::{
     ids::{MessageId, ProjectId, RecordSeq},
 };
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::JoinHandle,
@@ -82,10 +82,16 @@ impl Default for WriterOptions {
 pub struct WriteTransaction<'connection> {
     transaction: Transaction<'connection>,
     changed: BTreeSet<ChangeKey>,
+    rows: &'connection RowLog,
 }
 impl WriteTransaction<'_> {
     pub fn sql(&self) -> &Connection {
         &self.transaction
+    }
+    /// (table, rowid) of every row in `ROW_TABLES` that a transaction committed after
+    /// `mark` changed, in commit order; None when the log no longer reaches back that far.
+    pub fn rows_changed_since(&self, mark: RowMark) -> Option<Vec<(&'static str, i64)>> {
+        self.rows.since(mark)
     }
     pub fn changed(&mut self, project: Option<ProjectId>, view: impl Into<String>) {
         self.changed.insert(ChangeKey::new(project, view));
@@ -148,12 +154,80 @@ pub fn append_record(
     tx.append_record(project, event)
 }
 
+/// The tables whose changed rows the writer logs: those a plan edit is worked out from.
+pub const ROW_TABLES: [&str; 5] = ["plans", "projects", "inputs", "steps", "resources"];
+/// How many changed rows the log keeps; an older mark is answered with None.
+const ROW_LOG_LIMIT: usize = 1 << 16;
+/// A point in the row log: everything committed before it has been published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowMark(u64);
+/// The rows the writer's committed transactions changed in `ROW_TABLES`, in commit
+/// order, from SQLite's update hook. A row is published only once its transaction has
+/// committed, so a mark taken before a read snapshot begins covers every commit that
+/// snapshot cannot see. A plan edit prepared from that snapshot asks, in its writer
+/// transaction, which rows changed since: when none is its project's, its snapshot holds
+/// without the project's rows being read again.
+#[derive(Default)]
+struct RowLog {
+    state: Mutex<RowLogState>,
+}
+#[derive(Default)]
+struct RowLogState {
+    /// Changed by the transaction in progress.
+    pending: Vec<(usize, i64)>,
+    /// Ever published.
+    published: u64,
+    /// The last ROW_LOG_LIMIT published.
+    entries: VecDeque<(usize, i64)>,
+}
+impl RowLog {
+    fn lock(&self) -> std::sync::MutexGuard<'_, RowLogState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    fn note(&self, table: &str, rowid: i64) {
+        if let Some(table) = ROW_TABLES.iter().position(|name| *name == table) {
+            self.lock().pending.push((table, rowid));
+        }
+    }
+    fn discard(&self) {
+        self.lock().pending.clear();
+    }
+    fn publish(&self) {
+        let mut state = self.lock();
+        let state = &mut *state;
+        for entry in state.pending.drain(..) {
+            state.entries.push_back(entry);
+            state.published += 1;
+            if state.entries.len() > ROW_LOG_LIMIT {
+                state.entries.pop_front();
+            }
+        }
+    }
+    fn mark(&self) -> RowMark {
+        RowMark(self.lock().published)
+    }
+    fn since(&self, mark: RowMark) -> Option<Vec<(&'static str, i64)>> {
+        let state = self.lock();
+        let oldest = state.published - state.entries.len() as u64;
+        let skip = mark.0.checked_sub(oldest)?;
+        Some(
+            state
+                .entries
+                .iter()
+                .skip(skip as usize)
+                .map(|(table, rowid)| (ROW_TABLES[*table], *rowid))
+                .collect(),
+        )
+    }
+}
+
 type Operation<T> = Box<dyn FnOnce(&mut WriteTransaction<'_>) -> Result<T> + Send>;
 trait Job: Send {
     fn run(
         self: Box<Self>,
         connection: &mut Connection,
         changes: &watch::Sender<ChangeNotification>,
+        rows: &RowLog,
     );
 }
 struct Request<T> {
@@ -166,8 +240,9 @@ impl<T: Send + 'static> Job for Request<T> {
         self: Box<Self>,
         connection: &mut Connection,
         changes: &watch::Sender<ChangeNotification>,
+        rows: &RowLog,
     ) {
-        let result = transact(connection, self.operation, changes)
+        let result = transact(connection, self.operation, changes, rows)
             .map_err(|error| error.into_public(self.safety.is_idempotent()));
         let _ = self.reply.send(result);
     }
@@ -183,6 +258,7 @@ struct Inner {
     changes: watch::Receiver<ChangeNotification>,
     thread: Mutex<Option<JoinHandle<()>>>,
     home: PathBuf,
+    rows: Arc<RowLog>,
 }
 
 /// Clones share one actor. Explicit shutdown closes admission, drains accepted
@@ -210,11 +286,18 @@ impl Writer {
         let (sender, mut receiver) = mpsc::channel(options.queue_capacity);
         let (changes, change_receiver) = watch::channel(ChangeNotification::default());
         let (started, startup) = std::sync::mpsc::sync_channel(1);
+        let rows = Arc::new(RowLog::default());
+        let actor_rows = rows.clone();
         let thread = std::thread::Builder::new()
             .name("sluice-sqlite-writer".into())
             .spawn(move || {
                 let opened = schema::lock_home(&actor_home).and_then(|lock| {
-                    schema::open_writer(&actor_home, options.busy_timeout).map(|db| (lock, db))
+                    let db = schema::open_writer(&actor_home, options.busy_timeout)?;
+                    let hook = actor_rows.clone();
+                    db.update_hook(Some(move |_, _: &str, table: &str, rowid| {
+                        hook.note(table, rowid)
+                    }))?;
+                    Ok((lock, db))
                 });
                 let (lock, mut connection) = match opened {
                     Ok(opened) => {
@@ -231,7 +314,7 @@ impl Writer {
                 let mut shutdown_replies = Vec::new();
                 while let Some(command) = receiver.blocking_recv() {
                     match command {
-                        Command::Write(job) => job.run(&mut connection, &changes),
+                        Command::Write(job) => job.run(&mut connection, &changes, &actor_rows),
                         Command::Shutdown(reply) => {
                             receiver.close();
                             shutdown_replies.push(reply);
@@ -252,6 +335,7 @@ impl Writer {
                     changes: change_receiver,
                     thread: Mutex::new(Some(thread)),
                     home,
+                    rows,
                 }),
             }),
             Ok(Err(error)) => {
@@ -266,6 +350,11 @@ impl Writer {
     }
     pub fn home(&self) -> &Path {
         &self.inner.home
+    }
+    /// The row log's current point: take it before a read snapshot begins, and ask a
+    /// writer transaction what changed since (`WriteTransaction::rows_changed_since`).
+    pub fn row_mark(&self) -> RowMark {
+        self.inner.rows.mark()
     }
     /// How many write requests this actor has admitted: what callers cost the
     /// one writer, for diagnostics and tests.
@@ -361,13 +450,17 @@ fn transact<T>(
     connection: &mut Connection,
     operation: Operation<T>,
     changes: &watch::Sender<ChangeNotification>,
+    rows: &RowLog,
 ) -> Result<T> {
+    // Rows a failed transaction changed were rolled back with it.
+    rows.discard();
     let before = connection.total_changes();
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.authorizer(Some(request_authorizer))?;
     let mut tx = WriteTransaction {
         transaction,
         changed: BTreeSet::new(),
+        rows,
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&mut tx)));
     tx.sql()
@@ -388,6 +481,7 @@ fn transact<T>(
         )?;
     }
     tx.transaction.commit()?;
+    rows.publish();
     if !tx.changed.is_empty() {
         changes.send_modify(|notification| {
             notification.commits = notification.commits.wrapping_add(1);
