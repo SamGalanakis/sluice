@@ -1283,3 +1283,163 @@ fn a_steered_turn_that_ends_without_completing_starts_the_turn_start_wait() {
         FailureKind::TurnStartTimeout
     );
 }
+
+/// A host whose peer answers `busy` for `busy_for` from the first acknowledgement and note,
+/// as a guardian or coordinator stalled behind plan edits does, retried as `RunHost` retries.
+struct StallingHost {
+    host: Host,
+    busy_for: Duration,
+    patience: Duration,
+    since: Option<tokio::time::Instant>,
+    tries: std::sync::Arc<AtomicU64>,
+    cancel: CancellationToken,
+}
+impl StallingHost {
+    async fn stalled(&mut self) -> io::Result<()> {
+        let since = *self.since.get_or_insert_with(tokio::time::Instant::now);
+        let (busy_for, tries) = (self.busy_for, self.tries.clone());
+        patiently(&self.cancel, Some(self.patience), || {
+            let tries = tries.clone();
+            async move {
+                tries.fetch_add(1, Ordering::Relaxed);
+                if since.elapsed() < busy_for {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    Err(sluice_model::error::PublicError::Busy {
+                        message: "the run's guardian did not answer within 5s".into(),
+                        retryable: true,
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await
+    }
+}
+impl SupervisorHost for StallingHost {
+    async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
+        self.host.snapshot(after).await
+    }
+    async fn acknowledge(&mut self, ids: &[MessageId]) -> io::Result<()> {
+        if !ids.is_empty() {
+            self.stalled().await?;
+        }
+        self.host.acknowledge(ids).await
+    }
+    async fn me(&mut self) -> io::Result<String> {
+        self.host.me().await
+    }
+    async fn note(&mut self, body: &str) -> io::Result<()> {
+        self.stalled().await?;
+        self.host.note(body).await
+    }
+    async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
+        self.host.checkpoint(checkpoint).await
+    }
+    async fn cleanup(&mut self) -> io::Result<()> {
+        self.host.cleanup().await
+    }
+}
+/// One live message steered into the running turn, then the turn completes.
+fn live_message_frames() -> (Vec<ScriptFrame>, Host) {
+    let mut frames = happy()[..2].to_vec();
+    frames.push(frame(
+        Some(EngineCommand::Steer {
+            id: InputId::Message { id: MessageId(1) },
+            text: "*".into(),
+        }),
+        observation(EngineStatus::Busy, 2, 0),
+    ));
+    frames.push(frame(None, observation(EngineStatus::Idle, 2, 1)));
+    let mut host = Host::new();
+    host.messages = vec![DeliveryMessage {
+        id: MessageId(1),
+        body: JsonValue::try_from(serde_json::json!({"body":"live"})).unwrap(),
+    }];
+    (frames, host)
+}
+#[tokio::test]
+async fn a_stalled_peer_delays_the_acknowledgement_but_never_fails_the_run() {
+    let scratch = Scratch::new();
+    let config = config(&scratch);
+    let (frames, host) = live_message_frames();
+    let mut engine = ScriptedEngine::new(frames);
+    let cancel = CancellationToken::new();
+    let mut stalling = StallingHost {
+        host,
+        busy_for: Duration::from_millis(300),
+        patience: HOST_PATIENCE,
+        since: None,
+        tries: Default::default(),
+        cancel: cancel.clone(),
+    };
+    supervise(
+        config,
+        &mut engine,
+        &mut stalling,
+        &mut SessionGuard::default(),
+        None,
+        &cancel,
+    )
+    .await
+    .unwrap();
+    assert!(stalling.tries.load(Ordering::Relaxed) > 2);
+    assert_eq!(stalling.host.acks, vec![MessageId(1)]);
+}
+#[tokio::test]
+async fn a_peer_unavailable_past_its_patience_fails_the_run_transient_not_invalid() {
+    let scratch = Scratch::new();
+    let mut config = config(&scratch);
+    config.retry.owner = RetryOwner::OuterHelper;
+    let (frames, host) = live_message_frames();
+    let mut engine = ScriptedEngine::new(frames);
+    let cancel = CancellationToken::new();
+    let mut stalling = StallingHost {
+        host,
+        busy_for: Duration::MAX,
+        patience: Duration::from_millis(200),
+        since: None,
+        tries: Default::default(),
+        cancel: cancel.clone(),
+    };
+    let error = supervise(
+        config,
+        &mut engine,
+        &mut stalling,
+        &mut SessionGuard::default(),
+        None,
+        &cancel,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, FailureKind::Transient, "{error}");
+    assert!(error.message.contains("still unavailable after"), "{error}");
+    assert!(stalling.host.acks.is_empty());
+}
+#[tokio::test]
+async fn a_cancelled_run_stops_waiting_on_a_stalled_peer() {
+    let cancel = CancellationToken::new();
+    let waiting = patiently(&cancel, None, || async {
+        Err::<(), _>(sluice_model::error::PublicError::Busy {
+            message: "the coordinator did not answer within 5s".into(),
+            retryable: true,
+        })
+    });
+    cancel.cancel();
+    let error = waiting.await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    // A definite refusal is never retried.
+    let tries = AtomicU64::new(0);
+    let error = patiently(&CancellationToken::new(), None, || {
+        tries.fetch_add(1, Ordering::Relaxed);
+        async {
+            Err::<(), _>(sluice_model::error::PublicError::BadRequest {
+                message: "wrong invocation acknowledgement".into(),
+            })
+        }
+    })
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("wrong invocation"));
+    assert_eq!(tries.load(Ordering::Relaxed), 1);
+}

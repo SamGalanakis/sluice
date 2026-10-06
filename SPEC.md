@@ -189,6 +189,12 @@ delivery acknowledgements), holds one watch on the coordinator for cancellation 
 and reports the start and the completion until the coordinator acknowledges them. A payload is
 a Python fn (§5.4), an agent session in the private tmux, or a built-in fn.
 
+An agent's supervisor acknowledges each live message its engine accepted to the guardian, which
+answers once the acknowledgement is durable in the run's `delivery.json` (a redelivery after a
+restart skips it). The guardian tells the coordinator afterwards, beside its loop and again
+until the coordinator takes it, and the completion carries every acknowledgement, so a slow or
+stalled coordinator never holds the answer.
+
 The guardian hands each engine hook to the agent supervisor through the run's
 `engine-hooks/` journal and waits up to three seconds for its decision. The journal keeps only
 the hooks in flight, however many a run has: the supervisor removes a hook's request once its
@@ -1402,6 +1408,20 @@ owner's own Codex, serves them all. Each launch or resume, under `codex-native-h
 replaces any copy an earlier release left in a private home with the link; a copy for the owner's
 account refreshed later than the owner's file (`last_refresh`) is written to the owner's file
 first, and an older one never is.
+
+A stalled coordinator or guardian never fails an agent run. The supervisor's reads, its
+acknowledgements of live messages and its notes to the orchestrator retry a peer that answers
+`busy` (retryable) or does not answer within its 5 s, with waits growing from 50 ms to 1 s,
+until it answers, the run is cancelled, or (acknowledgements and notes) ten minutes have passed;
+it keeps answering the engine's hooks meanwhile. Each retry of a note is the same request, so
+the coordinator posts it once. A guardian refuses an acknowledgement of a message it has not
+offered yet, and its watch may lag the supervisor's read, so a refusal is retried for a minute
+before it counts. An acknowledgement still unanswered after ten minutes fails the run as
+`Transient` (the helper's retry resumes the session); a definite refusal fails it as `Invalid`.
+A note that never got through is logged and dropped. A `busy` from the socket client says what
+happened and to whom: `could not connect to the coordinator (…); the request was not sent`,
+`the run's guardian did not answer within 5s; acceptance may be unknown`, or `… ended the
+exchange without an answer (…)`.
 
 The agent is done when it submits: the supervisor stops the session as soon as the run's
 valid submission is stored, busy or not, and returns the result (§6.4); `final` is the agent's

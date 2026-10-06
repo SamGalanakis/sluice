@@ -364,9 +364,74 @@ pub struct HostSnapshot {
     pub background_work: Vec<String>,
     pub roots: Vec<ProcessIdentity>,
 }
+/// How long a host call keeps retrying a peer (the coordinator or the run's guardian) that
+/// answers `busy` (retryable) or does not answer in time, before the run fails `Transient`.
+/// A coordinator applying a burst of plan edits stalls for minutes at most, and a deploy
+/// restarts it in seconds; ten minutes covers both many times over while still ending a run
+/// whose peer is gone for good well inside the wall cap.
+pub const HOST_PATIENCE: Duration = Duration::from_secs(600);
+/// A host call whose peer stayed unavailable for its whole patience. The supervisor fails
+/// the run `Transient` on it, so the helper's retry resumes the session.
+#[derive(Debug)]
+pub struct HostUnavailable(pub String);
+impl std::fmt::Display for HostUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for HostUnavailable {}
+/// Calls `call` until it answers anything but a retryable `busy`, the run is cancelled
+/// (`Interrupted`), or `patience` (none: no limit) has passed since the first try
+/// ([`HostUnavailable`]). Waits between tries grow from 50 ms to 1 s. Another refusal is
+/// returned as it is: it is definite.
+pub async fn patiently<T, F>(
+    cancel: &CancellationToken,
+    patience: Option<Duration>,
+    mut call: impl FnMut() -> F,
+) -> io::Result<T>
+where
+    F: Future<Output = Result<T, sluice_model::error::PublicError>>,
+{
+    let cancelled = || io::Error::new(io::ErrorKind::Interrupted, "agent cancelled");
+    let started = tokio::time::Instant::now();
+    let mut wait = Duration::from_millis(50);
+    loop {
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(cancelled()),
+            result = call() => result,
+        };
+        let message = match result {
+            Ok(reply) => return Ok(reply),
+            Err(sluice_model::error::PublicError::Busy {
+                message,
+                retryable: true,
+            }) => message,
+            Err(error) => return Err(io::Error::other(error)),
+        };
+        if let Some(patience) = patience
+            && started.elapsed() >= patience
+        {
+            return Err(io::Error::other(HostUnavailable(format!(
+                "{message}; still unavailable after {}s of retrying",
+                started.elapsed().as_secs()
+            ))));
+        }
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(cancelled()),
+            _ = tokio::time::sleep(wait) => {},
+        }
+        wait = (wait * 2).min(Duration::from_secs(1));
+    }
+}
 /// The guardian supplies durable observations and holds invocation containment authority.
 /// cleanup must prove all engine-owned descendants gone, including detached work. It must
 /// retain the supervisor/control process and remain callable after an interrupted adapter.
+///
+/// A host call whose peer is only busy or slow keeps retrying (see [`patiently`]); it fails
+/// with [`HostUnavailable`] once its patience is spent, which fails the run `Transient`. Any
+/// other error is definite and fails the run `Invalid`.
 pub trait SupervisorHost: Send {
     fn snapshot(
         &mut self,
@@ -816,7 +881,35 @@ async fn bounded_host<T>(
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "agent cancelled")),
-        result = tokio::time::timeout_at(deadline, future) => result.map_err(|_| failure(FailureKind::WallCap, "wall-clock cap during host operation"))?.map_err(invalid),
+        result = tokio::time::timeout_at(deadline, future) => result.map_err(|_| failure(FailureKind::WallCap, "wall-clock cap during host operation"))?.map_err(host_failure),
+    }
+}
+/// A host error fails the run `Transient` when its peer was only unavailable, else `Invalid`.
+fn host_failure(error: io::Error) -> AgentFailure {
+    if error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<HostUnavailable>())
+    {
+        failure(FailureKind::Transient, error.to_string())
+    } else {
+        invalid(error)
+    }
+}
+/// Awaits a host call while answering the engine's hooks: the guardian waits on a hook's
+/// decision for three seconds, and a host call can wait on a stalled peer far longer.
+async fn answering_hooks<E: EngineAdapter, T>(
+    engine: &mut E,
+    config: &SupervisorConfig,
+    future: impl Future<Output = Result<T, AgentFailure>>,
+) -> Result<T, AgentFailure> {
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                process_hooks(engine, config.run, &config.run_dir).map_err(invalid)?;
+            }
+        }
     }
 }
 /// Called only in an admitted guardian invocation, never by a scheduler request future.
@@ -1256,10 +1349,14 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             machine.checkpoint.compactions = o.compactions;
         }
 
-        let snapshot = bounded_host(
-            cancel,
-            deadline,
-            host.snapshot(machine.checkpoint.live_after),
+        let snapshot = answering_hooks(
+            engine,
+            config,
+            bounded_host(
+                cancel,
+                deadline,
+                host.snapshot(machine.checkpoint.live_after),
+            ),
         )
         .await?;
         // Snapshot is authoritative; removing a field cannot leave an earlier submission complete.
@@ -1283,10 +1380,13 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 let cpu = crate::quiet::descendant_cpu(&snapshot.roots).map_err(invalid)?;
                 if let Some(note) = quiet.observe(now, config.limits.quiet, mark, cpu) {
                     machine.checkpoint.notes.push(note.clone());
-                    if let Err(error) =
-                        tokio::time::timeout(Duration::from_secs(2), host.note(&note))
-                            .await
-                            .unwrap_or_else(|_| Err(io::Error::other("quiet note timed out")))
+                    // A note is advice: one its peer never took is logged, never fatal.
+                    if let Err(error) = answering_hooks(
+                        engine,
+                        config,
+                        bounded_host(cancel, deadline, host.note(&note)),
+                    )
+                    .await
                     {
                         eprintln!("quiet note not posted: {error}");
                     }
@@ -1308,19 +1408,13 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
         persist(machine, config, host).await?;
         // The guardian answers control requests in order and may first be waiting on a hook
         // reply that only this loop writes; keep answering hooks while the ack is in flight.
-        {
-            let acknowledged = machine.checkpoint.delivery.acknowledged_messages();
-            let ack = bounded_host(cancel, deadline, host.acknowledge(&acknowledged));
-            tokio::pin!(ack);
-            loop {
-                tokio::select! {
-                    result = &mut ack => break result?,
-                    _ = tokio::time::sleep(Duration::from_millis(5)) => {
-                        process_hooks(engine, config.run, &config.run_dir).map_err(invalid)?;
-                    }
-                }
-            }
-        }
+        let acknowledged = machine.checkpoint.delivery.acknowledged_messages();
+        answering_hooks(
+            engine,
+            config,
+            bounded_host(cancel, deadline, host.acknowledge(&acknowledged)),
+        )
+        .await?;
         match action {
             Action::Send { id, text, steer } => {
                 machine.offered(&id, &o, now)?;

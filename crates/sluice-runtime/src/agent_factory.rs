@@ -564,6 +564,7 @@ impl AgentFactory for Factory {
             outer_dir: outer_dir.clone(),
             directory: directory.clone(),
             cancel: self.cancel.clone(),
+            patience: PATIENCE,
         };
         // The guardian's hook transport journals in the outer run directory. Each
         // logical supervisor owns that journal only while it is executing.
@@ -620,30 +621,98 @@ pub struct RunHost {
     outer_dir: PathBuf,
     directory: PathBuf,
     cancel: CancellationToken,
+    /// How long acknowledgements and notes wait out an unavailable peer.
+    patience: Patience,
 }
 impl RunHost {
+    /// A read waits out a busy or stalled coordinator for as long as the run lives.
     async fn read(&self, request: C) -> io::Result<R> {
-        loop {
-            let result = tokio::select! {
-                biased;
-                _ = self.cancel.cancelled() => return Err(io::Error::new(io::ErrorKind::Interrupted, "agent cancelled")),
-                result = self.link.request(request.clone()) => result,
-            };
-            match result {
-                Ok(reply) => return Ok(reply),
-                Err(sluice_model::error::PublicError::Busy {
-                    retryable: true, ..
-                }) => {
-                    tokio::select! {
-                        biased;
-                        _ = self.cancel.cancelled() => return Err(io::Error::new(io::ErrorKind::Interrupted, "agent cancelled")),
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {},
-                    }
-                }
-                Err(error) => return Err(io::Error::other(error)),
-            }
-        }
+        patiently(&self.cancel, None, || self.link.request(request.clone())).await
     }
+}
+/// How long host calls wait on their peers.
+#[derive(Debug, Clone, Copy)]
+struct Patience {
+    /// One try of a call to the run's guardian.
+    call: std::time::Duration,
+    /// All tries of an acknowledgement or a note, before the run fails `Transient`.
+    total: std::time::Duration,
+    /// How long a guardian's refusal of an acknowledgement may mean it has not offered the
+    /// message yet, rather than that the acknowledgement is wrong.
+    offer_lag: std::time::Duration,
+}
+const PATIENCE: Patience = Patience {
+    call: socket::RPC_TIMEOUT,
+    total: HOST_PATIENCE,
+    offer_lag: std::time::Duration::from_secs(60),
+};
+/// Reports to the run's guardian that the engine accepted `ack.message`. The guardian answers
+/// once the acknowledgement is durable in its `delivery.json`. Until it has offered the message
+/// itself it refuses the acknowledgement, and its own watch on the coordinator can lag this
+/// supervisor's read by as long as the coordinator stalls, so a refusal is retried like a busy
+/// guardian for the first minute. A guardian that is busy or does not answer is retried until
+/// `patience` has passed, which fails the run `Transient`.
+async fn acknowledge_delivery(
+    control: &Path,
+    capability: &RunCapability,
+    ack: DeliveryAck,
+    cancel: &CancellationToken,
+    patience: Patience,
+) -> io::Result<()> {
+    let offered_by = tokio::time::Instant::now() + patience.offer_lag;
+    patiently(cancel, Some(patience.total), || async {
+        match socket::call_within::<_, socket::ControlReply>(
+            control,
+            capability,
+            socket::ControlCommand::DeliveryAck(ack.clone()),
+            patience.call,
+        )
+        .await
+        {
+            Err(sluice_model::error::PublicError::BadRequest { message })
+                if tokio::time::Instant::now() < offered_by =>
+            {
+                Err(sluice_model::error::PublicError::Busy {
+                    message,
+                    retryable: true,
+                })
+            }
+            result => result.map(|_| ()),
+        }
+    })
+    .await
+}
+/// Says `body` to the orchestrator for this run. Every try carries the same request id, so a
+/// try the coordinator committed but could not answer in time is never posted twice.
+async fn say_to_orchestrator(
+    link: &impl CoordinatorLink,
+    launch: &Launch,
+    body: &str,
+    cancel: &CancellationToken,
+    patience: Patience,
+) -> io::Result<()> {
+    // The run says it to the orchestrator; its step and thread are derived.
+    let command = C::Callback {
+        identity: launch.identity.clone(),
+        request: Box::new(RpcRequest {
+            protocol: 1,
+            request_id: RequestId(InvocationId::new().to_string()),
+            run_capability: Some(launch.capability.clone()),
+            command: CommandRequest::Say(Say {
+                project: ProjectSelector::Id(launch.invocation.project),
+                to: "orchestrator".into(),
+                body: body.into(),
+                data: None,
+                run: Some(launch.identity.run),
+                owner: false,
+            }),
+        }),
+    };
+    patiently(cancel, Some(patience.total), || {
+        link.request(command.clone())
+    })
+    .await
+    .map(|_| ())
 }
 impl SupervisorHost for RunHost {
     async fn snapshot(&mut self, after: MessageId) -> io::Result<HostSnapshot> {
@@ -693,26 +762,14 @@ impl SupervisorHost for RunHost {
                 invocation: self.launch.invocation.invocation,
                 message: *message,
             };
-            // The guardian polls delivery independently. It must durably offer
-            // the message before accepting an acknowledgement of native delivery.
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-            loop {
-                match socket::call::<_, socket::ControlReply>(
-                    &self.outer_dir.join("control.sock"),
-                    &self.launch.capability,
-                    socket::ControlCommand::DeliveryAck(ack.clone()),
-                )
-                .await
-                {
-                    Ok(_) => break,
-                    Err(sluice_model::error::PublicError::BadRequest { .. })
-                        if tokio::time::Instant::now() < deadline =>
-                    {
-                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    }
-                    Err(error) => return Err(io::Error::other(error)),
-                }
-            }
+            acknowledge_delivery(
+                &self.outer_dir.join("control.sock"),
+                &self.launch.capability,
+                ack,
+                &self.cancel,
+                self.patience,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -732,28 +789,7 @@ impl SupervisorHost for RunHost {
         ))
     }
     async fn note(&mut self, body: &str) -> io::Result<()> {
-        // The run says it to the orchestrator; its step and thread are derived.
-        let command = CommandRequest::Say(Say {
-            project: ProjectSelector::Id(self.launch.invocation.project),
-            to: "orchestrator".into(),
-            body: body.into(),
-            data: None,
-            run: Some(self.launch.identity.run),
-            owner: false,
-        });
-        self.link
-            .request(C::Callback {
-                identity: self.launch.identity.clone(),
-                request: Box::new(RpcRequest {
-                    protocol: 1,
-                    request_id: RequestId(InvocationId::new().to_string()),
-                    run_capability: Some(self.launch.capability.clone()),
-                    command,
-                }),
-            })
-            .await
-            .map_err(io::Error::other)?;
-        Ok(())
+        say_to_orchestrator(&self.link, &self.launch, body, &self.cancel, self.patience).await
     }
     async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
         checkpoint.save(&self.directory)?;
@@ -873,4 +909,260 @@ fn callback_header(this: &std::path::Path) -> String {
         format!("Run every sluice command with {}.", this.display())
     };
     format!("{tool} SLUICE_PROJECT_ID and SLUICE_RUN_ID identify this invocation.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sluice_model::error::PublicError;
+    use sluice_process::{journal::AttemptKey, socket::RPC_TIMEOUT};
+    use std::{sync::Mutex, time::Duration};
+    use tokio::net::UnixListener;
+
+    fn launch() -> Launch {
+        let (project, run, attempt) = (ProjectId::new(), RunId::new(), AttemptId::new());
+        Launch {
+            identity: AttemptKey {
+                home: HomeId::new(),
+                project: Some(project),
+                step: Some("work".parse().unwrap()),
+                generation: StepGeneration(1),
+                work: WorkGeneration(1),
+                run,
+                attempt,
+            },
+            invocation: FnInvocation {
+                project,
+                step: Some("work".parse().unwrap()),
+                run,
+                attempt,
+                invocation: InvocationId::new(),
+                name: "agent.run".into(),
+                inputs: JsonMap::default(),
+            },
+            assigned: socket::AssignedRange {
+                after: MessageId(0),
+                through: MessageId(0),
+            },
+            prev_run: None,
+            capability: RunCapability::new("fixture-secret"),
+            timeout_seconds: None,
+            context: None,
+        }
+    }
+    /// A run's guardian that answers each acknowledgement with `answer(n)` for the nth
+    /// connection, `None` holding it unanswered as a guardian stalled on its coordinator did.
+    fn guardian(
+        control: &Path,
+        answer: impl Fn(usize) -> Option<Result<socket::ControlReply, PublicError>> + Send + 'static,
+    ) -> Arc<Mutex<usize>> {
+        let listener = UnixListener::bind(control).unwrap();
+        let seen = Arc::new(Mutex::new(0));
+        let count = seen.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let Ok(request) =
+                    socket::read_frame::<socket::Request<socket::ControlCommand>>(&mut stream)
+                        .await
+                else {
+                    continue;
+                };
+                let n = {
+                    let mut seen = count.lock().unwrap();
+                    *seen += 1;
+                    *seen
+                };
+                match answer(n) {
+                    None => held.push(stream),
+                    Some(result) => {
+                        let reply = socket::Reply {
+                            protocol: PROTOCOL_VERSION,
+                            request_id: request.request_id,
+                            result,
+                        };
+                        // A client that gave up first hangs up; that is its business.
+                        let _ = socket::write_frame(&mut stream, &reply).await;
+                    }
+                }
+            }
+        });
+        seen
+    }
+    fn ack(launch: &Launch) -> DeliveryAck {
+        DeliveryAck {
+            invocation: launch.invocation.invocation,
+            message: MessageId(7),
+        }
+    }
+
+    /// Real sockets on real time: tries of a tenth of a second stand in for RPC_TIMEOUT.
+    const QUICK: Patience = Patience {
+        call: Duration::from_millis(100),
+        total: Duration::from_secs(2),
+        offer_lag: Duration::from_millis(300),
+    };
+
+    #[tokio::test]
+    async fn an_acknowledgement_outlasts_a_guardian_that_does_not_answer_for_a_while() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("control.sock");
+        // Three tries go unanswered, each for the whole RPC timeout, then the guardian answers.
+        let seen = guardian(&control, |n| {
+            (n > 3).then_some(Ok(socket::ControlReply::Ack))
+        });
+        let launch = launch();
+        let started = tokio::time::Instant::now();
+        acknowledge_delivery(
+            &control,
+            &launch.capability,
+            ack(&launch),
+            &CancellationToken::new(),
+            QUICK,
+        )
+        .await
+        .unwrap();
+        assert_eq!(*seen.lock().unwrap(), 4);
+        assert!(started.elapsed() >= QUICK.call * 3);
+    }
+
+    #[tokio::test]
+    async fn an_acknowledgement_unanswered_past_its_patience_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = dir.path().join("control.sock");
+        guardian(&control, |_| None);
+        let launch = launch();
+        let error = acknowledge_delivery(
+            &control,
+            &launch.capability,
+            ack(&launch),
+            &CancellationToken::new(),
+            QUICK,
+        )
+        .await
+        .unwrap_err();
+        let inner = error.get_ref().expect("a typed error");
+        assert!(inner.is::<HostUnavailable>(), "{error}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("the run's guardian did not answer within 0.1s"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_retried_only_while_the_message_may_not_be_offered_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let refused = || {
+            Err(PublicError::BadRequest {
+                message: "wrong invocation acknowledgement".into(),
+            })
+        };
+        let launch = launch();
+        let control = dir.path().join("lagging");
+        std::fs::create_dir(&control).unwrap();
+        let control = control.join("control.sock");
+        // The guardian's watch hands it the message a little after this supervisor read it.
+        let seen = guardian(&control, move |n| {
+            Some(if n < 4 {
+                refused()
+            } else {
+                Ok(socket::ControlReply::Ack)
+            })
+        });
+        acknowledge_delivery(
+            &control,
+            &launch.capability,
+            ack(&launch),
+            &CancellationToken::new(),
+            QUICK,
+        )
+        .await
+        .unwrap();
+        assert_eq!(*seen.lock().unwrap(), 4);
+        // A refusal that outlasts any offer lag is definite.
+        let control = dir.path().join("refusing");
+        std::fs::create_dir(&control).unwrap();
+        let control = control.join("control.sock");
+        guardian(&control, move |_| Some(refused()));
+        let error = acknowledge_delivery(
+            &control,
+            &launch.capability,
+            ack(&launch),
+            &CancellationToken::new(),
+            QUICK,
+        )
+        .await
+        .unwrap_err();
+        assert!(!error.get_ref().unwrap().is::<HostUnavailable>(), "{error}");
+        assert!(error.to_string().contains("wrong invocation"), "{error}");
+    }
+
+    /// A coordinator that takes `stalls` requests without answering in time, then answers.
+    struct StalledCoordinator {
+        stalls: usize,
+        requests: Mutex<Vec<RequestId>>,
+    }
+    impl CoordinatorLink for StalledCoordinator {
+        async fn request(&self, command: C) -> Result<R, PublicError> {
+            let C::Callback { request, .. } = command else {
+                panic!("a note is a callback");
+            };
+            let n = {
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(request.request_id.clone());
+                requests.len()
+            };
+            if n <= self.stalls {
+                tokio::time::sleep(RPC_TIMEOUT).await;
+                return Err(PublicError::Busy {
+                    message: "the coordinator did not answer within 5s".into(),
+                    retryable: true,
+                });
+            }
+            Ok(R::Callback(Box::new(CommandReply::Ack)))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_note_outlasts_a_stalled_coordinator_and_is_said_once() {
+        let coordinator = StalledCoordinator {
+            stalls: 20,
+            requests: Mutex::default(),
+        };
+        let started = tokio::time::Instant::now();
+        say_to_orchestrator(
+            &coordinator,
+            &launch(),
+            "quiet for 45 minutes",
+            &CancellationToken::new(),
+            PATIENCE,
+        )
+        .await
+        .unwrap();
+        // A hundred seconds of stall, as twelve back-to-back plan edits cost.
+        assert!(started.elapsed() >= Duration::from_secs(100));
+        let requests = coordinator.requests.lock().unwrap();
+        assert_eq!(requests.len(), 21);
+        // Every try is the same request, so the coordinator posts it once however many it took.
+        assert!(requests.iter().all(|id| *id == requests[0]));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_run_stops_retrying_a_note() {
+        let coordinator = StalledCoordinator {
+            stalls: usize::MAX,
+            requests: Mutex::default(),
+        };
+        let (cancel, launch) = (CancellationToken::new(), launch());
+        let note = say_to_orchestrator(&coordinator, &launch, "quiet", &cancel, PATIENCE);
+        let stop = async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::join!(note, stop);
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    }
 }

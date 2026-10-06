@@ -270,10 +270,41 @@ struct Reported {
     starts: std::collections::BTreeSet<InvocationId>,
     acks: Vec<DeliveryAck>,
 }
-impl Reported {
-    fn taken(&self, reply: Result<CoordinatorReply, PublicError>) -> bool {
-        !matches!(reply, Err(PublicError::Busy { .. }))
+fn taken(reply: Result<CoordinatorReply, PublicError>) -> bool {
+    !matches!(reply, Err(PublicError::Busy { .. }))
+}
+/// Reports starts and acks once each; returns those the coordinator took.
+async fn report<L: CoordinatorLink>(
+    link: &L,
+    id: &AttemptKey,
+    starts: Vec<(InvocationId, ProcessIdentity)>,
+    acks: Vec<DeliveryAck>,
+) -> Reported {
+    let mut reported = Reported::default();
+    for (invocation, executor) in starts {
+        if taken(
+            link.request(CoordinatorCommand::Started {
+                identity: id.clone(),
+                invocation,
+                executor,
+            })
+            .await,
+        ) {
+            reported.starts.insert(invocation);
+        }
     }
+    for ack in acks {
+        if taken(
+            link.request(CoordinatorCommand::DeliverAck {
+                identity: id.clone(),
+                ack: ack.clone(),
+            })
+            .await,
+        ) {
+            reported.acks.push(ack);
+        }
+    }
+    reported
 }
 async fn messages<L: CoordinatorLink>(
     link: &L,
@@ -425,6 +456,10 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
         // taken yet. Polling the coordinator itself every tick cost it several
         // requests per tick per run.
         let mut watch = Box::pin(watch_once(link, id, offered, Duration::ZERO, legacy));
+        // Start and ack reports run beside the loop, one batch at a time, so a coordinator
+        // that is slow to take them never holds a control reply or the payload's poll.
+        let mut reporting: Option<std::pin::Pin<Box<dyn Future<Output = Reported> + Send + '_>>> =
+            None;
         loop {
             if cancel.is_cancelled() {
                 result = PayloadResult::Cancelled("cancel intent".into());
@@ -461,15 +496,17 @@ async fn run_claimed<L: CoordinatorLink, H: PayloadHost>(
                     }
                     watch = Box::pin(watch_once(link, id, offered, delay, legacy || once));
                 },
+                taken = async { reporting.as_mut().expect("reporting").await }, if reporting.is_some() => {
+                    reporting = None;
+                    reported.starts.extend(taken.starts);
+                    reported.acks.extend(taken.acks);
+                },
                 _ = tokio::time::sleep(args.poll_interval) => {
-                    for (invocation, executor) in &started {
-                        if !reported.starts.contains(invocation) && reported.taken(link.request(CoordinatorCommand::Started { identity: id.clone(), invocation: *invocation, executor: executor.clone() }).await) {
-                            reported.starts.insert(*invocation);
-                        }
-                    }
-                    for ack in &delivery.acks {
-                        if !reported.acks.contains(ack) && reported.taken(link.request(CoordinatorCommand::DeliverAck { identity: id.clone(), ack: ack.clone() }).await) {
-                            reported.acks.push(ack.clone());
+                    if reporting.is_none() {
+                        let starts: Vec<_> = started.iter().filter(|(invocation, _)| !reported.starts.contains(invocation)).cloned().collect();
+                        let acks: Vec<_> = delivery.acks.iter().filter(|ack| !reported.acks.contains(ack)).cloned().collect();
+                        if !starts.is_empty() || !acks.is_empty() {
+                            reporting = Some(Box::pin(report(link, id, starts, acks)));
                         }
                     }
                     match payload.poll().await {
@@ -649,16 +686,11 @@ async fn handle_control<L: CoordinatorLink, I: PayloadInvocation>(
             if !delivery.acks.contains(&ack) {
                 delivery.acks.push(ack.clone());
             }
+            // Durable here is the acknowledgement's answer. The coordinator hears of it from
+            // the tick's reports (or the completion journal), never on this reply's path: a
+            // stalled coordinator must not hold the agent's acknowledgement.
             match atomic_json(&args.run_dir, "delivery.json", &delivery.acks) {
-                Ok(()) => {
-                    let _ = link
-                        .request(CoordinatorCommand::DeliverAck {
-                            identity: args.guardian.identity.clone(),
-                            ack,
-                        })
-                        .await;
-                    Ok(ControlReply::Ack)
-                }
+                Ok(()) => Ok(ControlReply::Ack),
                 Err(e) => Err(PublicError::Storage {
                     message: e.to_string(),
                 }),

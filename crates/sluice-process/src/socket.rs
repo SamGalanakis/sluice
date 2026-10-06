@@ -188,7 +188,9 @@ pub async fn call<T: Serialize, R: DeserializeOwned>(
 }
 /// The longest a coordinator holds a `Watch` before it answers anyway.
 pub const MAX_WATCH: Duration = Duration::from_secs(60);
-/// `call` with its own limit, for a request the peer may hold (a long poll).
+/// `call` with its own limit, for a request the peer may hold (a long poll). A peer that
+/// cannot be reached, hangs up without an answer or does not answer within `limit` is `busy`
+/// (retryable), and the message says which of those happened and to which peer.
 pub async fn call_within<T: Serialize, R: DeserializeOwned>(
     path: &Path,
     capability: &RunCapability,
@@ -196,8 +198,10 @@ pub async fn call_within<T: Serialize, R: DeserializeOwned>(
     limit: Duration,
 ) -> Result<R, PublicError> {
     let request_id = RequestId(InvocationId::new().to_string());
+    let mut connected = false;
     let exchange = async {
         let mut stream = UnixStream::connect(path).await?;
+        connected = true;
         write_frame(
             &mut stream,
             &Request {
@@ -217,13 +221,42 @@ pub async fn call_within<T: Serialize, R: DeserializeOwned>(
         }
         Ok(reply.result)
     };
-    match tokio::time::timeout(limit, exchange).await {
-        Ok(Ok(reply)) => reply,
-        _ => Err(PublicError::Busy {
-            message: "coordinator unavailable; acceptance may be unknown".into(),
-            retryable: true,
-        }),
+    let outcome = tokio::time::timeout(limit, exchange).await;
+    let peer = peer(path);
+    let message = match outcome {
+        Ok(Ok(reply)) => return reply,
+        Ok(Err(error)) if !connected => {
+            format!("could not connect to {peer} ({error}); the request was not sent")
+        }
+        Ok(Err(error)) => {
+            format!(
+                "{peer} ended the exchange without an answer ({error}); acceptance may be unknown"
+            )
+        }
+        Err(_) if !connected => format!(
+            "could not connect to {peer} within {}; the request was not sent",
+            seconds(limit)
+        ),
+        Err(_) => format!(
+            "{peer} did not answer within {}; acceptance may be unknown",
+            seconds(limit)
+        ),
+    };
+    Err(PublicError::Busy {
+        message,
+        retryable: true,
+    })
+}
+/// Who listens on a socket: a run's control socket is its guardian's.
+fn peer(path: &Path) -> &'static str {
+    if path.file_name().is_some_and(|name| name == "control.sock") {
+        "the run's guardian"
+    } else {
+        "the coordinator"
     }
+}
+fn seconds(limit: Duration) -> String {
+    format!("{}s", limit.as_secs_f64())
 }
 #[derive(Clone)]
 pub struct UnixCoordinatorLink {

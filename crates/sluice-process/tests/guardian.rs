@@ -933,3 +933,82 @@ fn helper_rejection_is_typed_and_public_error_tails_are_bounded() {
     };
     assert!(message.len() <= 2048);
 }
+/// A coordinator that stops answering while `stalled` holds, as one applying a burst of plan
+/// edits does, then answers everything it was holding.
+#[derive(Clone)]
+struct StallLink {
+    inner: MemoryCoordinator,
+    gate: Arc<tokio::sync::watch::Sender<bool>>,
+    held: Arc<Mutex<Vec<&'static str>>>,
+}
+impl StallLink {
+    fn stall(&self, stalled: bool) {
+        self.gate.send_replace(stalled);
+    }
+}
+impl CoordinatorLink for StallLink {
+    async fn request(&self, command: CoordinatorCommand) -> Result<CoordinatorReply, PublicError> {
+        let mut gate = self.gate.subscribe();
+        if *gate.borrow() {
+            self.held.lock().unwrap().push(match command {
+                CoordinatorCommand::Started { .. } => "started",
+                CoordinatorCommand::DeliverAck { .. } => "deliver_ack",
+                _ => "other",
+            });
+            gate.wait_for(|stalled| !stalled).await.unwrap();
+        }
+        self.inner.request(command).await
+    }
+}
+#[tokio::test]
+async fn delivery_acks_are_answered_while_the_coordinator_stalls_and_reported_after() {
+    let home = tempfile::tempdir().unwrap();
+    let (args, link, host) = setup(home.path());
+    let stall = StallLink {
+        inner: link.clone(),
+        gate: Arc::new(tokio::sync::watch::channel(false).0),
+        held: Arc::default(),
+    };
+    let task = {
+        let (args, host, stall) = (args.clone(), host.clone(), stall.clone());
+        tokio::spawn(async move { guardian_main(args, &stall, &host).await })
+    };
+    until(|| host.state.starts.load(Ordering::SeqCst) == 1).await;
+    until(|| link.with_state(|s| s.requests.contains(&"started"))).await;
+    until(|| host.state.delivered.lock().unwrap().len() == 3).await;
+    stall.stall(true);
+    let ack = |id| {
+        control(
+            &args,
+            ControlCommand::DeliveryAck(DeliveryAck {
+                invocation: args.invocation.invocation,
+                message: MessageId(id),
+            }),
+        )
+    };
+    // The answer waits only for delivery.json, never for the coordinator.
+    tokio::time::timeout(Duration::from_secs(1), ack(1))
+        .await
+        .expect("answered while the coordinator stalls")
+        .unwrap();
+    let durable: Vec<DeliveryAck> =
+        decode_json(&std::fs::read(args.run_dir.join("delivery.json")).unwrap()).unwrap();
+    assert_eq!(durable.len(), 1);
+    // The tick's report of that ack is now held by the stalled coordinator; the guardian
+    // still answers the next acknowledgement at once.
+    until(|| stall.held.lock().unwrap().contains(&"deliver_ack")).await;
+    tokio::time::timeout(Duration::from_secs(1), ack(2))
+        .await
+        .expect("answered while a report is held")
+        .unwrap();
+    link.with_state(|s| assert!(s.attempts[&args.invocation.run].acknowledgements.is_empty()));
+    // Once the coordinator answers again, it hears of both.
+    stall.stall(false);
+    until(|| link.with_state(|s| s.attempts[&args.invocation.run].acknowledgements.len() == 2))
+        .await;
+    host.state.done.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        task.await.unwrap().unwrap(),
+        GuardianOutcome::Completed(_)
+    ));
+}
