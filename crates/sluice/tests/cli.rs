@@ -1760,3 +1760,61 @@ fn step_settle_takes_flags_help_and_suggestions() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("not_found"));
 }
+
+/// `unit_add` takes `after` as the documented map of recipe step suffix to step ids, from the
+/// JSON argument and from `--after`, and a single id for a suffix as a one-item list.
+#[test]
+fn unit_add_takes_its_after_map() {
+    let home = ScratchHome::new().unwrap();
+    let ok = |out: Output| {
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout(&out)
+    };
+    ok(tool(home.path(), "project_create", r#"{"name":"demo"}"#));
+    std::fs::create_dir_all(home.path().join("recipes")).unwrap();
+    std::fs::write(
+        home.path().join("recipes/lane.json"),
+        json!({"name":"lane","params":{},
+               "steps":{"{unit}-a":{"run":"core.echo","in":{"value":{"default":1}}},
+                        "{unit}-b":{"run":"core.echo","in":{"value":{"default":2}},"after":["{unit}-a"]}}})
+        .to_string(),
+    )
+    .unwrap();
+    ok(tool(
+        home.path(),
+        "step_add",
+        &json!({"project":"demo","step":"gate","start":false,
+                "spec":{"run":"core.echo","in":{"value":{"default":0}}}})
+        .to_string(),
+    ));
+    ok(tool(
+        home.path(),
+        "unit_add",
+        r#"{"project":"demo","recipe":"lane","params":{"unit":"u1"},"start":false,"after":{"a":["gate"]}}"#,
+    ));
+    ok(run(
+        home.path(),
+        &[
+            "tool",
+            "unit_add",
+            "--project",
+            "demo",
+            "--recipe",
+            "lane",
+            "--params",
+            r#"{"unit":"u2"}"#,
+            "--start",
+            "false",
+            "--after",
+            r#"{"b":"gate"}"#,
+        ],
+    ));
+    let plan = ok(tool(home.path(), "plan_get", r#"{"project":"demo"}"#));
+    let steps = &plan["plan"]["steps"];
+    assert_eq!(steps["u1-a"]["after"], json!(["gate"]), "{plan}");
+    assert_eq!(steps["u2-b"]["after"], json!(["u2-a", "gate"]), "{plan}");
+}

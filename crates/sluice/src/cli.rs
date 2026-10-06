@@ -631,7 +631,15 @@ async fn normalize_args(
             }
         }
         "unit_add" => {
-            listify(args, "after");
+            // `after` is a map of recipe step suffix to step ids ({"fork": ["x-landed"]}),
+            // never a list; a single id for a suffix is taken as a one-item list.
+            if let Some(Value::Object(after)) = args.get_mut("after") {
+                for ids in after.values_mut() {
+                    if let Value::String(_) = ids {
+                        *ids = Value::Array(vec![ids.take()]);
+                    }
+                }
+            }
             listify(args, "tags");
             edit(args);
             args.entry("after")
