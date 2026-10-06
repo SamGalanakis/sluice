@@ -64,6 +64,7 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "fn_call",
         "call_status",
         "board_set",
+        "board_slot_set",
         "board_get",
         "plan_get",
         "plan_patch",
@@ -374,7 +375,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 47);
+    assert_eq!(tools.len(), 48);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await

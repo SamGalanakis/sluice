@@ -982,3 +982,200 @@ async fn a_home_marked_with_the_interim_board_schema_is_marked_one_again() {
         (Some("root = Text(\"kept\")"), Revision(1))
     );
 }
+
+async fn set_slot(
+    writer: &Writer,
+    id: ProjectId,
+    key: &str,
+    markdown: Option<&str>,
+) -> Result<projects::SlotChange, PublicError> {
+    let request = projects::SetBoardSlot {
+        key: key.into(),
+        markdown: markdown.map(Into::into),
+        author: "orch".into(),
+    };
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::board_slot_set(tx, &selector(id), request)
+        })
+        .await
+}
+async fn slots(reads: &ReadPool, id: ProjectId) -> Vec<projects::BoardSlot> {
+    reads
+        .snapshot(move |c| projects::board_slots(c, id))
+        .await
+        .unwrap()
+}
+fn invalid_message(result: Result<projects::SlotChange, PublicError>) -> String {
+    match result {
+        Err(PublicError::Invalid { message, errors }) => {
+            assert_eq!(errors, std::slice::from_ref(&message));
+            message
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A board slot is set and cleared with no revision, each change a `project.update` record
+/// naming the slot (a kind every pinned release reads), and the settings revision untouched.
+#[tokio::test]
+async fn a_board_slot_is_set_and_cleared_without_a_revision_and_recorded() {
+    let (_home, writer, reads) = setup().await;
+    let p = create(&writer, "slots").await;
+    let id = p.project_id;
+    let set = set_slot(&writer, id, "phase", Some("**Green** soon"))
+        .await
+        .unwrap();
+    assert!(set.changed);
+    let slot = set.slot.unwrap();
+    assert_eq!(
+        (
+            slot.key.as_str(),
+            slot.markdown.as_str(),
+            slot.author.as_str()
+        ),
+        ("phase", "**Green** soon", "orch")
+    );
+    assert_eq!(slots(&reads, id).await, std::slice::from_ref(&slot));
+    // The same markdown again changes nothing: no record, the same time.
+    let again = set_slot(&writer, id, "phase", Some("**Green** soon"))
+        .await
+        .unwrap();
+    assert_eq!((again.changed, again.slot), (false, Some(slot.clone())));
+    set_slot(&writer, id, "needs-sam", Some("- one\n- two"))
+        .await
+        .unwrap();
+    let keys: Vec<String> = slots(&reads, id).await.into_iter().map(|s| s.key).collect();
+    assert_eq!(keys, ["needs-sam", "phase"]);
+    // "" and null both clear; clearing a slot that is not set changes nothing.
+    let cleared = set_slot(&writer, id, "phase", Some("")).await.unwrap();
+    assert_eq!((cleared.changed, cleared.slot), (true, None));
+    assert!(!set_slot(&writer, id, "phase", None).await.unwrap().changed);
+    assert!(
+        set_slot(&writer, id, "needs-sam", None)
+            .await
+            .unwrap()
+            .changed
+    );
+    assert!(slots(&reads, id).await.is_empty());
+    let stored: Option<String> = reads
+        .snapshot(move |c| {
+            Ok(c.query_row(
+                "SELECT board_slots FROM projects WHERE project_id=?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(stored, None, "no slots left is no value");
+    let (after, records, _) = snapshot(&reads, id).await;
+    let updates: Vec<&Value> = records
+        .iter()
+        .filter(|r| r["kind"] == "project.update")
+        .collect();
+    assert_eq!(
+        updates,
+        [
+            &json!({"kind":"project.update","fields":["board_slot:phase"],"reason":null,"author":"orch"}),
+            &json!({"kind":"project.update","fields":["board_slot:needs-sam"],"reason":null,"author":"orch"}),
+            &json!({"kind":"project.update","fields":["board_slot:phase"],"reason":"cleared","author":"orch"}),
+            &json!({"kind":"project.update","fields":["board_slot:needs-sam"],"reason":"cleared","author":"orch"}),
+        ]
+    );
+    assert_eq!(after.settings_rev, p.settings_rev);
+    assert_eq!(after.board_rev, Revision(0));
+}
+
+#[tokio::test]
+async fn a_board_slot_refuses_a_bad_key_long_markdown_and_too_many_slots() {
+    let (_home, writer, reads) = setup().await;
+    let id = create(&writer, "limits").await.project_id;
+    for key in ["", "Phase", "-lead", "a b", "a/b", &"k".repeat(65)] {
+        let message = invalid_message(set_slot(&writer, id, key, Some("x")).await);
+        assert!(message.starts_with("key: "), "{key}: {message}");
+    }
+    for key in ["a", "0", "phase.main", "needs_sam-2", &"k".repeat(64)] {
+        set_slot(&writer, id, key, Some("x")).await.unwrap();
+    }
+    let long = "x".repeat(16 * 1024 + 1);
+    let message = invalid_message(set_slot(&writer, id, "long", Some(&long)).await);
+    assert!(message.contains("over the slot's 16 KiB"), "{message}");
+    set_slot(&writer, id, "long", Some(&long[1..]))
+        .await
+        .unwrap();
+    for n in slots(&reads, id).await.len()..64 {
+        set_slot(&writer, id, &format!("s{n}"), Some("x"))
+            .await
+            .unwrap();
+    }
+    assert_eq!(slots(&reads, id).await.len(), 64);
+    let message = invalid_message(set_slot(&writer, id, "one-more", Some("x")).await);
+    assert!(message.contains("64 slots"), "{message}");
+    // A slot already there still changes, and a clear makes room.
+    set_slot(&writer, id, "a", Some("y")).await.unwrap();
+    set_slot(&writer, id, "a", None).await.unwrap();
+    set_slot(&writer, id, "one-more", Some("x")).await.unwrap();
+    // All of a project's slots together stay under 256 KiB.
+    for n in 0..64 {
+        set_slot(&writer, id, &format!("s{n}"), None).await.unwrap();
+    }
+    let mut refused = None;
+    for n in 0..20 {
+        if let Err(e) = set_slot(&writer, id, &format!("big{n}"), Some(&long[1..])).await {
+            refused = Some(e);
+            break;
+        }
+    }
+    let Some(PublicError::Invalid { message, .. }) = refused else {
+        panic!("{refused:?}")
+    };
+    assert!(message.contains("256 KiB together"), "{message}");
+    // An unknown project is not_found.
+    let missing = set_slot(&writer, ProjectId::new(), "a", Some("x")).await;
+    assert!(
+        matches!(missing, Err(PublicError::NotFound { .. })),
+        "{missing:?}"
+    );
+}
+
+/// Slots are a column and a view added to an existing home, never a table: every pinned
+/// release counts the home's tables and refuses a 24th.
+#[tokio::test]
+async fn a_home_from_before_slots_gains_them_when_its_writer_opens() {
+    let home = ScratchHome::new().unwrap();
+    let id = {
+        let writer = Writer::open(home.path()).unwrap();
+        let id = create(&writer, "old").await.project_id;
+        writer.shutdown().await.unwrap();
+        id
+    };
+    {
+        let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+        c.execute_batch("DROP VIEW board_slots; ALTER TABLE projects DROP COLUMN board_slots;")
+            .unwrap();
+    }
+    assert!(matches!(
+        ReadPool::open(home.path(), 1).map(|_| ()),
+        Err(StoreError::InvalidDatabase(_))
+    ));
+    let writer = Writer::open(home.path()).unwrap();
+    set_slot(&writer, id, "phase", Some("hello")).await.unwrap();
+    let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+    let tables: i64 = c
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 23);
+    let row: (String, String, String) = c
+        .query_row(
+            "SELECT project_id, key, markdown FROM board_slots",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row, (id.to_string(), "phase".into(), "hello".into()));
+}

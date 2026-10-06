@@ -52,3 +52,5 @@
 .settings-preview table.ou-table { display:table; }
 .board-preview .board-ui { overflow-wrap:break-word; }
 .board-preview .board-status { display:none; }
+#board-settings h3 { margin: 24px 0 0; font-size: 15px; line-height: 22px; }
+.slot-list .slot-preview { margin: 4px 0 0; font-size: 13px; color: var(--muted-foreground); }

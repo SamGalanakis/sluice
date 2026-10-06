@@ -623,6 +623,175 @@ pub fn board_set(
     tx.changed(None, "projects");
     Ok(rev)
 }
+/// The most bytes a project's slots take together, as stored (so the `board_slots` view, read
+/// under the `query` tool's 1 MiB value limit, always reads).
+pub const MAX_SLOTS_BYTES: usize = 256 * 1024;
+#[derive(Debug, Clone, Default)]
+pub struct SetBoardSlot {
+    pub key: String,
+    /// The slot's markdown; `None` or "" clears it.
+    pub markdown: Option<String>,
+    pub author: String,
+}
+/// One of a project's board slots: its markdown, when it last changed and who changed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardSlot {
+    pub key: String,
+    pub markdown: String,
+    pub at: String,
+    pub author: String,
+}
+/// What a `board_slot_set` did: the slot as it now is (`None` once cleared) and whether it
+/// changed (the same markdown again, or clearing a slot that is not set, changes nothing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotChange {
+    pub slot: Option<BoardSlot>,
+    pub changed: bool,
+}
+/// A project's slots (`projects.board_slots`, a JSON object of key to `{markdown, at,
+/// author}`), by key. A malformed entry is left out.
+pub fn board_slots(c: &Connection, project: ProjectId) -> Result<Vec<BoardSlot>> {
+    let raw: Option<String> = c
+        .query_row(
+            "SELECT board_slots FROM projects WHERE project_id=?1 AND deleted_at IS NULL",
+            [project.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(parse_slots(raw.as_deref()))
+}
+fn parse_slots(raw: Option<&str>) -> Vec<BoardSlot> {
+    let Some(Value::Object(map)) = raw.and_then(|r| serde_json::from_str::<Value>(r).ok()) else {
+        return vec![];
+    };
+    let mut out: Vec<BoardSlot> = map
+        .into_iter()
+        .filter_map(|(key, v)| {
+            Some(BoardSlot {
+                markdown: v.get("markdown")?.as_str()?.to_owned(),
+                at: v.get("at")?.as_str()?.to_owned(),
+                author: v
+                    .get("author")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                key,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.key.cmp(&b.key));
+    out
+}
+/// Set or clear one board slot in one transaction with its record: a `project.update` whose
+/// `fields` is `["board_slot:<key>"]` (reason "cleared" for a clear). A slot needs no
+/// revision. The key must be `valid_slot_key`, the markdown at most `MAX_SLOT_BYTES`, a
+/// project at most `MAX_BOARD_SLOTS` slots and `MAX_SLOTS_BYTES` in all; anything else is
+/// `invalid`. The settings revision is left alone, so slot updates never fence a settings
+/// save.
+pub fn board_slot_set(
+    tx: &mut WriteTransaction<'_>,
+    selector: &ProjectSelector,
+    request: SetBoardSlot,
+) -> Result<SlotChange> {
+    use sluice_model::openui::{MAX_BOARD_SLOTS, MAX_SLOT_BYTES, SLOT_KEY_RULE, valid_slot_key};
+    let refuse = |message: String| -> StoreError {
+        PublicError::Invalid {
+            errors: vec![message.clone()],
+            message,
+        }
+        .into()
+    };
+    if !valid_slot_key(&request.key) {
+        return Err(refuse(format!(
+            "key: {:?} is not a slot key ({SLOT_KEY_RULE})",
+            request.key
+        )));
+    }
+    let markdown = request.markdown.filter(|m| !m.is_empty());
+    if let Some(text) = &markdown
+        && text.len() > MAX_SLOT_BYTES
+    {
+        return Err(refuse(format!(
+            "markdown: {} bytes is over the slot's {} KiB",
+            text.len(),
+            MAX_SLOT_BYTES / 1024
+        )));
+    }
+    let project = resolve(tx.sql(), selector)?;
+    let id = project.project_id;
+    let raw: Option<String> = tx.sql().query_row(
+        "SELECT board_slots FROM projects WHERE project_id=?1",
+        [id.to_string()],
+        |r| r.get(0),
+    )?;
+    let mut slots = match raw.as_deref().map(serde_json::from_str::<Value>) {
+        Some(Ok(Value::Object(map))) => map,
+        _ => serde_json::Map::new(),
+    };
+    let current = slots
+        .get(&request.key)
+        .and_then(|v| v.get("markdown"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if current == markdown {
+        let slot = parse_slots(raw.as_deref())
+            .into_iter()
+            .find(|s| s.key == request.key);
+        return Ok(SlotChange {
+            slot,
+            changed: false,
+        });
+    }
+    let at = now()?;
+    let slot = match markdown {
+        Some(markdown) => {
+            if current.is_none() && slots.len() >= MAX_BOARD_SLOTS {
+                return Err(refuse(format!(
+                    "the board has {MAX_BOARD_SLOTS} slots, its most: clear one first"
+                )));
+            }
+            slots.insert(
+                request.key.clone(),
+                json!({"markdown": markdown, "at": at, "author": request.author}),
+            );
+            Some(BoardSlot {
+                key: request.key.clone(),
+                markdown,
+                at,
+                author: request.author.clone(),
+            })
+        }
+        None => {
+            slots.remove(&request.key);
+            None
+        }
+    };
+    let stored = (!slots.is_empty()).then(|| Value::Object(slots).to_string());
+    if stored.as_ref().is_some_and(|s| s.len() > MAX_SLOTS_BYTES) {
+        return Err(refuse(format!(
+            "the board's slots would take over {} KiB together",
+            MAX_SLOTS_BYTES / 1024
+        )));
+    }
+    tx.sql().execute(
+        "UPDATE projects SET board_slots=?2 WHERE project_id=?1",
+        rusqlite::params![id.to_string(), stored],
+    )?;
+    tx.append_record(
+        Some(id),
+        Event::ProjectUpdate {
+            fields: vec![format!("board_slot:{}", request.key)],
+            reason: slot.is_none().then(|| "cleared".to_owned()),
+            author: request.author,
+        },
+    )?;
+    tx.changed(Some(id), "board");
+    Ok(SlotChange {
+        slot,
+        changed: true,
+    })
+}
 /// Coordinator can add live-process knowledge not yet reflected in attempt rows.
 /// This check runs under the writer transaction and must not perform external I/O.
 pub trait DeletionGuard {
@@ -783,7 +952,7 @@ pub fn project_delete(
         )?;
     }
     tx.sql().execute("UPDATE maintenance SET paused_projects=(SELECT coalesce(json_group_array(value),'[]') FROM json_each(maintenance.paused_projects) WHERE value<>?1),revision=revision+1 WHERE EXISTS(SELECT 1 FROM json_each(maintenance.paused_projects) WHERE value=?1)",[id.to_string()])?;
-    tx.sql().execute("UPDATE projects SET deleted_at=?2,changed_at=?2,settings_rev=settings_rev+1,icon_text=NULL,icon_type=NULL,icon_hash=NULL,description='',board=NULL WHERE project_id=?1",[id.to_string(),now()?])?;
+    tx.sql().execute("UPDATE projects SET deleted_at=?2,changed_at=?2,settings_rev=settings_rev+1,icon_text=NULL,icon_type=NULL,icon_hash=NULL,description='',board=NULL,board_slots=NULL WHERE project_id=?1",[id.to_string(),now()?])?;
     tx.append_record(
         None,
         Event::ProjectDelete {

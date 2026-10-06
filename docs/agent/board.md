@@ -30,6 +30,48 @@ the plan has changed since, so the board needs no "updated at" line of its own.
 - A step's run may set its own project's board (`sluice tool board_set` in the run, or the
   MCP tool), as the orchestrator can.
 
+## Slots: words you update per event
+The program is the board's layout; what it says changes far more often than its shape. Give
+the words that change (the phase, what needs the owner, the latest decision) named **slots**:
+fix the layout once with `board_set`, putting a `Slot("key")` where each one goes, then update
+a slot with one small call whenever something happens. No program to rewrite, no revision to
+read first.
+
+- `board_slot_set(project, key, markdown)` → `{key, updated_at, cleared, changed}`. `markdown`
+  is the slot's text (links, **bold**, *italics*, `code`, short lists; at most 16 KiB); `""` or
+  `null` clears it. The same markdown again changes nothing (`changed` false, `updated_at` as
+  it was). In a run, `project` defaults to the run's own; another project's slots are outside
+  its authority.
+- `key` is a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -` (`phase`,
+  `needs-sam`, `lane.fig-5141`). A project has at most 64 slots, at most 256 KiB together; a bad
+  key, a long text or one slot too many is refused (`invalid`) and nothing changes.
+- Each change is a `project.update` record whose `fields` is `["board_slot:<key>"]` (`reason`
+  `"cleared"` for a clear), so `log_read(kinds=["project.update"])` shows who changed which
+  slot when. A slot change never moves the board's `rev` or the settings' revision.
+- The board draws a slot with when it last changed ("Updated 3m ago"), so the owner sees how
+  fresh it is; a slot not set yet draws its fallback, or "Not set yet.". The page patches a
+  slot change in as it patches everything else.
+- The `query` tool reads them in the view `board_slots` (`project_id, key, markdown,
+  updated_at, author`), so a Query or Metric can too. Project settings lists them under the
+  program.
+
+```openui
+root = Stack([title, phase, lanes, askHead, ask])
+title = Heading("Release 2.0", 1)
+phase = Slot("phase", "No phase set yet.")
+lanes = Units(["running", "failed", "blocked"])
+askHead = Heading("Needs you", 2)
+ask = Slot("needs-owner", "Nothing needs you.")
+```
+
+then, per event:
+
+```
+board_slot_set(project="release", key="phase", markdown="**Making main green**: 11 red targets left ([run 412](https://ci.example/412)).")
+board_slot_set(project="release", key="needs-owner", markdown="- Approve the paid S35 rows\n- Decide #53")
+board_slot_set(project="release", key="needs-owner", markdown="")
+```
+
 ## The language
 One statement per line, `name = Component(arg, ...)`; the first statement (conventionally
 `root`) is drawn. Arguments are positional, in the order of the signatures below; pass `null`
@@ -43,7 +85,7 @@ Layout and text:
 
 - `Stack(children: Component[], direction?: "col" | "row")` — a column of parts, or a row.
 - `Heading(text: string, level?: number)` — a heading, level 1 to 3.
-- `Text(text: string, tone?: "default" | "muted")` — one paragraph of plain text.
+- `Text(text: string, tone?: "default" | "muted")` — one paragraph of plain text (markdown is not read: use `Markdown`).
 - `Callout(text: string, variant?: "info" | "success" | "warning", title?: string)` — a short highlighted notice.
 - `Table(columns: string[], rows: string[][], caption?: string)` — a fixed table; cells may be numbers.
 - `Separator()` — a rule between groups.
@@ -66,11 +108,20 @@ Data, filled from the project when the page draws:
 - `Metric(label: string, query: string)` — one number (the first column of the first row) under its label.
 - `Query(query: string, caption?: string)` — the result as a table (the first 50 rows).
 - `Chart(kind: "bar" | "line", query: string, caption?: string)` — a small chart of a two-column result: a label, then a number (the first 60 rows). `bar` draws a bar per row; `line` joins them in order.
+- `Slot(key: string, fallback?: string)` — the slot's markdown (`board_slot_set`, above) with when it last changed; until it is set, `fallback` (markdown, muted) or "Not set yet.".
+- `LatestMessage(from: string, chars?: number)` — the newest message in the project whose sender is `from` (a step id, or a name such as `orchestrator` or `owner`, as `messages` reports `from`), with its time: its body as markdown, cut to `chars` characters (default 280, at most 4000) with an ellipsis and a link to the whole message in its thread. With none, "No message from <from> yet.".
+
+Markdown:
+
+- `Markdown(text: string)` — `text` as markdown: links, **bold**, *italics*, `code`, short lists. Raw HTML is shown as text, and a link to anything but `http`, `https`, `mailto` or a relative path is dropped.
 
 A query is one read-only `SELECT` (or `WITH`) run exactly as the `query` tool runs it (the same
 tables and views, the 2 s deadline and size limits). Every `?` (or `?1`) in it is bound to the
 project's id, so `WHERE project_id = ?` keeps it to this project; named parameters are refused.
 A board runs at most 16 queries.
+
+Slot, Markdown and LatestMessage draw markdown on the server the way message bodies draw:
+everything is escaped, and an unsafe link is drawn without its target.
 
 A part that cannot be drawn (a query that fails, a step not in the plan, a chart whose second
 column is not a number) is drawn as a small error box naming the component, its line and the
@@ -115,6 +166,15 @@ notes = Query("SELECT step_id, json_extract(outputs, '$.summary') AS summary FRO
 ask = Form("ship", [note], [ship])
 note = Textarea("notes", "Release notes", null, null, ["required", "minLength:10"])
 ship = Button("Ship it", "ship", {channel: "stable"})
+```
+
+What a step last reported, cut short, with the whole message a click away:
+
+```openui
+root = Stack([head, latest, note])
+head = Heading("Main: the latest full test run", 2)
+latest = LatestMessage("tests-main", 200)
+note = Markdown("Red targets are tracked in [the census](https://ci.example/census); **lanes** fix them one by one.")
 ```
 
 Messages per day, as a line:

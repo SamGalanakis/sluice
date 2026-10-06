@@ -1446,6 +1446,15 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-output { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .board-output .v { overflow-wrap: anywhere; }
 .board-output .v.num { font-variant-numeric: tabular-nums; }
+/* Slot, Markdown and LatestMessage: markdown at the board's prose measure; a slot says when it
+   last changed under it, a message who sent it and when over it, both in meta */
+.board-slot, .board-message { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.board-md { max-width: 72ch; min-width: 0; overflow-wrap: anywhere; }
+.board-md.muted { color: var(--muted-foreground); }
+.board-md :is(pre, table) { display: block; max-width: 100%; overflow: auto; }
+.board-md img { max-width: 100%; height: auto; }
+.board-fresh, .board-msg-head, .board-more, p.board-message { margin: 0; }
+.board-msg-head .m-from { font-weight: 600; color: var(--foreground); }
 .board-metric { display: flex; flex-direction: column; gap: 0; min-width: 0;
                 padding: 10px 14px; border-radius: var(--radius-md); background: var(--box); }
 .board-metric .metric-v { font: 800 28px/34px var(--font-display); letter-spacing: -0.015em;

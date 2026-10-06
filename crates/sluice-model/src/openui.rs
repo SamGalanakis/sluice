@@ -705,7 +705,41 @@ pub const DATA_COMPONENTS: &[ComponentSpec] = &[
         ],
         data: true,
     },
+    ComponentSpec {
+        name: "Slot",
+        props: &[req("key", T::String), opt("fallback", T::String)],
+        data: true,
+    },
+    ComponentSpec {
+        name: "Markdown",
+        props: &[req("text", T::String)],
+        data: false,
+    },
+    ComponentSpec {
+        name: "LatestMessage",
+        props: &[req("from", T::String), opt("chars", T::Number)],
+        data: true,
+    },
 ];
+/// The most slots a project's board keeps (`board_slot_set`).
+pub const MAX_BOARD_SLOTS: usize = 64;
+/// The most bytes of one slot's markdown.
+pub const MAX_SLOT_BYTES: usize = 16 * 1024;
+/// The most characters a LatestMessage shows; its default.
+pub const MAX_MESSAGE_CHARS: usize = 4000;
+pub const DEFAULT_MESSAGE_CHARS: usize = 280;
+/// A board slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.
+pub fn valid_slot_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && key.len() <= 64
+        && chars
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
+}
+pub const SLOT_KEY_RULE: &str =
+    "a slot key is a lowercase letter or digit, then up to 63 of a-z, 0-9, _, . and -";
 /// The board's whole vocabulary: the question components, then the data components.
 pub fn board_components() -> impl Iterator<Item = &'static ComponentSpec> {
     QUESTION_COMPONENTS.iter().chain(DATA_COMPONENTS)
@@ -950,6 +984,35 @@ fn check_component(c: &Component, problems: &mut Vec<Problem>) {
             ));
         }
     }
+    match c.name.as_str() {
+        "Slot" => {
+            if let Some(Value::String(key)) = c.args.first()
+                && !valid_slot_key(key)
+            {
+                fail(format!(
+                    "Slot: \"{key}\" is not a slot key ({SLOT_KEY_RULE})"
+                ));
+            }
+        }
+        "LatestMessage" => {
+            if let Some(Value::String(from)) = c.args.first()
+                && from.trim().is_empty()
+            {
+                fail(
+                    "LatestMessage: from names a sender (a step id or a name such as orchestrator)"
+                        .into(),
+                );
+            }
+            if let Some(Value::Number(n)) = c.args.get(1)
+                && !(n.fract() == 0.0 && *n >= 1.0 && *n <= MAX_MESSAGE_CHARS as f64)
+            {
+                fail(format!(
+                    "LatestMessage: chars must be a whole number from 1 to {MAX_MESSAGE_CHARS}"
+                ));
+            }
+        }
+        _ => {}
+    }
     for arg in &c.args {
         visit_components(arg, &mut |child| check_component(child, problems));
     }
@@ -1146,6 +1209,37 @@ mod tests {
         assert!(check_board("root = Units([\"sleeping\"])").is_err());
         assert!(check_board("root = Chart(\"pie\", \"SELECT 1, 2\")").is_err());
         assert!(check_board("root = Chart(\"bar\", \"SELECT 'a', 2\", \"caption\")").is_ok());
+    }
+
+    #[test]
+    fn slots_markdown_and_messages_check_their_arguments() {
+        let ok = "root = Stack([a, b, c, d, e])\na = Slot(\"phase\")\nb = Slot(\"needs-sam.v2_1\", \"Nothing yet.\")\nc = Markdown(\"**bold** [x](https://x)\")\nd = LatestMessage(\"tests-main\")\ne = LatestMessage(\"orchestrator\", 120)";
+        assert!(check_board(ok).is_ok(), "{:?}", check_board(ok).err());
+        let lines = |src: &str| -> Vec<String> {
+            check_board(src)
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(
+            lines("root = Slot(\"Phase\")"),
+            [format!(
+                "line 1: Slot: \"Phase\" is not a slot key ({SLOT_KEY_RULE})"
+            )]
+        );
+        assert!(
+            lines("root = Slot()")[0]
+                .contains("Slot needs key (Slot(key: string, fallback?: string))")
+        );
+        assert!(lines("root = Markdown([\"x\"])")[0].contains("Markdown: text must be string"));
+        assert!(
+            lines("root = LatestMessage(\"a\", 2.5)")[0].contains("chars must be a whole number")
+        );
+        assert!(lines("root = LatestMessage(\"a\", 5000)")[0].contains("from 1 to 4000"));
+        assert!(lines("root = LatestMessage(\" \")")[0].contains("from names a sender"));
+        assert!(valid_slot_key(&"a".repeat(64)) && !valid_slot_key(&"a".repeat(65)));
+        assert!(!valid_slot_key("") && !valid_slot_key("_a") && !valid_slot_key("a b"));
     }
 
     #[test]

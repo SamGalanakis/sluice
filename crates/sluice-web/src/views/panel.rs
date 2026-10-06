@@ -1,8 +1,9 @@
 //! The project's board (`docs("board")`): an OpenUI Lang program stored on the project, drawn
 //! here on the server beside the plan (its own section on a phone). The question components
 //! draw as the inbox draws them; the data components (Units, StepStatus, Output, Metric,
-//! Query, Chart) are filled from the project when the page renders and again on each live
-//! patch. A query runs read-only through the `query` tool's path and limits, with `?` bound to
+//! Query, Chart, Slot, LatestMessage) are filled from the project when the page renders and
+//! again on each live patch; Slot, Markdown and LatestMessage draw markdown through the
+//! dashboard's renderer. A query runs read-only through the `query` tool's path and limits, with `?` bound to
 //! the project's id. A component that cannot be drawn becomes an inline error box; the page
 //! never fails for it. A Button sends the orchestrator a `say` from the owner.
 use super::board::{self, CatalogSignatures, Registry};
@@ -70,15 +71,10 @@ impl Panel {
             esc(self.title.as_deref().unwrap_or("Board"))
         );
         if let Some(at) = self.written.as_deref().filter(|_| age) {
-            let shown = match (at.get(..10), at.get(11..16)) {
-                (Some(day), Some(time)) => format!("{day} {time} UTC"),
-                _ => at.to_owned(),
-            };
             let _ = write!(
                 out,
-                "<p class=\"meta board-age\">Written <time data-ago datetime=\"{}\">{}</time>{}.</p>",
-                esc(at),
-                esc(&shown),
+                "<p class=\"meta board-age\">Written {}{}.</p>",
+                ago(at),
                 if self.plan_changed {
                     "; the plan has changed since"
                 } else {
@@ -121,7 +117,19 @@ pub(crate) struct Loaded {
     steps: BTreeMap<String, Option<StepView>>,
     /// Every step of the plan, for Output's check.
     known: std::collections::BTreeSet<String>,
+    /// The project's slots by key, read when the board draws a Slot.
+    slots: BTreeMap<String, sluice_store::projects::BoardSlot>,
+    /// Each LatestMessage sender's newest message in the project, if any.
+    latest: BTreeMap<String, Option<LatestMessage>>,
     token: String,
+}
+/// A sender's newest message, as LatestMessage draws it.
+#[derive(Clone, Debug)]
+struct LatestMessage {
+    id: i64,
+    thread: String,
+    body: String,
+    at: String,
 }
 
 /// Load and draw the project's board, or `draft` instead (the settings preview), in a snapshot
@@ -201,6 +209,8 @@ pub(crate) fn gather(
         outputs: BTreeMap::new(),
         steps: BTreeMap::new(),
         known: steps().map(|s| s.id.to_string()).collect(),
+        slots: BTreeMap::new(),
+        latest: BTreeMap::new(),
         token: String::new(),
         board,
     };
@@ -219,8 +229,15 @@ pub(crate) fn gather(
     )?;
     loaded.token = format!("{rev}:{plan_rev}:{}", seq.unwrap_or(0));
     let mut wants_units = vec![];
+    let mut wants_slots = false;
     board.walk(&mut |c, _| match c.name.as_str() {
         "Units" => wants_units.push(c.strings_arg(0)),
+        "Slot" => wants_slots = true,
+        "LatestMessage" => {
+            if let Some(from) = c.str_arg(0) {
+                loaded.latest.insert(from.into(), None);
+            }
+        }
         "StepStatus" => {
             if let Some(step) = c.str_arg(0) {
                 loaded.steps.insert(
@@ -269,6 +286,30 @@ pub(crate) fn gather(
             .and_then(|o| serde_json::from_str::<Value>(&o).ok())
             .and_then(|o| o.get(&field).cloned());
         loaded.outputs.insert((step, field), value);
+    }
+    if wants_slots {
+        loaded.slots = sluice_store::projects::board_slots(c, project)?
+            .into_iter()
+            .map(|slot| (slot.key.clone(), slot))
+            .collect();
+    }
+    let senders: Vec<String> = loaded.latest.keys().cloned().collect();
+    for from in senders {
+        let message = c
+            .query_row(
+                "SELECT id,thread,body,at FROM messages WHERE project_id=?1 AND \"from\"=?2 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![project.to_string(), from],
+                |r| {
+                    Ok(LatestMessage {
+                        id: r.get(0)?,
+                        thread: r.get(1)?,
+                        body: r.get(2)?,
+                        at: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        loaded.latest.insert(from, message);
     }
     Ok(Some(loaded))
 }
@@ -486,6 +527,42 @@ fn prose(text: &str) -> String {
     }
     out
 }
+/// A time the page's script reads as "2h ago": without script the UTC day and minute.
+fn ago(at: &str) -> String {
+    let shown = match (at.get(..10), at.get(11..16)) {
+        (Some(day), Some(time)) => format!("{day} {time} UTC"),
+        _ => at.to_owned(),
+    };
+    format!(
+        "<time data-ago datetime=\"{}\">{}</time>",
+        esc(at),
+        esc(&shown)
+    )
+}
+/// Markdown drawn through the dashboard's renderer (escaped, unsafe link schemes refused).
+fn markdown(text: &str, class: &str) -> String {
+    format!(
+        "<div class=\"md board-md{}{class}\">{}</div>",
+        if class.is_empty() { "" } else { " " },
+        crate::markdown::render(text).as_str()
+    )
+}
+/// `text` cut to at most `chars` characters, at a space when one is near the end, and
+/// whether it was cut.
+fn clip(text: &str, chars: usize) -> (String, bool) {
+    let text = text.trim_end();
+    if text.chars().count() <= chars {
+        return (text.to_owned(), false);
+    }
+    let head: String = text.chars().take(chars).collect();
+    let floor = head.len() * 4 / 5;
+    let at = head
+        .char_indices()
+        .rev()
+        .find(|(i, c)| *i >= floor && c.is_whitespace())
+        .map_or(head.len(), |(i, _)| i);
+    (format!("{}…", head[..at].trim_end()), true)
+}
 fn cut(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         text.to_owned()
@@ -676,6 +753,12 @@ impl Draw<'_> {
             "StepStatus" => self.step_status(c),
             "Output" => self.output(c),
             "Metric" | "Query" | "Chart" => self.query_component(c),
+            "Slot" => self.slot(c),
+            "Markdown" => {
+                let html = markdown(c.str_arg(0).unwrap_or(""), "");
+                self.out.push_str(&html);
+            }
+            "LatestMessage" => self.latest_message(c),
             other => self.component_error(c, &format!("{other} is not a board component")),
         }
     }
@@ -954,6 +1037,67 @@ impl Draw<'_> {
             esc(step),
             esc(field)
         );
+    }
+    /// The slot's markdown with when it last changed, else the fallback (or "Not set yet."),
+    /// muted.
+    fn slot(&mut self, c: &Component) {
+        let key = c.str_arg(0).unwrap_or("");
+        let _ = write!(self.out, "<div class=\"board-slot\" data-slot=\"{}\">", esc(key));
+        match self.loaded.slots.get(key) {
+            Some(slot) => {
+                self.out.push_str(&markdown(&slot.markdown, ""));
+                let _ = write!(
+                    self.out,
+                    "<p class=\"meta board-fresh\">Updated {}</p>",
+                    ago(&slot.at)
+                );
+            }
+            None => match c.str_arg(1) {
+                Some(fallback) => self.out.push_str(&markdown(fallback, "muted")),
+                None => self
+                    .out
+                    .push_str("<p class=\"ou-text muted\">Not set yet.</p>"),
+            },
+        }
+        self.out.push_str("</div>");
+    }
+    /// The newest message from the sender: who and when (a link to it in its thread), and
+    /// its body as markdown, cut to `chars` with a link to the whole.
+    fn latest_message(&mut self, c: &Component) {
+        let from = c.str_arg(0).unwrap_or("");
+        let chars = c
+            .num_arg(1)
+            .map_or(openui::DEFAULT_MESSAGE_CHARS, |n| n as usize);
+        let Some(message) = self.loaded.latest.get(from).cloned().flatten() else {
+            let _ = write!(
+                self.out,
+                "<p class=\"ou-text muted board-message\">No message from {} yet.</p>",
+                prose(from)
+            );
+            return;
+        };
+        let href = format!(
+            "{}#message-{}",
+            super::threads::thread_url(self.project, &message.thread),
+            message.id
+        );
+        let (body, cut) = clip(&message.body, chars);
+        let _ = write!(
+            self.out,
+            "<div class=\"board-message\"><p class=\"meta board-msg-head\"><span class=\"m-from\">{}</span> · <a href=\"{}\">{}</a></p>{}",
+            prose(from),
+            esc(&href),
+            ago(&message.at),
+            markdown(&body, "")
+        );
+        if cut {
+            let _ = write!(
+                self.out,
+                "<p class=\"meta board-more\"><a href=\"{}\">The whole message</a></p>",
+                esc(&href)
+            );
+        }
+        self.out.push_str("</div>");
     }
     fn query_component(&mut self, c: &Component) {
         let sql_index = if c.name == "Query" { 0 } else { 1 };

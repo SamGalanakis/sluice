@@ -2957,6 +2957,18 @@
       }
     },
     {
+      "command": "board_slot_set",
+      "args": {
+        "project": {
+          "kind": "name",
+          "value": "work-1"
+        },
+        "key": "phase",
+        "markdown": "Main is **green**.",
+        "author": "orch"
+      }
+    },
+    {
       "command": "board_get",
       "args": {
         "project": {
@@ -4096,6 +4108,26 @@
       "program": null,
       "expected_rev": null,
       "reason": null,
+      "author": null
+    }
+  ],
+  "BoardSlotSet": [
+    {
+      "project": {
+        "kind": "name",
+        "value": "work-1"
+      },
+      "key": "phase",
+      "markdown": "**Main green.** [run](https://ci.example/7)",
+      "author": "orch"
+    },
+    {
+      "project": {
+        "kind": "id",
+        "value": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      },
+      "key": "needs-sam",
+      "markdown": null,
       "author": null
     }
   ],

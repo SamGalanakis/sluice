@@ -243,6 +243,16 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
         )
         .await;
     assert_eq!(board["rev"], 1);
+    let slot = f
+        .check(
+            "board_slot_set",
+            json!({"project":"p","key":"phase","markdown":"Main is **green**."}),
+        )
+        .await;
+    assert_eq!(
+        (slot["changed"].clone(), slot["cleared"].clone()),
+        (json!(true), json!(false))
+    );
     f.check("board_get", json!({"project":"p"})).await;
     f.check(
         "step_add",

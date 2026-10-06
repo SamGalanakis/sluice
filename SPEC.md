@@ -218,9 +218,13 @@ The home has one maintenance mode: `normal` or `drain`.
 `sluice.db` is SQLite in WAL mode at schema 1, created from `migrations/0001.sql` (23 STRICT
 tables). The schema version changes only for a change older binaries cannot read: a run's pinned
 `sluice` reads the database itself and refuses any other version. Columns added later keep the
-version; the coordinator's writer adds any that are missing (and marks a home left at the
-interim board schema 2 as 1) in one transaction when it opens the home or a restore, before
-anything else touches it, and readers refuse a home still missing one. Only
+version; the coordinator's writer adds any that are missing, and any view added later (and
+marks a home left at the interim board schema 2 as 1), in one transaction when it opens the
+home or a restore, before anything else touches it, and readers refuse a home still missing a
+column. New state is never a new table: every release counts the home's 23 tables and refuses
+any other number, so a pinned one could not read a home with a 24th. A board's slots are
+therefore the column `projects.board_slots` (a JSON object of key to `{markdown, at,
+author}`) and the view `board_slots`. Only
 the coordinator writes, through one writer task; reads use a pool of read-only connections and
 one snapshot per answer. Every logical change (an edit and its records, a status change and
 its records, a message and its record) commits in one transaction.
@@ -232,8 +236,9 @@ Tables: `home_meta`, `projects`, `plans`, `plan_edits`, `inputs`, `steps`, `atte
 
 Views for agents' queries (§12.4 `query`): `outcomes` (removed steps' results), `log` (each
 record as the log tools return it), `step_changes` (`step.status` records as rows), `edits`
-(`plan_edits`) and `questions` (the questions, `ask`s, plus derived `state`
-open|answered|closed and `waiting`). Public tables are keyed by the immutable `project_id`,
+(`plan_edits`), `questions` (the questions, `ask`s, plus derived `state`
+open|answered|closed and `waiting`) and `board_slots` (`project_id, key, markdown, updated_at,
+author`: each live project's board slots). Public tables are keyed by the immutable `project_id`,
 never by name.
 
 Ids: projects, runs, attempts, results and invocations are UUIDv7; message ids and record
@@ -888,7 +893,7 @@ seqs have gaps. Kinds:
 | `message` | the message's fields, with `posted_at` for its time |
 | `project.pause` | `paused, reason, author` |
 | `project.archive` | `archived, reason, author` |
-| `project.update` | `fields, reason, author` |
+| `project.update` | `fields, reason, author`; a board slot's change names `board_slot:<key>` in `fields`, with `reason` `"cleared"` for a clear |
 | `project.board` | `rev, cleared, reason, author` (never the program) |
 | `project.rename` | `old_name, new_name, author` |
 | `project.delete` | `project_id, name, author` |
@@ -1056,6 +1061,7 @@ unknown step `not_found`.
 | `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `author?` | `{project_id, name}` |
 | `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
 | `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …`; the same program again changes nothing; writes `project.board` |
+| `board_slot_set` | `project`, `key`, `markdown` (`""` or null clears), `author?` | `{key, updated_at, cleared, changed}`; no revision; `key` is `[a-z0-9][a-z0-9_.-]{0,63}`, `markdown` at most 16 KiB, a project at most 64 slots and 256 KiB of them, else `invalid`; the same markdown again changes nothing; writes `project.update` with `fields` `["board_slot:<key>"]` |
 | `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
 | `project_delete` | `project`, `confirm_name`, `expected_settings_rev` (from `projects_list`), `author?` | `{project_id, name, deleted}`; the project must be archived, and nothing of it live |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, submits?, icon?, open?}]` |
@@ -1071,8 +1077,8 @@ WebP, JPEG or GIF file of at most 256 KiB, which the coordinator reads once and 
 
 Each call's status changes are `call` records. `core.external` cannot be called.
 
-A step's run may call `board_set` (and `board_get`) for its own project, as it may the plan
-edits; another project's board is outside its authority.
+A step's run may call `board_set`, `board_slot_set` (and `board_get`) for its own project, as
+it may the plan edits; another project's board is outside its authority.
 
 **Plan edits**
 
@@ -1234,17 +1240,25 @@ first). Without a board the page is as before. The program is
 checked again and drawn on the server: the question components draw as the inbox draws them,
 and the data components are filled when the page renders and with every live patch:
 `Units(state?)` (the units view's rows), `StepStatus(step)`, `Output(step, field)`,
-`Metric(label, query)`, `Query(query, caption?)` and `Chart(kind, query, caption?)` (bar or
-line, an inline SVG). A query runs through the `query` tool's path, views and limits, every
-`?` bound to the project's id, at most 16 per board; a stream reruns them when the project's
-log, plan or board changes and at least every 30 s. A component that cannot be drawn (a bad
+`Metric(label, query)`, `Query(query, caption?)`, `Chart(kind, query, caption?)` (bar or
+line, an inline SVG), `Slot(key, fallback?)` (a slot's markdown, set per event by
+`board_slot_set`, with "Updated <time>" under it; unset, its fallback muted or "Not set
+yet.") and `LatestMessage(from, chars?)` (the project's newest message whose `from` is
+`from`, with its time linking to it in its thread, its body cut to `chars`, default 280, with
+an ellipsis and a link to the whole; none, "No message from <from> yet."); `Markdown(text)`
+draws its text as markdown. Slot, Markdown and LatestMessage use the dashboard's markdown
+renderer (escaped, unsafe link schemes refused); `Text` stays plain. A query runs through the
+`query` tool's path, views and limits, every `?` bound to the project's id, at most 16 per
+board; a stream reruns them when the project's log, plan or board changes (a slot change is
+both) and at least every 30 s. A component that cannot be drawn (a bad
 query, an unknown step, a non-numeric chart) is an inline error box naming it, its line and the
 reason; the page still renders. A Button sends `say(to: "orchestrator")` as `owner` with body
 `Board: <label>` and data `{board_rev, action, params, values}` (a primary button checks its
 form's rules first, `invalid` otherwise); if the board's rev changed since the page was drawn
 it is refused (`conflict`, shown under the board) and nothing is sent. The board never edits
 the plan. Project settings has a Board section: the program, a live preview, Save (fenced by
-`expected_rev`) and Clear.
+`expected_rev`) and Clear, then the board's slots, read-only, by key: each with when it was
+updated, by whom, and its text on one line.
 
 ## 14. CLI
 

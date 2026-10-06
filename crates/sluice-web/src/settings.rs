@@ -184,10 +184,12 @@ impl SettingsState {
                         error: r.error.map(|e| e.to_string()).unwrap_or_default(),
                     })
                     .collect();
+                let slots = projects::board_slots(c, id)?;
                 Ok(ProjectSettingsView {
                     shared,
                     project,
                     resources: rows,
+                    slots,
                     blocker,
                 })
             })
@@ -238,15 +240,40 @@ pub struct ProjectSettingsView {
     pub shared: DashboardSnapshot,
     pub project: Project,
     pub resources: Vec<ResourceView>,
+    /// The board's slots (`board_slot_set`), by key: listed under the program, read-only.
+    pub slots: Vec<projects::BoardSlot>,
     pub blocker: Option<String>,
 }
 impl ProjectSettingsView {
+    /// A slot's markdown as one line of plain text, cut short, for the Board section's list.
+    pub fn slot_preview(slot: &projects::BoardSlot) -> String {
+        let line = slot
+            .markdown
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if line.chars().count() > 140 {
+            let mut out: String = line.chars().take(139).collect();
+            out.push('…');
+            out
+        } else {
+            line
+        }
+    }
+    /// The UTC day and minute of a stored time, as the page shows it without script.
+    pub fn minute(at: &str) -> String {
+        match (at.get(..10), at.get(11..16)) {
+            (Some(day), Some(time)) => format!("{day} {time} UTC"),
+            _ => at.to_owned(),
+        }
+    }
     pub fn path(&self) -> String {
         format!("/projects/id/{}/settings", self.project.project_id)
     }
     fn version(&self) -> String {
         sluice_store::artifacts::fingerprint(&serde_json::to_vec(&serde_json::json!({
-            "shared":self.shared,"revision":self.project.settings_rev,"resources":self.resources,"blocker":self.blocker
+            "shared":self.shared,"revision":self.project.settings_rev,"resources":self.resources,"blocker":self.blocker,
+            "slots":self.slots.iter().map(|s| [&s.key, &s.at]).collect::<Vec<_>>()
         })).expect("owned views serialize"))
     }
     pub fn render(&self, viewer: &Viewer, feedback: &Feedback) -> Result<TrustedHtml, PublicError> {
@@ -287,22 +314,27 @@ impl ProjectSettingsView {
     fn batch(&self, viewer: &Viewer) -> Result<RenderedBatch, PublicError> {
         let nav = NavView::new(&self.shared, Some(self.project.project_id), "settings")?;
         let body = self.body(&Feedback::default()).map_err(render_error)?;
-        let regions = ["settings-live", "resource-status", "delete-guard"]
-            .into_iter()
-            .map(|id| {
-                // These owned template markers keep all editable forms out of stream patches.
-                let start = body
-                    .as_str()
-                    .find(&format!("<!--{id}-->"))
-                    .expect("owned marker")
-                    + id.len()
-                    + 7;
-                let end = body.as_str()[start..]
-                    .find(&format!("<!--/{id}-->"))
-                    .expect("owned closing marker")
-                    + start;
-                PatchRegion::new(id, TrustedHtml::owned(body.as_str()[start..end].into()))
-            });
+        let regions = [
+            "settings-live",
+            "resource-status",
+            "board-slots",
+            "delete-guard",
+        ]
+        .into_iter()
+        .map(|id| {
+            // These owned template markers keep all editable forms out of stream patches.
+            let start = body
+                .as_str()
+                .find(&format!("<!--{id}-->"))
+                .expect("owned marker")
+                + id.len()
+                + 7;
+            let end = body.as_str()[start..]
+                .find(&format!("<!--/{id}-->"))
+                .expect("owned closing marker")
+                + start;
+            PatchRegion::new(id, TrustedHtml::owned(body.as_str()[start..end].into()))
+        });
         Ok(RenderedBatch {
             version: self.version(),
             regions: std::iter::once(PatchRegion::new(

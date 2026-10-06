@@ -25,7 +25,18 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
         "board_rev",
         "INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0)",
     ),
+    ("projects", "board_slots", "TEXT"),
 ];
+/// Views added after homes existed, as `(name, definition)`: the writer creates the missing
+/// ones with the columns. A view is no table, so a release that counts the home's tables
+/// (every pinned one does) reads a home that has it.
+const ADDED_VIEWS: &[(&str, &str)] = &[(
+    "board_slots",
+    "CREATE VIEW board_slots AS SELECT p.project_id AS project_id, s.key AS key,
+  json_extract(s.value, '$.markdown') AS markdown, json_extract(s.value, '$.at') AS updated_at,
+  json_extract(s.value, '$.author') AS author
+  FROM projects p, json_each(p.board_slots) s WHERE p.deleted_at IS NULL",
+)];
 /// The board columns briefly shipped as schema 2. A home or backup marked 2 is schema 1 with
 /// those columns, and its writer marks it 1 again. Remove once no home or backup is marked 2.
 const BOARD_INTERIM_SCHEMA: i64 = 2;
@@ -181,7 +192,10 @@ pub(crate) fn upgrade_copy(database: &Path) -> Result<()> {
 /// immediate transaction; a home already in shape is left alone.
 fn conform(connection: &mut Connection) -> Result<()> {
     let marked: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if marked == SCHEMA_VERSION && missing_columns(connection)?.is_empty() {
+    if marked == SCHEMA_VERSION
+        && missing_columns(connection)?.is_empty()
+        && missing_views(connection)?.is_empty()
+    {
         return Ok(());
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -189,6 +203,9 @@ fn conform(connection: &mut Connection) -> Result<()> {
         transaction.execute_batch(&format!(
             "ALTER TABLE {table} ADD COLUMN {column} {definition}"
         ))?;
+    }
+    for definition in missing_views(&transaction)? {
+        transaction.execute_batch(definition)?;
     }
     transaction.execute(
         "UPDATE home_meta SET schema_version=?1 WHERE singleton=1",
@@ -223,6 +240,21 @@ fn missing_columns(
         )?;
         if !present {
             missing.push((table, column, definition));
+        }
+    }
+    Ok(missing)
+}
+
+fn missing_views(connection: &Connection) -> Result<Vec<&'static str>> {
+    let mut missing = Vec::new();
+    for &(name, definition) in ADDED_VIEWS {
+        let present: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='view' AND name=?1)",
+            [name],
+            |row| row.get(0),
+        )?;
+        if !present {
+            missing.push(definition);
         }
     }
     Ok(missing)

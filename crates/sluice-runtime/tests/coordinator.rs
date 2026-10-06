@@ -1480,6 +1480,84 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
         panic!("status")
     };
     assert_eq!(status.as_value()["board_rev"], 1);
+    // A run sets its own project's board slots too, with no revision; another project's are
+    // outside its authority.
+    let slot = |id: &str, project: Value, markdown: Value| RpcRequest {
+        protocol: 1,
+        request_id: RequestId(id.into()),
+        run_capability: Some(l.capability.clone()),
+        command: request(
+            json!({"command":"board_slot_set","args":{"project":project,"key":"phase","markdown":markdown,"author":"step:work"}}),
+        ),
+    };
+    let reply = b
+        .guardian(
+            C::Callback {
+                identity: l.identity.clone(),
+                request: Box::new(slot(
+                    "slot",
+                    json!({"kind":"id","value":p}),
+                    json!("Main is **green**."),
+                )),
+            },
+            Some(&l.capability),
+        )
+        .await
+        .unwrap();
+    assert!(format!("{reply:?}").contains("updated_at"), "{reply:?}");
+    assert!(
+        b.guardian(
+            C::Callback {
+                identity: l.identity.clone(),
+                request: Box::new(slot(
+                    "slot-other",
+                    json!({"kind":"id","value":other.project_id}),
+                    json!("x"),
+                )),
+            },
+            Some(&l.capability),
+        )
+        .await
+        .is_err()
+    );
+    // The owner's path: the same slot again changes nothing; null clears it.
+    let again = data_of(&b, json!({"command":"board_slot_set","args":{"project":{"kind":"id","value":p},"key":"phase","markdown":"Main is **green**.","author":"orch"}})).await;
+    assert_eq!(
+        (
+            again["key"].clone(),
+            again["changed"].clone(),
+            again["cleared"].clone()
+        ),
+        (json!("phase"), json!(false), json!(false))
+    );
+    assert!(again["updated_at"].is_string(), "{again}");
+    let cleared = data_of(&b, json!({"command":"board_slot_set","args":{"project":{"kind":"id","value":p},"key":"phase","markdown":null,"author":"orch"}})).await;
+    assert_eq!(
+        cleared,
+        json!({"key":"phase","updated_at":null,"cleared":true,"changed":true})
+    );
+    let bad = b
+        .command(request(json!({"command":"board_slot_set","args":{"project":{"kind":"id","value":p},"key":"Phase","markdown":"x","author":"orch"}})))
+        .await;
+    assert!(matches!(bad, Err(PublicError::Invalid { .. })), "{bad:?}");
+    let updates: Vec<(String, String)> = b
+        .reads()
+        .snapshot(move |sql| {
+            let mut q = sql.prepare("SELECT json_extract(payload,'$.fields[0]'), json_extract(payload,'$.author') FROM records WHERE project_id=?1 AND kind='project.update' ORDER BY seq")?;
+            let rows = q
+                .query_map([p.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        updates,
+        [
+            ("board_slot:phase".to_owned(), "step:work".to_owned()),
+            ("board_slot:phase".to_owned(), "orch".to_owned())
+        ]
+    );
 }
 
 /// A tool's data reply.

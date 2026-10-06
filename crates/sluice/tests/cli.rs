@@ -232,6 +232,53 @@ fn a_project_through_the_tools() {
         r#"{"project":"demo","program":null}"#,
     );
     assert_eq!(stdout(&cleared), json!({"rev": 2}));
+    // A slot: set by flags, refused without markdown, cleared with "".
+    let slot = run(
+        home.path(),
+        &[
+            "tool",
+            "board_slot_set",
+            "--project",
+            "demo",
+            "--key",
+            "phase",
+            "--markdown",
+            "Main is **green**.",
+        ],
+    );
+    assert!(
+        slot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&slot.stderr)
+    );
+    assert_eq!(stdout(&slot)["changed"], true);
+    assert!(stdout(&slot)["updated_at"].is_string());
+    let missing = tool(
+        home.path(),
+        "board_slot_set",
+        r#"{"project":"demo","key":"phase"}"#,
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        stderr(&missing)["message"]
+            .as_str()
+            .unwrap()
+            .contains("to clear the slot"),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    let bad = tool(
+        home.path(),
+        "board_slot_set",
+        r#"{"project":"demo","key":"Phase","markdown":"x"}"#,
+    );
+    assert_eq!(stderr(&bad)["error"], "invalid");
+    let cleared = tool(
+        home.path(),
+        "board_slot_set",
+        r#"{"project":"demo","key":"phase","markdown":""}"#,
+    );
+    assert_eq!(stdout(&cleared)["cleared"], true);
 }
 
 #[test]

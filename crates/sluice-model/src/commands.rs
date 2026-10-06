@@ -106,6 +106,21 @@ pub struct BoardSet {
     pub author: Option<String>,
 }
 
+/// `board_slot_set`: set one named text slot of the project's board (markdown a board's
+/// `Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is
+/// its own value, so an orchestrator updates one per event without reading the board first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardSlotSet {
+    pub project: ProjectSelector,
+    /// The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.
+    pub key: String,
+    /// The slot's markdown (at most 16 KiB); "" or null clears the slot.
+    #[schemars(required, extend("type" = ["string", "null"]))]
+    pub markdown: Option<String>,
+    pub author: Option<String>,
+}
+
 /// A project's board as `board_get` reads it: no program while none is set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -942,6 +957,7 @@ pub enum CommandRequest {
     ProjectUpdate(ProjectUpdate),
     ProjectDelete(ProjectDelete),
     BoardSet(BoardSet),
+    BoardSlotSet(BoardSlotSet),
     BoardGet {
         project: ProjectSelector,
     },

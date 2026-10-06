@@ -51,7 +51,13 @@
 <label for="board-program">Program{% if view.project.board_rev.0 > 0 %} · rev {{ view.project.board_rev }}{% endif %}</label>
 <textarea id="board-program" name="program" class="board-program" spellcheck="false" aria-describedby="board-feedback">{{ feedback.value("board", view.project.board.as_deref().unwrap_or("")) }}</textarea>
 <div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><button type="submit" name="op" value="clear"{% if view.project.board.is_none() %} disabled{% endif %}>Clear board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
-</form><p class="setting-help" data-board-preview-label hidden>Preview</p><div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div></section>
+</form><p class="setting-help" data-board-preview-label hidden>Preview</p><div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div>
+<h3 id="slots-heading">Slots</h3>
+<p class="setting-help">Named text the board draws with <code>Slot("key")</code>. Agents set one per event with <code>board_slot_set</code>, and clear one with its markdown <code>""</code>.</p>
+<!--board-slots--><div id="board-slots"><ul class="resource-list slot-list" aria-labelledby="slots-heading">
+{% for slot in view.slots %}<li><code>{{ slot.key }}</code> · updated <time data-ago datetime="{{ slot.at }}">{{ ProjectSettingsView::minute(slot.at) }}</time>{% if !slot.author.is_empty() %} by {{ slot.author }}{% endif %}<p class="slot-preview">{{ ProjectSettingsView::slot_preview(slot) }}</p></li>
+{% endfor %}{% if view.slots.is_empty() %}<li class="setting-help">No slots set.</li>{% endif %}
+</ul></div><!--/board-slots--></section>
 <section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
 <form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch"><div><p>Pause project</p><p class="setting-help">Hold future work. Running work continues.</p></div>
 <input type="hidden" name="field" value="paused"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.paused %}false{% else %}true{% endif %}">

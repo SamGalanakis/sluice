@@ -450,6 +450,11 @@ fn contract_board_set() {
 }
 
 #[test]
+fn contract_board_slot_set() {
+    contract::<BoardSlotSet>("BoardSlotSet");
+}
+
+#[test]
 fn contract_board_view() {
     contract::<BoardView>("BoardView");
 }

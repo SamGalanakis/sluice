@@ -114,6 +114,7 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(Reply);
         $m!(Ask);
         $m!(BoardSet);
+        $m!(BoardSlotSet);
         $m!(BoardView);
         $m!(StepWait);
         $m!(StepWaitUntil);

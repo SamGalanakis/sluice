@@ -25,6 +25,7 @@ CREATE TABLE projects (
   created_at TEXT NOT NULL, changed_at TEXT, deleted_at TEXT,
   board TEXT,
   board_rev INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0),
+  board_slots TEXT,
   CHECK (icon_text IS NULL OR icon_hash IS NULL),
   CHECK ((icon_type IS NULL) = (icon_hash IS NULL))
 ) STRICT;
@@ -343,6 +344,10 @@ CREATE VIEW step_changes AS SELECT seq, project_id, at, step_id,
   json_extract(payload, '$.from') AS "from", json_extract(payload, '$.to') AS "to",
   json_extract(payload, '$.error') AS error FROM records WHERE kind = 'step.status';
 CREATE VIEW edits AS SELECT * FROM plan_edits;
+CREATE VIEW board_slots AS SELECT p.project_id AS project_id, s.key AS key,
+  json_extract(s.value, '$.markdown') AS markdown, json_extract(s.value, '$.at') AS updated_at,
+  json_extract(s.value, '$.author') AS author
+  FROM projects p, json_each(p.board_slots) s WHERE p.deleted_at IS NULL;
 CREATE VIEW questions AS SELECT m.*,
   CASE WHEN closed_at IS NOT NULL THEN 'closed' WHEN resolved_by IS NOT NULL THEN 'answered' ELSE 'open' END AS state,
   EXISTS (SELECT 1 FROM question_attachments q JOIN runs r ON r.run_id = q.run_id

@@ -10476,6 +10476,23 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "board_slot_set"
+              },
+              "args": {
+                "$ref": "#/$defs/BoardSlotSet"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "board_get"
               },
               "args": {
@@ -11870,6 +11887,38 @@
         "required": [
           "project",
           "program"
+        ]
+      },
+      "BoardSlotSet": {
+        "description": "`board_slot_set`: set one named text slot of the project's board (markdown a board's\n`Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is\nits own value, so an orchestrator updates one per event without reading the board first.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "key": {
+            "description": "The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.",
+            "type": "string"
+          },
+          "markdown": {
+            "description": "The slot's markdown (at most 16 KiB); \"\" or null clears the slot.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "key",
+          "markdown"
         ]
       },
       "PlanPatch": {
@@ -20442,6 +20491,23 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "board_slot_set"
+          },
+          "args": {
+            "$ref": "#/$defs/BoardSlotSet"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "board_get"
           },
           "args": {
@@ -21836,6 +21902,38 @@
         "required": [
           "project",
           "program"
+        ]
+      },
+      "BoardSlotSet": {
+        "description": "`board_slot_set`: set one named text slot of the project's board (markdown a board's\n`Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is\nits own value, so an orchestrator updates one per event without reading the board first.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "key": {
+            "description": "The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.",
+            "type": "string"
+          },
+          "markdown": {
+            "description": "The slot's markdown (at most 16 KiB); \"\" or null clears the slot.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "key",
+          "markdown"
         ]
       },
       "PlanPatch": {
@@ -31967,6 +32065,89 @@
     "required": [
       "project",
       "program"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "BoardSlotSet": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "BoardSlotSet",
+    "description": "`board_slot_set`: set one named text slot of the project's board (markdown a board's\n`Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is\nits own value, so an orchestrator updates one per event without reading the board first.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "key": {
+        "description": "The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.",
+        "type": "string"
+      },
+      "markdown": {
+        "description": "The slot's markdown (at most 16 KiB); \"\" or null clears the slot.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "author": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "key",
+      "markdown"
     ],
     "$defs": {
       "ProjectSelector": {

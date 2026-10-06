@@ -53,7 +53,8 @@ question with `reply(project, to_message=<its id>, body=...)`; a note (`say`) ne
 
 To give the owner a live view of a project (a lane overview, a few numbers, a chart, a button
 that asks you for something), set its board: `board_set(project, program)`, drawn beside the
-plan on the dashboard; see `docs("board")`.
+plan on the dashboard; then keep its words current with `board_slot_set(project, key,
+markdown)`, one call per event, for each `Slot(key)` it draws; see `docs("board")`.
 
 Tool arguments are forgiving: an unknown tool or argument names the nearest valid ones, and an
 integer argument (a message id, a seq, a limit) may be given as a string of digits. From a

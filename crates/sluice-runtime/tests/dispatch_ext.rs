@@ -799,6 +799,11 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             "board_set",
             json!({"program":"root = Units()","expected_rev":null,"reason":null,"author":"test"}),
         ),
+        (
+            "BoardSlotSet",
+            "board_slot_set",
+            json!({"key":"phase","markdown":"Main is **green**.","author":"test"}),
+        ),
         ("BoardGet", "board_get", json!({})),
         (
             "PlanPatch",
@@ -991,6 +996,7 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             "ProjectUpdate"
                 | "ProjectDelete"
                 | "BoardSet"
+                | "BoardSlotSet"
                 | "BoardGet"
                 | "PlanPatch"
                 | "StepAdd"

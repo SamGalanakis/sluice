@@ -2279,6 +2279,7 @@ fn project_mutation(command: &CommandRequest) -> bool {
         command,
         CommandRequest::ProjectUpdate(_)
             | CommandRequest::BoardSet(_)
+            | CommandRequest::BoardSlotSet(_)
             | CommandRequest::StepRetry(_)
             | CommandRequest::StepCancel(_)
             | CommandRequest::StepSetOutput(_)
@@ -2326,6 +2327,29 @@ fn mutate_project(
                 },
             )?;
             Ok(CommandReply::BoardRev { rev })
+        }
+        CommandRequest::BoardSlotSet(request) => {
+            let key = request.key.clone();
+            let change = projects::board_slot_set(
+                tx,
+                &request.project,
+                projects::SetBoardSlot {
+                    key: request.key,
+                    markdown: request.markdown,
+                    author: request.author.unwrap_or_else(|| "cli".into()),
+                },
+            )?;
+            Ok(CommandReply::Data(
+                sluice_model::rpc::JsonValue::try_from(serde_json::json!({
+                    "key": key,
+                    "updated_at": change.slot.as_ref().map(|s| s.at.clone()),
+                    "cleared": change.slot.is_none(),
+                    "changed": change.changed,
+                }))
+                .map_err(|e| PublicError::Storage {
+                    message: e.to_string(),
+                })?,
+            ))
         }
         CommandRequest::StepRetry(request) => {
             crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;

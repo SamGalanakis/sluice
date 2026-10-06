@@ -543,7 +543,13 @@ project's live data. It is the owner's instrument for that project, never a seco
   under it in meta. Output is its name in meta over the value. Metric is a number in Archivo
   800 at 28/34 over its label, on the box tone; metrics in a row share it. Chart is an inline
   SVG at most 520px wide: bars and the line in the accent, labels in ink and values in muted
-  ink at 12px, its caption in meta under it. Buttons are the dashboard's buttons; what a press
+  ink at 12px, its caption in meta under it. Slot, Markdown and LatestMessage are markdown at
+  the text's 15/22 and 72ch measure, drawn as message bodies draw (escaped, unsafe links
+  dropped): a Slot has "Updated 3m ago" in meta under its text (the time a `data-ago`, UTC
+  without script), so the owner sees how fresh it is without the board saying it in words; an
+  unset slot is its fallback in muted ink, or "Not set yet."; LatestMessage leads with a meta
+  line, the sender in ink at 600 and its time as a link to the message in its thread, then the
+  body, and when it is cut, an ellipsis and "The whole message" in meta under it. Buttons are the dashboard's buttons; what a press
   did (or why it was refused) is a status line under the board.
 - **A part that cannot be drawn** is a small box in its place: the muted fill, a strong
   hairline, a 3px left rule in the attention gold and Lucide `triangle-alert` in gold; the
@@ -614,8 +620,10 @@ the project id), Description (with a Preview), Icon (a text icon up to 16 charac
 image up to 256 KiB). Resources: a line per resource (static capacity or capacity fn, in use,
 waiting, the step queue) and a capacity field each, then a new resource's name and capacity.
 Board: the program in a monospace textarea (with its rev), Save board and Clear board, and under
-them a live preview, drawn as the board column would draw it (its width), as one types.
-Activity: Pause project and Archive project switches. Delete project, in a bordered danger card:
+them a live preview, drawn as the board column would draw it (its width), as one types; then
+Slots (a 15px heading): a line per slot, by key, as the resources are listed (its key in code,
+"updated <time>" and by whom, its text on one line in muted 13px under it), read-only, or "No
+slots set.". Activity: Pause project and Archive project switches. Delete project, in a bordered danger card:
 it explains what goes, refuses until the project is archived, and needs the current name typed.
 
 ## Elevation & Depth
