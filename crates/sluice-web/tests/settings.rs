@@ -117,6 +117,9 @@ impl Fixture {
         )
         .await
     }
+    async fn get_page(&self) -> (u16, String) {
+        request(self.router(), "GET", &self.path(), String::new()).await
+    }
     async fn delete(&self, name: &str, rev: u64) -> (u16, String) {
         request(
             self.router(),
@@ -595,4 +598,57 @@ async fn images_are_validated_and_served_by_id_and_generation() {
         .unwrap();
     assert_eq!(response.status(), 400);
     assert_eq!(f.project().await.settings_rev, Revision(3));
+}
+
+#[tokio::test]
+async fn retiring_is_set_in_hours_with_keep_patterns_and_turned_off_when_empty() {
+    let f = Fixture::new().await;
+    let (status, html) = f.get_page().await;
+    assert_eq!(status, 200);
+    assert!(html.contains("Retire done units after"));
+    assert!(html.contains("Done units stay until an edit removes them"));
+    let (status, html) = f.post("prune_done_after", "6", "", 1).await;
+    assert_eq!(status, 200, "{html}");
+    let p = f.project().await;
+    assert_eq!(p.prune_done_after, Some(21600));
+    assert!(html.contains("Done units retire 6 h after their last step finished"));
+    assert!(html.contains("id=\"prune-done-after\" name=\"value\""));
+    let (status, html) = f.post("prune_keep", "ta-*, fig-? release", "", 2).await;
+    assert_eq!(status, 200, "{html}");
+    assert_eq!(f.project().await.prune_keep, ["ta-*", "fig-?", "release"]);
+    assert!(html.contains("value=\"ta-*, fig-?, release\""));
+    assert!(html.contains("except 3 patterns"));
+    let (status, _) = f.post("prune_done_after", "1.5", "", 3).await;
+    assert_eq!(status, 200);
+    assert_eq!(f.project().await.prune_done_after, Some(5400));
+    // Not a number, zero or negative is refused with the typed value kept.
+    for bad in ["soon", "0", "-2"] {
+        let (status, html) = f.post("prune_done_after", bad, "", 4).await;
+        assert_eq!(status, 400, "{bad}");
+        assert!(html.contains("Enter a number of hours"), "{html}");
+        assert!(html.contains(&format!("value=\"{bad}\"")));
+    }
+    // Empty turns retiring off; empty patterns clear them.
+    let (status, _) = f.post("prune_done_after", "", "", 4).await;
+    assert_eq!(status, 200);
+    let (status, _) = f.post("prune_keep", " ", "", 5).await;
+    assert_eq!(status, 200);
+    let p = f.project().await;
+    assert_eq!((p.prune_done_after, p.prune_keep), (None, vec![]));
+    let fields: Vec<_> = f
+        .records()
+        .await
+        .into_iter()
+        .map(|r| r["fields"].clone())
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            json!(["prune_done_after"]),
+            json!(["prune_keep"]),
+            json!(["prune_done_after"]),
+            json!(["prune_done_after"]),
+            json!(["prune_keep"])
+        ]
+    );
 }

@@ -1102,7 +1102,7 @@ fn prune_keeps_every_reference_kind_in_every_consumer_status() {
             snapshot
                 .steps
                 .insert(id("down"), state(status.clone(), json!({})));
-            let removed = prune_closed(&plan, &snapshot, &[unit("delivery")]).unwrap();
+            let removed = prune_closed(&plan, &snapshot, &[unit("delivery")], &[]).unwrap();
             assert!(removed.steps.is_empty(), "{relation}: {status:?}");
             assert_eq!(
                 removed.kept[&unit("delivery")],
@@ -1123,11 +1123,11 @@ fn pruning_reaches_fixed_point_and_plan_outputs_hold_candidates() {
             .collect(),
         ..StateSnapshot::default()
     };
-    let kept = prune_closed(&plan, &snapshot, &[unit("a"), unit("b")]).unwrap();
+    let kept = prune_closed(&plan, &snapshot, &[unit("a"), unit("b")], &[]).unwrap();
     assert!(kept.steps.is_empty());
     assert_eq!(kept.kept[&unit("b")], PruneHolder::Step(id("c")));
     assert_eq!(kept.kept[&unit("a")], PruneHolder::Step(id("b")));
-    let all = prune_closed(&plan, &snapshot, &[unit("a"), unit("b"), unit("c")]).unwrap();
+    let all = prune_closed(&plan, &snapshot, &[unit("a"), unit("b"), unit("c")], &[]).unwrap();
     assert_eq!(all.steps, [id("a"), id("b"), id("c")]);
     let output = plan
         .patch(
@@ -1138,13 +1138,13 @@ fn pruning_reaches_fixed_point_and_plan_outputs_hold_candidates() {
             &signatures(),
         )
         .unwrap();
-    let held = prune_closed(&output, &snapshot, &[unit("a"), unit("b"), unit("c")]).unwrap();
+    let held = prune_closed(&output, &snapshot, &[unit("a"), unit("b"), unit("c")], &[]).unwrap();
     assert!(held.steps.is_empty());
     assert_eq!(
         held.kept[&unit("c")],
         PruneHolder::PlanOutput("total".into())
     );
-    assert!(prune_closed(&plan, &StateSnapshot::default(), &[unit("a")]).is_err());
+    assert!(prune_closed(&plan, &StateSnapshot::default(), &[unit("a")], &[]).is_err());
 }
 
 #[test]
@@ -1163,10 +1163,10 @@ fn mutually_referencing_units_prune_together_without_step_cycle() {
             .collect(),
         ..StateSnapshot::default()
     };
-    let both = prune_closed(&plan, &snapshot, &[unit("a"), unit("b")]).unwrap();
+    let both = prune_closed(&plan, &snapshot, &[unit("a"), unit("b")], &[]).unwrap();
     assert_eq!(both.steps, [id("a0"), id("b0"), id("a1"), id("b1")]);
     assert!(both.kept.is_empty());
-    let single = prune_closed(&plan, &snapshot, &[unit("a")]).unwrap();
+    let single = prune_closed(&plan, &snapshot, &[unit("a")], &[]).unwrap();
     assert!(single.steps.is_empty());
     assert_eq!(single.kept[&unit("a")], PruneHolder::Step(id("b1")));
 }

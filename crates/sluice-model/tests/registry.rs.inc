@@ -46,6 +46,7 @@ macro_rules! every_contract { ($m:ident) => {
         $m!(StepCancel);
         $m!(StepSubmit);
         $m!(StepSettle);
+        $m!(StepProgress);
         $m!(MessageAnswer);
         $m!(MessagePost);
         $m!(Messages);

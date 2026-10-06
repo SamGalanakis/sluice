@@ -185,11 +185,13 @@ impl SettingsState {
                     })
                     .collect();
                 let slots = projects::board_slots(c, id)?;
+                let retired = projects::last_retirement(c, id)?;
                 Ok(ProjectSettingsView {
                     shared,
                     project,
                     resources: rows,
                     slots,
+                    retired,
                     blocker,
                 })
             })
@@ -242,9 +244,19 @@ pub struct ProjectSettingsView {
     pub resources: Vec<ResourceView>,
     /// The board's slots (`board_slot_set`), by key: listed under the program, read-only.
     pub slots: Vec<projects::BoardSlot>,
+    /// The latest automatic retirement (SPEC §6.11), when there has been one.
+    pub retired: Option<projects::Retirement>,
     pub blocker: Option<String>,
 }
 impl ProjectSettingsView {
+    /// `prune_done_after` in hours, as the field shows it: "6", "1.5", or "" when off.
+    pub fn retire_hours(&self) -> String {
+        self.project.prune_done_after.map(hours).unwrap_or_default()
+    }
+    /// The keep patterns as the field shows them: separated by a comma and a space.
+    pub fn retire_keep(&self) -> String {
+        self.project.prune_keep.join(", ")
+    }
     /// A slot's markdown as one line of plain text, cut short, for the Board section's list.
     pub fn slot_preview(slot: &projects::BoardSlot) -> String {
         let line = slot
@@ -273,6 +285,7 @@ impl ProjectSettingsView {
     fn version(&self) -> String {
         sluice_store::artifacts::fingerprint(&serde_json::to_vec(&serde_json::json!({
             "shared":self.shared,"revision":self.project.settings_rev,"resources":self.resources,"blocker":self.blocker,
+            "retired":self.retired.as_ref().map(|r| r.rev),
             "slots":self.slots.iter().map(|s| [&s.key, &s.at]).collect::<Vec<_>>()
         })).expect("owned views serialize"))
     }
@@ -309,6 +322,8 @@ impl ProjectSettingsView {
             icon_url,
             preview: markdown::render(description),
             css: views::asset_url("settings.css"),
+            retire_hours: self.retire_hours(),
+            retire_keep: self.retire_keep(),
         })
     }
     fn batch(&self, viewer: &Viewer) -> Result<RenderedBatch, PublicError> {
@@ -318,6 +333,7 @@ impl ProjectSettingsView {
             "settings-live",
             "resource-status",
             "board-slots",
+            "retire-status",
             "delete-guard",
         ]
         .into_iter()
@@ -355,6 +371,8 @@ struct SettingsTemplate<'a> {
     icon_url: String,
     preview: TrustedHtml,
     css: String,
+    retire_hours: String,
+    retire_keep: String,
 }
 #[derive(Default)]
 pub struct Feedback {
@@ -442,6 +460,35 @@ fn decode(headers: &HeaderMap, body: &[u8]) -> Result<FieldChange, PublicError> 
         Ok(request)
     }
 }
+/// Seconds as hours with up to three decimals and no trailing zeros: 21600 → "6".
+fn hours(seconds: u64) -> String {
+    let text = format!("{:.3}", seconds as f64 / 3600.0);
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+/// The Retire field's hours ("" or "off" turns retiring off) as `prune_done_after` seconds.
+fn retire_seconds(value: &str) -> Result<Option<u64>, PublicError> {
+    let value = value.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("off") {
+        return Ok(None);
+    }
+    let invalid = || {
+        bad("Enter a number of hours, such as 6 or 0.5, or leave it empty to turn retiring off.")
+    };
+    let hours: f64 = value.parse().map_err(|_| invalid())?;
+    let seconds = (hours * 3600.0).round();
+    if !hours.is_finite() || seconds < 1.0 || seconds > projects::PRUNE_DONE_AFTER_MAX as f64 {
+        return Err(invalid());
+    }
+    Ok(Some(seconds as u64))
+}
+/// The Keep field's patterns, separated by commas, spaces or new lines.
+fn keep_patterns(value: &str) -> Vec<String> {
+    value
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
 fn update(request: &FieldChange) -> Result<UpdateProject, PublicError> {
     let mut command = UpdateProject {
         expected_settings_rev: Some(request.expected_settings_rev),
@@ -464,6 +511,10 @@ fn update(request: &FieldChange) -> Result<UpdateProject, PublicError> {
             })?;
             command.resources = Some(serde_json::json!({ request.resource.clone():value }));
         }
+        "prune_done_after" => {
+            command.prune_done_after = Some(retire_seconds(&request.value)?);
+        }
+        "prune_keep" => command.prune_keep = Some(keep_patterns(&request.value)),
         "paused" | "archived" => {
             let value = match request.value.as_str() {
                 "true" => true,

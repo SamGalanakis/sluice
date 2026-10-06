@@ -15,8 +15,9 @@ the agent-facing topics the `docs` tool serves.
 - **Home:** one directory holding a database and everything a set of projects needs (§2.3). One
   coordinator process owns each home's writes.
 - **Project:** a name (renameable), an immutable UUIDv7 id, a description, an optional icon,
-  named resources, paused and archived flags, and an optional board (an OpenUI Lang program the
-  dashboard draws beside the plan, `docs("board")`). Each project has exactly one plan and its own
+  named resources, paused and archived flags, an optional board (an OpenUI Lang program the
+  dashboard draws beside the plan, `docs("board")`) and an optional age after which its done
+  units retire from the plan by themselves (§6.11). Each project has exactly one plan and its own
   functions and recipes.
 - **Function (fn):** a named unit with typed `inputs` and `outputs`. Built-in fns are compiled
   into sluice (§16); user fns are Python (`fn.json` plus `main.py`, §5). An **open** fn (every
@@ -230,7 +231,9 @@ home or a restore, before anything else touches it, and readers refuse a home st
 column. New state is never a new table: every release counts the home's 23 tables and refuses
 any other number, so a pinned one could not read a home with a 24th. A board's slots are
 therefore the column `projects.board_slots` (a JSON object of key to `{markdown, at,
-author}`) and the view `board_slots`. Only
+author}`) and the view `board_slots`, and automatic retiring's setting (§6.11) is the columns
+`projects.prune_done_after` (seconds, null when off) and `projects.prune_keep` (a JSON array of
+patterns, null when none). Only
 the coordinator writes, through one writer task; reads use a pool of read-only connections and
 one snapshot per answer. Every logical change (an edit and its records, a status change and
 its records, a message and its record) commits in one transaction.
@@ -603,6 +606,37 @@ cached capacities and never runs fns; `core.external` steps never appear in `wou
   history row. Its reply is the edit result with the current `rev` and empty `preview.ops`.
   `step_set_input` refuses one instead (`bad_request`).
 - Removing a finished step keeps its result as an `outcomes` row; a pending step leaves none.
+
+### 6.11 Retiring done units
+
+A project's `prune_done_after` (seconds, 1 to ten years; set with `project_update`, null turns
+it off, off by default) retires its done units by itself, so finished lanes leave the live plan
+without an orchestrator remembering `plan_prune`. `prune_keep` (unit-name patterns, `*` any run
+of characters and `?` one, at most 64 of at most 128 characters, no whitespace) names units it
+never removes, whatever their state. Each change of either is a `project.update` record naming
+the field. `query` reads both from `projects`.
+
+- **Owner and timing.** The coordinator's scheduler does it, beside its other upkeep, on its
+  30 s tick, whether or not anything holds the scheduler lease: each live project that is
+  neither paused nor archived and has the setting is looked at once every 5 minutes at most (a
+  coordinator restart looks again at once). A pass runs in its own task, one at a time, so a
+  large plan's edit never holds admission up.
+- **What goes.** A look reads, in one snapshot, what `plan_prune(older_than=prune_done_after,
+  keep=prune_keep)` would remove: done units whose every step's current result was recorded at
+  least that long ago, less those matching a keep pattern, less the reference closure (a unit a
+  surviving step or plan output references stays). When that is nothing, there is no edit.
+  Otherwise it runs that `plan_prune` at the revision it read, as one edit by author `sluice`
+  with reason `retire done units older than <N>h` (`<N>m` or `<N>s` when not whole hours). A
+  unit that is live, failed, stale or anything but done is never removed, and every removed
+  step's result stays in `outcomes` (§7.10).
+- **Races.** A plan edited between the look and the edit, or a member's result changed, is a
+  `conflict`: that round is skipped and the project waits for its next turn; it never retries
+  in a loop. A drain (§2.6), a blocked registry or any other refusal skips the round the same
+  way.
+- **Waits.** The edit is an ordinary `plan.edit` record (no new kind), so it wakes what any plan
+  edit wakes: `log_wait` and `watch` without a `kinds` filter, `next` with `all`, and a
+  `step_wait`'s re-read. `next` without `all` ignores it, so an orchestrator is not woken by
+  retiring.
 
 ## 7. Running
 
@@ -1094,7 +1128,7 @@ unknown step `not_found`.
 | `docs` | `topic?` | the topic's markdown, or the index |
 | `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
 | `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `author?` | `{project_id, name}` |
-| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
+| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
 | `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …`; the same program again changes nothing; writes `project.board` |
 | `board_slot_set` | `project`, `key`, `markdown` (`""` or null clears), `author?` | `{key, updated_at, cleared, changed}`; no revision; `key` is `[a-z0-9][a-z0-9_.-]{0,63}`, `markdown` at most 16 KiB, a project at most 64 slots and 256 KiB of them, else `invalid`; the same markdown again changes nothing; writes `project.update` with `fields` `["board_slot:<key>"]` |
 | `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
@@ -1128,7 +1162,7 @@ it may the plan edits; another project's board is outside its authority.
 | `unit_tag` | `project`, `unit`, `add=[]`, `remove=[]` |
 | `edge_add`, `edge_remove` | `project`, `step` (a step or `unit:<name>`: its entry steps), `after` (entries) |
 | `step_set_input` | `project`, `steps?`, `tags?`, `inputs` |
-| `plan_prune` | `project`, `units?`, `tags?`, `older_than=0` (seconds) |
+| `plan_prune` | `project`, `units?`, `tags?`, `older_than=0` (seconds), `keep?` (unit-name patterns) |
 
 `step_pause` with `subtree` also selects every step downstream of the selection (reading from
 or gated on one, transitively). `unit_add` reports the steps it added in `steps`, `unit_tag`
@@ -1137,9 +1171,12 @@ the unit's steps and `step_pause` the steps selected.
 `plan_prune` selects done units (all, or those named or tagged) whose last step finished at
 least `older_than` seconds ago, keeps any unit that a surviving step or plan output references
 (computed as a closure), and removes the rest in one edit; naming a unit that does not exist or
-is not done is `invalid`. The reply is the edit result plus `units` (removed) and `kept`:
-`[{unit, step}]` or `[{unit, output}]`, each kept unit with the step or plan output that holds
-it; `steps` lists the removed steps.
+is not done is `invalid`. A selected unit whose name matches a `keep` pattern (`*` any run of
+characters, `?` one; as §6.11's `prune_keep`) is kept too, and its steps hold what they
+reference like any surviving step's; without `keep` nothing changes. The reply is the edit
+result plus `units` (removed) and `kept`: `[{unit, step}]`, `[{unit, output}]` or `[{unit,
+keep}]`, each kept unit with the step, plan output or pattern that holds it; `steps` lists the
+removed steps.
 
 **State and values**
 
@@ -1302,7 +1339,9 @@ form's rules first, `invalid` otherwise); if the board's rev changed since the p
 it is refused (`conflict`, shown under the board) and nothing is sent. The board never edits
 the plan. Project settings has a Board section: the program, a live preview, Save (fenced by
 `expected_rev`) and Clear, then the board's slots, read-only, by key: each with when it was
-updated, by whom, and its text on one line.
+updated, by whom, and its text on one line. Its Retiring section sets §6.11's
+`prune_done_after` in hours (empty is off) and `prune_keep` (patterns separated by commas or
+spaces), and says whether retiring is on and when it last retired how many steps.
 
 ## 14. CLI
 
@@ -1338,7 +1377,7 @@ read them with `sluice query` or `--settles full`), `PROJECT <id> paused by <aut
 flat on edit tools, MCP's public names (`rev` for `expected`, `wait` for `fn_call`, `timeout`
 and `wake` for `log_wait`, `timeout` for `step_wait`, `timeout`, `settle` and `settle_max` for
 `next`, `older_than` for `plan_prune`, `fn` for `fn_save`), `older_than_hours` for
-`plan_prune`, `name` for `project_update` and `project_delete` (which also fills
+`plan_prune`, `prune_done_after_hours` for `project_update`, `name` for `project_update` and `project_delete` (which also fills
 `confirm_name` and the current `expected_settings_rev`), `params.unit` for `unit_add`, and
 `step`/`input`/`value` for `step_set_input`. Any other name is refused with the nearest ones (§12.2).
 

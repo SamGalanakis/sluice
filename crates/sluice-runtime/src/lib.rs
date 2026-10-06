@@ -10,6 +10,7 @@ pub mod inline;
 pub mod notify;
 pub mod python;
 pub mod registry;
+pub mod retire;
 pub mod scheduler;
 pub mod status;
 pub mod verify;

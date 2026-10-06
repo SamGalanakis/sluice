@@ -58,6 +58,25 @@
 {% for slot in view.slots %}<li><code>{{ slot.key }}</code> · updated <time data-ago datetime="{{ slot.at }}">{{ ProjectSettingsView::minute(slot.at) }}</time>{% if !slot.author.is_empty() %} by {{ slot.author }}{% endif %}<p class="slot-preview">{{ ProjectSettingsView::slot_preview(slot) }}</p></li>
 {% endfor %}{% if view.slots.is_empty() %}<li class="setting-help">No slots set.</li>{% endif %}
 </ul></div><!--/board-slots--></section>
+<section aria-labelledby="retire-heading" id="retire-settings"><h2 id="retire-heading">Retiring</h2>
+<p class="setting-help">Sluice removes done units from the plan once their last step finished this long ago, in one edit by <code>sluice</code>, checking every 5 minutes. A unit that a remaining step or plan output still uses stays, and each removed step's result stays in the <code>outcomes</code> view.</p>
+<!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}<span class="tag">On</span> Done units retire {{ retire_hours }} h after their last step finished{% if !view.project.prune_keep.is_empty() %}, except {{ view.project.prune_keep.len() }} pattern{% if view.project.prune_keep.len() != 1 %}s{% endif %}{% endif %}. {% else %}<span class="tag muted">Off</span> Done units stay until an edit removes them. {% endif %}{% if let Some(r) = view.retired %}Last retired <time data-ago datetime="{{ r.at }}">{{ ProjectSettingsView::minute(r.at) }}</time>: {{ r.steps }} step{% if r.steps != 1 %}s{% endif %} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
+<dl class="settings-fields">
+<div class="setting-row"><dt><label for="prune-done-after">Retire done units after</label></dt><dd>
+<form method="post" action="{{ view.path() }}" data-setting="prune_done_after">
+<input type="hidden" name="field" value="prune_done_after"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<div class="setting-unit"><input id="prune-done-after" name="value" inputmode="decimal" autocomplete="off" placeholder="Off" value="{{ feedback.value("prune_done_after", retire_hours.as_str()) }}" aria-describedby="prune-done-after-help prune-done-after-feedback"><span>hours</span></div>
+<p id="prune-done-after-help" class="setting-help">Such as 6 or 0.5. Leave empty to turn retiring off.</p>
+<div class="setting-actions"><button type="submit">Apply</button><span id="prune-done-after-feedback" class="settings-feedback{% if feedback.error("prune_done_after") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "prune_done_after" %}{{ feedback.message }}{% endif %}</span></div>
+</form></dd></div>
+<div class="setting-row"><dt><label for="prune-keep">Never retire</label></dt><dd>
+<form method="post" action="{{ view.path() }}" data-setting="prune_keep">
+<input type="hidden" name="field" value="prune_keep"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
+<input id="prune-keep" name="value" autocomplete="off" spellcheck="false" class="mono-field" value="{{ feedback.value("prune_keep", retire_keep.as_str()) }}" aria-describedby="prune-keep-help prune-keep-feedback">
+<p id="prune-keep-help" class="setting-help">Unit-name patterns, separated by commas or spaces: <code>*</code> matches any run of characters, <code>?</code> one, as in <code>ta-*</code>. A matching unit is never retired, done or not.</p>
+<div class="setting-actions"><button type="submit">Apply patterns</button><span id="prune-keep-feedback" class="settings-feedback{% if feedback.error("prune_keep") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "prune_keep" %}{{ feedback.message }}{% endif %}</span></div>
+</form></dd></div>
+</dl></section>
 <section aria-labelledby="activity-heading"><h2 id="activity-heading">Activity</h2>
 <form method="post" action="{{ view.path() }}" data-setting="paused" class="settings-switch"><div><p>Pause project</p><p class="setting-help">Hold future work. Running work continues.</p></div>
 <input type="hidden" name="field" value="paused"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><input type="hidden" name="value" value="{% if view.project.paused %}false{% else %}true{% endif %}">
@@ -111,7 +130,7 @@ async function sendForm(form, submitter) {
   const text = await response.text();
   const doc = new DOMParser().parseFromString(text, 'text/html');
   if (doc.getElementById('settings-live')) {
-   patch(doc, ['settings-live','top-nav','resource-status','delete-guard']);
+   patch(doc, ['settings-live','top-nav','resource-status','retire-status','delete-guard']);
    const field = form.dataset.setting;
    const source = [...doc.querySelectorAll('form[data-setting]')].find(f => f.dataset.setting === field && (f.querySelector('[name=resource]')?.value || '') === (form.querySelector('[name=resource]')?.value || ''));
    feedback.textContent = source?.querySelector('.settings-feedback')?.textContent || (response.ok ? 'Saved' : 'Could not save.');

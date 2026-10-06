@@ -34,6 +34,17 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ),
     ("steps", "progress_at", "TEXT"),
     ("steps", "progress_run", "TEXT"),
+    // Automatic retiring of done units: the age in seconds (null is off) and the keep patterns.
+    (
+        "projects",
+        "prune_done_after",
+        "INTEGER CHECK (prune_done_after IS NULL OR prune_done_after > 0)",
+    ),
+    (
+        "projects",
+        "prune_keep",
+        "TEXT CHECK (prune_keep IS NULL OR json_type(prune_keep) = 'array')",
+    ),
 ];
 /// Views added after homes existed, as `(name, definition)`: the writer creates the missing
 /// ones with the columns. A view is no table, so a release that counts the home's tables

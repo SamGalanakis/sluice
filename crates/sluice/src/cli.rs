@@ -568,6 +568,12 @@ async fn normalize_args(
             if let Some(value) = args.remove("name") {
                 args.entry("project").or_insert(value);
             }
+            if let Some(hours) = args.remove("prune_done_after_hours") {
+                let seconds = hours
+                    .as_f64()
+                    .map(|h| json!((h * 3600.0).round().max(0.0) as u64));
+                args.insert("prune_done_after".into(), seconds.unwrap_or(Value::Null));
+            }
             if let Some(project) = args.get_mut("project") {
                 to_selector(project)?;
             }
@@ -817,7 +823,13 @@ default to the run's own.
 fn cli_aliases(name: &str) -> Vec<(&'static str, Value)> {
     let text = |doc: &str| json!({"type": "string", "description": doc});
     match name {
-        "project_update" => vec![("name", text("the project's current name (as project)"))],
+        "project_update" => vec![
+            ("name", text("the project's current name (as project)")),
+            (
+                "prune_done_after_hours",
+                json!({"type": ["number", "null"], "description": "prune_done_after, in hours (null turns it off)"}),
+            ),
+        ],
         "project_delete" => vec![(
             "name",
             text(

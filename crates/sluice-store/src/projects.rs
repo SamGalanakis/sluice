@@ -187,6 +187,10 @@ pub struct Project {
     pub board: Option<String>,
     /// 0 until a board is first set; one more per change.
     pub board_rev: Revision,
+    /// Retire done units once their last step finished this many seconds ago (off when None).
+    pub prune_done_after: Option<u64>,
+    /// Unit-name patterns automatic retiring never removes.
+    pub prune_keep: Vec<String>,
 }
 /// Resolve on admission; all subsequent state and callbacks carry the immutable id.
 pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
@@ -194,7 +198,7 @@ pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
         ProjectSelector::Id(id) => ("project_id", id.to_string()),
         ProjectSelector::Name(name) => ("name", name.to_string()),
     };
-    let row=c.query_row(&format!("SELECT project_id,name,description,icon_text,icon_type,icon_hash,icon_generation,paused,archived,settings_rev,resources_rev,board,board_rev FROM projects WHERE {column}=?1 AND deleted_at IS NULL"),[value],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?,r.get::<_,bool>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,i64>(12)?))).optional()?.ok_or_else(|| StoreError::from(PublicError::NotFound{message:format!("project {selector} not found")}))?;
+    let row=c.query_row(&format!("SELECT project_id,name,description,icon_text,icon_type,icon_hash,icon_generation,paused,archived,settings_rev,resources_rev,board,board_rev,prune_done_after,prune_keep FROM projects WHERE {column}=?1 AND deleted_at IS NULL"),[value],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,i64>(6)?,r.get::<_,bool>(7)?,r.get::<_,bool>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,i64>(12)?,r.get::<_,Option<i64>>(13)?,r.get::<_,Option<String>>(14)?))).optional()?.ok_or_else(|| StoreError::from(PublicError::NotFound{message:format!("project {selector} not found")}))?;
     let icon = match (row.3, row.4, row.5) {
         (Some(t), None, None) => Some(ProjectIcon::Text(t)),
         (None, Some(media_type), Some(hash)) => Some(ProjectIcon::Image {
@@ -234,8 +238,87 @@ pub fn resolve(c: &Connection, selector: &ProjectSelector) -> Result<Project> {
                 .try_into()
                 .map_err(|_| invalid("invalid board revision"))?,
         ),
+        prune_done_after: row
+            .13
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| invalid("invalid prune_done_after"))?,
+        prune_keep: row
+            .14
+            .map(|keep| serde_json::from_str(&keep))
+            .transpose()?
+            .unwrap_or_default(),
     })
 }
+
+/// A project automatic retiring looks at (SPEC §6.11): live, neither paused nor archived,
+/// with `prune_done_after` set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetireSetting {
+    pub project: ProjectId,
+    pub after: u64,
+    pub keep: Vec<String>,
+}
+/// Every project automatic retiring looks at, in creation order.
+pub fn retire_settings(c: &Connection) -> Result<Vec<RetireSetting>> {
+    let rows: Vec<(String, i64, Option<String>)> = c
+        .prepare(
+            "SELECT project_id,prune_done_after,prune_keep FROM projects
+             WHERE deleted_at IS NULL AND paused=0 AND archived=0 AND prune_done_after IS NOT NULL
+             ORDER BY created_at,project_id",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    rows.into_iter()
+        .map(|(id, after, keep)| {
+            Ok(RetireSetting {
+                project: id
+                    .parse()
+                    .map_err(|_| invalid("invalid persisted ProjectId"))?,
+                after: u64::try_from(after).map_err(|_| invalid("invalid prune_done_after"))?,
+                keep: keep
+                    .map(|keep| serde_json::from_str(&keep))
+                    .transpose()?
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// The longest `prune_done_after`: ten years.
+pub const PRUNE_DONE_AFTER_MAX: u64 = 10 * 366 * 24 * 3600;
+
+/// The project's latest automatic retirement: its plan edit's rev, time and step count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Retirement {
+    pub rev: Revision,
+    pub at: String,
+    pub steps: u64,
+}
+/// The newest plan edit automatic retiring made (author `sluice`), if any.
+pub fn last_retirement(c: &Connection, id: ProjectId) -> Result<Option<Retirement>> {
+    Ok(c.query_row(
+        "SELECT rev,at,json_array_length(ops) FROM plan_edits
+         WHERE project_id=?1 AND author=?2 AND reason LIKE 'retire done units%'
+         ORDER BY rev DESC LIMIT 1",
+        rusqlite::params![id.to_string(), RETIRE_AUTHOR],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(|(rev, at, steps)| Retirement {
+        rev: Revision(rev.max(0) as u64),
+        at,
+        steps: steps.max(0) as u64,
+    }))
+}
+/// The author automatic retiring's plan edits carry.
+pub const RETIRE_AUTHOR: &str = "sluice";
 
 /// Every live project, by name, as `projects_list` reports it.
 pub fn list(c: &Connection) -> Result<Vec<ProjectSummary>> {
@@ -414,6 +497,10 @@ pub struct UpdateProject {
     pub resources: Option<Value>,
     pub paused: Option<bool>,
     pub archived: Option<bool>,
+    /// `Some(None)` turns automatic retiring off; `None` leaves it.
+    pub prune_done_after: Option<Option<u64>>,
+    /// The keep patterns; `Some(vec![])` clears them, `None` leaves them.
+    pub prune_keep: Option<Vec<String>>,
     pub expected_settings_rev: Option<Revision>,
     pub reason: Option<String>,
     pub author: String,
@@ -513,6 +600,42 @@ pub fn project_update(
         && set_icon(tx, id, icon)?
     {
         fields.push("icon".into());
+    }
+    if let Some(after) = request.prune_done_after {
+        if after.is_some_and(|after| !(1..=PRUNE_DONE_AFTER_MAX).contains(&after)) {
+            return Err(PublicError::Invalid {
+                message: "invalid prune_done_after".into(),
+                errors: vec![format!(
+                    "prune_done_after: seconds from 1 to {PRUNE_DONE_AFTER_MAX}, or null to turn it off"
+                )],
+            }
+            .into());
+        }
+        if after != project.prune_done_after {
+            tx.sql().execute(
+                "UPDATE projects SET prune_done_after=?2 WHERE project_id=?1",
+                rusqlite::params![id.to_string(), after.map(|a| a as i64)],
+            )?;
+            fields.push("prune_done_after".into());
+        }
+    }
+    if let Some(keep) = request.prune_keep {
+        sluice_model::units::check_keep("prune_keep", &keep).map_err(|errors| {
+            StoreError::from(PublicError::Invalid {
+                message: "invalid prune_keep".into(),
+                errors: errors.iter().map(ToString::to_string).collect(),
+            })
+        })?;
+        if keep != project.prune_keep {
+            let stored = (!keep.is_empty())
+                .then(|| serde_json::to_string(&keep))
+                .transpose()?;
+            tx.sql().execute(
+                "UPDATE projects SET prune_keep=?2 WHERE project_id=?1",
+                rusqlite::params![id.to_string(), stored],
+            )?;
+            fields.push("prune_keep".into());
+        }
     }
     for (column, value) in [("paused", paused), ("archived", archived)] {
         if let Some(value) = value {

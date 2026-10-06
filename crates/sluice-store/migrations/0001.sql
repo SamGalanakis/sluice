@@ -26,6 +26,10 @@ CREATE TABLE projects (
   board TEXT,
   board_rev INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0),
   board_slots TEXT,
+  -- Automatic retiring of done units (SPEC §6.11): the age in seconds, off when null, and
+  -- the unit-name patterns it never removes, a JSON array of strings.
+  prune_done_after INTEGER CHECK (prune_done_after IS NULL OR prune_done_after > 0),
+  prune_keep TEXT CHECK (prune_keep IS NULL OR json_type(prune_keep) = 'array'),
   CHECK (icon_text IS NULL OR icon_hash IS NULL),
   CHECK ((icon_type IS NULL) = (icon_hash IS NULL))
 ) STRICT;

@@ -77,9 +77,36 @@ pub struct ProjectUpdate {
     pub resources: Option<JsonMap>,
     pub paused: Option<bool>,
     pub archived: Option<bool>,
+    /// Retire done units automatically once their last step finished this many seconds ago
+    /// (SPEC §6.11); null turns it off, absent leaves it as it is.
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(extend("type" = ["integer", "null"], "minimum" = 1))]
+    pub prune_done_after: Option<Option<u64>>,
+    /// Unit-name patterns (`*`, `?`) automatic retiring never removes; `[]` or null clears
+    /// them, absent leaves them as they are.
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prune_keep: Option<Option<Vec<String>>>,
     pub expected_settings_rev: Option<Revision>,
     pub reason: Option<String>,
     pub author: Option<String>,
+}
+
+/// A field where absent (`None`) and null (`Some(None)`) differ: absent leaves a setting,
+/// null clears it.
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -253,6 +280,10 @@ pub struct PlanPrune {
     pub units: Option<Vec<UnitName>>,
     pub tags: Option<Vec<String>>,
     pub older_than_seconds: u64,
+    /// Unit-name patterns (`*` any run of characters, `?` one) never removed: a selected
+    /// unit whose name matches one is kept, `kept` naming the pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<Vec<String>>,
     pub edit: EditOptions,
 }
 
@@ -743,7 +774,8 @@ pub struct PruneResult {
     pub kept: Vec<KeptUnit>,
 }
 
-/// A unit prune kept: held by a step outside the pruned set, or by a plan output.
+/// A unit prune kept: held by a step outside the pruned set, by a plan output, or by the
+/// keep pattern its name matches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct KeptUnit {
@@ -752,6 +784,8 @@ pub struct KeptUnit {
     pub step: Option<StepId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

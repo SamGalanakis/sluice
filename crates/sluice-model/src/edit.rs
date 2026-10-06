@@ -434,7 +434,9 @@ pub fn prepare_edit(
                         .is_none_or(|units| units.contains(name))
                 })
                 .collect();
-            let closure = prune_closed(plan, context.state, &selected).map_err(invalid)?;
+            let keep = request.keep.unwrap_or_default();
+            crate::units::check_keep("keep", &keep).map_err(invalid)?;
+            let closure = prune_closed(plan, context.state, &selected, &keep).map_err(invalid)?;
             ops.extend(closure.steps.iter().map(|id| PatchOperation::Remove {
                 path: step_path(id),
             }));

@@ -636,7 +636,12 @@ Board: the program in a monospace textarea (with its rev), Save board and Clear 
 them a live preview, drawn as the board column would draw it (its width), as one types; then
 Slots (a 15px heading): a line per slot, by key, as the resources are listed (its key in code,
 "updated <time>" and by whom, its text on one line in muted 13px under it), read-only, or "No
-slots set.". Activity: Pause project and Archive project switches. Delete project, in a bordered danger card:
+slots set.". Retiring: a help line, then a status line (an "On" tag and "Done units retire 6 h
+after their last step finished", with how many keep patterns, or a muted "Off" tag and "Done
+units stay until an edit removes them", then "Last retired <time>: N steps (rev R)" or "Nothing
+retired yet."), then two rows: "Retire done units after", a 9rem field (placeholder "Off") with
+"hours" beside it, empty meaning off; and "Never retire", the keep patterns in a monospace
+field. Activity: Pause project and Archive project switches. Delete project, in a bordered danger card:
 it explains what goes, refuses until the project is archived, and needs the current name typed.
 
 ## Elevation & Depth

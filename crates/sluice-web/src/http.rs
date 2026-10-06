@@ -385,6 +385,8 @@ impl settings::SettingsCommands for SocketSettings {
                         })?,
                     paused: request.paused,
                     archived: request.archived,
+                    prune_done_after: request.prune_done_after,
+                    prune_keep: request.prune_keep.map(Some),
                     expected_settings_rev: request.expected_settings_rev,
                     reason: request.reason,
                     author: Some(request.author),

@@ -1218,3 +1218,156 @@ async fn a_home_from_before_slots_gains_them_when_its_writer_opens() {
         .unwrap();
     assert_eq!(row, (id.to_string(), "phase".into(), "hello".into()));
 }
+
+#[tokio::test]
+async fn retiring_settings_round_trip_with_their_records_and_checks() {
+    let (_home, writer, reads) = setup().await;
+    let p = create(&writer, "lanes").await;
+    let id = p.project_id;
+    assert_eq!((p.prune_done_after, p.prune_keep.clone()), (None, vec![]));
+    let set = update(
+        &writer,
+        id,
+        UpdateProject {
+            prune_done_after: Some(Some(6 * 3600)),
+            prune_keep: Some(vec!["ta-*".into(), "fig-?".into()]),
+            expected_settings_rev: Some(p.settings_rev),
+            author: "owner".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(set.prune_done_after, Some(21600));
+    assert_eq!(set.prune_keep, ["ta-*", "fig-?"]);
+    assert_eq!(set.settings_rev, Revision(p.settings_rev.0 + 1));
+    let record = records(&reads, Some(id)).await.pop().unwrap();
+    assert_eq!(record["kind"], "project.update");
+    assert_eq!(record["fields"], json!(["prune_done_after", "prune_keep"]));
+    let listed = reads.snapshot(projects::retire_settings).await.unwrap();
+    assert_eq!(
+        listed,
+        [projects::RetireSetting {
+            project: id,
+            after: 21600,
+            keep: vec!["ta-*".into(), "fig-?".into()],
+        }]
+    );
+    // The same values again change nothing: no revision, no record.
+    let again = update(
+        &writer,
+        id,
+        UpdateProject {
+            prune_done_after: Some(Some(21600)),
+            prune_keep: Some(vec!["ta-*".into(), "fig-?".into()]),
+            author: "owner".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.settings_rev, set.settings_rev);
+    // Out of range or a bad pattern is invalid, and nothing changes.
+    for bad in [
+        UpdateProject {
+            prune_done_after: Some(Some(0)),
+            ..Default::default()
+        },
+        UpdateProject {
+            prune_done_after: Some(Some(projects::PRUNE_DONE_AFTER_MAX + 1)),
+            ..Default::default()
+        },
+        UpdateProject {
+            prune_keep: Some(vec!["two words".into()]),
+            ..Default::default()
+        },
+        UpdateProject {
+            prune_keep: Some(vec![String::new()]),
+            ..Default::default()
+        },
+    ] {
+        assert!(matches!(
+            update(&writer, id, bad).await,
+            Err(PublicError::Invalid { .. })
+        ));
+    }
+    // A paused project is left alone; null turns retiring off and [] clears the patterns.
+    update(
+        &writer,
+        id,
+        UpdateProject {
+            paused: Some(true),
+            author: "owner".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        reads
+            .snapshot(projects::retire_settings)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let off = update(
+        &writer,
+        id,
+        UpdateProject {
+            prune_done_after: Some(None),
+            prune_keep: Some(vec![]),
+            paused: Some(false),
+            author: "owner".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!((off.prune_done_after, off.prune_keep), (None, vec![]));
+    assert!(
+        reads
+            .snapshot(projects::retire_settings)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let stored: (Option<i64>, Option<String>) = reads
+        .snapshot(move |c| {
+            Ok(c.query_row(
+                "SELECT prune_done_after,prune_keep FROM projects WHERE project_id=?1",
+                [id.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(stored, (None, None));
+}
+
+#[tokio::test]
+async fn a_home_from_before_retiring_gains_its_columns_when_its_writer_opens() {
+    let home = ScratchHome::new().unwrap();
+    {
+        let writer = Writer::open(home.path()).unwrap();
+        create(&writer, "old").await;
+    }
+    // Drop the retiring columns, as a release before them left the home.
+    {
+        let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+        c.execute_batch(
+            "ALTER TABLE projects DROP COLUMN prune_keep; ALTER TABLE projects DROP COLUMN prune_done_after;",
+        )
+        .unwrap();
+    }
+    assert!(matches!(
+        ReadPool::open(home.path(), 1).map(|_| ()),
+        Err(StoreError::InvalidDatabase(_))
+    ));
+    let _writer = Writer::open(home.path()).unwrap();
+    let reads = ReadPool::open(home.path(), 1).unwrap();
+    let p = reads
+        .snapshot(|c| projects::resolve(c, &ProjectSelector::Name("old".parse().unwrap())))
+        .await
+        .unwrap();
+    assert_eq!((p.prune_done_after, p.prune_keep), (None, vec![]));
+}

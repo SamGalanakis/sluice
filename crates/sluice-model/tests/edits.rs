@@ -720,6 +720,78 @@ fn prune_returns_reference_closed_set_and_each_retention_witness() {
     assert_eq!(prune.kept[&unit("kept")], PruneHolder::Step(id("consumer")));
 }
 #[test]
+fn prune_keep_patterns_keep_matching_units_and_what_they_reference() {
+    let mut a = ext();
+    a["tags"] = json!(["unit:ta-x"]);
+    let mut b = ext();
+    b["tags"] = json!(["unit:held"]);
+    let mut c = ext();
+    c["tags"] = json!(["unit:free"]);
+    let mut f = Fixture::new(json!({"steps":{
+        "b":b,
+        "a":{"run":"worker","in":{"a":{"source":"b/n"},"b":{"default":1}},"tags":["unit:ta-x"]},
+        "a2":a,
+        "c":c
+    }}));
+    for step in ["a", "a2", "b", "c"] {
+        f.status(step, StepStatus::Succeeded);
+    }
+    let prepared = f
+        .prepare(command(
+            "plan_prune",
+            json!({"units":null,"older_than_seconds":0,"keep":["ta-*","zz?"]}),
+            false,
+        ))
+        .unwrap();
+    assert_eq!(ops(&prepared), json!([{"op":"remove","path":"/steps/c"}]));
+    let prune = prepared.prune.unwrap();
+    assert_eq!(prune.units, vec![unit("free")]);
+    // The done ta-x is kept by its pattern; held, which ta-x reads, by ta-x's step.
+    assert_eq!(prune.kept[&unit("ta-x")], PruneHolder::Keep("ta-*".into()));
+    assert_eq!(prune.kept[&unit("held")], PruneHolder::Step(id("a")));
+    // Without keep, the same prune takes everything: keep is purely additive.
+    let all = f
+        .prepare(command(
+            "plan_prune",
+            json!({"units":null,"older_than_seconds":0}),
+            false,
+        ))
+        .unwrap()
+        .prune
+        .unwrap();
+    assert_eq!(all.units.len(), 3);
+    assert!(all.kept.is_empty());
+    for keep in [json!([""]), json!(["a b"]), json!([&"x".repeat(129)])] {
+        assert!(
+            f.prepare(command(
+                "plan_prune",
+                json!({"units":null,"older_than_seconds":0,"keep":keep}),
+                false,
+            ))
+            .is_err(),
+            "{keep}"
+        );
+    }
+}
+#[test]
+fn keep_patterns_match_whole_names_with_star_and_question_mark() {
+    use sluice_model::units::keep_match;
+    let p = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(keep_match(&p(&["ta-*"]), "ta-harness-work"), Some("ta-*"));
+    assert_eq!(keep_match(&p(&["ta-*"]), "ta-"), Some("ta-*"));
+    assert_eq!(keep_match(&p(&["ta-*"]), "beta-x"), None);
+    assert_eq!(keep_match(&p(&["fig-?"]), "fig-1"), Some("fig-?"));
+    assert_eq!(keep_match(&p(&["fig-?"]), "fig-12"), None);
+    assert_eq!(
+        keep_match(&p(&["*-landed"]), "fig-4200-landed"),
+        Some("*-landed")
+    );
+    assert_eq!(keep_match(&p(&["a*b*c"]), "axxbyyc"), Some("a*b*c"));
+    assert_eq!(keep_match(&p(&["a*b*c"]), "axxbyy"), None);
+    assert_eq!(keep_match(&p(&["x", "*"]), "y"), Some("*"));
+    assert_eq!(keep_match(&p(&[]), "y"), None);
+}
+#[test]
 fn prune_keeps_plan_output_and_rejects_unknown_not_done_and_unfiltered_age() {
     let mut f =
         Fixture::new(json!({"outputs":{"n":{"source":"a/n"}},"steps":{"a":ext(),"pending":ext()}}));

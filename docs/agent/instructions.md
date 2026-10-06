@@ -26,7 +26,9 @@ Workflow:
    act: fix the plan with `plan_patch` (needs the current `rev`), then `step_retry`; or record
    the result yourself with `step_set_output`. A `stale` step was computed from inputs that have
    changed since: `step_retry` it (or accept it with `step_set_output`). Provide values a plan
-   waits on with `plan_set_input`. `plan_prune(project)` removes done units from the plan.
+   waits on with `plan_set_input`. `plan_prune(project)` removes done units from the plan;
+   set `project_update(project, prune_done_after=<seconds>)` so finished lanes retire
+   themselves.
 5. `verify(project)` lists every problem (bad fn.json, name collisions, plan, state) with where
    it is. A project with function problems refuses edits and runs until they are fixed.
 

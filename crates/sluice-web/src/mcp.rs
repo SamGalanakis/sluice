@@ -654,7 +654,7 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "project_update",
-        "Update a project by current name or id:<uuid>, including new_name, description, icon, resources, paused or archived. icon is a short text icon, an absolute (or ~/) path to an SVG, PNG, WebP, JPEG or GIF file of at most 256 KB, or {media_type, bytes_base64}; \"\" removes it. expected_settings_rev (projects_list's settings_rev) fences stale settings. Each change records author and reason. Returns project_id and current name.",
+        "Update a project by current name or id:<uuid>, including new_name, description, icon, resources, paused, archived, prune_done_after or prune_keep. prune_done_after (seconds, null turns it off) retires done units automatically once their last step finished that long ago: sluice runs plan_prune itself, every 5 minutes at most, as one edit by \"sluice\", keeping referenced units; set it so finished lanes retire themselves (e.g. 21600 for 6 h). prune_keep is a list of unit-name patterns (* any run, ? one character) it never removes; [] or null clears it. Read both with query: SELECT prune_done_after, prune_keep FROM projects. icon is a short text icon, an absolute (or ~/) path to an SVG, PNG, WebP, JPEG or GIF file of at most 256 KB, or {media_type, bytes_base64}; \"\" removes it. expected_settings_rev (projects_list's settings_rev) fences stale settings. Each change records author and reason. Returns project_id and current name.",
     ),
     (
         "project_delete",
@@ -818,7 +818,7 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "plan_prune",
-        "Remove done units (every step succeeded or skipped), all or those named in units or tagged with tags, whose last step finished at least older_than seconds ago, in one edit. A unit a surviving step or plan output references is kept. Returns the edit result {project, rev, preview, steps} (steps: the removed steps) with units (the removed units) and kept: [{unit, step}] or [{unit, output}], each kept unit with the step or plan output holding it. Nothing to remove: no edit, the current rev. dry_run previews without committing. rev is the revision you read, reason and author record the edit.",
+        "Remove done units (every step succeeded or skipped), all or those named in units or tagged with tags, whose last step finished at least older_than seconds ago, in one edit. A unit a surviving step or plan output references is kept, and so is one whose name matches a keep pattern (keep: [\"ta-*\"], * any run, ? one character). Returns the edit result {project, rev, preview, steps} (steps: the removed steps) with units (the removed units) and kept: [{unit, step}], [{unit, output}] or [{unit, keep}], each kept unit with the step, plan output or pattern holding it. Nothing to remove: no edit, the current rev. dry_run previews without committing. rev is the revision you read, reason and author record the edit.",
     ),
     (
         "ask",

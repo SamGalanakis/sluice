@@ -54,3 +54,8 @@
 .board-preview .board-status { display:none; }
 #board-settings h3 { margin: 24px 0 0; font-size: 15px; line-height: 22px; }
 .slot-list .slot-preview { margin: 4px 0 0; font-size: 13px; color: var(--muted-foreground); }
+.setting-unit { display:flex; align-items:center; gap:8px; }
+.settings-page .setting-unit input:not([type=hidden]) { width:9rem; flex:none; }
+.setting-unit span { font-size:14px; color:var(--muted-foreground); }
+.settings-page input.mono-field { font-family:var(--font-mono); font-size:13px; }
+.retire-status .tag { margin-right:4px; }

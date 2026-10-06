@@ -376,7 +376,20 @@ ago, in one edit. A unit that any surviving step or plan output still references
 gate, a `unit:` entry — is kept. Naming a unit that is not done is `invalid`. It returns the
 edit result `{project, rev, preview, steps}` (`steps` the removed steps) with `units` (the
 removed units) and `kept`: each unit kept with what holds it, `{unit, step}` or `{unit,
-output}` for a plan output. When nothing can go it is no edit.
+output}` for a plan output. When nothing can go it is no edit. `keep: ["ta-*"]` keeps every
+unit whose name matches a pattern (`*` any run of characters, `?` one), reported as `{unit,
+keep}`.
+
+Rather than remembering to prune, set `prune_done_after` on the project so finished lanes
+retire themselves: `project_update(project, prune_done_after=21600)` (seconds; `sluice tool
+project_update --name p --prune-done-after-hours 6`; null turns it off), with `prune_keep:
+["ta-*"]` for units that must never go, whatever their state. Sluice then runs that prune
+itself, looking at each project at most every 5 minutes, as one edit by `sluice` ("retire done
+units older than 6h") and only when something qualifies. It removes only done units, keeps
+what anything left references, and skips a round when the plan moved under it (it never fights
+your edits). Its edit is a plain `plan.edit`: `next` does not wake for it (unless `all`). Read
+the setting with `query`: `SELECT prune_done_after, prune_keep FROM projects WHERE project_id =
+?1`. The owner can set both on the project settings page.
 
 Removing a step that finished (by `plan_prune`, `step_remove` or any `plan_patch`) keeps what it
 ended with in the `outcomes` view: its status, outputs, error, run ids, unit, when it was

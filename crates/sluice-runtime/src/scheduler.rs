@@ -509,6 +509,7 @@ pub async fn run<H: ExecutionHost>(
     // `serve` starts the scheduler right after its startup adoption pass, so
     // the immediate first full tick does not adopt again.
     let mut adopted_at_start = true;
+    let mut retiring = crate::retire::Background::default();
     loop {
         // Owner notifications go out whether or not anything holds the scheduler lease.
         if let Err(error) = notifier.tick().await {
@@ -549,6 +550,7 @@ pub async fn run<H: ExecutionHost>(
                 }
                 upkeep(broker.writer(), broker.home(), projects).await?;
                 crate::calls::retain_calls(broker.writer()).await?;
+                retiring.tick(&broker).await;
             },
             _=capacity.tick()=>{
                 if broker.scheduler_owner().await?.is_some(){for project in broker.projects().await?{for resource in broker.capacity_resources(project).await?{if let Err(e)=broker.calls().capacity_call(project,resource).await{tracing::warn!(%project,error=%e,"capacity observation deferred");}}}}

@@ -2703,6 +2703,8 @@ fn mutate_project(
                     resources: update.resources.map(serde_json::to_value).transpose()?,
                     paused: update.paused,
                     archived: update.archived,
+                    prune_done_after: update.prune_done_after,
+                    prune_keep: update.prune_keep.map(Option::unwrap_or_default),
                     expected_settings_rev: update.expected_settings_rev,
                     reason: update.reason,
                     author: update.author.unwrap_or_else(|| "cli".into()),
@@ -2853,11 +2855,18 @@ pub(crate) fn edit_reply(
                 .kept
                 .into_iter()
                 .map(|(unit, holder)| {
-                    let (step, output) = match holder {
-                        sluice_model::units::PruneHolder::Step(step) => (Some(step), None),
-                        sluice_model::units::PruneHolder::PlanOutput(name) => (None, Some(name)),
-                    };
-                    KeptUnit { unit, step, output }
+                    let (mut step, mut output, mut keep) = (None, None, None);
+                    match holder {
+                        sluice_model::units::PruneHolder::Step(id) => step = Some(id),
+                        sluice_model::units::PruneHolder::PlanOutput(name) => output = Some(name),
+                        sluice_model::units::PruneHolder::Keep(pattern) => keep = Some(pattern),
+                    }
+                    KeptUnit {
+                        unit,
+                        step,
+                        output,
+                        keep,
+                    }
                 })
                 .collect(),
         });

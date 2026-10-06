@@ -253,6 +253,84 @@ pub fn retry_walk(
 pub enum PruneHolder {
     Step(StepId),
     PlanOutput(String),
+    /// A keep pattern (`plan_prune`'s `keep`, a project's `prune_keep`) the unit's name matches.
+    Keep(String),
+}
+
+/// The most keep patterns one prune or one project takes, and the longest pattern.
+pub const KEEP_PATTERNS_MAX: usize = 64;
+pub const KEEP_PATTERN_LEN_MAX: usize = 128;
+
+/// Check keep patterns: at most 64, each 1 to 128 characters with no whitespace or control
+/// character. `*` matches any run of characters (none included), `?` exactly one; every
+/// other character matches itself.
+pub fn check_keep(field: &str, patterns: &[String]) -> Result<(), Vec<PathError>> {
+    let mut errors = vec![];
+    if patterns.len() > KEEP_PATTERNS_MAX {
+        errors.push(diagnostic(
+            field,
+            format!("at most {KEEP_PATTERNS_MAX} patterns"),
+        ));
+    }
+    for (index, pattern) in patterns.iter().enumerate() {
+        let length = pattern.chars().count();
+        if length == 0 || length > KEEP_PATTERN_LEN_MAX {
+            errors.push(diagnostic(
+                &format!("{field}[{index}]"),
+                format!("a pattern is 1 to {KEEP_PATTERN_LEN_MAX} characters"),
+            ));
+        } else if pattern.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            errors.push(diagnostic(
+                &format!("{field}[{index}]"),
+                "a pattern has no whitespace or control characters",
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// The first of `patterns` that `name` matches, whole (`*` any run, `?` one character).
+pub fn keep_match<'a>(patterns: &'a [String], name: &str) -> Option<&'a str> {
+    let name: Vec<char> = name.chars().collect();
+    patterns
+        .iter()
+        .find(|pattern| glob(&pattern.chars().collect::<Vec<_>>(), &name))
+        .map(String::as_str)
+}
+
+/// Iterative wildcard match with one backtrack point: linear in practice, never exponential.
+fn glob(pattern: &[char], name: &[char]) -> bool {
+    let (mut p, mut n) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, n));
+                p += 1;
+            }
+            Some('?') => {
+                p += 1;
+                n += 1;
+            }
+            Some(c) if *c == name[n] => {
+                p += 1;
+                n += 1;
+            }
+            _ => match star {
+                Some((sp, sn)) => {
+                    p = sp + 1;
+                    n = sn + 1;
+                    star = Some((sp, sn + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct PruneSet {
@@ -277,10 +355,14 @@ fn referenced_units(plan: &Plan, id: &StepId) -> IndexSet<UnitName> {
 }
 /// Greatest closed subset of the selected done units. Candidate consumers can
 /// retain each other only after an outside reference retains one of them.
+///
+/// A selected unit whose name matches one of `keep` is never a candidate: it is kept with
+/// the pattern, and its steps hold what they reference like any surviving step's.
 pub fn prune_closed(
     plan: &Plan,
     state: &StateSnapshot,
     selected: &[UnitName],
+    keep: &[String],
 ) -> Result<PruneSet, Vec<PathError>> {
     let mut errors = vec![];
     for name in selected {
@@ -296,8 +378,18 @@ pub fn prune_closed(
     if !errors.is_empty() {
         return Err(errors);
     }
-    let mut candidates: IndexSet<_> = selected.iter().cloned().collect();
     let mut kept = IndexMap::new();
+    let mut candidates = IndexSet::new();
+    for name in selected {
+        match keep_match(keep, name.as_str()) {
+            Some(pattern) => {
+                kept.insert(name.clone(), PruneHolder::Keep(pattern.to_owned()));
+            }
+            None => {
+                candidates.insert(name.clone());
+            }
+        }
+    }
     loop {
         let mut remove = IndexMap::new();
         for (name, reference) in plan.outputs() {
