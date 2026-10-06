@@ -498,8 +498,9 @@ project's live data. It is the owner's instrument for that project, never a seco
   from the top and at most the window's height, scrolling on its own. Its head (section voice,
   `heading-accent`, Lucide `layout-dashboard`) is the program's own title when a level-1
   Heading leads it (drawn there once, not again under it), else "Board"; under it in meta,
-  "Written 2h ago" (the program's last `project.board` record; the time in UTC without
-  script), and "; the plan has changed since" when a plan edit came after it, since the
+  "Updated 2h ago" (the last change to its words: the program's `project.board` record or a
+  slot's `project.update`; the time in UTC without script), and "; the plan has changed since"
+  when a plan edit came after it, since the
   board's own words may then be behind while its live parts are not. Its width is
   `clamp(400px, 36%, 1040px)` until the splitter sets one (about 495px at 1440, 864px at
   2560), so its Units table keeps a lane's marks on one line beside the unit and its state. A small segmented control,

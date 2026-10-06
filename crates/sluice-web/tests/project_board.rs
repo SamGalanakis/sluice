@@ -485,7 +485,7 @@ async fn the_board_side_has_a_separator_and_the_page_works_without_script() {
 /// not again under "Board"), else "Board"; under it, when the program was written, and that
 /// the plan has changed since when a plan edit came after it.
 #[tokio::test]
-async fn the_board_head_takes_the_programs_title_and_says_when_it_was_written() {
+async fn the_board_head_takes_the_programs_title_and_says_when_its_words_last_changed() {
     let f = Fixture::new().await;
     let path = format!("/projects/id/{}", f.id);
     let (_, html) = f.get(&path).await;
@@ -497,7 +497,7 @@ async fn the_board_head_takes_the_programs_title_and_says_when_it_was_written() 
     );
     assert!(!board.contains("class=\"ou-h\">Lanes<"), "{board}");
     assert!(
-        head.contains("Written <time data-ago datetime=\""),
+        head.contains("Updated <time data-ago datetime=\""),
         "{head}"
     );
     assert!(!head.contains("the plan has changed since"), "{head}");
@@ -517,6 +517,34 @@ async fn the_board_head_takes_the_programs_title_and_says_when_it_was_written() 
     let (_, html) = f.get(&path).await;
     let head = between(&html, "<div class=\"board-head\">", "</div>").to_owned();
     assert!(head.contains("; the plan has changed since.</p>"), "{head}");
+    // A slot set after the plan edit brings the board's words up to date: its time is the head's.
+    let slot_at = f
+        .writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::board_slot_set(
+                tx,
+                &ProjectSelector::Id(id),
+                projects::SetBoardSlot {
+                    key: "phase".into(),
+                    markdown: Some("Now **green**.".into()),
+                    author: "orch".into(),
+                },
+            )?;
+            Ok(tx.sql().query_row(
+                "SELECT at FROM records WHERE kind='project.update' ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    let (_, html) = f.get(&path).await;
+    let head = between(&html, "<div class=\"board-head\">", "</div>").to_owned();
+    assert!(
+        head.contains(&format!("datetime=\"{slot_at}\"")),
+        "{slot_at} {head}"
+    );
+    assert!(!head.contains("the plan has changed since"), "{head}");
     // A program without a title of its own: "Board", which the narrow switch already names.
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {

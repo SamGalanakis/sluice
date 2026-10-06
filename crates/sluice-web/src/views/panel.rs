@@ -51,8 +51,8 @@ pub struct Panel {
     /// The program's own title: a level-1 Heading that leads it, drawn as the board's head
     /// instead of "Board" (and not again under it).
     pub title: Option<String>,
-    /// When the program was last set (its `project.board` record), and whether the plan has
-    /// changed since: what the board's own words may be behind.
+    /// When the board's words last changed (its `project.board` record or a slot's
+    /// `project.update`), and whether the plan has changed since: what they may be behind.
     pub written: Option<String>,
     pub plan_changed: bool,
     pub html: String,
@@ -61,8 +61,8 @@ impl Panel {
     pub fn html(&self) -> TrustedHtml {
         TrustedHtml::owned(self.html.clone())
     }
-    /// The board's head: its title (the program's, else "Board"), and with `age` when it was
-    /// written, "the plan has changed since" when it has. The time reads "2h ago" with script.
+    /// The board's head: its title (the program's, else "Board"), and with `age` when its words
+    /// last changed, "the plan has changed since" when it has. The time reads "2h ago" with script.
     pub fn head(&self, age: bool) -> TrustedHtml {
         let mut out = format!(
             "<div class=\"board-head\"><h2 id=\"board-h\" class=\"board-h{}\">{}{}</h2>",
@@ -73,7 +73,7 @@ impl Panel {
         if let Some(at) = self.written.as_deref().filter(|_| age) {
             let _ = write!(
                 out,
-                "<p class=\"meta board-age\">Written {}{}.</p>",
+                "<p class=\"meta board-age\">Updated {}{}.</p>",
                 ago(at),
                 if self.plan_changed {
                     "; the plan has changed since"
@@ -192,10 +192,11 @@ pub(crate) fn gather(
     };
     let steps = || view.units.iter().flat_map(|u| &u.steps);
     let board = openui::check_board(&program);
-    // the program's last write, and whether a plan edit came after it (by record order)
+    // the last change to the board's words (the program, or a slot: a project.update whose
+    // fields name it), and whether a plan edit came after it (by record order)
     let written: Option<(i64, String)> = c
         .query_row(
-            "SELECT seq,at FROM records WHERE project_id=?1 AND kind='project.board' ORDER BY seq DESC LIMIT 1",
+            "SELECT seq,at FROM records WHERE project_id=?1 AND (kind='project.board' OR (kind='project.update' AND EXISTS(SELECT 1 FROM json_each(payload,'$.fields') WHERE value LIKE 'board_slot:%'))) ORDER BY seq DESC LIMIT 1",
             [project.to_string()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
