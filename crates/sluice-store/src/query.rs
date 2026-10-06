@@ -11,7 +11,9 @@
 //!   reply_to, answer, ui, input, data, run_id, at, claimed_by, resolved_by, closed_at.
 //! - `steps`: project_id, step_id, position, generation, work_generation,
 //!   declaration, status, unit, paused, outputs, error, skipped, manual,
-//!   inputs_hash, result_id, run_ids, instances, total, done, delivery_cursor.
+//!   inputs_hash, result_id, run_ids, instances, total, done, delivery_cursor,
+//!   progress, progress_at, progress_run (a running step's latest `step_progress` values,
+//!   never final, cleared when its next run starts).
 //! - `runs`: run_id, project_id, attempt_id, step_id, generation, work_generation,
 //!   item_index, prev_run, unit, unit_name, boot_id, guardian_pid, guardian_start,
 //!   cgroup, socket_challenge, release_id, protocol_major, assigned_after,

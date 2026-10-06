@@ -26,6 +26,14 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
         "INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0)",
     ),
     ("projects", "board_slots", "TEXT"),
+    // A running step's latest values (`step_progress`), kept until its next run starts.
+    (
+        "steps",
+        "progress",
+        "TEXT CHECK (progress IS NULL OR json_type(progress) = 'object')",
+    ),
+    ("steps", "progress_at", "TEXT"),
+    ("steps", "progress_run", "TEXT"),
 ];
 /// Views added after homes existed, as `(name, definition)`: the writer creates the missing
 /// ones with the columns. A view is no table, so a release that counts the home's tables

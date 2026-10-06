@@ -10757,6 +10757,23 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "step_progress"
+              },
+              "args": {
+                "$ref": "#/$defs/StepProgress"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "step_settle"
               },
               "args": {
@@ -12574,6 +12591,31 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepProgress": {
+        "description": "Publish a running step's latest values without finishing it, from its current run. Each\nfield is one of the step's outputs (its fn's or declared) and is checked against its type;\nthe fields merge over the run's earlier progress. Progress is never final: it feeds no\ninput, handoff or gate, settles nothing, writes no log record and wakes no wait.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "outputs": {
+            "$ref": "#/$defs/JsonMap"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "step",
+          "run",
+          "outputs"
+        ]
       },
       "StepSettle": {
         "description": "Settle a running step whose run has submitted (it is finishing) on that submission: its\nagent is stopped as a cancel stops it, and the step succeeds with the outputs the done\nsignal would have given it. Only a bare agent fn's step; anything else is refused.",
@@ -20772,6 +20814,23 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "step_progress"
+          },
+          "args": {
+            "$ref": "#/$defs/StepProgress"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "step_settle"
           },
           "args": {
@@ -22589,6 +22648,31 @@
         "type": "string",
         "format": "uuid",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepProgress": {
+        "description": "Publish a running step's latest values without finishing it, from its current run. Each\nfield is one of the step's outputs (its fn's or declared) and is checked against its type;\nthe fields merge over the run's earlier progress. Progress is never final: it feeds no\ninput, handoff or gate, settles nothing, writes no log record and wakes no wait.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "step": {
+            "$ref": "#/$defs/StepId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "outputs": {
+            "$ref": "#/$defs/JsonMap"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "step",
+          "run",
+          "outputs"
+        ]
       },
       "StepSettle": {
         "description": "Settle a running step whose run has submitted (it is finishing) on that submission: its\nagent is stopped as a cancel stops it, and the step succeeds with the outputs the done\nsignal would have given it. Only a bare agent fn's step; anything else is refused.",
@@ -32491,6 +32575,133 @@
           "failed",
           "stale",
           "skipped"
+        ]
+      }
+    }
+  },
+  "StepProgress": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StepProgress",
+    "description": "Publish a running step's latest values without finishing it, from its current run. Each\nfield is one of the step's outputs (its fn's or declared) and is checked against its type;\nthe fields merge over the run's earlier progress. Progress is never final: it feeds no\ninput, handoff or gate, settles nothing, writes no log record and wakes no wait.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "step": {
+        "$ref": "#/$defs/StepId"
+      },
+      "run": {
+        "$ref": "#/$defs/RunId"
+      },
+      "outputs": {
+        "$ref": "#/$defs/JsonMap"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "step",
+      "run",
+      "outputs"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "StepId": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "RunId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "JsonMap": {
+        "description": "Insertion-ordered object. Decode external requests through `decode_json`.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "JsonValue": {
+        "x-sluice-integer-lexemes": "i64",
+        "x-sluice-floats": "finite",
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": -9223372036854775808,
+            "maximum": 9223372036854775807
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            }
+          }
         ]
       }
     }

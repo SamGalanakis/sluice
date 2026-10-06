@@ -234,6 +234,12 @@ Tables: `home_meta`, `projects`, `plans`, `plan_edits`, `inputs`, `steps`, `atte
 `question_attachments`, `message_deliveries`, `readers`, `records`, `change_versions`,
 `maintenance`, `artifact_jobs`, `sessions`, `notification_attempts`.
 
+A step's row also carries its progress (§6.4): `progress` (the JSON object of latest values),
+`progress_at` (when it was last set) and `progress_run` (the run that set it), all null until a
+run publishes some and cleared when the step's next run starts. `steps` is readable by `query`
+as it is, so `SELECT json_extract(progress, '$.red'), progress_at FROM steps WHERE project_id =
+? AND step_id = 'tests-main'` reads a rolling step's latest count.
+
 Views for agents' queries (§12.4 `query`): `outcomes` (removed steps' results), `log` (each
 record as the log tools return it), `step_changes` (`step.status` records as rows), `edits`
 (`plan_edits`), `questions` (the questions, `ask`s, plus derived `state`
@@ -378,7 +384,7 @@ if __name__ == "__main__":
   `Cancelled` or `CallbackError` (`error`, `message`, `errors`, `current_rev`, `retryable`).
 - `ctx.tool(name, args)` calls a named tool for the run's own project (`project` defaults to
   it): the reads `status`, `plan_get`, `messages`, `log_read`, `fn_list`, `fn_get` and
-  `call_status`; `step_wait`; `ask`, `say` and `reply`, `message.ask`, `message.say`,
+  `call_status`; `step_wait`; `step_progress` (its own step's); `ask`, `say` and `reply`, `message.ask`, `message.say`,
   `message.reply` and `message.wait` (as the step, with its run); and the project's
   mutations (`project_update`, the edit tools, retry, cancel, manual values). `args` are the
   tool's flat MCP arguments (§12.2) and the result is the tool's MCP result (`{"ok": true}` for
@@ -388,6 +394,8 @@ if __name__ == "__main__":
   invocation) and returns its outputs.
 - `ctx.submission()` returns the run's submission, if any; `ctx.submit(outputs)` submits the
   step's declared outputs, once (§6.4).
+- `ctx.progress(**fields)` (or `ctx.progress({...})`) publishes the step's latest values
+  while it runs, through `ctx.tool("step_progress", …)`, and returns its reply (§6.4).
 - `ctx.retry_on_failure(step, message)` registers a completion action: if this run ends
   `rejected`, `step` (which must have a completed result) is retried with `message` (≤ 8 KiB)
   as feedback. Registering the same action again is a no-op; a different one is an error.
@@ -478,6 +486,24 @@ has been idle through its grace, so the step can stay finishing for a long time;
 (§7.5) settles it on its submission. No `grace_until` is shown: when the grace started (the
 agent's last turn going idle) lives only in that supervisor's memory, and the grace itself in
 its environment, so sluice cannot compute it honestly.
+
+**Progress.** A running step that never finishes (a rolling test run of main, say) still has
+results worth showing. Its current run publishes them with `step_progress(project, step, run,
+outputs)` (`ctx.progress(**fields)` in a fn; in a run `project`, `step` and `run` default to
+its own, §14): each field is one of the step's outputs (its fn's or declared) and must fit its
+type; an unknown field or a value that does not fit is `invalid` with each problem, and
+nothing is stored. Fields merge over the run's earlier progress. It is refused (`conflict`)
+unless the step is running and `run` is its current run, and (`invalid`) for a scattered step.
+Progress is never final: it feeds no input, handoff or gate, never finishes or settles the
+step, is not a submission (a run that publishes progress still submits, or returns its
+outputs, as before) and joins no result. It writes no log record, so it wakes no `next`,
+`log_wait` or `step_wait` (§10); its commit touches a change view of its own (`progress`) that
+nothing waits on and the scheduler's project versions leave out. It is kept, with its time
+and run, until the step's next run is reserved, which clears it: after the run ends it stays
+visible, as progress, not as outputs. The reply is `{project, step, run, progress, at}`, the
+merged values and when they were set. The dashboard (§13) shows a step's progress while it is
+fresher than its outputs: unless the step has succeeded (or gone stale since) with a result
+recorded at or after the progress was set.
 
 ### 6.5 Work done outside sluice
 
@@ -905,6 +931,8 @@ seqs have gaps. Kinds:
 | `run.completion_action` | `run, outcome, author` |
 | `unit.settled` | `unit, work, steps: [{id, status, held, outputs, omitted}]` |
 
+`step_progress` (§6.4) writes no record: progress is state on the step, not history.
+
 `kinds` filters take exact kinds or the groups `plan`, `step`, `project`, `run`, `unit`.
 `threads` keeps only messages on those threads (alone it means messages only). `statuses`
 (step statuses) keeps only the `step.status` records whose `to` is one of them; `recipients`
@@ -958,6 +986,7 @@ an orchestrator acts on and returns `{records, notes, last_seq, timed_out}`. It 
 - `project.pause` or `project.archive` not authored by `me`;
 - with `all`, any record.
 
+A step's progress (§6.4) writes no record, so it wakes none of these waits, `all` included.
 Notes are held and returned in `notes`. After the first waking record it keeps collecting until
 `settle` seconds pass with nothing new, or `settle_max` seconds after the first. Messages come
 first in `records`. `settles` sets how much of a settled unit's step outputs are carried:
@@ -1117,6 +1146,7 @@ it; `steps` lists the removed steps.
 | `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |
 | `step_cancel` | `project`, `steps?`, `tags?`, `reason`, `expected_rev?`, `author?` | `{ok: true}` |
 | `step_submit` | `project`, `step`, `run`, `outputs`, `author?` | `{ok: true}` |
+| `step_progress` | `project`, `step`, `run`, `outputs` | `{project, step, run, progress, at}` (§6.4) |
 | `step_settle` | `project`, `step`, `reason=""`, `author?` | `{project, step, run, outputs}` (§7.5) |
 | `status` | `project`, `steps?`, `tags?`, `brief=false`, `all=false`, `view="steps"`, `state?` | below |
 | `step_context` | `project`, `step` | below |
@@ -1192,7 +1222,7 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
 | `/projects/id/<p>` | the board; query `order=live\|plan` (units by attention, running, ready, held, done; or the plan's order), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed or stale step, done), `q=` (a search: the steps whose id, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it. A done unit (every step succeeded or skipped) is one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards; two or more in a row (under `order=live` every one, after the live work) sit on one shelf, "n done units · m steps", closed unless `show=done` or a search matches in it, which draws the shelf and the matching units open |
 | `/projects/id/<p>/units/<u>` | one unit's board |
-| `/projects/id/<p>/steps/<s>` | one step: status, actions (Retry first and primary on a failed step), finishing, error, outputs (those not set yet named on one line), inputs, runs |
+| `/projects/id/<p>/steps/<s>` | one step: status, actions (Retry first and primary on a failed step), finishing, error, progress (while fresher than the outputs, §6.4), outputs (those not set yet named on one line), inputs, runs |
 | `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel`, `revision`, `message` (retry feedback) |
 | `/inbox`, `/questions`, `/history` | the message views across projects |
 | `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project; `thread?thread=<name>` |
@@ -1211,6 +1241,11 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 A finishing step (§6.4) keeps its running glyph; its card's caption reads "finishing", and its
 drawer and page add a "finishing" badge and a Finishing section: when it submitted, the
 `step.submit` record's seq, its release, and that `step_settle` settles a run that lingers.
+
+A step with progress fresher than its outputs (§6.4) has a Progress section in its drawer and
+page, before Outputs: its fields as the outputs show theirs, under a "live" badge (the running
+glyph) while it runs, else "progress", and when it was set: by its current run, or by its
+last, which ended without making it outputs. The board's `Output` shows the same value.
 
 Every page has a `…/stream` twin that patches the page live over Datastar SSE. Pages render
 fully without JavaScript; every value is HTML-escaped and markdown bodies are rendered on the
@@ -1239,8 +1274,11 @@ is picked a phone shows the board, a wider window the plan; without script both 
 first). Without a board the page is as before. The program is
 checked again and drawn on the server: the question components draw as the inbox draws them,
 and the data components are filled when the page renders and with every live patch:
-`Units(state?)` (the units view's rows), `StepStatus(step)`, `Output(step, field)`,
-`Metric(label, query)`, `Query(query, caption?)`, `Chart(kind, query, caption?)` (bar or
+`Units(state?)` (the units view's rows), `StepStatus(step)`, `Output(step, field)` (the
+freshest value: the step's progress for that field while it is fresher than the outputs, §6.4,
+marked "live" with the running glyph while the step runs and "progress" after, with when it
+was set; otherwise the output), `Metric(label, query)`, `Query(query, caption?)`,
+`Chart(kind, query, caption?)` (bar or
 line, an inline SVG), `Slot(key, fallback?)` (a slot's markdown, set per event by
 `board_slot_set`, with "Updated <time>" under it; unset, its fallback muted or "Not set
 yet.") and `LatestMessage(from, chars?)` (the project's newest message whose `from` is
@@ -1249,8 +1287,8 @@ an ellipsis and a link to the whole; none, "No message from <from> yet."); `Mark
 draws its text as markdown. Slot, Markdown and LatestMessage use the dashboard's markdown
 renderer (escaped, unsafe link schemes refused); `Text` stays plain. A query runs through the
 `query` tool's path, views and limits, every `?` bound to the project's id, at most 16 per
-board; a stream reruns them when the project's log, plan or board changes (a slot change is
-both) and at least every 30 s. A component that cannot be drawn (a bad
+board; a stream reruns them when the project's log, plan, board or step progress changes (a
+slot change is both of the first) and at least every 30 s. A component that cannot be drawn (a bad
 query, an unknown step, a non-numeric chart) is an inline error box naming it, its line and the
 reason; the page still renders. A Button sends `say(to: "orchestrator")` as `owner` with body
 `Board: <label>` and data `{board_rev, action, params, values}` (a primary button checks its
@@ -1320,12 +1358,13 @@ A tool's arguments are one JSON object, flags, or both:
 - **Both**: the flags apply over the JSON object, so a flag wins over the same field in it.
 - **Run defaults**: in a run (`SLUICE_RUN_ID` set), a call that leaves out `project` gets
   `id:$SLUICE_PROJECT_ID` (when set), and one that leaves out `run` gets `$SLUICE_RUN_ID`, on
-  every tool that takes them; `step_submit` and `step_context` also get `step` from
-  `SLUICE_STEP`. No other step is defaulted: a step that names a target is always given. A
+  every tool that takes them; `step_submit`, `step_progress` and `step_context` also get
+  `step` from `SLUICE_STEP`. No other step is defaulted: a step that names a target is always given. A
   field the call gives is kept, even as null (`"run": null` speaks as the orchestrator,
   `"project": null` leaves an optional project out), and `project_update` or `project_delete`
   given `name` names its project that way. Only `sluice tool` defaults; MCP, HTTP and
-  `ctx.tool` do not.
+  `ctx.tool` do not, except that `ctx.tool("step_progress", …)` defaults `step` and `run` to
+  the run's own.
 - **Help**: `sluice tool <name> --help` (or `-h`) prints the tool's description and each field
   with its type, whether it is required or its default, and what it is, from the tool's schema;
   `sluice tool --help` prints the usage.

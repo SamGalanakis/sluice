@@ -106,6 +106,13 @@ struct UnitsData {
     rows: Vec<UnitRow>,
     done: Option<(usize, usize)>,
 }
+/// An Output's value: the step's output, or its progress when that is fresher (`step_progress`).
+#[derive(Clone, Debug)]
+struct OutputValue {
+    value: Value,
+    /// Set when the value is progress: when it was set, and whether the step still runs.
+    progress: Option<(String, bool)>,
+}
 /// What one render needs from the store, gathered in one read snapshot.
 pub(crate) struct Loaded {
     rev: u64,
@@ -113,7 +120,7 @@ pub(crate) struct Loaded {
     plan_changed: bool,
     board: Result<Board, Vec<Problem>>,
     units: BTreeMap<Vec<String>, Result<UnitsData, String>>,
-    outputs: BTreeMap<(String, String), Option<Value>>,
+    outputs: BTreeMap<(String, String), Option<OutputValue>>,
     steps: BTreeMap<String, Option<StepView>>,
     /// Every step of the plan, for Output's check.
     known: std::collections::BTreeSet<String>,
@@ -227,7 +234,17 @@ pub(crate) fn gather(
         [project.to_string()],
         |r| r.get(0),
     )?;
-    loaded.token = format!("{rev}:{plan_rev}:{}", seq.unwrap_or(0));
+    // progress writes no record, so it counts apart: a new value or a cleared one reruns them
+    let (progressed, progress_at): (i64, Option<String>) = c.query_row(
+        "SELECT count(progress),max(progress_at) FROM steps WHERE project_id=?1",
+        [project.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    loaded.token = format!(
+        "{rev}:{plan_rev}:{}:{progressed}:{}",
+        seq.unwrap_or(0),
+        progress_at.unwrap_or_default()
+    );
     let mut wants_units = vec![];
     let mut wants_slots = false;
     board.walk(&mut |c, _| match c.name.as_str() {
@@ -282,9 +299,24 @@ pub(crate) fn gather(
             )
             .optional()?
             .flatten();
-        let value = outputs
-            .and_then(|o| serde_json::from_str::<Value>(&o).ok())
-            .and_then(|o| o.get(&field).cloned());
+        // the freshest value: progress unless the step has finished with outputs since
+        let progress = sluice_store::attempts::read_progress(c, project, &step)?;
+        let value = match progress
+            .as_ref()
+            .and_then(|p| p.fresher(&field).map(|v| (p, v)))
+        {
+            Some((p, value)) => Some(OutputValue {
+                value: value.clone(),
+                progress: Some((p.at.clone(), p.live)),
+            }),
+            None => outputs
+                .and_then(|o| serde_json::from_str::<Value>(&o).ok())
+                .and_then(|o| o.get(&field).cloned())
+                .map(|value| OutputValue {
+                    value,
+                    progress: None,
+                }),
+        };
         loaded.outputs.insert((step, field), value);
     }
     if wants_slots {
@@ -1023,7 +1055,8 @@ impl Draw<'_> {
             .get(&(step.to_owned(), field.to_owned()))
             .cloned()
             .flatten();
-        let shown = match &value {
+        let progress = value.as_ref().and_then(|v| v.progress.clone());
+        let shown = match value.as_ref().map(|v| &v.value) {
             None => "<span class=\"quiet\">Not set yet.</span>".to_owned(),
             Some(Value::String(s)) => format!("<span class=\"v\">{}</span>", esc(&cut(s, 160))),
             Some(Value::Bool(b)) => format!("<span class=\"v bool\">{b}</span>"),
@@ -1031,9 +1064,26 @@ impl Draw<'_> {
             Some(Value::Null) => "<span class=\"quiet\">none</span>".to_owned(),
             Some(other) => format!("<code class=\"v\">{}</code>", esc(&cut(&other.to_string(), 160))),
         };
+        // progress (`step_progress`) is marked as such: live, with the running glyph, while the
+        // step runs; plain "progress" after; and when it was set
+        let mark = match progress {
+            None => String::new(),
+            Some((at, live)) => format!(
+                "<span class=\"meta board-progress\">{}{}</span>",
+                if live {
+                    format!(
+                        "<span class=\"tag live\">{}live</span>",
+                        super::home::glyph("running")
+                    )
+                } else {
+                    "<span class=\"tag muted\">progress</span>".to_owned()
+                },
+                ago(&at)
+            ),
+        };
         let _ = write!(
             self.out,
-            "<div class=\"board-output\"><span class=\"meta\">{}/{}</span>{shown}</div>",
+            "<div class=\"board-output\"><span class=\"meta\">{}/{}</span>{shown}{mark}</div>",
             esc(step),
             esc(field)
         );

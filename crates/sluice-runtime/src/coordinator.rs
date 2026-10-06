@@ -386,7 +386,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         self.reads().snapshot(|sql|{let mut stmt=sql.prepare("SELECT project_id FROM projects WHERE deleted_at IS NULL ORDER BY created_at,project_id")?;let rows=stmt.query_map([],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(calls::parse_id).collect()}).await.map_err(|e|e.into_public(true))
     }
     pub async fn project_versions(&self) -> Result<BTreeMap<ProjectId, i64>, PublicError> {
-        self.reads().snapshot(|sql|{let mut stmt=sql.prepare("SELECT p.project_id,coalesce(sum(v.version),0) FROM projects p LEFT JOIN change_versions v ON v.project_id=p.project_id WHERE p.deleted_at IS NULL GROUP BY p.project_id")?;let rows=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(|(id,n)|Ok((calls::parse_id(id)?,n))).collect()}).await.map_err(|e|e.into_public(true))
+        self.reads().snapshot(|sql|{let mut stmt=sql.prepare("SELECT p.project_id,coalesce(sum(v.version),0) FROM projects p LEFT JOIN change_versions v ON v.project_id=p.project_id AND v.view<>'progress' WHERE p.deleted_at IS NULL GROUP BY p.project_id")?;let rows=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>()?;rows.into_iter().map(|(id,n)|Ok((calls::parse_id(id)?,n))).collect()}).await.map_err(|e|e.into_public(true))
     }
     pub async fn capacity_resources(&self, project: ProjectId) -> Result<Vec<String>, PublicError> {
         self.reads()
@@ -490,6 +490,7 @@ impl<H: ExecutionHost> Coordinator<H> {
             },
             CommandRequest::StepSubmit(request)=>self.writer().write(RetrySafety::NonIdempotent,move|tx|{let version=attempts::step_submit(tx,request)?;if version.is_none(){return Err(conflict("stale submission").into());}Ok(CommandReply::Ack)}).await,
             CommandRequest::Submission{run}=>data(self.submissions(run).await?),
+            CommandRequest::StepProgress(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|attempts::step_progress(tx,request)).await.and_then(data),
             CommandRequest::StepSettle(request)=>self.step_settle(request).await,
             CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_) => {
                 let post = message_post(request)?;
@@ -1018,6 +1019,9 @@ impl<H: ExecutionHost> Coordinator<H> {
                     && Some(&s.step) == id.step.as_ref()
                     && s.run == id.run => {}
             CommandRequest::Submission { run } if *run == id.run => {}
+            // Its own step's progress: the store checks the run is that step's current one.
+            CommandRequest::StepProgress(p)
+                if Some(&p.step) == id.step.as_ref() && p.run == id.run => {}
             CommandRequest::MessagePost(m)
                 if m.run == Some(id.run)
                     && m.project
@@ -1063,6 +1067,14 @@ impl<H: ExecutionHost> Coordinator<H> {
                             return Err(conflict("stale submission").into());
                         }
                         CommandReply::Ack
+                    }
+                    CommandRequest::StepProgress(p) => {
+                        if Some(messages_project(tx.sql(), &p.project)?) != id.project {
+                            return Err(conflict("tool project differs from run").into());
+                        }
+                        CommandReply::Data(sluice_model::rpc::JsonValue::try_from(
+                            attempts::step_progress(tx, p)?,
+                        )?)
                     }
                     CommandRequest::Submission { run } => {
                         let row: Option<String> = tx
@@ -1305,6 +1317,20 @@ impl<H: ExecutionHost> Coordinator<H> {
                     }
                 }
                 let author = id.step.as_ref().map(|step| format!("step:{step}"));
+                let mut tool = tool;
+                // `ctx.tool("step_progress", {...})` is about the run's own step by default.
+                if tool.name == "step_progress" {
+                    let text = |s: String| sluice_model::rpc::JsonValue::try_from(Value::String(s));
+                    let args = &mut tool.args.0;
+                    if let Some(step) = &id.step
+                        && !args.contains_key("step")
+                    {
+                        args.insert("step".into(), text(step.to_string())?);
+                    }
+                    if !args.contains_key("run") {
+                        args.insert("run".into(), text(id.run.to_string())?);
+                    }
+                }
                 let mut command = crate::compose::decode_tool(tool, author.as_deref())?;
                 // Named callbacks use the same command adapters with the run's
                 // immutable project and submission identity.
@@ -1321,6 +1347,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let reply = if matches!(
                     &command,
                     CommandRequest::StepSubmit(_)
+                        | CommandRequest::StepProgress(_)
                         | CommandRequest::Submission { .. }
                         | CommandRequest::MessagePost(_)
                         | CommandRequest::Ask(_)

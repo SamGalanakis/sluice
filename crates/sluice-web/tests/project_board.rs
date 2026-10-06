@@ -543,3 +543,113 @@ async fn the_board_head_takes_the_programs_title_and_says_when_it_was_written() 
     assert!(!head.contains("the plan has changed since"), "{head}");
     assert!(html.contains("class=\"ou-h\">Two</h4>"), "{html}");
 }
+
+/// `Output` shows the freshest value: a running step's progress (marked live, with when it was
+/// set) over its older outputs; its outputs once it has finished with them after the progress;
+/// the progress again, marked as progress, when its run ended without outputs. The step's
+/// page shows a Progress section while it is the fresher.
+#[tokio::test]
+async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
+    let f = Fixture::new().await;
+    let id = f
+        .project(
+            "rolling",
+            json!({"steps":{"tests-main":{"run":"custom.open","outputs":{"red":"int","head":"string"}}}}),
+            &[("tests-main", "running")],
+        )
+        .await;
+    // Older outputs (a previous run's), then this run's progress.
+    let set = |sql: &'static str| {
+        let writer = f.writer.clone();
+        async move {
+            writer
+                .write(RetrySafety::NonIdempotent, move |tx| {
+                    tx.sql().execute(sql, [id.to_string()])?;
+                    tx.changed(Some(id), "status");
+                    Ok(())
+                })
+                .await
+                .unwrap()
+        }
+    };
+    set("UPDATE steps SET outputs='{\"red\":9,\"head\":\"old\"}',progress='{\"red\":2}',progress_at='2026-10-06T10:00:00.5Z',progress_run='019a2b3c-4d5e-7f01-8234-56789abcdef0' WHERE project_id=?1").await;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            projects::board_set(
+                tx,
+                &ProjectSelector::Id(id),
+                projects::SetBoard {
+                    program: Some("root = Stack([red, head, metric])\nred = Output(\"tests-main\", \"red\")\nhead = Output(\"tests-main\", \"head\")\nmetric = Metric(\"Red\", \"SELECT json_extract(progress, '$.red') FROM steps WHERE project_id = ? AND step_id = 'tests-main'\")".into()),
+                    expected_rev: Some(sluice_model::ids::Revision(0)),
+                    reason: None,
+                    author: "orch".into(),
+                },
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let page = format!("/projects/id/{id}");
+    let step = format!("/projects/id/{id}/steps/tests-main");
+    let output = |html: &str, field: &str| {
+        between(html, &format!("tests-main/{field}</span>"), "</div>").to_owned()
+    };
+    let (_, html) = f.get(&page).await;
+    let red = output(&html, "red");
+    assert!(red.contains("<span class=\"v num\">2</span>"), "{red}");
+    assert!(
+        red.contains("<span class=\"tag live\">")
+            && red.contains("live</span><time data-ago datetime=\"2026-10-06T10:00:00.5Z\">2026-10-06 10:00 UTC</time>"),
+        "{red}"
+    );
+    // A field the progress lacks shows the output, unmarked.
+    let head = output(&html, "head");
+    assert!(
+        head.contains("<span class=\"v\">old</span>") && !head.contains("tag"),
+        "{head}"
+    );
+    assert!(html.contains("<span class=\"metric-v\">2</span><span class=\"metric-l\">Red</span>"));
+    let (_, detail) = f.get(&step).await;
+    let section = between(
+        &detail,
+        "<section class=\"d-sec d-progress\">",
+        "</section>",
+    );
+    assert!(
+        section.contains("<h3>Progress</h3>") && section.contains("live</span>"),
+        "{section}"
+    );
+    assert!(section.contains("by its current run"), "{section}");
+    assert!(
+        section.contains("<span class=\"v num\">2</span>"),
+        "{section}"
+    );
+    // Finished with outputs after the progress was set: the outputs are the fresher values.
+    set("INSERT INTO step_results(result_id,project_id,step_id,generation,declaration,status,outputs,recorded_at) VALUES ('019a2b3c-4d5e-7f01-8234-56789abcdef1',?1,'tests-main',1,'{}','succeeded','{\"red\":0,\"head\":\"new\"}','2026-10-06T10:00:01Z')").await;
+    set("UPDATE steps SET status='succeeded',outputs='{\"red\":0,\"head\":\"new\"}',result_id='019a2b3c-4d5e-7f01-8234-56789abcdef1' WHERE project_id=?1").await;
+    let (_, html) = f.get(&page).await;
+    let red = output(&html, "red");
+    assert!(
+        red.contains("<span class=\"v num\">0</span>") && !red.contains("tag"),
+        "{red}"
+    );
+    let (_, detail) = f.get(&step).await;
+    assert!(!detail.contains("d-progress"), "{detail}");
+    // A run that ended without outputs leaves its progress the fresher, marked as progress.
+    set("UPDATE steps SET status='failed',outputs=NULL WHERE project_id=?1").await;
+    let (_, html) = f.get(&page).await;
+    let red = output(&html, "red");
+    assert!(
+        red.contains("<span class=\"v num\">2</span>")
+            && red.contains("<span class=\"tag muted\">progress</span>")
+            && !red.contains("live"),
+        "{red}"
+    );
+    let (_, detail) = f.get(&step).await;
+    let section = between(
+        &detail,
+        "<section class=\"d-sec d-progress\">",
+        "</section>",
+    );
+    assert!(section.contains("by its last run"), "{section}");
+}

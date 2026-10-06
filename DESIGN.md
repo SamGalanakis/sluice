@@ -540,7 +540,12 @@ project's live data. It is the owner's instrument for that project, never a seco
   – skipped). In a board under 600px each row is a block: the unit, its state and its marks on
   one line where they fit (the marks take the next line whole when they do not, breaking
   between steps only past the board's width), then what it waits on. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
-  under it in meta. Output is its name in meta over the value. Metric is a number in Archivo
+  under it in meta. Output is its name in meta over the value; a value from the step's progress
+  (`step_progress`, fresher than its outputs) has a line under it: a small badge, "live" led by
+  the running glyph (its blue spinning ring, the badge's border a blue hairline) while the step
+  runs, or a muted "progress" once its run has ended, then when it was set in meta ("2m ago",
+  the time in UTC without script). An output never carries the badge, so a value that is not
+  final never passes for one. Metric is a number in Archivo
   800 at 28/34 over its label, on the box tone; metrics in a row share it. Chart is an inline
   SVG at most 520px wide: bars and the line in the accent, labels in ink and values in muted
   ink at 12px, its caption in meta under it. Slot, Markdown and LatestMessage are markdown at
@@ -572,7 +577,14 @@ The step reads top down:
 - sections under small heads, in need order: Queued, Skipped, Finishing (when it submitted,
   as a relative time, the record's seq and the release in mono, then a meta note that
   `step_settle` settles a run that lingers), Error (the error in a mono box),
-  Outside sluice (an external step's doc and how to settle it), Outputs, Inputs, Runs.
+  Outside sluice (an external step's doc and how to settle it), Progress, Outputs, Inputs,
+  Runs.
+- Progress (a step's `step_progress` values while they are fresher than its outputs): the
+  small head "Progress" with the same badge as the board's Output ("live" with the running
+  glyph while the step runs, else a muted "progress") on its centre line, a meta line "Set 2m
+  ago by its current run. Not final: no step reads it." (or "by its last run, which ended
+  without making it outputs. Kept until the next run starts."), then its fields as the
+  Outputs draw theirs.
 - Outputs and Inputs are field lists: the name (with its type after it, shown by the Types
   switch at the Outputs head or the display preference) in a narrow column of meta, its doc
   and "From <source>" (linking to the source step) under the name at 12.5px, the value beside

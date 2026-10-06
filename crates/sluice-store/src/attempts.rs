@@ -465,7 +465,7 @@ pub fn reserve(
     } else {
         0
     };
-    tx.sql().execute("UPDATE steps SET status='running',inputs_hash=?3,run_ids=?4,instances=?5,total=?6,done=?7,error=NULL,skipped=NULL,manual=0 WHERE project_id=?1 AND step_id=?2",
+    tx.sql().execute("UPDATE steps SET status='running',inputs_hash=?3,run_ids=?4,instances=?5,total=?6,done=?7,error=NULL,skipped=NULL,manual=0,progress=NULL,progress_at=NULL,progress_run=NULL WHERE project_id=?1 AND step_id=?2",
         params![id.project.to_string(),id.step.as_str(),request.inputs_hash.to_string(),serde_json::to_string(&runs)?,if scatter {instances.to_string()} else {"{}".into()},request.item_count.map(plans::sql_counter).transpose()?,done])?;
     plans::status_record(
         tx,
@@ -719,6 +719,184 @@ pub fn step_submit(tx: &mut WriteTransaction<'_>, request: StepSubmit) -> Result
     )?;
     tx.changed(Some(id.project), "status");
     Ok(Some(version as u64))
+}
+
+/// `step_progress`: merge `request.outputs` over the latest values the step's current run has
+/// published, each field one of the run's frozen outputs (its fn's or declared) and of that
+/// type. Refused (`conflict`) unless the step is running and `request.run` is its current run;
+/// `invalid` for a scattered step, an unknown field or a value that does not fit. Progress
+/// is store state only: it writes no record, so no wait wakes on it, and nothing reads it as a
+/// value (inputs, handoffs, gates and completion read `outputs`). Returns `{project, step,
+/// run, progress, at}`.
+pub fn step_progress(
+    tx: &mut WriteTransaction<'_>,
+    request: sluice_model::commands::StepProgress,
+) -> Result<Value> {
+    let project = crate::projects::resolve(tx.sql(), &request.project)?.project_id;
+    let step = request.step;
+    // status, run_ids, total, progress, progress_run
+    type Row = (String, String, Option<i64>, Option<String>, Option<String>);
+    let row: Option<Row> = tx
+        .sql()
+        .query_row(
+            "SELECT status,run_ids,total,progress,progress_run FROM steps WHERE project_id=?1 AND step_id=?2",
+            params![project.to_string(), step.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let Some((status, runs, total, progress, progress_run)) = row else {
+        return Err(PublicError::NotFound {
+            message: format!("no step {step} in the plan"),
+        }
+        .into());
+    };
+    if status != "running" {
+        return Err(plans::conflict(format!(
+            "step {step} is {status}, not running: only a running step's current run publishes progress"
+        )));
+    }
+    if total.is_some() {
+        return Err(plans::invalid(format!(
+            "step {step} is scattered: progress is for a step that runs once"
+        )));
+    }
+    let run = request.run;
+    let frozen: Option<String> = tx
+        .sql()
+        .query_row(
+            "SELECT a.request FROM runs r JOIN attempts a USING(attempt_id)
+             WHERE r.run_id=?1 AND r.project_id=?2 AND r.step_id=?3 AND r.finished_at IS NULL
+             AND a.phase IN ('reserved','claimed','executing')",
+            params![run.to_string(), project.to_string(), step.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let current = serde_json::from_str::<Vec<RunId>>(&runs)?.contains(&run);
+    let Some(frozen) = frozen.filter(|_| current) else {
+        return Err(plans::conflict(format!(
+            "run {run} is not the current run of step {step}"
+        )));
+    };
+    if request.outputs.0.is_empty() {
+        return Err(plans::invalid("outputs: give at least one field"));
+    }
+    let frozen: Value = serde_json::from_str(&frozen)?;
+    let mut errors = vec![];
+    for (name, value) in &request.outputs.0 {
+        let ty = frozen["declared"]
+            .get(name)
+            .or_else(|| frozen["returns"].get(name));
+        let Some(ty) = ty else {
+            errors.push(format!("outputs.{name}: not an output of step {step}"));
+            continue;
+        };
+        let ty = Type::parse(ty).map_err(|e| plans::invalid(e.to_string()))?;
+        if let Err(e) = check_value_at(&ty, value.as_value(), &format!("outputs.{name}")) {
+            errors.extend(e.into_iter().map(|e| e.to_string()));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(PublicError::Invalid {
+            message: "progress does not fit the step's outputs".into(),
+            errors,
+        }
+        .into());
+    }
+    // Earlier progress of this same run, merged under the new fields.
+    let mut merged = match (progress, progress_run) {
+        (Some(progress), Some(by)) if by == run.to_string() => {
+            serde_json::from_str::<serde_json::Map<String, Value>>(&progress)?
+        }
+        _ => serde_json::Map::new(),
+    };
+    for (name, value) in request.outputs.0 {
+        merged.insert(name, value.as_value().clone());
+    }
+    let at = plans::now()?;
+    let merged = Value::Object(merged);
+    tx.sql().execute(
+        "UPDATE steps SET progress=?3,progress_at=?4,progress_run=?5 WHERE project_id=?1 AND step_id=?2",
+        params![
+            project.to_string(),
+            step.as_str(),
+            merged.to_string(),
+            at,
+            run.to_string()
+        ],
+    )?;
+    // A view of its own: no wait (log, status) and no scheduler pass listens for it; the
+    // dashboard redraws from its snapshots.
+    tx.changed(Some(project), PROGRESS_VIEW);
+    Ok(json!({"project":project,"step":step,"run":run,"progress":merged,"at":at}))
+}
+
+/// The change view `step_progress` touches; the scheduler's dirty check leaves it out.
+pub const PROGRESS_VIEW: &str = "progress";
+
+/// A step's progress as the dashboard shows it (`step_progress`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Progress {
+    pub outputs: serde_json::Map<String, Value>,
+    /// When it was last set (RFC 3339).
+    pub at: String,
+    pub run: Option<String>,
+    /// The step is running, so the progress is its current run's: live.
+    pub live: bool,
+    /// The step has finished with outputs (succeeded, or stale since) after the progress was
+    /// set: the outputs are the fresher values and the progress is history.
+    pub superseded: bool,
+}
+impl Progress {
+    /// The freshest value of `field`: the progress value unless the outputs supersede it.
+    pub fn fresher(&self, field: &str) -> Option<&Value> {
+        (!self.superseded)
+            .then(|| self.outputs.get(field))
+            .flatten()
+    }
+}
+
+/// Read a step's progress, `None` when it has none.
+pub fn read_progress(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    step: &str,
+) -> Result<Option<Progress>> {
+    // status, progress, progress_at, progress_run, the result's recorded_at
+    type Row = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let row: Option<Row> = c
+        .query_row(
+            "SELECT s.status,s.progress,s.progress_at,s.progress_run,r.recorded_at FROM steps s
+             LEFT JOIN step_results r ON r.result_id=s.result_id
+             WHERE s.project_id=?1 AND s.step_id=?2",
+            params![project.to_string(), step],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let Some((status, Some(progress), Some(at), run, finished)) = row else {
+        return Ok(None);
+    };
+    let time = |text: &str| {
+        time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).ok()
+    };
+    let superseded = matches!(status.as_str(), "succeeded" | "stale")
+        && match (finished.as_deref().and_then(time), time(&at)) {
+            (Some(finished), Some(set)) => finished >= set,
+            (Some(_), None) => true,
+            _ => false,
+        };
+    Ok(Some(Progress {
+        outputs: serde_json::from_str(&progress)?,
+        live: status == "running",
+        at,
+        run,
+        superseded,
+    }))
 }
 
 pub fn completion_target(

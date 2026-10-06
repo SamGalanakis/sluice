@@ -354,6 +354,10 @@ const TOOLS: &[(&str, &str)] = &[
         "step_submit",
         "a run's outputs, submitted by the step itself",
     ),
+    (
+        "step_progress",
+        "a running step's latest values, never final",
+    ),
     ("step_settle", "settle a finishing step on its submission"),
     (
         "step_context",
@@ -797,8 +801,8 @@ boolean's flag alone meaning true. A value is the text as given for a field that
 only strings; any other value is parsed as JSON when it parses, else taken as text (as
 a one-item list for a list of strings: --statuses failed).
 --<field>-file PATH reads the value from a file (`-` for stdin). Flags win over the
-JSON object. In a run, project, run and (step_submit, step_context) step default to
-the run's own.
+JSON object. In a run, project, run and (step_submit, step_progress, step_context) step
+default to the run's own.
 ";
 
 /// The names only `sluice tool` takes, rewritten by `normalize_args`, with their schema.
@@ -913,7 +917,9 @@ impl CliFields {
             let in_run = match name.as_str() {
                 "project" => Some("id:$SLUICE_PROJECT_ID"),
                 "run" => Some("$SLUICE_RUN_ID"),
-                "step" if matches!(tool, "step_submit" | "step_context") => Some("$SLUICE_STEP"),
+                "step" if matches!(tool, "step_submit" | "step_progress" | "step_context") => {
+                    Some("$SLUICE_STEP")
+                }
                 _ => None,
             };
             if let Some(value) = in_run {
@@ -1094,7 +1100,7 @@ fn parse_tool_args(
 
 /// In a run (SLUICE_RUN_ID set), a call that leaves out `project` or `run` gets the run's
 /// own, `id:$SLUICE_PROJECT_ID` and `$SLUICE_RUN_ID`, on every tool that takes it, and
-/// `step_submit` and `step_context` get `$SLUICE_STEP` as `step`. A field the call gives,
+/// `step_submit`, `step_progress` and `step_context` get `$SLUICE_STEP` as `step`. A field the call gives,
 /// even as null, is kept, and project_update or project_delete given `name` names its
 /// project that way.
 fn run_defaults(tool: &str, fields: &CliFields, args: &mut serde_json::Map<String, Value>) {
@@ -1120,7 +1126,7 @@ fn run_defaults(tool: &str, fields: &CliFields, args: &mut serde_json::Map<Strin
                 &project,
             )));
     }
-    if matches!(tool, "step_submit" | "step_context")
+    if matches!(tool, "step_submit" | "step_progress" | "step_context")
         && let Some(step) = var("SLUICE_STEP")
     {
         args.entry("step").or_insert(Value::String(step));

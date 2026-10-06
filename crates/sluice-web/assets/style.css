@@ -314,6 +314,8 @@ p { margin: 0; }
 .tag > span[aria-hidden] { display: flex; }  /* the glyph on the badge's centre line */
 .tag .g { margin: 0; width: 14px; height: 14px; }
 .tag .g svg { width: 14px; height: 14px; }
+.tag.live { border-color: color-mix(in oklch, var(--status-active) 45%, transparent); }
+.d-progress .d-sec-h { align-items: center; }  /* the "live" badge on the head's centre line */
 .err { color: var(--foreground); font-weight: 500; }
 .empty { color: var(--muted-foreground); padding: 32px 0; max-width: 60ch; }
 .lead { font-size: 15px; line-height: 22px; }
@@ -1445,7 +1447,6 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-why { overflow-wrap: anywhere; }
 .board-output { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .board-output .v { overflow-wrap: anywhere; }
-.board-output .v.num { font-variant-numeric: tabular-nums; }
 /* Slot, Markdown and LatestMessage: markdown at the board's prose measure; a slot says when it
    last changed under it, a message who sent it and when over it, both in meta */
 .board-slot, .board-message { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -1455,6 +1456,9 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-md img { max-width: 100%; height: auto; }
 .board-fresh, .board-msg-head, .board-more, p.board-message { margin: 0; }
 .board-msg-head .m-from { font-weight: 600; color: var(--foreground); }
+.board-output .v.num { font-variant-numeric: tabular-nums; text-align: left; }  /* under its name, as text is */
+/* a value from step_progress: not final; "live" (the running ring) while the step runs */
+.board-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .board-metric { display: flex; flex-direction: column; gap: 0; min-width: 0;
                 padding: 10px 14px; border-radius: var(--radius-md); background: var(--box); }
 .board-metric .metric-v { font: 800 28px/34px var(--font-display); letter-spacing: -0.015em;

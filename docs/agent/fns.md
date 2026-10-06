@@ -116,6 +116,17 @@ if __name__ == "__main__":
   `ctx.builtin(name, inputs)` runs a built-in function (an agent, say) inside this run. A
   function that runs an agent declares `"listen": "boolean?"` and passes it on: its runs then
   take messages live, and `ask`/`say` to its step report `delivered`.
+- `ctx.progress(**fields)` (or `ctx.progress({"red": 3})`) publishes the step's latest values
+  while it runs, without finishing it: for a step that never ends (a rolling test run of
+  main) or a long one worth watching. Each field is one of the step's outputs (the fn's or
+  the step's declared ones) and must fit its type (`CallbackError` `invalid` otherwise);
+  fields merge over the run's earlier progress. Progress is never final: no step reads it (a
+  dependent waits for the real outputs), it is not a submission, and it writes no log record,
+  so it wakes no `next` or `log_wait` and can be updated every minute. The dashboard shows it
+  on the step (live while it runs) and in a board's `Output`; `query` reads it as
+  `steps.progress` (JSON) and `steps.progress_at`. It stays until the step's next run
+  starts. `ctx.tool("step_progress", {"outputs": {...}})` is the same call. The step's result
+  is still what `main` returns.
 - `ctx.retry_on_failure(step, message)` registers a send-back: if this run then ends rejected,
   `step` is retried with `message` posted to it first.
 - `ctx` has `project`, `project_id`, `step`, `run_id`, `run_dir` (scratch space), `project_dir`,

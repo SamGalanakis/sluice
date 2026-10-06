@@ -550,6 +550,11 @@ fn contract_step_submit() {
 }
 
 #[test]
+fn contract_step_progress() {
+    contract::<StepProgress>("StepProgress");
+}
+
+#[test]
 fn contract_step_settle() {
     contract::<StepSettle>("StepSettle");
 }

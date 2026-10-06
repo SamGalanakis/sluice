@@ -318,6 +318,19 @@ pub struct StepSubmit {
     pub author: Option<String>,
 }
 
+/// Publish a running step's latest values without finishing it, from its current run. Each
+/// field is one of the step's outputs (its fn's or declared) and is checked against its type;
+/// the fields merge over the run's earlier progress. Progress is never final: it feeds no
+/// input, handoff or gate, settles nothing, writes no log record and wakes no wait.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepProgress {
+    pub project: ProjectSelector,
+    pub step: StepId,
+    pub run: RunId,
+    pub outputs: JsonMap,
+}
+
 /// Settle a running step whose run has submitted (it is finishing) on that submission: its
 /// agent is stopped as a cancel stops it, and the step succeeds with the outputs the done
 /// signal would have given it. Only a bare agent fn's step; anything else is refused.
@@ -975,6 +988,7 @@ pub enum CommandRequest {
     StepRetry(StepRetry),
     StepCancel(StepCancel),
     StepSubmit(StepSubmit),
+    StepProgress(StepProgress),
     StepSettle(StepSettle),
     Ask(Ask),
     Say(Say),

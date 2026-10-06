@@ -212,6 +212,19 @@ class Context:
                                              "run": self.run_id, "outputs": outputs,
                                              "author": self.step})
 
+    def progress(self, outputs=None, /, **fields):
+        """Publish the step's latest values while it runs, without finishing it:
+        `ctx.progress(red=3)` or `ctx.progress({"red": 3})`. Each field is one of the step's
+        outputs and must fit its type; fields merge over this run's earlier progress. Never
+        final: nothing reads it as an output, and it wakes no wait. Returns {project, step,
+        run, progress, at}."""
+        values = dict(outputs or {})
+        values.update(fields)
+        if not values:
+            raise ValueError("progress needs at least one field")
+        return self.tool("step_progress", {"step": self.step, "run": self.run_id,
+                                           "outputs": values})
+
     def retry_on_failure(self, step, message):
         """The receiver captures and registers the store target in one transaction."""
         if not isinstance(step, str) or not step or not isinstance(message, str) or not message:

@@ -2999,6 +2999,21 @@
         },
         "timeout_seconds": 60
       }
+    },
+    {
+      "command": "step_progress",
+      "args": {
+        "project": {
+          "kind": "id",
+          "value": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+        },
+        "step": "tests-main",
+        "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+        "outputs": {
+          "red": 3,
+          "head": "abc123"
+        }
+      }
     }
   ],
   "PlanViewFormat": [
@@ -4228,6 +4243,20 @@
         "build": "running"
       },
       "seq": 7
+    }
+  ],
+  "StepProgress": [
+    {
+      "project": {
+        "kind": "id",
+        "value": "019a2b3c-4d5e-7f01-8234-56789abcdef0"
+      },
+      "step": "tests-main",
+      "run": "019a2b3c-4d5e-7f01-8234-56789abcdef0",
+      "outputs": {
+        "red": 3,
+        "head": "abc123"
+      }
     }
   ]
 }

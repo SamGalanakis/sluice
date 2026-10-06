@@ -104,7 +104,7 @@ Data, filled from the project when the page draws:
 
 - `Units(state?: ("running" | "failed" | "settled" | "blocked" | "queued" | "pending")[])` — the units view's rows (`status(project, view="units")`): each unit (a link to its page) with its state, its steps' marks and what holds it. Without `state`, done units are left out and counted; name `settled` to see them.
 - `StepStatus(step: string)` — the step's card: its status glyph and word (or "blocked", "queued", "outside"), and why it waits or what failed. A link to the step.
-- `Output(step: string, field: string)` — the step's current output `field`, cut short; "Not set yet." until it has one.
+- `Output(step: string, field: string)` — the step's freshest value of `field`, cut short; "Not set yet." until it has one. While the step's progress (`step_progress`, `docs("fns")`) is newer than its outputs, that is the value, marked "live" while the step runs ("progress" after its run ended) with when it was set; once the step finishes with outputs, the output.
 - `Metric(label: string, query: string)` — one number (the first column of the first row) under its label.
 - `Query(query: string, caption?: string)` — the result as a table (the first 50 rows).
 - `Chart(kind: "bar" | "line", query: string, caption?: string)` — a small chart of a two-column result: a label, then a number (the first 60 rows). `bar` draws a bar per row; `line` joins them in order.
@@ -175,6 +175,18 @@ root = Stack([head, latest, note])
 head = Heading("Main: the latest full test run", 2)
 latest = LatestMessage("tests-main", 200)
 note = Markdown("Red targets are tracked in [the census](https://ci.example/census); **lanes** fix them one by one.")
+```
+
+A rolling step that never finishes (`tests-main`, publishing `ctx.progress(red=…, head=…)`
+after each run of the suite): its latest numbers, live.
+
+```openui
+root = Stack([title, now, history])
+title = Heading("Main", 1)
+now = Stack([red, head], "row")
+red = Output("tests-main", "red")
+head = Output("tests-main", "head")
+history = Query("SELECT json_extract(progress, '$.red') AS red, progress_at AS at FROM steps WHERE project_id = ? AND step_id = 'tests-main'", "Latest run")
 ```
 
 Messages per day, as a line:

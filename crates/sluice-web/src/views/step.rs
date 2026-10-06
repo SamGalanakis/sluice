@@ -129,6 +129,25 @@ pub struct StepView {
     pub revision: u64,
     /// Running, and its run has submitted: only finishing (SPEC §6.4).
     pub finishing: Option<sluice_model::attempt::Finishing>,
+    /// Its latest progress (`step_progress`) while that is fresher than its outputs.
+    pub progress: Option<ProgressView>,
+}
+/// A step's progress as its page shows it: the fields, when they were set, and whether the
+/// step still runs (live) or the run has ended (kept until the next run starts).
+#[derive(Clone, Debug, Serialize)]
+pub struct ProgressView {
+    pub fields: Vec<FieldView>,
+    pub at: String,
+    pub live: bool,
+}
+impl ProgressView {
+    /// When it was set as the page reads without script: "2026-10-06 14:05 UTC".
+    pub fn shown(&self) -> String {
+        match (self.at.get(..10), self.at.get(11..16)) {
+            (Some(day), Some(time)) => format!("{day} {time} UTC"),
+            _ => self.at.clone(),
+        }
+    }
 }
 pub fn status_name(status: &StepStatus) -> &'static str {
     match status {
@@ -265,6 +284,7 @@ impl StepView {
             manual: false,
             revision: 0,
             finishing: None,
+            progress: None,
         }
     }
     pub fn href(&self) -> String {
@@ -430,6 +450,27 @@ pub fn load_detail(
             }
         }
     }
+    // Progress shows while the outputs have not superseded it, each field typed as its output.
+    step.progress = sluice_store::attempts::read_progress(c, project, step.id.as_str())?
+        .filter(|p| !p.superseded)
+        .map(|p| ProgressView {
+            fields: p
+                .outputs
+                .iter()
+                .map(|(n, v)| {
+                    let output = step.outputs.iter().find(|f| &f.name == n);
+                    FieldView::new(
+                        n,
+                        output.map(|f| f.ty.as_str()).unwrap_or(""),
+                        output.map(|f| f.doc.as_str()).unwrap_or(""),
+                        Some(v),
+                        "",
+                    )
+                })
+                .collect(),
+            at: p.at,
+            live: p.live,
+        });
     (step.messages,step.awaiting) = c.prepare_cached("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2")?.query_row((project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
     let mut q = c.prepare_cached("SELECT sub.outputs FROM submissions sub JOIN runs r USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL ORDER BY r.created_at DESC LIMIT 1")?;
     use rusqlite::OptionalExtension;

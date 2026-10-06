@@ -103,6 +103,13 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   what it should have.
 - A run that ends without a valid submission (its agent exited, or stopped after its
   nudges) fails the step with `exited_without_submit`, carrying the agent's `session`.
+- Before it is done, a running step may publish its latest values with
+  `step_progress(project, step, run, outputs)` (in the run, `sluice tool step_progress
+  --outputs '{"red": 3}'`; `ctx.progress(red=3)` in a fn): fields of its outputs, type-checked
+  and merged over its earlier progress. Progress is never final: no step reads it, it is not
+  a submission and does not end the session, and it writes no log record, so it wakes no
+  `next` or `log_wait`. The dashboard and a board's `Output` show it, and `query` reads it
+  from `steps.progress` and `steps.progress_at`. The next run of the step clears it.
 - An engine's account problem fails the step at once with `agent_failure`, carrying the
   `session`, and nothing inside the run retries it:
   - kind `QuotaExhausted`: a hard usage cap (Codex, Claude or Devin: a usage, plan or credit

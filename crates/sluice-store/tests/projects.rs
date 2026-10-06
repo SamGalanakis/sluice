@@ -938,6 +938,45 @@ async fn a_home_from_before_boards_gains_them_when_its_writer_opens() {
     );
 }
 
+#[tokio::test]
+async fn a_home_from_before_progress_gains_its_columns_when_its_writer_opens() {
+    let home = ScratchHome::new().unwrap();
+    {
+        let writer = Writer::open(home.path()).unwrap();
+        create(&writer, "old").await;
+    }
+    // Drop the progress columns, as a release before step_progress left the home.
+    {
+        let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+        c.execute_batch(
+            "ALTER TABLE steps DROP COLUMN progress_run; ALTER TABLE steps DROP COLUMN progress_at; ALTER TABLE steps DROP COLUMN progress;",
+        )
+        .unwrap();
+    }
+    // Readers refuse it until the writer has added them; the schema version stays 1.
+    assert!(matches!(
+        ReadPool::open(home.path(), 1).map(|_| ()),
+        Err(StoreError::InvalidDatabase(_))
+    ));
+    let _writer = Writer::open(home.path()).unwrap();
+    let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
+    let columns: Vec<String> = c
+        .prepare(
+            "SELECT name FROM pragma_table_info('steps') WHERE name LIKE 'progress%' ORDER BY cid",
+        )
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(columns, ["progress", "progress_at", "progress_run"]);
+    let version: i64 = c
+        .query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    ReadPool::open(home.path(), 1).unwrap();
+}
+
 /// The board briefly shipped as schema 2, which a run's pinned CLI from before it refuses: the
 /// writer marks such a home 1 again and keeps its boards.
 #[tokio::test]

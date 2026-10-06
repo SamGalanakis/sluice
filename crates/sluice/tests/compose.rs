@@ -1484,3 +1484,111 @@ run(main)
         .unwrap();
     assert_eq!((from.as_str(), run), ("tools", g.run("tools")));
 }
+
+/// `ctx.progress` publishes a running step's latest values without finishing it: they merge,
+/// are checked against the step's outputs, show in the `query` tool's `steps`, feed no reader,
+/// and wake neither `log_wait` nor `next`. The step's result is what its run returns.
+#[test]
+fn python_ctx_progress_publishes_values_that_are_never_final_and_wake_nothing() {
+    let g = Gate::new();
+    let dir = g.temp.path().join("rolling");
+    std::fs::create_dir(&dir).unwrap();
+    g.function(
+        "custom.rolling",
+        json!({"dir":"string"}),
+        json!({"red":"int","head":"string"}),
+        r#"from sluice_fn import run, CallbackError
+from pathlib import Path
+import time
+
+def wait(path):
+    while not path.exists():
+        time.sleep(0.02)
+
+def main(inp, ctx):
+    root = Path(inp['dir'])
+    first = ctx.progress(red=3)
+    assert first['progress'] == {'red': 3} and first['run'] == ctx.run_id, first
+    second = ctx.progress({'head': 'abc'})
+    assert second['progress'] == {'red': 3, 'head': 'abc'}, second
+    via = ctx.tool('step_progress', {'outputs': {'note': 'via tool'}})
+    assert via['progress'] == {'red': 3, 'head': 'abc', 'note': 'via tool'}, via
+    for bad, word in [({'red': 'three'}, 'outputs.red'), ({'nope': 1}, 'outputs.nope')]:
+        try:
+            ctx.progress(bad)
+            raise AssertionError('progress that does not fit was accepted')
+        except CallbackError as error:
+            assert error.error == 'invalid' and any(word in e for e in error.errors), error.errors
+    try:
+        ctx.tool('step_progress', {'step': 'later', 'outputs': {'value': 1}})
+        raise AssertionError("another step's progress was accepted")
+    except CallbackError as error:
+        assert error.error == 'conflict', error.message
+    (root / 'published').touch()
+    wait(root / 'again')
+    ctx.progress(red=1)
+    (root / 'published-again').touch()
+    wait(root / 'finish')
+    return {'red': 0, 'head': 'def'}
+run(main)
+"#,
+    );
+    g.plan(json!({
+        "rolling":{"run":"custom.rolling","in":{"dir":{"default":dir}},"outputs":{"note":"string?"}},
+        "later":{"run":"core.echo","in":{"value":{"source":"rolling/red"}}}}));
+    let _lease = g.lease();
+    let wait_file = |name: &str| {
+        let path = dir.join(name);
+        g.wait(|_| path.exists());
+    };
+    wait_file("published");
+    let status = g.status();
+    assert_eq!(status["steps"]["rolling"]["status"], "running", "{status}");
+    assert_eq!(status["steps"]["later"]["status"], "pending", "{status}");
+    let query = |g: &Gate| {
+        g.data(json!({"command":"query","args":{"sql":"SELECT json_extract(progress, '$.red'), json_extract(progress, '$.note'), progress_at IS NOT NULL, progress_run FROM steps WHERE project_id = ? AND step_id = 'rolling'","params":[g.project.to_string()],"limit":10}}))
+    };
+    assert_eq!(
+        query(&g)["rows"][0],
+        json!([3, "via tool", 1, g.run("rolling")])
+    );
+    // Waits standing while more progress lands wake for none of it.
+    let CommandReply::Records(page) = g.rpc(
+        json!({"command":"log_read","args":{"project":g.selector(),"since_seq":null,"kinds":null,"threads":null,"limit":1}}),
+    ) else {
+        panic!("records")
+    };
+    let since = page.last_seq.0;
+    let started = Instant::now();
+    let (log_wait, next) = std::thread::scope(|scope| {
+        let log_wait = scope.spawn(|| {
+            g.rpc(json!({"command":"log_wait","args":{"read":{"project":g.selector(),"since_seq":since,"kinds":null,"threads":null,"limit":50},"timeout_seconds":3,"questions_only":false}}))
+        });
+        let next = scope.spawn(|| {
+            g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":since,"me":"orchestrator","timeout_seconds":3,"all":false,"settle_seconds":1,"settle_max_seconds":1,"settles":"short"}}))
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(dir.join("again"), b"").unwrap();
+        wait_file("published-again");
+        (log_wait.join().unwrap(), next.join().unwrap())
+    });
+    assert!(started.elapsed() >= Duration::from_millis(2500));
+    let CommandReply::Records(page) = log_wait else {
+        panic!("log_wait: {log_wait:?}")
+    };
+    assert!(page.records.is_empty(), "{:?}", page.records);
+    let CommandReply::Next(next) = next else {
+        panic!("next: {next:?}")
+    };
+    assert!(next.records.is_empty() && next.timed_out, "{next:?}");
+    assert_eq!(query(&g)["rows"][0][0], 1);
+    // The step's result is what its run returns; the reader gets that, never the progress.
+    std::fs::write(dir.join("finish"), b"").unwrap();
+    let rolling = g.terminal("rolling");
+    assert_eq!(rolling["status"], "succeeded", "{rolling}");
+    assert_eq!(rolling["outputs"]["red"], 0);
+    let later = g.terminal("later");
+    assert_eq!(later["outputs"]["value"], 0, "{later}");
+    // Kept after the run, with its time, until the next run starts.
+    assert_eq!(query(&g)["rows"][0][0], 1);
+}

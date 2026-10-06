@@ -85,6 +85,7 @@ fn every_v2_tool_has_a_shared_strict_schema() {
         "step_set_output",
         "step_retry",
         "step_submit",
+        "step_progress",
         "log_read",
         "log_wait",
         "step_wait",
@@ -221,6 +222,27 @@ fn flat_edits_decode_to_the_folded_commands() {
         panic!()
     };
     assert_eq!(icon, Some(IconUpload::Text("/srv/icons/p.svg".into())));
+    // step_progress takes the project as any tool does, and no author: it writes no record.
+    let run = "019a2b3c-4d5e-7f01-8234-56789abcdef0";
+    let CommandRequest::StepProgress(request) = decode(
+        "step_progress",
+        json!({"project":"p","step":"tests-main","run":run,"outputs":{"red":3}}),
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert_eq!(request.project, "p".parse().unwrap());
+    assert_eq!(
+        (request.step.as_str(), request.run.to_string()),
+        ("tests-main", run.into())
+    );
+    assert!(
+        decode(
+            "step_progress",
+            json!({"project":"p","step":"s","run":run,"outputs":{},"author":"x"})
+        )
+        .is_err()
+    );
 }
 #[test]
 fn waits_are_capped_and_negative_waits_are_refused() {
@@ -375,7 +397,7 @@ fn client_config() -> ClientConfig {
 }
 async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, ClientConfig>) {
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 48);
+    assert_eq!(tools.len(), 49);
     let result = client
         .call_tool(CallToolRequestParams::new("projects_list"))
         .await

@@ -77,6 +77,9 @@ CREATE TABLE steps (
   total INTEGER CHECK (total IS NULL OR total >= 0),
   done INTEGER NOT NULL DEFAULT 0 CHECK (done >= 0 AND (total IS NULL OR done <= total)),
   delivery_cursor INTEGER NOT NULL DEFAULT 0 CHECK (delivery_cursor >= 0),
+  -- step_progress: the current run's latest values, never final; cleared when a run starts.
+  progress TEXT CHECK (progress IS NULL OR json_type(progress) = 'object'),
+  progress_at TEXT, progress_run TEXT,
   PRIMARY KEY (project_id, step_id), UNIQUE (project_id, position),
   FOREIGN KEY (project_id, result_id) REFERENCES step_results(project_id, result_id)
 ) STRICT;

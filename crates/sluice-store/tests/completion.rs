@@ -1183,3 +1183,207 @@ async fn a_submitted_run_is_finishing_and_a_settled_one_succeeds_with_the_record
         note.text()
     );
 }
+
+/// `work` runs an agent-like open fn and declares outputs; `next` reads one of them, `gated`
+/// waits on another, and `many` scatters.
+async fn rolling() -> Fixture {
+    Fixture::new(json!({"steps":{
+        "work":{"run":"agentish","outputs":{"summary":"string","red":"int","green":"boolean?"}},
+        "next":{"run":"echo","in":{"value":{"source":"work/summary"}}},
+        "gated":{"run":"empty","after":["work/green"]},
+        "many":{"run":"echo","scatter":"value","in":{"value":{"default":[1,2]}}}}}))
+    .await
+}
+async fn progress(
+    f: &Fixture,
+    step: &str,
+    run: sluice_model::ids::RunId,
+    outputs: serde_json::Value,
+) -> Result<serde_json::Value, PublicError> {
+    let request = StepProgress {
+        project: sluice_model::ids::ProjectSelector::Id(f.context.project),
+        step: id(step),
+        run,
+        outputs: map(outputs),
+    };
+    f.writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            step_progress(tx, request)
+        })
+        .await
+}
+async fn read(f: &Fixture) -> Option<Progress> {
+    let project = f.context.project;
+    f.reads
+        .snapshot(move |c| read_progress(c, project, "work"))
+        .await
+        .unwrap()
+}
+fn invalid_errors(result: Result<serde_json::Value, PublicError>) -> Vec<String> {
+    match result {
+        Err(PublicError::Invalid { errors, .. }) => errors,
+        other => panic!("expected invalid, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn progress_is_checked_against_the_steps_outputs_and_comes_from_its_current_run() {
+    let f = rolling().await;
+    let stranger = sluice_model::ids::RunId::new();
+    // Not running yet: refused.
+    let refused = progress(&f, "work", stranger, json!({"red":1})).await;
+    assert!(
+        matches!(&refused, Err(PublicError::Conflict { message, .. }) if message.contains("not running")),
+        "{refused:?}"
+    );
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    let current = run.identity.run;
+    // A value of the wrong type, an unknown field and nothing at all are invalid.
+    let errors = invalid_errors(progress(&f, "work", current, json!({"red":"three"})).await);
+    assert!(
+        errors.iter().any(|e| e.contains("outputs.red")),
+        "{errors:?}"
+    );
+    let errors = invalid_errors(progress(&f, "work", current, json!({"nope":1,"red":2})).await);
+    assert_eq!(errors, ["outputs.nope: not an output of step work"]);
+    invalid_errors(progress(&f, "work", current, json!({})).await);
+    // Another run is not the step's current one.
+    let wrong = progress(&f, "work", stranger, json!({"red":1})).await;
+    assert!(
+        matches!(&wrong, Err(PublicError::Conflict { message, .. }) if message.contains("not the current run")),
+        "{wrong:?}"
+    );
+    // A step not in the plan.
+    assert!(matches!(
+        progress(&f, "ghost", current, json!({"red":1})).await,
+        Err(PublicError::NotFound { .. })
+    ));
+    // Nothing was stored by the refusals; the fn's own outputs are fields too.
+    assert_eq!(read(&f).await, None);
+    let set = progress(&f, "work", current, json!({"session":"s-1"}))
+        .await
+        .unwrap();
+    assert_eq!(set["progress"], json!({"session":"s-1"}));
+    // A scattered step's items do not publish progress.
+    let request = f.request("many", json!({"value":1}), 0, Some(2)).await;
+    let item_run = request.run;
+    let context = f.context.clone();
+    f.writer
+        .write(RetrySafety::Idempotent, move |tx| {
+            reserve(tx, &context, request, &mut Hooks::default())
+        })
+        .await
+        .unwrap();
+    let errors = invalid_errors(progress(&f, "many", item_run, json!({"value":[1]})).await);
+    assert!(errors[0].contains("scattered"), "{errors:?}");
+}
+
+#[tokio::test]
+async fn progress_merges_and_feeds_no_reader_or_gate_and_writes_no_record() {
+    let f = rolling().await;
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    let current = run.identity.run;
+    let before = f.counts().await;
+    let first = progress(&f, "work", current, json!({"summary":"half","red":3}))
+        .await
+        .unwrap();
+    let second = progress(&f, "work", current, json!({"red":2,"green":true}))
+        .await
+        .unwrap();
+    assert_eq!(
+        second["progress"],
+        json!({"summary":"half","red":2,"green":true})
+    );
+    assert_eq!(second["run"], json!(current));
+    assert!(first["at"].is_string() && second["at"].is_string());
+    // No record: nothing that waits on the log wakes for it.
+    assert_eq!(f.counts().await, before);
+    // Never final: the step has no outputs, its reader and its gate still wait.
+    let state = f.state().await;
+    assert_eq!(state.status(&id("work")), StepStatus::Running);
+    assert!(state.steps[&id("work")].outputs.0.is_empty());
+    let plan = &f.context.plan;
+    for reader in ["next", "gated"] {
+        assert_eq!(state.status(&id(reader)), StepStatus::Pending);
+        let decision = sluice_model::gates::evaluate_step(plan, &state, &plan.steps()[&id(reader)]);
+        assert!(
+            !matches!(decision, sluice_model::gates::GateDecision::Ready),
+            "{reader}: {decision:?}"
+        );
+    }
+    let shown = read(&f).await.unwrap();
+    assert!(shown.live && !shown.superseded);
+    assert_eq!(shown.fresher("red"), Some(&json!(2)));
+    assert_eq!(shown.run.as_deref(), Some(current.to_string().as_str()));
+    // The query tool reads it from steps.
+    let rows = sluice_store::query::query(
+        f.home.path(),
+        "SELECT json_extract(progress, '$.red'), progress_at IS NOT NULL, progress_run FROM steps WHERE project_id = ? AND step_id = 'work'",
+        Some(&[rusqlite::types::Value::Text(f.context.project.to_string())]),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        rows.rows()[0],
+        [
+            sluice_store::query::QueryCell::Integer(2),
+            sluice_store::query::QueryCell::Integer(1),
+            sluice_store::query::QueryCell::Text(current.to_string())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn progress_outlives_its_run_and_clears_when_the_next_run_starts() {
+    let f = rolling().await;
+    let run = f.reserve("work", json!({})).await;
+    f.start(&run).await;
+    progress(&f, "work", run.identity.run, json!({"red":5}))
+        .await
+        .unwrap();
+    finish_with(
+        &f,
+        &run,
+        CompletionKind::Succeeded,
+        json!({"summary":"done","red":0}),
+    )
+    .await;
+    // Kept after its run, but the outputs that came after it are the fresher values.
+    let kept = read(&f).await.unwrap();
+    assert!(!kept.live && kept.superseded);
+    assert_eq!(kept.outputs["red"], json!(5));
+    assert_eq!(kept.fresher("red"), None);
+    // The finished run may not publish any more.
+    let late = progress(&f, "work", run.identity.run, json!({"red":6})).await;
+    assert!(
+        matches!(late, Err(PublicError::Conflict { .. })),
+        "{late:?}"
+    );
+    f.retry(&["work"], None).await;
+    // Still there while the retried step waits to start ...
+    assert!(read(&f).await.is_some());
+    // ... and gone once its next run starts.
+    let next = f.reserve("work", json!({})).await;
+    assert_eq!(read(&f).await, None);
+    f.start(&next).await;
+    // The new run's progress starts afresh: nothing of the old run's merges in.
+    let set = progress(&f, "work", next.identity.run, json!({"green":false}))
+        .await
+        .unwrap();
+    assert_eq!(set["progress"], json!({"green":false}));
+    // A run that fails leaves its progress as the freshest values it has.
+    finish_with(
+        &f,
+        &next,
+        CompletionKind::Failed(PublicError::FnFailure {
+            message: "suite crashed".into(),
+        }),
+        json!({}),
+    )
+    .await;
+    let failed = read(&f).await.unwrap();
+    assert!(!failed.live && !failed.superseded);
+    assert_eq!(failed.fresher("green"), Some(&json!(false)));
+}
