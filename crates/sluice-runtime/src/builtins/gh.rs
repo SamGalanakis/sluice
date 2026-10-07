@@ -1,8 +1,10 @@
 //! gh.* builtins: pr, pr_wait, run_cancel and run_latest, ported from packs/git. Each is
 //! a bounded argv-only `gh` invocation with JSON output decoded strictly; the plumbing
 //! (BuiltinCtx, FnFailure, sh, ref validation) lives in builtins::git until P4.02 unifies
-//! the builtin contract. Only a failed `gh pr view` inside pr_wait is Transient — the one
-//! call the Python declares worth a retry; every other failure is Terminal.
+//! the builtin contract. A failed `gh pr view` inside pr_wait is Transient. Elsewhere a
+//! failure GitHub caused (a server error, a GraphQL "Something went wrong", a dropped
+//! connection) is Transient and retried; anything else (a missing branch, no commits between
+//! base and head, bad auth) is Terminal.
 
 use super::git::{
     BuiltinCtx, BuiltinDescriptor, FnFailure, arg, decode, num, opt, output, ports, py_str,
@@ -27,8 +29,8 @@ const FAILED_STATES: [&str; 2] = ["FAILURE", "ERROR"];
 /// `gh run` conclusions worth listing under failed_jobs (gh.run_latest).
 const FAILED_JOBS: [&str; 3] = ["failure", "cancelled", "timed_out"];
 
-/// Descriptors equal to packs/git/gh.*/fn.json, in the same field order. pr_wait declares
-/// `run(main, retries=3)`; the others run `run(main)`: no retries, 30s backoff.
+/// Descriptors equal to packs/git/gh.*/fn.json, in the same field order. Each retries 3
+/// times, 30s apart: pr_wait on any failed poll, the others on a failure GitHub caused.
 pub fn descriptors() -> [BuiltinDescriptor; 4] {
     let d = |name, doc, inputs, outputs, retries| BuiltinDescriptor {
         name,
@@ -51,7 +53,7 @@ pub fn descriptors() -> [BuiltinDescriptor; 4] {
                 ("draft", "boolean?"),
             ]),
             ports(&[("number", "int"), ("url", "string")]),
-            0,
+            3,
         ),
         d(
             "gh.pr_wait",
@@ -84,7 +86,7 @@ timeout passes.",
             "Cancel a GitHub Actions run; a run that already completed is not an error.",
             ports(&[("path", "string"), ("run_id", "int")]),
             ports(&[("cancelled", "boolean")]),
-            0,
+            3,
         ),
         d(
             "gh.run_latest",
@@ -104,7 +106,7 @@ its failed jobs.",
                 ("workflow", "string"),
                 ("failed_jobs", "string[]"),
             ]),
-            0,
+            3,
         ),
     ]
 }
@@ -120,6 +122,37 @@ pub async fn dispatch(
         "gh.run_cancel" => run_cancel(inputs, ctx).await,
         "gh.run_latest" => run_latest(inputs, ctx).await,
         _ => Err(FnFailure::terminal(format!("unknown gh builtin: {name}"))),
+    }
+}
+
+/// What gh prints when GitHub, not the request, failed: a server error, a GraphQL
+/// "Something went wrong", or a connection cut or timed out on the way.
+const GITHUB_SIDE: [&str; 12] = [
+    "something went wrong while executing your query",
+    "internal server error",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    "connection reset",
+    "unexpected eof",
+    "i/o timeout",
+];
+/// A Terminal failure whose text shows GitHub at fault becomes Transient, so the step retries
+/// instead of failing for good on an outage a later try gets past.
+fn github_side(failure: FnFailure) -> FnFailure {
+    match failure {
+        FnFailure::Terminal(message)
+            if GITHUB_SIDE
+                .iter()
+                .any(|marker| message.to_lowercase().contains(marker)) =>
+        {
+            FnFailure::Transient(message)
+        }
+        other => other,
     }
 }
 
@@ -142,7 +175,8 @@ pub async fn pr(inputs: &JsonMap, ctx: &BuiltinCtx) -> Result<JsonMap, FnFailure
         Some(Path::new(&path)),
         true,
     )
-    .await?
+    .await
+    .map_err(github_side)?
     .stdout;
     let prs = decode(&listed)?;
     let existing = match &prs {
@@ -164,7 +198,8 @@ pub async fn pr(inputs: &JsonMap, ctx: &BuiltinCtx) -> Result<JsonMap, FnFailure
             Some(Path::new(&path)),
             true,
         )
-        .await?;
+        .await
+        .map_err(github_side)?;
     } else {
         let mut argv = gh(&[
             "pr", "create", "--base", &base, "--head", &head, "--title", &title, "--body", &body,
@@ -172,7 +207,9 @@ pub async fn pr(inputs: &JsonMap, ctx: &BuiltinCtx) -> Result<JsonMap, FnFailure
         if opt(inputs, "draft").is_some_and(truthy) {
             argv.push("--draft".into());
         }
-        sh(ctx, &argv, Some(Path::new(&path)), true).await?;
+        sh(ctx, &argv, Some(Path::new(&path)), true)
+            .await
+            .map_err(github_side)?;
     }
     let data = decode(
         &sh(
@@ -181,7 +218,8 @@ pub async fn pr(inputs: &JsonMap, ctx: &BuiltinCtx) -> Result<JsonMap, FnFailure
             Some(Path::new(&path)),
             true,
         )
-        .await?
+        .await
+        .map_err(github_side)?
         .stdout,
     )?;
     output([
@@ -305,13 +343,15 @@ pub async fn run_cancel(inputs: &JsonMap, ctx: &BuiltinCtx) -> Result<JsonMap, F
     let run_id = ref_("run_id", req(inputs, "run_id")?)?;
     let path = arg(inputs, "path")?;
     let argv = gh(&["run", "cancel", &run_id]);
-    let p = sh(ctx, &argv, Some(Path::new(&path)), false).await?;
+    let p = sh(ctx, &argv, Some(Path::new(&path)), false)
+        .await
+        .map_err(github_side)?;
     if p.code != 0
         && !format!("{}{}", p.stderr, p.stdout)
             .to_lowercase()
             .contains("complet")
     {
-        return Err(sh_error(&argv, &p));
+        return Err(github_side(sh_error(&argv, &p)));
     }
     output([("cancelled", json!(p.code == 0))])
 }
@@ -337,7 +377,12 @@ pub async fn run_latest(inputs: &JsonMap, ctx: &BuiltinCtx) -> Result<JsonMap, F
         ]
         .map(OsString::from),
     );
-    let runs = decode(&sh(ctx, &argv, Some(Path::new(&path)), true).await?.stdout)?;
+    let runs = decode(
+        &sh(ctx, &argv, Some(Path::new(&path)), true)
+            .await
+            .map_err(github_side)?
+            .stdout,
+    )?;
     let Value::Array(items) = &runs else {
         return Err(FnFailure::terminal("run list did not return a list"));
     };
@@ -358,7 +403,8 @@ pub async fn run_latest(inputs: &JsonMap, ctx: &BuiltinCtx) -> Result<JsonMap, F
                 Some(Path::new(&path)),
                 true,
             )
-            .await?
+            .await
+            .map_err(github_side)?
             .stdout,
         )?;
         match jobs.get("jobs") {

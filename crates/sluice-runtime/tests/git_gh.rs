@@ -1303,3 +1303,71 @@ async fn cancelling_the_wait_kills_the_in_flight_gh() {
         "gh child survived cancellation"
     );
 }
+
+/// A failure GitHub caused is Transient, so the step retries past an outage; a failure of the
+/// request itself stays Terminal (issue #20).
+#[tokio::test]
+async fn gh_failures_github_caused_are_transient_and_request_failures_terminal() {
+    let outage = [
+        "GraphQL: Something went wrong while executing your query on 2026-10-07T17:02:05Z. Please include `85F6:1AD696` when reporting this issue.",
+        "HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+        "HTTP 503: Service Unavailable",
+        "read tcp 10.0.0.2:443: connection reset by peer",
+    ];
+    for msg in outage {
+        let tmp = tmp();
+        let repo = repo(&tmp);
+        let (bin, _) = make_gh_failing(&tmp, msg);
+        let failure = gh::pr(
+            &inputs(
+                json!({"path": &repo.path, "base": "main", "head": "feature",
+                           "title": "t", "body": "b"}),
+            ),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(failure.is_transient(), "{msg}: {failure}");
+        let failure = gh::run_latest(
+            &inputs(json!({"path": &repo.path})),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(failure.is_transient(), "{msg}: {failure}");
+        let failure = gh::run_cancel(
+            &inputs(json!({"path": &repo.path, "run_id": 7})),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(failure.is_transient(), "{msg}: {failure}");
+    }
+    for msg in [
+        "pull request create failed: GraphQL: No commits between main and feature (createPullRequest)",
+        "could not find base branch: nope",
+        "HTTP 401: Bad credentials",
+    ] {
+        let tmp = tmp();
+        let repo = repo(&tmp);
+        let (bin, _) = make_gh_failing(&tmp, msg);
+        let failure = gh::pr(
+            &inputs(
+                json!({"path": &repo.path, "base": "main", "head": "feature",
+                           "title": "t", "body": "b"}),
+            ),
+            &ctx(&run_dir(&tmp), Some(bin.as_path())),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(failure, FnFailure::Terminal(_)),
+            "{msg}: {failure}"
+        );
+    }
+    let retries: Vec<_> = gh::descriptors()
+        .iter()
+        .map(|d| (d.name, d.retries))
+        .collect();
+    assert!(retries.iter().all(|(_, r)| *r == 3), "{retries:?}");
+}

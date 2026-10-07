@@ -1697,10 +1697,10 @@ run Claude's default.
 | `git.rebase` | `path`, `onto` | `ok: boolean`, `sha`, `conflicts: string[]` | conflicts abort and are data |
 | `git.worktree` | `repo`, `base`, `branch`, `path?` | `path`, `branch`, `sha` | |
 | `git.worktree_rm` | `repo`, `path`, `force: boolean?` | `removed: boolean` | |
-| `gh.pr` | `path`, `base`, `head`, `title`, `body`, `draft: boolean?` | `number: int`, `url` | creates or updates the open PR |
+| `gh.pr` | `path`, `base`, `head`, `title`, `body`, `draft: boolean?` | `number: int`, `url` | creates or updates the open PR; 3 retries, 30 s apart, when GitHub failed (a server error, a GraphQL "Something went wrong", a dropped connection) |
 | `gh.pr_wait` | `path`, `pr`, `until` (`checks`, `merged`), `interval: int?`, `timeout: int?` | `state` (`green`, `red`, `conflicting`, `merged`, `closed`, `timeout`), `sha`, `url`, `failed: string[]` | 3 retries, 30 s apart |
-| `gh.run_cancel` | `path`, `run_id: int` | `cancelled: boolean` | |
-| `gh.run_latest` | `path`, `branch?`, `workflow?` | `run_id: int`, `sha`, `status`, `conclusion?`, `url`, `workflow`, `failed_jobs: string[]` | |
+| `gh.run_cancel` | `path`, `run_id: int` | `cancelled: boolean` | retries like `gh.pr` |
+| `gh.run_latest` | `path`, `branch?`, `workflow?` | `run_id: int`, `sha`, `status`, `conclusion?`, `url`, `workflow`, `failed_jobs: string[]` | retries like `gh.pr` |
 | `jev.ask` | `state: Any`, `questions: Any`, `model?` | `answers: Any`, `model`, `usage: Any` | TypeSafe System One; needs `TYPESAFE_API_KEY`; 3 retries, 5 s apart (all `jev.*`) |
 | `jev.choice` | `state`, `instructions`, `options`, `min_confidence: float?`, `model?` | `choice`, `probabilities`, `confidence: float`, `confident: boolean`, `model` | |
 | `jev.score` | `state`, `instructions`, `levels: Any[]`, `model?` | `score: float`, `probabilities`, `confidence: float`, `legend`, `model` | |
