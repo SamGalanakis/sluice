@@ -1415,6 +1415,66 @@ fn owner_question_runs_the_configured_notify_command_once() {
     assert_eq!(sent[0]["project"], "compose");
     assert_eq!(sent[0]["project_id"], json!(g.project));
 }
+/// A coordinator restart leaves steps waiting on asks waiting rather than failed: each
+/// asks again once it is back and still gets its answer.
+#[test]
+fn waiting_asks_survive_a_coordinator_restart() {
+    const ASKS: usize = 2;
+    let mut g = Gate::new();
+    let steps = (0..ASKS)
+        .map(|i| {
+            let ask =
+                json!({"to":"owner","title":format!("Merge {i}?"),"body":"Approve?","wait":true});
+            (
+                format!("ask{i}"),
+                json!({"run":"message.ask","in":bindings(ask)}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    g.plan(Value::Object(steps));
+    let lease = g.lease();
+    let open = |g: &Gate| {
+        let CommandReply::Messages(page) = g.rpc(json!({"command":"messages","args":{"project":g.selector(),"view":"questions","thread":null,"since":null,"owner":true}})) else {
+            panic!("messages")
+        };
+        page.messages
+    };
+    g.wait(|g| open(g).len() == ASKS);
+    // Restart it as systemd does, with SIGTERM.
+    drop(lease);
+    let mut broker = g.broker.take().unwrap();
+    let pid = broker.id().to_string();
+    assert!(
+        Command::new("/bin/kill")
+            .args(["-TERM", &pid])
+            .status()
+            .unwrap()
+            .success()
+    );
+    broker.wait().unwrap();
+    g.boot();
+    let _lease = g.lease();
+    let until = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < until {
+        for i in 0..ASKS {
+            let step = &g.status()["steps"][format!("ask{i}")];
+            assert_eq!(step["status"], "running", "{step}");
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert_eq!(open(&g).len(), ASKS);
+    for q in open(&g) {
+        g.rpc(json!({"command":"reply","args":{"project":g.selector(),"to_message":q.id,"body":"","answer":{"action":"approve","params":null,"values":null},"owner":true}}));
+    }
+    for i in 0..ASKS {
+        let step = g.terminal(&format!("ask{i}"));
+        assert_eq!(step["status"], "succeeded", "{step}");
+        assert_eq!(
+            step["outputs"]["reply"]["answer"]["action"], "approve",
+            "{step}"
+        );
+    }
+}
 
 /// `ctx.tool` takes the flat arguments MCP takes and returns the plain result MCP returns,
 /// authored as the step.
