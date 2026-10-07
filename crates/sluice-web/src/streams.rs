@@ -41,12 +41,14 @@ pub struct RenderedBatch {
 impl RenderedBatch {
     /// A batch versioned by the HTML it draws: the same regions are the same version, so a page
     /// drawn with these regions and its stream's first batch agree whenever they show the same.
+    /// A ticking time's text (`<time data-since=…>…</time>`, a running card's timer) is the
+    /// clock's, not the page's: the version leaves it out, so the clock alone never patches.
     pub fn new(regions: Vec<PatchRegion>) -> Self {
         let mut drawn = Vec::new();
         for region in &regions {
             drawn.extend_from_slice(region.id.as_bytes());
             drawn.push(0);
-            drawn.extend_from_slice(region.html.as_str().as_bytes());
+            without_clock(region.html.as_str(), &mut drawn);
             drawn.push(0);
         }
         Self {
@@ -54,6 +56,20 @@ impl RenderedBatch {
             regions,
         }
     }
+}
+/// `html` with the text of each `<time data-since=…>` element left out (its tag kept).
+fn without_clock(html: &str, out: &mut Vec<u8>) {
+    const OPEN: &str = "<time data-since=";
+    let mut rest = html;
+    while let Some(at) = rest.find(OPEN) {
+        let Some(tag) = rest[at..].find('>') else {
+            break;
+        };
+        let (kept, after) = rest.split_at(at + tag + 1);
+        out.extend_from_slice(kept.as_bytes());
+        rest = after.find("</time>").map_or(after, |end| &after[end..]);
+    }
+    out.extend_from_slice(rest.as_bytes());
 }
 #[derive(Clone, Copy, Debug)]
 pub enum VersionSignal {

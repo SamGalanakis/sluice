@@ -374,3 +374,131 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
         "{html}"
     );
 }
+
+#[test]
+fn a_cards_timer_reads_in_its_two_largest_units() {
+    use sluice_web::views::step::{short_duration, spoken_duration};
+    for (seconds, shown, said) in [
+        (0.4, "<1s", "under a second"),
+        (45.9, "45s", "45 seconds"),
+        (60.0, "1m", "1 minute"),
+        (12.0 * 60.0 + 59.0, "12m", "12 minutes"),
+        (3_600.0, "1h 0m", "1 hour"),
+        (
+            2.0 * 3_600.0 + 14.0 * 60.0 + 30.0,
+            "2h 14m",
+            "2 hours 14 minutes",
+        ),
+        (86_400.0 + 3.0 * 3_600.0 + 59.0, "1d 3h", "1 day 3 hours"),
+        (2.0 * 86_400.0, "2d 0h", "2 days"),
+    ] {
+        assert_eq!(short_duration(seconds), shown, "{seconds}");
+        assert_eq!(spoken_duration(seconds), said, "{seconds}");
+    }
+}
+
+/// The step's card on the project page, as the page draws it.
+async fn card(state: &views::DashboardState, project: ProjectId) -> String {
+    let app = views::dashboard_router(state.clone()).layer(Extension(Registry(Arc::new(Exact))));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/projects/id/{project}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1 << 22).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    let start = body.find("<a id=\"n-work\"").expect("the card");
+    let end = start + body[start..].find("</a>").unwrap();
+    body[start..end].to_owned()
+}
+
+#[tokio::test]
+async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_ended() {
+    use sluice_model::ids::{AttemptId, RunId};
+    let (_home, writer, state, project) = fixture().await;
+    let set = |sql: &'static str| {
+        let writer = writer.clone();
+        async move {
+            writer
+                .write(RetrySafety::NonIdempotent, move |tx| {
+                    tx.sql().execute(sql, [project.to_string()])?;
+                    tx.changed(Some(project), "project");
+                    Ok(())
+                })
+                .await
+                .unwrap()
+        }
+    };
+    let run = |created: &'static str, finished: Option<&'static str>| {
+        let writer = writer.clone();
+        async move {
+            writer.write(RetrySafety::NonIdempotent, move |tx| {
+                let attempt = AttemptId::new();
+                // one live attempt a step: the one before has ended
+                tx.sql().execute("UPDATE attempts SET phase='terminal' WHERE project_id=?1", [project.to_string()])?;
+                tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES(?1,?2,'work','executing','{}','fixture',?3)", (attempt.to_string(),project.to_string(),created))?;
+                tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,started_at,finished_at) VALUES(?1,?2,?3,'work',?4,?4,?5)", (RunId::new().to_string(),project.to_string(),attempt.to_string(),created,finished))?;
+                tx.changed(Some(project), "project");
+                Ok(())
+            }).await.unwrap()
+        }
+    };
+    // failed without a run, then pending: no timer
+    assert!(!card(&state, project).await.contains("took"));
+    set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
+    assert!(!card(&state, project).await.contains("took"));
+
+    // running: a <time data-since> at its run's start, which sluice.js ticks
+    run("2026-10-05T09:00:00Z", None).await;
+    set("UPDATE steps SET status='running' WHERE project_id=?1").await;
+    let html = card(&state, project).await;
+    assert!(
+        html.contains("<time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\" class=\"took live\" title=\"Started 2026-10-05 09:00 UTC\"><span class=\"tk\" aria-hidden=\"true\">"),
+        "{html}"
+    );
+    assert!(html.contains("<span class=\"vh\">, for "), "{html}");
+    // its name reads "running work, for 2 days 5 hours" (the glyph, the id, the timer)
+    assert!(html.contains("aria-label=\"running\""), "{html}");
+
+    // failed after it ran, then retried and pending again: nothing until the next run starts
+    set("UPDATE runs SET finished_at='2026-10-05T09:30:00Z' WHERE project_id=?1").await;
+    set("UPDATE steps SET status='failed' WHERE project_id=?1").await;
+    let html = card(&state, project).await;
+    assert!(
+        html.contains("<span class=\"took\" title=\"Took 30m\"><span aria-hidden=\"true\">30m</span><span class=\"vh\">, took 30 minutes</span></span>"),
+        "{html}"
+    );
+    set("UPDATE steps SET status='pending' WHERE project_id=?1").await;
+    assert!(
+        !card(&state, project).await.contains("took"),
+        "a pending step shows no timer"
+    );
+
+    // the retry runs: the timer is the current run's, not the first's
+    run("2026-10-05T10:00:00Z", None).await;
+    set("UPDATE steps SET status='running' WHERE project_id=?1").await;
+    let html = card(&state, project).await;
+    assert!(
+        html.contains("<time data-since=\"2026-10-05T10:00:00Z\" datetime=\"2026-10-05T10:00:00Z\" class=\"took live\" title=\"2 runs; this one started 2026-10-05 10:00 UTC\">"),
+        "{html}"
+    );
+
+    // it succeeds: how long its last run took, static and quieter
+    set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;
+    set("UPDATE steps SET status='succeeded' WHERE project_id=?1").await;
+    let html = card(&state, project).await;
+    assert!(
+        html.contains("<span class=\"took\" title=\"2 runs; this one took 2h 14m\"><span aria-hidden=\"true\">2h 14m</span><span class=\"vh\">, took 2 hours 14 minutes</span></span>"),
+        "{html}"
+    );
+    assert!(!html.contains("data-since"), "{html}");
+
+    // a value set by hand did not take its run's time
+    set("UPDATE steps SET manual=1 WHERE project_id=?1").await;
+    assert!(!card(&state, project).await.contains("took"));
+}

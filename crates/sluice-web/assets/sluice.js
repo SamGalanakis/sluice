@@ -16,6 +16,27 @@ function dur(seconds) {
   return parts.filter(([n]) => n).map(([n, u]) => `${n}${u}`).join(" ") || "0s";
 }
 
+// a card's timer, as the server draws it: its two largest units, "45s", "12m", "2h 14m", "1d 3h"
+function short(seconds) {
+  const s = Math.floor(Math.max(seconds, 0));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (s < 1) return "<1s";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${m}m`;
+  return s < 86400 ? `${h}h ${m}m` : `${d}d ${h}h`;
+}
+
+// the same in words, for a screen reader: "45 seconds", "2 hours 14 minutes", "1 day"
+function spoken(seconds) {
+  const s = Math.floor(Math.max(seconds, 0));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  const unit = (n, one) => (n === 0 ? "" : `${n} ${one}${n === 1 ? "" : "s"}`);
+  if (s < 1) return "under a second";
+  const parts = s < 60 ? [unit(s, "second")] : s < 3600 ? [unit(m, "minute")]
+    : s < 86400 ? [unit(h, "hour"), unit(m, "minute")] : [unit(d, "day"), unit(h, "hour")];
+  return parts.filter(Boolean).join(" ");
+}
+
 function ago(seconds) {
   for (const [unit, size] of [["d", 86400], ["h", 3600], ["m", 60]]) {
     if (seconds >= size) return `${Math.floor(seconds / size)}${unit} ago`;
@@ -27,10 +48,26 @@ const QUIET = 15 * 60;  // seconds without a write before a running step has gon
 
 function tick() {
   const now = Date.now();
+  let wider = false;
   for (const t of $$("time[data-since]")) {
-    const text = dur((now - Date.parse(t.dataset.since)) / 1000);
-    if (t.textContent !== text) t.textContent = text;
+    const seconds = (now - Date.parse(t.dataset.since)) / 1000;
+    if (!Number.isFinite(seconds)) continue;
+    const shown = $(":scope > .tk", t), said = $(":scope > .vh", t);
+    if (!shown) {  // the drawer's "Running 12m 5s"
+      const text = dur(seconds);
+      if (t.textContent !== text) t.textContent = text;
+      continue;
+    }
+    // a card's timer: its width is held, so only a longer text ("9h 59m" to "10h 0m") can move
+    // the edges that meet its card
+    const text = short(seconds), words = `, for ${spoken(seconds)}`;
+    if (shown.textContent !== text) {
+      wider ||= text.length > shown.textContent.length;
+      shown.textContent = text;
+    }
+    if (said && said.textContent !== words) said.textContent = words;
   }
+  if (wider) window.dispatchEvent(new Event("sluice-resized"));
   for (const t of $$("time[data-ago]")) {
     const text = ago((now - Date.parse(t.getAttribute("datetime"))) / 1000);
     if (t.textContent !== text) t.textContent = text;
@@ -482,6 +519,9 @@ rocket("sluice-board", {
       const said = new Set();
       for (const r of records) {
         if (r.target.closest?.("svg.edges")) continue;
+        // a card's timer ticking (tick() says when that widens a card)
+        const at = r.target.nodeType === Node.TEXT_NODE ? r.target.parentElement : r.target;
+        if (r.type !== "attributes" && at?.closest?.("time[data-since]")) continue;
         if (r.type === "attributes" && r.attributeName === "class"
             && layoutClasses(r.oldValue) === layoutClasses(r.target.getAttribute("class"))) continue;
         board = true;

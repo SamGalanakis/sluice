@@ -131,6 +131,60 @@ pub struct StepView {
     pub finishing: Option<sluice_model::attempt::Finishing>,
     /// Its latest progress (`step_progress`) while that is fresher than its outputs.
     pub progress: Option<ProgressView>,
+    /// Its current run's times, for its card's timer.
+    pub timing: Option<RunTiming>,
+}
+/// When a step's current run started and how long it ran or has run so far: its card's timer.
+/// The current run is its latest in its current generation; a scatter's is its latest round,
+/// from its first item's start to its last item's end.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct RunTiming {
+    /// The current run's start, RFC 3339 UTC.
+    pub started: String,
+    /// When it ended; none while it runs.
+    pub finished: Option<String>,
+    /// How many runs the step has had in its current generation, this one included.
+    pub runs: usize,
+    /// Seconds it ran, or has run as of the read. It moves with the clock while the run does, so
+    /// it is no part of the step's version.
+    #[serde(skip)]
+    pub seconds: f64,
+}
+/// A card's timer as the board draws it: its two largest units, "<1s", "45s", "12m", "2h 14m",
+/// "1d 3h" (`sluice.js` ticks a running one in the same words).
+pub fn short_duration(seconds: f64) -> String {
+    let s = seconds.max(0.0).floor() as u64;
+    let (d, h, m) = (s / 86_400, s % 86_400 / 3_600, s % 3_600 / 60);
+    match s {
+        0 => "<1s".into(),
+        1..60 => format!("{s}s"),
+        60..3_600 => format!("{m}m"),
+        3_600..86_400 => format!("{h}h {m}m"),
+        _ => format!("{d}d {h}h"),
+    }
+}
+/// The same duration in words, for a screen reader: "under a second", "45 seconds",
+/// "2 hours 14 minutes", "1 day".
+pub fn spoken_duration(seconds: f64) -> String {
+    let s = seconds.max(0.0).floor() as u64;
+    let unit = |n: u64, one: &str| match n {
+        0 => String::new(),
+        1 => format!("1 {one}"),
+        _ => format!("{n} {one}s"),
+    };
+    let (d, h, m) = (s / 86_400, s % 86_400 / 3_600, s % 3_600 / 60);
+    let parts = match s {
+        0 => return "under a second".into(),
+        1..60 => [unit(s, "second"), String::new()],
+        60..3_600 => [unit(m, "minute"), String::new()],
+        3_600..86_400 => [unit(h, "hour"), unit(m, "minute")],
+        _ => [unit(d, "day"), unit(h, "hour")],
+    };
+    parts
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 /// A step's progress as its page shows it: the fields, when they were set, and whether the
 /// step still runs (live) or the run has ended (kept until the next run starts).
@@ -285,6 +339,7 @@ impl StepView {
             revision: 0,
             finishing: None,
             progress: None,
+            timing: None,
         }
     }
     pub fn href(&self) -> String {
@@ -333,6 +388,67 @@ impl StepView {
         } else {
             String::new()
         }
+    }
+    /// The run times its card shows: a running step's current run, ticking; how long a
+    /// succeeded (not set by hand) or failed step's last run took. Other steps show none.
+    pub fn shown_timing(&self) -> Option<&RunTiming> {
+        let timing = self.timing.as_ref()?;
+        let finished = timing.finished.is_some();
+        match self.status.as_str() {
+            "running" => Some(timing),
+            "succeeded" if finished && !self.manual => Some(timing),
+            "failed" if finished => Some(timing),
+            _ => None,
+        }
+    }
+    /// The card's timer, after its caption: a running run's a `<time data-since>` that
+    /// `sluice.js` ticks (its text the clock's, which a page's version leaves out), a finished
+    /// one's static and quieter. Visible as "2h 14m"; read as ", for 2 hours 14 minutes" or
+    /// ", took 12 minutes". Its title says how many runs the step has had.
+    pub fn timer_html(&self) -> Result<TrustedHtml, askama::Error> {
+        #[derive(Template)]
+        #[template(
+            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\">, for {{ said }}</span></time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\">, took {{ said }}</span></span>{% endif %}",
+            ext = "html"
+        )]
+        struct Timer<'a> {
+            t: &'a RunTiming,
+            live: bool,
+            shown: String,
+            said: String,
+            title: String,
+        }
+        let Some(t) = self.shown_timing() else {
+            return Ok(TrustedHtml::owned(String::new()));
+        };
+        let live = t.finished.is_none();
+        let shown = short_duration(t.seconds);
+        // a running run's title must not move with the clock: it names the start
+        let this = if live {
+            let at = match (t.started.get(..10), t.started.get(11..16)) {
+                (Some(day), Some(time)) => format!("{day} {time} UTC"),
+                _ => t.started.clone(),
+            };
+            format!("started {at}")
+        } else {
+            format!("took {shown}")
+        };
+        let title = match t.runs {
+            0 | 1 => {
+                let mut c = this.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().chain(c).collect())
+                    .unwrap_or_default()
+            }
+            n => format!("{n} runs; this one {this}"),
+        };
+        TrustedHtml::from_template(&Timer {
+            t,
+            live,
+            shown,
+            said: spoken_duration(t.seconds),
+            title,
+        })
     }
     /// The outputs with a value, drawn as fields; the rest are named on one line.
     pub fn outputs_set(&self) -> Vec<&FieldView> {

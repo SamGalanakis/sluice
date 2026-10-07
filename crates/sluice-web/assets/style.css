@@ -661,7 +661,7 @@ sluice-drawer { display: contents; }
 /* the rest recede by losing their chrome, not their text: an unrelated id stays muted ink */
 .plane.tracing .node:not(.near) { border-color: transparent; background: transparent;
                                   box-shadow: none; }
-.plane.tracing .node:not(.near) :is(.sid, .dur) { color: var(--muted-foreground); }
+.plane.tracing .node:not(.near) :is(.sid, .dur, .took) { color: var(--muted-foreground); }
 .plane.tracing .node:not(.near) :is(.g, .ficon) { opacity: .5; }
 .node { position: relative; z-index: 2;  /* over the edges, which are over the boxes */
         display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
@@ -673,6 +673,12 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .sid { font: 600 14.5px/20px var(--font-display); min-width: 0; overflow: hidden;
        text-overflow: ellipsis; white-space: nowrap; }
 .node .dur { font-size: 12px; line-height: 16px; }
+/* the card's timer, after its caption: how long its run took, quiet, or (running) how long it
+   has gone, in ink and ticking; tabular figures, and a running one holds the width of "2h 14m",
+   its figures at the pill's end, so a tick never moves the card or its edges */
+.node .took { flex: none; font-size: 12px; line-height: 16px; white-space: nowrap;
+              color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.node .took.live { min-width: 6ch; text-align: end; color: var(--foreground); }
 .node .sep { font-size: 0; line-height: 0; vertical-align: top; }  /* read, not seen */
 .node .tag { margin-left: -2px; }
 /* two colours mix in sRGB: in oklch, navy and cream meet by way of teal */

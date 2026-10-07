@@ -179,3 +179,27 @@ async fn axum_wire_disconnects_between_each_pair_replay_targets_before_acknowled
         drop(body);
     }
 }
+#[test]
+fn a_ticking_times_text_is_the_clocks_not_part_of_the_version() {
+    #[derive(Template)]
+    #[template(
+        source = "<a class=\"node\">work<time data-since=\"{{ since }}\" class=\"took live\"><span class=\"tk\">{{ shown }}</span><span class=\"vh\">, for {{ shown }}</span></time> after</a>",
+        ext = "html"
+    )]
+    struct Card<'a> {
+        since: &'a str,
+        shown: &'a str,
+    }
+    let version = |since: &str, shown: &str| {
+        RenderedBatch::new(vec![PatchRegion::new(
+            "board",
+            TrustedHtml::from_template(&Card { since, shown }).unwrap(),
+        )])
+        .version
+    };
+    let start = version("2026-10-05T09:00:00Z", "2h 14m");
+    // the clock moved: the same page
+    assert_eq!(start, version("2026-10-05T09:00:00Z", "2h 15m"));
+    // a new run started: a new page
+    assert_ne!(start, version("2026-10-05T11:00:00Z", "<1s"));
+}

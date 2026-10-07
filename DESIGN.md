@@ -664,7 +664,15 @@ tag's 5px corner.
 ## Components
 
 - **Step card**: a pill with the status glyph, the step id (14.5px, 600) and, in 12px meta, a
-  caption: "blocked", "queued", "outside" or `done/total`. Running cards take a blue border,
+  caption: "blocked", "queued", "outside", "finishing" or `done/total`. After the caption, a
+  timer in the board's two-unit durations ("45s", "12m", "2h 14m", "1d 3h"), tabular figures:
+  a running step's says how long its current run (the latest, a retry's own) has gone, in ink,
+  ticking, and holds the width of "2h 14m" with its figures at the pill's end so a tick never
+  moves the card or its edges; a succeeded or failed step's says how long its last run took,
+  in muted ink and still. A pending, blocked, queued, paused, stale or skipped step, and a value
+  set by hand, has none. Its title counts the runs ("3 runs; this one took 2h 14m"); a screen
+  reader hears "running fig-5240-work, for 2 hours 14 minutes" or "…, took 12 minutes". On a
+  phone the card keeps one line: the id gives way before the timer. Running cards take a blue border,
   failed a full-ink one, stale a gold one, paused plum; blocked a dashed border; a step next in
   line (ready) keeps a strong hairline. Inline `core.*` steps are chips: dashed and muted. Its
   accessible description carries the doc, what it waits on and its error. The card in the drawer

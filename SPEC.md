@@ -1281,6 +1281,14 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 | `POST /settings` | display preferences (theme, value types) |
 | `/static/<name>` | assets |
 
+A step's card on the board carries a timer: while it runs, how long its current run has gone
+(its latest run in the step's current generation, so a retry starts it again; a scatter's latest
+round, from its first item's start), ticked by the page's script from the run's start; once it
+has succeeded or failed, how long that run took (start to end), still. A step set by hand, and
+one pending, stale or skipped, shows none; the title counts the step's runs. The page draws the
+time as of its render, so it reads right without script, and the version (below) leaves a
+ticking time's text out, so the clock alone never patches the page.
+
 A finishing step (§6.4) keeps its running glyph; its card's caption reads "finishing", and its
 drawer and page add a "finishing" badge and a Finishing section: when it submitted, the
 `step.submit` record's seq, its release, and that `step_settle` settles a run that lingers.
@@ -1297,7 +1305,7 @@ cdn.jsdelivr.net; every script is served from `/static/` (Datastar 1.0.4, OpenUI
 0.3.0, zod 4.6.5 and sluice's own). A page and each stream batch are drawn from one store
 snapshot, with each running run's activity (its run files' modification times) read once;
 nothing that changes meanwhile fails the page. The version a page carries (`ver`) is a
-fingerprint of the HTML its stream patches, so a stream opened at it sends nothing until
+fingerprint of the HTML its stream patches (a ticking `<time data-since>`'s text left out), so a stream opened at it sends nothing until
 something shown changes. A page that fails answers the shared JSON error with its status, its
 message never empty. Assets linked with their fingerprint (`?v=`) are served immutable.
 

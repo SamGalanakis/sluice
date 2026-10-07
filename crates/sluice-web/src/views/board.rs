@@ -1,5 +1,5 @@
 //! The v2 board. Relations retain their gate form and unit endpoints.
-use super::step::{FieldView, StepView};
+use super::step::{FieldView, RunTiming, StepView};
 use super::{DashboardSnapshot, DashboardState, FunctionCatalog, NavView, TrustedHtml, Viewer};
 use crate::streams::{self, PatchRegion, RenderedBatch, StreamQuery, VersionSignal};
 use askama::Template;
@@ -917,6 +917,7 @@ pub fn load_board(
         cards.insert(r.get::<_, String>(0)?, (manual, total, done));
     }
     let finishing = sluice_store::attempts::finishing(c, project)?;
+    let timings = run_timings(c, project)?;
     for unit in &mut board.units {
         if let Some((message, at)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
@@ -929,6 +930,7 @@ pub fn load_board(
                 step.done = *done as usize;
             }
             step.finishing = finishing.get(&step.id).cloned();
+            step.timing = timings.get(step.id.as_str()).cloned();
             step.revision = revision as u64;
         }
         if let Some(id) = detail
@@ -941,6 +943,72 @@ pub fn load_board(
         }
     }
     Ok((board, plan))
+}
+/// Each step's current run times (its card's timer), from its current generation's runs: its
+/// latest run, or for a scatter its latest round's item runs, from the first start to the last
+/// end. One pass over the project's runs; a run still going is measured to the read's `now`.
+fn run_timings(
+    c: &Connection,
+    project: ProjectId,
+) -> sluice_store::Result<BTreeMap<String, RunTiming>> {
+    struct Run {
+        item: i64,
+        work: i64,
+        started: String,
+        finished: Option<String>,
+        from: Option<f64>,
+        to: Option<f64>,
+    }
+    let mut runs = BTreeMap::<String, Vec<Run>>::new();
+    let mut q = c.prepare_cached(
+        "SELECT r.step_id,r.item_index,r.work_generation,coalesce(r.started_at,r.created_at),r.finished_at,julianday(coalesce(r.started_at,r.created_at)),julianday(coalesce(r.finished_at,'now')) FROM runs r JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation WHERE r.project_id=?1 ORDER BY r.step_id,r.created_at,r.run_id",
+    )?;
+    let mut rows = q.query([project.to_string()])?;
+    while let Some(r) = rows.next()? {
+        runs.entry(r.get(0)?).or_default().push(Run {
+            item: r.get(1)?,
+            work: r.get(2)?,
+            started: r.get(3)?,
+            finished: r.get(4)?,
+            from: r.get(5)?,
+            to: r.get(6)?,
+        });
+    }
+    Ok(runs
+        .into_iter()
+        .filter_map(|(step, all)| {
+            let last = all.last()?;
+            let round: Vec<&Run> = if last.item < 0 {
+                vec![last]
+            } else {
+                all.iter()
+                    .filter(|r| r.item >= 0 && r.work == last.work)
+                    .collect()
+            };
+            let first = round
+                .iter()
+                .min_by(|a, b| a.from.partial_cmp(&b.from).unwrap_or(std::cmp::Ordering::Equal))?;
+            let from = first.from?;
+            let to = round
+                .iter()
+                .map(|r| r.to)
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .fold(from, f64::max);
+            let finished = round
+                .iter()
+                .map(|r| r.finished.clone())
+                .collect::<Option<Vec<_>>>()
+                .and_then(|ends| ends.into_iter().max());
+            let timing = RunTiming {
+                started: first.started.clone(),
+                finished,
+                runs: all.len(),
+                seconds: (to - from) * 86_400.0,
+            };
+            Some((step, timing))
+        })
+        .collect())
 }
 /// Each unit's last message (body and time): the newest from or to one of its steps, or in one
 /// of its steps' threads. One pass over the project's messages, newest first.
