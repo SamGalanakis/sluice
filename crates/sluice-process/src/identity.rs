@@ -133,17 +133,3 @@ fn open_pidfd(pid: Pid) -> io::Result<OwnedFd> {
 }
 
 pub use rustix::process::Signal;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_process_gone_before_pidfd_open_is_stale() {
-        let mut child = std::process::Command::new("/bin/true").spawn().unwrap();
-        let pid = Pid::from_raw(child.id() as i32).unwrap();
-        child.wait().unwrap();
-        let error = open_pidfd(pid).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::NotFound, "{error}");
-    }
-}

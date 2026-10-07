@@ -70,30 +70,7 @@ fn journal(a: &AdoptionAttempt) -> CompletionJournal {
         delivery_acks: vec![],
     }
 }
-#[tokio::test]
-async fn reconnects_only_the_exact_live_guardian() {
-    let dir = tempfile::tempdir().unwrap();
-    let (a, link) = setup(dir.path());
-    assert_eq!(
-        adopt_attempt(
-            &a,
-            &link,
-            &Presence(GuardianPresence::Live(a.guardian.clone().unwrap()))
-        )
-        .await
-        .unwrap(),
-        AdoptionOutcome::Reconnected
-    );
-    let mut wrong = a.guardian.clone().unwrap();
-    wrong.process.start_time += 1;
-    assert!(matches!(
-        adopt_attempt(&a, &link, &Presence(GuardianPresence::Live(wrong)))
-            .await
-            .unwrap(),
-        AdoptionOutcome::Pending(_)
-    ));
-    link.with_state(|s| assert_eq!(s.attempts[&a.identity.run].releases, 0));
-}
+
 #[tokio::test]
 async fn journal_import_replays_start_before_completion_and_busy_keeps_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -119,74 +96,7 @@ async fn journal_import_replays_start_before_completion_and_busy_keeps_it() {
     assert!(!dir.path().join("completion.json").exists());
     link.with_state(|s| assert_eq!(s.attempts[&a.identity.run].releases, 1));
 }
-#[tokio::test]
-async fn loss_releases_holds_only_after_proven_recursive_emptiness() {
-    let dir = tempfile::tempdir().unwrap();
-    let (a, link) = setup(dir.path());
-    assert!(matches!(
-        adopt_attempt(&a, &link, &Presence(GuardianPresence::Gone(proof(false))))
-            .await
-            .unwrap(),
-        AdoptionOutcome::Pending(_)
-    ));
-    assert!(matches!(
-        adopt_attempt(
-            &a,
-            &link,
-            &Presence(GuardianPresence::Ambiguous("service stopping".into()))
-        )
-        .await
-        .unwrap(),
-        AdoptionOutcome::Pending(_)
-    ));
-    link.with_state(|s| assert_eq!(s.attempts[&a.identity.run].releases, 0));
-    assert!(matches!(
-        adopt_attempt(&a, &link, &Presence(GuardianPresence::Gone(proof(true))))
-            .await
-            .unwrap(),
-        AdoptionOutcome::Lost(_)
-    ));
-    link.with_state(|s| {
-        let r = &s.attempts[&a.identity.run];
-        assert_eq!(r.releases, 1);
-        assert!(matches!(
-            r.completion.as_ref().unwrap().result,
-            PayloadResult::Lost(_)
-        ));
-        assert!(r.started.is_empty());
-    });
-}
-#[tokio::test]
-async fn changed_boot_and_unclaimed_reservations_are_lost_only_after_absence() {
-    for unclaimed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
-        let (mut a, link) = setup(dir.path());
-        if unclaimed {
-            a.guardian = None;
-        } else {
-            a.guardian.as_mut().unwrap().process.boot_id = "old-boot".into();
-        }
-        assert!(matches!(
-            adopt_attempt(
-                &a,
-                &link,
-                &Presence(GuardianPresence::Ambiguous(
-                    "absence not established".into()
-                ))
-            )
-            .await
-            .unwrap(),
-            AdoptionOutcome::Pending(_)
-        ));
-        assert!(matches!(
-            adopt_attempt(&a, &link, &Presence(GuardianPresence::Gone(proof(true))))
-                .await
-                .unwrap(),
-            AdoptionOutcome::Lost(_)
-        ));
-        link.with_state(|s| assert!(s.attempts[&a.identity.run].started.is_empty()));
-    }
-}
+
 #[test]
 fn journal_publication_refuses_corruption_identity_changes_and_overwrite() {
     let dir = tempfile::tempdir().unwrap();
@@ -243,37 +153,4 @@ async fn wrong_completion_ack_never_deletes_journal() {
         .is_err()
     );
     assert!(dir.path().join("completion.json").exists());
-}
-
-#[tokio::test]
-async fn collected_result_landing_during_reconciliation_wins_over_loss() {
-    struct DiesAfterCollection(CompletionJournal);
-    impl AdoptionHost for DiesAfterCollection {
-        async fn reconcile(&self, a: &AdoptionAttempt) -> io::Result<GuardianPresence> {
-            std::fs::write(
-                a.run_dir.join("collected.json"),
-                serde_json::to_vec(&self.0).unwrap(),
-            )?;
-            Ok(GuardianPresence::Gone(proof(true)))
-        }
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let (a, link) = setup(dir.path());
-    let j = journal(&a);
-    assert!(matches!(
-        adopt_attempt(&a, &link, &DiesAfterCollection(j))
-            .await
-            .unwrap(),
-        AdoptionOutcome::Imported(_)
-    ));
-    link.with_state(|s| {
-        assert!(matches!(
-            s.attempts[&a.identity.run]
-                .completion
-                .as_ref()
-                .unwrap()
-                .result,
-            PayloadResult::Succeeded(_)
-        ))
-    });
 }

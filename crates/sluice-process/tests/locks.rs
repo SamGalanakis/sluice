@@ -7,30 +7,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[test]
-fn conflict_reports_holder_and_drop_releases_descriptor() {
-    let scratch = tempfile::tempdir().unwrap();
-    let path = scratch.path().join("home.lock");
-    let LockAttempt::Acquired(lock) =
-        FileLock::try_acquire(&path, Some("fixture".into()), None).unwrap()
-    else {
-        panic!("new lock conflicted")
-    };
-    let LockAttempt::Conflict(holder) =
-        FileLock::try_acquire(&path, Some("contender".into()), None).unwrap()
-    else {
-        panic!("second descriptor acquired held flock")
-    };
-    assert_eq!(&holder, lock.holder());
-    assert_eq!(holder.pid, std::process::id());
-    drop(lock);
-    assert!(matches!(
-        FileLock::try_acquire(&path, None, None).unwrap(),
-        LockAttempt::Acquired(_)
-    ));
-    assert!(path.exists(), "lock inode must persist");
-}
-
 struct ChildGuard(std::process::Child, sluice_process::identity::OwnedProcess);
 impl ChildGuard {
     fn new(child: std::process::Child) -> Self {

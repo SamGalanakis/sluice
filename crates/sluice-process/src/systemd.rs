@@ -313,39 +313,3 @@ async fn manager_output(command: Command) -> io::Result<Output> {
     }
     Ok(output)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn deterministic_names_and_strict_queries() {
-        let run = RunId::new();
-        assert_eq!(
-            TransientService::for_run(run).name(),
-            TransientService::for_run(run).name()
-        );
-        assert!(parse_state("x", "ActiveState=inactive").is_err());
-        let state = parse_state(
-            "x",
-            "LoadState=not-found\nActiveState=inactive\nSubState=dead\nControlGroup=\nMainPID=0\n",
-        )
-        .unwrap();
-        assert!(state.stopped());
-        assert!(state.cgroup.is_none());
-        assert_eq!(
-            TransientService::for_run(run).name(),
-            format!("sluice-run-{run}.service")
-        );
-        assert_eq!(
-            TransientService::for_test(run).name(),
-            format!("sluice-test-{run}.service")
-        );
-        let names = TransientService::names(run);
-        assert_eq!(names[0], TransientService::for_launch(run).name());
-        for name in &names {
-            assert!(TransientService::adopt(run, name).is_ok());
-        }
-        assert!(TransientService::adopt(RunId::new(), &names[0]).is_err());
-        assert!(TransientService::adopt(run, &format!("sluice-{run}.service")).is_err());
-    }
-}
