@@ -237,6 +237,49 @@ async fn edits_that_change_nothing_commit_no_revision_or_history() {
     );
     assert_eq!(f.rev().await, rev);
     assert_eq!(f.history_len().await, history);
+    let plan_before = f.plan().await;
+    let log_before = f.call("log_read", json!({"limit":1000})).await.unwrap();
+    for ops in [
+        json!([{ "op":"replace", "path":"/steps/c/in/value/default", "value":3 },
+               { "op":"test", "path":"/steps/d/in/value/default", "value":99 }]),
+        json!([{ "op":"replace", "path":"/steps/c/in/value/default", "value":3 },
+               { "op":"remove", "path":"/steps/absent" }]),
+        json!([{ "op":"replace", "path":"/steps/c/in/value/default", "value":3 },
+               { "op":"replace", "path":"/steps/d/run", "value":"missing" }]),
+    ] {
+        assert!(
+            f.call(
+                "plan_patch",
+                json!({"rev":rev,"ops":ops,"dry_run":false,"reason":"refused","start":true})
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(f.plan().await, plan_before);
+        assert_eq!(f.rev().await, rev);
+        assert_eq!(f.history_len().await, history);
+        assert_eq!(
+            f.call("log_read", json!({"limit":1000})).await.unwrap(),
+            log_before
+        );
+    }
+    let stale = f
+        .call(
+            "plan_patch",
+            json!({"rev":rev-1,"ops":[],"dry_run":false,"reason":"stale","start":true}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(stale, PublicError::Conflict { current_rev: Some(Revision(r)), .. } if r == rev),
+        "{stale:?}"
+    );
+    assert_eq!(f.plan().await, plan_before);
+    assert_eq!(f.history_len().await, history);
+    assert_eq!(
+        f.call("log_read", json!({"limit":1000})).await.unwrap(),
+        log_before
+    );
     // A real change still commits.
     let changed = edited(
         f.call(

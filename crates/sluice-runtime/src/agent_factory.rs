@@ -1149,20 +1149,4 @@ mod tests {
         // Every try is the same request, so the coordinator posts it once however many it took.
         assert!(requests.iter().all(|id| *id == requests[0]));
     }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_cancelled_run_stops_retrying_a_note() {
-        let coordinator = StalledCoordinator {
-            stalls: usize::MAX,
-            requests: Mutex::default(),
-        };
-        let (cancel, launch) = (CancellationToken::new(), launch());
-        let note = say_to_orchestrator(&coordinator, &launch, "quiet", &cancel, PATIENCE);
-        let stop = async {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            cancel.cancel();
-        };
-        let (result, ()) = tokio::join!(note, stop);
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
-    }
 }

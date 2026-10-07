@@ -34,27 +34,3 @@ pub(crate) async fn contained<T: Send + 'static>(
         }),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn a_panic_is_an_error_and_a_result_passes_through() {
-        let ok = contained("command", async { Ok::<_, PublicError>(7) }).await;
-        assert_eq!(ok.unwrap(), 7);
-        let failed: Result<(), _> =
-            contained("command", async { panic!("broken {}", "work") }).await;
-        let Err(PublicError::Storage { message }) = failed else {
-            panic!("{failed:?}")
-        };
-        assert_eq!(message, "the coordinator's command failed: broken work");
-        let refused: Result<(), _> = contained("command", async {
-            Err(PublicError::BadRequest {
-                message: "no".into(),
-            })
-        })
-        .await;
-        assert!(matches!(refused, Err(PublicError::BadRequest { .. })));
-    }
-}

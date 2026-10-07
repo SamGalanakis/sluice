@@ -187,6 +187,60 @@ async fn recipe_expansion_precedence_tags_edges_inputs_and_atomic_failure_over_s
         recipes[1]["params"],
         json!({"unit":"string","base":{"type":"int","doc":"number"}})
     );
+    let recipe_root = f.home.path().join("recipes");
+    for (name, bytes) in [
+        (
+            "duplicate",
+            br#"{"name":"duplicate","name":"duplicate","steps":{}}"#.as_slice(),
+        ),
+        ("array", b"[]".as_slice()),
+        (
+            "overflow",
+            br#"{"name":"overflow","steps":{"a":{"n":9223372036854775808}}}"#.as_slice(),
+        ),
+        ("invalid", b"{".as_slice()),
+    ] {
+        std::fs::write(recipe_root.join(format!("{name}.json")), bytes).unwrap();
+    }
+    let catalog = data(f.call("recipe_list", json!({})).await.unwrap());
+    for name in ["duplicate", "array", "overflow", "invalid"] {
+        assert!(
+            catalog
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["name"] == name)
+                .unwrap()["error"]
+                .is_string()
+        );
+    }
+    assert!(
+        catalog
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "lane" && entry["doc"] == "project")
+    );
+    let before_errors = data(f.call("plan_get", json!({})).await.unwrap());
+    for (unit, params, expected) in [
+        ("bad", json!({}), "base"),
+        ("bad", json!({"base":"no"}), "base"),
+        ("bad", json!({"base":1,"extra":2}), "extra"),
+    ] {
+        let error = f.call("unit_add", json!({"recipe":"lane","unit":unit,"params":params,"after":{},"edit":options(false)})).await.unwrap_err();
+        assert!(matches!(error, PublicError::Invalid { .. }), "{error:?}");
+        let PublicError::Invalid { errors, .. } = &error else {
+            unreachable!()
+        };
+        assert!(
+            errors.iter().any(|path| path.contains(expected)),
+            "{error:?}"
+        );
+        assert_eq!(
+            data(f.call("plan_get", json!({})).await.unwrap()),
+            before_errors
+        );
+    }
     let args = json!({"recipe":"lane","unit":"lane","params":{"base":7},"start":false,"after":{"*":["unit:pre"],"land":["pre/ok"]},"tags":["delivery"],"inputs":{"land":{"value":9}},"edit":options(false)});
     let before = f.rev().await;
     let result = f.call("unit_add", args).await.unwrap();
@@ -730,6 +784,64 @@ async fn prune_uses_age_evidence_and_backup_is_online_and_refuses_overwrite() {
     assert_eq!(f.rev().await, before + 1);
     let plan = data(f.call("plan_get", json!({})).await.unwrap());
     assert!(plan["plan"]["steps"].get("pre").is_none());
+    let names = [
+        "ta-harness-work",
+        "ta-",
+        "beta-x",
+        "fig-1",
+        "fig-12",
+        "fig-4200-landed",
+        "axxbyyc",
+        "axxbyy",
+        "y",
+    ];
+    f.patch(json!(names.iter().map(|name| json!({"op":"add","path":format!("/steps/{name}"),"value":{"run":"core.external","outputs":{"done":"boolean"},"tags":[format!("unit:{name}")]}})).collect::<Vec<_>>())).await;
+    for name in names {
+        f.call(
+            "step_set_output",
+            json!({"step":name,"outputs":{"done":true},"force":true,"reason":"fixture"}),
+        )
+        .await
+        .unwrap();
+    }
+    for (patterns, name, expected) in [
+        (vec!["ta-*"], "ta-harness-work", Some("ta-*")),
+        (vec!["ta-*"], "ta-", Some("ta-*")),
+        (vec!["ta-*"], "beta-x", None),
+        (vec!["fig-?"], "fig-1", Some("fig-?")),
+        (vec!["fig-?"], "fig-12", None),
+        (vec!["*-landed"], "fig-4200-landed", Some("*-landed")),
+        (vec!["a*b*c"], "axxbyyc", Some("a*b*c")),
+        (vec!["a*b*c"], "axxbyy", None),
+        (vec!["x", "*"], "y", Some("*")),
+        (vec![], "y", None),
+    ] {
+        let before = f.rev().await;
+        let CommandReply::Pruned(preview) = f
+            .call(
+                "plan_prune",
+                json!({"units":[name],"keep":patterns,"older_than_seconds":0,"edit":options(false)}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("prune preview")
+        };
+        assert_eq!(
+            preview
+                .kept
+                .iter()
+                .find(|kept| kept.unit.as_str() == name)
+                .and_then(|kept| kept.keep.as_deref()),
+            expected,
+            "{name}: {preview:?}"
+        );
+        assert_eq!(
+            preview.units.iter().any(|unit| unit.as_str() == name),
+            expected.is_none()
+        );
+        assert_eq!(f.rev().await, before + u64::from(expected.is_none()));
+    }
     let path = f.home.root().join("backup.db");
     let backup = data(
         f.client
@@ -739,6 +851,33 @@ async fn prune_uses_age_evidence_and_backup_is_online_and_refuses_overwrite() {
     );
     assert!(backup["bytes"].as_u64().unwrap() > 0);
     assert!(path.exists());
+    let original = std::fs::read(&path).unwrap();
+    let source = f.home.path().join("sluice.db");
+    for target in [&path, &source, &f.home.path().to_owned()] {
+        let error = f
+            .client
+            .command(request("backup", json!({"destination":target})))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PublicError::BadRequest { .. }), "{error:?}");
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert!(
+        data(f.call("plan_get", json!({})).await.unwrap())["plan"]["steps"]
+            .get("work")
+            .is_some()
+    );
+    let reserved = f.home.root().join("sidecar.db");
+    let sidecar = f.home.root().join("sidecar.db-wal");
+    std::fs::write(&sidecar, b"another owner's sidecar").unwrap();
+    assert!(
+        f.client
+            .command(request("backup", json!({"destination":reserved})))
+            .await
+            .is_err()
+    );
+    assert!(!reserved.exists());
+    assert_eq!(std::fs::read(sidecar).unwrap(), b"another owner's sidecar");
     assert!(
         f.client
             .command(request("backup", json!({"destination":path})))

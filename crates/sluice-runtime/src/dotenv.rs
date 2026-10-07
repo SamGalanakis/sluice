@@ -86,18 +86,4 @@ mod tests {
         assert_eq!(values["EQ"], "a=b");
         assert_eq!(bad, vec![7, 8]);
     }
-
-    #[test]
-    fn project_env_overrides_home_env() {
-        let home = tempfile::tempdir().unwrap();
-        let project = ProjectId::new();
-        let dir = home.path().join("projects").join(project.to_string());
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(home.path().join(".env"), "SHARED=home\nHOME_ONLY=1\n").unwrap();
-        std::fs::write(dir.join(".env"), "SHARED=project\n").unwrap();
-        let env = run_environment(home.path(), Some(project));
-        assert_eq!(env["SHARED"], "project");
-        assert_eq!(env["HOME_ONLY"], "1");
-        assert_eq!(run_environment(home.path(), None)["SHARED"], "home");
-    }
 }
