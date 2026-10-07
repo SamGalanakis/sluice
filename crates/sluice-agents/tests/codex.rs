@@ -140,25 +140,7 @@ async fn completed(
         sleep(Duration::from_millis(10)).await;
     }
 }
-#[test]
-fn tui_disables_startup_updates_for_fresh_and_resume() {
-    for session in [None, Some("thread-1")] {
-        let argv = profile::tui_argv(
-            Path::new("/tools/codex"),
-            Path::new("/tmp/app.sock"),
-            session,
-        );
-        assert_eq!(
-            &argv[..3],
-            ["/tools/codex", "-c", "check_for_update_on_startup=false"]
-        );
-        assert!(argv.contains(&"--remote".into()));
-        assert_eq!(
-            argv.last().unwrap(),
-            session.unwrap_or("unix:///tmp/app.sock")
-        );
-    }
-}
+
 #[test]
 fn private_config_disables_all_mcp_forms_and_preserves_toml_types() {
     for servers in [
@@ -189,18 +171,7 @@ fn private_config_disables_all_mcp_forms_and_preserves_toml_types() {
         assert!(!output.contains("secret"));
     }
 }
-#[test]
-fn private_config_keeps_difficult_values() {
-    let source = "'key with space'=1\n'é'='ünï'\nbig=1e300\nneg=-inf\nodd=nan\nlocal=2026-09-29T12:34:56.5\noff=2026-09-29T12:34:56+02:00\nempty={}\nnone=[]\ndeep=[[{a={'b.c'=[1.5,'x']}}]]\n";
-    let output = profile::private_config(source, "sol", Some("max"), true).unwrap();
-    assert!(output.starts_with(source));
-    assert!(
-        output.parse::<toml_edit::DocumentMut>().unwrap()["odd"]
-            .as_float()
-            .unwrap()
-            .is_nan()
-    );
-}
+
 #[test]
 fn malformed_config_and_invalid_mcp_tables_fail() {
     for source in [

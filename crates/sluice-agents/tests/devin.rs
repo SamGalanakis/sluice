@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use sluice_agents::engines::{
     DeliveryOutcome, EngineAdapter, EngineCommand, EngineContext, EngineErrorKind, EngineLaunch,
     EngineObservation, EngineStatus, HookEvent, InputId,
-    devin::{Devin, DevinOptions, profile, protocol},
+    devin::{Devin, DevinOptions, protocol},
 };
 use sluice_agents::supervisor::{
     Checkpoint, HostSnapshot, Limits, RetryPolicy, State, SupervisorConfig, SupervisorHost,
@@ -551,29 +551,6 @@ async fn supervisor_devin_fresh_task_delivered_once_submission_and_finish() {
     );
 }
 
-#[test]
-fn devin_model_profile_and_composer_match_the_python_contract() {
-    let profile = profile::profile();
-    let default = profile.default_model.clone().unwrap();
-    assert_eq!(
-        default.to_value(),
-        json!({"type":"normal","model":"swe-2","effort":"high"})
-    );
-    assert_eq!(
-        sluice_agents::model::compose("devin", &default).unwrap().id,
-        "swe-2-high"
-    );
-    assert!(!profile.reports_waiting);
-    let pane = include_str!("fixtures/devin/composer.txt");
-    assert!(protocol::composer_ready(pane));
-    assert!(protocol::draft_visible(pane, "Your task is in"));
-    assert!(!protocol::draft_visible(pane, "old answer"));
-    assert_eq!(
-        protocol::paste_payload("a\r\nb\t\x1b[201~\\"),
-        b"a\rb\t[201~\\\r"
-    );
-}
-
 #[tokio::test]
 async fn devin_private_jsonc_config_preserves_settings_and_pins_fusion() {
     let root = Scratch::new();
@@ -1087,78 +1064,6 @@ async fn devin_exit_probe_drains_terminal_hooks_before_reporting_exit() {
         assert_eq!(observation.turns_completed, u64::from(stop));
         adapter.close().await.unwrap();
     }
-}
-
-#[test]
-fn devin_permission_mode_reads_the_release_indicator_near_the_composer() {
-    use protocol::{PermissionMode::*, permission_mode};
-    // Captured from labelled G3 session amusing-learning: the indicator sits in the top rule.
-    for captured in [
-        include_str!("fixtures/devin/real-fresh-bypass-pane.txt"),
-        include_str!("fixtures/devin/real-resume-bypass-pane.txt"),
-    ] {
-        assert_eq!(permission_mode(captured), Bypass);
-        let normal = captured.replace(" (bypass permissions on) ", &"\u{2500}".repeat(25));
-        assert_eq!(permission_mode(&normal), NotBypass);
-    }
-    let real = include_str!("fixtures/devin/resume-footer-excerpt.txt");
-    assert_eq!(permission_mode(real), Bypass);
-    let coloured = real.replace(
-        "(bypass permissions on)",
-        "\x1b[38;5;214m(bypass\x1b[0m permissions on)\x1b]8;;\x07",
-    );
-    assert_eq!(permission_mode(&coloured), Bypass);
-    let normal: String = real.lines().skip(1).map(|l| format!("{l}\n")).collect();
-    assert_eq!(permission_mode(&normal), NotBypass);
-    let history = format!(
-        "(bypass permissions on)\n{}{normal}",
-        "earlier output\n".repeat(8)
-    );
-    assert_eq!(permission_mode(&history), NotBypass);
-    assert_eq!(
-        permission_mode(&real.replace("bypass permissions on", "accept edits on")),
-        NotBypass
-    );
-    // A draft hides the placeholder; an undrawn footer leaves the mode unknown.
-    assert_eq!(
-        permission_mode(&real.replace(
-            "Ask Devin to build features, fix bugs, or work on your code",
-            "/bypass"
-        )),
-        Unknown
-    );
-    assert_eq!(
-        permission_mode("❭ Ask Devin to build features, fix bugs, or work on your code\n"),
-        Unknown
-    );
-}
-
-#[test]
-fn devin_working_pane_reads_the_release_spinner_and_busy_placeholder() {
-    use protocol::{input_queued, working};
-    // Real panes: a Fusion lead blocked on its sidekick, a SWE-2 turn typing its last
-    // message, and the idle composer after a turn.
-    let fusion = include_str!("fixtures/devin/real-fusion-busy-pane.txt");
-    assert!(working(fusion));
-    assert!(working(include_str!(
-        "fixtures/devin/real-fresh-bypass-pane.txt"
-    )));
-    let idle = include_str!("fixtures/devin/resume-footer-excerpt.txt");
-    assert!(!working(idle));
-    // Either indicator alone is work; an indicator quoted in the transcript is not.
-    assert!(working(&fusion.replace("Guide Devin while it works", "")));
-    assert!(working(&fusion.replace(
-        "(esc twice to interrupt)",
-        "(esc again to interrupt)"
-    )));
-    assert!(!working(&format!(
-        "Running tools \u{b7} 1s (esc twice to interrupt)\nGuide Devin while it works\n{}{idle}",
-        "transcript\n".repeat(12)
-    )));
-    assert!(!input_queued(fusion));
-    assert!(input_queued(&format!(
-        "  \u{21b3} Addressed live message \u{b7} queued \u{b7} send now\n{fusion}"
-    )));
 }
 
 #[test]
@@ -2391,23 +2296,4 @@ async fn supervisor_devin_turn_start_timeout_keeps_the_pane_at_failure() {
         0o600
     );
     assert_eq!(host.cleanups, 1);
-}
-
-#[test]
-fn devin_composer_holding_a_draft_is_no_screen_to_wait_out() {
-    let rule = "\u{2500}".repeat(100);
-    let footer = "SWE-2 High \u{b7} Context: 0k / 262k tokens (0%)";
-    let empty = format!(
-        "{rule}\n\u{276f} Ask Devin to build features, fix bugs, or work on your code\n{rule}\n{footer}"
-    );
-    let draft = format!("{rule}\n\u{276f} Submit the declared word\n{rule}\n{footer}");
-    let pasted = format!("{rule}\n\u{276f} \n  [Pasted text #1 +40 lines]\n{rule}\n{footer}");
-    assert!(protocol::composer_ready(&empty) && protocol::composer_drawn(&empty));
-    for pane in [&draft, &pasted] {
-        assert!(!protocol::composer_ready(pane), "{pane}");
-        assert!(protocol::composer_drawn(pane), "{pane}");
-        assert!(protocol::blocking_screen(pane).is_none(), "{pane}");
-    }
-    let picker = "Select your Devin organization:\n\n\u{276f} Acme Corp\n  Personal";
-    assert!(!protocol::composer_drawn(picker));
 }

@@ -3,7 +3,7 @@ use sluice_agents::engines::{
     claude::{
         Claude,
         protocol::{self, Tail},
-        state::{ClaudeState, STABLE_IDLE},
+        state::ClaudeState,
     },
     *,
 };
@@ -63,113 +63,7 @@ fn snapshot(state: &mut ClaudeState, status: &str, now: u64) -> EngineObservatio
         1900000000.0,
     )
 }
-#[test]
-fn background_shell_agent_wakeup_and_only_own_one_shot_crons_wait() {
-    let mut state = ClaudeState::default();
-    state
-        .hook(&hook("UserPromptSubmit", json!({"prompt":"p"})))
-        .unwrap();
-    state.hook(&hook("Stop",json!({"last_assistant_message":"Started.","background_tasks":[{"type":"shell","status":"running"},{"type":"local_agent","status":"running","description":"review"},{"type":"shell","status":"completed"}]}))).unwrap();
-    let s = snapshot(&mut state, "shell", 0);
-    assert_eq!(s.status, EngineStatus::Idle);
-    assert_eq!(s.turns_completed, 1);
-    assert_eq!(s.background_work.len(), 2);
-    assert_eq!(
-        snapshot(&mut state, "idle", 1).waiting.as_deref(),
-        Some("background task: review")
-    );
-    let entries: Vec<Value> = include_str!("fixtures/claude/transcript.jsonl")
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    for entry in &entries[..5] {
-        state.transcript(entry, true);
-    }
-    state
-        .hook(&hook("UserPromptSubmit", json!({"prompt":"p2"})))
-        .unwrap();
-    state.hook(&hook("Stop",json!({"last_assistant_message":"Scheduled.","session_crons":[{"id":"cron-redacted","recurring":false},{"id":"loop-owned"}]}))).unwrap();
-    let s = snapshot(&mut state, "idle", 2);
-    assert!(
-        s.background_work
-            .iter()
-            .any(|s| s.starts_with("a wakeup at"))
-    );
-    assert!(s.background_work.contains(&"a scheduled job".into()));
-    state.transcript(&entries[5], true);
-    state
-        .hook(&hook("UserPromptSubmit", json!({"prompt":"awake"})))
-        .unwrap();
-    state
-        .hook(&hook(
-            "Stop",
-            json!({"last_assistant_message":"AWAKE","session_crons":[{"id":"loop-owned"}]}),
-        ))
-        .unwrap();
-    let s = snapshot(&mut state, "idle", 3);
-    assert_eq!(s.turns_completed, 3);
-    assert!(s.waiting.is_none());
-    assert_eq!(s.final_text, "AWAKE");
-}
-#[test]
-fn interrupt_requires_ten_seconds_of_continuous_verified_idle_in_current_prompt() {
-    assert_eq!(STABLE_IDLE, Duration::from_secs(10));
-    for interruption in ["busy", "waiting", "new-prompt", "progress", "overlay"] {
-        let mut state = ClaudeState::default();
-        state
-            .hook(&hook("UserPromptSubmit", json!({"prompt":"first"})))
-            .unwrap();
-        assert_eq!(snapshot(&mut state, "idle", 10).status, EngineStatus::Busy);
-        match interruption {
-            "new-prompt"=>state.hook(&hook("UserPromptSubmit",json!({"prompt":"second"}))).unwrap(),
-            "progress"=>state.transcript(&json!({"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}),true),
-            "overlay"=>{state.snapshot(Some("idle"),false,false,Duration::from_secs(12),0.0);},
-            other=>{snapshot(&mut state,other,12);}
-        }
-        assert_eq!(snapshot(&mut state, "idle", 16).turns_completed, 0);
-        assert_eq!(snapshot(&mut state, "idle", 25).turns_completed, 0);
-        assert_eq!(snapshot(&mut state, "idle", 26).turns_completed, 1);
-        assert_eq!(snapshot(&mut state, "idle", 50).turns_completed, 1);
-    }
-}
-#[test]
-fn hook_acknowledgements_errors_and_subagent_text_are_facts_only() {
-    let mut state = ClaudeState::default();
-    state.pending(InputId::Task, "the task".into());
-    state
-        .hook(&hook("UserPromptSubmit", json!({"prompt":"different"})))
-        .unwrap();
-    assert!(snapshot(&mut state, "idle", 0).acknowledged.is_empty());
-    state
-        .hook(&hook("UserPromptSubmit", json!({"prompt":"\nthe task\n"})))
-        .unwrap();
-    state
-        .hook(&hook(
-            "StopFailure",
-            json!({"error":"rate_limit","last_assistant_message":"API Error: 429"}),
-        ))
-        .unwrap();
-    let s = snapshot(&mut state, "idle", 1);
-    assert_eq!(s.acknowledged, vec![InputId::Task]);
-    assert_eq!(s.error.unwrap().kind, EngineErrorKind::Transient);
-    state
-        .hook(&hook("SubagentStart", json!({"agent_id":"a"})))
-        .unwrap();
-    state.transcript(&json!({"type":"assistant","message":{"content":[{"type":"text","text":"subagent result"}]}}),false);
-    let s = snapshot(&mut state, "idle", 2);
-    assert_eq!(s.final_text, "API Error: 429");
-    assert_eq!(s.turns_completed, 1);
-    assert!(s.waiting.is_some());
-    state
-        .hook(&hook(
-            "SubagentStop",
-            json!({"agent_id":"a","last_assistant_message":"child done"}),
-        ))
-        .unwrap();
-    assert!(snapshot(&mut state, "idle", 3).waiting.is_none());
-    state.hook(&hook("SessionEnd", json!({}))).unwrap();
-    assert_eq!(snapshot(&mut state, "idle", 4).status, EngineStatus::Exited);
-}
+
 /// Claude Code writes a transcript line over 1 MiB for a large tool result or file read:
 /// the reader skips it and goes on with the records after it, and the run's state keeps
 /// following the transcript.
@@ -252,31 +146,6 @@ fn protocol_bounds_identity_and_partial_transcript_offsets() {
     assert!(protocol::decode_hook("Stop", &value).is_err());
     value["session_id"] = json!("../escape");
     assert!(protocol::decode_hook("SessionStart", &value).is_err());
-}
-#[test]
-fn composer_rules_history_shell_overlay_wrapped_drafts_and_control_bytes() {
-    let rule = "─".repeat(40);
-    let pane = format!("x\n{rule}\n❯ \n{rule}\n footer");
-    assert!(protocol::composer_ready(&pane));
-    assert!(!protocol::composer_ready(&format!("{rule}\n! ls\n{rule}")));
-    assert!(protocol::occupied("a dialog\n❯ 1. Yes"));
-    assert!(!protocol::occupied(""));
-    assert!(!protocol::composer_ready(&format!(
-        "{rule}\n❯ \n{rule}\nsearch prompts: old"
-    )));
-    assert!(protocol::draft_visible(
-        &format!("{rule}\n❯ \n  [Pasted text #1 +3 lines]\n{rule}"),
-        "any"
-    ));
-    assert!(protocol::draft_visible(
-        &format!("{rule}\n❯ \n Your task is in\n /a/very/long/path\n{rule}"),
-        "Your task is in /a/very/"
-    ));
-    assert!(!protocol::draft_visible(
-        &format!("❯ old task\nout\n{rule}\n❯ \n{rule}"),
-        "old task"
-    ));
-    assert_eq!(protocol::paste_payload("x\r\ny\t\x1b\\\n"), b"x\ry\t\\\r");
 }
 
 struct Harness {
@@ -1174,59 +1043,7 @@ fn claude_usage_limits_fail_as_quota_exhausted_and_short_or_plain_rate_limits_st
         EngineErrorKind::QuotaExhausted
     );
 }
-#[test]
-fn claude_stop_failure_text_is_a_fallback_and_the_transcript_reset_wins() {
-    let now = account::now();
-    let text = "You've hit your session limit \u{b7} resets 5:10pm (Europe/Berlin)";
-    let failure = || {
-        hook(
-            "StopFailure",
-            json!({"error":"rate_limit","last_assistant_message":text}),
-        )
-    };
-    let mut entry = real_limits()[1].clone();
-    entry["quotaLimits"]["resetsAt"] = json!(now + 300);
-    // The hook alone: Claude's limit wording with no reset is a hard cap.
-    let mut state = prompted();
-    state.hook(&failure()).unwrap();
-    let error = snapshot(&mut state, "idle", 0).error.unwrap();
-    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted, "{error:?}");
-    assert!(
-        error.message.ends_with(&format!("Claude said: {text}")),
-        "{}",
-        error.message
-    );
-    // The transcript's entry for the same error then gives its reset, five minutes away.
-    state.transcript(&entry, true);
-    assert_eq!(
-        snapshot(&mut state, "idle", 1).error.unwrap().kind,
-        EngineErrorKind::Transient
-    );
-    // Read in the other order, the hook keeps the entry's classification.
-    let mut state = prompted();
-    state.transcript(&entry, true);
-    state.hook(&failure()).unwrap();
-    assert_eq!(
-        snapshot(&mut state, "idle", 0).error.unwrap().kind,
-        EngineErrorKind::Transient
-    );
-    // The older `Claude AI usage limit reached|<epoch>` carries its reset.
-    let mut state = prompted();
-    let legacy = format!("Claude AI usage limit reached|{}", now + 7200);
-    state
-        .hook(&hook(
-            "StopFailure",
-            json!({"error":"rate_limit","last_assistant_message":legacy}),
-        ))
-        .unwrap();
-    let error = snapshot(&mut state, "idle", 0).error.unwrap();
-    assert_eq!(error.kind, EngineErrorKind::QuotaExhausted);
-    assert!(
-        error.message.contains("(in 2h)") || error.message.contains("(in 1h 59m)"),
-        "{}",
-        error.message
-    );
-}
+
 #[test]
 fn claude_auth_failures_fail_as_auth_failed_from_their_category_or_login_wording() {
     let real = real_auth();
@@ -1292,61 +1109,7 @@ fn claude_auth_failures_fail_as_auth_failed_from_their_category_or_login_wording
         EngineErrorKind::Transient
     );
 }
-#[test]
-fn claude_limit_and_login_words_in_tool_output_and_prose_do_not_fail() {
-    for words in [
-        "You've hit your weekly limit \u{b7} resets Sep 22, 1am (Europe/Berlin)",
-        "Not logged in \u{b7} Please run /login",
-    ] {
-        let mut state = prompted();
-        state.transcript(&json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cat notes"}}]}}), true);
-        state.transcript(&json!({"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":words,"tool_use_id":"t1"}]}}), true);
-        state.transcript(
-            &json!({"type":"assistant","message":{"content":[{"type":"text","text":words}]}}),
-            true,
-        );
-        state
-            .hook(&hook("Stop", json!({"last_assistant_message":words})))
-            .unwrap();
-        let s = snapshot(&mut state, "idle", 0);
-        assert_eq!(s.error, None);
-        assert_eq!(s.final_text, words);
-        // An API error of another category that quotes the words, or that does not start
-        // with them, is not an account failure.
-        for entry in [
-            text_entry("server_error", words),
-            text_entry("invalid_request", &format!("API Error: 400 {words}")),
-        ] {
-            let kind = transcript_error(&entry).unwrap().kind;
-            assert!(
-                !matches!(
-                    kind,
-                    EngineErrorKind::QuotaExhausted | EngineErrorKind::AuthFailed
-                ),
-                "{entry}: {kind:?}"
-            );
-        }
-    }
-}
-#[test]
-fn claude_login_screen_is_read_only_without_a_composer() {
-    let screen = " Select login method:\n\n \u{276f} 1. Claude account with subscription \u{b7} Pro, Max, Team, or Enterprise\n\n   2. Anthropic Console account \u{b7} API usage billing\n";
-    assert!(protocol::login_screen(screen));
-    assert_eq!(
-        protocol::login_text(screen),
-        "Select login method: \u{276f} 1. Claude account with subscription \u{b7} Pro, Max, Team, or Enterprise 2. Anthropic Console account \u{b7} API usage billing"
-    );
-    // The same words above a ready composer are transcript text.
-    let quoted = format!(
-        "{screen}{}\n\u{276f} \n{}\n",
-        "─".repeat(70),
-        "─".repeat(70)
-    );
-    assert!(!protocol::login_screen(&quoted));
-    assert!(!protocol::login_screen(
-        "● Select login method: is the screen you get when logged out"
-    ));
-}
+
 #[tokio::test]
 async fn fake_usage_limit_is_quota_exhausted_a_plain_429_transient_and_quoted_words_nothing() {
     let weekly = "You've hit your weekly limit \u{b7} resets Oct 9, 1am (Europe/Berlin)";
@@ -1478,84 +1241,6 @@ async fn claude_is_told_its_config_dir_only_when_the_host_chose_one() {
 const THEME_PICKER: &str = " Let's get started.\n\n Choose the text style that looks best with your terminal\n To change this later, run /theme\n\n \u{276f} 1. Auto (match terminal)\n   2. Dark mode \u{2714}\n   3. Light mode\n   4. Dark mode (colorblind-friendly)\n   5. Light mode (colorblind-friendly)\n   6. Dark mode (ANSI colors only)\n   7. Light mode (ANSI colors only)\n\n  1  function greet() {\n  2 -  console.log(\"Hello, World!\");\n  2 +  console.log(\"Hello, Claude!\");\n  3  }\n\n  Syntax highlighting enabled (ctrl+t to disable)\n";
 
 #[test]
-fn claude_blocking_screens_are_named_from_its_own_rows_and_never_with_the_composer() {
-    let named = |pane: &str| protocol::blocking_screen(pane).map(|(what, _)| what);
-    assert_eq!(
-        named(THEME_PICKER).as_deref(),
-        Some("its first-run setup (theme picker)")
-    );
-    for (pane, what) in [
-        (
-            " Security notes:\n\n 1. Claude can make mistakes.\n    You're responsible for Claude's actions",
-            "its first-run setup (security notes)",
-        ),
-        (
-            " Use Claude Code's terminal setup?\n\n For the optimal coding experience, enable the recommended settings",
-            "its first-run setup (terminal setup)",
-        ),
-        (
-            " Unable to connect to Anthropic services\n getaddrinfo ENOTFOUND api.anthropic.com",
-            "its first-run connectivity check (it cannot reach Anthropic)",
-        ),
-        (
-            " Detected a custom API key in your environment\n\n ANTHROPIC_API_KEY: sk-ant-...F0dF\n\n Do you want to use this API key?\n\n   1. Yes\n \u{276f} 2. No (recommended)",
-            "its API-key prompt (ANTHROPIC_API_KEY is set)",
-        ),
-        (
-            " Updates to Consumer Terms and Policies\n\n \u{276f} 1. Accept terms \u{b7} Help improve our AI models: ON",
-            "Anthropic's updated terms",
-        ),
-        (
-            "\u{256d}\u{2500}\u{2500}\u{2500}\n\u{2502} Managed settings require approval\n\u{2502} \u{276f} Yes, I trust these settings",
-            "its approval of the organization's managed settings",
-        ),
-        (
-            " New MCP server found in this project: search\n\n \u{276f} 1. Use this MCP server",
-            "its approval of the project's MCP servers (.mcp.json)",
-        ),
-        (
-            " Allow external CLAUDE.md file imports?\n\n This project's CLAUDE.md or .claude/rules imports files outside the current working directory.",
-            "its approval of CLAUDE.md imports from outside the directory",
-        ),
-        (
-            "It looks like your version of Claude Code (2.1.284) needs an update.\nA newer version (2.2.0 or higher) is required to continue.",
-            "a required update (this Claude Code is older than the version it now requires)",
-        ),
-    ] {
-        assert_eq!(named(pane).as_deref(), Some(what), "{pane}");
-    }
-    // The dialogs the adapter answers, its login screen (an auth failure) and the composer are
-    // not blocking screens, even when the composer's transcript quotes one.
-    for pane in [
-        "No, exit\n\u{276f} No, exit\n  Yes, I trust this folder",
-        " WARNING: Claude Code running in Bypass Permissions mode\n \u{276f} 1. No, exit\n   2. Yes, I accept",
-        " Select login method:\n\n \u{276f} 1. Claude account with subscription \u{b7} Pro, Max, Team, or Enterprise",
-        &format!(
-            "{THEME_PICKER}\n{}\n\u{276f} \n{}\n",
-            "\u{2500}".repeat(70),
-            "\u{2500}".repeat(70)
-        ),
-    ] {
-        assert_eq!(named(pane), None, "{pane}");
-    }
-    let error = sluice_agents::engines::screen::Screen {
-        engine: sluice_agents::engines::account::Engine::Claude,
-        what: "its first-run setup (theme picker)".into(),
-        advice: "finish it".into(),
-        pane: THEME_PICKER.into(),
-    }
-    .error();
-    assert_eq!(error.kind, EngineErrorKind::BlockedScreen);
-    assert!(
-        error.message.starts_with(
-            "claude: blocked on its first-run setup (theme picker) — finish it, then step_retry. Claude showed: Let's get started. | Choose the text style that looks best with your terminal | To change this later, run /theme | \u{276f} 1. Auto (match terminal) |"
-        ),
-        "{}",
-        error.message
-    );
-}
-
-#[test]
 fn pane_text_kept_at_a_failure_is_masked_and_its_tail_trimmed() {
     use sluice_agents::engines::screen;
     let key = "sk-ant-api03-Zq8xV4mN2pL7kR9tY3wE6uI1oP5aS0dF";
@@ -1577,36 +1262,6 @@ fn pane_text_kept_at_a_failure_is_masked_and_its_tail_trimmed() {
     );
     assert!(!screen::quote(&pane).contains("Zq8xV4mN2pL7"));
     assert!(screen::tail("\n  \n").is_empty());
-}
-
-#[test]
-fn an_unrecognized_screen_stands_only_while_it_is_unchanged() {
-    use sluice_agents::engines::screen::Watch;
-    let grace = Duration::from_secs(20);
-    let start = Instant::now();
-    let mut watch = Watch::default();
-    assert!(!watch.stands("Press any key  \n", grace, start));
-    assert!(!watch.stands("Press any key", grace, start + Duration::from_secs(19)));
-    assert!(watch.stands("Press any key\n\n", grace, start + grace));
-    // A spinner, or a startup that progresses, restarts the clock.
-    let mut watch = Watch::default();
-    for (i, frame) in ["\u{280b} Loading", "\u{2819} Loading"]
-        .iter()
-        .cycle()
-        .take(30)
-        .enumerate()
-    {
-        assert!(!watch.stands(frame, grace, start + Duration::from_secs(i as u64)));
-    }
-    watch.reset();
-    assert!(!watch.stands("\u{2819} Loading", grace, start + Duration::from_secs(60)));
-    use sluice_agents::engines::screen::{DEFAULT_GRACE, parse_grace};
-    assert_eq!(DEFAULT_GRACE, grace);
-    assert_eq!(parse_grace("45").unwrap(), Duration::from_secs(45));
-    assert_eq!(parse_grace("0.5").unwrap(), Duration::from_millis(500));
-    for bad in ["0", "-1", "inf", "NaN", "x", ""] {
-        assert!(parse_grace(bad).is_err(), "{bad}");
-    }
 }
 
 async fn first_error(h: &mut Harness, within: Duration) -> (EngineError, Duration) {

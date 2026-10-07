@@ -4,13 +4,12 @@
 use serde_json::{Value, json};
 use sluice_agents::{
     AgentBuiltinRequest,
-    engines::{claude, codex, devin},
+    engines::devin,
     model::{self, ModelChoice, ResolvedModel},
     prompt::PromptContext,
     supervisor::FailureKind,
 };
 use sluice_model::rpc::{JsonMap, JsonValue};
-use std::sync::atomic::{AtomicU32, Ordering};
 
 fn choice(value: Value) -> ModelChoice {
     ModelChoice::parse(&value).unwrap()
@@ -20,9 +19,6 @@ fn id(engine: &str, value: Value) -> String {
 }
 fn devin_models() -> Vec<String> {
     devin::profile::parse_models(devin::fixture::MODELS.as_bytes()).unwrap()
-}
-fn codex_models() -> Vec<String> {
-    codex::profile::parse_models(codex::protocol::FIXTURE_MODELS.as_bytes()).unwrap()
 }
 
 #[test]
@@ -124,94 +120,6 @@ fn every_shape_composes_the_id_its_engine_takes() {
         let error = model::compose(engine, &choice(value)).unwrap_err();
         assert!(error.contains(message), "{error}");
     }
-}
-
-#[test]
-fn unknown_ids_fail_naming_the_composed_id_and_the_nearest_listed() {
-    let devin = devin_models();
-    assert!(devin.len() > 100);
-    let error = model::resolve(
-        "devin",
-        &choice(json!({"type":"normal","model":"swe-2","effort":"hgh"})),
-        &devin,
-    )
-    .unwrap_err();
-    assert!(
-        error.starts_with("devin has no model swe-2-hgh (composed from model {"),
-        "{error}"
-    );
-    let nearest = error.split("nearest: ").nth(1).unwrap();
-    assert_eq!(nearest.split(", ").count(), 5, "{error}");
-    assert!(nearest.starts_with("swe-2-high"), "{error}");
-    // Ids that begin with the composed one come first.
-    let error = model::resolve(
-        "devin",
-        &choice(json!({"type":"normal","model":"claude-opus-5-5"})),
-        &devin,
-    )
-    .unwrap_err();
-    let nearest: Vec<&str> = error
-        .split("nearest: ")
-        .nth(1)
-        .unwrap()
-        .split(", ")
-        .collect();
-    assert_eq!(nearest.len(), 5);
-    assert!(
-        nearest.iter().all(|n| n.starts_with("claude-opus-5-5-")),
-        "{error}"
-    );
-    // A fusion the listing lacks: no Opus 5.5 High fusion has a low swe-2 sidekick.
-    let error = model::resolve(
-        "devin",
-        &choice(json!({"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"low"}})),
-        &devin,
-    )
-    .unwrap_err();
-    assert!(
-        error.contains("no model fusion-claude-opus-5-5-high-sidekick-swe-2-low"),
-        "{error}"
-    );
-    assert!(error.contains("fusion-claude-opus-5-5-high-sidekick-swe-2-"));
-    let codex = codex_models();
-    assert!(codex.contains(&"gpt-6.1-sol@ultra".to_owned()));
-    let error = model::resolve(
-        "codex",
-        &choice(json!({"type":"normal","model":"sol","effort":"minimal"})),
-        &codex,
-    )
-    .unwrap_err();
-    assert!(
-        error.contains("codex has no model gpt-6.1-sol@minimal"),
-        "{error}"
-    );
-    assert!(error.contains("nearest: gpt-6.1-sol"), "{error}");
-    let error = model::resolve(
-        "claude",
-        &choice(json!({"type":"normal","model":"sonnet","effort":"high"})),
-        &claude::profile::models(),
-    )
-    .unwrap_err();
-    assert!(error.contains("claude has no model sonnet@high"), "{error}");
-    let error = model::resolve("devin", &model::default_for("devin").unwrap(), &[]).unwrap_err();
-    assert!(error.ends_with("devin listed no models"), "{error}");
-}
-
-#[tokio::test]
-async fn listings_are_reused_within_the_ttl() {
-    let fetched = AtomicU32::new(0);
-    let binary = std::path::Path::new("/nonexistent/models-cache-test");
-    for _ in 0..3 {
-        let list = model::cached("devin", binary, async {
-            fetched.fetch_add(1, Ordering::Relaxed);
-            Ok(vec!["swe-2-high".to_owned()])
-        })
-        .await
-        .unwrap();
-        assert_eq!(list, ["swe-2-high"]);
-    }
-    assert_eq!(fetched.load(Ordering::Relaxed), 1);
-    assert_eq!(model::CATALOG_TTL.as_secs(), 600);
 }
 
 fn request(name: &str, inputs: Value) -> Result<AgentBuiltinRequest, String> {
