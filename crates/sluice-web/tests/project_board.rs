@@ -262,6 +262,33 @@ async fn settings_save_clear_and_preview_the_board() {
         drawn.contains("<span class=\"metric-v\">4</span>"),
         "{drawn}"
     );
+    let program = format!("root = Markdown({})", serde_json::to_string("## A\n#### B\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>alert(1)</script>\n\n**text** <b>raw</b>\n\n- one\n  - two\n\n```rust\n<thing>\n```").unwrap());
+    let response = f
+        .router()
+        .oneshot(
+            Request::post(format!("{settings}/board/preview"))
+                .body(Body::from(program))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(bytes.to_vec()).unwrap();
+    for text in [
+        "<h4>A</h4>",
+        "<h6>B</h6>",
+        "<table>",
+        "<strong>text</strong>",
+        "&lt;script&gt;",
+        "&lt;b&gt;raw&lt;/b&gt;",
+        "language-rust",
+        "&lt;thing&gt;",
+    ] {
+        assert!(html.contains(text), "{text}: {html}");
+    }
+    assert!(!html.contains("<script>"));
+    assert_eq!(html.matches("<ul>").count(), 2);
     let problems = preview("root = Stack([a])").await;
     assert!(
         problems.contains("line 1: a is used but never defined"),
@@ -291,6 +318,38 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
             html
         }
     };
+    let escaped_id = f.project("escaped", json!({"steps":{
+        "start":{"run":"core.external","doc":"A <script>failure</script>","outputs":{"text":"string"},"tags":["unit:build"]},
+        "done":{"run":"core.external","tags":["unit:finished"]}
+    }}), &[("start","failed"),("done","skipped")]).await;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let error = serde_json::to_string(&sluice_model::error::PublicError::BadRequest {
+                message: "A <script>failure</script>".into(),
+            })?;
+            tx.sql().execute(
+                "UPDATE steps SET error=?2 WHERE project_id=?1 AND step_id='start'",
+                (escaped_id.to_string(), error),
+            )?;
+            tx.sql().execute(
+                "UPDATE projects SET description='Fixture <script>' WHERE project_id=?1",
+                [escaped_id.to_string()],
+            )?;
+            tx.changed(Some(escaped_id), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (status, escaped) = f.get(&format!("/projects/id/{escaped_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(escaped.contains("data-node=\"u:build\""));
+    assert!(escaped.contains("fold-finished"));
+    assert!(escaped.contains("data-preserve-attr=\"open\""));
+    assert!(!escaped.contains("<script>failure"));
+    assert!(escaped.contains("&lt;script&gt;"));
+    let region = between(&escaped, "id=\"project-board\"", "</sluice-board>");
+    assert!(!region.contains("sluice-drawer"));
+    assert!(!region.contains("data-init"));
     // By id: each unit keeps only its matching steps; the count says how many.
     let html = page("q=review").await;
     assert_eq!(cards(&html), ["beta-review", "alpha-review"], "live order");

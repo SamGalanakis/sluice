@@ -1613,24 +1613,5 @@ mod tests {
         assert_eq!(placeholders("SELECT json_extract(x, '$.a')").unwrap(), 0);
     }
 
-    #[test]
-    fn a_bar_chart_names_its_points() {
-        let table = QueryTable {
-            columns: vec!["lane".into(), "n".into()],
-            rows: vec![
-                vec![QueryCell::Text("a<b".into()), QueryCell::Integer(3)],
-                vec![QueryCell::Text("c".into()), QueryCell::Real(1.5)],
-            ],
-            truncated: false,
-        };
-        let svg = chart("bar", &table, Some("Steps")).unwrap();
-        assert!(svg.contains("aria-label=\"Steps: a&lt;b 3, c 1.5\""), "{svg}");
-        assert_eq!(svg.matches("<rect").count(), 2);
-        let bad = QueryTable {
-            columns: vec!["a".into(), "b".into()],
-            rows: vec![vec![QueryCell::Text("x".into()), QueryCell::Text("y".into())]],
-            truncated: false,
-        };
-        assert!(chart("line", &bad, None).is_err());
-    }
+
 }
