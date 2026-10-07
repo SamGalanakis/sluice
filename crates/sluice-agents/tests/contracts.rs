@@ -957,9 +957,6 @@ async fn fn_host_dispatches_agent_builtin_and_refuses_concurrent_composition() {
     assert_eq!(host.factory.calls.load(Ordering::Relaxed), 1);
 }
 
-/// The work tree summary: clean, dirty (count and the first 20 paths), not a repository, and
-/// git absent, which never fails: it says so.
-
 #[test]
 fn account_limits_split_at_the_threshold_and_render_their_reset() {
     use sluice_agents::engines::account::{self, Cap, Engine, Limit};

@@ -28,8 +28,9 @@ four-byte big-endian length followed by one UTF-8 document. A request carries pr
 request id and, for run callbacks, the run capability.
 
 `docs/rust/schemas.json` snapshots the JSON Schema of every public contract.
-`crates/sluice-model/tests/contracts.rs` checks round trips, schema snapshots and unknown-field
-rejection against it. Regenerate it after changing a contract:
+`crates/sluice-model/tests/contracts.rs` checks strict event decoding and legacy message/error
+compatibility. Socket, CLI and MCP tests exercise command and reply shapes. Regenerate the
+schema reference after changing a contract:
 
 ```sh
 cargo --config "build.target-dir=\"$PWD/target\"" run --locked -p sluice-model --example schemas > docs/rust/schemas.json
@@ -50,8 +51,7 @@ worktree's `target/` (it passes the target dir with `--config` and sets no `CARG
 variables). Host prerequisites and the containment gates are in
 [host-prerequisites.md](host-prerequisites.md).
 
-`tests/support/` holds the helpers shared by the integration tests (scratch homes, a manual
-clock, free ports, systemd unit names, the headless Chromium driver) and `tests/browser.py` the
+`tests/support/` holds the helpers shared by the integration tests (scratch homes, free ports, systemd unit names, the headless Chromium driver) and `tests/browser.py` the
 Python DevTools driver used for dashboard screenshots. `crates/sluice/src/bin/fixture.rs` builds
 the `fixture` binary that stands in for engines and fns in tests, and
 `crates/sluice-web/examples/dashboard_fixture.rs` serves the dashboard over a seeded scratch
