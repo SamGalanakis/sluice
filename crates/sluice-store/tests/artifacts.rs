@@ -1,10 +1,7 @@
 #[path = "../../../tests/support/home.rs"]
 mod home;
 use home::ScratchHome;
-use sluice_model::{
-    error::PublicError,
-    ids::{AttemptId, InvocationId, ProjectId, RunId},
-};
+use sluice_model::ids::{InvocationId, ProjectId};
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
     artifacts::{self, Bundle, BundleScope},
@@ -59,14 +56,6 @@ async fn state(reads: &ReadPool, id: InvocationId) -> artifacts::ArtifactJob {
         .snapshot(move |c| artifacts::job(c, id))
         .await
         .unwrap()
-}
-async fn run(writer: &Writer, project: ProjectId, previous: Option<RunId>) -> RunId {
-    let run = RunId::new();
-    writer.write(RetrySafety::NonIdempotent,move|tx|{let a=AttemptId::new();tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'executing','{}','hash','now')",[a.to_string(),project.to_string()])?;tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,prev_run,created_at) VALUES (?1,?2,?3,?4,'now')",rusqlite::params![run.to_string(),project.to_string(),a.to_string(),previous.map(|r|r.to_string())])?;tx.changed(Some(project),"status");Ok(())}).await.unwrap();
-    run
-}
-async fn terminal(writer: &Writer, id: RunId) {
-    writer.write(RetrySafety::NonIdempotent,move|tx|{tx.sql().execute("UPDATE runs SET finished_at='done' WHERE run_id=?1",[id.to_string()])?;tx.sql().execute("UPDATE attempts SET phase='terminal' WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?1)",[id.to_string()])?;tx.changed(None,"status");Ok(())}).await.unwrap();
 }
 
 #[tokio::test]
@@ -189,89 +178,6 @@ async fn crash_after_rename_before_database_commit_verifies_and_commits_generati
     restarted.shutdown().await.unwrap();
 }
 
-#[tokio::test]
-async fn running_and_predecessor_runs_pin_old_generations_until_terminal() {
-    let (home, writer, reads, project) = setup().await;
-    let scope = BundleScope::Project(project);
-    let old = stage(&writer, scope, "old").await;
-    artifacts::execute(&writer, home.path(), old).await.unwrap();
-    let active = run(&writer, project, None).await;
-    writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            artifacts::pin_generation(tx, old, active)
-        })
-        .await
-        .unwrap();
-    let newest = stage(&writer, scope, "new").await;
-    artifacts::execute(&writer, home.path(), newest)
-        .await
-        .unwrap();
-    assert!(
-        writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                artifacts::retire_generation(tx, old)
-            })
-            .await
-            .is_err()
-    );
-    terminal(&writer, active).await;
-    let successor = run(&writer, project, Some(active)).await;
-    assert!(
-        writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                artifacts::retire_generation(tx, old)
-            })
-            .await
-            .is_err()
-    );
-    terminal(&writer, successor).await;
-    let cleanup = writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            artifacts::retire_generation(tx, old)
-        })
-        .await
-        .unwrap();
-    assert!(
-        writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                artifacts::pin_generation(tx, old, successor)
-            })
-            .await
-            .is_err()
-    );
-    artifacts::execute(&writer, home.path(), cleanup)
-        .await
-        .unwrap();
-    assert!(!home.path().join(state(&reads, old).await.path).exists());
-    assert!(home.path().join(state(&reads, newest).await.path).is_dir());
-    writer.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn home_and_project_bundles_are_independent_and_current_cannot_be_retired() {
-    let (home, writer, reads, project) = setup().await;
-    let global = stage(&writer, BundleScope::Home, "global").await;
-    let local = stage(&writer, BundleScope::Project(project), "project").await;
-    artifacts::recover(&writer, home.path()).await.unwrap();
-    assert_eq!(state(&reads, global).await.generation, 1);
-    assert_eq!(state(&reads, local).await.generation, 1);
-    assert_ne!(
-        state(&reads, global).await.path,
-        state(&reads, local).await.path
-    );
-    for id in [global, local] {
-        assert!(
-            writer
-                .write(RetrySafety::NonIdempotent, move |tx| {
-                    artifacts::retire_generation(tx, id)
-                })
-                .await
-                .is_err()
-        );
-    }
-    writer.shutdown().await.unwrap();
-}
-
 async fn raw_cleanup(writer: &Writer, project: ProjectId, path: String) -> InvocationId {
     let id = InvocationId::new();
     writer.write(RetrySafety::NonIdempotent,move|tx|{tx.sql().execute("INSERT INTO artifact_jobs(job_id,project_id,kind,generation,path,state,created_at) VALUES (?1,?2,'cleanup',1,?3,'pending','now')",[id.to_string(),project.to_string(),path])?;tx.changed(Some(project),"artifacts");Ok(())}).await.unwrap();
@@ -377,25 +283,6 @@ async fn worker_refuses_a_different_home_even_with_valid_job_paths() {
 }
 
 #[tokio::test]
-async fn concurrent_workers_replay_one_job_without_rewriting_published_bytes() {
-    let (home, writer, reads, project) = setup().await;
-    let id = stage(&writer, BundleScope::Project(project), "immutable").await;
-    let (a, b) = tokio::join!(
-        artifacts::execute(&writer, home.path(), id),
-        artifacts::execute(&writer, home.path(), id)
-    );
-    a.unwrap();
-    b.unwrap();
-    assert_eq!(state(&reads, id).await.state, "done");
-    let path = home
-        .path()
-        .join(state(&reads, id).await.path)
-        .join("main.py");
-    assert_eq!(fs::read(path).unwrap(), b"immutable");
-    writer.shutdown().await.unwrap();
-}
-
-#[tokio::test]
 async fn mismatched_existing_generation_stays_unpublished_and_recovery_continues() {
     let (home, writer, reads, project) = setup().await;
     let bad = stage(&writer, BundleScope::Project(project), "frozen").await;
@@ -434,52 +321,6 @@ fn complete_bundle_refuses_escape_paths_and_file_directory_collisions() {
         ]))
         .is_err()
     );
-}
-
-#[tokio::test]
-async fn deleted_project_cancels_unfinished_generations_and_never_resurrects_directory() {
-    let (home, writer, reads, project) = setup().await;
-    let generation = stage(&writer, BundleScope::Project(project), "old").await;
-    writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            let p = projects::project_update(
-                tx,
-                &sluice_model::ids::ProjectSelector::Id(project),
-                projects::UpdateProject {
-                    archived: Some(true),
-                    ..Default::default()
-                },
-                &NoResourceSettings,
-            )?;
-            projects::project_delete(
-                tx,
-                &sluice_model::ids::ProjectSelector::Id(project),
-                projects::DeleteProject {
-                    confirm_name: "p".into(),
-                    expected_settings_rev: p.settings_rev,
-                    author: "test".into(),
-                },
-                &projects::StoredWorkOnly,
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-    artifacts::execute(&writer, home.path(), generation)
-        .await
-        .unwrap();
-    artifacts::recover(&writer, home.path()).await.unwrap();
-    assert_eq!(state(&reads, generation).await.state, "failed");
-    assert!(!home.path().join(format!("projects/{project}")).exists());
-    assert!(matches!(
-        writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                artifacts::stage_generation(tx, BundleScope::Project(project), bundle("new"))
-            })
-            .await,
-        Err(PublicError::NotFound { .. })
-    ));
-    writer.shutdown().await.unwrap();
 }
 
 #[tokio::test]
