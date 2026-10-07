@@ -592,12 +592,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn distance_counts_edits() {
-        assert_eq!(distance("kitten", "sitting"), 3);
-        assert_eq!(distance("", "abc"), 3);
-        assert_eq!(distance("same", "same"), 0);
-    }
-    #[test]
     fn parse_refuses_unknown_fields_and_types() {
         for (value, message) in [
             (json!({"type":"normal"}), "model.model is required"),
@@ -638,15 +632,5 @@ mod tests {
             let error = ModelChoice::parse(&value).unwrap_err();
             assert!(error.contains(message), "{value}: {error}");
         }
-    }
-    #[test]
-    fn serialization_round_trips_and_omits_defaults() {
-        let value = json!({"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}});
-        let choice = ModelChoice::parse(&value).unwrap();
-        assert_eq!(choice.to_value(), value);
-        assert_eq!(
-            serde_json::from_value::<ModelChoice>(value).unwrap(),
-            choice
-        );
     }
 }

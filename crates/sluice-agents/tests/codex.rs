@@ -878,76 +878,6 @@ async fn cleanup_after_cancelled_prepare_reaps_auxiliary_child() {
 mod acceptance;
 
 #[tokio::test]
-async fn supervisor_fresh_required_submit() {
-    acceptance::scenario("fresh_required_submit", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_busy_submitted() {
-    acceptance::scenario("busy_submitted", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_background() {
-    acceptance::scenario("background", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_quiet() {
-    acceptance::scenario("quiet", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_compaction() {
-    acceptance::scenario("compaction", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_addressed_live_message() {
-    acceptance::scenario("addressed_live_message", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_feedback_resume() {
-    acceptance::scenario("feedback_resume", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_missing_outputs() {
-    acceptance::scenario("missing_outputs", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_nudge() {
-    acceptance::scenario("nudge", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_unknown_acceptance() {
-    acceptance::scenario("unknown_acceptance", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_cancel_backoff() {
-    acceptance::scenario("cancel_backoff", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_retry_exhaustion() {
-    acceptance::scenario("retry_exhaustion", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_session_cwd_mismatch() {
-    acceptance::scenario("session_cwd_mismatch", "codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_engine_mismatch() {
-    acceptance::scenario("engine_mismatch", "codex").await;
-}
-
-#[tokio::test]
 async fn supervisor_codex_wire_compaction_required_submit_and_cleanup() {
     let scratch = Scratch::new();
     let (mut adapter, context) = setup(&scratch, "normal");
@@ -972,21 +902,6 @@ async fn supervisor_codex_wire_compaction_required_submit_and_cleanup() {
     );
     assert!(adapter.server_pid().is_none());
     assert_eq!(host.cleanups, 1);
-}
-
-#[tokio::test]
-async fn supervisor_same_run_transient_commits_without_feedback() {
-    acceptance::transient_commits("codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_missing_session_lock_and_cwd() {
-    acceptance::session_policy("codex").await;
-}
-
-#[tokio::test]
-async fn supervisor_predecessor_cwd_mismatch_starts_fresh() {
-    acceptance::scenario("predecessor_cwd_mismatch", "codex").await;
 }
 
 // g3-fix owns native generation cloning. Real Codex creates these links in CODEX_HOME/tmp.

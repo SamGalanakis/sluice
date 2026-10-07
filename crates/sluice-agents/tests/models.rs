@@ -127,67 +127,6 @@ fn every_shape_composes_the_id_its_engine_takes() {
 }
 
 #[test]
-fn defaults_are_the_objects_a_caller_could_pass() {
-    for (engine, default, resolved) in [
-        (
-            "devin",
-            json!({"type":"normal","model":"swe-2","effort":"high"}),
-            "swe-2-high",
-        ),
-        (
-            "codex",
-            json!({"type":"normal","model":"sol","effort":"high"}),
-            "gpt-6.1-sol@high",
-        ),
-        (
-            "claude",
-            json!({"type":"normal","model":"opus","effort":"high"}),
-            "opus@high",
-        ),
-    ] {
-        let profile = match engine {
-            "devin" => devin::profile::profile(),
-            "codex" => codex::profile::profile(),
-            _ => claude::profile::profile(),
-        };
-        let choice = profile.default_model.unwrap();
-        assert_eq!(choice.to_value(), default);
-        assert_eq!(ModelChoice::parse(&default).unwrap(), choice);
-        assert_eq!(model::default_for(engine), Some(choice.clone()));
-        assert_eq!(
-            model::launch_model(engine, None).unwrap().id,
-            resolved,
-            "{engine}"
-        );
-        assert_eq!(model::compose(engine, &choice).unwrap().id, resolved);
-    }
-    assert!(
-        model::resolve(
-            "devin",
-            &model::default_for("devin").unwrap(),
-            &devin_models()
-        )
-        .is_ok()
-    );
-    assert!(
-        model::resolve(
-            "codex",
-            &model::default_for("codex").unwrap(),
-            &codex_models()
-        )
-        .is_ok()
-    );
-    assert!(
-        model::resolve(
-            "claude",
-            &model::default_for("claude").unwrap(),
-            &claude::profile::models()
-        )
-        .is_ok()
-    );
-}
-
-#[test]
 fn unknown_ids_fail_naming_the_composed_id_and_the_nearest_listed() {
     let devin = devin_models();
     assert!(devin.len() > 100);

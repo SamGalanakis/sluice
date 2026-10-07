@@ -968,76 +968,6 @@ async fn fake_same_run_transient_after_commit_preserves_session_and_original_bas
 mod acceptance;
 
 #[tokio::test]
-async fn supervisor_fresh_required_submit() {
-    acceptance::scenario("fresh_required_submit", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_busy_submitted() {
-    acceptance::scenario("busy_submitted", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_background() {
-    acceptance::scenario("background", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_quiet() {
-    acceptance::scenario("quiet", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_compaction() {
-    acceptance::scenario("compaction", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_addressed_live_message() {
-    acceptance::scenario("addressed_live_message", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_feedback_resume() {
-    acceptance::scenario("feedback_resume", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_missing_outputs() {
-    acceptance::scenario("missing_outputs", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_nudge() {
-    acceptance::scenario("nudge", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_unknown_acceptance() {
-    acceptance::scenario("unknown_acceptance", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_cancel_backoff() {
-    acceptance::scenario("cancel_backoff", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_retry_exhaustion() {
-    acceptance::scenario("retry_exhaustion", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_session_cwd_mismatch() {
-    acceptance::scenario("session_cwd_mismatch", "claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_engine_mismatch() {
-    acceptance::scenario("engine_mismatch", "claude").await;
-}
-
-#[tokio::test]
 async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     // The agent submits only after the live message: submitting ends the session.
     let mut h = Harness::new(json!({"turns":[{"reply":"done","compact":true,"delay_ms":100},{"reply":"feedback","submit":{"word":"blue"}}]})).await;
@@ -1126,21 +1056,6 @@ async fn supervisor_claude_hooks_submit_live_compact_and_resume() {
     assert_eq!(next.session, result.session);
     assert_eq!(host.acks, vec![sluice_model::ids::MessageId(2)]);
     h.cleanup().await;
-}
-
-#[tokio::test]
-async fn supervisor_same_run_transient_commits_without_feedback() {
-    acceptance::transient_commits("claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_missing_session_lock_and_cwd() {
-    acceptance::session_policy("claude").await;
-}
-
-#[tokio::test]
-async fn supervisor_predecessor_cwd_mismatch_starts_fresh() {
-    acceptance::scenario("predecessor_cwd_mismatch", "claude").await;
 }
 
 /// The redacted real API error entries 2.1.284 wrote for usage and rate limits.

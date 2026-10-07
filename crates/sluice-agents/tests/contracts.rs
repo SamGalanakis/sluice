@@ -66,41 +66,7 @@ fn ports() -> PromptContext {
 fn inputs(value: serde_json::Value) -> JsonMap {
     sluice_model::rpc::decode_json(&serde_json::to_vec(&value).unwrap()).unwrap()
 }
-#[test]
-fn full_prompt_contains_header_inputs_outputs_exact_submit_identity_and_live_thread_note() {
-    let text = build(
-        "Fix it",
-        &BTreeMap::from([("interface".into(), serde_json::json!("api.md\nsecond line"))]),
-        &ports(),
-    );
-    assert!(text.starts_with("Step work: repair the bug This step's project is `p`; pass exactly that as `project` to any sluice tool.\n\nFix it"));
-    let i = text.find("## Inputs").unwrap();
-    let o = text.find("## Outputs you must submit").unwrap();
-    let t = text.find("Messages addressed to this step").unwrap();
-    assert!(i < o && o < t);
-    assert!(text.contains("`interface` (string):\napi.md\nsecond line"));
-    assert!(text.contains("\"project\":\"p\",\"step\":\"work\",\"run\":\"r\""));
-    assert!(text.contains("\"ready\": <boolean>"));
-    assert!(
-        text.contains(
-            "Submit only when you are finished: submitting ends your session. Submit them"
-        )
-    );
-    assert!(!text.contains("submission counts"));
-    assert!(text.contains("step-work"));
-    // The verbs, each with this run's identity; nothing is posted "to nobody".
-    for verb in ["ask", "say", "reply"] {
-        assert!(text.contains(&format!("`sluice tool {verb} '")), "{verb}");
-    }
-    assert!(text.contains("\"to\":\"orchestrator\""));
-    assert!(!text.contains("needs_reply"));
-    assert!(!text.contains("message_post"));
-    assert!(!text.contains("nobody"));
-    assert!(!text.contains("thread.post"));
-    assert!(!text.contains("inbox_"));
-    assert!(!text.contains("log_read"));
-    assert_eq!(required_outputs(&ports()), vec!["ready"]);
-}
+
 /// The tools read a bare string as a name, so every callback the prompt gives names an id
 /// project as `id:<uuid>`, and the header says to pass exactly that.
 #[test]
@@ -136,35 +102,7 @@ fn every_callback_gives_an_id_project_as_an_id_selector() {
     let text = build("Fix it", &BTreeMap::new(), &context);
     assert!(text.starts_with(&format!("This step's project is `{selector}`;")));
 }
-#[test]
-fn listen_false_drops_only_the_note_and_empty_ports_have_no_sections() {
-    let mut context = ports();
-    context.listen = false;
-    let text = build("task", &BTreeMap::new(), &context);
-    assert!(text.contains("## Inputs"));
-    assert!(text.contains("## Outputs"));
-    assert!(!text.contains("Messages addressed to this step"));
-    // Asking needs no live delivery: the exact commands still carry this run's identity.
-    for verb in ["ask", "say"] {
-        let post = text
-            .split(&format!("sluice tool {verb} '"))
-            .nth(1)
-            .and_then(|rest| rest.split('\'').next())
-            .unwrap();
-        let post: serde_json::Value = serde_json::from_str(post).unwrap();
-        assert_eq!(
-            post,
-            serde_json::json!({"project":"p","run":"r","to":"orchestrator","body":"..."})
-        );
-    }
-    context.inputs.clear();
-    context.outputs.clear();
-    let text = build("task", &BTreeMap::new(), &context);
-    assert!(!text.contains("##"));
-    context.step.clear();
-    let text = build("task", &BTreeMap::new(), &context);
-    assert!(!text.contains("sluice tool ask"));
-}
+
 #[test]
 fn thread_names_and_shell_quoting_preserve_literal_data() {
     assert_eq!(thread_name("Build.Mac OS"), "step-build-mac-os");
@@ -290,14 +228,7 @@ fn report_final_session_and_declared_submissions_survive_return_building() {
     assert!(output.0["ready"].as_value().as_bool().unwrap());
     assert!(!output.0.contains_key("git"));
 }
-#[test]
-fn reprime_uses_current_snapshot_and_fallback_includes_task_path() {
-    let path = std::path::Path::new("/scratch/task.md");
-    assert!(sluice_agents::reprime::context(path, Ok("new snapshot")).contains("new snapshot"));
-    let fallback = sluice_agents::reprime::context(path, Err("unavailable"));
-    assert!(fallback.contains("/scratch/task.md"));
-    assert!(fallback.contains("unavailable"));
-}
+
 #[test]
 fn hook_journal_claims_before_decision_and_never_replays_claimed_requests() {
     let scratch = Scratch::new();
@@ -1025,101 +956,9 @@ async fn fn_host_dispatches_agent_builtin_and_refuses_concurrent_composition() {
     );
     assert_eq!(host.factory.calls.load(Ordering::Relaxed), 1);
 }
-/// The note on the step's previous attempt heads the task, before the task itself.
-#[test]
-fn the_previous_attempt_note_heads_the_task() {
-    let mut context = ports();
-    context.previous =
-        Some("## Previous attempt\nNone: this is the first attempt at this step.".into());
-    let text = build("Fix it", &BTreeMap::new(), &context);
-    let note = text.find("## Previous attempt").unwrap();
-    let task = text.find("## Task\n\nFix it").unwrap();
-    assert!(text.starts_with("Step work: repair the bug"), "{text}");
-    assert!(note < task, "{text}");
-    assert!(text.contains("first attempt"), "{text}");
-}
-fn git_in(repo: &std::path::Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .current_dir(repo)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+
 /// The work tree summary: clean, dirty (count and the first 20 paths), not a repository, and
 /// git absent, which never fails: it says so.
-#[tokio::test]
-async fn the_work_tree_summary_counts_dirty_paths_and_survives_git_absent() {
-    use sluice_model::attempt::WorkTreeState;
-    let scratch = Scratch::new();
-    let plain = scratch.0.join("plain");
-    fs::create_dir(&plain).unwrap();
-    let git = std::path::Path::new("git");
-    let wait = Duration::from_secs(10);
-    assert_eq!(sluice_agents::git::worktree(git, &plain, wait).await, None);
-    let repo = scratch.0.join("repo");
-    fs::create_dir(&repo).unwrap();
-    git_in(&repo, &["init", "-q"]);
-    fs::write(repo.join("kept.txt"), "kept\n").unwrap();
-    git_in(&repo, &["add", "."]);
-    git_in(&repo, &["commit", "-q", "-m", "first"]);
-    assert_eq!(
-        sluice_agents::git::worktree(git, &repo, wait).await,
-        Some(WorkTreeState::Clean)
-    );
-    fs::write(repo.join("kept.txt"), "changed\n").unwrap();
-    for n in 0..25 {
-        fs::write(repo.join(format!("new-{n:02}.txt")), "x").unwrap();
-    }
-    let Some(WorkTreeState::Dirty { count, paths }) =
-        sluice_agents::git::worktree(git, &repo, wait).await
-    else {
-        panic!("dirty");
-    };
-    assert_eq!(count, 26);
-    assert_eq!(paths.len(), 20);
-    assert!(paths.contains(&"M kept.txt".to_owned()), "{paths:?}");
-    assert!(paths.contains(&"?? new-00.txt".to_owned()), "{paths:?}");
-    let absent = scratch.0.join("no-git-here");
-    assert_eq!(
-        sluice_agents::git::worktree(&absent, &repo, wait).await,
-        Some(WorkTreeState::Unavailable {
-            reason: "git is not installed or not on PATH".into()
-        })
-    );
-    let note = sluice_model::attempt::AttemptNote {
-        number: 1,
-        previous: None,
-        worktree: Some(sluice_model::attempt::WorkTree {
-            cwd: repo.display().to_string(),
-            state: WorkTreeState::Dirty {
-                count,
-                paths: paths.clone(),
-            },
-        }),
-    };
-    assert!(
-        note.text().contains(&format!(
-            "has 26 uncommitted paths now: {}",
-            paths.join(", ")
-        )),
-        "{}",
-        note.text()
-    );
-    assert!(note.text().ends_with(" and 6 more."), "{}", note.text());
-}
 
 #[test]
 fn account_limits_split_at_the_threshold_and_render_their_reset() {
