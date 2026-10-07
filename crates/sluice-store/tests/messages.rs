@@ -841,3 +841,72 @@ async fn repeated_range_request_keeps_the_frozen_window_and_leaves_late_messages
     assert_eq!(again, first);
     assert!(late.id > first.through);
 }
+/// A step that asks without waiting settles at once, so the questions it leaves open are
+/// still answered or closed after it settles, and its retry takes up the answer; anything
+/// else to the settled step, a second reply included, is refused and not stored.
+#[tokio::test]
+async fn open_questions_of_a_settled_step_can_be_answered_or_closed() {
+    let f = Fixture::new().await;
+    let p = f.project;
+    let run = f.run("work", -1, 1, None).await;
+    let q = f
+        .post(asking(p, "q").title("Title").speaker(Speaker::Run(run)))
+        .await
+        .unwrap();
+    let other = f
+        .post(asking(p, "other").title("Other").speaker(Speaker::Run(run)))
+        .await
+        .unwrap();
+    f.stop(run).await;
+    let settled = |status: &'static str| {
+        let w = f.writer.clone();
+        async move {
+            w.write(RetrySafety::NonIdempotent, move |tx| {
+                tx.sql().execute(
+                    "UPDATE steps SET status=?2 WHERE project_id=?1 AND step_id='work'",
+                    params![p.to_string(), status],
+                )?;
+                tx.changed(Some(p), "status");
+                Ok(())
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let refused = |result: std::result::Result<Posted, PublicError>| {
+        assert!(
+            matches!(&result, Err(PublicError::Conflict { message, .. }) if message.contains("step work is settled")),
+            "{result:?}"
+        );
+    };
+    for status in ["succeeded", "failed", "stale", "skipped"] {
+        settled(status).await;
+        let before = f.count("messages").await;
+        refused(f.posted(draft(p, "hi").to("work")).await);
+        refused(f.posted(asking(p, "why").to("work")).await);
+        assert_eq!(f.count("messages").await, before, "{status}");
+    }
+    settled("succeeded").await;
+    let answered = f.posted(reply(p, q.id, "yes")).await.unwrap();
+    assert_eq!(answered.receipt.to, "work");
+    assert_eq!(f.question(q.id).await.state, QuestionState::Answered);
+    let before = f.count("messages").await;
+    refused(f.posted(reply(p, q.id, "again")).await);
+    assert_eq!(f.count("messages").await, before);
+    let close = reply(p, other.id, "").answer(MessageAnswer {
+        action: "close".into(),
+        params: None,
+        values: None,
+    });
+    assert_eq!(f.posted(close).await.unwrap().receipt.to, "work");
+    assert_eq!(f.question(other.id).await.state, QuestionState::Closed);
+    // The step's retry asks again and takes up the answer.
+    let retry = f.run("work", -1, 1, Some(run)).await;
+    match f.ask(retry, "Title").await {
+        AskResult::Answered { question, reply } => {
+            assert_eq!(question.id, q.id);
+            assert_eq!(reply.id, answered.message.id);
+        }
+        _ => panic!("expected the answer"),
+    }
+}
