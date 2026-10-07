@@ -465,16 +465,19 @@ fn doctor_probes_engines_on_path_without_their_homes() {
     let bin = gate.root.path().join("engines");
     std::fs::create_dir(&bin).unwrap();
     let seen = gate.root.path().join("probe-homes");
-    // codex is supported, claude is too new, devin is not installed.
+    // codex is newer than tested (accepted untested), claude is older than its floor (refused),
+    // devin is not installed.
+    let codex_help = sluice_agents::engines::codex::protocol::FIXTURE_HELP;
+    let server_help = sluice_agents::engines::codex::protocol::FIXTURE_APP_SERVER_HELP;
     for (name, version) in [
-        ("codex", "codex-cli 0.160.0"),
-        ("claude", "2.2.0 (Claude Code)"),
+        ("codex", "codex-cli 0.161.0"),
+        ("claude", "2.1.282 (Claude Code)"),
     ] {
         let path = bin.join(name);
         std::fs::write(
             &path,
             format!(
-                "#!/bin/sh\necho \"{name} $* $HOME $CODEX_HOME $CLAUDE_CONFIG_DIR\" >> '{}'\necho '{version}'\n",
+                "#!/bin/sh\necho \"{name}|$*|$HOME|$CODEX_HOME|$CLAUDE_CONFIG_DIR\" >> '{}'\nif [ \"$1\" = --help ]; then printf '%s' '{codex_help}'; exit; fi\nif [ \"$1 $2\" = 'app-server --help' ]; then printf '%s' '{server_help}'; exit; fi\necho '{version}'\n",
                 seen.display()
             ),
         )
@@ -502,30 +505,76 @@ fn doctor_probes_engines_on_path_without_their_homes() {
     };
     let codex = engine("codex");
     assert_eq!(codex["executable"], json!(bin.join("codex")));
-    assert_eq!(codex["version"], "codex-cli 0.160.0");
+    assert_eq!(codex["version"], "codex-cli 0.161.0");
     assert_eq!(codex["supported"], true, "{codex}");
+    assert_eq!(codex["status"], "untested, accepted", "{codex}");
+    assert_eq!(codex["tested"], json!(["0.160.0", "0.160.1"]));
+    assert_eq!(codex["floor"], "0.160.0");
+    assert_eq!(codex["newer_major"], "accepted");
+    assert_eq!(codex["probes"]["missing"], json!([]), "{codex}");
+    for capability in ["app-server", "resume", "--remote", "unix-websocket"] {
+        assert!(
+            codex["probes"]["verified"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(capability)),
+            "{capability}: {codex}"
+        );
+    }
+    // The fake has no protocol schema to generate: the methods are assumed, not missing.
+    assert!(
+        codex["probes"]["assumed"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("turn/steer")),
+        "{codex}"
+    );
     let claude = engine("claude");
-    assert_eq!(claude["version"], "2.2.0 (Claude Code)");
+    assert_eq!(claude["version"], "2.1.282 (Claude Code)");
     assert_eq!(claude["supported"], false);
-    assert!(claude["error"].is_string());
+    assert_eq!(claude["status"], "refused");
+    assert_eq!(claude["floor"], "2.1.283");
+    assert!(
+        claude["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("claude 2.1.282 is older than 2.1.283"),
+        "{claude}"
+    );
     let devin = engine("devin");
     assert_eq!(devin["executable"], Value::Null);
     assert_eq!(devin["version"], Value::Null);
+    assert_eq!(devin["status"], "not found");
+    assert_eq!(devin["newer_major"], "refused");
     assert_eq!(devin["error"], "executable not found on PATH");
-    // Only `--version` ran, in a scratch home that is gone afterwards: no session started and
-    // the owner's engine homes were never pointed at.
+    // Only version and help probes ran, in scratch homes that are gone afterwards: no session
+    // started and the owner's engine homes were never pointed at.
     let probes = std::fs::read_to_string(&seen).unwrap();
-    assert_eq!(probes.lines().count(), 2, "{probes}");
+    let ran: Vec<(&str, &str)> = probes
+        .lines()
+        .map(|l| {
+            let f: Vec<&str> = l.split('|').collect();
+            (f[0], f[1])
+        })
+        .collect();
+    assert_eq!(
+        ran,
+        [
+            ("codex", "--version"),
+            ("codex", "--help"),
+            ("codex", "app-server --help"),
+            ("claude", "--version"),
+        ],
+        "{probes}"
+    );
     for line in probes.lines() {
-        let fields: Vec<&str> = line.split(' ').collect();
-        assert_eq!(fields[1], "--version", "{line}");
+        let fields: Vec<&str> = line.split('|').collect();
         let probe_home = Path::new(fields[2]);
         assert!(probe_home.starts_with(std::env::temp_dir()), "{line}");
-        assert!(
-            fields[3..].iter().all(|f| Path::new(f) == probe_home),
-            "{line}"
-        );
-        assert!(!probe_home.exists());
+        assert!(Path::new(fields[4]) == probe_home, "{line}");
+        let codex_home = Path::new(fields[3]);
+        assert!(codex_home.starts_with(std::env::temp_dir()), "{line}");
+        assert!(!probe_home.exists() && !codex_home.exists(), "{line}");
     }
     let text = gate
         .command(Path::new(env!("CARGO_BIN_EXE_sluice")), &["doctor"])
@@ -533,8 +582,23 @@ fn doctor_probes_engines_on_path_without_their_homes() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&text.stdout);
-    assert!(text.contains("ok  engine codex"), "{text}");
-    assert!(text.contains("warn engine claude"), "{text}");
+    assert!(
+        text.lines().any(|l| l.starts_with("warn engine codex")
+            && l.contains("codex-cli 0.161.0")
+            && l.contains(": untested, accepted (tested versions 0.160.0, 0.160.1; floor 0.160.0; newer major accepted)")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l.trim_start().starts_with("capabilities: ")
+                && l.contains("verified; assumed: ")),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|l| l.starts_with("warn engine claude")
+            && l.contains(": refused: claude 2.1.282 is older than 2.1.283")),
+        "{text}"
+    );
     assert!(
         text.lines()
             .any(|l| l.starts_with("warn engine devin") && l.contains("not found on PATH")),

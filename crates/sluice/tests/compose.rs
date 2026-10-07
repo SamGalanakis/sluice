@@ -367,7 +367,7 @@ fn native_engine(g: &mut Gate, engine: &str) {
     g.env.insert("SLUICE_CODEX_FIXTURE".into(), "tui".into());
     let executable = bin.join(engine);
     let script = format!(
-        "#!/bin/sh\nset -e\ncase \"$1\" in --version|--help|models|debug) exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
+        "#!/bin/sh\nset -e\ncase \"$1 $2\" in '--version '*|'--help '*|'models '*|'debug '*|'app-server --help') exec '{}' {engine} \"$@\" ;; esac\n/usr/bin/python3 - <<'PY'\n{NATIVE_ENV_PROBE}\nPY\n{}\nexec '{}' {engine} \"$@\" 2>>\"$SLUICE_RUN_DIR/fixture-errors.log\"\n",
         Path::new(env!("CARGO_BIN_EXE_fixture")).display(),
         if engine == "codex" {
             "case \"$1\" in -c) exec /usr/bin/sleep 600 ;; esac"

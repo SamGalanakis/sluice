@@ -40,6 +40,9 @@ impl EngineAdapter for Adapter {
     fn profile(&self) -> EngineProfile {
         adapter_call!(self, profile)
     }
+    fn version(&self) -> Option<version::Verdict> {
+        adapter_call!(self, version)
+    }
     fn on_hook(&mut self, hook: HookEvent) -> Result<HookReply, EngineError> {
         adapter_call!(self, on_hook, hook)
     }
@@ -144,6 +147,9 @@ impl FixtureFaultEngine {
 impl EngineAdapter for FixtureFaultEngine {
     fn profile(&self) -> EngineProfile {
         self.inner.profile()
+    }
+    fn version(&self) -> Option<version::Verdict> {
+        self.inner.version()
     }
     fn on_hook(&mut self, hook: HookEvent) -> Result<HookReply, EngineError> {
         self.inner.on_hook(hook)
@@ -470,12 +476,14 @@ impl AgentFactory for Factory {
                 .with_config_dir_passed(std::env::var_os("CLAUDE_CONFIG_DIR").is_some())
                 .with_environment(environment.clone())
                 .with_quota_threshold(quota_threshold)
-                .with_screen_grace(screen_grace),
+                .with_screen_grace(screen_grace)
+                .with_probe_cache(self.home.join(version::CACHE_DIR)),
             )),
             "devin" => Adapter::Devin(Box::new(devin::Devin::new(devin::DevinOptions {
                 hook_binary: bin.clone(),
                 environment,
                 screen_grace,
+                probe_cache: Some(self.home.join(version::CACHE_DIR)),
                 ..Default::default()
             }))),
             _ => return Err(invalid("unknown engine")),

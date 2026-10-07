@@ -3,7 +3,10 @@ use super::super::{
     EngineLaunch, EngineObservation, EngineProfile, EngineStatus, InputId, SessionMetadata,
 };
 use super::{
-    super::account::{self, Auth, Cap, Engine, Limit},
+    super::{
+        account::{self, Auth, Cap, Engine, Limit},
+        version::{self, Verdict},
+    },
     profile::{self, error},
     protocol::{Rpc, auth_text, plain_rpc_error, rpc_error, usage_limit_text},
 };
@@ -77,6 +80,8 @@ pub struct Codex {
     /// This turn's limit error, classified again once every drained event is applied, since
     /// the rate-limit update that carries its reset may follow it.
     limit_error: Option<(Cap, String)>,
+    /// The CLI version the last `prepare` found, as `profile::POLICY` judged it.
+    version: Option<Verdict>,
 }
 impl Codex {
     pub fn new(options: CodexOptions) -> Self {
@@ -98,6 +103,7 @@ impl Codex {
             windows: BTreeMap::new(),
             credits: BTreeMap::new(),
             limit_error: None,
+            version: None,
         }
     }
     pub fn private_home(&self) -> Option<&Path> {
@@ -647,7 +653,18 @@ impl Codex {
                 result => break result.map_err(local)?,
             }
         };
-        profile::check_version(&String::from_utf8_lossy(&version.stdout))?;
+        let verdict = profile::check_version(&String::from_utf8_lossy(&version.stdout))?;
+        self.version = Some(verdict.clone());
+        let report = version::cached(
+            Some(&self.options.sluice_home.join(version::CACHE_DIR)),
+            "codex",
+            &self.options.binary,
+            self.options.environment.get("PATH").map(String::as_str),
+            &verdict.version,
+            profile::probe(&self.options.binary, &self.options.environment),
+        )
+        .await;
+        report.require(&verdict)?;
         let source = match fs::read_to_string(self.options.source_home.join("config.toml")) {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
@@ -806,7 +823,16 @@ impl Codex {
             }
             sleep(Duration::from_millis(20)).await;
         }
-        self.rpc()?.request("initialize", json!({"clientInfo":{"name":"sluice","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await?;
+        let initialize = self.rpc()?.request("initialize", json!({"clientInfo":{"name":"sluice","version":"0.1.0"},"capabilities":{"experimentalApi":true}})).await;
+        if let Err(mut e) = initialize {
+            if e.kind == EngineErrorKind::CapabilityMismatch {
+                e.message = format!(
+                    "Codex app-server refused `initialize` with the `experimentalApi` capability sluice needs: {}",
+                    e.message
+                );
+            }
+            return Err(e);
+        }
         self.rpc()?.notify("initialized").await?;
         // Codex with no credentials at all cannot run a turn: say so before starting one. The
         // read is local (no token refresh); an app-server without it is not refused.
@@ -835,6 +861,9 @@ impl EngineAdapter for Codex {
     fn profile(&self) -> EngineProfile {
         profile::profile()
     }
+    fn version(&self) -> Option<Verdict> {
+        self.version.clone()
+    }
     async fn models(&mut self) -> Result<Vec<String>, EngineError> {
         // The account's catalog, as the CLI refreshes it with the owner's Codex home.
         let mut command = Command::new(&self.options.binary);
@@ -843,8 +872,25 @@ impl EngineAdapter for Codex {
             .env_clear()
             .envs(&self.options.environment)
             .env("CODEX_HOME", &self.options.source_home);
+        let (binary, environment) = (
+            self.options.binary.clone(),
+            self.options.environment.clone(),
+        );
         crate::model::cached("codex", &self.options.binary, async move {
-            profile::parse_models(&crate::model::listing(command, "Codex models").await?)
+            let parsed =
+                profile::parse_models(&crate::model::listing(command, "Codex models").await?);
+            match parsed {
+                // A listing this Codex prints differently: name the version when it is untested.
+                Err(mut e) => {
+                    if let Ok(out) = version::run(&binary, &["--version"], &environment).await
+                        && let Ok(verdict) = profile::check_version(&out)
+                    {
+                        e.message = verdict.explain(e.message);
+                    }
+                    Err(e)
+                }
+                ok => ok,
+            }
         })
         .await
     }

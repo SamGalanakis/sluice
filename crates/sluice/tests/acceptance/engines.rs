@@ -682,7 +682,7 @@ fn public_adapter_fixture(engines: &[&str], addressed: bool) {
         crate::executable::write(
             &binary,
             format!(
-                "#!/bin/sh\nset -e\n{codex_tui}export {env_name}='{}'\ncase \"$1\" in --version|--help|models|debug) ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
+                "#!/bin/sh\nset -e\n{codex_tui}export {env_name}='{}'\ncase \"$1 $2\" in '--version '*|'--help '*|'models '*|'debug '*|'app-server --help') ;; *) if [ ! -f '{}' ]; then printf fixture > original.txt; git add original.txt; git commit -qm 'Record the fake engine turn.'; touch '{}'; fi ;; esac\nexec '{}' {engine} \"$@\"\n",
                 config.display(),
                 scratch.0.join("committed").display(),
                 scratch.0.join("committed").display(),

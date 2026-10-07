@@ -514,20 +514,91 @@ async fn private_compaction_context_refresh_and_ask_user_denial() {
         "deny"
     );
 }
+/// A fake Claude printing `version` and `help`, the rest delegated to the fixture.
+fn fake_claude(h: &Harness, name: &str, version: &str, help: &str) -> PathBuf {
+    let bin = h.scratch.0.join(name);
+    executable::write(
+        &bin,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' '{version}'; exit; fi\nif [ \"$1\" = --help ]; then printf '%s' '{help}'; exit; fi\nexit 1\n"
+        ),
+    );
+    bin
+}
 #[tokio::test]
-async fn unknown_version_and_model_rejected_before_task_or_launch() {
+async fn version_policy_refuses_older_or_unreadable_versions_before_task_or_launch() {
+    for (version, message) in [
+        (
+            "2.1.282 (Claude Code)",
+            "claude 2.1.282 is older than 2.1.283, the oldest version with every capability sluice needs (tested 2.1.283, 2.1.284); update claude on this host, then step_retry",
+        ),
+        (
+            "2.1.284 (Other Tool)",
+            "claude: `claude --version` printed `2.1.284 (Other Tool)`, not a Claude Code version; sluice needs Claude Code 2.1.283 or newer (tested 2.1.283, 2.1.284)",
+        ),
+        (
+            "latest (Claude Code)",
+            "claude: cannot read a version from `claude --version` (got `latest`); sluice needs claude 2.1.283 or newer (tested 2.1.283, 2.1.284)",
+        ),
+    ] {
+        let mut h = Harness::new(json!({})).await;
+        let bin = fake_claude(&h, "old", version, claude::fixture::FIXTURE_HELP);
+        h.adapter = Claude::new(
+            bin,
+            h.scratch.0.join("claude"),
+            "/usr/bin/true".into(),
+            RunId::new(),
+        );
+        let error = h.adapter.prepare(&h.context, None).await.unwrap_err();
+        assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
+        assert_eq!(error.message, message);
+        assert!(!h.context.run_dir.join("claude-settings.json").exists());
+    }
+}
+#[tokio::test]
+async fn a_newer_version_runs_untested_unless_a_flag_sluice_needs_is_gone() {
+    let h = Harness::new(json!({})).await;
+    let bin = fake_claude(
+        &h,
+        "newer",
+        "2.1.293 (Claude Code)",
+        claude::fixture::FIXTURE_HELP,
+    );
+    let mut adapter = Claude::new(
+        bin.clone(),
+        h.scratch.0.join("claude"),
+        "/usr/bin/true".into(),
+        RunId::new(),
+    )
+    .with_probe_cache(h.scratch.0.join("probes"));
+    // Past the version and the probe, the launch goes on (here to the tmux it lacks).
+    let _ = adapter.prepare(&h.context, None).await;
+    let verdict = adapter.version().unwrap();
+    assert_eq!(
+        verdict.note().unwrap(),
+        "claude 2.1.293 is newer than the tested 2.1.283, 2.1.284; accepted untested (floor 2.1.283)"
+    );
+    assert!(h.scratch.0.join("probes/claude.json").is_file());
+
     let mut h = Harness::new(json!({})).await;
-    let bin = h.scratch.0.join("unknown");
-    executable::write(&bin, "#!/bin/sh\nprintf '9.0.0 (Claude Code)\\n'\n");
+    let without = claude::fixture::FIXTURE_HELP.replace("  --effort <level>\n", "");
+    let bin = fake_claude(
+        &h,
+        "newer-without-effort",
+        "2.1.293 (Claude Code)",
+        &without,
+    );
     h.adapter = Claude::new(
         bin,
         h.scratch.0.join("claude"),
         "/usr/bin/true".into(),
         RunId::new(),
     );
+    let error = h.adapter.prepare(&h.context, None).await.unwrap_err();
+    assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
     assert_eq!(
-        h.adapter.prepare(&h.context, None).await.unwrap_err().kind,
-        EngineErrorKind::CapabilityMismatch
+        error.message,
+        "claude 2.1.293 lacks `--effort` that sluice needs (tested 2.1.283, 2.1.284; this version is untested)"
     );
     assert!(!h.context.run_dir.join("claude-settings.json").exists());
 }
@@ -1444,7 +1515,7 @@ async fn supervisor_claude_required_update_at_exit_fails_as_blocked_screen() {
     );
     assert!(
         error.message.starts_with(
-            "claude: blocked on a required update (this Claude Code is older than the version it now requires) — update Claude Code on this host (`claude update`) together with sluice's pinned Claude profile, then step_retry. Claude showed: It looks like your version of Claude Code (2.1.284) needs an update. | A newer version (2.2.0 or higher) is required to continue."
+            "claude: blocked on a required update (this Claude Code is older than the version it now requires) — update Claude Code on this host (`claude update`; sluice runs the newer version untested), then step_retry. Claude showed: It looks like your version of Claude Code (2.1.284) needs an update. | A newer version (2.2.0 or higher) is required to continue."
         ),
         "{}",
         error.message

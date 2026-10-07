@@ -16,6 +16,7 @@ pub mod codex;
 pub mod devin;
 pub mod environment;
 pub mod screen;
+pub mod version;
 
 /// Writes a private (0600) file through a sibling temp file and a rename, so a concurrent
 /// reader sees the old file or the whole new one, never an empty or partial file.
@@ -185,6 +186,11 @@ pub trait EngineAdapter: Send {
         })
     }
     fn profile(&self) -> EngineProfile;
+    /// The CLI version the last `prepare` found and how the engine's policy judged it; `None`
+    /// before then, or for an engine without a version policy.
+    fn version(&self) -> Option<version::Verdict> {
+        None
+    }
     /// Every model id this engine accepts, in the form `model::compose` gives (Devin's model
     /// id, `<model>@<effort>` for Codex and Claude). It may run the engine CLI, so adapters
     /// reuse it per process (`model::cached`).

@@ -36,6 +36,8 @@ pub struct DevinOptions {
     pub turn_quiet: Duration,
     /// How long a screen sluice does not recognize may stand unchanged before any turn.
     pub screen_grace: Duration,
+    /// Where the `--help` probe's report is kept (`version::cached`); `None` probes each launch.
+    pub probe_cache: Option<PathBuf>,
 }
 impl Default for DevinOptions {
     fn default() -> Self {
@@ -60,6 +62,7 @@ impl Default for DevinOptions {
             delivery_timeout: Duration::from_secs(20),
             turn_quiet: Duration::from_secs(10),
             screen_grace: super::super::screen::DEFAULT_GRACE,
+            probe_cache: None,
         }
     }
 }
@@ -111,6 +114,8 @@ pub struct Devin {
     exit_enter: Option<Instant>,
     restore_mode: Option<Restore>,
     watch: super::super::screen::Watch,
+    /// The CLI version the last `prepare` found, as `profile::POLICY` judged it.
+    version: Option<super::super::version::Verdict>,
 }
 impl Devin {
     pub fn new(options: DevinOptions) -> Self {
@@ -134,6 +139,7 @@ impl Devin {
             exit_enter: None,
             restore_mode: None,
             watch: Default::default(),
+            version: None,
         }
     }
     /// One observation reports a transient without changing delivery or session evidence.
@@ -759,14 +765,35 @@ impl EngineAdapter for Devin {
     fn profile(&self) -> EngineProfile {
         profile::profile()
     }
+    fn version(&self) -> Option<super::super::version::Verdict> {
+        self.version.clone()
+    }
     async fn models(&mut self) -> Result<Vec<String>, EngineError> {
         let mut command = Command::new(&self.options.binary);
         command
             .args(["models", "list", "--format", "json"])
             .env_clear()
             .envs(&self.options.environment);
+        let (binary, environment) = (
+            self.options.binary.clone(),
+            self.options.environment.clone(),
+        );
         crate::model::cached("devin", &self.options.binary, async move {
-            profile::parse_models(&crate::model::listing(command, "Devin models").await?)
+            let parsed =
+                profile::parse_models(&crate::model::listing(command, "Devin models").await?);
+            match parsed {
+                // A listing this Devin prints differently: name the version when it is untested.
+                Err(mut e) => {
+                    if let Ok(out) =
+                        super::super::version::run(&binary, &["--version"], &environment).await
+                        && let Ok(verdict) = profile::validate_version(&out)
+                    {
+                        e.message = verdict.explain(e.message);
+                    }
+                    Err(e)
+                }
+                ok => ok,
+            }
         })
         .await
     }
@@ -832,12 +859,21 @@ impl EngineAdapter for Devin {
             .arg("--version")
             .env_clear()
             .envs(&self.options.environment);
-        let version = output(version).await?;
-        let mut help = Command::new(&self.options.binary);
-        help.arg("--help")
-            .env_clear()
-            .envs(&self.options.environment);
-        profile::validate_cli(&version, &output(help).await?)?;
+        let verdict = profile::validate_version(&output(version).await?)?;
+        self.version = Some(verdict.clone());
+        let (binary, environment) = (&self.options.binary, &self.options.environment);
+        let report = super::super::version::cached(
+            self.options.probe_cache.as_deref(),
+            "devin",
+            binary,
+            environment.get("PATH").map(String::as_str),
+            &verdict.version,
+            async {
+                profile::probe(super::super::version::run(binary, &["--help"], environment).await)
+            },
+        )
+        .await;
+        report.require(&verdict)?;
         self.resume = match session {
             Some(session) => {
                 let meta = self.session(session).await?.ok_or_else(|| {

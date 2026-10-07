@@ -1,10 +1,38 @@
-//! Claude Code 2.1.283 and 2.1.284 hook/status/TUI profile.
+//! Claude Code hook/status/TUI profile, tested on 2.1.283 and 2.1.284.
 use super::protocol::failure;
-use crate::engines::{EngineError, EngineErrorKind, EngineProfile};
+use crate::engines::{
+    EngineError, EngineErrorKind, EngineProfile,
+    version::{Major, Policy, ProbeReport, Verdict},
+};
 use crate::model::{ModelChoice, ResolvedModel};
 use std::path::Path;
 
-pub const VERSION_RANGE: &str = ">=2.1.283 <=2.1.284";
+/// Claude Code's version policy. 2.1.283 is the floor: the hook, status, transcript and screen
+/// fixtures were recorded on 2.1.284 and the wrapped composer on 2.1.283, and nothing older was
+/// checked. Claude Code updates itself in patch releases several times a week, and its 1.x to
+/// 2.x change kept the hooks, `--settings` and transcript sluice reads, so a newer version,
+/// a newer major too, runs untested: the `--help` probe and the session's own hooks say what
+/// changed.
+pub const POLICY: Policy = Policy {
+    engine: "claude",
+    tested: &["2.1.283", "2.1.284"],
+    floor: "2.1.283",
+    newer_major: Major::Accept,
+};
+/// The flags of `claude --help` sluice launches Claude with (`argv`).
+pub const HELP: [(&str, &str); 8] = [
+    ("--model", "--model"),
+    ("--effort", "--effort"),
+    (
+        "--dangerously-skip-permissions",
+        "--dangerously-skip-permissions",
+    ),
+    ("--disallowedTools", "--disallowedTools"),
+    ("--settings", "--settings"),
+    ("--strict-mcp-config", "--strict-mcp-config"),
+    ("--mcp-config", "--mcp-config"),
+    ("--resume", "--resume"),
+];
 pub const SCRUB_ENV: &[&str] = &[
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",
@@ -51,7 +79,7 @@ pub fn models() -> Vec<String> {
 pub fn profile() -> EngineProfile {
     EngineProfile {
         engine: "claude".into(),
-        version_range: VERSION_RANGE.into(),
+        version_range: POLICY.summary(),
         required_capabilities: vec![
             "hooks".into(),
             "interactive-status".into(),
@@ -62,17 +90,40 @@ pub fn profile() -> EngineProfile {
         reports_waiting: true,
     }
 }
-pub fn validate_version(text: &str) -> Result<String, EngineError> {
+/// Judges `claude --version`'s output (`2.1.284 (Claude Code)`) by `POLICY`.
+pub fn validate_version(text: &str) -> Result<Verdict, EngineError> {
     let version = text.split_whitespace().next().unwrap_or_default();
-    if !matches!(version, "2.1.283" | "2.1.284") || !text.contains("(Claude Code)") {
+    if !text.contains("(Claude Code)") {
         return Err(failure(
             EngineErrorKind::CapabilityMismatch,
             format!(
-                "claude: unsupported version; require {VERSION_RANGE}. Update the profile and hook fixtures before delivery."
+                "claude: `claude --version` printed `{}`, not a Claude Code version; sluice needs Claude Code {} or newer (tested {})",
+                text.trim().chars().take(80).collect::<String>(),
+                POLICY.floor,
+                POLICY.tested_list()
             ),
         ));
     }
-    Ok(version.into())
+    POLICY.judge(version)
+}
+/// What `claude --help` shows of the flags sluice launches with. The hooks, the status file,
+/// the transcript JSONL and inline compaction context show only in a session: the launch waits
+/// for its `SessionStart` hook, and a failure there on an untested version names the version.
+pub fn probe(help: Result<String, String>) -> ProbeReport {
+    let mut report = ProbeReport::default();
+    match help {
+        Ok(help) => report.help(&help, &HELP),
+        Err(e) => report.missing.push(format!("`claude --help` ({e})")),
+    }
+    for capability in [
+        "hooks",
+        "interactive-status",
+        "transcript-jsonl",
+        crate::engines::INLINE_COMPACTION_CONTEXT,
+    ] {
+        report.assume(capability);
+    }
+    report
 }
 pub fn argv(
     binary: &Path,

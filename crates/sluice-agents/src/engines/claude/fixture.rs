@@ -328,9 +328,15 @@ impl Fake {
         Ok(())
     }
 }
+/// `claude --help`, cut to the flags sluice's probe reads, as 2.1.284 prints them.
+pub const FIXTURE_HELP: &str = "Options:\n  --dangerously-skip-permissions\n  --disallowedTools, --disallowed-tools <tools...>\n  --effort <level>\n  --mcp-config <configs...>\n  --model <model>\n  -r, --resume [value]\n  --settings <file-or-json>\n  --strict-mcp-config\n";
 pub fn main(args: Vec<String>) -> io::Result<()> {
     if args.iter().any(|a| a == "--version") {
         println!("2.1.284 (Claude Code)");
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--help") {
+        print!("{FIXTURE_HELP}");
         return Ok(());
     }
     let home = PathBuf::from(

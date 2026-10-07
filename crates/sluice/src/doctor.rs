@@ -39,10 +39,10 @@ fn storage(error: impl std::fmt::Display) -> PublicError {
     }
 }
 
-/// Each engine's executable on PATH and its `--version` (devin's `--help` too), checked
-/// against its profile. The probes run with HOME and the engines' config and XDG dirs pointed
-/// at a private scratch directory removed afterwards: no session starts and no credential is
-/// read.
+/// Each engine's executable on PATH, its `--version` judged by the engine's version policy,
+/// and its capability probes (`--help`, Codex's app-server protocol schema). The probes run
+/// with HOME and the engines' config and XDG dirs pointed at a private scratch directory
+/// removed afterwards: no session starts and no credential is read.
 async fn engines(home: &Path) -> Result<Vec<Value>, PublicError> {
     let probe = std::env::temp_dir().join(format!(
         "sluice-doctor-{}-{}",
@@ -89,27 +89,42 @@ pub fn run(mode: crate::cli::Mode, home: PathBuf) -> ModeFuture {
                     check.message,
                 );
             }
-            // An engine that is missing or unsupported is reported, not a readiness failure:
-            // only the steps that use it need it.
+            // An engine that is missing, untested or refused is reported, not a readiness
+            // failure: only the steps that use it need it.
             for engine in &engines {
                 let name = format!("engine {}", engine["engine"].as_str().unwrap_or("?"));
                 let version = engine["version"].as_str().unwrap_or("no version");
+                let status = engine["status"].as_str().unwrap_or("unknown");
                 let detail = match (engine["executable"].as_str(), engine["error"].as_str()) {
                     (None, _) => "not found on PATH".to_owned(),
-                    (Some(path), None) => format!("{version} ({path})"),
-                    (Some(path), Some(error)) => format!("{version} ({path}): {error}"),
+                    (Some(path), None) => format!("{version} ({path}): {status}"),
+                    (Some(path), Some(error)) => format!("{version} ({path}): {status}: {error}"),
                 };
+                let tested: Vec<&str> = engine["tested"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
                 println!(
-                    "{} {:<24} {} (supported: {})",
-                    if engine["supported"] == true {
-                        "ok "
-                    } else {
-                        "warn"
-                    },
+                    "{} {:<24} {} (tested versions {}; floor {}; newer major {})",
+                    if status == "tested" { "ok " } else { "warn" },
                     name,
                     detail,
-                    engine["supported_range"].as_str().unwrap_or("?"),
+                    tested.join(", "),
+                    engine["floor"].as_str().unwrap_or("?"),
+                    engine["newer_major"].as_str().unwrap_or("?"),
                 );
+                if let Ok(probes) = serde_json::from_value::<
+                    sluice_agents::engines::version::ProbeReport,
+                >(engine["probes"].clone())
+                {
+                    println!(
+                        "     {:<24} capabilities: {}",
+                        "",
+                        sluice_agents::engines::version::describe(&probes)
+                    );
+                }
             }
             println!(
                 "{} {:<24} {}",

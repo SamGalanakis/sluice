@@ -558,6 +558,10 @@ pub struct Claude {
     /// How long a screen sluice does not recognize may stand unchanged before any turn.
     screen_grace: Duration,
     watch: screen::Watch,
+    /// Where the `--help` probe's report is kept (`version::cached`); `None` probes each launch.
+    probe_cache: Option<PathBuf>,
+    /// The CLI version the last `prepare` found, as `profile::POLICY` judged it.
+    version: Option<version::Verdict>,
 }
 impl Claude {
     pub fn new(binary: PathBuf, home: PathBuf, hook_binary: PathBuf, run: RunId) -> Self {
@@ -582,7 +586,14 @@ impl Claude {
             environment: super::super::environment::host_environment(),
             screen_grace: screen::DEFAULT_GRACE,
             watch: screen::Watch::default(),
+            probe_cache: None,
+            version: None,
         }
+    }
+    /// Keep the `--help` probe's report in `dir` (`<home>/engine-probes`).
+    pub fn with_probe_cache(mut self, dir: PathBuf) -> Self {
+        self.probe_cache = Some(dir);
+        self
     }
     pub fn from_environment() -> Result<Self, EngineError> {
         let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
@@ -1035,6 +1046,9 @@ impl EngineAdapter for Claude {
     fn profile(&self) -> EngineProfile {
         profile::profile()
     }
+    fn version(&self) -> Option<version::Verdict> {
+        self.version.clone()
+    }
     async fn models(&mut self) -> Result<Vec<String>, EngineError> {
         Ok(profile::models())
     }
@@ -1056,7 +1070,31 @@ impl EngineAdapter for Claude {
             command.env("CLAUDE_CONFIG_DIR", &self.home);
         }
         command.arg("--version").env("DISABLE_AUTOUPDATER", "1");
-        profile::validate_version(&String::from_utf8_lossy(&Self::output(command).await?))?;
+        let verdict =
+            profile::validate_version(&String::from_utf8_lossy(&Self::output(command).await?))?;
+        self.version = Some(verdict.clone());
+        let mut env = self.environment.clone();
+        for name in profile::SCRUB_ENV {
+            env.remove(*name);
+        }
+        if self.pass_config_dir {
+            env.insert(
+                "CLAUDE_CONFIG_DIR".into(),
+                self.home.to_string_lossy().into_owned(),
+            );
+        }
+        env.insert("DISABLE_AUTOUPDATER".into(), "1".into());
+        let binary = self.binary.clone();
+        let report = version::cached(
+            self.probe_cache.as_deref(),
+            "claude",
+            &self.binary,
+            self.environment.get("PATH").map(String::as_str),
+            &verdict.version,
+            async { profile::probe(version::run(&binary, &["--help"], &env).await) },
+        )
+        .await;
+        report.require(&verdict)?;
         let mut context = context.clone();
         context.cwd = fs::canonicalize(&context.cwd).map_err(io_error)?;
         context.run_dir = fs::canonicalize(&context.run_dir).map_err(io_error)?;

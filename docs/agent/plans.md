@@ -145,6 +145,16 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   Let's get started. | …``. Treat it as `AuthFailed`: tell the owner the message as given, do
   not `step_retry` until they say it is answered, then retry with the `session` bound, or run
   the step on another engine.
+- An engine CLI that updated itself keeps running: a version newer than the ones sluice was
+  tested on runs untested, and the run's result `notes` say so (`codex 0.161.0 is newer than
+  the tested 0.160.0, 0.160.1; accepted untested (floor 0.160.0)`). A launch fails with
+  `agent_failure` kind `CapabilityMismatch` only when the engine lacks something sluice needs
+  (``codex 0.161.0 lacks `turn/steer` that sluice needs …``), is older than its floor, or (Devin)
+  is a newer major; and a run on an untested version that fails in a way a protocol change
+  explains ends its message with `likely cause: untested <engine> <version> (tested …)`. Retrying
+  will not help: tell the owner the message as given (the fix is on the host: update, or pin the
+  engine CLI to a tested version), or run the step on another engine. `sluice doctor` shows each
+  engine's tested versions, floor, installed version and probe results.
 - When an agent run fails before its engine completed a turn, or on a timeout or stall
   (`TurnStartTimeout`, `ReadyTimeout`, `StallCap`, `WallCap`), its message ends with the last
   rows of the engine's screen at the failure, under `pane at failure (last rows; whole screen:

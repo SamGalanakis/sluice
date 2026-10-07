@@ -5,7 +5,7 @@ use sluice_agents::engines::{
     InputId,
     codex::{
         Codex, CodexOptions, auth, profile,
-        protocol::{Rpc, redact},
+        protocol::{self, Rpc, redact},
     },
 };
 use std::{
@@ -80,7 +80,9 @@ fn setup(scratch: &Scratch, scenario: &str) -> (Codex, EngineContext) {
     executable::write(
         &binary,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.160.0'; exit; fi\nif [ \"$1\" = debug ]; then cat {}; exit; fi\nexport SLUICE_CODEX_TEST_SOCKET=\"${{3#unix://}}\"\nexport SLUICE_CODEX_TEST_SCENARIO='{scenario}'\nexec {} --ignored --exact fake_codex_executable --nocapture\n",
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.160.0'; exit; fi\nif [ \"$1\" = --help ]; then printf '%s' '{}'; exit; fi\nif [ \"$1 $2\" = 'app-server --help' ]; then printf '%s' '{}'; exit; fi\nif [ \"$1\" = debug ]; then cat {}; exit; fi\nexport SLUICE_CODEX_TEST_SOCKET=\"${{3#unix://}}\"\nexport SLUICE_CODEX_TEST_SCENARIO='{scenario}'\nexec {} --ignored --exact fake_codex_executable --nocapture\n",
+            protocol::FIXTURE_HELP,
+            protocol::FIXTURE_APP_SERVER_HELP,
             shell_quote(
                 &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engines/codex/models.json")
             ),
@@ -492,21 +494,198 @@ async fn corrupt_rollout_line_does_not_hide_session_cwd() {
     );
     assert!(adapter.session("../owner").await.is_err());
 }
+/// The fake Codex of `setup`, printing `version` and, when given, `help` for `codex --help`.
+fn retarget(scratch: &Scratch, version: &str, help: Option<&str>) {
+    let path = scratch.path().join("fake-codex");
+    let mut script = fs::read_to_string(&path)
+        .unwrap()
+        .replace("codex-cli 0.160.0", version);
+    if let Some(help) = help {
+        script = script.replace(protocol::FIXTURE_HELP, help);
+    }
+    fs::write(&path, script).unwrap();
+}
+/// Logs each invocation of the fake Codex to `invocations.log`.
+fn log_invocations(scratch: &Scratch) {
+    let path = scratch.path().join("fake-codex");
+    let log = scratch.path().join("invocations.log");
+    let script = fs::read_to_string(&path).unwrap().replacen(
+        "#!/bin/sh\n",
+        &format!("#!/bin/sh\necho \"$*\" >> '{}'\n", log.display()),
+        1,
+    );
+    fs::write(&path, script).unwrap();
+}
+/// How many logged invocations contain `what`.
+fn invocations(scratch: &Scratch, what: &str) -> usize {
+    fs::read_to_string(scratch.path().join("invocations.log"))
+        .map(|log| log.lines().filter(|l| l.contains(what)).count())
+        .unwrap_or(0)
+}
+
 #[tokio::test]
-async fn unknown_version_fails_before_launch() {
+async fn version_policy_runs_tested_and_newer_versions_and_refuses_older_or_unreadable() {
+    for (version, verdict) in [
+        ("codex-cli 0.160.0", Some(None)),
+        ("codex-cli 0.160.1", Some(None)),
+        (
+            "codex-cli 0.161.0",
+            Some(Some(
+                "codex 0.161.0 is newer than the tested 0.160.0, 0.160.1; accepted untested (floor 0.160.0)",
+            )),
+        ),
+        // A newer major runs too: Codex's numbers mark releases, not protocol breaks.
+        ("codex-cli 1.0.0", Some(Some("codex 1.0.0 is newer than"))),
+        ("codex-cli 0.159.9", None),
+        ("codex-cli nightly", None),
+        ("", None),
+    ] {
+        let scratch = Scratch::new();
+        let (mut adapter, context) = setup(&scratch, "normal");
+        retarget(&scratch, version, None);
+        let prepared = adapter.prepare(&context, None).await;
+        match verdict {
+            Some(note) => {
+                prepared.unwrap_or_else(|e| panic!("{version}: {e:?}"));
+                let note_now = adapter.version().unwrap().note();
+                match note {
+                    None => assert_eq!(note_now, None, "{version}"),
+                    Some(note) => assert!(note_now.unwrap().starts_with(note), "{version}"),
+                }
+                adapter.close().await.unwrap();
+            }
+            None => {
+                let error = prepared.unwrap_err();
+                assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch, "{version}");
+                assert!(error.message.contains("0.160.0"), "{}", error.message);
+                assert!(adapter.server_pid().is_none());
+                assert!(!context.run_dir.exists());
+            }
+        }
+    }
+    let error = profile::check_version("codex-cli 0.159.9").unwrap_err();
+    assert_eq!(
+        error.message,
+        "codex 0.159.9 is older than 0.160.0, the oldest version with every capability sluice needs (tested 0.160.0, 0.160.1); update codex on this host, then step_retry"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_capability_fails_the_launch_naming_it_and_the_versions() {
     let scratch = Scratch::new();
     let (mut adapter, context) = setup(&scratch, "normal");
-    fs::write(
-        scratch.path().join("fake-codex"),
-        "#!/bin/sh\necho 'codex-cli 999.0.0'\n",
-    )
-    .unwrap();
+    let without_remote = protocol::FIXTURE_HELP.replace("      --remote <ADDR>\n", "");
+    retarget(&scratch, "codex-cli 0.161.0", Some(&without_remote));
+    let error = adapter.prepare(&context, None).await.unwrap_err();
+    assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
     assert_eq!(
-        adapter.prepare(&context, None).await.unwrap_err().kind,
-        EngineErrorKind::CapabilityMismatch
+        error.message,
+        "codex 0.161.0 lacks `--remote` that sluice needs (tested 0.160.0, 0.160.1; this version is untested)"
     );
     assert!(adapter.server_pid().is_none());
-    assert!(!context.run_dir.exists());
+
+    // The protocol schema the CLI generates names each request and notification sluice uses.
+    let schema = scratch.path().join("schema");
+    fs::create_dir(&schema).unwrap();
+    let methods = |names: &[&str]| {
+        json!({"oneOf": names.iter().map(|m| json!({"properties":{"method":{"enum":[m]}}})).collect::<Vec<_>>(),
+            "definitions":{"InitializeCapabilities":{"properties":{"experimentalApi":{"type":"boolean"}}}}})
+    };
+    let requests: Vec<&str> = profile::REQUESTS
+        .into_iter()
+        .filter(|m| *m != "turn/steer")
+        .collect();
+    fs::write(
+        schema.join("ClientRequest.json"),
+        methods(&requests).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        schema.join("ServerNotification.json"),
+        methods(&profile::NOTIFICATIONS).to_string(),
+    )
+    .unwrap();
+    let mut report = sluice_agents::engines::version::ProbeReport::default();
+    profile::check_schema(&mut report, &profile::read_schema(&schema).unwrap());
+    assert_eq!(report.missing, ["turn/steer"]);
+    let verdict = profile::check_version("codex-cli 0.161.0").unwrap();
+    assert_eq!(
+        report.require(&verdict).unwrap_err().message,
+        "codex 0.161.0 lacks `turn/steer` that sluice needs (tested 0.160.0, 0.160.1; this version is untested)"
+    );
+}
+
+#[tokio::test]
+async fn the_probe_is_kept_per_binary_version_and_mtime() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "normal");
+    log_invocations(&scratch);
+    adapter.prepare(&context, None).await.unwrap();
+    adapter.close().await.unwrap();
+    assert_eq!(
+        invocations(&scratch, "--help"),
+        2,
+        "codex --help, app-server --help"
+    );
+    assert!(
+        scratch
+            .path()
+            .join("home/engine-probes/codex.json")
+            .is_file()
+    );
+    adapter.prepare(&context, None).await.unwrap();
+    adapter.close().await.unwrap();
+    assert_eq!(invocations(&scratch, "--help"), 2, "kept");
+    assert_eq!(
+        invocations(&scratch, "--version"),
+        2,
+        "the version is read each launch"
+    );
+    // The same file rewritten (as an update in place would): its mtime changed, so it is
+    // probed again.
+    let fake = scratch.path().join("fake-codex");
+    fs::write(&fake, fs::read(&fake).unwrap()).unwrap();
+    adapter.prepare(&context, None).await.unwrap();
+    adapter.close().await.unwrap();
+    assert_eq!(invocations(&scratch, "--help"), 4);
+}
+
+#[tokio::test]
+async fn an_untested_version_is_noted_in_the_run_and_named_in_its_protocol_failure() {
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "normal");
+    retarget(&scratch, "codex-cli 0.161.0", None);
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd.clone();
+    cfg.run_dir = context.run_dir.clone();
+    cfg.limits.wall = Duration::from_millis(2000);
+    let result = acceptance::run(cfg, &mut adapter, &mut acceptance::Host::submitted())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.notes,
+        [
+            "codex 0.161.0 is newer than the tested 0.160.0, 0.160.1; accepted untested (floor 0.160.0)"
+        ]
+    );
+
+    let scratch = Scratch::new();
+    let (mut adapter, context) = setup(&scratch, "capability-mismatch");
+    retarget(&scratch, "codex-cli 0.161.0", None);
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd.clone();
+    cfg.run_dir = context.run_dir.clone();
+    let error = acceptance::run(cfg, &mut adapter, &mut acceptance::Host::submitted())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        sluice_agents::supervisor::FailureKind::CapabilityMismatch
+    );
+    assert_eq!(
+        error.message,
+        "Codex app-server refused `initialize` with the `experimentalApi` capability sluice needs: experimentalApi unavailable; likely cause: untested codex 0.161.0 (tested 0.160.0, 0.160.1)"
+    );
 }
 #[test]
 fn transcripts_redact_prose_credentials_paths_and_identities() {
@@ -559,6 +738,41 @@ async fn a_resumed_long_thread_larger_than_four_mebibytes_is_received() {
     assert_eq!(
         result["thread"]["history"].as_str().unwrap().len(),
         history.len()
+    );
+    rpc.close().await.unwrap();
+    server.abort();
+}
+#[tokio::test]
+async fn a_method_the_app_server_lacks_is_named() {
+    let scratch = Scratch::new();
+    let socket = scratch.path().join("rpc.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let request: Value =
+            serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        let response =
+            json!({"id": request["id"], "error": {"code": -32601, "message": "method not found"}});
+        ws.send(tokio_tungstenite::tungstenite::Message::text(
+            response.to_string(),
+        ))
+        .await
+        .unwrap();
+        sleep(Duration::from_secs(60)).await;
+    });
+    let mut rpc = Rpc::connect(
+        &socket,
+        &scratch.path().join("wire.jsonl"),
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap();
+    let error = rpc.request("turn/steer", json!({})).await.unwrap_err();
+    assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
+    assert_eq!(
+        error.message,
+        "Codex app-server does not implement `turn/steer`: method not found"
     );
     rpc.close().await.unwrap();
     server.abort();
@@ -652,6 +866,134 @@ fn git(cwd: &Path, args: &[&str]) -> String {
     assert!(output.status.success(), "git failed");
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
+/// A real Codex binary (`SLUICE_CODEX_PROBE_BINARY`, e.g. one installed into a scratch npm
+/// prefix) through the adapter with no credential of the owner's: an invalid API key in a
+/// scratch Codex home. It checks the version policy and probe, the app-server's launch on a
+/// Unix socket, `initialize` with `experimentalApi`, `account/read`, `thread/start`,
+/// `turn/start` and the 401 turn failure, then `thread/resume` of the same thread, and keeps the
+/// redacted wire transcripts in `SLUICE_CODEX_PROBE_EVIDENCE` to compare across versions.
+fn keep_wire(scratch: &Scratch, run: &str) {
+    if let Some(evidence) = std::env::var_os("SLUICE_CODEX_PROBE_EVIDENCE").map(PathBuf::from) {
+        fs::create_dir_all(&evidence).unwrap();
+        fs::copy(
+            scratch.path().join(run).join("codex-wire.jsonl"),
+            evidence.join(format!("{run}-wire.jsonl")),
+        )
+        .unwrap();
+    }
+}
+#[tokio::test]
+#[ignore = "runs a real Codex binary from SLUICE_CODEX_PROBE_BINARY; calls the API with an invalid key"]
+async fn real_codex_wire_without_credentials() {
+    let Some(binary) = std::env::var_os("SLUICE_CODEX_PROBE_BINARY").map(PathBuf::from) else {
+        println!("real codex PENDING: set SLUICE_CODEX_PROBE_BINARY");
+        return;
+    };
+    let scratch = Scratch::new();
+    let source = scratch.path().join("owner");
+    fs::create_dir(&source).unwrap();
+    fs::write(
+        source.join("auth.json"),
+        r#"{"OPENAI_API_KEY":"sk-sluice-probe-invalid"}"#,
+    )
+    .unwrap();
+    let cwd = scratch.path().join("work");
+    fs::create_dir(&cwd).unwrap();
+    let mut context = EngineContext {
+        run_dir: scratch.path().join("fresh"),
+        cwd,
+        model: Some(sluice_agents::model::ResolvedModel {
+            id: "gpt-6.1-sol@low".into(),
+            model: "gpt-6.1-sol".into(),
+            effort: Some("low".into()),
+        }),
+        tmux_binary: None,
+    };
+    let mut adapter = Codex::new(CodexOptions {
+        request_timeout: Duration::from_secs(30),
+        ..CodexOptions::new(binary, source, scratch.path().join("home"))
+    });
+    let failed_turn = async |adapter: &mut Codex, context: &EngineContext| {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let observation = adapter.observe(context).await.unwrap();
+            // Codex retries the stream first (`Reconnecting... n/5`, `willRetry`).
+            let retrying = observation
+                .error
+                .as_ref()
+                .is_some_and(|e| e.message.starts_with("Reconnecting..."));
+            if (observation.error.is_some() && !retrying) || observation.turns_completed > 0 {
+                return observation;
+            }
+            assert!(Instant::now() < deadline, "{observation:?}");
+            sleep(Duration::from_millis(100)).await;
+        }
+    };
+    assert!(adapter.prepare(&context, None).await.unwrap().is_none());
+    let verdict = adapter.version().unwrap();
+    println!("real codex {} ({:?})", verdict.version, verdict.standing);
+    let probes: Value = serde_json::from_slice(
+        &fs::read(scratch.path().join("home/engine-probes/codex.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(probes["report"]["missing"], json!([]), "{probes}");
+    println!("probe: {}", probes["report"]);
+    adapter
+        .execute(&context, EngineCommand::StartFresh)
+        .await
+        .unwrap();
+    assert_eq!(
+        text(
+            &mut adapter,
+            &context,
+            InputId::Task,
+            "Reply with the word blue."
+        )
+        .await,
+        DeliveryOutcome::Acknowledged
+    );
+    let observation = failed_turn(&mut adapter, &context).await;
+    let session = observation.session_id.clone().expect("thread id");
+    let error = observation.error.expect("the invalid key fails the turn");
+    println!("fresh turn: {:?}: {}", error.kind, error.message);
+    assert_eq!(error.kind, EngineErrorKind::AuthFailed, "{error:?}");
+    adapter.close().await.unwrap();
+    keep_wire(&scratch, "fresh");
+    context.run_dir = scratch.path().join("resumed");
+    if let Some(wait) = std::env::var("SLUICE_CODEX_PROBE_RESUME_WAIT_S")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        sleep(Duration::from_secs(wait)).await;
+    }
+    adapter.prepare(&context, Some(&session)).await.unwrap();
+    adapter
+        .execute(
+            &context,
+            EngineCommand::Resume {
+                session: session.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    text(
+        &mut adapter,
+        &context,
+        InputId::Continue { attempt: 2 },
+        "Reply with the word blue.",
+    )
+    .await;
+    let observation = failed_turn(&mut adapter, &context).await;
+    assert_eq!(observation.session_id.as_deref(), Some(session.as_str()));
+    assert_eq!(
+        observation.error.map(|e| e.kind),
+        Some(EngineErrorKind::AuthFailed)
+    );
+    adapter.close().await.unwrap();
+    keep_wire(&scratch, "resumed");
+    println!("real codex {} PASS session={session}", verdict.version);
+}
+
 #[tokio::test]
 #[ignore = "g3_codex uses the owner's credentials and one labelled scratch session"]
 async fn g3_codex() {

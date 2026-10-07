@@ -1,7 +1,12 @@
-//! Read-only engine profile diagnostics. Version probes run in a caller-owned private home.
-use crate::engines::{EngineProfile, claude, codex, devin};
+//! Read-only engine profile diagnostics. Version and capability probes run in a caller-owned
+//! private home.
+use crate::engines::{
+    EngineProfile, claude, codex, devin,
+    version::{self, Major, Policy, ProbeReport},
+};
 use serde::Serialize;
 use std::{
+    collections::BTreeMap,
     io,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -15,8 +20,19 @@ pub struct EngineDiagnostic {
     pub engine: String,
     pub executable: Option<PathBuf>,
     pub version: Option<String>,
+    /// Whether launches run this version: the policy accepts it and no probe found a
+    /// capability missing.
     pub supported: bool,
+    /// `tested`, `untested, accepted`, `refused`, `not found` or `unknown` (no version read).
+    pub status: String,
+    /// The policy in one line (`Policy::summary`).
     pub supported_range: String,
+    pub tested: Vec<String>,
+    pub floor: String,
+    /// Whether a major version newer than every tested one is `accepted` or `refused`.
+    pub newer_major: String,
+    /// What the capability probes found; `None` when they did not run.
+    pub probes: Option<ProbeReport>,
     /// These are profile requirements, not a claim that a session negotiated them.
     pub required_capabilities: Vec<String>,
     /// What an agent fn runs on this engine when its `model` input is left out.
@@ -117,6 +133,34 @@ pub async fn engine_diagnostics(
     }
     Ok(result)
 }
+fn policy(engine: &str) -> Policy {
+    match engine {
+        "codex" => codex::profile::POLICY,
+        "claude" => claude::profile::POLICY,
+        _ => devin::profile::POLICY,
+    }
+}
+/// The probe environment: this process's, with HOME and the engines' config dirs pointed at
+/// `home` and parent-session markers removed.
+fn probe_env(home: &Path) -> BTreeMap<String, String> {
+    let mut env: BTreeMap<String, String> = std::env::vars().collect();
+    for name in [
+        "HOME",
+        "CODEX_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+    ] {
+        env.insert(name.into(), home.to_string_lossy().into_owned());
+    }
+    for name in ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "AI_AGENT"] {
+        env.remove(name);
+    }
+    env.insert("DISABLE_AUTOUPDATER".into(), "1".into());
+    env
+}
 async fn diagnose(
     profile: EngineProfile,
     path: &std::ffi::OsStr,
@@ -129,13 +173,22 @@ async fn diagnose(
         "claude" => "claude",
         _ => "devin",
     });
+    let policy = policy(&profile.engine);
     let mut report = EngineDiagnostic {
         executable: binary.clone(),
         version: None,
         supported: false,
+        status: "not found".into(),
         private_home_status: private_status(&private_home),
         private_home,
         supported_range: profile.version_range,
+        tested: policy.tested.iter().map(|v| (*v).into()).collect(),
+        floor: policy.floor.into(),
+        newer_major: match policy.newer_major {
+            Major::Accept => "accepted".into(),
+            Major::Refuse => "refused".into(),
+        },
+        probes: None,
         required_capabilities: profile.required_capabilities,
         default_model: profile.default_model,
         reports_waiting: profile.reports_waiting,
@@ -146,6 +199,7 @@ async fn diagnose(
         report.error = Some("executable not found on PATH".into());
         return report;
     };
+    report.status = "unknown".into();
     let version = match probe(&binary, "--version", probe_home).await {
         Ok(v) => v,
         Err(e) => {
@@ -153,22 +207,40 @@ async fn diagnose(
             return report;
         }
     };
-    let validation = match report.engine.as_str() {
+    let verdict = match report.engine.as_str() {
         "codex" => codex::profile::check_version(&version),
-        "claude" => claude::profile::validate_version(&version).map(|_| ()),
-        _ => match probe(&binary, "--help", probe_home).await {
-            Ok(help) => devin::profile::validate_cli(&version, &help),
-            Err(e) => {
-                report.version = Some(version);
-                report.error = Some(e);
-                return report;
-            }
-        },
+        "claude" => claude::profile::validate_version(&version),
+        _ => devin::profile::validate_version(&version),
     };
     report.version = Some(version);
-    match validation {
-        Ok(()) => report.supported = true,
-        Err(e) => report.error = Some(e.to_string()),
+    let verdict = match verdict {
+        Ok(verdict) => verdict,
+        Err(e) => {
+            report.status = "refused".into();
+            report.error = Some(e.to_string());
+            return report;
+        }
+    };
+    let env = probe_env(probe_home);
+    let probes = match report.engine.as_str() {
+        "codex" => codex::profile::probe(&binary, &env).await,
+        "claude" => claude::profile::probe(version::run(&binary, &["--help"], &env).await),
+        _ => devin::profile::probe(version::run(&binary, &["--help"], &env).await),
+    };
+    match probes.require(&verdict) {
+        Ok(()) => {
+            report.supported = true;
+            report.status = if verdict.tested() {
+                "tested".into()
+            } else {
+                "untested, accepted".into()
+            };
+        }
+        Err(e) => {
+            report.status = "refused".into();
+            report.error = Some(e.to_string());
+        }
     }
+    report.probes = Some(probes);
     report
 }

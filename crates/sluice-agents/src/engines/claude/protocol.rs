@@ -425,7 +425,7 @@ pub fn blocking_screen(pane: &str) -> Option<(String, String)> {
     {
         (
             "a required update (this Claude Code is older than the version it now requires)",
-            "update Claude Code on this host (`claude update`) together with sluice's pinned Claude profile",
+            "update Claude Code on this host (`claude update`; sluice runs the newer version untested)",
         )
     } else {
         return None;

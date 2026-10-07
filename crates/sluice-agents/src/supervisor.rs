@@ -1094,6 +1094,14 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 let command = machine.checkpoint.session.clone().map(|session| EngineCommand::Resume { session }).unwrap_or(EngineCommand::StartFresh);
                 bounded(cancel, ready_deadline, engine.execute(&context, command)).await.map(|_| ())
             }.await;
+            // An untested engine version runs, with a warning in the log and a note in the run.
+            if let Some(note) = engine.version().and_then(|v| v.note())
+                && !machine.checkpoint.notes.contains(&note)
+            {
+                tracing::warn!(engine = %config.engine, run = %config.run, "{note}");
+                eprintln!("{note}");
+                machine.checkpoint.notes.push(note);
+            }
             let mut startup_failure = None;
             if let Err(mut error) = startup {
                 if error.kind == FailureKind::WallCap && ready_deadline < deadline { error.kind = FailureKind::ReadyTimeout; }
@@ -1151,6 +1159,14 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         }
     }.await;
     let mut outcome = outcome;
+    // A failure that a protocol change could explain names an untested version as its cause.
+    if let Err(error) = &mut outcome
+        && let Some(hint) = engine.version().and_then(|v| v.hint())
+        && let Some(likelihood) = version_cause(error.kind)
+        && !error.message.contains(&hint)
+    {
+        error.message = format!("{}; {likelihood} cause: {hint}", error.message);
+    }
     // The pane goes with the teardown below, so its text is kept first.
     if let Err(error) = &mut outcome
         && keeps_pane(error.kind, machine.turns_completed())
@@ -1181,6 +1197,19 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         notes: machine.checkpoint.notes,
         model: model.map(|m| m.id),
     })
+}
+/// How likely an untested engine version caused a failure of this kind: an engine refusing
+/// or failing a request, or exiting, is likely a protocol change; a lost or unstarted turn or a
+/// stall may be one. Account, screen, session and sluice-side failures never are.
+fn version_cause(kind: FailureKind) -> Option<&'static str> {
+    match kind {
+        FailureKind::CapabilityMismatch | FailureKind::EngineExited => Some("likely"),
+        FailureKind::UnknownAcceptance
+        | FailureKind::ReadyTimeout
+        | FailureKind::TurnStartTimeout
+        | FailureKind::StallCap => Some("possible"),
+        _ => None,
+    }
 }
 /// Whether a failure keeps the pane's text: one before the engine completed a turn, or a
 /// timeout or stall; never a cancellation.

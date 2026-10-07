@@ -197,7 +197,12 @@ pub fn main(args: &[String]) -> io::Result<()> {
         return Ok(());
     }
     if args.iter().any(|s| s == "--help") {
-        println!("--config --export --model --resume --respect-workspace-trust");
+        println!(
+            "{}",
+            settings["help"]
+                .as_str()
+                .unwrap_or("--config --export --model --resume --respect-workspace-trust")
+        );
         return Ok(());
     }
     CONTINUE_PAST_HOOK_FAILURES.store(

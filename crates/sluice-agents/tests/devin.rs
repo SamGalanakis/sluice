@@ -86,6 +86,7 @@ fn options(root: &Scratch, script: Value) -> DevinOptions {
         hook_binary: fixture,
         config: root.join("owner-config.json"),
         data_home: root.join("data"),
+        probe_cache: None,
         environment: BTreeMap::from([
             (
                 "SLUICE_HOME".into(),
@@ -771,15 +772,40 @@ async fn devin_resume_validates_read_only_metadata_cwd_and_session() {
 
 #[tokio::test]
 async fn devin_unknown_version_and_bad_config_fail_before_delivery() {
+    // A newer major is refused (Devin's major marks a CLI line, not a release), as is an
+    // older version or a flag sluice launches with that `--help` no longer lists.
+    for (script, message) in [
+        (
+            json!({"version":"3001.0.0"}),
+            "devin 3001.0.0 is a newer major version than the tested 3000.11.3; sluice runs an untested devin major only after its wire fixtures are recorded for it (floor 3000.11.3). Pin devin to a 3000.x release on this host, then step_retry",
+        ),
+        (
+            json!({"version":"3000.10.9"}),
+            "devin 3000.10.9 is older than 3000.11.3, the oldest version with every capability sluice needs (tested 3000.11.3); update devin on this host, then step_retry",
+        ),
+        (
+            json!({"version":"3000.12.0","help":"--config --model --resume --respect-workspace-trust"}),
+            "devin 3000.12.0 lacks `--export` that sluice needs (tested 3000.11.3; this version is untested)",
+        ),
+    ] {
+        let root = Scratch::new();
+        let mut adapter = Devin::new(options(&root, script));
+        let ctx = context(&root, "run", false);
+        let error = adapter.prepare(&ctx, None).await.unwrap_err();
+        assert_eq!(error.kind, EngineErrorKind::CapabilityMismatch);
+        assert_eq!(error.message, message);
+        assert!(!ctx.run_dir.join("devin-config.json").exists());
+        assert!(!root.join("prompts.jsonl").exists());
+    }
+    // A newer 3000.x runs untested.
     let root = Scratch::new();
-    let mut adapter = Devin::new(options(&root, json!({"version":"3001.0.0"})));
+    let mut adapter = Devin::new(options(&root, json!({"version":"3000.12.0"})));
     let ctx = context(&root, "run", false);
+    let _ = adapter.prepare(&ctx, None).await;
     assert_eq!(
-        adapter.prepare(&ctx, None).await.unwrap_err().kind,
-        EngineErrorKind::CapabilityMismatch
+        adapter.version().unwrap().note().unwrap(),
+        "devin 3000.12.0 is newer than the tested 3000.11.3; accepted untested (floor 3000.11.3)"
     );
-    assert!(!ctx.run_dir.join("devin-config.json").exists());
-    assert!(!root.join("prompts.jsonl").exists());
     for raw in [
         "[]",
         "{\"agent\":[]}",
@@ -1896,6 +1922,7 @@ async fn g3_devin() -> io::Result<()> {
         hook_binary: fixture.clone(),
         config: home.join(".config/devin/config.json"),
         data_home: home.join(".local/share"),
+        probe_cache: None,
         environment: BTreeMap::from([
             ("HOME".into(), home.to_string_lossy().into_owned()),
             (

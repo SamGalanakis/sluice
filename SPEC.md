@@ -152,6 +152,8 @@ runs/<run id>/              one run's directory: its control socket, invocation 
                             records, messages.json (the messages assigned to it), stderr and
                             the engine's own files
 locks/session-<key>.lock    agent session locks
+engine-probes/<engine>.json the last capability probe of each engine CLI (§15), kept per
+                            binary (canonical path, mtime, size, inode) and version
 projects/<project id>/
   fns/                      the project's fns
   generations/<n>/          immutable published copies of the project's fns
@@ -1378,7 +1380,7 @@ write that timed out, and connections dropped for want of a permit.
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |
 | `me [--project P] [--step S] [--json]` | `step_context` for the current step (from `SLUICE_PROJECT_ID`/`SLUICE_PROJECT` and `SLUICE_STEP`) |
-| `doctor [--json]` | host prerequisites, each engine (`codex`, `claude`, `devin`): its executable on PATH, `--version` and whether its profile supports it, and the selected release's manifest check. The engine probes run with HOME and the engines' config dirs in a private scratch directory, so no session starts and no credential is read; a missing or unsupported engine is a warning, not a failure |
+| `doctor [--json]` | host prerequisites, each engine (`codex`, `claude`, `devin`): its executable on PATH, its `--version`, its tested versions, floor and newer-major rule, its status (`tested`, `untested, accepted`, `refused` with why, `not found`), what its capability probes verified, found missing or must assume (§15), and the selected release's manifest check. The engine probes run with HOME and the engines' config dirs in a private scratch directory, so no session starts and no credential is read; a missing, untested or refused engine is a warning, not a failure |
 | `query [SQL [PARAM…]] [--limit N] [--table [--width 60]]` | the `query` tool, read directly from the database; without SQL, every public table and view with its columns |
 | `backup PATH [--force]` | an online copy of `sluice.db` |
 | `docs [topic]` | the agent docs: the pages the `docs` tool serves |
@@ -1574,8 +1576,51 @@ Claude's API error entry, `StopFailure` and login screen, Devin's last pane entr
 picker), and text only at its start, so the words in tool output or the agent's own prose never
 match. Logged out, Devin opens on its login picker (`How would you like to log in?`, `Log in with
 browser`): the run fails as `AuthFailed` before any input is taken, as Claude's login screen does.
-`sluice doctor` probes each engine's version only, in a scratch home that holds no credential, so
-it does not report auth.
+`sluice doctor` probes each engine's version and capabilities only, in a scratch home that holds
+no credential, so it does not report auth.
+
+Engine versions and capabilities. An engine CLI that updates itself must not take runs down
+unless it stopped doing something sluice needs, so a launch judges the CLI's `--version` by the
+engine's policy and then probes what it needs, rather than pinning one version:
+
+| engine | tested | floor | a newer major |
+|---|---|---|---|
+| Codex | 0.160.0, 0.160.1 | 0.160.0 | runs untested |
+| Claude Code | 2.1.283, 2.1.284 | 2.1.283 | runs untested |
+| Devin | 3000.11.3 | 3000.11.3 | refused |
+
+- A tested version runs as it is. A version at or above the floor that was not tested runs too:
+  the run's log (`stderr.log`) and the service log (a `warn`) say so, and the run's result
+  carries the note in `notes`, e.g. `codex 0.161.0 is newer than the tested 0.160.0, 0.160.1;
+  accepted untested (floor 0.160.0)`. A version below the floor, one sluice cannot read, or
+  (Devin only) a newer major fails the launch with `agent_failure` kind `CapabilityMismatch`
+  naming the version, the floor and the tested versions. The floor is the oldest version the
+  adapter was built and checked against. Codex is 0.x and ships a minor version per release, and
+  Claude Code a patch version, so their numbers do not mark protocol breaks; Devin's major is
+  not a release counter (every release is 3000.x), so a new one marks a different CLI line, and
+  Devin is driven through its pane, hook journal and session SQLite schema, which no probe shows
+  before a session.
+- The probe, before anything starts: Codex's `codex --help` (`app-server`, `resume`, `debug`,
+  `--remote`, `--dangerously-bypass-approvals-and-sandbox`, `--config`), `codex app-server
+  --help` (the `unix://` listener) and the protocol schema `codex app-server generate-json-schema
+  --experimental` writes (every request and notification sluice uses, and `initialize`'s
+  `experimentalApi` capability; a CLI without the command leaves them assumed); Claude's
+  `claude --help` (each flag sluice launches with); Devin's `devin --help` (`--config`,
+  `--export`, `--model`, `--resume`, `--respect-workspace-trust`). What no cheap probe can show
+  is assumed and shown by the session itself: Claude's and Devin's hooks, Claude's status file,
+  transcript and inline compaction context, Devin's session schema (checked when a session is
+  looked up), Codex's remote TUI and its in-place `auth.json` writes. Codex's `initialize` reply
+  is checked at every launch. A capability the probe finds missing fails the launch with kind
+  `CapabilityMismatch`: ``codex 0.161.0 lacks `turn/steer` that sluice needs (tested 0.160.0,
+  0.160.1; this version is untested)``. A probe with nothing missing is kept in
+  `<home>/engine-probes/<engine>.json` for that binary (canonical path, mtime, size, inode) and
+  version, so later launches only read the version.
+- On an untested version, a run that fails in a way a protocol change explains names the
+  version: `CapabilityMismatch` and `EngineExited` add `; likely cause: untested codex 0.161.0
+  (tested 0.160.0, 0.160.1)`, and `UnknownAcceptance`, `ReadyTimeout`, `TurnStartTimeout` and
+  `StallCap` `; possible cause: …`. An app-server request Codex does not implement fails as
+  `CapabilityMismatch` naming the method (``Codex app-server does not implement `turn/steer`:
+  …``), and a model listing an untested CLI prints differently names the version too.
 
 A pane-driven engine (Claude, Devin) that stops before its first turn on an interactive screen
 sluice does not answer can take no input, so the run fails at once with `agent_failure` kind

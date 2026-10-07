@@ -137,6 +137,19 @@ impl Rpc {
                     && frame.get("method").is_none()
                 {
                     if let Some(failure) = frame.get("error") {
+                        // Method not found names the method; `initialize` answers it for a
+                        // refused capability instead, which the adapter names.
+                        if failure.get("code").and_then(Value::as_i64) == Some(-32601)
+                            && method != "initialize"
+                        {
+                            return Err(error(
+                                EngineErrorKind::CapabilityMismatch,
+                                format!(
+                                    "Codex app-server does not implement `{method}`: {}",
+                                    failure["message"].as_str().unwrap_or("method not found")
+                                ),
+                            ));
+                        }
                         return Err(rpc_error(failure));
                     }
                     return frame.get("result").cloned().ok_or_else(|| {
@@ -582,9 +595,22 @@ fn rate_limited_before() -> io::Result<bool> {
 /// for launch validation against the fixture.
 pub const FIXTURE_MODELS: &str = include_str!("models.json");
 
+/// `codex --help` and `codex app-server --help`, cut to what sluice's probe reads, as 0.160.x
+/// prints them (the fixture has no protocol schema to generate).
+pub const FIXTURE_HELP: &str = "Commands:\n  app-server        [experimental] Run the app server or related tooling\n  debug             Debugging tools\n  resume            Resume a previous interactive session\nOptions:\n  -c, --config <key=value>\n      --remote <ADDR>\n      --dangerously-bypass-approvals-and-sandbox\n";
+pub const FIXTURE_APP_SERVER_HELP: &str = "Options:\n      --listen <URL>\n          Transport endpoint URL. Supported values: `stdio://` (default), `unix://`, `unix://PATH`, `ws://IP:PORT`, `off`\n";
+
 pub fn fixture_main(args: &[String]) -> io::Result<()> {
     if args == ["--version"] {
         println!("codex-cli 0.160.0");
+        return Ok(());
+    }
+    if args == ["--help"] {
+        print!("{FIXTURE_HELP}");
+        return Ok(());
+    }
+    if args == ["app-server", "--help"] {
+        print!("{FIXTURE_APP_SERVER_HELP}");
         return Ok(());
     }
     if args == ["debug", "models"] {

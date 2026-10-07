@@ -12,8 +12,13 @@ steer races, missing sessions and a disconnected turn/start. These synthetic cas
 not claims that the real gate observed those errors.
 
 Sources: the installed CLI's generated experimental JSON schema and the official
-[app-server contract](https://developers.openai.com/codex/app-server/). The checked CLI
-version is exact because the initialize reply does not advertise method version ranges.
+[app-server contract](https://developers.openai.com/codex/app-server/). The initialize reply
+does not advertise method version ranges, so a launch checks the schema each new CLI
+generates (`codex app-server generate-json-schema --experimental`) for every request and
+notification sluice uses, and a newer CLI runs untested (SPEC §15). 0.160.1 is tested too: its
+generated schema is byte-identical to 0.160.0's, and `real_codex_wire_without_credentials`
+(an invalid API key in a scratch home, no owner credential) ran the same launch, thread and
+turn exchange on both with the same redacted wire.
 
 The account scenarios (`limit-reached`, `usage-limit`, `rate-limit-soon`, `limit-words`,
 `unauthorized`, `unauthorized-401`, `logged-out`) send frames shaped by the 0.160.0 generated

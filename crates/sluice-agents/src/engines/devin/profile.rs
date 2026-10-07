@@ -1,9 +1,24 @@
-//! Tested Devin CLI profile. Updating this requires new wire and real-session evidence.
-use super::super::{EngineError, EngineErrorKind, EngineProfile};
+//! Devin CLI profile, tested on 3000.11.3.
+use super::super::{
+    EngineError, EngineErrorKind, EngineProfile,
+    version::{Major, Policy, ProbeReport, Verdict},
+};
 use crate::model::ModelChoice;
 use serde_json::Value;
 
+/// The version the fixtures and the real-session gates were recorded against.
 pub const VERSION: &str = "3000.11.3";
+/// Devin's version policy. 3000.11.3 is both the only tested version and the floor: no older
+/// one was checked. A newer 3000.x runs untested; a newer major is refused, because Devin's
+/// major is not a release counter (every release so far is 3000.x), so a new one marks a
+/// different CLI line, and sluice drives Devin through its pane, hook journal and session
+/// SQLite schema, none of which a probe can show before a session.
+pub const POLICY: Policy = Policy {
+    engine: "devin",
+    tested: &[VERSION],
+    floor: VERSION,
+    newer_major: Major::Refuse,
+};
 pub const HOOKS: [&str; 7] = [
     "SessionStart",
     "UserPromptSubmit",
@@ -24,7 +39,7 @@ pub const REQUIRED_FLAGS: [&str; 5] = [
 pub fn profile() -> EngineProfile {
     EngineProfile {
         engine: "devin".into(),
-        version_range: format!("={VERSION}; session SQLite user_version=0"),
+        version_range: format!("{}; session SQLite user_version=0", POLICY.summary()),
         required_capabilities: HOOKS.iter().map(|s| (*s).into()).collect(),
         default_model: Some(ModelChoice::normal("swe-2", Some("high"))),
         reports_waiting: false,
@@ -49,18 +64,26 @@ pub fn parse_models(listing: &[u8]) -> Result<Vec<String>, EngineError> {
     Ok(ids)
 }
 
-pub fn validate_cli(version: &str, help: &str) -> Result<(), EngineError> {
-    if version.split_whitespace().take(2).collect::<Vec<_>>() != ["devin", VERSION]
-        || !REQUIRED_FLAGS.iter().all(|flag| help.contains(flag))
-    {
-        return Err(error(
-            EngineErrorKind::CapabilityMismatch,
-            format!(
-                "Devin requires tested CLI {VERSION} and config/export/resume capabilities; update the Devin profile and fixtures before delivery"
-            ),
-        ));
+/// Judges `devin --version`'s output (`devin 3000.11.3 (9c803229faa4)`) by `POLICY`.
+pub fn validate_version(version: &str) -> Result<Verdict, EngineError> {
+    let words: Vec<&str> = version.split_whitespace().take(2).collect();
+    match words.as_slice() {
+        ["devin", version] => POLICY.judge(version),
+        _ => POLICY.judge(version.trim()),
     }
-    Ok(())
+}
+/// What `devin --help` shows of the flags sluice launches with. The lifecycle hooks show only
+/// in a session; the session SQLite schema is checked when a session is looked up.
+pub fn probe(help: Result<String, String>) -> ProbeReport {
+    let mut report = ProbeReport::default();
+    match help {
+        Ok(help) => report.help(&help, &REQUIRED_FLAGS.map(|flag| (flag, flag))),
+        Err(e) => report.missing.push(format!("`devin --help` ({e})")),
+    }
+    for hook in HOOKS {
+        report.assume(format!("{hook} hook"));
+    }
+    report
 }
 
 pub(crate) fn error(kind: EngineErrorKind, message: impl Into<String>) -> EngineError {
