@@ -857,6 +857,57 @@ run(main)
         )
         .unwrap();
     assert_eq!(count, 4);
+    let format = |inputs| {
+        g.data(json!({"command":"fn_call","args":{"project":g.selector(),"name":"core.format","inputs":inputs,"direct":true}}))
+    };
+    for (inputs, expected) in [
+        (
+            json!({"template":"hi {who}, {n} + {rest} = {sum}","values":{"who":"world","n":4,"rest":[1,2],"sum":{"a":true}}}),
+            "hi world, 4 + [1,2] = {\"a\":true}",
+        ),
+        (
+            json!({"template":"{0} then {1}","values":["first",2]}),
+            "first then 2",
+        ),
+        (json!({"template":"{0}!","values":7}), "7!"),
+        (
+            json!({"template":"{{{0}}} {{literal}} }}","values":["x"]}),
+            "{x} {literal} }",
+        ),
+    ] {
+        let call = format(inputs);
+        assert_eq!(call["status"], "succeeded", "{call}");
+        assert_eq!(call["outputs"]["text"], expected);
+        assert_eq!(call["direct"], true);
+    }
+    for (template, values, expected) in [
+        ("{1}", json!("one"), "single value"),
+        ("{2}", json!(["a", "b"]), "has 2 item(s)"),
+        ("unclosed {", json!({}), "unclosed '{'"),
+        ("{a{b}", json!({"a":1,"b":2}), "unclosed '{'"),
+        ("stray }", json!({}), "unmatched '}'"),
+        ("empty {}", json!({}), "empty placeholder"),
+        ("{x.y}", json!({"x":1}), "attribute or item access"),
+        ("{x[0]}", json!({"x":1}), "attribute or item access"),
+        ("{x!r}", json!({"x":1}), "conversion flags"),
+        ("{x!s:>10}", json!({"x":1}), "conversion flags"),
+        ("{x:>10}", json!({"x":1}), "format specifications"),
+        ("{x:.2f}", json!({"x":1}), "format specifications"),
+        ("{missing}", json!({"x":1}), "no value 'missing'"),
+        ("{0}", json!({"x":1}), "is a record"),
+        ("{name}", json!(["a"]), "is an array"),
+    ] {
+        let call = format(json!({"template":template,"values":values}));
+        assert_eq!(call["status"], "failed", "{call}");
+        assert_eq!(call["error"]["error"], "fn_failure", "{call}");
+        assert!(
+            call["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{template}: {call}"
+        );
+    }
 }
 #[test]
 fn fake_agent_submits_delivers_once_and_feedback_resumes_previous_session() {

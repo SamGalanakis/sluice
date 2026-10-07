@@ -114,6 +114,175 @@ fn query_prints_a_table_binds_params_and_lists_the_schema() {
     let bad = run(home.path(), &["query", "DELETE FROM projects"]);
     assert_eq!(bad.status.code(), Some(1));
     assert_eq!(stderr(&bad)["error"], "bad_request");
+    let bound = tool(home.path(), "query", &json!({"sql":"SELECT ?,?,?,?,?,?", "params":[null,true,7,2.5,"x'; DROP TABLE projects;--",false]}).to_string());
+    assert!(
+        bound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bound.stderr)
+    );
+    assert_eq!(
+        stdout(&bound)["rows"],
+        json!([[null, 1, 7, 2.5, "x'; DROP TABLE projects;--", 0]])
+    );
+    for sql in [
+        "SELECT 1; SELECT 2",
+        "SELECT 1; DROP TABLE projects",
+        "",
+        ";",
+        "-- only comment",
+        "SELECT 1; ;",
+    ] {
+        assert!(!run(home.path(), &["query", sql]).status.success(), "{sql}");
+    }
+    let nul = tool(
+        home.path(),
+        "query",
+        &json!({"sql":"SELECT 1\u{0}"}).to_string(),
+    );
+    assert!(!nul.status.success());
+    for sql in [
+        "SELECT ';' AS \"semi;colon\"; -- trailing ;\n /* ; */",
+        "SELECT 'it''s ; fine'",
+        "/* ; */ SELECT 1; /* trailing */",
+    ] {
+        let reply = run(home.path(), &["query", sql]);
+        assert!(
+            reply.status.success(),
+            "{sql}: {}",
+            String::from_utf8_lossy(&reply.stderr)
+        );
+        assert_eq!(stdout(&reply)["truncated"], false);
+    }
+    for limit in [1001, usize::MAX] {
+        let out = tool(
+            home.path(),
+            "query",
+            &json!({"sql":"SELECT 1","limit":limit}).to_string(),
+        );
+        assert_eq!(stderr(&out)["error"], "bad_request");
+    }
+    for args in [
+        json!({"sql":"SELECT ?"}),
+        json!({"sql":"SELECT 1","params":[1]}),
+        json!({"sql":"SELECT ?","params":[[1]]}),
+    ] {
+        assert!(
+            !tool(home.path(), "query", &args.to_string())
+                .status
+                .success()
+        );
+    }
+    assert_eq!(
+        stdout(&run(
+            home.path(),
+            &["query", "SELECT count(*) FROM projects"]
+        ))["rows"],
+        json!([[0]])
+    );
+    assert!(
+        !run(home.path(), &["query", &"SELECT 1;".repeat(11000)])
+            .status
+            .success()
+    );
+    let series =
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r LIMIT 1001) SELECT n FROM r";
+    for (limit, count, truncated) in [
+        (None, 200, true),
+        (Some(0), 200, true),
+        (Some(2), 2, true),
+        (Some(1000), 1000, true),
+    ] {
+        let mut args = json!({"sql":series});
+        if let Some(limit) = limit {
+            args["limit"] = json!(limit);
+        }
+        let out = tool(home.path(), "query", &args.to_string());
+        let table = stdout(&out);
+        assert_eq!(table["rows"].as_array().unwrap().len(), count);
+        assert_eq!(table["truncated"], truncated);
+    }
+    let exact = run(
+        home.path(),
+        &["query", "SELECT 1 UNION ALL SELECT 2", "--limit", "2"],
+    );
+    assert_eq!(stdout(&exact)["rows"], json!([[1], [2]]));
+    assert_eq!(stdout(&exact)["truncated"], false);
+    let blob = run(home.path(), &["query", "SELECT x'0102' AS icon"]);
+    let message = stderr(&blob)["message"].as_str().unwrap().to_owned();
+    assert!(
+        message.contains("binary data")
+            && message.contains("hex(\"icon\")")
+            && message.contains("length(\"icon\")")
+    );
+    assert_eq!(
+        stdout(&run(
+            home.path(),
+            &["query", "SELECT hex(x'0102'),length(x'0102')"]
+        ))["rows"],
+        json!([["0102", 2]])
+    );
+    for sql in [
+        "SELECT CAST(x'ff' AS TEXT)",
+        "SELECT 1e999",
+        "SELECT missing FROM projects",
+        "SELECT (",
+        "SELECT json('broken')",
+    ] {
+        assert_eq!(
+            stderr(&run(home.path(), &["query", sql]))["error"],
+            "invalid",
+            "{sql}"
+        );
+    }
+    let never = home.root().join("never.db");
+    for sql in [
+        format!("VACUUM INTO '{}'", never.display()),
+        "SELECT load_extension('/tmp/never.so')".into(),
+        "SELECT LOAD_EXTENSION('/tmp/never.so')".into(),
+        "SELECT sqlite_log(1,'never')".into(),
+        format!("SELECT writefile('{}','never')", never.display()),
+        "SELECT readfile('/etc/passwd')".into(),
+        "SELECT fts3_tokenizer('simple')".into(),
+        "SELECT eval('DELETE FROM projects')".into(),
+    ] {
+        assert!(
+            !run(home.path(), &["query", &sql]).status.success(),
+            "{sql}"
+        );
+    }
+    assert!(!never.exists());
+    let began = std::time::Instant::now();
+    let bomb = run(
+        home.path(),
+        &[
+            "query",
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT sum(n) FROM r",
+        ],
+    );
+    assert_eq!(stderr(&bomb)["error"], "bad_request");
+    assert!(
+        stderr(&bomb)["message"]
+            .as_str()
+            .unwrap()
+            .contains("VM-operation")
+    );
+    assert!(began.elapsed() < std::time::Duration::from_secs(3));
+    assert_eq!(
+        stdout(&run(home.path(), &["query", "SELECT 1"]))["rows"],
+        json!([[1]])
+    );
+    let wide = run(
+        home.path(),
+        &[
+            "query",
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r LIMIT 200) SELECT n,hex(randomblob(8000)) FROM r",
+        ],
+    );
+    let table = stdout(&wide);
+    assert!(table["truncated"].as_bool().unwrap());
+    let rows = table["rows"].as_array().unwrap();
+    assert!(!rows.is_empty() && rows.len() < 200);
+    assert!(wide.stdout.len() <= sluice_store::query::MAX_BYTES + 1);
     let listing = run(home.path(), &["query"]);
     let listing = String::from_utf8(listing.stdout).unwrap();
     assert!(listing.contains("table projects("));
