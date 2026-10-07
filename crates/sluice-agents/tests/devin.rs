@@ -314,6 +314,33 @@ async fn devin_session_start_reports_readiness_before_any_input() {
     adapter.close().await.unwrap();
 }
 
+/// A hook just under the 1 MiB the relay accepts is journaled with its envelope (the
+/// invocation, its absent fields as nulls), a line over 1 MiB the reader must still read.
+#[tokio::test]
+async fn a_hook_just_under_the_limit_is_journaled_and_read_back() {
+    let root = Scratch::new();
+    let mut adapter = Devin::new(options(&root, json!({})));
+    let ctx = context(&root, "run", true);
+    adapter.prepare(&ctx, None).await.unwrap().unwrap();
+    let mut hook = json!({"hook_event_name":"PostToolUse","tool_name":"Read","tool_response":""});
+    let room = protocol::MAX_HOOK_BYTES - serde_json::to_vec(&hook).unwrap().len();
+    hook["tool_response"] = json!("x".repeat(room));
+    assert_eq!(
+        serde_json::to_vec(&hook).unwrap().len(),
+        protocol::MAX_HOOK_BYTES
+    );
+    event(&mut adapter, hook);
+    let journal = fs::read_to_string(ctx.run_dir.join("devin-hooks.jsonl")).unwrap();
+    assert!(journal.lines().next().unwrap().len() > protocol::MAX_HOOK_BYTES);
+    // Each hook is read back as it is journaled: a refused line would have failed it.
+    event(
+        &mut adapter,
+        json!({"hook_event_name":"UserPromptSubmit","prompt_id":"0"}),
+    );
+    let journal = fs::read_to_string(ctx.run_dir.join("devin-hooks.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 2);
+}
+
 #[tokio::test]
 async fn devin_visible_composer_reports_readiness_without_session_start() {
     let root = Scratch::new();

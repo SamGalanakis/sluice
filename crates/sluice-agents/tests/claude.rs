@@ -170,6 +170,53 @@ fn hook_acknowledgements_errors_and_subagent_text_are_facts_only() {
     state.hook(&hook("SessionEnd", json!({}))).unwrap();
     assert_eq!(snapshot(&mut state, "idle", 4).status, EngineStatus::Exited);
 }
+/// Claude Code writes a transcript line over 1 MiB for a large tool result or file read:
+/// the reader skips it and goes on with the records after it, and the run's state keeps
+/// following the transcript.
+#[test]
+fn a_two_mib_transcript_record_is_skipped_and_the_records_around_it_are_read() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("transcript.jsonl");
+    let assistant = |text: &str| {
+        json!({"type":"assistant","message":{"content":[{"type":"text","text":text}]}}).to_string()
+    };
+    let huge = json!({"type":"user","message":{"content":[{"type":"tool_result","content":"x".repeat(2 * protocol::MAX_EVENT_BYTES)}]}}).to_string();
+    fs::write(
+        &path,
+        format!("{}\n{huge}\n{}\n", assistant("before"), assistant("after")),
+    )
+    .unwrap();
+    let mut tail = Tail::new(path.clone(), 0);
+    let mut records = vec![];
+    loop {
+        let offset = tail.offset();
+        records.extend(tail.read().unwrap());
+        if tail.offset() == offset {
+            break;
+        }
+    }
+    assert_eq!(
+        records.len(),
+        2,
+        "{:?}",
+        records
+            .iter()
+            .map(|r| r["type"].clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(tail.skipped(), 1);
+    let mut state = ClaudeState::default();
+    for record in &records {
+        state.transcript(record, true);
+    }
+    assert_eq!(snapshot(&mut state, "busy", 1).final_text, "after");
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "{}", assistant("later")).unwrap();
+    for record in tail.read().unwrap() {
+        state.transcript(&record, true);
+    }
+    assert_eq!(snapshot(&mut state, "busy", 2).final_text, "later");
+}
 #[test]
 fn protocol_bounds_identity_and_partial_transcript_offsets() {
     let scratch = Scratch::new();
@@ -183,8 +230,15 @@ fn protocol_bounds_identity_and_partial_transcript_offsets() {
     assert_eq!(tail.read().unwrap(), vec![json!({"type":"assistant"})]);
     fs::write(&path, b"{}\n").unwrap();
     assert_eq!(tail.read().unwrap(), vec![json!({})]);
+    // A record still growing past the limit is dropped up to its newline, not fatal.
     fs::write(&path, vec![b'x'; protocol::MAX_EVENT_BYTES + 1]).unwrap();
-    assert!(Tail::new(path.clone(), 0).read().is_err());
+    let mut tail = Tail::new(path.clone(), 0);
+    assert!(tail.read().unwrap().is_empty());
+    assert_eq!(tail.skipped(), 1);
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    file.write_all(b"xxxx\n{\"type\":\"user\"}\n").unwrap();
+    assert_eq!(tail.read().unwrap(), vec![json!({"type":"user"})]);
+    assert_eq!(tail.skipped(), 1);
     for id in ["../bad", "", "a/b", "--session"] {
         assert!(protocol::session_id(id).is_err());
     }

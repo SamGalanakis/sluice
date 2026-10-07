@@ -347,13 +347,13 @@ impl Devin {
         file.seek(SeekFrom::Start(self.offset as u64))
             .map_err(fatal)?;
         let mut bytes = Vec::new();
-        file.take(protocol::MAX_HOOK_BYTES as u64 + 4096)
+        file.take(protocol::MAX_JOURNAL_LINE as u64 + 4096)
             .read_to_end(&mut bytes)
             .map_err(fatal)?;
         let mut consumed = 0;
         while let Some(n) = bytes[consumed..].iter().position(|b| *b == b'\n') {
             let end = consumed + n;
-            if n > protocol::MAX_HOOK_BYTES {
+            if n > protocol::MAX_JOURNAL_LINE {
                 return Err(fatal("oversized journal event"));
             }
             let entry: JournalEntry =
@@ -364,7 +364,7 @@ impl Devin {
                 self.accept_hook(entry.hook)?;
             }
         }
-        if bytes.len() - consumed > protocol::MAX_HOOK_BYTES {
+        if bytes.len() - consumed > protocol::MAX_JOURNAL_LINE {
             return Err(fatal("oversized partial journal event"));
         }
         Ok(())

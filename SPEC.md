@@ -1481,6 +1481,11 @@ or when the engine exits first, the run fails with kind `ExitedWithoutSubmit` an
 `exited_without_submit`. A step with nothing to submit ends a settle after its agent goes idle,
 or when its reported background work ends (at most `SLUICE_AGENT_WORK_MIN`).
 
+Claude's transcript (its session JSONL and its subagents') is read for progress, the last
+message so far and API errors. A record over 1 MiB (Claude Code writes one for a large tool
+result or file read) is skipped, never fatal, and the run's log says how many were skipped; the
+turn still ends at its `Stop` hook, which carries the final message, or on a stable idle pane.
+
 A Devin turn ends at a `Stop` hook that no other hook follows for 10 s, once the pane no longer
 shows Devin working (the `(esc twice to interrupt)` spinner or the `Guide Devin while it works`
 placeholder). A tool or compaction hook after a `Stop` keeps the turn open, or reopens it: in

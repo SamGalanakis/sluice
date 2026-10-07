@@ -88,11 +88,19 @@ pub fn decode_hook(event: &str, payload: &Value) -> Result<Hook, EngineError> {
     Ok(hook)
 }
 
+/// Follows a JSONL transcript Claude Code appends to. A record (one line) over
+/// `MAX_EVENT_BYTES` is skipped and counted, never fatal: Claude Code writes such lines for
+/// a large tool result or file read. A line still incomplete past the limit is dropped as it
+/// grows (the tail is in discard mode until its newline), so memory stays bounded by the
+/// limit plus one read.
 #[derive(Debug)]
 pub struct Tail {
     path: PathBuf,
     offset: u64,
     partial: Vec<u8>,
+    /// Dropping an oversized record's bytes until its newline.
+    discarding: bool,
+    skipped: u64,
 }
 impl Tail {
     pub fn new(path: PathBuf, offset: u64) -> Self {
@@ -100,10 +108,16 @@ impl Tail {
             path,
             offset,
             partial: vec![],
+            discarding: false,
+            skipped: 0,
         }
     }
     pub fn offset(&self) -> u64 {
         self.offset
+    }
+    /// How many oversized records this tail has skipped.
+    pub fn skipped(&self) -> u64 {
+        self.skipped
     }
     pub fn read(&mut self) -> Result<Vec<Value>, EngineError> {
         let mut file = match File::open(&self.path) {
@@ -115,6 +129,7 @@ impl Tail {
         if size < self.offset {
             self.offset = 0;
             self.partial.clear();
+            self.discarding = false;
         }
         file.seek(SeekFrom::Start(self.offset)).map_err(io_error)?;
         let mut data = vec![];
@@ -122,7 +137,18 @@ impl Tail {
             .read_to_end(&mut data)
             .map_err(io_error)?;
         self.offset += data.len() as u64;
-        self.partial.extend(data);
+        Ok(self.lines(&data))
+    }
+    /// The complete records `data` (the bytes after the last read) ends, decoded.
+    fn lines(&mut self, mut data: &[u8]) -> Vec<Value> {
+        if self.discarding {
+            let Some(end) = data.iter().position(|b| *b == b'\n') else {
+                return vec![];
+            };
+            data = &data[end + 1..];
+            self.discarding = false;
+        }
+        self.partial.extend_from_slice(data);
         let mut output = vec![];
         let mut consumed = 0;
         for (index, byte) in self.partial.iter().enumerate() {
@@ -130,27 +156,24 @@ impl Tail {
                 continue;
             }
             let line = &self.partial[consumed..index];
+            consumed = index + 1;
             if line.len() > MAX_EVENT_BYTES {
-                return Err(failure(
-                    EngineErrorKind::Fatal,
-                    "claude: transcript record exceeds 1 MiB",
-                ));
+                self.skipped += 1;
+                continue;
             }
             if let Ok(value) = serde_json::from_slice::<Value>(line)
                 && value.is_object()
             {
                 output.push(value);
             }
-            consumed = index + 1;
         }
         self.partial.drain(..consumed);
         if self.partial.len() > MAX_EVENT_BYTES {
-            return Err(failure(
-                EngineErrorKind::Fatal,
-                "claude: incomplete transcript record exceeds 1 MiB",
-            ));
+            self.partial = vec![];
+            self.discarding = true;
+            self.skipped += 1;
         }
-        Ok(output)
+        output
     }
 }
 
@@ -415,4 +438,41 @@ pub fn read_json(path: &Path) -> Option<Value> {
         return None;
     }
     serde_json::from_reader(file).ok()
+}
+
+#[cfg(test)]
+mod tail_tests {
+    use super::*;
+
+    fn record(n: usize) -> String {
+        format!("{{\"type\":\"assistant\",\"n\":{n}}}\n")
+    }
+    fn numbers(values: &[Value]) -> Vec<u64> {
+        values.iter().map(|v| v["n"].as_u64().unwrap()).collect()
+    }
+
+    #[test]
+    fn an_oversized_tail_still_being_written_is_dropped_until_its_newline() {
+        let mut tail = Tail::new(PathBuf::new(), 0);
+        assert_eq!(numbers(&tail.lines(record(1).as_bytes())), [1]);
+        // The record grows past the limit with no newline yet: it is dropped as it comes.
+        let blob = format!("{{\"blob\":\"{}", "y".repeat(MAX_EVENT_BYTES));
+        assert!(tail.lines(blob.as_bytes()).is_empty());
+        assert_eq!(tail.skipped(), 1);
+        assert!(tail.partial.is_empty());
+        assert!(
+            tail.lines("y".repeat(MAX_EVENT_BYTES).as_bytes())
+                .is_empty()
+        );
+        assert!(tail.partial.is_empty());
+        // Its end, then more records in the same read.
+        let rest = format!("yy\"}}\n{}{}", record(2), record(3));
+        assert_eq!(numbers(&tail.lines(rest.as_bytes())), [2, 3]);
+        assert_eq!(tail.skipped(), 1);
+        // A record split across reads still parses.
+        let next = record(4);
+        let (a, b) = next.split_at(5);
+        assert!(tail.lines(a.as_bytes()).is_empty());
+        assert_eq!(numbers(&tail.lines(b.as_bytes())), [4]);
+    }
 }

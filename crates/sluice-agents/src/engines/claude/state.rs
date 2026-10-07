@@ -913,9 +913,21 @@ impl Claude {
             let tail = self
                 .tails
                 .entry(path.clone())
-                .or_insert_with(|| Tail::new(path, offset));
+                .or_insert_with(|| Tail::new(path.clone(), offset));
+            let skipped = tail.skipped();
             for entry in tail.read()? {
                 self.state.transcript(&entry, is_main);
+            }
+            // An oversized record is skipped, not fatal; the run's log says so. A turn
+            // still ends on its Stop hook (which carries the final message) or a stable idle
+            // pane, neither of which reads the transcript.
+            let skipped = tail.skipped() - skipped;
+            if skipped > 0 {
+                eprintln!(
+                    "claude: skipped {skipped} transcript record(s) over 1 MiB in {} ({} so far)",
+                    path.display(),
+                    tail.skipped()
+                );
             }
         }
         Ok(())

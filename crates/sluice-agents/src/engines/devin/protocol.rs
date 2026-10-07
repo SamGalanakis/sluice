@@ -10,6 +10,9 @@ use std::{
 };
 
 pub const MAX_HOOK_BYTES: usize = 1024 * 1024;
+/// The longest journal line `append_hook` can write: a hook of at most `MAX_HOOK_BYTES`
+/// re-encoded (its absent fields as nulls) inside the invocation envelope.
+pub const MAX_JOURNAL_LINE: usize = MAX_HOOK_BYTES + 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hook {
