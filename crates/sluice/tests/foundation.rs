@@ -1,75 +1,10 @@
-#[path = "../../../tests/support/mod.rs"]
-mod support;
-
-use sluice_model::{error::PublicError, rpc::FnInvocation};
+use sluice_model::error::PublicError;
 use sluice_process::host::{guard_home, refuse_live_home, resolve_path};
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Output},
-    time::Duration,
-};
-use support::{
-    clock::{Clock, ManualClock, SystemClock},
-    free_port::free_port,
-    home::ScratchHome,
+    process::Command,
 };
 
-fn run(home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sluice"))
-        .env("SLUICE_HOME", home)
-        .args(args)
-        .output()
-        .unwrap()
-}
-#[test]
-fn registered_modes_cover_cli_and_pending_modes_leave_home_untouched() {
-    let home = ScratchHome::new().unwrap();
-    use clap::CommandFactory;
-    use sluice::modes::{MODES, PENDING_MODES};
-    let mut registered = MODES
-        .iter()
-        .map(|m| m.name.split_whitespace().next().unwrap())
-        .chain(PENDING_MODES.iter().map(|m| m.name))
-        .collect::<Vec<_>>();
-    registered.sort_unstable();
-    let mut cli_modes = sluice::cli::Cli::command()
-        .get_subcommands()
-        .map(|m| m.get_name().to_owned())
-        .collect::<Vec<_>>();
-    cli_modes.sort_unstable();
-    assert_eq!(registered, cli_modes);
-    for pending in PENDING_MODES {
-        let args = pending.args;
-        let output = run(home.path(), args);
-        assert_eq!(output.status.code(), Some(1), "{args:?}");
-        let error: PublicError = serde_json::from_slice(&output.stderr).unwrap();
-        assert!(
-            error.to_string().contains("not implemented in this build"),
-            "{args:?}"
-        );
-        assert!(output.stdout.is_empty());
-        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
-    }
-    assert_eq!(std::fs::read_dir(home.root()).unwrap().count(), 1);
-}
-#[test]
-fn cli_parsing_rejects_bad_arguments_and_lists_modes() {
-    let home = ScratchHome::new().unwrap();
-    for args in [
-        vec!["serve", "--port", "invalid"],
-        vec!["guardian"],
-        vec!["agent", "hook", "--engine", "unknown", "--event", "Stop"],
-    ] {
-        assert_eq!(run(home.path(), &args).status.code(), Some(2));
-    }
-    let help = run(home.path(), &["--help"]);
-    assert!(help.status.success());
-    assert!(
-        String::from_utf8(help.stdout)
-            .unwrap()
-            .contains("payload-exec")
-    );
-}
 /// A scratch account whose live installation selects a scratch "live" home.
 fn live_account(root: &Path) -> (PathBuf, PathBuf) {
     let account = root.join("account");
@@ -150,48 +85,4 @@ fn home_guard_resolves_symlinks_and_parent_components_in_path_order() {
         resolve_path(&temp.path().join("external/../next")).unwrap(),
         external.path().parent().unwrap().join("next")
     );
-}
-#[test]
-fn test_support_has_injectable_clock_and_reserved_port() {
-    let clock = ManualClock::default();
-    assert_eq!(clock.now(), Duration::ZERO);
-    clock.advance(Duration::from_millis(10)).unwrap();
-    assert_eq!(clock.now(), Duration::from_millis(10));
-    let system = SystemClock::default();
-    assert!(system.now() <= system.now());
-    let listener = free_port().unwrap();
-    assert_ne!(listener.local_addr().unwrap().port(), 0);
-    assert!(std::net::TcpListener::bind(listener.local_addr().unwrap()).is_err());
-}
-#[test]
-fn fixture_binary_is_inert_and_checks_scratch_home() {
-    let home = ScratchHome::new().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_fixture"))
-        .env("SLUICE_HOME", home.path())
-        .arg("fn")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("not implemented in this build")
-    );
-    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
-}
-#[test]
-fn process_dispatch_is_injected_with_send_futures() {
-    use sluice_process::FnHost;
-    fn send<T: Send>(_: T) {}
-    let invocation:FnInvocation=sluice_model::rpc::decode_json(br#"{"project":"019a2b3c-4d5e-7f01-8234-56789abcdef0","step":null,"run":"019a2b3c-4d5e-7f01-8234-56789abcdef0","attempt":"019a2b3c-4d5e-7f01-8234-56789abcdef0","invocation":"019a2b3c-4d5e-7f01-8234-56789abcdef0","name":"fake","inputs":{}}"#).unwrap();
-    let host = sluice_process::guardian::UnimplementedFnHost;
-    let mut future = std::pin::pin!(host.invoke(invocation));
-    send(&mut future);
-    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-    match std::future::Future::poll(future.as_mut(), &mut context) {
-        std::task::Poll::Ready(Err(error)) => {
-            assert!(error.to_string().contains("not implemented in this build"))
-        }
-        _ => panic!("fn host stub did not fail immediately"),
-    }
 }

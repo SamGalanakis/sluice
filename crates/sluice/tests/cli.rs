@@ -52,31 +52,6 @@ fn stderr(output: &Output) -> Value {
 }
 
 #[test]
-fn the_first_run_writes_the_default_config_and_lists_the_tools() {
-    let home = ScratchHome::new().unwrap();
-    let listing = run(home.path(), &["tool"]);
-    assert!(listing.status.success());
-    let config: Value =
-        serde_json::from_str(&std::fs::read_to_string(home.path().join("config.json")).unwrap())
-            .unwrap();
-    assert_eq!(
-        config,
-        json!({"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 3065}, "log_max": 10000})
-    );
-    let names: Vec<String> = String::from_utf8(listing.stdout)
-        .unwrap()
-        .lines()
-        .map(|line| line.split_whitespace().next().unwrap().to_owned())
-        .collect();
-    for name in ["projects_list", "plan_patch", "fn_call", "verify", "status"] {
-        assert!(names.iter().any(|n| n == name), "{name} not listed");
-    }
-    for gone in ["init", "plan", "fn"] {
-        assert_eq!(run(home.path(), &[gone]).status.code(), Some(2), "{gone}");
-    }
-}
-
-#[test]
 fn tool_errors_and_bad_arguments_exit_1() {
     let home = ScratchHome::new().unwrap();
     let unknown = tool(home.path(), "no_such_tool", "{}");
@@ -147,6 +122,27 @@ fn query_prints_a_table_binds_params_and_lists_the_schema() {
 #[test]
 fn a_project_through_the_tools() {
     let home = ScratchHome::new().unwrap();
+    let listing = run(home.path(), &["tool"]);
+    assert!(listing.status.success());
+    let config: Value =
+        serde_json::from_str(&std::fs::read_to_string(home.path().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        config,
+        json!({"fn_dirs": [], "http": {"host": "127.0.0.1", "port": 3065}, "log_max": 10000})
+    );
+    let names: Vec<String> = String::from_utf8(listing.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| line.split_whitespace().next().unwrap().to_owned())
+        .collect();
+    for name in ["projects_list", "plan_patch", "fn_call", "verify", "status"] {
+        assert!(names.iter().any(|n| n == name), "{name} not listed");
+    }
+    for gone in ["init", "plan", "fn"] {
+        assert_eq!(run(home.path(), &[gone]).status.code(), Some(2), "{gone}");
+    }
+
     let created = tool(
         home.path(),
         "project_create",

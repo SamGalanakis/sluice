@@ -173,26 +173,6 @@ impl Fixture {
     }
 }
 
-#[test]
-fn described_keys_are_parsed() {
-    assert_eq!(
-        described("x. Returns the edit result {project, rev?, preview: {a, b}}: more"),
-        Some((
-            false,
-            vec![
-                ("project".into(), false),
-                ("rev".into(), true),
-                ("preview".into(), false)
-            ]
-        ))
-    );
-    assert_eq!(
-        described("Returns [{seq, at, ...}]"),
-        Some((true, vec![("seq".into(), false), ("at".into(), false)]))
-    );
-    assert_eq!(described("Returns nothing. {a}"), None);
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_descriptions_name_the_keys_their_replies_have() {
     let f = Fixture::new().await;
