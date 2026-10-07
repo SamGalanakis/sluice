@@ -1,2 +1,0 @@
-{"name": "test.wait", "doc": "Wait for `go` to appear in the run dir, then return `value`.",
- "inputs": {"value": "Any?"}, "outputs": {"value": "Any"}}

@@ -1,3 +1,0 @@
-{"name": "test.spawn", "doc": "Start `sleep 60` (in a session of its own with detach), write its pid to child.pid in the run dir, wait for it. On SIGTERM, kill it and exit.",
- "inputs": {"detach": "boolean?"},
- "outputs": {}}

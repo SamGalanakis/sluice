@@ -1,3 +1,0 @@
-{"name": "test.gate",
- "doc": "Wait for `go` to appear in the run dir like test.wait, then fail when `fail` is there too, else return `tag`.",
- "inputs": {"tag": "Any"}, "outputs": {"tag": "Any"}}

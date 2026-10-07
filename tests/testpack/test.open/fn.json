@@ -1,4 +1,0 @@
-{"name": "test.open", "doc": "An open fn: reports its step's ports and extra inputs, and submits each of `attempts` in turn through `sluice tool step_submit`.",
- "open": true,
- "inputs": {"attempts": "Any[]?"},
- "outputs": {"ports": "Any", "extra": "Any", "results": "Any[]"}}

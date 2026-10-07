@@ -533,7 +533,7 @@ async fn open_submissions_are_merged_and_validated_in_rust_even_without_the_help
 async fn converted_open_fixture_submits_and_resubmits_with_run_capability() {
     let scratch = Scratch::new();
     let source = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/testpack/test.open/main.py"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/open_fn.py"),
     )
     .unwrap();
     let (mut host, mut invocation) = scratch.host(

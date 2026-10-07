@@ -1,1 +1,0 @@
-{"name": "test.split", "inputs": {"text": "string"}, "outputs": {"parts": "string[]"}}

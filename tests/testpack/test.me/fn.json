@@ -1,3 +1,0 @@
-{"name": "test.me", "doc": "Run `sluice me` as the step's agent would and return its output.",
- "open": true,
- "inputs": {"seen": "Any?"}, "outputs": {"me": "string", "code": "int", "err": "string"}}

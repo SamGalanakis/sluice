@@ -1,2 +1,0 @@
-{"name": "test.brief", "doc": "Stand-in for a reporting step: a summary, a long final, a report path.",
- "inputs": {}, "outputs": {"summary": "string", "final": "string", "report": "string"}}
