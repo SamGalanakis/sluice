@@ -72,6 +72,41 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         let mut browser = Chrome::open(&format!("{base}/projects/id/{lanes}")).unwrap();
         let ready = "document.querySelector('#project-board') && document.readyState === 'complete' && (!document.querySelector('.has-panel') || document.querySelector('#project-board').dataset.view)";
         browser.wait(ready).unwrap();
+        let listener_counts = |browser: &mut Chrome| {
+            browser.send("Runtime.evaluate", serde_json::json!({
+                "expression": "Object.fromEntries(['pointerover','pointerout','focusin','focusout','keydown','toggle'].map(t=>[t,(getEventListeners(document.querySelector('sluice-board'))[t]||[]).length]))",
+                "includeCommandLineAPI": true,
+                "returnByValue": true
+            })).unwrap()["result"]["value"].clone()
+        };
+        let expected = listener_counts(&mut browser);
+        assert!(expected.as_object().unwrap().values().all(|n| n == &serde_json::json!(1)), "{expected}");
+        let scroll_count = |browser: &mut Chrome| {
+            browser.send("Runtime.evaluate", serde_json::json!({
+                "expression": "(getEventListeners(document.querySelector('#drawer')).scroll||[]).length",
+                "includeCommandLineAPI": true,
+                "returnByValue": true
+            })).unwrap()["result"]["value"].clone()
+        };
+        let scroll = scroll_count(&mut browser);
+        assert_eq!(scroll, 1);
+        for _ in 0..3 {
+            browser.eval("(()=>{window.controller=sluiceStream();const board=document.querySelector('sluice-board'),parent=board.parentNode,next=board.nextSibling;board.remove();parent.insertBefore(board,next);window.host=document.querySelector('sluice-drawer');window.drawerParent=host.parentNode;window.after=host.nextSibling;host.remove()})()").unwrap();
+            assert_eq!(browser.eval("controller.signal.aborted").unwrap(), true);
+            browser.eval("drawerParent.insertBefore(host,after)").unwrap();
+            assert_eq!(listener_counts(&mut browser), expected);
+            assert_eq!(scroll_count(&mut browser), scroll);
+        }
+        browser.eval("document.getElementById('n-alpha-build').focus()").unwrap();
+        browser.send("Input.dispatchKeyEvent", serde_json::json!({"type":"keyDown","key":"ArrowDown","code":"ArrowDown"})).unwrap();
+        assert_ne!(browser.eval("document.activeElement.id").unwrap(), "n-alpha-build");
+        browser.eval("window.late=0;document.querySelector('#drawer').focus=()=>late++;history.replaceState(null,'','#step:beta-build');dispatchEvent(new HashChangeEvent('hashchange'));host.remove()").unwrap();
+        browser.eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))").unwrap();
+        assert_eq!(browser.eval("late").unwrap(), 0);
+        assert_eq!(browser.eval("document.documentElement.classList.contains('drawer-open')").unwrap(), false);
+        browser.eval("drawerParent.insertBefore(host,after);history.replaceState(null,'',location.pathname)").unwrap();
+        browser.navigate(&format!("{base}/projects/id/{lanes}")).unwrap();
+        browser.wait(ready).unwrap();
         let shoot = |browser: &mut Chrome, name: &str| {
             if let Some(dir) = &screens {
                 browser.screenshot(&dir.join(format!("{name}.png"))).unwrap();

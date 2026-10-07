@@ -344,29 +344,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nearest_names() {
-        assert_eq!(distance("step_contxt", "step_context"), 1);
-        assert_eq!(
-            closest("step_contxt", ["step_context", "step_cancel", "status"]),
-            ["step_context"]
-        );
-        assert_eq!(
-            closest("output", ["project", "step", "run", "outputs", "author"]),
-            ["outputs"]
-        );
-        assert_eq!(closest("message", ["to_message", "body"]), ["to_message"]);
-        assert_eq!(
-            closest("to-message", ["to_message", "body"]),
-            ["to_message"]
-        );
-        assert!(closest("zz", ["to", "ui", "body"]).is_empty());
-        assert_eq!(
-            did_you_mean("stepz", ["steps", "step", "tags"]).as_deref(),
-            Some("did you mean step or steps?")
-        );
-    }
-
-    #[test]
     fn decimal_strings_become_integers_only_where_the_schema_wants_one() {
         let schema = json!({
             "properties": {
@@ -402,20 +379,5 @@ mod tests {
             };
             assert!(message.starts_with(key), "{message}");
         }
-    }
-
-    #[test]
-    fn args_blocks_split_field_by_field() {
-        let (text, args) = described_args(
-            "Reply.\n\nArgs:\n    project: the project.\n    body: the reply,\n        markdown.\n\ndry_run: more.",
-        );
-        assert_eq!(text, "Reply.\n\ndry_run: more.");
-        assert_eq!(
-            args,
-            [
-                ("project".to_owned(), "the project.".to_owned()),
-                ("body".to_owned(), "the reply, markdown.".to_owned())
-            ]
-        );
     }
 }

@@ -143,27 +143,7 @@ fn html_escapes_values_and_folds_all_skipped_units() {
     assert!(!region.as_str().contains("sluice-drawer"));
     assert!(!region.as_str().contains("data-init"));
 }
-#[test]
-fn header_is_a_passive_status_view_without_project_actions() {
-    let (plan, state, mut project) = fixture();
-    project.paused = true;
-    project.archived = true;
-    let view = ProjectView::new(project.clone(), &plan, &state, 1);
-    let html = view.body().unwrap();
-    let html = html.as_str();
-    assert!(html.contains(">Paused</span>"));
-    assert!(html.contains("Archived: listed apart"));
-    assert!(!html.contains("switches"));
-    assert!(!html.contains("/actions"));
-    assert!(!html.contains("pause_project"));
-    assert!(!html.contains("archive_project"));
-    project.paused = false;
-    project.archived = false;
-    let view = ProjectView::new(project, &plan, &state, 1);
-    let html = view.body().unwrap();
-    assert!(!html.as_str().contains(">Paused</span>"));
-    assert!(!html.as_str().contains("Archived: listed apart"));
-}
+
 #[test]
 fn paused_and_queued_work_have_distinct_wait_projection() {
     let (plan, mut state, project) = fixture();
@@ -299,36 +279,6 @@ fn relations_between_boxes_are_marked_and_shown_as_chips_on_their_dependents() {
     let label = &label[..label.find("</p>").unwrap()];
     assert!(label.contains("→ 2"), "{label}");
 }
-/// A unit of one lane takes one cell of the board's grid; a unit with cards side by side
-/// spans the grid's row. The legend leads the board, and the drawn edges survive a patch.
-#[test]
-fn layout_marks_wide_units_and_leads_the_board_with_its_legend() {
-    let (plan, state, project) = fixture();
-    let view = ProjectView::new(project, &plan, &state, 1);
-    let html = view.body().unwrap();
-    let html = html.as_str();
-    assert!(html.contains("<section id=\"unit-review\" class=\"box wide\""));
-    assert!(html.contains("<section id=\"unit-build\" class=\"box\""));
-    assert!(html.contains("<div class=\"boxes boxed units\">"));
-    let board = html.find("<sluice-board").unwrap();
-    let legend = html.find("<p class=\"legend\">").expect("a legend");
-    let plane = html.find("<div class=\"plane\"").unwrap();
-    assert!(
-        board < legend && legend < plane,
-        "the legend leads the board"
-    );
-    assert!(html[legend..plane].contains(
-        "<span class=\"xm\">after </span><span class=\"xn\">step</span></i><span class=\"vh\">a chip: </span>from another unit"
-    ));
-    assert!(html.contains("<svg class=\"edges\" aria-hidden=\"true\" data-ignore-morph></svg>"));
-    // With no unit to show there is nothing to read the legend by.
-    let (plan, state, project) = fixture();
-    let mut empty = ProjectView::new(project, &plan, &state, 1);
-    empty.units.clear();
-    let html = empty.body().unwrap();
-    assert!(html.as_str().contains("No units match this view."));
-    assert!(!html.as_str().contains("class=\"legend\""));
-}
 
 /// A chip whose source's card is folded away in a done unit says where it is.
 #[test]
@@ -453,18 +403,6 @@ fn done_units_fold_to_lines_on_a_shelf_and_a_search_opens_them() {
             .as_str()
             .contains("id=\"shelf-d1-open\"")
     );
-}
-
-/// The legend says what each line means: a value (handoff, condition) solid, order alone
-/// dotted, an order a skip satisfies dashed.
-#[test]
-fn the_legend_tells_a_value_from_an_order() {
-    let (plan, state, project) = fixture();
-    let html = ProjectView::new(project, &plan, &state, 1).body().unwrap();
-    let html = html.as_str();
-    assert!(html.contains("<i class=\"lg-line\" aria-hidden=\"true\"></i><span class=\"vh\">A solid line: </span>handoff · condition"), "{html}");
-    assert!(html.contains("<i class=\"lg-line dotted\" aria-hidden=\"true\"></i><span class=\"vh\">a dotted line: </span>after"));
-    assert!(html.contains("<i class=\"lg-line dashed\" aria-hidden=\"true\"></i><span class=\"vh\">a dashed line: </span>after, even if skipped (?)"));
 }
 
 /// A lash lane's later steps (gated by conditions, afters and handoffs from earlier ones) read

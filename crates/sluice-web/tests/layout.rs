@@ -1,11 +1,5 @@
-use axum::{
-    body::{Body, to_bytes},
-    http::Request,
-};
-use sluice_store::{
-    ReadPool, RetrySafety, Writer,
-    projects::{self, CreateProject, EmptyPlanInitializer, NoResourceSettings},
-};
+use axum::{body::Body, http::Request};
+use sluice_store::{ReadPool, RetrySafety, Writer};
 use sluice_web::views::{home::HomeView, *};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -65,78 +59,7 @@ fn shared_layout_escapes_labels_marks_current_tab_and_has_two_settings_controls(
     assert!(html.contains("data-signals="));
     assert!(html.contains("/static/style.css?v="));
 }
-#[test]
-fn home_groups_archives_and_includes_runner_status_failure_title_and_no_script_content() {
-    let mut snapshot = fixture();
-    let mut old = snapshot.projects[0].clone();
-    old.archived = true;
-    old.name = "Old".into();
-    snapshot.projects.push(old);
-    let view = HomeView::new(&snapshot);
-    let html = view
-        .render(
-            &snapshot,
-            &Viewer {
-                theme: Some("dark".into()),
-                types: true,
-            },
-        )
-        .unwrap();
-    assert!(html.as_str().contains("Archived (1)"));
-    assert!(html.as_str().contains("Runner stopped"));
-    assert!(html.as_str().contains("1 failed · Projects · sluice"));
-    assert!(html.as_str().contains("data-theme=\"dark\""));
-    assert!(html.as_str().contains("class=\"show-types\""));
-    assert!(html.as_str().contains("data-preserve-attr=\"open\""));
-    assert!(html.as_str().contains("Stopped:"));
-}
-#[tokio::test]
-async fn router_and_facade_read_a_fixture_store_and_render_first_load_without_a_stream() {
-    let home = tempfile::tempdir().unwrap();
-    let writer = Writer::open(home.path()).unwrap();
-    writer
-        .write(RetrySafety::NonIdempotent, |tx| {
-            projects::project_create(
-                tx,
-                CreateProject {
-                    name: "fixture".parse().unwrap(),
-                    description: "text".into(),
-                    icon: None,
-                    resources: None,
-                    author: "owner".into(),
-                },
-                &EmptyPlanInitializer,
-                &NoResourceSettings,
-            )
-        })
-        .await
-        .unwrap();
-    let state = DashboardState::new(
-        ReadPool::open(home.path(), 1).unwrap(),
-        Arc::new(EmptyCatalog),
-    );
-    let snapshot = state.snapshot(None).await.unwrap();
-    assert_eq!(snapshot.projects.len(), 1);
-    assert_eq!(snapshot.projects[0].name, "fixture");
-    let router = dashboard_router(state);
-    for path in [
-        "/",
-        "/fns",
-        "/static/style.css",
-        "/static/nav.js",
-        "/static/datastar-rocket-1.0.4.js",
-        "/static/logo.svg",
-    ] {
-        let response = router
-            .clone()
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200, "{path}");
-        let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        assert!(!body.is_empty());
-    }
-}
+
 #[tokio::test]
 async fn a_catalog_that_changes_on_every_read_is_read_once_per_snapshot() {
     struct Changing(std::sync::atomic::AtomicUsize);

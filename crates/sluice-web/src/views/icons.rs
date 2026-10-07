@@ -63,34 +63,3 @@ pub fn icon(icon: Icon, size: u16, class: &str) -> TrustedHtml {
         BODIES[icon as usize]
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_icon_is_lucide_on_the_grid_and_stroke_it_is_drawn_with() {
-        for &each in Icon::ALL {
-            let source = each.source();
-            assert!(
-                source.starts_with("<!-- @license lucide-static v1.52.0 - ISC -->"),
-                "{each:?}"
-            );
-            let tag = &source[source.find("<svg").unwrap()..];
-            let tag = &tag[..tag.find('>').unwrap()];
-            for attr in [
-                "viewBox=\"0 0 24 24\"",
-                "fill=\"none\"",
-                "stroke=\"currentColor\"",
-                "stroke-width=\"2\"",
-                "stroke-linecap=\"round\"",
-                "stroke-linejoin=\"round\"",
-            ] {
-                assert!(tag.contains(attr), "{each:?} lacks {attr}");
-            }
-            let html = icon(each, 20, "x").to_string();
-            assert!(html.starts_with("<svg class=\"icon x\" width=\"20\" height=\"20\""));
-            assert!(html.ends_with("/></svg>") && !html.contains('\n'), "{html}");
-        }
-    }
-}

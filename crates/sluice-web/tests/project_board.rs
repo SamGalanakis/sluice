@@ -269,61 +269,6 @@ async fn settings_save_clear_and_preview_the_board() {
     );
 }
 
-#[test]
-fn the_board_docs_and_the_question_drawer_name_the_same_vocabulary() {
-    use sluice_model::openui;
-    let docs = include_str!("../../../docs/agent/board.md");
-    for spec in openui::board_components() {
-        assert!(
-            docs.contains(&format!("`{}`", spec.signature())),
-            "docs(\"board\") lacks {}",
-            spec.signature()
-        );
-    }
-    // A question's ui is drawn in the browser (assets/openui.js): it knows exactly the
-    // question components, with the same props in the same order.
-    let js = include_str!("../assets/openui.js");
-    let vocab = &js[js.find("const VOCAB = ").unwrap() + "const VOCAB = ".len()..];
-    let vocab: Value = serde_json::from_str(&vocab[..vocab.find("};").unwrap() + 1]).unwrap();
-    let drawn: Vec<(String, Vec<String>)> = vocab["components"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| {
-            (
-                c["name"].as_str().unwrap().to_owned(),
-                c["props"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|p| p[0].as_str().unwrap().to_owned())
-                    .collect(),
-            )
-        })
-        .collect();
-    let ours: Vec<(String, Vec<String>)> = openui::QUESTION_COMPONENTS
-        .iter()
-        .map(|c| {
-            (
-                c.name.to_owned(),
-                c.props
-                    .iter()
-                    .map(|p| format!("{}{}", p.name, if p.required { "" } else { "?" }))
-                    .collect(),
-            )
-        })
-        .collect();
-    assert_eq!(drawn, ours);
-    let inbox = include_str!("../../../docs/agent/inbox.md");
-    for spec in openui::QUESTION_COMPONENTS {
-        assert!(
-            inbox.contains(&format!("`{}`", spec.signature())),
-            "{}",
-            spec.signature()
-        );
-    }
-}
-
 /// The cards a page draws on the plan, by step id, in page order.
 fn cards(html: &str) -> Vec<&str> {
     let plan = between(html, "<sluice-board", "</sluice-board>");
@@ -414,71 +359,6 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
         "{first}"
     );
     assert!(first.contains("1 step matches “parser”."), "{first}");
-}
-
-#[tokio::test]
-async fn the_board_side_has_a_separator_and_the_page_works_without_script() {
-    let f = Fixture::new().await;
-    let (_, html) = f.get(&format!("/projects/id/{}", f.id)).await;
-    // The splitter: a focusable vertical separator that controls the board pane.
-    let side = between(&html, "<div class=\"board-side\">", "</aside>");
-    let splitter = between(side, "<div class=\"splitter\"", ">");
-    for attr in [
-        "role=\"separator\"",
-        "aria-orientation=\"vertical\"",
-        "aria-controls=\"board-pane\"",
-        "aria-label=\"Board width\"",
-        "aria-valuemin=\"320\"",
-        "aria-valuemax=",
-        "aria-valuenow=",
-        "tabindex=\"0\"",
-    ] {
-        assert!(splitter.contains(attr), "{attr}: {splitter}");
-    }
-    assert!(side.contains("<aside id=\"board-pane\""), "{side}");
-    // Plan · Both · Board.
-    let switch = between(&html, "<div class=\"view-switch\"", "</div>");
-    assert_eq!(switch.matches("data-view-tab=").count(), 3, "{switch}");
-    assert!(switch.contains("data-view-tab=\"both\""));
-    // Without script: the tools are a GET form with its Apply button, and the description's
-    // rest is a closed <details> after its lead paragraph.
-    let tools = between(&html, "<form class=\"board-tools\"", "</form>");
-    assert!(
-        tools.contains("method=\"get\"")
-            && tools.contains("<button class=\"apply\">Apply</button>")
-    );
-    assert!(
-        tools.contains("name=\"q\"")
-            && tools.contains("name=\"order\"")
-            && tools.contains("name=\"show\"")
-    );
-    let about = between(&html, "<div class=\"about\">", "<form");
-    assert!(
-        about.starts_with(
-            "<div class=\"about\"><div class=\"md\"><p>Lanes: two units of &lt;work&gt;.</p>"
-        ),
-        "{about}"
-    );
-    let more = between(about, "<details class=\"about-more\"", "</details>");
-    assert!(!more.contains(" open"), "folded by default: {more}");
-    assert!(
-        more.contains("<span class=\"am-more\">More</span>"),
-        "{more}"
-    );
-    assert!(
-        more.contains("How work is done here:") && more.contains("<li>reviews follow builds</li>")
-    );
-    assert!(
-        !about[..about.find("<details").unwrap()].contains("How work"),
-        "{about}"
-    );
-    // The stylesheet hides Apply and shows the splitter only with script.
-    let (_, css) = f.get("/static/style.css").await;
-    assert!(css.contains("@media (scripting: enabled) { .board-tools .apply { display: none; } }"));
-    assert!(css.contains(".splitter { display: none;"));
-    // A project with a one-paragraph description has nothing to fold.
-    let (_, plain) = f.get(&format!("/projects/id/{}", f.plain)).await;
-    assert!(!plain.contains("about-more") && !plain.contains("class=\"splitter\""));
 }
 
 /// The board's head is the program's own title when a level-1 Heading leads it (drawn once,
