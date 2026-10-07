@@ -385,7 +385,8 @@ def child_env(extra=None):
 def sh(argv, cwd=None, check=True, env=None, timeout=None, input=None):
     log(f"$ {' '.join(map(str, argv))}")
     result = subprocess.run(argv, cwd=cwd, env=child_env(env), timeout=timeout,
-                            input=input, text=True, capture_output=True, check=False)
+                            input=input, text=True, errors="replace", capture_output=True,
+                            check=False)
     for output in (result.stdout, result.stderr):
         if output.strip():
             log(_tail(output).rstrip())

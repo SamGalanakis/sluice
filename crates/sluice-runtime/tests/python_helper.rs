@@ -293,7 +293,7 @@ async fn host_cancellation_reaps_uv_while_backoff_is_active() {
 #[tokio::test]
 async fn child_environment_restores_host_tools_and_keeps_callbacks() {
     let scratch = Scratch::new();
-    let (mut host,invocation)=scratch.host("from sluice_fn import run,child_env,sh\nimport os\ndef main(inp,ctx):\n    os.environ['VIRTUAL_ENV']='/uv/environment'\n    os.environ['PATH']='/uv/environment/bin:/bad'\n    os.environ['PYTHONHOME']='/bad'\n    os.environ['UV_PROJECT_ENVIRONMENT']='/bad'\n    os.environ['CLAUDECODE']='1'\n    e=child_env({'X':'yes'})\n    return {'path':e['PATH'], 'x':e['X'], 'clean':all(k not in e for k in ['VIRTUAL_ENV','PYTHONPATH','PYTHONHOME','UV_PROJECT_ENVIRONMENT','CLAUDECODE']), 'run':e['SLUICE_RUN_ID'], 'host':sh(['python3','-c','import sys;print(sys.prefix)']).stdout.strip()}\nrun(main)\n",json!({"path":"string","x":"string","clean":"boolean","run":"string","host":"string"}));
+    let (mut host,invocation)=scratch.host("from sluice_fn import run,child_env,sh\nimport os\ndef main(inp,ctx):\n    os.environ['VIRTUAL_ENV']='/uv/environment'\n    os.environ['PATH']='/uv/environment/bin:/bad'\n    os.environ['PYTHONHOME']='/bad'\n    os.environ['UV_PROJECT_ENVIRONMENT']='/bad'\n    os.environ['CLAUDECODE']='1'\n    e=child_env({'X':'yes'})\n    return {'path':e['PATH'], 'x':e['X'], 'clean':all(k not in e for k in ['VIRTUAL_ENV','PYTHONPATH','PYTHONHOME','UV_PROJECT_ENVIRONMENT','CLAUDECODE']), 'run':e['SLUICE_RUN_ID'], 'host':sh(['python3','-c','import sys;print(sys.prefix)']).stdout.strip(), 'binary':sh(['printf','\\\\037\\\\213gz']).stdout}\nrun(main)\n",json!({"path":"string","x":"string","clean":"boolean","run":"string","host":"string","binary":"string"}));
     host.config
         .environment
         .remove(std::ffi::OsStr::new("PYTHONPATH"));
@@ -309,6 +309,8 @@ async fn child_environment_restores_host_tools_and_keeps_callbacks() {
     assert_eq!(out["clean"], true);
     assert_eq!(out["run"], invocation.run.to_string());
     assert!(!out["host"].as_str().unwrap().contains("environments-v2"));
+    // Output that is not UTF-8 (a gzip header) is decoded with replacement characters.
+    assert_eq!(out["binary"], "\u{1f}\u{fffd}gz");
 }
 
 #[tokio::test]

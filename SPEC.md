@@ -384,7 +384,8 @@ if __name__ == "__main__":
   `cancelled`, `AgentFailure(kind, message, session)` → an `agent_failure` error, anything
   else → `fn_failure` with the exception's text. The traceback goes to stderr.
 - `log(msg)` / `ctx.log`: stderr. `sh(argv, cwd, check, env, timeout, input)` runs a command
-  (raises `ShError` on a non-zero exit when `check`); `stream(argv, on_line, …)` runs one and
+  (raises `ShError` on a non-zero exit when `check`; output that is not UTF-8, such as a
+  binary file, is decoded with replacement characters, as `stream` does); `stream(argv, on_line, …)` runs one and
   hands each line to `on_line`; `child_env(extra)` is the environment for child tools (host
   `PATH`, `PYTHONPATH`, `VIRTUAL_ENV` restored, uv and agent-nesting variables removed).
 - `ctx` attributes: `project_id`, `project`, `step`, `run_id`, `attempt_id`, `invocation_id`,
