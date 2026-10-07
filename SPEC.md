@@ -1460,6 +1460,32 @@ of `cwd`. A failed session is an `agent_failure` error with its `kind` and `sess
 retry a transient failure up to 3 times, 600 s apart, resuming the session; a rate limit whose
 reset the engine reported waits until just after that reset instead.
 
+A Codex network loss costs a run only time. Codex retries a dropped connection itself, sending an
+`error` notification with `willRetry: true` (`Reconnecting... 2/5`) for each try: the turn goes
+on, and the run's log (`stderr.log`) gets one line per try, `codex: Codex is retrying
+(responseStreamDisconnected, HTTP 403): Reconnecting... 2/5` (Codex's text masked as below and
+cut to 300 characters). When Codex gives up on a network or server failure (a final `error`, or
+a turn whose `turn.error` says so) the failure is `Transient`, `codex: network error
+(responseStreamDisconnected, HTTP 403); Codex gave up after its own retries. Codex said: …`. A
+network or server failure is a `codexErrorInfo` of `responseStreamConnectionFailed`,
+`responseStreamDisconnected`, `httpConnectionFailed`, `internalServerError`, `serverOverloaded`
+or `responseTooManyFailedAttempts` (one with `httpStatusCode` 401 is an auth failure, below),
+or, with no `codexErrorInfo` or `other`, a message that starts with Codex's `stream disconnected
+before completion` (not its content filter), `Connection failed`, `exceeded retry limit`,
+`We're currently experiencing high demand` or `Selected model is at capacity`; every other
+`codexErrorInfo` (`badRequest`, `contextWindowExceeded`, `sandboxError`, …) is classified as
+before. Once that turn has ended, the supervisor continues the same thread in the same
+app-server: it logs `agent transient, continuing the same session in 30s: …`, waits 30 s (2 min
+and 8 min for the run's second and third loss), then sends `Your turn was cut off by a network
+error. Continue your task where you left off.` as the next attempt's `Continue` input, never
+replayed if its acceptance is unknown. These continuations share the transient budget (3 per
+invocation) with the resumes above, and work the same whether a step runs the agent or a fn
+composes it. A loss whose turn stays open 10 s past it, or one past the budget, takes the
+transient path above (a composing fn's own retry, e.g. `run(main, retries=3)`, resumes the
+session), so a network that stays down fails the run `Transient` with that message. A resume
+that meets Codex's `thread … already has an active writer` (its previous app-server died within
+about a minute) is retried every 2 s for up to 90 s.
+
 Codex runs with a private `CODEX_HOME` under `<home>/codex-native-homes/`, whose `auth.json` is a
 symlink to the owner's (`$CODEX_HOME/auth.json`, by default `~/.codex/auth.json`), never a copy,
 with `cli_auth_credentials_store = "file"`. Codex rotates its refresh token at each refresh,

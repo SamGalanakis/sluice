@@ -84,7 +84,8 @@ pub struct EngineError {
     pub kind: EngineErrorKind,
     pub message: String,
     /// For a `Transient` rate limit whose reset the engine reported: the Unix second, just
-    /// after that reset, at which a retry should start instead of the fixed backoff.
+    /// after that reset, at which a retry should start instead of the fixed backoff; for
+    /// Codex's network loss, the end of its network backoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<u64>,
 }
@@ -190,6 +191,13 @@ pub trait EngineAdapter: Send {
     /// before then, or for an engine without a version policy.
     fn version(&self) -> Option<version::Verdict> {
         None
+    }
+    /// Whether the session can carry on, in this same engine process, from `error`, which the
+    /// adapter's last observation reported: the supervisor then waits out the error's backoff
+    /// and sends a continuation input instead of tearing the engine down. Saying yes takes the
+    /// error back out of the adapter's observation. Only Codex's network loss does (§15).
+    fn recover_in_place(&mut self, _error: &EngineError) -> bool {
+        false
     }
     /// Every model id this engine accepts, in the form `model::compose` gives (Devin's model
     /// id, `<model>@<effort>` for Codex and Claude). It may run the engine CLI, so adapters

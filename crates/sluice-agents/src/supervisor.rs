@@ -186,8 +186,8 @@ pub struct AgentFailure {
     pub kind: FailureKind,
     pub message: String,
     pub session: Option<String>,
-    /// A `Transient` rate limit's reported reset: the Unix second the retry starts at, in
-    /// place of the policy's fixed backoff.
+    /// A `Transient` rate limit's reported reset (or the end of Codex's network backoff): the
+    /// Unix second the retry starts at, in place of the policy's fixed backoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<u64>,
 }
@@ -1525,6 +1525,26 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 persist(machine, config, host).await?;
             }
             Action::Retry => {
+                // An error the session can carry on from in place (Codex's network loss) costs
+                // a backoff and a continuation, within the transient budget; any other goes
+                // back to `supervise`, which tears the engine down.
+                if let Some(error) = &o.error
+                    && machine.checkpoint.internal_attempt <= config.retry.additional_tries
+                    && engine.recover_in_place(error)
+                {
+                    continue_in_place(
+                        machine,
+                        config,
+                        engine,
+                        host,
+                        cancel,
+                        deadline,
+                        error.clone().into(),
+                    )
+                    .await?;
+                    quiet.reset();
+                    continue;
+                }
                 return Err(match o.error {
                     Some(error) => error.into(),
                     None => failure(FailureKind::Transient, "engine transient"),
@@ -1543,6 +1563,62 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
         }
         tokio::select! { biased; _ = cancel.cancelled() => return Err(failure(FailureKind::Cancelled, "agent cancelled")), _ = tokio::time::sleep(config.limits.poll) => {} }
     }
+}
+/// Carries the session on in the same engine process after a transient the adapter took back
+/// (`EngineAdapter::recover_in_place`): waits out its backoff in `Backoff`, then queues the
+/// next attempt's `Continue` input, which reaches the engine as any input does (never
+/// replayed when its acceptance is unknown).
+async fn continue_in_place<E: EngineAdapter, H: SupervisorHost>(
+    machine: &mut Machine,
+    config: &SupervisorConfig,
+    engine: &mut E,
+    host: &mut H,
+    cancel: &CancellationToken,
+    deadline: tokio::time::Instant,
+    error: AgentFailure,
+) -> Result<(), AgentFailure> {
+    machine.checkpoint.state = State::Backoff;
+    persist(machine, config, host).await?;
+    let wait = backoff(&error, config.retry.backoff);
+    eprintln!(
+        "agent transient, continuing the same session in {}s: {}",
+        wait.as_secs(),
+        error.message
+    );
+    answering_hooks(engine, config, async {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(failure(FailureKind::Cancelled, "cancelled during transient backoff")),
+            _ = tokio::time::sleep_until(deadline) => Err(failure(FailureKind::WallCap, "wall-clock cap during backoff")),
+            _ = tokio::time::sleep(wait) => Ok(()),
+        }
+    })
+    .await?;
+    machine.checkpoint.internal_attempt += 1;
+    let attempt = machine.checkpoint.internal_attempt;
+    machine
+        .checkpoint
+        .delivery
+        .enqueue(
+            InputId::Continue { attempt },
+            "Your turn was cut off by a network error. Continue your task where you left off."
+                .into(),
+        )
+        .map_err(invalid)?;
+    let now = Duration::from_millis(
+        clock_ms()
+            .map_err(invalid)?
+            .saturating_sub(machine.checkpoint.started_ms),
+    );
+    *machine = Machine::new(
+        machine.checkpoint.clone(),
+        config.limits.clone(),
+        config.required.clone(),
+        engine.profile().reports_waiting,
+        now,
+    );
+    machine.checkpoint.state = State::Delivering;
+    persist(machine, config, host).await
 }
 async fn clean<E: EngineAdapter, H: SupervisorHost>(
     engine: &mut E,

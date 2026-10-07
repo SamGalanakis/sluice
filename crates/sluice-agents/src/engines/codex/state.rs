@@ -8,7 +8,7 @@ use super::{
         version::{self, Verdict},
     },
     profile::{self, error},
-    protocol::{Rpc, auth_text, plain_rpc_error, rpc_error, usage_limit_text},
+    protocol::{Rpc, auth_text, error_info, network_cause, quoted, rpc_error, usage_limit_text},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -36,6 +36,9 @@ pub struct CodexOptions {
     pub environment: BTreeMap<String, String>,
     /// A limit that resets further away than this fails the run as `QuotaExhausted`.
     pub quota_threshold: Duration,
+    /// The wait before the run continues a session whose network Codex gave up on, times 4 for
+    /// each continuation the adapter already made: 30 s, 2 min, 8 min.
+    pub network_backoff: Duration,
 }
 impl CodexOptions {
     pub fn new(binary: PathBuf, source_home: PathBuf, sluice_home: PathBuf) -> Self {
@@ -47,6 +50,7 @@ impl CodexOptions {
             request_timeout: Duration::from_secs(30),
             environment: super::super::environment::host_environment(),
             quota_threshold: account::DEFAULT_THRESHOLD,
+            network_backoff: Duration::from_secs(30),
         }
     }
 }
@@ -82,7 +86,21 @@ pub struct Codex {
     limit_error: Option<(Cap, String)>,
     /// The CLI version the last `prepare` found, as `profile::POLICY` judged it.
     version: Option<Verdict>,
+    /// The network loss this adapter reported in its observation, which the session can carry
+    /// on from (`recover_in_place`).
+    network: Option<EngineError>,
+    /// A network loss Codex reported while its turn was still open, held until that turn ends
+    /// (its `turn/completed` carries the same error) or `GIVE_UP_HOLD` passes.
+    gave_up: Option<(EngineError, Instant)>,
+    /// The in-place continuations this adapter has made, which lengthen the next backoff.
+    continuations: u32,
 }
+/// How long a network loss waits for its turn to end before the observation reports it.
+const GIVE_UP_HOLD: Duration = Duration::from_secs(10);
+/// How long `thread/resume` retries a thread whose previous app-server still holds its writer
+/// lease (about a minute after that app-server died), and how often.
+const WRITER_PATIENCE: Duration = Duration::from_secs(90);
+const WRITER_RETRY: Duration = Duration::from_secs(2);
 impl Codex {
     pub fn new(options: CodexOptions) -> Self {
         Self {
@@ -104,6 +122,9 @@ impl Codex {
             credits: BTreeMap::new(),
             limit_error: None,
             version: None,
+            network: None,
+            gave_up: None,
+            continuations: 0,
         }
     }
     pub fn private_home(&self) -> Option<&Path> {
@@ -216,6 +237,13 @@ impl Codex {
         for event in events {
             self.event(&event)?;
         }
+        if let Some((error, at)) = self.gave_up.take() {
+            if at.elapsed() < GIVE_UP_HOLD {
+                self.gave_up = Some((error, at));
+            } else {
+                self.lost(error);
+            }
+        }
         if let Some((cap, message)) = self.limit_error.clone() {
             self.observation.error = Some(self.limit(cap, message));
         }
@@ -276,13 +304,29 @@ impl Codex {
             _ if usage_limit_text(message) => Some(Cap::Usage),
             _ => None,
         };
-        match cap {
-            Some(cap) => {
-                self.limit_error = Some((cap, message.into()));
-                self.limit(cap, message.into())
-            }
-            None => rpc_error(value),
+        if let Some(cap) = cap {
+            self.limit_error = Some((cap, message.into()));
+            return self.limit(cap, message.into());
         }
+        if let Some(cause) = network_cause(value) {
+            let wait = self.options.network_backoff * 4u32.saturating_pow(self.continuations);
+            return EngineError {
+                retry_at: Some(account::now() + wait.as_secs()),
+                ..error(
+                    EngineErrorKind::Transient,
+                    format!(
+                        "codex: network error ({cause}); Codex gave up after its own retries. Codex said: {}",
+                        quoted(message)
+                    ),
+                )
+            };
+        }
+        rpc_error(value)
+    }
+    /// Reports a network loss Codex gave up on, which the session can carry on from.
+    fn lost(&mut self, error: EngineError) {
+        self.network = Some(error.clone());
+        self.observation.error = Some(error);
     }
     /// `account/rateLimits/updated`: records the windows and credits and, when Codex says a
     /// limit is reached (`rateLimitReachedType`) with no credits to carry on, fails the run at
@@ -403,9 +447,16 @@ impl Codex {
                     if self.turn.as_deref().is_none_or(|active| active == id) {
                         self.turn = None;
                         self.observation.status = EngineStatus::Idle;
+                        let held = self.gave_up.take().map(|(error, _)| error);
                         if !params["turn"]["error"].is_null() {
-                            self.observation.error =
-                                Some(self.turn_error(&params["turn"]["error"]));
+                            let failure = self.turn_error(&params["turn"]["error"]);
+                            if network_cause(&params["turn"]["error"]).is_some() {
+                                self.lost(failure);
+                            } else {
+                                self.observation.error = Some(failure);
+                            }
+                        } else if let Some(held) = held {
+                            self.lost(held);
                         } else if params["turn"]["status"] == "failed" {
                             self.observation.error =
                                 Some(error(EngineErrorKind::Fatal, "Codex turn failed"));
@@ -437,12 +488,24 @@ impl Codex {
             }
             "error" => {
                 let value = params.get("error").unwrap_or(params);
-                // While Codex retries an error itself it is not this run's limit.
-                self.observation.error = Some(if params["willRetry"].as_bool() == Some(true) {
-                    plain_rpc_error(value)
+                let message = value["message"].as_str().unwrap_or("");
+                if params["willRetry"].as_bool() == Some(true) {
+                    // Codex retries it itself (`Reconnecting... 2/5`): the turn goes on, and
+                    // the run's log says so.
+                    let what = error_info(value).map_or_else(String::new, |i| format!(" ({i})"));
+                    eprintln!("codex: Codex is retrying{what}: {}", quoted(message));
+                } else if network_cause(value).is_some() {
+                    let failure = self.turn_error(value);
+                    // Its turn's end follows with the same error; a loss is reported once
+                    // the turn is over, so the session can carry on from it.
+                    if self.turn.is_some() {
+                        self.gave_up = Some((failure, Instant::now()));
+                    } else {
+                        self.lost(failure);
+                    }
                 } else {
-                    self.turn_error(value)
-                });
+                    self.observation.error = Some(self.turn_error(value));
+                }
             }
             "account/rateLimits/updated" => self.rate_limits(&params["rateLimits"]),
             _ => {}
@@ -529,6 +592,8 @@ impl Codex {
         self.delivery.insert(id.clone(), DeliveryOutcome::Uncertain);
         self.observation.error = None;
         self.limit_error = None;
+        self.network = None;
+        self.gave_up = None;
         let input = json!([{"type":"text","text":text}]);
         if let Some(turn) = self.turn.clone() {
             match self
@@ -864,6 +929,26 @@ impl EngineAdapter for Codex {
     fn version(&self) -> Option<Verdict> {
         self.version.clone()
     }
+    /// A network loss Codex gave up on, once its turn is over and the app-server still runs:
+    /// the next input starts a turn on the same thread in the same app-server.
+    fn recover_in_place(&mut self, failure: &EngineError) -> bool {
+        let alive = self.rpc.is_some()
+            && self
+                .server
+                .as_mut()
+                .is_some_and(|server| matches!(server.try_wait(), Ok(None)));
+        if !alive
+            || self.turn.is_some()
+            || self.network.as_ref() != Some(failure)
+            || self.observation.error.as_ref() != Some(failure)
+        {
+            return false;
+        }
+        self.network = None;
+        self.observation.error = None;
+        self.continuations += 1;
+        true
+    }
     async fn models(&mut self) -> Result<Vec<String>, EngineError> {
         // The account's catalog, as the CLI refreshes it with the owner's Codex home.
         let mut command = Command::new(&self.options.binary);
@@ -928,6 +1013,8 @@ impl EngineAdapter for Codex {
         self.windows.clear();
         self.credits.clear();
         self.limit_error = None;
+        self.network = None;
+        self.gave_up = None;
         let result = self.prepare_inner(context, session).await;
         if result.is_err() {
             let _ = self.close().await;
@@ -968,7 +1055,22 @@ impl EngineAdapter for Codex {
             }
             EngineCommand::Resume { session } => {
                 validate_session(&session)?;
-                let reply = self.rpc()?.request("thread/resume", json!({"threadId":session,"cwd":context.cwd,"approvalPolicy":"never","sandbox":"danger-full-access"})).await?;
+                // A thread whose previous app-server died within the last minute or so still
+                // has that writer: wait it out, for a bounded time.
+                let patience = Instant::now() + WRITER_PATIENCE;
+                let reply = loop {
+                    match self.rpc()?.request("thread/resume", json!({"threadId":session,"cwd":context.cwd,"approvalPolicy":"never","sandbox":"danger-full-access"})).await {
+                        Err(e)
+                            if e.kind != EngineErrorKind::UnknownAcceptance
+                                && e.message.contains("already has an active writer")
+                                && Instant::now() + WRITER_RETRY < patience =>
+                        {
+                            eprintln!("codex: thread {session} still has its previous writer; retrying the resume in {}s", WRITER_RETRY.as_secs());
+                            sleep(WRITER_RETRY).await;
+                        }
+                        result => break result?,
+                    }
+                };
                 if reply["thread"]["id"].as_str() != Some(session.as_str()) {
                     return Err(local("Codex resumed a different thread"));
                 }

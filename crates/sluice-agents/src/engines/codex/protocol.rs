@@ -271,6 +271,66 @@ pub fn auth_text(message: &str) -> bool {
         ],
     )
 }
+/// The `codexErrorInfo` variants (0.160.x's generated schema, `CodexErrorInfo`) that say the
+/// model provider could not be reached or failed on its side: Codex retries these itself
+/// before it gives up.
+const NETWORK_INFO: [&str; 6] = [
+    "responseStreamConnectionFailed",
+    "responseStreamDisconnected",
+    "httpConnectionFailed",
+    "internalServerError",
+    "serverOverloaded",
+    "responseTooManyFailedAttempts",
+];
+/// An error object's `codexErrorInfo` as `name` or `name, HTTP <status>`; none for null.
+pub fn error_info(value: &Value) -> Option<String> {
+    match &value["codexErrorInfo"] {
+        Value::String(name) => Some(name.clone()),
+        Value::Object(info) => {
+            let (name, details) = info.iter().next()?;
+            Some(match details["httpStatusCode"].as_u64() {
+                Some(status) => format!("{name}, HTTP {status}"),
+                None => name.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+/// A network or server failure, from an error object's `codexErrorInfo` first (as
+/// `error_info` gives it), else, when that is null or `other`, from Codex's own words at the
+/// start of its message (the stream errors, except a content filter's, the connection and
+/// retry-limit errors, and the provider's overload).
+pub fn network_cause(value: &Value) -> Option<String> {
+    let message = value["message"].as_str().unwrap_or("");
+    match error_info(value) {
+        Some(info) if info != "other" => NETWORK_INFO
+            .iter()
+            .any(|name| info == *name || info.starts_with(&format!("{name}, ")))
+            .then_some(info),
+        _ => (says(
+            message,
+            &[
+                "stream disconnected before completion",
+                "Connection failed",
+                "exceeded retry limit",
+                "Reconnecting...",
+                "We're currently experiencing high demand",
+                "Selected model is at capacity",
+            ],
+        ) && !message.contains("content_filter"))
+        .then(|| "network or server error".into()),
+    }
+}
+/// An engine's text as the run's log quotes it: anything token-like masked, cut to 300
+/// characters.
+pub fn quoted(text: &str) -> String {
+    let text = super::super::account::redact(text.trim());
+    if text.chars().count() > 300 {
+        format!("{}…", text.chars().take(300).collect::<String>())
+    } else {
+        text
+    }
+}
 /// A JSON-RPC or turn error object, from its text alone: an auth failure or a usage limit in
 /// Codex's words (a hard cap: its reset is unknown here), else `plain_rpc_error`. The adapter
 /// reads a turn error's structured `codexErrorInfo` first.
@@ -288,7 +348,7 @@ pub fn rpc_error(value: &Value) -> EngineError {
     }
     plain_rpc_error(value)
 }
-/// An error object classified by keywords only, as for an error Codex retries itself.
+/// An error object classified by keywords only.
 pub fn plain_rpc_error(value: &Value) -> EngineError {
     let message = value
         .get("message")
@@ -407,6 +467,16 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
                 if scenario == "missing" {
                     failure = Some(json!({"code":-32603,"message":"no rollout found"}));
                 }
+                // A thread whose app-server died a moment ago keeps its writer lease for about a
+                // minute; this scenario refuses the first resume of a Codex home that way.
+                if scenario == "active-writer"
+                    && request["params"].get("cwd").is_some()
+                    && !fixture_marker("fixture-active-writer")?
+                {
+                    failure = Some(
+                        json!({"code":-32603,"message":"thread fixture-thread already has an active writer"}),
+                    );
+                }
                 json!({"thread":{"id":request["params"]["threadId"],"cwd":std::env::current_dir()?,"turns":[{"id":"history","status":"completed"}]}})
             }
             "thread/read" => {
@@ -460,7 +530,16 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
             let events: Vec<Value> =
                 serde_json::from_str(include_str!("../../../tests/fixtures/codex/turn.json"))
                     .map_err(io::Error::other)?;
-            let limited = scenario == "rate-limit-soon" && !rate_limited_before()?;
+            let limited = scenario == "rate-limit-soon" && !fixture_marker("fixture-rate-limited")?;
+            if let Some(events) = network_events(scenario, &active, turns) {
+                // The turn's network failed for good: nothing else comes.
+                for event in events {
+                    ws.send(Message::Text(event.to_string().into()))
+                        .await
+                        .map_err(io::Error::other)?;
+                }
+                continue;
+            }
             for event in limit_events(scenario, &active, limited)? {
                 ws.send(Message::Text(event.to_string().into()))
                     .await
@@ -507,13 +586,60 @@ pub async fn fixture_server(socket: &Path, scenario: &str) -> io::Result<()> {
                 {
                     continue;
                 }
+                let started = event["method"] == "turn/started";
                 ws.send(Message::Text(event.to_string().into()))
                     .await
                     .map_err(io::Error::other)?;
+                if started && scenario == "reconnect" && turns == 1 {
+                    for attempt in 1..=2 {
+                        ws.send(Message::Text(
+                            reconnecting(&active, attempt).to_string().into(),
+                        ))
+                        .await
+                        .map_err(io::Error::other)?;
+                    }
+                }
             }
         }
     }
     Ok(())
+}
+
+/// The stream error 0.160.x reports while the network is down (`codexErrorInfo`
+/// `responseStreamDisconnected`, as seen live with `httpStatusCode` 403).
+pub const NETWORK_FIXTURE: &str = "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)";
+/// Codex's `error` notification for a stream it retries itself: `Reconnecting... n/5`.
+fn reconnecting(turn: &str, attempt: u32) -> Value {
+    json!({"method":"error","params":{"error":{"message":format!("Reconnecting... {attempt}/5 ({NETWORK_FIXTURE})"),"codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":null}},"additionalDetails":null},"willRetry":true,"threadId":"fixture-thread","turnId":turn}})
+}
+/// A turn that fails, in place of its usual events:
+/// - `network-lost` (the first turn of an app-server) and `network-down` (every turn): Codex
+///   retries the stream twice, then gives up with `responseStreamDisconnected`;
+/// - `bad-request`: Codex refuses the request (`badRequest`), which is no network error.
+fn network_events(scenario: &str, turn: &str, turns: u32) -> Option<Vec<Value>> {
+    let error = match scenario {
+        "network-lost" if turns == 1 => {
+            json!({"message":NETWORK_FIXTURE,"codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":null}},"additionalDetails":null})
+        }
+        "network-down" => {
+            json!({"message":NETWORK_FIXTURE,"codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":null}},"additionalDetails":null})
+        }
+        "bad-request" => {
+            json!({"message":"Invalid request: the input is malformed.","codexErrorInfo":"badRequest","additionalDetails":null})
+        }
+        _ => return None,
+    };
+    let mut events = vec![
+        json!({"method":"turn/started","params":{"threadId":"fixture-thread","turn":{"id":turn,"items":[],"status":"inProgress","error":null}}}),
+    ];
+    if scenario != "bad-request" {
+        events.extend((1..=2).map(|attempt| reconnecting(turn, attempt)));
+    }
+    events.extend([
+        json!({"method":"error","params":{"error":error,"willRetry":false,"threadId":"fixture-thread","turnId":turn}}),
+        json!({"method":"turn/completed","params":{"threadId":"fixture-thread","turn":{"id":turn,"items":[],"status":"failed","error":error}}}),
+    ]);
+    Some(events)
 }
 
 /// The auth failure 0.160.0 sent live when the refresh token was revoked (a lash lane's rollout,
@@ -580,10 +706,11 @@ fn limit_events(scenario: &str, turn: &str, limited: bool) -> io::Result<Vec<Val
         _ => vec![],
     })
 }
-/// `rate-limit-soon` limits only the first turn in a Codex home, so the retry resumes.
-fn rate_limited_before() -> io::Result<bool> {
-    let marker =
-        Path::new(&std::env::var_os("CODEX_HOME").unwrap_or_default()).join("fixture-rate-limited");
+/// Whether `name` was marked in this Codex home before, marking it: `rate-limit-soon` limits
+/// only the first turn in a home, so the retry resumes, and `active-writer` refuses only the
+/// first resume.
+fn fixture_marker(name: &str) -> io::Result<bool> {
+    let marker = Path::new(&std::env::var_os("CODEX_HOME").unwrap_or_default()).join(name);
     if marker.exists() {
         return Ok(true);
     }

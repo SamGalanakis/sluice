@@ -134,6 +134,13 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
 
   A short rate limit is not either kind: it stays `transient` and is retried inside the run,
   just after its reset when the engine reported one.
+- A Codex network blip never fails a step. Codex retries a dropped connection itself
+  (`Reconnecting... 2/5`, one line each in the run's log) while its turn goes on. When Codex gives
+  up, the run waits (30 s, then 2 min, then 8 min) and continues the same session with a short
+  "continue where you left off" input; only a network still down after that fails the step
+  `transient`, with a message naming the cause (`codex: network error
+  (responseStreamDisconnected, HTTP 403); Codex gave up after its own retries. Codex said: …`)
+  and the `session`. `step_retry` with that `session` bound resumes it once the network is back.
 - A Claude or Devin agent that stops before its first turn on a screen nobody can answer
   (Claude's first-run setup, its API-key prompt, updated terms, managed-settings or MCP-server
   approval, a required update; Devin's organization picker or workspace-trust prompt; or any

@@ -43,6 +43,9 @@ impl EngineAdapter for Adapter {
     fn version(&self) -> Option<version::Verdict> {
         adapter_call!(self, version)
     }
+    fn recover_in_place(&mut self, error: &EngineError) -> bool {
+        adapter_call!(self, recover_in_place, error)
+    }
     fn on_hook(&mut self, hook: HookEvent) -> Result<HookReply, EngineError> {
         adapter_call!(self, on_hook, hook)
     }
@@ -150,6 +153,9 @@ impl EngineAdapter for FixtureFaultEngine {
     }
     fn version(&self) -> Option<version::Verdict> {
         self.inner.version()
+    }
+    fn recover_in_place(&mut self, error: &EngineError) -> bool {
+        self.inner.recover_in_place(error)
     }
     fn on_hook(&mut self, hook: HookEvent) -> Result<HookReply, EngineError> {
         self.inner.on_hook(hook)

@@ -67,6 +67,10 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"))
 }
 fn setup(scratch: &Scratch, scenario: &str) -> (Codex, EngineContext) {
+    let (options, context) = setup_options(scratch, scenario);
+    (Codex::new(options), context)
+}
+fn setup_options(scratch: &Scratch, scenario: &str) -> (CodexOptions, EngineContext) {
     let source = scratch.path().join("owner");
     fs::create_dir(&source).unwrap();
     fs::write(
@@ -101,7 +105,7 @@ fn setup(scratch: &Scratch, scenario: &str) -> (Codex, EngineContext) {
         request_timeout: Duration::from_secs(2),
         ..CodexOptions::new(binary, source, scratch.path().join("home"))
     };
-    (Codex::new(options), context)
+    (options, context)
 }
 async fn start(adapter: &mut Codex, context: &EngineContext) {
     assert!(adapter.prepare(context, None).await.unwrap().is_none());
@@ -917,12 +921,9 @@ async fn real_codex_wire_without_credentials() {
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
             let observation = adapter.observe(context).await.unwrap();
-            // Codex retries the stream first (`Reconnecting... n/5`, `willRetry`).
-            let retrying = observation
-                .error
-                .as_ref()
-                .is_some_and(|e| e.message.starts_with("Reconnecting..."));
-            if (observation.error.is_some() && !retrying) || observation.turns_completed > 0 {
+            // Codex retries the stream first (`Reconnecting... n/5`, `willRetry`), which the
+            // adapter leaves out of the observation.
+            if observation.error.is_some() || observation.turns_completed > 0 {
                 return observation;
             }
             assert!(Instant::now() < deadline, "{observation:?}");
@@ -1619,6 +1620,223 @@ async fn supervisor_codex_short_rate_limit_backs_off_until_its_reset() {
             .iter()
             .any(|e| e.id == InputId::Continue { attempt: 2 })
     );
+}
+
+/// Runs a Codex scenario under the supervisor with `network_backoff` and returns the outcome,
+/// the checkpoint, the app-server's wire record and how many cleanups the host saw.
+async fn supervised(
+    scratch: &Scratch,
+    scenario: &str,
+    network_backoff: Duration,
+) -> (
+    Result<sluice_agents::supervisor::AgentResult, sluice_agents::supervisor::AgentFailure>,
+    sluice_agents::supervisor::Checkpoint,
+    String,
+    u32,
+) {
+    let (options, context) = setup_options(scratch, scenario);
+    let mut adapter = Codex::new(CodexOptions {
+        network_backoff,
+        ..options
+    });
+    let mut cfg = acceptance::config(scratch.path(), "codex");
+    cfg.cwd = context.cwd;
+    cfg.run_dir = context.run_dir;
+    cfg.limits.stall = Duration::from_secs(10);
+    cfg.limits.wall = Duration::from_secs(60);
+    // A wait of the fixed backoff would outlast the test: the network backoff is used instead.
+    cfg.retry.backoff = Duration::from_secs(600);
+    let directory = cfg.run_dir.clone();
+    let mut host = acceptance::Host::submitted();
+    let outcome = acceptance::run(cfg, &mut adapter, &mut host).await;
+    assert!(adapter.server_pid().is_none());
+    let checkpoint = sluice_agents::supervisor::Checkpoint::read(&directory)
+        .unwrap()
+        .unwrap();
+    let wire = fs::read_to_string(directory.join("codex-wire.jsonl")).unwrap();
+    (outcome, checkpoint, wire, host.cleanups)
+}
+/// The checkpoint's inputs but the reprimes the fixture turn's compaction adds.
+fn inputs(
+    checkpoint: &sluice_agents::supervisor::Checkpoint,
+) -> Vec<(InputId, u32, sluice_agents::delivery::DeliveryState)> {
+    checkpoint
+        .delivery
+        .entries
+        .iter()
+        .filter(|e| !matches!(e.id, InputId::Reprime { .. }))
+        .map(|e| (e.id.clone(), e.tries, e.state.clone()))
+        .collect()
+}
+fn sent(wire: &str, method: &str) -> usize {
+    wire.lines()
+        .filter(|l| l.contains(r#""direction":"send""#))
+        .filter(|l| l.contains(&format!(r#""method":"{method}""#)))
+        .count()
+}
+
+/// The child half of `supervisor_codex_reconnects_are_logged_and_the_turn_goes_on`: its stderr
+/// is the run's log.
+#[tokio::test]
+#[ignore = "run by supervisor_codex_reconnects_are_logged_and_the_turn_goes_on"]
+async fn reconnecting_run() {
+    let Some(root) = std::env::var_os("SLUICE_CODEX_TEST_RUN_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    fs::create_dir(&root).unwrap();
+    let scratch = Scratch(root);
+    let (outcome, checkpoint, wire, cleanups) =
+        supervised(&scratch, "reconnect", Duration::from_secs(600)).await;
+    let result = outcome.unwrap();
+    assert_eq!(result.session, "fixture-thread");
+    // One turn, no retry, nothing sent again (the turn's compaction adds its reprime).
+    assert_eq!(checkpoint.internal_attempt, 1);
+    assert_eq!(
+        inputs(&checkpoint),
+        [(
+            InputId::Task,
+            1,
+            sluice_agents::delivery::DeliveryState::Acknowledged
+        )]
+    );
+    // The task's turn and the reprime's.
+    assert_eq!(sent(&wire, "turn/start"), 2);
+    assert_eq!(wire.matches(r#""willRetry":true"#).count(), 2);
+    assert_eq!(cleanups, 1);
+    eprintln!("reconnecting run PASS");
+}
+#[test]
+fn supervisor_codex_reconnects_are_logged_and_the_turn_goes_on() {
+    let scratch = Scratch::new();
+    let log = scratch.path().join("stderr.log");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "reconnecting_run", "--nocapture"])
+        .env("SLUICE_CODEX_TEST_RUN_ROOT", scratch.path().join("run"))
+        .stdout(std::process::Stdio::null())
+        .stderr(fs::File::create(&log).unwrap())
+        .status()
+        .unwrap();
+    let log = fs::read_to_string(&log).unwrap();
+    assert!(status.success(), "{log}");
+    assert!(log.contains("reconnecting run PASS"), "{log}");
+    let lines: Vec<_> = log
+        .lines()
+        .filter(|l| l.starts_with("codex: Codex is retrying"))
+        .collect();
+    assert_eq!(
+        lines,
+        (1..=2)
+            .map(|n| format!(
+                "codex: Codex is retrying (responseStreamDisconnected): Reconnecting... {n}/5 ({})",
+                protocol::NETWORK_FIXTURE
+            ))
+            .collect::<Vec<_>>(),
+        "{log}"
+    );
+    assert!(!log.contains("agent failed"), "{log}");
+}
+
+#[tokio::test]
+async fn supervisor_codex_network_loss_continues_the_same_session_in_place() {
+    let scratch = Scratch::new();
+    let started = Instant::now();
+    let (outcome, checkpoint, wire, cleanups) =
+        supervised(&scratch, "network-lost", Duration::from_secs(1)).await;
+    let elapsed = started.elapsed();
+    let result = outcome.unwrap();
+    assert_eq!(result.session, "fixture-thread");
+    assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
+    // The task once, then one continuation on the same thread in the same app-server: no
+    // restart, no resume, nothing replayed.
+    assert_eq!(checkpoint.internal_attempt, 2);
+    assert_eq!(
+        inputs(&checkpoint),
+        [
+            (
+                InputId::Task,
+                1,
+                sluice_agents::delivery::DeliveryState::Acknowledged
+            ),
+            (
+                InputId::Continue { attempt: 2 },
+                1,
+                sluice_agents::delivery::DeliveryState::Acknowledged
+            ),
+        ]
+    );
+    assert_eq!(sent(&wire, "initialize"), 1);
+    assert_eq!(sent(&wire, "thread/start"), 1);
+    // Only the subscription after the first turn started; the session is never resumed.
+    assert_eq!(sent(&wire, "thread/resume"), 1);
+    // The task's turn, the continuation's and the reprime's.
+    assert_eq!(sent(&wire, "turn/start"), 3);
+    assert_eq!(cleanups, 1);
+}
+
+#[tokio::test]
+async fn supervisor_codex_network_that_stays_down_fails_transient_naming_it() {
+    let scratch = Scratch::new();
+    let (outcome, checkpoint, wire, _) = supervised(&scratch, "network-down", Duration::ZERO).await;
+    let failure = outcome.unwrap_err();
+    assert_eq!(
+        failure.kind,
+        sluice_agents::supervisor::FailureKind::Transient,
+        "{failure}"
+    );
+    assert_eq!(
+        failure.message,
+        format!(
+            "codex: network error (responseStreamDisconnected); Codex gave up after its own retries. Codex said: {}",
+            protocol::NETWORK_FIXTURE
+        )
+    );
+    assert_eq!(failure.session.as_deref(), Some("fixture-thread"));
+    // Three continuations (the transient budget), each its own input, then the failure.
+    assert_eq!(checkpoint.internal_attempt, 4);
+    assert_eq!(
+        checkpoint
+            .delivery
+            .entries
+            .iter()
+            .map(|e| (e.id.clone(), e.tries))
+            .collect::<Vec<_>>(),
+        [
+            (InputId::Task, 1),
+            (InputId::Continue { attempt: 2 }, 1),
+            (InputId::Continue { attempt: 3 }, 1),
+            (InputId::Continue { attempt: 4 }, 1),
+        ]
+    );
+    assert_eq!(sent(&wire, "initialize"), 1);
+    assert_eq!(sent(&wire, "turn/start"), 4);
+}
+
+#[tokio::test]
+async fn supervisor_codex_bad_request_still_fails_at_once() {
+    let failure = supervisor_fails_at_once(
+        "bad-request",
+        sluice_agents::supervisor::FailureKind::EngineExited,
+    )
+    .await;
+    assert_eq!(failure.message, "Invalid request: the input is malformed.");
+}
+
+#[tokio::test]
+async fn codex_resume_waits_out_the_previous_writer() {
+    let scratch = Scratch::new();
+    let (mut adapter, mut context) = setup(&scratch, "active-writer");
+    closed_session(&mut adapter, &context).await;
+    let started = Instant::now();
+    resume(&mut adapter, &mut context, &scratch).await;
+    // Refused once with Codex's writer lease, then resumed after one retry.
+    assert!(
+        (Duration::from_secs(2)..Duration::from_secs(10)).contains(&started.elapsed()),
+        "{:?}",
+        started.elapsed()
+    );
+    let wire = fs::read_to_string(context.run_dir.join("codex-wire.jsonl")).unwrap();
+    assert_eq!(sent(&wire, "thread/resume"), 2);
+    adapter.close().await.unwrap();
 }
 
 /// A fake `auth.json` in Codex's shape: no real token anywhere.
