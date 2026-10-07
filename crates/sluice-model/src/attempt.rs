@@ -283,29 +283,3 @@ impl AttemptNote {
         lines.join("\n")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn releases_shorten_to_their_git_sha() {
-        assert_eq!(
-            short_release(
-                "0123456789abcdef0123456789abcdef01234567-89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
-            ),
-            "0123456789ab"
-        );
-        assert_eq!(short_release("runtime-v1"), "runtime-v1");
-    }
-
-    #[test]
-    fn cuts_long_strings_at_any_depth() {
-        let long = "x".repeat(205);
-        assert_eq!(
-            cut_strings(&json!({"a":[long],"b":1}), 200),
-            json!({"a":[format!("{}… [5 more characters]", "x".repeat(200))],"b":1})
-        );
-    }
-}

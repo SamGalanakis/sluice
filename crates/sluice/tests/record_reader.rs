@@ -25,17 +25,7 @@ impl Server {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         assert_ne!(port, 3065);
-        let binary = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("sluice");
-        assert!(
-            binary.is_file(),
-            "build this worktree's sluice binary first"
-        );
+        let binary = PathBuf::from(env!("CARGO_BIN_EXE_sluice"));
         let mut server = Self {
             children: vec![],
             home: tempfile::tempdir().unwrap(),
@@ -168,7 +158,6 @@ fn assert_messages(result: &NextResult, id: ProjectId) {
 }
 
 #[test]
-#[ignore = "native next/HTTP gate; build this worktree binary with cargo build --workspace first"]
 fn native_next_and_http_read_message_records_across_project_rename() {
     let server = Server::new();
     let created: Value = decode_json(&server.http(

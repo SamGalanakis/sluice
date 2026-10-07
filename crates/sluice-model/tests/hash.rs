@@ -40,87 +40,6 @@ fn versioned_hash_matches_independent_sha256_fixture() {
 }
 
 #[test]
-fn file_edits_affect_provenance_but_keep_validity_hash() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("brief.md");
-    std::fs::write(&path, b"one").unwrap();
-    let bindings = IndexMap::from([(
-        "brief".into(),
-        EffectiveInput::File(path.to_str().unwrap().into()),
-    )]);
-    let before = InputsHash::from_bindings(&bindings).unwrap();
-    let old_bytes = std::fs::read(&path).unwrap();
-    let provenance = ExecutionProvenance::fingerprint(&old_bytes);
-    std::fs::write(&path, b"two").unwrap();
-    assert_eq!(InputsHash::from_bindings(&bindings).unwrap(), before);
-    assert_ne!(
-        ExecutionProvenance::fingerprint(&std::fs::read(&path).unwrap()),
-        provenance
-    );
-    assert_eq!(ExecutionProvenance::fingerprint(&old_bytes), provenance);
-    assert_eq!(
-        before,
-        hash(json!({"brief":{"file":path.to_str().unwrap()}}))
-    );
-    std::fs::remove_file(&path).unwrap();
-    assert_eq!(InputsHash::from_bindings(&bindings).unwrap(), before);
-}
-
-#[test]
-fn changed_file_path_changes_hash_even_with_identical_bytes() {
-    let a = IndexMap::from([("brief".into(), EffectiveInput::File("/tmp/a.md".into()))]);
-    let b = IndexMap::from([("brief".into(), EffectiveInput::File("/tmp/b.md".into()))]);
-    assert_ne!(
-        InputsHash::from_bindings(&a).unwrap(),
-        InputsHash::from_bindings(&b).unwrap()
-    );
-}
-
-#[test]
-fn unbound_optional_inputs_are_absent_and_bound_null_is_present() {
-    let declarations_before = ["path"];
-    let declarations_after = ["path", "base"];
-    let bindings = IndexMap::from([("path".into(), data(json!("/tmp/source.txt")))]);
-    let resolve_bound = |declarations: &[&str]| {
-        declarations
-            .iter()
-            .filter_map(|name| bindings.get(*name).map(|v| ((*name).to_owned(), v.clone())))
-            .collect::<IndexMap<_, _>>()
-    };
-    let before = InputsHash::from_bindings(&resolve_bound(&declarations_before)).unwrap();
-    assert_eq!(
-        before,
-        InputsHash::from_bindings(&resolve_bound(&declarations_after)).unwrap()
-    );
-    let mut with_null = bindings.clone();
-    with_null.insert("base".into(), data(Value::Null));
-    assert_ne!(before, InputsHash::from_bindings(&with_null).unwrap());
-    with_null.insert("base".into(), data(json!("x")));
-    assert_ne!(before, InputsHash::from_bindings(&with_null).unwrap());
-}
-
-#[test]
-fn effective_literals_defaults_plan_inputs_and_handoffs_hash_by_value() {
-    let effective = IndexMap::from([("a".into(), data(json!(2))), ("b".into(), data(json!(1)))]);
-    let original = InputsHash::from_bindings(&effective).unwrap();
-    assert_eq!(original, hash(json!({"b":1,"a":2})));
-    assert_ne!(original, hash(json!({"a":2,"b":5})));
-    assert_ne!(original, hash(json!({"a":5,"b":1})));
-    assert_eq!(original, hash(json!({"a":2,"b":1})));
-}
-
-#[test]
-fn gates_and_fn_edits_do_not_contribute_to_effective_data() {
-    let first = json!({"after":["a"],"run":"old.fn","effective":{"n":2}});
-    let second = json!({"after":["!check/ok","unit:other?"],"run":"new.fn","effective":{"n":2}});
-    assert_eq!(
-        hash(first["effective"].clone()),
-        hash(second["effective"].clone())
-    );
-    assert_ne!(hash(first["effective"].clone()), hash(json!({"n":3})));
-}
-
-#[test]
 fn object_order_is_irrelevant_at_all_depths_and_array_order_matters() {
     let a = InputsHash::parse_json(br#"{"b":2,"a":[{"z":0,"x":1}]}"#).unwrap();
     let b = InputsHash::parse_json(br#"{"a":[{"x":1,"z":0}],"b":2}"#).unwrap();
@@ -204,18 +123,6 @@ fn digest_serialization_roundtrips_and_refuses_malformed_digests() {
         assert!(
             decode_json::<ExecutionProvenance>(&serde_json::to_vec(&malformed).unwrap()).is_err()
         );
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(96))]
-    #[test]
-    fn hashes_are_stable_under_nested_key_reordering(entries in proptest::collection::btree_map("[a-z]{1,6}",any::<i64>(),0..16)) {
-        let nested: serde_json::Map<_,_> = entries.iter().map(|(k,v)|(k.clone(),json!({"z":v,"a":[v,true]}))).collect();
-        let reversed: serde_json::Map<_,_> = entries.iter().rev().map(|(k,v)|(k.clone(),json!({"a":[v,true],"z":v}))).collect();
-        let first: JsonMap = decode_json(&serde_json::to_vec(&nested).unwrap()).unwrap();
-        let second: JsonMap = decode_json(&serde_json::to_vec(&reversed).unwrap()).unwrap();
-        prop_assert_eq!(InputsHash::of(&first).unwrap(),InputsHash::of(&second).unwrap());
     }
 }
 

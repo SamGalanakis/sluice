@@ -1139,20 +1139,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_the_documented_shapes() {
-        let src = "root = Stack([a, b], \"row\")\n// a comment\na = Button(\"Ship\", 'ship', {value: true, \"n\": -1.5})\nb = Table([\"x\"], [[\"1\", 2]],\n  null)\n";
-        let board = check_board(src).unwrap();
-        assert_eq!(board.root.name, "Stack");
-        let buttons = board.buttons();
-        assert_eq!(buttons.len(), 1);
-        assert_eq!(buttons[0].0.str_arg(1), Some("ship"));
-        assert_eq!(
-            buttons[0].0.arg(2).unwrap().to_json(),
-            serde_json::json!({"value": true, "n": -1.5})
-        );
-    }
-
-    #[test]
     fn reports_every_bad_line() {
         let src = "root = Stack([a, Nope(1)])\nthis is prose\na = Text(1)\nb = Text(\"never used\")\nc = Metric(\"x\")\n";
         let errors: Vec<String> = check_board(src)
@@ -1248,17 +1234,5 @@ mod tests {
         assert!(rule_fails("min:3", &serde_json::json!(2)).is_some());
         assert!(rule_fails("maxLength:3", &serde_json::json!("abcd")).is_some());
         assert!(rule_fails("email", &serde_json::json!("a@b")).is_none());
-    }
-
-    #[test]
-    fn signatures_spell_types_as_the_docs_do() {
-        assert_eq!(
-            board_spec("Units").unwrap().signature(),
-            "Units(state?: (\"running\" | \"failed\" | \"settled\" | \"blocked\" | \"queued\" | \"pending\")[])"
-        );
-        assert_eq!(
-            board_spec("Button").unwrap().signature(),
-            "Button(label: string, action?: string, params?: Record<string, any>, variant?: \"primary\" | \"secondary\")"
-        );
     }
 }

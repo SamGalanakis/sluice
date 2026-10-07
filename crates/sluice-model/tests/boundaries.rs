@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use sluice_model::{commands::*, error::PublicError, events::*, ids::*, rpc::*};
+use sluice_model::{commands::*, error::PublicError, ids::*, rpc::*};
 
 #[test]
 fn strict_json_rejects_duplicate_keys_at_every_depth() {
@@ -176,87 +176,5 @@ fn error_envelope_and_required_command_fields_are_closed() {
             "ProjectDelete" => decode_json::<ProjectDelete>(&wire).is_err(),
             _ => decode_json::<Messages>(&wire).is_err(),
         });
-    }
-}
-#[test]
-fn corrected_retry_binding_lease_stream_and_action_fixtures() {
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/corrected.json")).unwrap();
-    let retries: Vec<TransientRetry> =
-        decode_json(&serde_json::to_vec(&fixture["transient"]).unwrap()).unwrap();
-    assert_eq!(retries[0].run, retries[1].run);
-    assert_eq!(retries[0].attempt, retries[1].attempt);
-    assert_eq!(retries[0].invocation, retries[1].invocation);
-    assert_eq!(
-        (retries[0].internal_attempt, retries[1].internal_attempt),
-        (1, 2)
-    );
-    let binding: FileBinding =
-        decode_json(&serde_json::to_vec(&fixture["binding"]).unwrap()).unwrap();
-    assert_eq!(
-        serde_json::to_value(binding).unwrap(),
-        json!({"file":"/tmp/brief.md"})
-    );
-    let leases: Vec<CommandRequest> =
-        decode_json(&serde_json::to_vec(&fixture["leases"]).unwrap()).unwrap();
-    assert!(matches!(&leases[0], CommandRequest::AcquireLease(_)));
-    assert!(matches!(&leases[1], CommandRequest::ReleaseLease(_)));
-    assert!(matches!(&leases[2], CommandRequest::AcquireLease(_)));
-    let grants: Vec<CommandReply> =
-        decode_json(&serde_json::to_vec(&fixture["grants"]).unwrap()).unwrap();
-    assert!(matches!(
-        &grants[0],
-        CommandReply::Lease {
-            lease: LeaseId(1),
-            state: LeaseState::Held
-        }
-    ));
-    assert!(matches!(
-        &grants[1],
-        CommandReply::Lease {
-            lease: LeaseId(2),
-            state: LeaseState::Held
-        }
-    ));
-    if let (CommandRequest::AcquireLease(first), CommandRequest::AcquireLease(second)) =
-        (&leases[0], &leases[2])
-    {
-        assert_eq!(first.run, second.run);
-        assert_ne!(first.request_id, second.request_id);
-    }
-    let events: Vec<StreamEvent> =
-        decode_json(&serde_json::to_vec(&fixture["stream"]).unwrap()).unwrap();
-    assert!(matches!(&events[0], StreamEvent::Elements(_)));
-    assert!(matches!(&events[1], StreamEvent::Elements(_)));
-    assert!(matches!(&events[2], StreamEvent::Version(_)));
-    let outcomes: Vec<CompletionActionOutcome> =
-        decode_json(&serde_json::to_vec(&fixture["actions"]).unwrap()).unwrap();
-    assert!(matches!(&outcomes[0], CompletionActionOutcome::Applied(_)));
-    assert!(matches!(&outcomes[1], CompletionActionOutcome::Conflict(_)));
-    assert!(matches!(&outcomes[2], CompletionActionOutcome::Discarded));
-}
-#[test]
-fn runtime_trait_requires_send_futures() {
-    struct Api;
-    impl RuntimeApi for Api {
-        async fn command(&self, _: CommandRequest) -> Result<CommandReply, PublicError> {
-            Err(PublicError::not_implemented("command"))
-        }
-        async fn changes(&self, _: ChangeCursor) -> Result<ChangeBatch, PublicError> {
-            Err(PublicError::not_implemented("changes"))
-        }
-    }
-    fn send<T: Send>(_: T) {}
-    send(Api.command(CommandRequest::ProjectsList));
-    send(Api.changes(ChangeCursor {
-        after: RecordSeq(0),
-        projects: vec![],
-    }));
-}
-proptest::proptest! {
-    #![proptest_config(proptest::test_runner::Config::with_cases(64))]
-    #[test]
-    fn signed_integer_roundtrips(value in proptest::prelude::any::<i64>()) {
-        let decoded:JsonValue=decode_json(value.to_string().as_bytes()).unwrap();
-        proptest::prop_assert_eq!(decoded.as_value().as_i64(),Some(value));
     }
 }

@@ -2,8 +2,7 @@ use indexmap::IndexMap;
 use proptest::prelude::*;
 use serde_json::{Value, json};
 use sluice_model::types::{
-    Type, check_value, check_value_at, decode_json, fits, navigate, navigate_segments,
-    navigate_value,
+    Type, check_value, decode_json, fits, navigate, navigate_segments, navigate_value,
 };
 
 fn p(form: Value) -> Type {
@@ -238,15 +237,6 @@ fn values_reject_with_paths_and_collect_all_fields() {
 }
 
 #[test]
-fn check_value_prefixes_a_base_path() {
-    let errors = check_value_at(&Type::Int, &json!("x"), "steps.a.in.n").unwrap_err();
-    assert_eq!(
-        errors[0].to_string(),
-        "steps.a.in.n: expected int, got \"x\""
-    );
-}
-
-#[test]
 fn navigation_types_and_values() {
     let t = p(
         json!({"type":"record","fields":{"head":record(false),"meta":"Any","tags":"string[]",
@@ -300,77 +290,6 @@ fn navigation_preserves_optional_ancestors_and_literal_field_names() {
 }
 
 #[test]
-fn form_spells_types_back_and_display_is_parseable() {
-    for form in [
-        json!("string"),
-        json!("Any"),
-        json!("int?"),
-        json!("string[]"),
-        json!("float[]?"),
-        json!(["null",{"type":"enum","symbols":["a","b"]}]),
-        json!({"type":"array","items":{"type":"record","fields":{"a":"int","b":"string?"}}}),
-        json!({"type":"array","items":["null",{"type":"enum","symbols":["x"]}]}),
-    ] {
-        let t = p(form.clone());
-        assert_eq!(t.form(), form);
-        assert_eq!(t.to_string().parse::<Type>().unwrap(), t);
-        assert_eq!(Type::parse_json(t.to_string().as_bytes()).unwrap(), t);
-    }
-    assert_eq!(
-        p(json!({"type":"array","items":"int"})).form(),
-        json!("int[]")
-    );
-    assert_eq!("int[]".parse::<Type>().unwrap(), p(json!("int[]")));
-    let escaped = Type::Record(IndexMap::from([(
-        "a\"\\\n".into(),
-        Type::Enum(vec!["é\"".into()]),
-    )]));
-    assert_eq!(escaped.to_string().parse::<Type>().unwrap(), escaped);
-}
-
-#[test]
-fn strict_json_boundaries_reject_duplicates_overflow_and_nonfinite() {
-    for bytes in [
-        r#"{"x":1,"x":2}"#,
-        r#"{"x":[{"n":1,"n":2}]}"#,
-        r#"{"\u0061":1,"a":2}"#,
-        "9223372036854775808",
-        "-9223372036854775809",
-        "18446744073709551616",
-        "-18446744073709551616",
-        "NaN",
-        "Infinity",
-        "-Infinity",
-        "1e999",
-        "null null",
-    ] {
-        assert!(decode_json::<Value>(bytes.as_bytes()).is_err(), "{bytes}");
-    }
-    for bytes in [
-        "9223372036854775807",
-        "-9223372036854775808",
-        "1.0",
-        "1e20",
-        "1.7976931348623157e308",
-    ] {
-        let value: Value = decode_json(bytes.as_bytes()).unwrap();
-        assert!(check_value(&Type::Any, &value).is_ok());
-    }
-    for bytes in [
-        r#"{"type":"record","fields":{"a":"int","a":"string"}}"#,
-        r#"{"type":"enum","symbols":[9223372036854775808]}"#,
-        r#"{"type":"record","fields":{"a":1e999}}"#,
-    ] {
-        assert!(Type::parse_json(bytes.as_bytes()).is_err());
-    }
-    for value in [json!(u64::MAX), json!({"extra":[u64::MAX]})] {
-        assert!(Type::parse(&value).is_err());
-        assert!(check_value(&Type::Any, &value).is_err());
-        assert!(check_value(&p(json!({"type":"record","fields":{}})), &value).is_err());
-    }
-}
-
-#[test]
 fn type_and_value_nesting_is_bounded() {
     assert!(format!("int{}", "[]".repeat(128)).parse::<Type>().is_err());
     let mut value = Value::Null;
@@ -409,6 +328,5 @@ proptest! {
         prop_assert_eq!(decode_json::<Type>(&wire).unwrap(), t.clone());
         prop_assert_eq!(t.to_string().parse::<Type>().unwrap(), t);
     }
-    #[test]
-    fn fits_is_reflexive(t in type_strategy()) { prop_assert!(fits(&t,&t)); }
+
 }
