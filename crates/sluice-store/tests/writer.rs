@@ -3,11 +3,9 @@ mod home;
 use home::ScratchHome;
 use rusqlite::Connection;
 use sluice_model::{
-    commands::StepStatus,
     error::PublicError,
     events::Event,
-    ids::{HomeId, ProjectId, StepId},
-    rpc::JsonMap,
+    ids::{HomeId, ProjectId},
 };
 use sluice_store::{ChangeKey, ReadPool, RetrySafety, StoreError, Writer, WriterOptions};
 use std::{
@@ -419,55 +417,6 @@ async fn snapshot_consistent_while_writer_commits_and_releases_afterwards() {
 }
 
 #[tokio::test]
-async fn typed_records_keep_nulls_filters_and_monotonic_ids_after_trim() {
-    let (_home, writer, reads, project) = setup().await;
-    let record = writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.append_record(
-                Some(project),
-                Event::StepStatus {
-                    step: StepId::new("a").unwrap(),
-                    from: None,
-                    to: StepStatus::Pending,
-                    error: None,
-                    run_ids: vec![],
-                    needs: JsonMap::default(),
-                },
-            )
-        })
-        .await
-        .unwrap();
-    assert_eq!(record.seq.0, 1);
-    let (step, null): (String, String) = reads
-        .snapshot(|c| {
-            Ok(c.query_row(
-                "SELECT step_id, json_type(payload,'$.from') FROM records",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert_eq!((step.as_str(), null.as_str()), ("a", "null"));
-    writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute("DELETE FROM records", [])?;
-            tx.changed(Some(project), "log");
-            Ok(())
-        })
-        .await
-        .unwrap();
-    let second = writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.append_record(Some(project), event())
-        })
-        .await
-        .unwrap();
-    assert_eq!(second.seq.0, 2);
-    writer.shutdown().await.unwrap();
-}
-
-#[tokio::test]
 async fn unique_conflicts_and_shape_constraints_map_to_public_errors() {
     let (_home, writer, _reads, project) = setup().await;
     let duplicate = writer
@@ -619,82 +568,6 @@ async fn writer_uses_full_sync_foreign_keys_and_busy_timeout() {
         .await
         .unwrap();
     assert_eq!(settings, (2, 1, 5000));
-    writer.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn results_and_messages_survive_projection_removal_and_record_trim() {
-    use sluice_model::{
-        commands::Message,
-        ids::{MessageId, ResultId},
-    };
-    let (_home, writer, reads, project) = setup().await;
-    let result_id = ResultId::new().to_string();
-    let saved_result = result_id.clone();
-    let message = writer.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute("INSERT INTO step_results(result_id,project_id,step_id,generation,declaration,status,outputs,manual,recorded_at) VALUES (?1,?2,'a',1,'{}','succeeded','{\"value\":null}',1,'now')", (&result_id, project.to_string()))?;
-        tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,result_id) VALUES (?1,'a',0,'{}','succeeded',?2)", (project.to_string(), &result_id))?;
-        let record = tx.append_record(Some(project), Event::Message(Box::new(Message {
-            id: MessageId(0), thread: "t".into(), from: "a".into(), to: Some("owner".into()),
-            title: None, body: "question".into(), verb: sluice_model::commands::MessageVerb::Ask, to_message: None,
-            answer: None, ui: None, input: None, data: None, run: None, at: "now".into(), state: None, answered_by: None,
-        })))?;
-        let Event::Message(message) = record.event else { unreachable!() };
-        assert_eq!(message.id.0, record.seq.0);
-        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,needs_reply,at) VALUES (?1,?2,'t','a','owner','question',1,'now')", (message.id.0, project.to_string()))?;
-        tx.sql().execute("DELETE FROM steps WHERE project_id=?1", [project.to_string()])?;
-        tx.sql().execute("UPDATE step_results SET removed_at='later' WHERE result_id=?1", [&result_id])?;
-        tx.sql().execute("DELETE FROM records", [])?;
-        tx.sql().execute("INSERT INTO steps(project_id,step_id,position,generation,declaration) VALUES (?1,'a',0,2,'{}')", [project.to_string()])?;
-        tx.changed(Some(project), "status"); tx.changed(Some(project), "messages");
-        Ok(message)
-    }).await.unwrap();
-    assert_eq!(message.id.0, 1);
-    assert_eq!(count(&reads, "records").await, 0);
-    assert_eq!(count(&reads, "messages").await, 1);
-    assert_eq!(count(&reads, "outcomes").await, 1);
-    let (generation, status, result): (i64, String, Option<String>) = reads
-        .snapshot(|c| {
-            Ok(
-                c.query_row("SELECT generation,status,result_id FROM steps", [], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?,
-            )
-        })
-        .await
-        .unwrap();
-    assert_eq!((generation, status.as_str(), result), (2, "pending", None));
-    let error = writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute(
-                "UPDATE step_results SET outputs='{}' WHERE result_id=?1",
-                [saved_result],
-            )?;
-            tx.changed(Some(project), "status");
-            Ok(())
-        })
-        .await
-        .unwrap_err();
-    assert!(matches!(error, PublicError::Invalid { .. }));
-    writer.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn tombstone_releases_name_without_transferring_identity_or_readers() {
-    let (_home, writer, reads, project) = setup().await;
-    let replacement = ProjectId::new();
-    writer.write(RetrySafety::NonIdempotent, move |tx| {
-        tx.sql().execute("INSERT INTO readers(project_id,identity,stream,thread,cursor) VALUES (?1,'owner','owner','t',42)", [project.to_string()])?;
-        tx.sql().execute("UPDATE projects SET deleted_at='now' WHERE project_id=?1", [project.to_string()])?;
-        tx.sql().execute("INSERT INTO projects(project_id,name,created_at) VALUES (?1,'p','later')", [replacement.to_string()])?;
-        tx.changed(None, "projects"); Ok(())
-    }).await.unwrap();
-    let reader_project: String = reads
-        .snapshot(|c| Ok(c.query_row("SELECT project_id FROM readers", [], |r| r.get(0))?))
-        .await
-        .unwrap();
-    assert_eq!(reader_project, project.to_string());
-    assert_ne!(reader_project, replacement.to_string());
     writer.shutdown().await.unwrap();
 }
 

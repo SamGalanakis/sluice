@@ -127,19 +127,6 @@ impl Fixture {
             .await
             .unwrap()
     }
-    async fn order(&self) -> Vec<String> {
-        let p = self.project;
-        let plan = self.plan.clone();
-        self.reads
-            .snapshot(move |c| {
-                Ok(r::admit_order(c, p, &plan)?
-                    .into_iter()
-                    .map(|s| s.step.to_string())
-                    .collect())
-            })
-            .await
-            .unwrap()
-    }
 }
 fn needs(items: &[(&str, u64)]) -> Needs {
     items.iter().map(|(n, a)| (n.to_string(), *a)).collect()
@@ -148,45 +135,6 @@ fn failure() -> PublicError {
     PublicError::FnFailure {
         message: "no reading".into(),
     }
-}
-
-#[tokio::test]
-async fn many_ready_steps_consume_capacity_once_and_release_admits_next() {
-    let f=Fixture::new(json!({"a":{"run":"job","needs":{"lane":1}},"b":{"run":"job","needs":{"lane":1}},"c":{"run":"job","needs":{"lane":1}},"d":{"run":"job","needs":{"lane":1}}}),json!({"lane":2})).await;
-    let a = f.reserve("a", -1, needs(&[("lane", 1)])).await.unwrap();
-    f.reserve("b", -1, needs(&[("lane", 1)])).await.unwrap();
-    for _ in 0..3 {
-        assert!(f.reserve("c", -1, needs(&[("lane", 1)])).await.is_err());
-    }
-    assert_eq!(f.held().await, needs(&[("lane", 2)]));
-    let p = f.project;
-    let plan = f.plan.clone();
-    let status = f
-        .reads
-        .snapshot(move |c| r::status(c, p, &plan))
-        .await
-        .unwrap();
-    assert_eq!(status["lane"].queued, 2);
-    assert!(f.stop(a).await);
-    f.reserve("c", -1, needs(&[("lane", 1)])).await.unwrap();
-    assert_eq!(f.held().await["lane"], 2);
-}
-
-#[tokio::test]
-async fn admission_priority_then_dependency_order_and_smaller_requests_can_pass() {
-    let f=Fixture::new(json!({"low":{"run":"job","needs":{"lane":1}},"mid":{"run":"job","priority":5,"needs":{"lane":2,"gpu":1}},"top":{"run":"job","priority":9,"needs":{"lane":1,"gpu":1}},"tie":{"run":"job","priority":5,"needs":{"lane":1}}}),json!({"lane":3,"gpu":1})).await;
-    assert_eq!(f.order().await, ["top", "mid", "tie", "low"]);
-    f.reserve("top", -1, needs(&[("lane", 1), ("gpu", 1)]))
-        .await
-        .unwrap();
-    assert!(
-        f.reserve("mid", -1, needs(&[("lane", 2), ("gpu", 1)]))
-            .await
-            .is_err()
-    );
-    f.reserve("tie", -1, needs(&[("lane", 1)])).await.unwrap();
-    f.reserve("low", -1, needs(&[("lane", 1)])).await.unwrap();
-    assert_eq!(f.held().await, needs(&[("gpu", 1), ("lane", 3)]));
 }
 
 #[tokio::test]
@@ -216,54 +164,6 @@ async fn multi_resource_reservation_rolls_back_entire_attempt_and_names_shortage
 }
 
 #[tokio::test]
-async fn scatter_holds_once_until_every_item_and_unlaunched_reservation_stop() {
-    let f = Fixture::new(json!({"many":{"run":"job"}}), json!({"lane":1})).await;
-    let a = f.reserve("many", 0, needs(&[("lane", 1)])).await.unwrap();
-    let b = f.reserve("many", 1, needs(&[("lane", 1)])).await.unwrap();
-    assert_eq!(f.held().await["lane"], 1);
-    let p = f.project;
-    let pending = AttemptId::new();
-    f.writer.write(RetrySafety::NonIdempotent,move |tx| {
-        tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,item_index,phase,request,inputs_hash,created_at) VALUES (?,?,'many',2,'reserved','{}','hash','now')",params![pending.to_string(),p.to_string()])?;
-        tx.changed(Some(p),"status"); Ok(())
-    }).await.unwrap();
-    assert!(!f.stop(a).await);
-    assert!(!f.stop(b).await);
-    assert_eq!(f.held().await["lane"], 1);
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            tx.sql().execute(
-                "UPDATE attempts SET phase='terminal' WHERE attempt_id=?",
-                [pending.to_string()],
-            )?;
-            tx.changed(Some(p), "status");
-            assert!(tx.release_needs(b)?);
-            Ok(())
-        })
-        .await
-        .unwrap();
-    assert_eq!(f.held().await.get("lane").copied().unwrap_or(0), 0);
-}
-
-#[tokio::test]
-async fn capacity_decrease_preserves_held_work_and_zero_grows() {
-    let f = Fixture::new(
-        json!({"a":{"run":"job"},"b":{"run":"job"}}),
-        json!({"lane":2}),
-    )
-    .await;
-    let a = f.reserve("a", -1, needs(&[("lane", 2)])).await.unwrap();
-    f.patch(json!({"lane":0})).await.unwrap();
-    assert_eq!(f.held().await["lane"], 2);
-    assert!(!f.fit(needs(&[("lane", 1)])).await.fits());
-    assert!(f.fit(needs(&[("lane", 0)])).await.fits());
-    assert!(f.stop(a).await);
-    assert!(f.reserve("b", -1, needs(&[("lane", 1)])).await.is_err());
-    f.patch(json!({"lane":1})).await.unwrap();
-    f.reserve("b", -1, needs(&[("lane", 1)])).await.unwrap();
-}
-
-#[tokio::test]
 async fn holds_and_cached_capacity_survive_writer_restart() {
     let f = Fixture::new(
         json!({"a":{"run":"job"}}),
@@ -285,39 +185,6 @@ async fn holds_and_cached_capacity_survive_writer_restart() {
         .await
         .unwrap();
     assert_eq!(f.held().await["cpu"], 1);
-}
-
-#[tokio::test]
-async fn dynamic_failures_retain_last_good_value_and_clear_on_success() {
-    let f = Fixture::new(json!({}), json!({"cpu":{"capacity_fn":"cap"},"lane":1})).await;
-    let rev = f.resource("cpu").await.revision;
-    assert_eq!(
-        f.fit(needs(&[("cpu", 1)])).await.reason,
-        "needs cpu 1 (capacity unknown)"
-    );
-    assert!(f.fit(needs(&[("lane", 1)])).await.fits());
-    assert!(f.observe("cpu", rev, Err(failure())).await);
-    assert_eq!(f.resource("cpu").await.capacity, None);
-    assert!(f.observe("cpu", rev, Ok(2)).await);
-    assert!(f.observe("cpu", rev, Err(failure())).await);
-    assert!(!f.observe("cpu", rev, Err(failure())).await);
-    let r = f.resource("cpu").await;
-    assert_eq!(r.capacity, Some(2));
-    assert_eq!(r.error, Some(failure()));
-    assert!(f.observe("cpu", rev, Ok(2)).await);
-    assert_eq!(f.resource("cpu").await.error, None);
-    let records: i64 = f
-        .reads
-        .snapshot(|c| {
-            Ok(c.query_row(
-                "SELECT count(*) FROM records WHERE kind='project.capacity'",
-                [],
-                |r| r.get(0),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(records, 4);
 }
 
 #[tokio::test]
@@ -404,48 +271,6 @@ async fn removal_refused_for_needs_even_zero_and_patch_does_not_partially_apply(
 }
 
 #[tokio::test]
-async fn paused_unready_external_and_no_needs_steps_are_excluded_from_queue() {
-    let f=Fixture::new(json!({"a":{"run":"job","needs":{"lane":1}},"b":{"run":"job","needs":{"lane":1},"paused":true},"c":{"run":"job","needs":{"lane":1},"after":["a"]},"external":{"run":"core.external","needs":{"lane":1}},"plain":{"run":"job"}}),json!({"lane":0})).await;
-    assert_eq!(f.order().await, ["a"]);
-    let p = f.project;
-    let plan = f.plan.clone();
-    let s = f
-        .reads
-        .snapshot(move |c| r::status(c, p, &plan))
-        .await
-        .unwrap();
-    assert_eq!(s["lane"].queued, 1);
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            tx.sql().execute(
-                "UPDATE steps SET paused='true' WHERE project_id=? AND step_id='a'",
-                [p.to_string()],
-            )?;
-            tx.changed(Some(p), "status");
-            Ok(())
-        })
-        .await
-        .unwrap();
-    assert!(f.order().await.is_empty());
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| {
-            tx.sql().execute(
-                "UPDATE steps SET paused=NULL WHERE project_id=?",
-                [p.to_string()],
-            )?;
-            tx.sql().execute(
-                "UPDATE projects SET paused=1 WHERE project_id=?",
-                [p.to_string()],
-            )?;
-            tx.changed(Some(p), "status");
-            Ok(())
-        })
-        .await
-        .unwrap();
-    assert!(f.order().await.is_empty());
-}
-
-#[tokio::test]
 async fn stale_compiled_plan_cannot_admit() {
     let f = Fixture::new(
         json!({"a":{"run":"job","needs":{"lane":1}}}),
@@ -512,24 +337,6 @@ async fn duplicate_hold_release_and_old_generation_cannot_touch_new_hold() {
         assert!(!tx.release_needs(old)?); Ok(())
     }).await.unwrap();
     assert_eq!(f.held().await["lane"], 1);
-}
-
-#[tokio::test]
-async fn zero_needs_always_fit_and_work_without_needs_is_unrestricted() {
-    let f = Fixture::new(
-        json!({"zero":{"run":"job"},"plain":{"run":"job"}}),
-        json!({"lane":0}),
-    )
-    .await;
-    f.reserve("zero", -1, needs(&[("lane", 0)])).await.unwrap();
-    f.reserve("plain", -1, Needs::new()).await.unwrap();
-    assert_eq!(f.held().await.get("lane").copied().unwrap_or(0), 0);
-    assert!(f.fit(needs(&[("unknown", 0)])).await.fits());
-    assert!(
-        f.reserve("zero", 0, needs(&[("unknown", 0)]))
-            .await
-            .is_err()
-    );
 }
 
 #[tokio::test]

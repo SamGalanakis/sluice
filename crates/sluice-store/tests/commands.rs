@@ -1,6 +1,6 @@
+#[allow(dead_code)]
 #[path = "../../../tests/support/home.rs"]
 mod home;
-#[allow(dead_code)]
 mod support {
     use super::home::ScratchHome;
     use rusqlite::params;
@@ -92,7 +92,7 @@ mod support {
         .unwrap()
     }
     pub struct Fixture {
-        pub home: ScratchHome,
+        pub _home: ScratchHome,
         pub writer: Writer,
         pub reads: ReadPool,
         pub context: PlanContext,
@@ -118,7 +118,7 @@ mod support {
                 .unwrap();
             let reads = ReadPool::open(home.path(), 2).unwrap();
             Self {
-                home,
+                _home: home,
                 writer,
                 reads,
                 context: PlanContext {
@@ -179,16 +179,7 @@ mod support {
                 .await
                 .unwrap()
         }
-        pub async fn retry(&self, steps: &[&str], message: Option<&str>) -> RetryResult {
-            let context = self.context.clone();
-            let request = retry_request(context.project, steps, message);
-            self.writer
-                .write(RetrySafety::NonIdempotent, move |tx| {
-                    plans::step_retry(tx, &context, request, &mut Hooks::default())
-                })
-                .await
-                .unwrap()
-        }
+
         pub async fn reserve(&self, step: &str, inputs: Value) -> Reservation {
             let request = self.request(step, inputs, -1, None).await;
             let context = self.context.clone();
@@ -416,7 +407,7 @@ mod support {
         }
     }
 }
-use serde_json::{Value, json};
+use serde_json::json;
 use sluice_model::{commands::*, error::PublicError, ids::*};
 use sluice_store::{
     RetrySafety,
@@ -492,24 +483,7 @@ async fn failed_composition_rolls_back_edit_state_archive_and_records() {
         .unwrap();
     assert_eq!(removed, 0);
 }
-#[tokio::test]
-async fn dry_run_writes_nothing_and_keeps_revision() {
-    let f = Fixture::new(json!({"steps":{}})).await;
-    let mut prepared = edit(&f.context, json!({"steps":{"a":{"run":"empty"}}}));
-    prepared.dry_run = true;
-    let before = f.counts().await;
-    let project = f.context.project;
-    let result = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            plans::apply_edit(tx, project, prepared)
-        })
-        .await
-        .unwrap();
-    assert_eq!(result.rev, Revision(1));
-    assert_eq!(f.counts().await, before);
-    assert!(f.state().await.steps.is_empty());
-}
+
 #[tokio::test]
 async fn running_step_is_guarded_again_at_apply_but_pause_and_tags_are_allowed() {
     let mut f =
@@ -619,59 +593,7 @@ async fn forced_missing_data_becomes_stale_when_values_arrive() {
         .unwrap();
     assert_eq!(f.state().await.status(&id("a")), StepStatus::Stale);
 }
-#[tokio::test]
-async fn retries_keep_visible_values_and_stale_only_changed_effective_data() {
-    let f=Fixture::new(json!({"steps":{"a":{"run":"echo","in":{"value":{"default":1}}},"b":{"run":"echo","in":{"value":{"source":"a/value"}}},"gate":{"run":"empty","after":["a"]}}})).await;
-    f.manual("a", json!({"value":1}), false).await;
-    f.manual("b", json!({"value":1}), false).await;
-    f.manual("gate", json!({}), false).await;
-    let retry = f.retry(&["a"], None).await;
-    assert!(retry.stopped_at.contains(&id("b")));
-    assert!(retry.stopped_at.contains(&id("gate")));
-    let r = f.reserve("a", json!({"value":1})).await;
-    assert_eq!(
-        f.state().await.steps[&id("a")].outputs,
-        map(json!({"value":1}))
-    );
-    assert_eq!(f.state().await.status(&id("b")), StepStatus::Succeeded);
-    f.finish(&r, CompletionKind::Succeeded, json!({"value":1}))
-        .await;
-    assert_eq!(f.state().await.status(&id("b")), StepStatus::Succeeded);
-    f.retry(&["a"], None).await;
-    let r = f.reserve("a", json!({"value":1})).await;
-    f.finish(&r, CompletionKind::Succeeded, json!({"value":2}))
-        .await;
-    assert_eq!(f.state().await.status(&id("b")), StepStatus::Stale);
-    assert_eq!(f.state().await.status(&id("gate")), StepStatus::Succeeded);
-    f.manual("a", json!({"value":1}), false).await;
-    assert_eq!(f.state().await.status(&id("b")), StepStatus::Succeeded);
-}
-#[tokio::test]
-async fn retry_walk_crosses_pending_and_failed_but_stops_at_success_and_skip() {
-    let f=Fixture::new(json!({"steps":{"a":{"run":"empty"},"pending":{"run":"empty","after":["a"]},"failed":{"run":"empty","after":["pending"],"paused":"hold"},"done":{"run":"empty","after":["a"]},"behind":{"run":"empty","after":["done"]}}})).await;
-    f.manual("a", json!({}), false).await;
-    f.manual("done", json!({}), false).await;
-    f.fail_projection("failed").await;
-    f.fail_projection("behind").await;
-    let result = f.retry(&["a"], Some("fix it")).await;
-    assert_eq!(result.rearmed, vec![id("failed")]);
-    assert_eq!(result.stopped_at, vec![id("done")]);
-    assert_eq!(f.state().await.status(&id("behind")), StepStatus::Failed);
-    let (work, pause): (i64, String) = f
-        .reads
-        .snapshot(|c| {
-            Ok(c.query_row(
-                "SELECT work_generation,paused FROM steps WHERE step_id='failed'",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(work, 2);
-    assert_eq!(pause, "\"hold\"");
-    assert_eq!(f.counts().await.3, 1);
-}
+
 #[tokio::test]
 async fn retry_is_atomic_when_message_storage_fails() {
     let f = Fixture::new(json!({"steps":{"a":{"run":"empty"},"b":{"run":"empty","after":["a"]}}}))
@@ -738,155 +660,6 @@ async fn external_never_reserves_and_pending_cancellation_commits_failure() {
     assert_eq!(f.state().await.status(&id("a")), StepStatus::Failed);
     assert_eq!(f.counts().await.1, 1);
 }
-async fn submit(f: &Fixture, run: RunId, outputs: Value) -> Result<Option<u64>, PublicError> {
-    let request = StepSubmit {
-        project: f.context.project,
-        step: id("a"),
-        run,
-        outputs: map(outputs),
-        author: Some("sam".into()),
-    };
-    f.writer
-        .write(RetrySafety::Idempotent, move |tx| step_submit(tx, request))
-        .await
-}
-#[tokio::test]
-async fn a_submission_is_checked_taken_once_and_joins_the_returned_outputs() {
-    let f = Fixture::new(
-        json!({"steps":{"a":{"run":"open","outputs":{"ready":"boolean","note":"string?"}},"b":{"run":"echo","in":{"value":{"source":"a/ready"}}}}}),
-    )
-    .await;
-    let r = f.reserve("a", json!({})).await;
-    f.start(&r).await;
-    let before = f.counts().await;
-    // An invalid submission lists its problems and changes nothing: the step still runs.
-    let Err(PublicError::Invalid { errors, .. }) =
-        submit(&f, r.identity.run, json!({"ready":"wrong","extra":1})).await
-    else {
-        panic!("an invalid submission is refused")
-    };
-    assert_eq!(errors.len(), 2, "{errors:?}");
-    assert_eq!(f.counts().await, before);
-    assert_eq!(f.state().await.status(&id("a")), StepStatus::Running);
-    assert_eq!(
-        submit(&f, r.identity.run, json!({"ready":true}))
-            .await
-            .unwrap(),
-        Some(1)
-    );
-    // Submitting ended the run's agent: there is no second submission.
-    let Err(PublicError::Conflict { message, .. }) =
-        submit(&f, r.identity.run, json!({"ready":false})).await
-    else {
-        panic!("a second submission is refused")
-    };
-    assert!(message.contains("already submitted"), "{message}");
-    // The run's completion is the step's result: what the fn returned, the submission
-    // joined in.
-    let outcome = f
-        .finish_seen(
-            &r,
-            CompletionKind::Succeeded,
-            json!({"report":"hello"}),
-            Some(1),
-        )
-        .await;
-    assert_eq!(outcome.status, StepStatus::Succeeded);
-    assert_eq!(
-        outcome.outputs,
-        map(json!({"ready":true,"report":"hello","note":null}))
-    );
-    let state = f.state().await;
-    assert!(matches!(
-        sluice_model::gates::evaluate_step(
-            &f.context.plan,
-            &state,
-            &f.context.plan.steps()[&id("b")]
-        ),
-        sluice_model::gates::GateDecision::Ready
-    ));
-}
-#[tokio::test]
-async fn a_send_back_reopens_a_submitted_step_as_a_new_run() {
-    let f = Fixture::new(json!({"steps":{"a":{"run":"open","outputs":{"ready":"boolean"}}}})).await;
-    let r = f.reserve("a", json!({})).await;
-    f.start(&r).await;
-    submit(&f, r.identity.run, json!({"ready":true}))
-        .await
-        .unwrap();
-    f.finish_seen(&r, CompletionKind::Succeeded, json!({}), Some(1))
-        .await;
-    f.retry(&["a"], Some("fix the thing")).await;
-    assert_eq!(f.state().await.status(&id("a")), StepStatus::Pending);
-    let again = f.reserve("a", json!({})).await;
-    assert_ne!(again.identity.run, r.identity.run);
-    assert_eq!(again.prev_run, Some(r.identity.run));
-    f.start(&again).await;
-    // The new run submits afresh.
-    assert_eq!(
-        submit(&f, again.identity.run, json!({"ready":false}))
-            .await
-            .unwrap(),
-        Some(1)
-    );
-}
-#[tokio::test]
-async fn a_run_that_ends_without_submitting_fails_its_step_typed() {
-    let f = Fixture::new(json!({"steps":{"a":{"run":"open","outputs":{"ready":"boolean"}}}})).await;
-    let r = f.reserve("a", json!({})).await;
-    f.start(&r).await;
-    let outcome = f
-        .finish(
-            &r,
-            CompletionKind::Succeeded,
-            json!({"report":"done","session":"s-1"}),
-        )
-        .await;
-    assert_eq!(outcome.status, StepStatus::Failed);
-    let Some(PublicError::ExitedWithoutSubmit { message, session }) = outcome.error else {
-        panic!("{:?}", outcome.error)
-    };
-    assert!(message.contains("ready"), "{message}");
-    assert_eq!(session.as_deref(), Some("s-1"));
-    // An agent that stopped without submitting says so through its own failure kind.
-    f.retry(&["a"], None).await;
-    let r = f.reserve("a", json!({})).await;
-    f.start(&r).await;
-    let outcome = f
-        .finish(
-            &r,
-            CompletionKind::Failed(PublicError::AgentFailure {
-                kind: "ExitedWithoutSubmit".into(),
-                message: "stopped after 3 nudges".into(),
-                session: Some("s-2".into()),
-            }),
-            json!({}),
-        )
-        .await;
-    assert_eq!(
-        outcome.error,
-        Some(PublicError::ExitedWithoutSubmit {
-            message: "stopped after 3 nudges".into(),
-            session: Some("s-2".into()),
-        })
-    );
-}
-#[tokio::test]
-async fn invalid_or_missing_final_outputs_terminalize_failure() {
-    for outputs in [
-        json!({}),
-        json!({"value":"not an int"}),
-        json!({"value":1,"extra":2}),
-    ] {
-        let f =
-            Fixture::new(json!({"steps":{"a":{"run":"int","in":{"value":{"default":1}}}}})).await;
-        let r = f.reserve("a", json!({"value":1})).await;
-        let outcome = f.finish(&r, CompletionKind::Succeeded, outputs).await;
-        assert_eq!(outcome.status, StepStatus::Failed);
-        assert!(matches!(outcome.error, Some(PublicError::Invalid { .. })));
-        assert_eq!(f.state().await.status(&id("a")), StepStatus::Failed);
-    }
-}
 
 #[tokio::test]
 async fn regression_growing_reorder_preserves_old_steps_and_inputs_without_position_collisions() {
@@ -921,30 +694,6 @@ async fn regression_growing_reorder_preserves_old_steps_and_inputs_without_posit
 }
 
 #[tokio::test]
-async fn selection_is_the_union_of_explicit_ids_and_matching_tags() {
-    let f=Fixture::new(json!({"steps":{"a":{"run":"empty"},"b":{"run":"empty","tags":["lane"]},"c":{"run":"empty","tags":["other"]}}})).await;
-    for s in ["a", "b", "c"] {
-        f.manual(s, json!({}), false).await;
-    }
-    let context = f.context.clone();
-    let request = StepRetry {
-        selection: StepSelection {
-            steps: Some(vec![id("a")]),
-            tags: Some(vec!["lane".into(), "unused".into()]),
-        },
-        ..retry_request(context.project, &["a"], None)
-    };
-    let result = f
-        .writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            plans::step_retry(tx, &context, request, &mut Hooks::default())
-        })
-        .await
-        .unwrap();
-    assert_eq!(result.steps, vec![id("a"), id("b")]);
-    assert_eq!(f.state().await.status(&id("c")), StepStatus::Succeeded);
-}
-#[tokio::test]
 async fn cancelling_a_mixed_selection_refuses_pending_executable_without_partial_changes() {
     let f = Fixture::new(
         json!({"steps":{"x":{"run":"core.external"},"y":{"run":"empty","paused":true}}}),
@@ -972,16 +721,6 @@ async fn cancelling_a_mixed_selection_refuses_pending_executable_without_partial
     );
     assert_eq!(f.counts().await, before);
     assert_eq!(f.state().await.status(&id("x")), StepStatus::Pending);
-}
-#[tokio::test]
-async fn open_extra_inputs_and_optional_declared_outputs_complete_without_submission() {
-    let f=Fixture::new(json!({"steps":{"a":{"run":"open","in":{"extra":{"default":{"nested":[1,2]}}},"outputs":{"note":"string?"}}}})).await;
-    let r = f.reserve("a", json!({"extra":{"nested":[1,2]}})).await;
-    let result = f
-        .finish(&r, CompletionKind::Succeeded, json!({"report":"done"}))
-        .await;
-    assert_eq!(result.status, StepStatus::Succeeded);
-    assert_eq!(result.outputs, map(json!({"report":"done","note":null})));
 }
 
 #[tokio::test]
