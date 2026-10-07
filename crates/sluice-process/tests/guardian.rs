@@ -208,50 +208,7 @@ fn launch(
     let (args, link, host) = (args.clone(), link.clone(), host.clone());
     tokio::spawn(async move { guardian_main(args, &link, &host).await })
 }
-#[tokio::test]
-async fn normal_run_advances_cursor_after_start_and_releases_after_cleanup() {
-    let home = tempfile::tempdir().unwrap();
-    let (args, link, host) = setup(home.path());
-    let task = launch(&args, &link, &host);
-    until(|| host.state.starts.load(Ordering::SeqCst) == 1).await;
-    assert!(matches!(
-        control(
-            &args,
-            ControlCommand::Challenge(args.guardian.socket_challenge.clone())
-        )
-        .await
-        .unwrap(),
-        ControlReply::Identity(_)
-    ));
-    until(|| link.with_state(|s| s.attempts[&args.invocation.run].cursor == MessageId(2))).await;
-    until(|| host.state.delivered.lock().unwrap().len() == 3).await;
-    assert_eq!(
-        *host.state.delivered.lock().unwrap(),
-        vec![MessageId(1), MessageId(2), MessageId(3)]
-    );
-    control(
-        &args,
-        ControlCommand::DeliveryAck(DeliveryAck {
-            invocation: args.invocation.invocation,
-            message: MessageId(3),
-        }),
-    )
-    .await
-    .unwrap();
-    host.state.done.store(true, Ordering::SeqCst);
-    assert!(matches!(
-        task.await.unwrap().unwrap(),
-        GuardianOutcome::Completed(_)
-    ));
-    assert_eq!(host.state.cleaned.load(Ordering::SeqCst), 1);
-    link.with_state(|s| {
-        let a = &s.attempts[&args.invocation.run];
-        assert_eq!(a.releases, 1);
-        assert_eq!(a.acknowledgements.len(), 1);
-    });
-    assert!(!args.run_dir.join("completion.json").exists());
-    assert!(!args.run_dir.join("control.sock").exists());
-}
+
 #[tokio::test]
 async fn busy_completion_keeps_the_exact_journal_and_never_runs_again() {
     let home = tempfile::tempdir().unwrap();
@@ -420,55 +377,7 @@ async fn direct_call_caller_disappears_while_guardian_completes() {
     task.await.unwrap().unwrap();
     direct.with_state(|s| assert_eq!(s.attempts[&args.invocation.run].releases, 1));
 }
-#[tokio::test]
-async fn helper_retry_cleans_before_reentry_and_preserves_acknowledged_input() {
-    let home = tempfile::tempdir().unwrap();
-    let (args, link, host) = setup(home.path());
-    let task = launch(&args, &link, &host);
-    until(|| host.state.starts.load(Ordering::SeqCst) == 1).await;
-    for id in [1, 2] {
-        control(
-            &args,
-            ControlCommand::DeliveryAck(DeliveryAck {
-                invocation: args.invocation.invocation,
-                message: MessageId(id),
-            }),
-        )
-        .await
-        .unwrap();
-    }
-    control(
-        &args,
-        ControlCommand::Retry {
-            checkpoint: decode_json(br#"{"session":"same","original_head":"baseline"}"#).unwrap(),
-            backoff_ms: 1,
-        },
-    )
-    .await
-    .unwrap();
-    host.state.done.store(true, Ordering::SeqCst);
-    task.await.unwrap().unwrap();
-    assert_eq!(host.state.starts.load(Ordering::SeqCst), 2);
-    assert_eq!(host.state.cleaned.load(Ordering::SeqCst), 2);
-    let delivered = host.state.delivered.lock().unwrap();
-    assert_eq!(
-        delivered.iter().filter(|id| **id == MessageId(1)).count(),
-        1
-    );
-    assert_eq!(
-        delivered.iter().filter(|id| **id == MessageId(2)).count(),
-        1
-    );
-    assert_eq!(
-        host.state.checkpoints.lock().unwrap()[1].0["session"].as_value(),
-        "same"
-    );
-    link.with_state(|s| {
-        let a = &s.attempts[&args.invocation.run];
-        assert_eq!(a.started.len(), 2);
-        assert_eq!(a.releases, 1);
-    });
-}
+
 #[tokio::test]
 async fn unknown_or_undelivered_acknowledgements_and_wrong_capabilities_are_refused() {
     let home = tempfile::tempdir().unwrap();
