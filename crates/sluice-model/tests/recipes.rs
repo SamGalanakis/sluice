@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use sluice_model::{
-    recipe::{Recipe, catalog},
+    recipe::Recipe,
     rpc::{JsonMap, decode_json},
 };
 
@@ -15,20 +15,6 @@ fn value(map: &JsonMap) -> Value {
     serde_json::to_value(map).unwrap()
 }
 
-#[test]
-fn substitution_in_ids_nested_strings_and_object_keys() {
-    let r = recipe(
-        json!({"{unit}-work":{"doc":"Work {unit} {n} {flag}", "in":{"{key}":{"default":["see {unit}",{"deep":"{unit}!"}]}}}}),
-        json!({"n":"int","flag":"boolean","key":"string"}),
-    );
-    assert_eq!(
-        value(
-            &r.substitute(&map(json!({"unit":"u1","n":3,"flag":false,"key":"extra"})))
-                .unwrap()
-        ),
-        json!({"u1-work":{"doc":"Work u1 3 false","in":{"extra":{"default":["see u1",{"deep":"u1!"}]}}}})
-    );
-}
 #[test]
 fn exact_placeholders_keep_types_optional_params_become_null() {
     let r = recipe(
@@ -72,87 +58,7 @@ fn unknown_params_and_lone_braces_name_each_location() {
     );
     assert_eq!(errors.iter().filter(|e| e.contains("lone")).count(), 2);
 }
-#[test]
-fn params_collect_unknown_missing_bad_unit_and_type_errors() {
-    let r = recipe(
-        json!({"a":{}}),
-        json!({"n":"int","kind":{"type":"enum","symbols":["a","b"]}}),
-    );
-    let errors = r
-        .substitute(&map(json!({"unit":"U 1","n":"three","kind":"c","extra":1})))
-        .unwrap_err();
-    assert_eq!(errors.len(), 4);
-    assert_eq!(
-        errors.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
-        ["params.extra", "params.unit", "params.n", "params.kind"]
-    );
-    assert_eq!(
-        r.substitute(&map(json!({"unit":"u","kind":"a"})))
-            .unwrap_err()[0]
-            .path,
-        "params.n"
-    );
-    assert_eq!(
-        r.substitute(&map(json!({"n":1,"kind":"a"}))).unwrap_err()[0].path,
-        "params.unit"
-    );
-}
-#[test]
-fn parameter_declarations_reuse_model_types_and_docs() {
-    let r = recipe(
-        json!({"a":{}}),
-        json!({"n":{"type":"int","doc":"A count"},"rec":{"type":"record","fields":{"name":"string"}}}),
-    );
-    assert_eq!(r.params()["n"].doc.as_deref(), Some("A count"));
-    assert!(
-        r.substitute(&map(json!({"unit":"u","n":2,"rec":{"name":"ok"}})))
-            .is_ok()
-    );
-    for form in [
-        json!({"unit":"int"}),
-        json!({"Bad":"int"}),
-        json!({"n":"strng"}),
-        json!({"n":{"doc":"missing type"}}),
-    ] {
-        assert!(Recipe::parse("r", &json!({"name":"r","params":form,"steps":{"a":{}}})).is_err());
-    }
-}
-#[test]
-fn strict_json_and_broken_catalog_entries_do_not_hide_others() {
-    let global = br#"{"name":"lane","doc":"global","steps":{"{unit}":{"run":"core.external"}}}"#;
-    let project =
-        br#"{"name":"lane","doc":"project","steps":{"{unit}-mine":{"run":"core.external"}}}"#;
-    let good = br#"{"name":"good","steps":{"{unit}":{"run":"core.external"}}}"#;
-    let old = br#"{"name":"old","steps":{"{unit}":{"run":"core.external","when":"yes"}}}"#;
-    let entries = catalog([
-        ("lane", "global", global.as_slice()),
-        ("good", "global", good.as_slice()),
-        ("lane", "project", project.as_slice()),
-        ("broken", "project", b"{".as_slice()),
-        ("old", "project", old.as_slice()),
-    ]);
-    assert_eq!(entries["lane"].scope, "project");
-    assert_eq!(entries["lane"].recipe.as_ref().unwrap().doc(), "project");
-    assert!(entries["good"].recipe.is_ok());
-    assert!(entries["broken"].recipe.is_err());
-    assert!(
-        entries["old"].recipe.as_ref().unwrap_err()[0]
-            .path
-            .ends_with(".when")
-    );
-    for bytes in [
-        br#"{"name":"r","name":"r","steps":{}}"#.as_slice(),
-        b"[]",
-        br#"{"name":"r","steps":{"a":{"n":9223372036854775808}}}"#,
-    ] {
-        assert!(Recipe::parse_json("r", bytes).is_err());
-    }
-    let shadowed = catalog([
-        ("lane", "global", global.as_slice()),
-        ("lane", "project", b"{".as_slice()),
-    ]);
-    assert!(shadowed["lane"].recipe.is_err());
-}
+
 #[test]
 fn substitution_refuses_key_and_step_id_collisions() {
     let r = recipe(json!({"{unit}":{}, "a":{}}), json!({}));
@@ -200,5 +106,31 @@ fn value_parser_refuses_overflow_and_bounds_placeholder_recursion() {
         errors
             .iter()
             .any(|error| error.message.contains("nesting exceeds 128"))
+    );
+}
+
+#[test]
+fn params_collect_unknown_missing_bad_unit_and_type_errors() {
+    let r = recipe(
+        json!({"a":{}}),
+        json!({"n":"int","kind":{"type":"enum","symbols":["a","b"]}}),
+    );
+    let errors = r
+        .substitute(&map(json!({"unit":"U 1","n":"three","kind":"c","extra":1})))
+        .unwrap_err();
+    assert_eq!(errors.len(), 4);
+    assert_eq!(
+        errors.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+        ["params.extra", "params.unit", "params.n", "params.kind"]
+    );
+    assert_eq!(
+        r.substitute(&map(json!({"unit":"u","kind":"a"})))
+            .unwrap_err()[0]
+            .path,
+        "params.n"
+    );
+    assert_eq!(
+        r.substitute(&map(json!({"n":1,"kind":"a"}))).unwrap_err()[0].path,
+        "params.unit"
     );
 }

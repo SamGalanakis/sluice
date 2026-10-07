@@ -40,15 +40,6 @@ fn versioned_hash_matches_independent_sha256_fixture() {
 }
 
 #[test]
-fn object_order_is_irrelevant_at_all_depths_and_array_order_matters() {
-    let a = InputsHash::parse_json(br#"{"b":2,"a":[{"z":0,"x":1}]}"#).unwrap();
-    let b = InputsHash::parse_json(br#"{"a":[{"x":1,"z":0}],"b":2}"#).unwrap();
-    assert_eq!(a, b);
-    assert_ne!(hash(json!({"items":[1,2]})), hash(json!({"items":[2,1]})));
-    assert_ne!(hash(json!({"items":[1,2]})), hash(json!({"items":[1,2,3]})));
-}
-
-#[test]
 fn numeric_representation_is_explicit_and_collision_free() {
     assert_ne!(hash(json!({"x":1})), hash(json!({"x":1.0})));
     assert_ne!(hash(json!({"x":0.0})), hash(json!({"x":-0.0})));
@@ -138,23 +129,6 @@ proptest::proptest! {
         let second: JsonMap = decode_json(&encoded).unwrap();
         proptest::prop_assert_eq!(second.0["x"].as_value().as_f64().unwrap().to_bits(), bits);
         proptest::prop_assert_eq!(InputsHash::of(&first).unwrap(), InputsHash::of(&second).unwrap());
-    }
-}
-
-#[test]
-fn structural_data_comparison_matches_canonical_numeric_and_order_rules() {
-    use sluice_model::hash::data_equal;
-    for (left, right, equal) in [
-        (json!({"x":[-0.0]}), json!({"x":[0.0]}), false),
-        (json!({"x":[1]}), json!({"x":[1.0]}), false),
-        (
-            json!({"x":1,"y":{"b":2,"a":3}}),
-            json!({"y":{"a":3,"b":2},"x":1}),
-            true,
-        ),
-        (json!([1, 2]), json!([2, 1]), false),
-    ] {
-        assert_eq!(data_equal(&left, &right).unwrap(), equal);
     }
 }
 

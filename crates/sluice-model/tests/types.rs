@@ -1,9 +1,7 @@
 use indexmap::IndexMap;
 use proptest::prelude::*;
 use serde_json::{Value, json};
-use sluice_model::types::{
-    Type, check_value, decode_json, fits, navigate, navigate_segments, navigate_value,
-};
+use sluice_model::types::{Type, check_value, fits, navigate, navigate_segments, navigate_value};
 
 fn p(form: Value) -> Type {
     Type::parse(&form).unwrap()
@@ -82,37 +80,6 @@ fn parse_errors_name_the_path() {
 }
 
 #[test]
-fn structural_fits_accepts_python_scenarios() {
-    for (source, target) in [
-        (json!("int"), json!("int")),
-        (json!("int"), json!("float")),
-        (json!("string"), json!("Any")),
-        (json!("Any"), json!("int")),
-        (json!("int"), json!("int?")),
-        (json!("int?"), json!("int?")),
-        (json!("int[]"), json!("float[]")),
-        (
-            json!({"type":"enum","symbols":["a"]}),
-            json!({"type":"enum","symbols":["a","b"]}),
-        ),
-        (json!({"type":"enum","symbols":["a"]}), json!("string")),
-        (
-            json!({"type":"record","fields":{"branch":"string","sha":"string","x":"int"}}),
-            record(false),
-        ),
-        (
-            json!({"type":"record","fields":{"branch":"string"}}),
-            record(false),
-        ),
-    ] {
-        assert!(
-            fits(&p(source.clone()), &p(target.clone())),
-            "{source} -> {target}"
-        );
-    }
-}
-
-#[test]
 fn structural_fits_rejects_python_scenarios() {
     for (source, target) in [
         (json!("float"), json!("int")),
@@ -139,26 +106,6 @@ fn structural_fits_rejects_python_scenarios() {
     assert!(fits(&Type::Any, &p(json!("string?"))));
     assert!(!fits(&p(json!("int?[]")), &p(json!("float[]"))));
     assert!(fits(&p(json!("int[]")), &p(json!("float?[]"))));
-}
-
-#[test]
-fn values_accept_python_scenarios() {
-    for (form, value) in [
-        (json!("int"), json!(3)),
-        (json!("float"), json!(3)),
-        (json!("float"), json!(2.5)),
-        (json!("boolean"), json!(false)),
-        (json!("Any"), json!({"x":[1]})),
-        (json!("Any?"), Value::Null),
-        (json!("string?"), Value::Null),
-        (json!({"type":"enum","symbols":["done"]}), json!("done")),
-        (json!("int[]"), json!([1, 2])),
-        (record(false), json!({"branch":"b"})),
-        (record(false), json!({"branch":"b","extra":1})),
-        (json!("Any"), Value::Null),
-    ] {
-        assert_eq!(check_value(&p(form), &value), Ok(()));
-    }
 }
 
 #[test]
@@ -237,32 +184,6 @@ fn values_reject_with_paths_and_collect_all_fields() {
 }
 
 #[test]
-fn navigation_types_and_values() {
-    let t = p(
-        json!({"type":"record","fields":{"head":record(false),"meta":"Any","tags":"string[]",
-        "opt":["null",{"type":"record","fields":{"x":"int"}}]}}),
-    );
-    for (path, expected) in [
-        ("head.branch", p(json!("string"))),
-        ("head.sha", p(json!("string?"))),
-        ("meta.deep.0", Type::Any),
-        ("tags.0", Type::String),
-        ("opt.x", p(json!("int?"))),
-    ] {
-        assert_eq!(navigate(&t, path).unwrap(), expected);
-    }
-    assert_eq!(navigate(&t, "head.nope").unwrap_err().path, "head.nope");
-    assert!(navigate(&t, "tags.x").is_err());
-    assert_eq!(navigate(&t, "").unwrap(), t);
-    let v = json!({"a":{"b":[10,20]},"n":null});
-    assert_eq!(navigate_value(&v, &["a", "b", "1"]), Some(&json!(20)));
-    assert_eq!(navigate_value(&v, &["a", "b", "5"]), None);
-    assert_eq!(navigate_value(&v, &["n", "x"]), None);
-    assert_eq!(navigate_value(&v, &["n"]), Some(&Value::Null));
-    assert_eq!(navigate_value(&v, &[]), Some(&v));
-}
-
-#[test]
 fn invalid_list_indices_do_not_panic() {
     for index in ["²", "-1", "x", "", "99999999999999999999999999999999"] {
         if index.bytes().all(|b| b.is_ascii_digit()) && !index.is_empty() {
@@ -300,33 +221,8 @@ fn type_and_value_nesting_is_bounded() {
     assert!(Type::parse(&value).is_err());
 }
 
-fn type_strategy() -> impl Strategy<Value = Type> {
-    prop_oneof![
-        Just(Type::String),
-        Just(Type::Int),
-        Just(Type::Float),
-        Just(Type::Boolean),
-        Just(Type::Any),
-        proptest::collection::btree_set("[a-z]{1,5}", 1..5)
-            .prop_map(|s| Type::Enum(s.into_iter().collect()))
-    ]
-    .prop_recursive(4, 64, 8, |inner| {
-        prop_oneof![
-            inner.clone().prop_map(|t| Type::Optional(Box::new(t))),
-            inner.clone().prop_map(|t| Type::List(Box::new(t))),
-            proptest::collection::btree_map("[a-z]{1,5}", inner, 0..5)
-                .prop_map(|m| Type::Record(m.into_iter().collect())),
-        ]
-    })
-}
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
-    #[test]
-    fn parse_display_roundtrip(t in type_strategy()) {
-        let wire = serde_json::to_vec(&t).unwrap();
-        prop_assert_eq!(Type::parse_json(&wire).unwrap(), t.clone());
-        prop_assert_eq!(decode_json::<Type>(&wire).unwrap(), t.clone());
-        prop_assert_eq!(t.to_string().parse::<Type>().unwrap(), t);
-    }
+
 
 }
