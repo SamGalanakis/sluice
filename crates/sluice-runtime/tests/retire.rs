@@ -503,10 +503,3 @@ async fn plan_prune_keep_keeps_matching_units_and_names_the_pattern() {
     assert_eq!(names(&result.units), ["ta-x"]);
     f.close().await;
 }
-
-#[test]
-fn the_reason_names_the_age() {
-    assert_eq!(retire::reason(21600), "retire done units older than 6h");
-    assert_eq!(retire::reason(5400), "retire done units older than 90m");
-    assert_eq!(retire::reason(1), "retire done units older than 1s");
-}

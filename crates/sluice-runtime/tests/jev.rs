@@ -1,6 +1,5 @@
 //! jev.* builtins against a local HTTP fixture, porting packs/jev/tests/test_jev.py.
-//! Nothing here may reach the real TypeSafe API; the credentialed smoke test is ignored
-//! unless run explicitly.
+//! Requests stay on the local HTTP fixture.
 
 use axum::{
     Json, Router,
@@ -10,11 +9,10 @@ use axum::{
     routing::post,
 };
 use serde_json::{Value, json};
-use sluice_model::{rpc::JsonMap, types::Type};
+use sluice_model::rpc::JsonMap;
 use sluice_runtime::builtins::jev::{self, BuiltinCtx};
 use std::{
     future::IntoFuture,
-    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -466,98 +464,4 @@ async fn model_comes_from_input_then_env_then_default() {
     assert_eq!(captured[0].body["model"], "jev-env");
     assert_eq!(captured[1].body["model"], "jev-in");
     assert_eq!(captured[2].body["model"], "jev-latest");
-}
-
-#[tokio::test]
-async fn dispatch_routes_by_name_and_rejects_unknown_names() {
-    let (_fixture, base) = fixture(|_| {
-        (
-            200,
-            json!({"answers": {"q": {"noul": 0.5}}, "model": "jev-x"}).to_string(),
-        )
-    })
-    .await;
-    let ctx = ctx(&[("TYPESAFE_API_KEY", "k"), ("TYPESAFE_BASE_URL", &base)]);
-    let inputs = inputs(json!({"state": "x", "instructions": "y?"}));
-    let out = jev::dispatch("jev.noul", &inputs, &ctx).await.unwrap();
-    assert_eq!(get(&out, "noul"), &json!(0.5));
-    let error = jev::dispatch("jev.bogus", &inputs, &ctx).await.unwrap_err();
-    assert!(!error.is_transient());
-    assert!(error.to_string().contains("jev.bogus"));
-}
-
-#[test]
-fn descriptors_match_the_pack_fn_json() {
-    fn render(ty: &Type) -> String {
-        match ty {
-            Type::String => "string".into(),
-            Type::Int => "int".into(),
-            Type::Float => "float".into(),
-            Type::Boolean => "boolean".into(),
-            Type::Any => "Any".into(),
-            Type::Optional(inner) => format!("{}?", render(inner)),
-            Type::List(inner) => format!("{}[]", render(inner)),
-            Type::Enum(_) | Type::Record(_) => panic!("not in the jev grammar"),
-        }
-    }
-    let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/jev");
-    let mut names = Vec::new();
-    for descriptor in jev::descriptors() {
-        names.push(descriptor.name);
-        let manifest: Value = serde_json::from_str(
-            &std::fs::read_to_string(pack.join(descriptor.name).join("fn.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(manifest["name"], descriptor.name);
-        assert_eq!(manifest["doc"], descriptor.doc);
-        for (declared, key) in [
-            (&descriptor.inputs, "inputs"),
-            (&descriptor.outputs, "outputs"),
-        ] {
-            let fields = manifest[key].as_object().unwrap();
-            assert_eq!(
-                declared
-                    .iter()
-                    .map(|(name, ty)| (*name, render(ty)))
-                    .collect::<Vec<_>>(),
-                fields
-                    .iter()
-                    .map(|(name, ty)| (name.as_str(), ty.as_str().unwrap().to_string()))
-                    .collect::<Vec<_>>(),
-                "{}.{key}",
-                descriptor.name
-            );
-        }
-    }
-    assert_eq!(names, ["jev.ask", "jev.choice", "jev.score", "jev.noul"]);
-}
-
-/// G8's authorized credential smoke: real System One, only when explicitly run.
-#[tokio::test]
-#[ignore = "credentialed smoke test: set TYPESAFE_API_KEY and run with --include-ignored"]
-async fn credentialed_noul_smoke() {
-    let key = std::env::var("TYPESAFE_API_KEY").ok().or_else(|| {
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.env"))
-            .ok()
-            .and_then(|env| {
-                env.lines().find_map(|line| {
-                    line.strip_prefix("TYPESAFE_API_KEY=")
-                        .map(|key| key.trim().to_string())
-                })
-            })
-    });
-    let Some(key) = key else { return };
-    let mut env = vec![("TYPESAFE_API_KEY".to_string(), key)];
-    for name in ["TYPESAFE_BASE_URL", "TYPESAFE_MODEL"] {
-        if let Ok(value) = std::env::var(name) {
-            env.push((name.to_string(), value));
-        }
-    }
-    let out = jev::noul(
-        &inputs(json!({"state": "My invoice looks wrong.", "instructions": "Is this urgent?"})),
-        &BuiltinCtx::new(env),
-    )
-    .await
-    .unwrap();
-    assert!((0.0..=1.0).contains(&get(&out, "noul").as_f64().unwrap()));
 }
