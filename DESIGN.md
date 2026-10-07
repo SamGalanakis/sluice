@@ -413,7 +413,8 @@ Top down:
 3. **The board**: first the legend (none when no unit is shown), one quiet line in meta under
    the tools, each kind with its mark: a solid line for "handoff · condition" (a value passes),
    a dotted one for "after" (order alone), a dashed one for "after, even if skipped (?)", a box
-   swatch for "unit", a sample chip "after step" for "from another unit".
+   swatch for "unit", a sample chip "after step" (drawn as the board's chips) for "from
+   another unit".
    Then the plan inputs as dashed chips, one box per unit, the plan outputs as dashed chips. A
    box (the theme's box tone, 14px radius, 16 by 18px padding, 12px on a phone, no border) is
    labelled with the unit's id in meta and lays its cards in rows by dependency depth. Live
@@ -466,12 +467,15 @@ Top down:
      up at its foot, so a card under chips stays level with its neighbours. The chip says
      what it is, as an input to its card: `after source` an after, `after unit:build` a unit
      gate, `if source/ok` and `if not source/ok` a condition, `from source/text` a handoff
-     (its output, "from" as the step's page says of an input's source), a trailing `?` and a dashed hairline when a skip counts; no arrow. 12px text at
-     500, the 5px corner and a strong hairline on half the card colour, the kind words in
-     muted ink, the source in ink. Every chip at rest looks the same; the states are
-     deliberate and apart: hovered, or lit by a trace from its source, an ink hairline on the
-     card colour; focused, the ring as well, 1px out so it clears the card; receded while
-     another source is traced, still a chip (a faint hairline, its words muted). Its
+     (its output, "from" as the step's page says of an input's source), a trailing `?` and a dashed hairline when a skip counts; no arrow. A chip is the
+     step card's pill, smaller and quieter: fully round, the card's hairline on half the card
+     colour, 2px by 10px of padding, and one voice for all its words, 12px at 500 in muted
+     ink; the kind word is plain text in that voice before the source ("after
+     fig-5226-landed"), never a second weight or colour. Every kind, and the legend's sample,
+     has the same size and spacing. Every chip at rest looks the same; the states are
+     deliberate and apart: hovered, or lit by a trace from its source, an ink hairline and ink
+     words on the card colour; focused, the ring as well, 1px out so it clears the card;
+     receded while another source is traced, still a chip (its hairline, no fill). Its
      accessible name says the kind ("after source", "Handoff from source/text") and its title
      the whole relation, and where its source is when its card is not on the board as drawn
      ("in done unit build", "not shown in this view"). A chip is a link: to the source step (in the drawer with script, its
@@ -656,10 +660,11 @@ card with a hairline, no shadow.
 The mark's generous corner, scaled down. 14px (`--radius`) for regions: unit boxes, the index's
 list, question cards, the danger card; 10px (`--radius-md`) for controls, the switcher and its
 menu, and code blocks; 5px (`--radius-sm`) for inline code, tags and menu items. A pill (999px)
-is only for the step cards, the progress bar, the inbox badge, the Types switch's track and a
-boolean value: a card is a token of work, not a panel. Plan input and output chips are dashed,
-since they are ends, not work; a relation chip ("after source") is a fact, so it takes the
-tag's 5px corner.
+is only for the step cards and the chips on the plan graph, the progress bar, the inbox badge,
+the Types switch's track and a boolean value: a card is a token of work, not a panel. On the
+graph every pill is one family: plan input and output chips are dashed cards, since they are
+ends, not work; a relation chip ("after source") is the card's pill, smaller and quieter. The
+done shelf's lines and a done unit's line are rows of a box (`--radius`), not pills.
 
 ## Components
 
@@ -690,7 +695,7 @@ tag's 5px corner.
   drawn; the mark and favicon are the owner's, and a project's own icon is the user's.
 - **Tracing**: hovering or focusing a card lights its edges and the chips to and from it; the
   other cards lose their border and fill and their text turns muted ink, the other chips keep
-  a faint hairline and mute their words. A chip traces its source; a card folded away in a done
+  their hairline and lose their fill. A chip traces its source; a card folded away in a done
   unit is stood in for by that unit's line, ringed in ink, and a unit on the closed done shelf by
   the shelf's line, ringed the same way. Tracing follows the
   keyboard's focus, never a focus given back after a click or by the drawer's close, so when
