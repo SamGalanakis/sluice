@@ -230,7 +230,7 @@ fn facts(
     for (step, finishing) in finishing {
         facts.entry(step).or_default().finishing = Some(finishing);
     }
-    let ago = |sql: &Connection, query: &str| -> sluice_store::Result<Vec<(StepId, i64)>> {
+    let ago = |sql: &Connection, query: &str| -> sluice_store::Result<Vec<(StepId, f64)>> {
         let mut q = sql.prepare(query)?;
         let rows = q
             .query_map([id.to_string()], |r| {
@@ -239,7 +239,7 @@ fn facts(
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .filter_map(|(step, secs)| secs.map(|s| (step, s)))
-            .map(|(step, secs)| Ok((step_id(step)?, secs.max(0.0) as i64)))
+            .map(|(step, secs)| Ok((step_id(step)?, secs.max(0.0))))
             .collect()
     };
     for (step, secs) in ago(

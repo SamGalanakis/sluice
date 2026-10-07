@@ -25,10 +25,11 @@ pub const BRIEF: usize = 200;
 pub struct StepFacts {
     /// `queued: needs lane 1 (56/56 held)` for a ready step short of resources.
     pub queued: Option<String>,
-    /// Seconds its earliest live run has run, for a running step.
-    pub running_for: Option<i64>,
+    /// Seconds its earliest live run has run, for a running step (fractional, so units
+    /// started within a second of each other keep one order).
+    pub running_for: Option<f64>,
     /// Seconds since its last change (status record, run start or finish).
-    pub changed_ago: Option<i64>,
+    pub changed_ago: Option<f64>,
     /// A running step whose run has submitted: it is only finishing.
     pub finishing: Option<crate::attempt::Finishing>,
 }
@@ -462,6 +463,7 @@ pub fn units_view(
     let none = StepFacts::default();
     let fact = |id: &StepId| facts.get(id).unwrap_or(&none);
     let mut view = UnitsView::default();
+    let mut exacts: Vec<f64> = vec![];
     let mut done = (0, 0);
     for (name, unit) in plan.units() {
         if let Some(selected) = selected {
@@ -504,22 +506,22 @@ pub fn units_view(
         if wanted.is_some_and(|w| !w.contains(&unit_state)) {
             continue;
         }
-        let age = if unit_state == UnitState::Running {
+        let exact = if unit_state == UnitState::Running {
             Some(
                 unit.steps
                     .iter()
                     .zip(&statuses)
                     .filter(|(_, s)| **s == StepStatus::Running)
-                    .map(|(id, _)| fact(id).running_for.unwrap_or(0))
-                    .max()
-                    .unwrap_or(0),
+                    .map(|(id, _)| fact(id).running_for.unwrap_or(0.0))
+                    .fold(0.0, f64::max),
             )
         } else {
             unit.steps
                 .iter()
                 .filter_map(|id| fact(id).changed_ago)
-                .min()
+                .reduce(f64::min)
         };
+        let age = exact.map(|secs| secs as i64);
         let prefix = format!("{name}-");
         let steps = unit
             .steps
@@ -581,11 +583,19 @@ pub fn units_view(
             finishing,
         };
         row.line = line(&row);
+        exacts.push(exact.unwrap_or(-1.0));
         view.rows.push(row);
     }
-    // Stable: equal ages keep plan order.
-    view.rows
-        .sort_by_key(|row| std::cmp::Reverse(row.age.unwrap_or(-1)));
+    // Oldest first by the exact age, not the whole seconds shown: two units started within a
+    // second of each other would otherwise swap places as the clock ticks. Stable: equal ages
+    // keep plan order.
+    let mut order: Vec<usize> = (0..view.rows.len()).collect();
+    order.sort_by(|&a, &b| exacts[b].total_cmp(&exacts[a]));
+    let mut rows: Vec<Option<UnitRow>> = std::mem::take(&mut view.rows)
+        .into_iter()
+        .map(Some)
+        .collect();
+    view.rows = order.into_iter().filter_map(|i| rows[i].take()).collect();
     if done.0 > 0 {
         view.done = Some(done);
     }
