@@ -1648,6 +1648,16 @@ input) keeps validating; such a step fails at launch with kind `Invalid` and a m
 the object to use instead (`"sol"` with effort `xhigh` →
 `{"type":"normal","model":"sol","effort":"xhigh"}`, `"fusion"` →
 `{"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}}`).
+An edit refuses a string model before it reaches a launch: `step_add`, `unit_add` (after its
+recipe's expansion and `inputs` overrides), `step_update`, `step_set_input` and `plan_patch`
+refuse (`invalid`, with that same message, and `steps.<id>.in.model: …` in `errors`) a new step,
+or a step whose fn or `model` binding they change, when it is an agent step and its `model`
+binds a literal that is not an object, or reads a plan input whose value is not one;
+`plan_set_input` refuses setting a plan input that such a step's `model` reads to one. An agent
+step is one running an agent built-in, or an open fn whose own `model` input is typed `Any` (an
+agent block that hands it on to one); a fn typing `model` otherwise (an enum of names) takes
+what it declares. A model read from another step's output is known only at launch. A stored
+step keeping a string model is left alone, as is any edit that does not change its model.
 The result's `model` is the id the run resolved and launched. `agent.review` and `decide.llm`
 run Claude's default.
 

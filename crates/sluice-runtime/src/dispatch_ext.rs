@@ -261,6 +261,12 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                             errors: errors.into_iter().map(|e| e.to_string()).collect(),
                         })?;
                         let before = plans::read_state(sql, id)?;
+                        crate::models::check_input(
+                            &ctx.plan,
+                            &request.name,
+                            request.value.as_value(),
+                            &before.inputs,
+                        )?;
                         let mut after = before.clone();
                         after.inputs.0.insert(request.name, request.value);
                         let simulated = gates::simulate_edit(
@@ -421,6 +427,7 @@ async fn edit_extension<H: ExecutionHost>(
                     },
                     edit,
                 )?;
+                crate::models::check_edit(&plan, &prepared.plan, &state.inputs)?;
                 // A dry run writes nothing: it is answered from the snapshot.
                 if prepared.dry_run {
                     return Ok(Err(prepared.preview));

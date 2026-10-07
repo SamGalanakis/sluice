@@ -733,9 +733,10 @@ run(main)
         assert!(hooks.contains(&format!("\"{event}\"")), "{event}: {hooks}");
     }
 }
-/// A stored plan still holding the retired forms (a string `model`, an `effort` input) keeps
-/// validating; each such step fails at launch with kind `Invalid` and the object to use. An
-/// object whose id the engine does not list fails the same way, naming the nearest ids.
+/// The retired forms (a string `model`, an `effort` input) validate in a plan; each such step
+/// fails at launch with kind `Invalid` and the object to use. An edit refuses a literal string
+/// model, so here the strings come from another step's outputs, known only at launch. An object
+/// whose id the engine does not list fails the same way, naming the nearest ids.
 #[test]
 fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
     let g = Gate::configured(|g| native_engine(g, "devin"));
@@ -748,15 +749,25 @@ fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
             .extend(extra.as_object().unwrap().clone());
         json!({"run":run,"in":bindings(inputs)})
     };
+    let named = |run: &str, extra: Value, name: &str| {
+        let mut step = step(run, extra);
+        step["in"]["model"] = json!({"source":format!("names/{name}")});
+        step
+    };
     g.plan(json!({
-        "run-sol": step("agent.run", json!({"engine":"codex","model":"sol","effort":"xhigh"})),
-        "codex-sol": step("agent.codex", json!({"model":"sol","effort":"high"})),
-        "devin-fusion": step("agent.devin", json!({"model":"fusion"})),
+        "names": {"run":"core.external","outputs":{"sol":"string","fusion":"string"}},
+        "run-sol": named("agent.run", json!({"engine":"codex","effort":"xhigh"}), "sol"),
+        "codex-sol": named("agent.codex", json!({"effort":"high"}), "sol"),
+        "devin-fusion": named("agent.devin", json!({}), "fusion"),
         "devin-effort": step("agent.devin", json!({"model":{"type":"normal","model":"swe-2","effort":"high"},"effort":"max"})),
         "devin-unknown": step("agent.devin", json!({"model":{"type":"normal","model":"swe-2","effort":"hgh"}})),
     }));
     let problems = g.data(json!({"command":"verify","args":{"project":g.selector()}}));
     assert_eq!(problems, json!([]), "{problems}");
+    g.rpc(
+        json!({"command":"step_set_output","args":{"project":g.selector(),"step":"names",
+        "outputs":{"sol":"sol","fusion":"fusion"},"force":true,"reason":"names"}}),
+    );
     let _lease = g.lease();
     for (step, message) in [
         (

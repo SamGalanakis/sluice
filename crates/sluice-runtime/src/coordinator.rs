@@ -2753,6 +2753,7 @@ impl OutsideEdit {
                     edit,
                 );
                 let outcome = prepared.map_err(Into::into).and_then(|prepared| {
+                    crate::models::check_edit(&plan, &prepared.plan, &state.inputs)?;
                     if prepared.dry_run {
                         return Ok(Staged::Preview(prepared.preview));
                     }
@@ -3009,6 +3010,12 @@ fn mutate_project(
             if request.edit.expected.is_some_and(|r| r != ctx.revision) {
                 return Err(conflict("plan revision changed").into());
             }
+            crate::models::check_input(
+                &ctx.plan,
+                &request.name,
+                request.value.as_value(),
+                &plans::read_state(tx.sql(), id)?.inputs,
+            )?;
             plans::set_input(
                 tx,
                 &ctx,
@@ -3039,6 +3046,7 @@ fn mutate_project(
                 },
                 PlanEdit::try_from(other)?,
             )?;
+            crate::models::check_edit(&ctx.plan, &prepared.plan, &state.inputs)?;
             if prepared.dry_run {
                 return Ok(CommandReply::Preview(prepared.preview));
             }

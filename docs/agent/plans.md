@@ -198,7 +198,12 @@ no separate `effort` input: the effort is in the object.
   the session starts. An unknown id fails the run (`agent_failure`, kind `Invalid`) with the
   nearest ids it lists; nothing else runs instead. The result's `model` is the id that ran.
 - A string `model` (`"sol"`, `"fusion"`) or an `effort` input is the retired form: the run
-  fails at launch with the object to use instead.
+  fails at launch with the object to use instead. An edit that adds an agent step with a
+  string `model`, or changes a step's model to one (`step_add`, `unit_add` with its recipe's
+  params and `inputs`, `step_update`, `step_set_input`, `plan_patch`, or `plan_set_input` on an
+  input a model reads), is refused at once with that message. In a recipe whose `model` param
+  is a name, pass the object through `unit_add`'s `inputs`:
+  `"inputs": {"work": {"model": {"type": "normal", "model": "sol", "effort": "high"}}}`.
 
 ## Units: the tag is the unit
 Steps tagged `unit:<name>` form **unit** `<name>`; a step carries at most one `unit:` tag. An
