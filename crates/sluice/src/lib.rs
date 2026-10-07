@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod doctor;
+pub mod logging;
 pub mod me;
 pub mod modes;
 

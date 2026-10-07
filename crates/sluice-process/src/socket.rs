@@ -242,10 +242,37 @@ pub async fn call_within<T: Serialize, R: DeserializeOwned>(
             seconds(limit)
         ),
     };
+    note_busy(&message);
     Err(PublicError::Busy {
         message,
         retryable: true,
     })
+}
+/// Log a request that went unanswered (a peer unreachable, silent or gone), at most once
+/// every 10 s per process with how many more there were since, so a guardian polling a
+/// restarting coordinator writes a line, not one per poll. Only the long-running modes
+/// install a subscriber; elsewhere this writes nothing.
+pub fn note_busy(message: &str) {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    static SINCE: AtomicUsize = AtomicUsize::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let last = LAST.load(Ordering::Relaxed);
+    if last != 0 && now < last + 10 {
+        SINCE.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    if LAST
+        .compare_exchange(last, now.max(1), Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        SINCE.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let more = SINCE.swap(0, Ordering::Relaxed);
+    tracing::warn!(%message, more, "request unanswered");
 }
 /// Who listens on a socket: a run's control socket is its guardian's.
 fn peer(path: &Path) -> &'static str {

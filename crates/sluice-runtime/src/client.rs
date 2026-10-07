@@ -72,13 +72,15 @@ impl CoordinatorClient {
         tokio::time::timeout(limit, exchange)
             .await
             .unwrap_or_else(|_| {
+                let message = format!(
+                    "the coordinator at {} did not answer within {} s; it may still be \
+                     starting or adopting runs, and the request may still take effect",
+                    self.path.display(),
+                    limit.as_secs()
+                );
+                socket::note_busy(&message);
                 Err(PublicError::Busy {
-                    message: format!(
-                        "the coordinator at {} did not answer within {} s; it may still be \
-                         starting or adopting runs, and the request may still take effect",
-                        self.path.display(),
-                        limit.as_secs()
-                    ),
+                    message,
                     retryable: true,
                 })
             })

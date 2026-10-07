@@ -153,10 +153,18 @@ pub async fn dispatch_ext<H: ExecutionHost>(
             )?
         }
         CommandRequest::UnitAdd(request) => {
-            edit_extension(broker, PlanEdit::UnitAdd(request)).await?
+            let mut log = crate::coordinator::EditLog::start();
+            let author = request.edit.author.clone();
+            let reply = edit_extension(broker, PlanEdit::UnitAdd(request), &mut log).await;
+            log.finish(Some(("unit_add", author.as_deref())), &reply);
+            reply?
         }
         CommandRequest::PlanPrune(request) => {
-            edit_extension(broker, PlanEdit::PlanPrune(request)).await?
+            let mut log = crate::coordinator::EditLog::start();
+            let author = request.edit.author.clone();
+            let reply = edit_extension(broker, PlanEdit::PlanPrune(request), &mut log).await;
+            log.finish(Some(("plan_prune", author.as_deref())), &reply);
+            reply?
         }
         CommandRequest::PlanHistory { project, since_rev } => data(
             broker
@@ -348,6 +356,7 @@ fn cached_resources(
 async fn edit_extension<H: ExecutionHost>(
     broker: &Coordinator<H>,
     edit: PlanEdit,
+    log: &mut crate::coordinator::EditLog,
 ) -> Result<CommandReply, PublicError> {
     let (project, age) = match &edit {
         PlanEdit::UnitAdd(request) => (request.project.clone(), None),
@@ -367,9 +376,8 @@ async fn edit_extension<H: ExecutionHost>(
             broker.plan_cache(),
         );
         let mark = broker.writer().row_mark();
-        let prepared = broker
-            .reads()
-            .snapshot(move |sql| {
+        let prepared = log
+            .preparing(broker.reads().snapshot(move |sql| {
                 let id = messages::resolve_project(sql, &project)?;
                 let signatures = catalog.for_project(Some(id));
                 let (revision, plan) = cache.compiled(sql, id, &catalog, &signatures)?;
@@ -444,54 +452,67 @@ async fn edit_extension<H: ExecutionHost>(
                     effect,
                     prune,
                 }))
-            })
+            }))
             .await
             .map_err(public)?;
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(preview) => return Ok(CommandReply::Preview(preview)),
         };
-        let reply = broker
+        let (reply, held) = broker
             .writer()
             .write(RetrySafety::NonIdempotent, move |tx| {
-                crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
-                Ok(Some(match prepared {
-                    Prepared::Staged {
-                        id,
-                        witness,
-                        effect,
-                        prune,
-                    } => {
-                        if !witness.holds_since(tx, id, mark)? {
-                            return Ok(None);
-                        }
-                        let (effect, plan) = effect?;
-                        let result = plans::commit_effect(tx, *effect)?;
-                        (crate::coordinator::edit_reply(result, None, prune), plan)
-                    }
-                    Prepared::Direct(id, prepared, evidence) => {
-                        let prune = prepared.prune.clone();
-                        let result = if let Some(evidence) = evidence {
-                            plans::apply_prune(tx, id, *prepared, &evidence)?
-                        } else {
-                            plans::apply_edit(tx, id, *prepared)?
-                        };
-                        (crate::coordinator::edit_reply(result, None, prune), None)
-                    }
-                }))
+                let started = std::time::Instant::now();
+                let committed = commit_prepared(tx, prepared, mark)?;
+                Ok((committed, started.elapsed()))
             })
             .await?;
+        log.writer += held;
         if let Some((reply, plan)) = reply {
             if let Some(plan) = plan {
                 broker.plan_cache().put(plan);
             }
             return Ok(reply);
         }
+        log.retries += 1;
     }
     // The last try applies the edit directly, so it never comes back for another.
     Err(PublicError::Storage {
         message: "plan edit was not committed".into(),
     })
+}
+/// Commit a prepared unit_add or plan_prune, or None when it was staged from rows that
+/// have changed since `mark` (nothing is written).
+fn commit_prepared(
+    tx: &mut sluice_store::WriteTransaction<'_>,
+    prepared: Prepared,
+    mark: sluice_store::RowMark,
+) -> sluice_store::Result<Option<(CommandReply, Option<crate::coordinator::CachedPlan>)>> {
+    crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
+    Ok(Some(match prepared {
+        Prepared::Staged {
+            id,
+            witness,
+            effect,
+            prune,
+        } => {
+            if !witness.holds_since(tx, id, mark)? {
+                return Ok(None);
+            }
+            let (effect, plan) = effect?;
+            let result = plans::commit_effect(tx, *effect)?;
+            (crate::coordinator::edit_reply(result, None, prune), plan)
+        }
+        Prepared::Direct(id, prepared, evidence) => {
+            let prune = prepared.prune.clone();
+            let result = if let Some(evidence) = evidence {
+                plans::apply_prune(tx, id, *prepared, &evidence)?
+            } else {
+                plans::apply_edit(tx, id, *prepared)?
+            };
+            (crate::coordinator::edit_reply(result, None, prune), None)
+        }
+    }))
 }
 /// A unit_add or plan_prune prepared from a read snapshot: worked out down to its rows
 /// for the writer to commit while the snapshot holds, or (an age-filtered prune, or the

@@ -35,10 +35,19 @@ fn dispatch() -> Result<(), PublicError> {
             });
         }
     };
+    let mode = cli.mode.name();
+    let logged = sluice::logging::init(mode, &home);
     let runtime = sluice_runtime::coordinator::executor().map_err(|e| PublicError::Storage {
         message: e.to_string(),
     })?;
-    runtime.block_on(modes::run(cli.mode, home))
+    let result = runtime.block_on(modes::run(cli.mode, home));
+    if logged {
+        match &result {
+            Ok(()) => tracing::info!(mode, "sluice stopped"),
+            Err(error) => tracing::error!(mode, %error, "sluice stopped on an error"),
+        }
+    }
+    result
 }
 fn main() -> ExitCode {
     match dispatch() {

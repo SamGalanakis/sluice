@@ -1347,6 +1347,16 @@ spaces), and says whether retiring is on and when it last retired how many steps
 
 `sluice <mode>`; errors print as JSON on stderr with a non-zero exit.
 
+`coordinator`, `serve`, `loop` and `guardian` also log to stderr (their unit's user journal),
+one line per event at info unless `SLUICE_LOG` (an EnvFilter, e.g. `warn` or
+`info,sluice_store=debug`) says otherwise; `RUST_LOG` is not read, and no other mode logs. At
+info: the start (mode, release, home) and stop, the startup adoption pass (runs live, adopted,
+deferred), each committed or refused plan edit (project, rev, author, op count, prepare and
+writer ms, how many times it was prepared again) and each retiring round. At warn: a write
+transaction that held the writer over 1 s (naming the function that sent it), a busy answer, a
+request a peer left unanswered (at most one line every 10 s per process), a socket read or
+write that timed out, and connections dropped for want of a permit.
+
 | mode | |
 |---|---|
 | `serve [--no-runner] [--port P] [--host H]` | dashboard, MCP and HTTP tools; takes the scheduler lease unless `--no-runner`; loopback only. Host and port default to config.json's `http`, else 127.0.0.1:3065 |

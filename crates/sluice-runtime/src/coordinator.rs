@@ -134,6 +134,39 @@ tokio::task_local! {
 }
 /// Held watches per run that leave the connection pool; more count against it.
 const WATCHES_PER_RUN: usize = 2;
+/// Connections dropped because every connection permit was taken: logged at most once
+/// every 10 s, with how many were dropped since the last line.
+#[derive(Default)]
+struct Refused {
+    since: usize,
+    logged: Option<std::time::Instant>,
+}
+impl Refused {
+    fn note(&mut self) {
+        self.since += 1;
+        if self
+            .logged
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
+        {
+            return;
+        }
+        tracing::warn!(
+            dropped = self.since,
+            "connections dropped: every coordinator connection is taken"
+        );
+        self.since = 0;
+        self.logged = Some(std::time::Instant::now());
+    }
+}
+/// What an adoption pass did: the nonterminal runs it found, those it adopted and those
+/// whose adoption it deferred to a later pass (the rest another pass was adopting, or it
+/// stopped before them).
+#[derive(Debug, Default)]
+struct AdoptionPass {
+    runs: usize,
+    adopted: usize,
+    deferred: usize,
+}
 /// Per-run adoptions in flight at once during an adoption pass.
 pub const ADOPTION_PARALLELISM: usize = 16;
 /// Connections the coordinator serves at once.
@@ -1070,6 +1103,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         let encoded = serde_json::to_value(&command).map_err(storage)?;
         let refresh = matches!(command, CommandRequest::AcquireLease(_));
         let mut tries = 0;
+        let mut log = EditLog::start();
         let reply = loop {
             let catalog = self.inner.catalog.clone();
             let plans = self.inner.plans.clone();
@@ -1078,20 +1112,37 @@ impl<H: ExecutionHost> Coordinator<H> {
             // has changed by the time the writer takes it, it is prepared again, and after
             // EDIT_TRIES such tries it is prepared in the writer.
             let outside = if tries < EDIT_TRIES {
-                OutsideEdit::prepare(self, &command).await
+                log.preparing(OutsideEdit::prepare(self, &command)).await
             } else {
                 None
             };
-            let (id, command) = (id.clone(), command.clone());
+            let (id, mutation) = (id.clone(), command.clone());
+            let held = Arc::new(std::sync::Mutex::new(Duration::ZERO));
+            let timer = held.clone();
             let attempt = self
                 .callback_attempt(
                     id.clone(),
                     key.clone(),
                     encoded.clone(),
                     refresh,
-                    move |tx| callback_mutation(tx, &id, command, &catalog, &plans, &home, outside),
+                    move |tx| {
+                        let started = std::time::Instant::now();
+                        let out =
+                            callback_mutation(tx, &id, mutation, &catalog, &plans, &home, outside);
+                        *timer.lock().unwrap_or_else(|e| e.into_inner()) = started.elapsed();
+                        out
+                    },
                 )
-                .await?;
+                .await;
+            log.writer += *held.lock().unwrap_or_else(|e| e.into_inner());
+            let attempt = match attempt {
+                Ok(attempt) => attempt,
+                Err(error) => {
+                    let error = Err(error);
+                    log.finish(sluice_model::edit::edit_label(&command), &error);
+                    return error;
+                }
+            };
             match attempt {
                 Some((reply, plan)) => {
                     // The plan an edit committed, kept rather than freed in the writer.
@@ -1100,9 +1151,15 @@ impl<H: ExecutionHost> Coordinator<H> {
                     }
                     break reply;
                 }
-                None => tries += 1,
+                None => {
+                    tries += 1;
+                    log.retries += 1;
+                }
             }
         };
+        let reply = Ok(reply);
+        log.finish(sluice_model::edit::edit_label(&command), &reply);
+        let reply = reply?;
         if matches!(reply, CommandReply::Project(_)) {
             artifacts::recover(self.writer(), self.home())
                 .await
@@ -1199,31 +1256,52 @@ impl<H: ExecutionHost> Coordinator<H> {
     /// was prepared from holds; after EDIT_TRIES tries that found it changed, prepared and
     /// committed in the writer.
     async fn plan_edit(&self, command: CommandRequest) -> Result<CommandReply, PublicError> {
+        let mut log = EditLog::start();
+        let reply = self.plan_edit_logged(&command, &mut log).await;
+        log.finish(sluice_model::edit::edit_label(&command), &reply);
+        reply
+    }
+    async fn plan_edit_logged(
+        &self,
+        command: &CommandRequest,
+        log: &mut EditLog,
+    ) -> Result<CommandReply, PublicError> {
         let catalog = self.inner.catalog.clone();
         let home = self.home().to_owned();
         for _ in 0..EDIT_TRIES {
-            let Some(outside) = OutsideEdit::prepare(self, &command).await else {
+            let Some(outside) = log.preparing(OutsideEdit::prepare(self, command)).await else {
                 break;
             };
             let catalog = catalog.clone();
-            if let Some((reply, plan)) = self
+            let (committed, held) = self
                 .writer()
                 .write(RetrySafety::NonIdempotent, move |tx| {
-                    commit_outside(tx, &catalog, outside)
+                    let started = std::time::Instant::now();
+                    Ok((commit_outside(tx, &catalog, outside)?, started.elapsed()))
                 })
-                .await?
-            {
+                .await?;
+            log.writer += held;
+            if let Some((reply, plan)) = committed {
                 if let Some(plan) = plan {
                     self.inner.plans.put(plan);
                 }
                 return Ok(reply);
             }
+            log.retries += 1;
         }
-        self.writer()
+        let command = command.clone();
+        let (reply, held) = self
+            .writer()
             .write(RetrySafety::NonIdempotent, move |tx| {
-                mutate_project(tx, &catalog, &home, command)
+                let started = std::time::Instant::now();
+                Ok((
+                    mutate_project(tx, &catalog, &home, command)?,
+                    started.elapsed(),
+                ))
             })
-            .await
+            .await?;
+        log.writer += held;
+        Ok(reply)
     }
     async fn helper(
         &self,
@@ -1560,6 +1638,7 @@ impl<H: ExecutionHost> Coordinator<H> {
     pub async fn adopt_bounded(&self, parallelism: usize) -> Result<(), PublicError> {
         self.adopt_until(parallelism, &CancellationToken::new())
             .await
+            .map(|_| ())
     }
     /// Each run's adoption touches only that run (its run dir, unit, cgroup and
     /// attempt rows) and never launches, so runs adopt concurrently. A run's
@@ -1570,7 +1649,7 @@ impl<H: ExecutionHost> Coordinator<H> {
         &self,
         parallelism: usize,
         stop: &CancellationToken,
-    ) -> Result<(), PublicError> {
+    ) -> Result<AdoptionPass, PublicError> {
         let home = self.home().to_path_buf();
         let home_id = self.home_id();
         let attempts=self.reads().snapshot(move|sql|{
@@ -1584,6 +1663,11 @@ impl<H: ExecutionHost> Coordinator<H> {
             }Ok(out)
         }).await.map_err(|e|e.into_public(true))?;
         let mut running = JoinSet::new();
+        let deferred = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut pass = AdoptionPass {
+            runs: attempts.len(),
+            ..AdoptionPass::default()
+        };
         for attempt in attempts {
             while running.len() >= parallelism.max(1) {
                 adoption_ended(running.join_next().await);
@@ -1596,6 +1680,8 @@ impl<H: ExecutionHost> Coordinator<H> {
                 continue;
             };
             let broker = self.clone();
+            let deferred = deferred.clone();
+            pass.adopted += 1;
             running.spawn(async move {
                 let _claim = claim;
                 let link = LocalLink {
@@ -1603,6 +1689,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     capability: attempt.capability.clone(),
                 };
                 if let Err(e) = adopt_attempt(&attempt, &link, broker.host()).await {
+                    deferred.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     tracing::warn!(run=%attempt.identity.run,error=%e,"adoption deferred");
                 }
             });
@@ -1610,7 +1697,9 @@ impl<H: ExecutionHost> Coordinator<H> {
         while let Some(ended) = running.join_next().await {
             adoption_ended(Some(ended));
         }
-        Ok(())
+        pass.deferred = deferred.load(std::sync::atomic::Ordering::Relaxed);
+        pass.adopted -= pass.deferred.min(pass.adopted);
+        Ok(pass)
     }
     pub async fn serve(&self, stop: CancellationToken) -> Result<(), PublicError> {
         use std::os::unix::fs::PermissionsExt;
@@ -1628,15 +1717,28 @@ impl<H: ExecutionHost> Coordinator<H> {
         // admission, starts only after it.
         self.inner.gate.send_replace(Gate::Adopting);
         let serving = stop.child_token();
+        tracing::info!(socket = %path.display(), "coordinator listening; adopting live runs");
         let mut startup = tokio::spawn({
             let broker = self.clone();
             let stop = serving.clone();
-            async move { broker.adopt_until(ADOPTION_PARALLELISM, &stop).await }
+            async move {
+                let started = std::time::Instant::now();
+                let pass = broker.adopt_until(ADOPTION_PARALLELISM, &stop).await?;
+                tracing::info!(
+                    live = pass.runs,
+                    adopted = pass.adopted,
+                    deferred = pass.deferred,
+                    ms = started.elapsed().as_millis() as u64,
+                    "startup adoption done"
+                );
+                Ok::<(), PublicError>(())
+            }
         });
         let mut adopting = true;
         let mut scheduler_task = None;
         let mut failure = None;
         let mut clients = JoinSet::new();
+        let mut refused = Refused::default();
         loop {
             tokio::select! {
                 _=serving.cancelled()=>break,
@@ -1651,9 +1753,14 @@ impl<H: ExecutionHost> Coordinator<H> {
                     }
                 },
                 Some(result)=clients.join_next()=>{if let Err(e)=result{tracing::error!(error=%e,"coordinator client task failed");}},
-                accepted=listener.accept()=>{let (stream,_)=accepted.map_err(storage)?;let Ok(permit)=self.inner.connections.clone().try_acquire_owned()else{drop(stream);continue;};let broker=self.clone();let stop=serving.child_token();clients.spawn(async move{if let Err(e)=broker.connection(stream,stop,permit).await{tracing::debug!(error=%e,"socket client closed");}});}
+                accepted=listener.accept()=>{let (stream,_)=accepted.map_err(storage)?;let Ok(permit)=self.inner.connections.clone().try_acquire_owned()else{drop(stream);refused.note();continue;};let broker=self.clone();let stop=serving.child_token();clients.spawn(async move{if let Err(e)=broker.connection(stream,stop,permit).await{tracing::debug!(error=%e,"socket client closed");}});}
             }
         }
+        tracing::info!(
+            failed = failure.is_some(),
+            requests = clients.len(),
+            "coordinator stopping"
+        );
         // Requests still waiting for the pass are refused, not left waiting.
         self.inner.gate.send_if_modified(|gate| {
             let adopting = *gate == Gate::Adopting;
@@ -1696,10 +1803,14 @@ impl<H: ExecutionHost> Coordinator<H> {
         let request: Request<Value> =
             tokio::time::timeout(Duration::from_secs(5), socket::read_frame(&mut stream))
                 .await
-                .map_err(storage)?
+                .map_err(|elapsed| {
+                    tracing::warn!("a client connected but sent no request within 5 s");
+                    storage(elapsed)
+                })?
                 .map_err(storage)?;
         let route = Route::of(&request.command);
         let request_id = request.request_id.clone();
+        let name = request_name(&request.command).to_owned();
         // A request that cannot be decoded is answered with its error, never dropped.
         let incoming = match Incoming::decode(request.protocol, &request) {
             Ok(incoming) => incoming,
@@ -1723,6 +1834,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     }),
                 );
                 let result = answer(&mut stream, &stop, scope, work).await;
+                note_busy(&name, &request_id, &result);
                 write_reply(
                     &mut stream,
                     &RpcReply {
@@ -1812,6 +1924,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 } else {
                     answer(&mut stream, &stop, scope, handler).await
                 };
+                note_busy(&name, &request_id, &result);
                 write_reply(
                     &mut stream,
                     &Reply {
@@ -1831,6 +1944,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     REQUEST.scope(scope.clone(), async move { broker.command(command).await }),
                 );
                 let reply = answer(&mut stream, &stop, scope, work).await;
+                note_busy(&name, &request_id, &reply);
                 let result = match reply {
                     Ok(reply) => RpcResult::Ok(Box::new(reply)),
                     Err(e) => RpcResult::Error(e),
@@ -2230,7 +2344,27 @@ fn step_identity(id: &AttemptKey) -> sluice_store::Result<attempts::AttemptIdent
 async fn write_reply<T: Serialize>(stream: &mut UnixStream, reply: &T) -> std::io::Result<()> {
     tokio::time::timeout(Duration::from_secs(5), socket::write_frame(stream, reply))
         .await
-        .map_err(std::io::Error::other)?
+        .map_err(|elapsed| {
+            tracing::warn!("a reply could not be written within 5 s; the client was dropped");
+            std::io::Error::other(elapsed)
+        })?
+}
+/// What a socket request asks for, for the log: its command, method or runtime name.
+fn request_name(command: &Value) -> &str {
+    ["command", "method", "runtime"]
+        .iter()
+        .find_map(|tag| command.get(*tag).and_then(Value::as_str))
+        .unwrap_or("request")
+}
+/// A busy answer is logged: something the coordinator could not do in time.
+fn note_busy<T>(
+    name: &str,
+    request: &sluice_model::rpc::RequestId,
+    result: &Result<T, PublicError>,
+) {
+    if let Err(PublicError::Busy { message, .. }) = result {
+        tracing::warn!(request = name, id = %request.0, %message, "answered busy");
+    }
 }
 
 fn require_invocation(
@@ -2464,6 +2598,97 @@ fn callback_mutation(
 
 /// How many times a plan edit is prepared outside the writer before it is prepared in it.
 pub(crate) const EDIT_TRIES: usize = 3;
+
+/// What one plan edit cost, logged once it is answered: the time spent preparing it from
+/// read snapshots, the time its transactions held the writer, and how many times what it
+/// was prepared from had changed before the writer took it.
+pub(crate) struct EditLog {
+    started: std::time::Instant,
+    pub(crate) prepare: Duration,
+    pub(crate) writer: Duration,
+    pub(crate) retries: usize,
+}
+impl EditLog {
+    pub(crate) fn start() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            prepare: Duration::ZERO,
+            writer: Duration::ZERO,
+            retries: 0,
+        }
+    }
+    /// Time a preparation.
+    pub(crate) async fn preparing<T>(&mut self, work: impl std::future::Future<Output = T>) -> T {
+        let started = std::time::Instant::now();
+        let out = work.await;
+        self.prepare += started.elapsed();
+        out
+    }
+    /// One line for the answered edit (`label` is its name and author): info when it committed or was refused,
+    /// debug for a dry run.
+    pub(crate) fn finish(
+        self,
+        label: Option<(&str, Option<&str>)>,
+        reply: &Result<CommandReply, PublicError>,
+    ) {
+        let Some((kind, author)) = label else {
+            return;
+        };
+        let author = author.unwrap_or("-");
+        let (prepare_ms, writer_ms, total_ms) = (
+            self.prepare.as_millis() as u64,
+            self.writer.as_millis() as u64,
+            self.started.elapsed().as_millis() as u64,
+        );
+        let retries = self.retries;
+        let edit = match reply {
+            Ok(CommandReply::Edit(edit)) => edit,
+            Ok(CommandReply::Inputs(inputs)) => &inputs.edit,
+            Ok(CommandReply::Pruned(pruned)) => &pruned.edit,
+            Ok(CommandReply::Preview(_)) => {
+                tracing::debug!(kind, author, prepare_ms, total_ms, "plan edit previewed");
+                return;
+            }
+            Ok(_) => {
+                tracing::info!(
+                    kind,
+                    author,
+                    prepare_ms,
+                    writer_ms,
+                    retries,
+                    total_ms,
+                    "plan edit"
+                );
+                return;
+            }
+            Err(error) => {
+                tracing::info!(
+                    kind,
+                    author,
+                    %error,
+                    prepare_ms,
+                    writer_ms,
+                    retries,
+                    total_ms,
+                    "plan edit refused"
+                );
+                return;
+            }
+        };
+        tracing::info!(
+            kind,
+            project = %edit.project.name,
+            rev = %edit.rev,
+            author,
+            ops = edit.preview.ops.len(),
+            prepare_ms,
+            writer_ms,
+            retries,
+            total_ms,
+            "plan edit"
+        );
+    }
+}
 
 /// A plan edit prepared from a read snapshot, before its writer transaction: compiled,
 /// patched, validated, simulated and worked out down to the rows it writes, so the writer

@@ -234,6 +234,29 @@ struct Request<T> {
     operation: Operation<T>,
     reply: oneshot::Sender<std::result::Result<T, PublicError>>,
     safety: RetrySafety,
+    /// What the transaction is: the function that submitted it.
+    what: &'static str,
+}
+/// A transaction that holds the one writer longer than this is logged.
+pub const SLOW_TRANSACTION: Duration = Duration::from_secs(1);
+/// The function that wrote a closure, from its type name:
+/// `sluice_runtime::coordinator::Coordinator<OsHost>::plan_edit::{{closure}}::{{closure}}`
+/// is `sluice_runtime::coordinator::Coordinator::plan_edit`.
+pub fn submitter(type_name: &str) -> String {
+    let mut out = String::with_capacity(type_name.len());
+    let mut depth = 0usize;
+    for c in type_name.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            c if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    while let Some(trimmed) = out.strip_suffix("::{{closure}}") {
+        out.truncate(trimmed.len());
+    }
+    out
 }
 impl<T: Send + 'static> Job for Request<T> {
     fn run(
@@ -242,8 +265,18 @@ impl<T: Send + 'static> Job for Request<T> {
         changes: &watch::Sender<ChangeNotification>,
         rows: &RowLog,
     ) {
+        let started = std::time::Instant::now();
         let result = transact(connection, self.operation, changes, rows)
             .map_err(|error| error.into_public(self.safety.is_idempotent()));
+        let held = started.elapsed();
+        if held > SLOW_TRANSACTION {
+            tracing::warn!(
+                what = %submitter(self.what),
+                held_ms = held.as_millis() as u64,
+                ok = result.is_ok(),
+                "a write transaction held the writer for over 1 s"
+            );
+        }
         let _ = self.reply.send(result);
     }
 }
@@ -393,6 +426,7 @@ impl Writer {
             operation: Box::new(operation),
             reply,
             safety,
+            what: std::any::type_name::<F>(),
         })));
         result
             .await

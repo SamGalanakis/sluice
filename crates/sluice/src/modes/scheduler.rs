@@ -12,6 +12,7 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
         )
         .await?;
         let _lease = client.acquire_scheduler().await?;
+        tracing::info!("holding the scheduler lease");
         sluice_runtime::client::wait_for_signal().await
     })
 }

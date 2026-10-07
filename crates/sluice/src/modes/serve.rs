@@ -17,6 +17,7 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
             .or(config.host)
             .unwrap_or_else(|| DEFAULT_HOST.to_owned());
         let port = port.or(config.port).unwrap_or(DEFAULT_PORT);
+        tracing::info!(%host, port, runner = !no_runner, "serving the dashboard");
         sluice_web::http::serve(home, host, port, no_runner).await
     })
 }

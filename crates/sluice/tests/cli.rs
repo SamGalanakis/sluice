@@ -344,6 +344,66 @@ fn a_coordinator_exits_once_its_home_is_removed() {
     assert!(status.success(), "{status}");
 }
 
+/// What a coordinator writes to stderr from start to a SIGTERM, with `SLUICE_LOG` set to
+/// `level` (unset when None).
+fn coordinator_stderr(level: Option<&str>) -> String {
+    let home = ScratchHome::new().unwrap();
+    let log = tempfile::NamedTempFile::new().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sluice"));
+    command
+        .env("SLUICE_HOME", home.path())
+        .env_remove("SLUICE_LOG")
+        .env_remove("JOURNAL_STREAM")
+        .arg("coordinator")
+        .stdout(Stdio::null())
+        .stderr(log.reopen().unwrap());
+    if let Some(level) = level {
+        command.env("SLUICE_LOG", level);
+    }
+    let mut coordinator = command.spawn().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::os::unix::net::UnixStream::connect(home.path().join("coordinator.sock")).is_err() {
+        if coordinator.try_wait().unwrap().is_some() || std::time::Instant::now() > deadline {
+            let _ = coordinator.kill();
+            panic!(
+                "coordinator never served: {}",
+                std::fs::read_to_string(log.path()).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let killed = Command::new("/usr/bin/kill")
+        .args(["-TERM", &coordinator.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success());
+    let status = coordinator.wait().unwrap();
+    assert!(status.success(), "{status}");
+    std::fs::read_to_string(log.path()).unwrap()
+}
+
+#[test]
+fn a_coordinator_logs_its_start_and_stop_to_stderr_at_info() {
+    let logged = coordinator_stderr(None);
+    let started = logged
+        .lines()
+        .find(|line| line.contains("sluice started"))
+        .unwrap_or_else(|| panic!("no startup line in {logged:?}"));
+    assert!(started.contains("INFO"), "{started}");
+    assert!(started.contains("mode=\"coordinator\""), "{started}");
+    assert!(started.contains("release="), "{started}");
+    assert!(started.contains("home="), "{started}");
+    assert!(logged.contains("startup adoption done"), "{logged}");
+    assert!(logged.contains("sluice stopped"), "{logged}");
+}
+
+#[test]
+fn sluice_log_warn_keeps_a_quiet_coordinator_silent() {
+    let logged = coordinator_stderr(Some("warn"));
+    assert!(!logged.contains("sluice started"), "{logged}");
+    assert!(!logged.contains("INFO"), "{logged}");
+}
+
 #[tokio::test]
 async fn dispatched_commands_round_trip_through_a_coordinator() {
     let home = ScratchHome::new().unwrap();
