@@ -257,7 +257,7 @@ pub struct UnitView {
     /// A done unit a search matched in: drawn open, its matching cards in view.
     pub open: bool,
 }
-/// A part of the board under one label ("Running", "Stopped", "Waiting"; none under Plan
+/// A part of the board under one label ("Stopped", "Running", "Waiting"; none under Plan
 /// order): its units in layers by dependency depth, so the lines between them run down.
 pub struct Band<'a> {
     pub label: &'static str,
@@ -771,14 +771,14 @@ impl ProjectView {
     pub fn href(&self) -> String {
         self.project.href()
     }
-    /// The board as drawn. Live first: the running units, then the stopped (a failure, or
-    /// held up by one), then the waiting; Plan order: every unit not done in one band. Each band
+    /// The board as drawn. Live first: the stopped units (a failure, or
+    /// held up by one), then the running, then the waiting; Plan order: every unit not done in one band. Each band
     /// lays its units in layers by dependency depth among themselves, a layer ordered after the
     /// units it follows (so lines run down and seldom cross), ties in the view's order. Every
     /// done unit is on one shelf at the end.
     pub fn layout(&self) -> Layout<'_> {
         let bands: Vec<(&'static str, Vec<&UnitView>)> = if self.order == "live" {
-            [("Running", 0), ("Stopped", 1), ("Waiting", 2)]
+            [("Stopped", 1), ("Running", 0), ("Waiting", 2)]
                 .into_iter()
                 .map(|(label, band)| {
                     let units = self.units.iter().filter(|u| u.band() == band).collect();

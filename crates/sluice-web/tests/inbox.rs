@@ -584,6 +584,8 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     );
     assert!(html.contains("Nobody is waiting <span class=\"n\">3</span>"));
     assert!(html.contains("<summary>Close all 3</summary>"));
+    assert!(html.contains("data-confirm-title=\"Close all 3 questions?\""));
+    assert!(html.contains("data-keep>Keep them</button>"));
     assert!(html.contains("Close these 3 questions?"));
     // the nav's Inbox counts what the page lists as yours: not the ones nobody waits on
     assert_eq!(page.nav.inbox, page.for_you().len());

@@ -134,13 +134,12 @@ impl SettingsState {
             .snapshot(move |c| {
                 let shared = views::load_snapshot(c, functions)?;
                 let project = projects::resolve(c, &ProjectSelector::Id(id))?;
-                let blocker =
-                    projects::deletion_blocker(c, &ProjectSelector::Id(id))?.or_else(|| {
-                        guard
-                            .check(id)
-                            .err()
-                            .map(|e| e.into_public(true).to_string())
-                    });
+                let blocker = projects::live_work_blocker(c, id)?.or_else(|| {
+                    guard
+                        .check(id)
+                        .err()
+                        .map(|e| e.into_public(true).to_string())
+                });
                 let declarations = resources::declarations(c, id)?;
                 let held = resources::held(c, id)?;
                 let leases = resources::leases(c, id)?;
@@ -823,7 +822,6 @@ async fn upload(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Confirmation {
-    confirm_name: String,
     expected_settings_rev: Revision,
 }
 async fn delete(
@@ -842,20 +840,56 @@ async fn delete(
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
         serde_json::from_value(
-            serde_json::json!({"confirm_name":fields.get("confirm_name"),"expected_settings_rev":fields.get("expected_settings_rev").and_then(|s| s.parse::<u64>().ok())}),
+            serde_json::json!({"expected_settings_rev":fields.get("expected_settings_rev").and_then(|s| s.parse::<u64>().ok())}),
         )
     };
     let confirmation = match confirmation {
         Ok(c) => c,
-        Err(_) => return error_response(bad("exact name and settings revision required")),
+        Err(_) => return error_response(bad("settings revision required")),
+    };
+    let view = match state.snapshot(id).await {
+        Ok(view) => view,
+        Err(e) => return error_response(e),
+    };
+    if view.project.settings_rev != confirmation.expected_settings_rev {
+        return error_response(PublicError::Conflict {
+            message: "project settings changed".into(),
+            current_rev: Some(view.project.settings_rev),
+        });
+    }
+    if let Err(e) = state.deletion_guard.check(id) {
+        return error_response(e.into_public(true));
+    }
+    if let Some(reason) = view.blocker {
+        return error_response(bad(reason));
+    }
+    let project = if view.project.archived {
+        view.project
+    } else {
+        match state
+            .commands
+            .update(
+                id,
+                UpdateProject {
+                    archived: Some(true),
+                    expected_settings_rev: Some(confirmation.expected_settings_rev),
+                    author: "owner".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(project) => project,
+            Err(e) => return error_response(e),
+        }
     };
     match state
         .commands
         .delete(
             id,
             projects::DeleteProject {
-                confirm_name: confirmation.confirm_name,
-                expected_settings_rev: confirmation.expected_settings_rev,
+                confirm_name: project.name.to_string(),
+                expected_settings_rev: project.settings_rev,
                 author: "owner".into(),
             },
         )

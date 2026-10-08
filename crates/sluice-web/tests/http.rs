@@ -532,6 +532,7 @@ async fn owner_actions_send_the_displayed_revision_and_author_through_the_socket
         panic!()
     };
     assert_eq!(cancel.expected_rev, Some(sluice_model::ids::Revision(7)));
+    assert_eq!(cancel.reason, "continue");
 }
 #[tokio::test]
 async fn the_board_mermaid_is_the_plan_view_text() {

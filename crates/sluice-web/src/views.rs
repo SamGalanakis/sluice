@@ -143,6 +143,24 @@ pub struct RunningView {
     #[serde(default)]
     pub said: String,
 }
+impl RunningView {
+    pub fn link_name(&self) -> String {
+        let title = self
+            .title
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim();
+        let title = crate::markdown::plain(title);
+        let short: String = title.chars().take(72).collect();
+        if short.is_empty() || short == self.step {
+            self.step.clone()
+        } else {
+            format!("{} {short}", self.step)
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectView {
     pub id: ProjectId,

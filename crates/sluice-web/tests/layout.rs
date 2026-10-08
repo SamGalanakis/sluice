@@ -172,3 +172,27 @@ async fn runner_line_follows_the_scheduler_lease_and_is_versioned() {
     lease(None).await.unwrap();
     assert!(state.snapshot(None).await.unwrap().runner_stopped);
 }
+
+#[test]
+fn home_running_link_has_a_short_name_and_the_full_doc_as_description() {
+    let mut snapshot = fixture();
+    snapshot.projects[0].running.push(RunningView {
+        step: "watch-main-tests".into(),
+        title: "Watch main tests\n\nA long explanation that should be a description. ".repeat(5),
+        started: String::new(),
+        quiet: false,
+        quiet_after: QUIET_AFTER,
+        run_id: String::new(),
+        activity: None,
+        said: String::new(),
+    });
+    let html = HomeView::new(&snapshot).body().unwrap();
+    assert!(
+        html.as_str()
+            .contains("aria-label=\"watch-main-tests Watch main tests\"")
+    );
+    assert!(
+        html.as_str()
+            .contains("aria-description=\"Watch main tests")
+    );
+}

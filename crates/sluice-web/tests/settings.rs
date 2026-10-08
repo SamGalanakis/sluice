@@ -120,12 +120,12 @@ impl Fixture {
     async fn get_page(&self) -> (u16, String) {
         request(self.router(), "GET", &self.path(), String::new()).await
     }
-    async fn delete(&self, name: &str, rev: u64) -> (u16, String) {
+    async fn delete(&self, rev: u64) -> (u16, String) {
         request(
             self.router(),
             "POST",
             &format!("{}/delete", self.path()),
-            json!({"confirm_name":name,"expected_settings_rev":rev}).to_string(),
+            json!({"expected_settings_rev":rev}).to_string(),
         )
         .await
     }
@@ -404,17 +404,19 @@ async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
     assert!(state.1.cursor.0 > 0);
 }
 #[tokio::test]
-async fn deletion_requires_archive_exact_name_current_revision_and_no_active_work() {
+async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_live_work() {
     let f = Fixture::new().await;
     let (_, html) = request(f.router(), "GET", &f.path(), String::new()).await;
-    assert!(html.contains("archive the project before deleting"));
-    assert!(html.contains("id=\"delete-button\" disabled"));
-    assert_eq!(f.delete("first", 1).await.0, 400);
-    assert_eq!(f.post("archived", "true", "", 1).await.0, 200);
-    assert_eq!(f.delete("wrong", 2).await.0, 400);
+    assert!(html.contains("Delete first?"));
+    assert!(!html.contains("confirm-name"));
+    assert!(!html.contains("data-disabled=\"true\""));
     let id = f.id;
     f.writer.write(RetrySafety::NonIdempotent,move |tx| {tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status) VALUES (?1,'s',0,'{}','running')",[id.to_string()])?;tx.changed(Some(id),"status");Ok(())}).await.unwrap();
-    assert_eq!(f.delete("first", 2).await.0, 400);
+    assert_eq!(f.delete(1).await.0, 400);
+    assert!(!f.project().await.archived);
+    let (_, blocked) = f.get_page().await;
+    assert!(blocked.contains("id=\"delete-button\" data-disabled=\"true\""));
+    assert!(blocked.contains("Open the plan"));
     let view = f.state.snapshot(id).await.unwrap();
     assert_eq!(view.blocker.as_deref(), Some("project has running steps"));
     f.writer
@@ -428,9 +430,9 @@ async fn deletion_requires_archive_exact_name_current_revision_and_no_active_wor
         })
         .await
         .unwrap();
-    assert_eq!(f.post("name", "second", "", 2).await.0, 200);
-    assert_eq!(f.delete("first", 2).await.0, 409);
-    assert_eq!(f.delete("first", 3).await.0, 400);
+    assert_eq!(f.post("name", "second", "", 1).await.0, 200);
+    assert_eq!(f.delete(1).await.0, 409);
+    assert!(!f.project().await.archived);
     let response = f
         .router()
         .oneshot(
@@ -443,7 +445,7 @@ async fn deletion_requires_archive_exact_name_current_revision_and_no_active_wor
         .unwrap();
     let mut stream = response.into_body().into_data_stream();
     stream.next().await.unwrap().unwrap();
-    assert_eq!(f.delete("second", 3).await.0, 303);
+    assert_eq!(f.delete(2).await.0, 303);
     assert_eq!(
         request(f.router(), "GET", &f.path(), String::new()).await.0,
         404
@@ -498,7 +500,7 @@ async fn coordinator_guard_is_visible_and_rechecked_in_delete_command() {
         f.state.snapshot(f.id).await.unwrap().blocker.as_deref(),
         Some("guardian still owns a process")
     );
-    assert_eq!(f.delete("first", 2).await.0, 409);
+    assert_eq!(f.delete(2).await.0, 409);
     assert_eq!(f.project().await.name.as_str(), "first");
 }
 #[tokio::test]

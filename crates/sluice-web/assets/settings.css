@@ -55,7 +55,7 @@
 .settings-danger { border:1px solid color-mix(in srgb,var(--status-attention) 55%,var(--border)); padding:20px; border-radius:var(--radius); background:color-mix(in srgb,var(--status-attention) 5%,var(--background)); }
 .settings-danger h2 { color:var(--status-attention); }
 .settings-danger button { color:var(--status-attention); border-color:var(--status-attention); }
-.settings-danger button:disabled { opacity:.6; cursor:not-allowed; }
+.settings-danger button:disabled { opacity:1; cursor:not-allowed; color:var(--muted-foreground); border-color:var(--border); background:var(--muted); }
 .settings-feedback { min-height:1.3em; min-width:0; max-width:100%; overflow-wrap:anywhere; white-space:normal; }
 @media(max-width:720px) {
  .setting-row { grid-template-columns:minmax(0,1fr); gap:6px; }

@@ -15,7 +15,7 @@ colors:
   hairline: "oklch(0.308 0.112 262 / 11%)"
   hairline-strong: "oklch(0.308 0.112 262 / 24%)"
   ring: "oklch(0.617 0.2 257)"
-  edge: "oklch(0.46 0.07 258 / 70%)"
+  edge: "oklch(0.46 0.07 258 / 74%)"
   box: "oklch(0.945 0.024 240)"
   nav: "oklch(0.308 0.112 262)"
   nav-ink: "oklch(0.975 0.017 88)"
@@ -446,7 +446,7 @@ Top down:
    page's stream restarts under the new query; Apply is for a page without script only. Escape
    or the `x` clears the search. With a search a meta line under the tools says how many steps
    match ("12 steps match “land”", "No step matches “x”.", a polite status). Live first draws
-   the running units, then the stopped, then the waiting, each band laid out by dependency
+   the stopped units, then the running, then the waiting, each band laid out by dependency
    depth; Plan order draws every unit not done in one band by depth, in the plan's order where
    depth ties. Either way every done unit is on one shelf at the end. The search keeps the
    steps whose id, doc or unit id holds every word of it (any case, any order); a unit with
@@ -455,8 +455,7 @@ Top down:
 3. **The board**: the plan as a graph that reads top down with no key. Every mark explains
    itself: a card is a step (its glyph and id), a box is a unit of several steps, a line with
    an arrowhead is "this, then that", a quiet label names each band.
-   - **Bands**: under Live first, "Running" (a unit with a step running or outside), then
-     "Stopped" (a step failed or stale, or held up by one), then "Waiting" (the rest not
+   - **Bands**: under Live first, "Stopped" (a step failed or stale, or held up by one), then "Running" (a unit with a step running or outside), then "Waiting" (the rest not
      done), each label an `h2` under the page's `h1`, set in meta (13px, 500, muted ink) at the
      column's left edge, 32px after
      the band before. Under Plan order there is one band and no label. Show and the search
@@ -645,7 +644,7 @@ The step reads top down:
   retried), Retry with a folded "Feedback for retry" textarea
   (succeeded, failed, stale; on a failed step Retry is the primary button and comes first; on
   a cancelled one it stays a plain button),
-  Cancel (pending or running), 14px apart; then a link "Thread · n messages" ("Thread · no
+  Cancel (pending or running), 14px apart; it opens the shared confirmation dialog, names the run and its duration, says Retry starts it over, and offers an optional reason, "Cancel the run" and "Keep running"; then a link "Thread · n messages" ("Thread · no
   messages yet") and a gold "n
   awaiting reply" tag on the same line, the feedback's fold on a line of its own under them;
   a failure that says how to resume ("To resume it, bind the step's session input…") under
@@ -732,7 +731,7 @@ body's font, its body in muted ink. A question with a `ui` draws its OpenUI prog
 fields and buttons) above a folded "Answer in words instead". The questions nobody is waiting
 on (their askers stopped) follow under "Nobody is waiting n" with "Close all n" at its right,
 which asks once ("Close these 6 questions? Closed, they leave this list and no one can answer
-them." and a primary "Close them" in a small card under it) before it closes them:
+them." with "Close them" and "Keep them" in the shared confirmation dialog) before it closes them:
 one list on the card colour, a line each (a chevron, the title at 600, "project · why" in
 meta) that opens to the body, and Close at its end. The inbox then lists "Unread notes n" with
 "Mark all read" (a read mark that does not go through is one quiet meta line under the help,
@@ -816,7 +815,7 @@ units stay until an edit removes them", then "Last retired <time>: N steps (rev 
 retired yet."), then two rows: "Retire done units after", a 9rem field (placeholder "Off") with
 "hours" beside it, empty meaning off; and "Never retire", the keep patterns in a monospace
 field. Activity: Pause project and Archive project switches. Delete project, in a bordered danger card:
-it explains what goes, refuses until the project is archived, and needs the current name typed.
+one Delete project button opens the shared confirmation dialog, naming the project and what goes, with "Delete <name>" in ink and "Keep it". Confirmation archives first if needed, then deletes with the known name and current revision. Live work disables the button in muted ink and fill, with a reason and a link to the plan.
 
 ## Elevation & Depth
 
@@ -916,3 +915,7 @@ its facts and its thread link; the Types switch keeps its size on a 44px target.
 - Don't repeat on the page what another part of it already says.
 - Don't use uppercase labels, kickers or decorative motion; motion is the drawer's slide, the
   running spinner and short fades.
+
+### Confirmation dialogs
+
+Cancel, Delete project and Questions' Close all use one native `<dialog>`. It is centred, at most 480px wide with 16px beside it on a phone, on the card colour with the region corner, strong hairline, lift and scrim. Its title is Public Sans 18/24 at 650, its copy the body voice. Button rows wrap and each target is at least 44px high. Focus starts on the keep button, stays in the dialog, Escape closes it, and closing returns focus to its opener. Without script, a details fold shows the same confirmation form inline. Cancel offers a reason field; Delete uses an ink-filled danger button, leaving coral to questions. Running card borders hold at least 3:1 in every theme; wait-lines hold at least 3.4:1 on a unit box.

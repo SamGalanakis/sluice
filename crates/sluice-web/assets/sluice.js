@@ -621,6 +621,7 @@ function setupDrawer(host) {
       location.hash = `step:${encodeURIComponent(a.dataset.step || a.dataset.opens)}`;
     };
     const escape = (evt) => {
+      if (document.querySelector("dialog[open]")) return;
       if (evt.key === "Tab" && currentStep() && OVER.matches) {
         const items = $$("a[href], button, input, select, textarea, [tabindex='0']", drawer).filter(shown);
         const first = items[0], last = items.at(-1);
@@ -635,7 +636,7 @@ function setupDrawer(host) {
       + ".node, .scrim, [data-step]";
     const away = (evt) => {
       const t = evt.target;
-      if (!currentStep() || evt.button !== 0 || !(t instanceof Element)) return;
+      if (document.querySelector("dialog[open]") || !currentStep() || evt.button !== 0 || !(t instanceof Element)) return;
       if (drawer.contains(t) || t.closest(INTERACTIVE)) return;
       if (getSelection && !getSelection().isCollapsed) return;
       window.sluiceClose();

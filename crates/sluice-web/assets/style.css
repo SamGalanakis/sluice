@@ -57,7 +57,7 @@
   --border: light-dark(oklch(0.308 0.112 262 / 11%), oklch(0.955 0.022 88 / 11%));
   --border-strong: light-dark(oklch(0.308 0.112 262 / 24%), oklch(0.955 0.022 88 / 24%));
   --input: light-dark(oklch(0.308 0.112 262 / 22%), oklch(0.955 0.022 88 / 20%));
-  --edge: light-dark(oklch(0.46 0.07 258 / 70%), oklch(0.8 0.05 240 / 52%));  /* 3.2:1 or more on the page, a card and a unit box */
+  --edge: light-dark(oklch(0.46 0.07 258 / 74%), oklch(0.8 0.05 240 / 52%));  /* at least 3.4:1 on a unit box */
   --edge-head: light-dark(oklch(0.46 0.07 258 / 78%), oklch(0.8 0.05 240 / 72%));
   --status-idle: light-dark(oklch(0.6 0.025 262), oklch(0.66 0.03 262));
   --status-success: light-dark(oklch(0.53 0.14 150), oklch(0.76 0.16 150));
@@ -100,7 +100,7 @@
   --border: oklch(0.3 0.07 40 / 12%);
   --border-strong: oklch(0.3 0.07 40 / 26%);
   --input: oklch(0.3 0.07 40 / 24%);
-  --edge: oklch(0.44 0.06 60 / 68%);
+  --edge: oklch(0.44 0.06 60 / 72%);
   --edge-head: oklch(0.44 0.06 60 / 78%);
   --status-idle: oklch(0.58 0.015 20);
   --status-success: oklch(0.52 0.13 140);
@@ -138,7 +138,7 @@
   --border: oklch(0.3 0.07 158 / 12%);
   --border-strong: oklch(0.3 0.07 158 / 26%);
   --input: oklch(0.3 0.07 158 / 24%);
-  --edge: oklch(0.42 0.05 150 / 68%);
+  --edge: oklch(0.42 0.05 150 / 72%);
   --edge-head: oklch(0.42 0.05 150 / 78%);
   --status-idle: oklch(0.58 0.025 140);
   --status-success: oklch(0.52 0.14 138);
@@ -176,7 +176,7 @@
   --border: oklch(0.27 0.025 230 / 12%);
   --border-strong: oklch(0.27 0.025 230 / 26%);
   --input: oklch(0.27 0.025 230 / 24%);
-  --edge: oklch(0.42 0.04 205 / 68%);
+  --edge: oklch(0.42 0.04 205 / 72%);
   --edge-head: oklch(0.42 0.04 205 / 78%);
   --status-idle: oklch(0.59 0.02 220);
   --status-success: oklch(0.52 0.13 150);
@@ -214,7 +214,7 @@
   --border: oklch(0.945 0.02 90 / 11%);
   --border-strong: oklch(0.945 0.02 90 / 24%);
   --input: oklch(0.945 0.02 90 / 20%);
-  --edge: oklch(0.8 0.06 280 / 53%);
+  --edge: oklch(0.8 0.06 280 / 54%);
   --edge-head: oklch(0.8 0.06 280 / 72%);
   --status-idle: oklch(0.68 0.035 280);
   --status-success: oklch(0.78 0.15 150);
@@ -680,7 +680,7 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .node.is-pending.is-next .sid { color: var(--foreground); }
 .node.is-skipped { border-style: dashed; }
 .node.is-running, .node.is-external {
-  border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
+  border-color: color-mix(in srgb, var(--accent-ink) 78%, var(--card)); }
 /* a failed card is the loudest state on the board without coral: a solid ink pill, its id,
    caption and glyph in the card's colour (the glyph's cut in ink); the open step's ring stands
    apart from it, two pixels out */
@@ -1071,7 +1071,7 @@ a.log-place:hover { color: var(--foreground); text-decoration: underline; }
    the row's right end so the sentence keeps the width */
 table.log td.what { position: relative; min-width: 14rem; width: 100%; padding-right: 52px; }
 .log-what { margin: 0; padding: 3px 0; min-height: 18px; color: var(--foreground);
-            overflow-wrap: anywhere; }
+            overflow-wrap: anywhere; max-width: var(--measure); }
 .log-x { margin-left: 2px; padding: 0 5px; border-radius: 999px; background: var(--muted);
          color: var(--muted-foreground); font-size: 11.5px; font-weight: 600;
          font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1241,18 +1241,27 @@ dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
 .stopped-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
                 gap: 8px 16px; }
 .stopped-head h2 { margin: 0; }
-/* "Close all n" asks once: a button that opens its confirmation under the head */
-.close-all { position: relative; }
-.close-all > summary { display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px;
-                       list-style: none; cursor: pointer; border: 1px solid var(--input);
-                       border-radius: var(--radius-md); background: var(--card); font-weight: 500; }
-.close-all > summary::-webkit-details-marker { display: none; }
-.close-all > summary:hover, .close-all[open] > summary { background: var(--muted); }
-.close-confirm { position: absolute; right: 0; top: calc(100% + 6px); z-index: 10;
-                 width: min(320px, calc(100vw - 2 * var(--gutter))); padding: 12px 14px;
-                 border: 1px solid var(--border); border-radius: var(--radius-md);
-                 background: var(--card); box-shadow: var(--lift); }
-.close-confirm p { margin: 0 0 10px; font-size: 14px; line-height: 20px; }
+/* Shared confirmation, inline without script and modal with it. */
+.confirm-flow:not(details) > form { display: none; }
+.confirm-flow > summary { display: inline-flex; align-items: center; min-height: 32px;
+  padding: 5px 12px; border: 1px solid var(--input); border-radius: var(--radius-md);
+  background: var(--card); cursor: pointer; list-style: none; font-weight: 500; }
+.confirm-flow > summary::-webkit-details-marker { display: none; }
+.confirm-flow > summary[data-disabled] { pointer-events: none; opacity: .5; }
+.confirm-flow > form { padding: 16px; background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-top: 8px; }
+.confirmation { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
+  margin: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--card); color: var(--foreground); box-shadow: var(--lift); }
+.confirmation::backdrop { background: var(--scrim); }
+.confirmation h2 { font: 650 18px/24px var(--font-sans); margin: 0 0 12px; overflow-wrap: anywhere; }
+.confirm-copy { margin-bottom: 16px; overflow-wrap: anywhere; }
+.confirm-reason { display: grid; gap: 6px; font-size: 14px; }
+.confirm-reason textarea { width: 100%; min-width: 0; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.confirm-actions button { min-height: 44px; overflow-wrap: anywhere; max-width: 100%; }
+button.danger { background: var(--foreground); border-color: var(--foreground); color: var(--card); }
+button.danger:hover { background: var(--muted-foreground); }
 .stopped > .meta, .notes > .meta, .q-group > .meta { margin: 4px 0 10px; max-width: var(--measure); }
 .stopped-list { list-style: none; margin: 0; padding: 0; background: var(--card);
                 border: 1px solid var(--border); border-radius: var(--radius); }
@@ -1286,7 +1295,7 @@ details.read-now .item { opacity: .85; }
 .missing-links a { display: inline-flex; align-items: center; min-height: 32px; }
 @media (max-width: 720px) {
   .q-actions button, .q-close button, .crumbs a, .missing-links a, details.pane > summary,
-  details.kinds > summary, .stopped-list summary, .close-all > summary, .close-confirm button, .mark-all { min-height: 44px; }
+  details.kinds > summary, .stopped-list summary, .confirm-flow > summary, .confirm-flow > button, .mark-all { min-height: 44px; }
   .stopped-list summary { padding-top: 10px; }
   dl.a-facts { grid-template-columns: minmax(0, 1fr); }
   dl.a-facts dd { margin-bottom: 4px; }
@@ -1370,7 +1379,7 @@ details.read-now .item { opacity: .85; }
   table.log td.what { grid-column: 1 / -1; min-width: 0; margin-top: 2px; padding-right: 48px; }
   .log-json > summary { top: 0; right: 0; }
   table.log td.num { text-align: left; }
-  form.filters label.field { flex: 1 1 100%; }
+  form.filters label.field { flex: 1 1 100%; display: grid; grid-template-columns: 3.5rem minmax(0, 1fr); }
   form.filters label.field input { flex: 1 1 auto; width: auto; min-width: 0; height: 44px; }
   .bar { width: 120px; }
 }

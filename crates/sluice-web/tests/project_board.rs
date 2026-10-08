@@ -655,7 +655,7 @@ fn line(edges: &[Value], from: &str, to: &str) -> Option<(bool, bool)> {
 
 /// The plan reads without a key: a one-step unit is its card once, a wait between units is a
 /// line in the edges data (a satisfied one is not), nothing on the board needs a legend or an
-/// arrow count, and Live first draws the running band, then the waiting by depth, then one
+/// arrow count, and Live first draws stopped, running, then waiting by depth, then one
 /// shelf of done units; a card says in words what it waits for, for a phone.
 #[tokio::test]
 async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
@@ -666,6 +666,7 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
             json!({"steps":{
                 "k1":{"run":"custom.open","tags":["unit:k1"]},
                 "old":{"run":"custom.open","tags":["unit:old"]},
+                "stopped":{"run":"custom.open","tags":["unit:stopped"]},
                 "k2":{"run":"custom.open","after":["k1"],"tags":["unit:k2"]},
                 "k3":{"run":"custom.open","after":["k2"],"tags":["unit:k3"]},
                 "k4":{"run":"custom.open","after":["k3","k1"],"tags":["unit:k4"]},
@@ -677,6 +678,7 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
             &[
                 ("k1", "succeeded"),
                 ("old", "succeeded"),
+                ("stopped", "failed"),
                 ("k2", "running"),
                 ("lane-fork", "succeeded"),
                 ("pkg", "succeeded"),
@@ -752,9 +754,11 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
         board.contains("id=\"n-k1\" class=\"node card is-succeeded\" "),
         "{board}"
     );
-    // Live first: running, then waiting by depth (k4 a layer under k3), then one done shelf
+    // Live first: stopped, running, waiting by depth (k4 under k3), then one done shelf
     let at = |s: &str| plane.find(s).unwrap_or_else(|| panic!("no {s}: {plane}"));
     let order = [
+        "<h2 class=\"band-h\">Stopped</h2>",
+        "id=\"unit-stopped\"",
         "<h2 class=\"band-h\">Running</h2>",
         "id=\"unit-k2\"",
         "<h2 class=\"band-h\">Waiting</h2>",
@@ -769,20 +773,17 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
     assert!(plane[at("id=\"unit-k3\"")..at("id=\"unit-k4\"")].contains("<div class=\"layer\">"));
     assert_eq!(plane.matches("class=\"done-shelf\"").count(), 1);
     assert!(plane.contains("3 done units · 4 steps"), "{plane}");
-    // the bar draws no sliver for nothing: no failed segment
-    assert!(!between(&html, "<div class=\"sumline\">", "</p>").contains("b-failed"));
+    assert!(between(&html, "<div class=\"sumline\">", "</p>").contains("b-failed"));
     // Plan order: one band without a label, the same single shelf at the end
     let (_, html) = f.get(&format!("{base}?order=plan")).await;
     let plane = between(&html, "<div class=\"plane\"", "</sluice-board");
     assert!(!plane.contains("band-h"), "{plane}");
     assert_eq!(plane.matches("class=\"done-shelf\"").count(), 1);
     assert!(plane.find("id=\"unit-k4\"").unwrap() < plane.find("class=\"done-shelf\"").unwrap());
-    // an empty view says why
+    // Attention keeps the stopped unit and leaves out running work
     let (_, html) = f.get(&format!("{base}?show=attention")).await;
-    assert!(
-        html.contains("<p class=\"empty\">Nothing needs attention.</p>"),
-        "{html}"
-    );
+    assert!(html.contains("id=\"unit-stopped\""), "{html}");
+    assert!(!html.contains("id=\"unit-k2\""), "{html}");
     // a plan without steps has nothing to search and says so
     let (_, html) = f.get(&format!("/projects/id/{}", f.plain)).await;
     assert!(html.contains("The plan has no steps yet."), "{html}");

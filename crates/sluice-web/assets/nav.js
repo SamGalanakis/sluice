@@ -159,3 +159,61 @@ tick();
 setInterval(tick, 5000);
 new MutationObserver(tick).observe(document.querySelector("main") ?? document.body,
   { childList: true, subtree: true, characterData: true });
+
+const confirmation = document.querySelector('#confirmation');
+let confirming;
+function confirmations() {
+  for (const details of document.querySelectorAll('details.confirm-flow')) {
+    const flow = document.createElement('div');
+    for (const attr of details.attributes) flow.setAttribute(attr.name, attr.value);
+    flow.append(...details.childNodes);
+    details.replaceWith(flow);
+    const summary = flow.querySelector(':scope > summary');
+    if (!summary) continue;
+    const button = document.createElement('button');
+    for (const attr of summary.attributes) button.setAttribute(attr.name, attr.value);
+    button.type = 'button';
+    button.textContent = summary.textContent;
+    button.disabled = summary.hasAttribute('data-disabled');
+    summary.replaceWith(button);
+    button.addEventListener('click', () => {
+      if (button.disabled || confirmation.open) return;
+      const form = flow.querySelector('form');
+      const place = document.createComment('confirmation form');
+      form.replaceWith(place);
+      confirming = { form, place, button, title: flow.dataset.confirmTitle };
+      document.querySelector('#confirmation-title').textContent = flow.dataset.confirmTitle;
+      document.querySelector('#confirmation-body').replaceChildren(form);
+      form.querySelector('.confirm-copy').id = 'confirmation-copy';
+      confirmation.setAttribute('aria-describedby', 'confirmation-copy');
+      confirmation.showModal();
+      form.querySelector('[data-keep]').focus();
+    });
+  }
+}
+confirmation?.addEventListener('close', () => {
+  if (!confirming) return;
+  const { form, place, button, title } = confirming;
+  form.querySelector('.confirm-copy').removeAttribute('id');
+  if (place.isConnected) place.replaceWith(form);
+  else form.remove();
+  confirming = null;
+  const opener = button.isConnected ? button : [...document.querySelectorAll(".confirm-flow")].find(flow => flow.dataset.confirmTitle === title)?.querySelector("button");
+  opener?.focus();
+});
+document.addEventListener('click', event => {
+  const keep = event.target.closest('[data-keep]');
+  if (!keep) return;
+  if (confirmation.open && confirmation.contains(keep)) confirmation.close();
+  else keep.closest('details.confirm-flow').open = false;
+});
+confirmations();
+new MutationObserver(confirmations).observe(document.body, { childList: true, subtree: true });
+
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Tab' || !confirmation?.open) return;
+  const controls = [...confirmation.querySelectorAll('button:not(:disabled), textarea, input:not([type=hidden])')];
+  const first = controls[0], last = controls.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});

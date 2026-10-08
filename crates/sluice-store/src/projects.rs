@@ -1040,7 +1040,11 @@ pub fn deletion_blocker(c: &Connection, selector: &ProjectSelector) -> Result<Op
     if !project.archived {
         return Ok(Some("archive the project before deleting it".into()));
     }
-    let id = project.project_id.to_string();
+    live_work_blocker(c, project.project_id)
+}
+/// Live work that prevents deletion even when the dashboard will archive first.
+pub fn live_work_blocker(c: &Connection, project: ProjectId) -> Result<Option<String>> {
+    let id = project.to_string();
     for (sql, reason) in [
         (
             "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND status='running')",

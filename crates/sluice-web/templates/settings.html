@@ -86,15 +86,12 @@
 <button type="submit" role="switch" aria-checked="{{ view.project.archived }}" aria-label="Archive project">{% if view.project.archived %}Unarchive{% else %}Archive{% endif %}</button><span class="settings-feedback" role="status"></span></form>
 </section>
 <section class="settings-danger" aria-labelledby="danger-heading"><h2 id="danger-heading">Delete project</h2>
-<p>This permanently removes the plan, messages, history, functions, secrets and artifacts.</p>
-<!--delete-guard--><div id="delete-guard" data-allowed="{{ view.blocker.is_none() }}"><p id="delete-explanation" class="setting-help">{% if let Some(reason) = view.blocker %}Cannot delete: {{ reason }}.{% else %}Archived with no active work. Type the exact current name below.{% endif %}</p></div><!--/delete-guard-->
-<form method="post" action="{{ view.path() }}/delete" id="delete-form"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<label for="confirm-name">Current project name: <span data-current-name>{{ view.project.name }}</span></label><input id="confirm-name" name="confirm_name" autocomplete="off" aria-describedby="delete-explanation delete-feedback">
-<div class="setting-actions"><button type="submit" id="delete-button"{% if view.blocker.is_some() %} disabled{% endif %}>Delete project</button><span id="delete-feedback" class="settings-feedback setting-error" role="status"></span></div></form></section>
+<!--delete-guard--><div id="delete-guard" data-allowed="{{ view.blocker.is_none() }}"><p id="delete-explanation" class="setting-help">{% if let Some(reason) = view.blocker %}Cannot delete: {{ reason }}. <a href="/projects/id/{{ view.project.project_id }}">Open the plan</a>.{% endif %}</p></div><!--/delete-guard-->
+<details class="confirm-flow" data-confirm-title="Delete {{ view.project.name }}?"><summary id="delete-button"{% if view.blocker.is_some() %} data-disabled="true"{% endif %}>Delete project</summary><form method="post" action="{{ view.path() }}/delete" id="delete-form"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><p class="confirm-copy">This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.</p><div class="confirm-actions"><button class="danger">Delete {{ view.project.name }}</button><button type="button" data-keep>Keep it</button></div><span id="delete-feedback" class="settings-feedback setting-error" role="status"></span></form></details></section>
 </div>
 <script type="module">
 const base = location.pathname;
-let name = document.querySelector('#settings-live').dataset.name;
+
 let saving = false;
 const refresh = () => {
  const live = document.querySelector('#settings-live');
@@ -107,13 +104,16 @@ const refresh = () => {
   form.querySelector('button').setAttribute('aria-checked',String(on));
   form.querySelector('button').textContent = field === 'paused' ? (on ? 'Resume' : 'Pause') : (on ? 'Unarchive' : 'Archive');
  }
- if (name !== live.dataset.name) { document.querySelector('#confirm-name').value = ''; name = live.dataset.name; }
- document.querySelector('[data-current-name]').textContent = name;
+ const deletion = document.querySelector('#delete-form');
+ if (deletion.closest('dialog[open]') && deletion.querySelector('[name=expected_settings_rev]').value !== live.dataset.revision) deletion.closest('dialog').close();
+ document.querySelector('#delete-button').closest('.confirm-flow').dataset.confirmTitle = 'Delete ' + live.dataset.name + '?';
+ deletion.querySelector('.confirm-copy').textContent = 'This permanently removes the plan, messages, history, functions, secrets and artifacts. This cannot be undone.';
+ deletion.querySelector('.danger').textContent = 'Delete ' + live.dataset.name;
  for (const input of document.querySelectorAll('[name=expected_settings_rev]')) input.value = live.dataset.revision;
- document.querySelector('#delete-button').disabled = saving || document.querySelector('#delete-guard').dataset.allowed !== 'true' || document.querySelector('#confirm-name').value !== name;
+ document.querySelector('#delete-button').toggleAttribute('data-disabled', saving || document.querySelector('#delete-guard').dataset.allowed !== 'true');
+ document.querySelector('#delete-button').disabled = saving || document.querySelector('#delete-guard').dataset.allowed !== 'true';
 };
 document.addEventListener('datastar-signal-patch', refresh);
-document.querySelector('#confirm-name').addEventListener('input', refresh);
 document.querySelector('[data-preview]').hidden = false;
 document.querySelector('[data-upload]').hidden = false;
 function patch(doc, ids) {

@@ -182,9 +182,9 @@ async fn fixture() -> (tempfile::TempDir, Writer, views::DashboardState, Project
 }
 #[tokio::test]
 async fn router_uses_injected_exact_signatures_and_owner_commands() {
-    let (_home, _writer, state, project) = fixture().await;
+    let (_home, writer, state, project) = fixture().await;
     let fake = Arc::new(Fake::default());
-    let app = views::dashboard_router(state)
+    let app = views::dashboard_router(state.clone())
         .layer(Extension(Registry(Arc::new(Exact))))
         .layer(Extension(Commands(fake.clone())));
     let path = format!("/projects/id/{project}/steps/work");
@@ -221,12 +221,57 @@ async fn router_uses_injected_exact_signatures_and_owner_commands() {
             .unwrap();
         assert_eq!(response.status(), status);
     }
+    {
+        let calls = fake.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].project, project);
+        assert_eq!(calls[0].action, Action::Retry);
+        assert_eq!(calls[0].author, "owner");
+        assert_eq!(calls[0].message, "Try again");
+    }
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='running' WHERE project_id=?1",
+                [project.to_string()],
+            )?;
+            tx.changed(Some(project), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("Cancel work?"));
+    assert!(html.contains("Keep running"));
+    assert!(!html.contains("<p class=\"d-doc\"></p>"));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{path}/actions"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "action=cancel&revision=1&message=Stop+to+replan",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let calls = fake.0.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].project, project);
-    assert_eq!(calls[0].action, Action::Retry);
-    assert_eq!(calls[0].author, "owner");
-    assert_eq!(calls[0].message, "Try again");
+    assert_eq!(calls[1].action, Action::Cancel);
+    assert_eq!(calls[1].message, "Stop to replan");
 }
 #[tokio::test]
 async fn deleted_or_old_names_and_missing_steps_are_not_rendered() {
@@ -308,6 +353,18 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
     let step = &step;
     assert_eq!(step.runs.len(), 1);
     assert_eq!(step.runs[0].id, live);
+    let mut ended = step.clone();
+    ended.runs[0].finished = "2026-10-05T12:14:00Z".into();
+    ended.runs[0].seconds = Some(8040.0);
+    let ended_html = ended.body().unwrap();
+    assert!(ended_html.as_str().contains(" · took 2h 14m"));
+    assert!(!ended_html.as_str().contains("took took"));
+    let mut timed = step.clone();
+    timed.runs[0].seconds = Some(19200.0);
+    assert_eq!(
+        timed.cancel_prompt(),
+        "Its 5h 20m run stops; Retry starts it over."
+    );
     assert_eq!(step.inputs[0].value, "frozen attempted value");
     assert_eq!(step.outputs[0].value, "true");
     assert_eq!(step.outputs[0].source, "Submitted so far");

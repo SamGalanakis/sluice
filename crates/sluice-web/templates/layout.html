@@ -28,4 +28,4 @@
 <main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="@get('{{ stream }}', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: 'cleanup'})"{% endif %}>
 <p id="stream-state" class="stream-state attn" role="status" aria-live="polite" style="display:none" data-show="$stale">Updates paused. Reconnecting… <button type="button" class="stream-retry">Reconnect</button></p>
 {{ body|safe }}
-</main><script type="module" src="{{ nav_url }}"></script></body></html>
+</main><dialog id="confirmation" class="confirmation" aria-labelledby="confirmation-title" data-ignore-morph><h2 id="confirmation-title"></h2><div id="confirmation-body"></div></dialog><script type="module" src="{{ nav_url }}"></script></body></html>

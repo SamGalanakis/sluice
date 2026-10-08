@@ -826,6 +826,18 @@ impl StepView {
     pub fn last_run(&self) -> Option<&RunView> {
         self.runs.last()
     }
+    pub fn cancel_prompt(&self) -> String {
+        let duration = self
+            .last_run()
+            .filter(|r| r.finished.is_empty())
+            .and_then(|r| r.seconds)
+            .map(short_duration);
+        if let Some(duration) = duration {
+            format!("Its {duration} run stops; Retry starts it over.")
+        } else {
+            "It stops; Retry starts it over.".to_owned()
+        }
+    }
     pub fn cancellable(&self) -> bool {
         matches!(self.status.as_str(), "pending" | "running")
     }
