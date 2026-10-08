@@ -605,9 +605,14 @@ impl EngineAdapter for CommitEngine {
         self.fake.close().await
     }
 }
-pub async fn transient_commits(engine_name: &str) {
+pub async fn transient_commits(
+    engine_name: &str,
+    failure_message: &str,
+    expected_text: &str,
+    reenter: bool,
+) {
     let root = Scratch::new();
-    let cfg = config(&root.0, engine_name);
+    let mut cfg = config(&root.0, engine_name);
     repo(&cfg.cwd);
     let baseline = git(&cfg.cwd, &["rev-parse", "HEAD"]);
     let run_id = cfg.run;
@@ -616,7 +621,7 @@ pub async fn transient_commits(engine_name: &str) {
     let mut frames = happy();
     frames[2].observation.error = Some(EngineError {
         kind: EngineErrorKind::Transient,
-        message: "capacity after commit".into(),
+        message: failure_message.into(),
         retry_at: None,
     });
     frames.push(frame(
@@ -637,6 +642,13 @@ pub async fn transient_commits(engine_name: &str) {
         directory: Some(dir.clone()),
         ..Default::default()
     };
+    if reenter {
+        cfg.retry.owner = RetryOwner::OuterHelper;
+        let error = run(cfg.clone(), &mut engine, &mut host).await.unwrap_err();
+        assert_eq!(error.kind, FailureKind::Transient);
+        assert_eq!(error.message, failure_message);
+        cfg.internal_attempt += 1;
+    }
     let result = run(cfg, &mut engine, &mut host).await.unwrap();
     let facts = result.git.unwrap();
     assert_eq!(facts.head_before, baseline);
@@ -647,6 +659,23 @@ pub async fn transient_commits(engine_name: &str) {
     assert_eq!(cp.attempt, attempt);
     assert_eq!(cp.internal_attempt, 2);
     assert_eq!(cp.session.as_deref(), Some("acceptance-session"));
+    let continuations: Vec<_> = engine
+        .fake
+        .commands
+        .iter()
+        .filter_map(|command| match command {
+            EngineCommand::DeliverText {
+                id: InputId::Continue { attempt: 2 },
+                text,
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        continuations,
+        [expected_text],
+        "{engine_name}: {failure_message}"
+    );
     assert_eq!(
         engine
             .fake
@@ -662,6 +691,6 @@ pub async fn transient_commits(engine_name: &str) {
             .count(),
         1
     );
-    assert_eq!(engine.fake.closed, 2);
-    assert_eq!(host.cleanups, 2);
+    assert_eq!(engine.fake.closed, 2 + u32::from(reenter));
+    assert_eq!(host.cleanups, 2 + u32::from(reenter));
 }

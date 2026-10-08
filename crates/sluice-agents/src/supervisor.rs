@@ -842,6 +842,57 @@ fn backoff(error: &AgentFailure, fixed: Duration) -> Duration {
         Duration::from_secs(at.saturating_sub(crate::engines::account::now()))
     })
 }
+fn resume_text(previous: Option<&AgentFailure>) -> String {
+    let cause = previous
+        .filter(|error| error.kind == FailureKind::Transient)
+        .map(|error| {
+            let message = error.message.to_lowercase();
+            if message.starts_with("codex: network error (") {
+                "Codex lost its network connection after its own retries"
+            } else if message.starts_with("claude: the pasted input did not show in the composer") {
+                "your message could not be delivered and is being sent again"
+            } else if [
+                "rate limit",
+                "rate_limit",
+                "http status 429",
+                "http 429",
+                "too many requests",
+            ]
+            .iter()
+            .any(|word| message.contains(word))
+            {
+                if error.retry_at.is_some() {
+                    "a rate limit; it has reset"
+                } else {
+                    "a rate limit"
+                }
+            } else if [
+                "capacity",
+                "overloaded",
+                "http status 529",
+                "http 529",
+                "http status 503",
+                "http 503",
+            ]
+            .iter()
+            .any(|word| message.contains(word))
+            {
+                "the engine was temporarily at capacity"
+            } else if message.contains("engine exited") {
+                "the engine exited"
+            } else if message.contains("network error") || message.contains("connection error") {
+                "a network connection failed"
+            } else {
+                "a temporary failure"
+            }
+        });
+    match cause {
+        Some(cause) => format!(
+            "Your session was interrupted ({cause}). Continue your task where you left off."
+        ),
+        None => "Your session was interrupted. Continue your task where you left off.".into(),
+    }
+}
 fn clock_ms() -> io::Result<u64> {
     u64::try_from(
         SystemTime::now()
@@ -1049,6 +1100,8 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
     };
     let mut server: Option<PrivateTmux> = None;
     let mut quiet = QuietMonitor::default();
+    // Checkpoints reject unknown fields in pinned releases, so the cause stays in memory.
+    let mut previous_failure = None;
     let outcome = async {
         loop {
             if cancel.is_cancelled() { return Err(failure(FailureKind::Cancelled, "agent cancelled")); }
@@ -1119,7 +1172,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 startup_failure = Some(error);
             }
             if machine.checkpoint.internal_attempt > 1 && startup_failure.is_none() {
-                machine.checkpoint.delivery.enqueue(InputId::Continue { attempt: machine.checkpoint.internal_attempt }, "Your session was interrupted by a rate limit or capacity error. Continue your task where you left off.".into()).map_err(invalid)?;
+                machine.checkpoint.delivery.enqueue(InputId::Continue { attempt: machine.checkpoint.internal_attempt }, resume_text(previous_failure.as_ref())).map_err(invalid)?;
             }
             let result = if let Some(error) = startup_failure {
                 Err(error)
@@ -1149,6 +1202,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                         _ = tokio::time::sleep(wait) => {},
                     }
                     machine.checkpoint.internal_attempt += 1;
+                    previous_failure = Some(error);
                     machine.checkpoint.compactions = 0;
                     let now = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
                     machine = Machine::new(machine.checkpoint.clone(), config.limits.clone(), config.required.clone(), profile.reports_waiting, now);

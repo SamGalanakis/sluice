@@ -1509,6 +1509,13 @@ engine's hooks, nudges a stalled session, and ends it when the agent is done. Th
 of `cwd`. A failed session is an `agent_failure` error with its `kind` and `session`. Agent fns
 retry a transient failure up to 3 times, 600 s apart, resuming the session; a rate limit whose
 reset the engine reported waits until just after that reset instead.
+After resuming, the supervisor sends `Your session was interrupted (<cause>). Continue your
+task where you left off.` The cause is a short fixed phrase chosen from the triggering
+failure's kind and message, never the engine's full message or pane text. It names a network
+loss, an undelivered message, a rate limit or capacity when recognized, otherwise a temporary
+failure. The cause stays in memory because pinned releases reject unknown checkpoint fields.
+After a supervisor restart or outer-helper re-entry, the message is `Your session was
+interrupted. Continue your task where you left off.`
 
 A Codex network loss costs a run only time. Codex retries a dropped connection itself, sending an
 `error` notification with `willRetry: true` (`Reconnecting... 2/5`) for each try: the turn goes

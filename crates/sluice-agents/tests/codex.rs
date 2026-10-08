@@ -1599,8 +1599,6 @@ async fn supervisor_codex_short_rate_limit_backs_off_until_its_reset() {
     cfg.retry.backoff = Duration::from_secs(600);
     let directory = cfg.run_dir.clone();
     let mut host = acceptance::Host::submitted();
-    // The agent submits in the resumed session, after the backoff.
-    host.submit_when.as_mut().unwrap().0 = sluice_agents::supervisor::State::Backoff;
     let started = Instant::now();
     let result = acceptance::run(cfg, &mut adapter, &mut host).await.unwrap();
     let elapsed = started.elapsed();
@@ -1613,13 +1611,22 @@ async fn supervisor_codex_short_rate_limit_backs_off_until_its_reset() {
         .unwrap()
         .unwrap();
     assert_eq!(checkpoint.internal_attempt, 2);
-    assert!(
-        checkpoint
-            .delivery
-            .entries
-            .iter()
-            .any(|e| e.id == InputId::Continue { attempt: 2 })
+    let continuation = checkpoint
+        .delivery
+        .entries
+        .iter()
+        .find(|e| e.id == InputId::Continue { attempt: 2 })
+        .unwrap();
+    let expected = "Your session was interrupted (a rate limit; it has reset). Continue your task where you left off.";
+    assert_eq!(continuation.text, expected);
+    assert_eq!(
+        continuation.state,
+        sluice_agents::delivery::DeliveryState::Acknowledged
     );
+    let wire = fs::read_to_string(directory.join("codex-wire.jsonl")).unwrap();
+    // Prompts are redacted in the wire log. The task, continuation and reprime each start
+    // a turn; the ledger above proves which continuation text was acknowledged.
+    assert_eq!(sent(&wire, "turn/start"), 3);
 }
 
 /// Runs a Codex scenario under the supervisor with `network_backoff` and returns the outcome,

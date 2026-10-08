@@ -1677,7 +1677,7 @@ async fn fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepted() {
 #[tokio::test]
 async fn supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
     let h = Harness::new(
-        json!({"swallow_pastes":3,"turns":[{"reply":"done","submit":{"word":"blue"}}]}),
+        json!({"swallow_pastes":3,"turns":[{"reply":"task taken"},{"reply":"done","submit":{"word":"blue"}}]}),
     )
     .await;
     let (result, directory) = supervise_claude(&h, |cfg| {
@@ -1700,6 +1700,11 @@ async fn supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
     let prompts = logged(&directory, "fixture-prompts.jsonl");
     assert_eq!(
         prompts[0], "Labelled scratch acceptance task",
+        "{prompts:?}"
+    );
+    assert_eq!(
+        prompts[1],
+        "Your session was interrupted (your message could not be delivered and is being sent again). Continue your task where you left off.",
         "{prompts:?}"
     );
     assert_eq!(
