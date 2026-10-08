@@ -170,6 +170,8 @@ pub struct LogRow {
     pub at: String,
     pub kind: String,
     pub summary: String,
+    /// On the global log, the record's project: its name and page ("" for the home's own).
+    pub place: (String, String),
     pub json: String,
 }
 #[derive(Clone, Debug)]
@@ -236,8 +238,11 @@ pub async fn load(
         let nav = super::load_snapshot(sql, FunctionCatalog::default())?;
         // The store owns the closed set of valid event kinds.
         records::read_records(sql, project, &RecordFilter { kinds: query.kinds.clone(), threads: query.threads.clone(), limit: 1, ..Default::default() })?;
-        let mut condition = "project_id IS ?".to_owned();
-        let mut args = vec![project.map_or(Value::Null, |id| Value::Text(id.to_string()))];
+        // a project's log is its records; the global log is every project's and the home's
+        let (mut condition, mut args) = match project {
+            Some(id) => ("project_id=?".to_owned(), vec![Value::Text(id.to_string())]),
+            None => ("1".to_owned(), vec![]),
+        };
         let mut kinds = query.kinds.clone();
         if kinds.is_empty() && !query.threads.is_empty() { kinds.push("message".into()); }
         if !kinds.is_empty() {
@@ -255,6 +260,9 @@ pub async fn load(
         // a fn call that did not fail is noise (a capacity fn runs every few seconds) unless
         // the calls were asked for
         if !query.kinds.iter().any(|k| k == "call") { condition.push_str(" AND NOT (kind='call' AND coalesce(json_extract(payload,'$.status'),'')!='failed')"); }
+        // a status record that changes nothing (a running step restarted under a new run) is
+        // left out unless step.status was asked for
+        if !query.kinds.iter().any(|k| k == "step.status") { condition.push_str(" AND NOT (kind='step.status' AND json_extract(payload,'$.from') IS json_extract(payload,'$.to'))"); }
         if !query.step.is_empty() {
             condition.push_str(" AND (step_id=? OR thread=?)");
             args.push(Value::Text(query.step.clone()));
@@ -268,16 +276,22 @@ pub async fn load(
         if let Some(before) = query.before { condition.push_str(" AND seq<?"); args.push(Value::Integer(before)); }
         if let Some(after) = query.after { condition.push_str(" AND seq>?"); args.push(Value::Integer(after)); }
         let order = if query.after.is_some() { "ASC" } else { "DESC" };
-        let mut stmt = sql.prepare(&format!("SELECT seq,at,payload,payload_version FROM records WHERE {condition} ORDER BY seq {order} LIMIT {PAGE_SIZE}"))?;
-        let raw = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?, r.get::<_,i64>(3)?)))?.collect::<Result<Vec<_>,_>>()?;
+        let mut stmt = sql.prepare(&format!("SELECT seq,at,payload,payload_version,project_id FROM records WHERE {condition} ORDER BY seq {order} LIMIT {PAGE_SIZE}"))?;
+        let raw = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?, r.get::<_,i64>(3)?, r.get::<_,Option<String>>(4)?)))?.collect::<Result<Vec<_>,_>>()?;
         let mut rows = vec![];
-        for (seq, at, payload, version) in raw {
+        for (seq, at, payload, version, owner) in raw {
             if version != sluice_store::schema::RECORD_PAYLOAD_VERSION { return Err(sluice_store::StoreError::InvalidDatabase("unsupported record payload version".into())); }
             let event: Event = serde_json::from_str(&payload)?;
             let json = serde_json::to_value(&event)?;
             let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("").into();
             let summary = summary(&event);
-            rows.push(LogRow { seq, at: at.clone(), kind, summary, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project, event })? });
+            let owner: Option<ProjectId> = owner.and_then(|p| p.parse().ok());
+            // the global log names each record's project
+            let place = match (project, owner) {
+                (None, Some(id)) => nav.projects.iter().find(|p| p.id == id).map(|p| (p.name.to_string(), p.href())).unwrap_or_else(|| ("a deleted project".into(), String::new())),
+                _ => (String::new(), String::new()),
+            };
+            rows.push(LogRow { seq, at: at.clone(), kind, summary, place, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.seq));
         let base = project.map(|id| format!("/projects/id/{id}/log")).unwrap_or_else(|| "/log".into());
@@ -290,66 +304,92 @@ pub async fn load(
         Ok(LogView { nav, project, query, rows, older, newer })
     }).await.map_err(|e| e.into_public(true))
 }
+/// A record in one plain sentence: who did what to which step, unit, run or project. A
+/// failure reads as `views::failure` says it (a cancel as a cancel), never as a pane dump or
+/// JSON; the record's JSON is one click away under it.
 fn summary(event: &Event) -> String {
+    let because = |reason: &str| {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", cut(reason, 160))
+        }
+    };
+    let maybe = |reason: &Option<String>| because(reason.as_deref().unwrap_or(""));
     match event {
         Event::Message(m) => format!(
             "{} from {} to {}: {}",
             m.thread,
             m.from,
             m.to.as_deref().unwrap_or("anyone"),
-            m.body.chars().take(160).collect::<String>()
+            cut(&m.body, 160)
         ),
         Event::StepStatus {
-            step,
-            from,
-            to,
-            error,
-            ..
-        } => format!(
-            "{step} {} → {}{}",
-            from.as_ref()
-                .map(|s| serde_json::to_value(s)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_owned())
-                .unwrap_or_else(|| "new".into()),
-            serde_json::to_value(to).unwrap().as_str().unwrap(),
-            error.as_ref().map(|e| format!(": {e}")).unwrap_or_default()
-        ),
+            step, from, to, error, ..
+        } => match error {
+            Some(error) if *to == sluice_model::commands::StepStatus::Failed => {
+                format!("{step}: {}", super::failure::Failure::new(error, None).headline)
+            }
+            _ => match from {
+                Some(from) => format!("{step} {} → {}", word(from), word(to)),
+                None => format!("{step} added, {}", word(to)),
+            },
+        },
         Event::PlanEdit {
             rev,
             author,
             reason,
             ops,
-        } => format!("rev {} by {author}: {reason} ({} ops)", rev.0, ops.len()),
+        } => format!(
+            "Plan rev {} by {author}, {} {}{}",
+            rev.0,
+            ops.len(),
+            if ops.len() == 1 { "change" } else { "changes" },
+            because(reason)
+        ),
         Event::PlanInput {
             name,
             value,
             author,
+            reason,
             ..
-        } => format!("{name} = {value:?} by {author}"),
-        Event::Call { name, status, .. } => format!(
-            "{name} {}",
-            serde_json::to_value(status).unwrap().as_str().unwrap()
+        } => format!(
+            "Plan input {name} set to {} by {author}{}",
+            cut(&value.as_value().to_string(), 80),
+            because(reason)
         ),
-        Event::StepRetry { step, author, .. } => format!("{step} retried by {author}"),
+        Event::StepOutput {
+            step,
+            outputs,
+            author,
+            reason,
+            ..
+        } => format!(
+            "{step}'s {} set by {author}{}",
+            names(outputs.0.keys()),
+            because(reason)
+        ),
+        Event::StepRetry {
+            step,
+            author,
+            reason,
+            ..
+        } => format!("{step} retried by {author}{}", because(reason)),
         Event::StepCancel {
             step,
             author,
             reason,
-        } => format!(
-            "{step} cancelled by {author}{}",
-            if reason.is_empty() {
-                String::new()
-            } else {
-                format!(": {reason}")
-            }
-        ),
-        Event::StepSubmit { step, outputs, .. } => format!(
-            "{step} submitted {}",
-            outputs.0.keys().cloned().collect::<Vec<_>>().join(", ")
-        ),
+        } => format!("{step} cancelled by {author}{}", because(reason)),
+        Event::StepSubmit { step, outputs, .. } => {
+            format!("{step} submitted {}", names(outputs.0.keys()))
+        }
+        Event::StepSettle {
+            step,
+            author,
+            reason,
+            ..
+        } => format!("{step} settled by {author}{}", because(reason)),
         Event::StepLease {
             step,
             resource,
@@ -359,31 +399,181 @@ fn summary(event: &Event) -> String {
         } => format!(
             "{} {} {amount} {resource}",
             step.as_ref().map_or("a run", |s| s.as_str()),
-            serde_json::to_value(state)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_default()
+            word(state)
         ),
-        Event::StepQueued { step, reason, .. } => format!("{step} queued: {reason}"),
+        Event::StepQueued { step, reason, .. } => format!("{step} queued{}", because(reason)),
+        Event::Call {
+            name,
+            status,
+            error,
+            ..
+        } => match error {
+            Some(error) if *status == sluice_model::commands::StepStatus::Failed => {
+                format!("{name}: {}", super::failure::Failure::new(error, None).headline)
+            }
+            _ => format!("{name} {}", word(status)),
+        },
+        Event::ProjectPause {
+            paused,
+            reason,
+            author,
+        } => format!(
+            "Project {} by {author}{}",
+            if *paused { "paused" } else { "unpaused" },
+            maybe(reason)
+        ),
+        Event::ProjectArchive {
+            archived,
+            reason,
+            author,
+        } => format!(
+            "Project {} by {author}{}",
+            if *archived {
+                "archived"
+            } else {
+                "taken out of the archive"
+            },
+            maybe(reason)
+        ),
+        Event::ProjectUpdate {
+            fields,
+            reason,
+            author,
+        } => capital(&format!(
+            "{} changed by {author}{}",
+            sentence_list(fields.iter().map(|f| field_words(f).to_owned())),
+            maybe(reason)
+        )),
+        Event::ProjectBoard {
+            rev,
+            cleared,
+            reason,
+            author,
+        } => {
+            if *cleared {
+                format!("Board cleared by {author}{}", maybe(reason))
+            } else {
+                format!("Board set to rev {} by {author}{}", rev.0, maybe(reason))
+            }
+        }
+        Event::ProjectRename {
+            old_name,
+            new_name,
+            author,
+        } => format!("Project renamed from {old_name} to {new_name} by {author}"),
+        Event::ProjectDelete { name, author, .. } => {
+            format!("Project {name} deleted by {author}")
+        }
         Event::ProjectCapacity {
             resource,
+            name,
             capacity,
+            error,
+        } => match (capacity, error) {
+            (Some(c), _) => format!("{resource} capacity {c}, from {name}"),
+            (None, Some(e)) => format!(
+                "{resource} capacity unknown: {}",
+                super::failure::Failure::new(e, None).headline
+            ),
+            (None, None) => format!("{resource} capacity unknown, from {name}"),
+        },
+        Event::ProjectNotify {
+            message, outcome, ..
+        } => format!("Notification for message {message}: {}", word(outcome)),
+        Event::RunAdopt {
+            run, step, outcome, ..
+        } => format!(
+            "Run {run}{} adopted: {}",
+            step.as_ref().map(|s| format!(" of {s}")).unwrap_or_default(),
+            word(outcome)
+        ),
+        Event::RunOrphan { run } => format!("Run {run} orphaned: its process was lost"),
+        Event::RunCompletionActionRegistered {
+            run,
+            message,
+            author,
             ..
         } => format!(
-            "{resource} capacity {}",
-            capacity.map_or("unknown".to_owned(), |c| c.to_string())
+            "{author} set what run {run} does when it ends{}",
+            because(message)
         ),
+        Event::RunCompletionAction {
+            run,
+            outcome,
+            author,
+        } => format!("Run {run}'s completion action by {author}: {}", word(outcome)),
         Event::UnitSettled { unit, steps, .. } => format!(
-            "unit {unit} settled, {} {}",
+            "Unit {unit} settled, {} {}",
             steps.len(),
             if steps.len() == 1 { "step" } else { "steps" }
         ),
-        _ => serde_json::to_string(event)
-            .unwrap_or_default()
-            .chars()
-            .take(200)
-            .collect(),
+        // a kind this release does not know yet: its name, the JSON under it
+        other => serde_json::to_value(other)
+            .ok()
+            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_owned))
+            .map(|kind| format!("A {kind} record"))
+            .unwrap_or_else(|| "A record".into()),
     }
+}
+/// A status, state or outcome as its wire name, in words: `not_found` reads "not found"; a
+/// tagged outcome (`{"outcome": "applied", …}`) by its tag.
+fn word<T: serde::Serialize>(value: &T) -> String {
+    let value = serde_json::to_value(value).unwrap_or_default();
+    let name = match &value {
+        serde_json::Value::String(s) => s.as_str(),
+        serde_json::Value::Object(o) => o
+            .get("outcome")
+            .or_else(|| o.values().next())
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+        _ => "",
+    };
+    name.replace('_', " ")
+}
+fn cut(text: &str, width: usize) -> String {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= width {
+        return text;
+    }
+    let mut out: String = text.chars().take(width - 1).collect();
+    out.push('…');
+    out
+}
+fn names<'a>(keys: impl Iterator<Item = &'a String>) -> String {
+    let keys: Vec<&String> = keys.collect();
+    if keys.is_empty() {
+        "nothing".into()
+    } else {
+        sentence_list(keys.into_iter().cloned())
+    }
+}
+/// "a", "a and b", "a, b and c".
+fn sentence_list(items: impl Iterator<Item = String>) -> String {
+    let items: Vec<String> = items.collect();
+    match items.as_slice() {
+        [] => "nothing".into(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+/// A project field as its settings page names it.
+fn field_words(field: &str) -> &str {
+    match field {
+        "board_doc" => "the board's document",
+        "prune_done_after" => "when done units retire",
+        "prune_keep" => "the units never retired",
+        "resources" => "the resources",
+        "icon" => "the icon",
+        "description" => "the description",
+        other => other,
+    }
+}
+fn capital(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
 }
 pub fn router(state: DashboardState) -> Router {
     Router::new()

@@ -159,6 +159,14 @@ impl SettingsState {
                     .into_values()
                     .map(|r| ResourceView {
                         name: r.name.clone(),
+                        number: match &r.declaration {
+                            resources::Capacity::Fixed(n) => n.to_string(),
+                            resources::Capacity::Function(_) => String::new(),
+                        },
+                        function: match &r.declaration {
+                            resources::Capacity::Function(f) => f.to_string(),
+                            resources::Capacity::Fixed(_) => String::new(),
+                        },
                         value: match &r.declaration {
                             resources::Capacity::Fixed(n) => n.to_string(),
                             resources::Capacity::Function(f) => {
@@ -231,6 +239,9 @@ impl sluice_model::plan::SignatureProvider for CatalogSignatures<'_> {
 pub struct ResourceView {
     pub name: String,
     pub value: String,
+    /// Its fixed capacity, or its fn's name: the two halves of its editor.
+    pub number: String,
+    pub function: String,
     pub capacity: String,
     pub dynamic: bool,
     pub held: u64,
@@ -249,6 +260,24 @@ pub struct ProjectSettingsView {
     pub blocker: Option<String>,
 }
 impl ProjectSettingsView {
+    /// The fns that can give a resource its capacity (they return `{capacity}`), with
+    /// `current` kept even when the catalog no longer lists it.
+    pub fn capacity_fns(&self, current: &str) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .shared
+            .functions
+            .entries
+            .iter()
+            .filter(|f| f.error.is_empty() && f.outputs.iter().any(|o| o.name == "capacity"))
+            .map(|f| f.name.clone())
+            .collect();
+        if !current.is_empty() && !names.iter().any(|n| n == current) {
+            names.push(current.to_owned());
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
     /// `prune_done_after` in hours, as the field shows it: "6", "1.5", or "" when off.
     pub fn retire_hours(&self) -> String {
         self.project.prune_done_after.map(hours).unwrap_or_default()
@@ -447,7 +476,15 @@ fn decode(headers: &HeaderMap, body: &[u8]) -> Result<FieldChange, PublicError> 
             field: fields
                 .remove("field")
                 .ok_or_else(|| bad("field required"))?,
-            value: fields.remove("value").unwrap_or_default(),
+            value: match fields.remove("capacity") {
+                // the form's capacity choice: a number, a fn, or none
+                Some(kind) => capacity_value(
+                    &kind,
+                    &fields.remove("number").unwrap_or_default(),
+                    &fields.remove("capacity_fn").unwrap_or_default(),
+                )?,
+                None => fields.remove("value").unwrap_or_default(),
+            },
             resource: fields.remove("resource").unwrap_or_default(),
             expected_settings_rev: Revision(rev),
         };
@@ -455,6 +492,23 @@ fn decode(headers: &HeaderMap, body: &[u8]) -> Result<FieldChange, PublicError> 
             return Err(bad("unknown settings field"));
         }
         Ok(request)
+    }
+}
+/// A resource's capacity as the settings command takes it, from the form's choice: `number` a
+/// whole number of 0 or more, `fn` the fn that gives it, `remove` none.
+fn capacity_value(kind: &str, number: &str, function: &str) -> Result<String, PublicError> {
+    match kind {
+        "number" => number
+            .trim()
+            .parse::<u64>()
+            .map(|n| n.to_string())
+            .map_err(|_| bad("Enter a whole number of 0 or more.")),
+        "fn" if !function.trim().is_empty() => {
+            Ok(serde_json::json!({ "capacity_fn": function.trim() }).to_string())
+        }
+        "fn" => Err(bad("Choose the fn that gives the capacity.")),
+        "remove" => Ok("null".into()),
+        _ => Err(bad("capacity must be number, fn or remove")),
     }
 }
 /// Seconds as hours with up to three decimals and no trailing zeros: 21600 → "6".
@@ -871,4 +925,19 @@ async fn settings_stream(
     ))
     .keep_alive(KeepAlive::default())
     .into_response()
+}
+/// Two names the same: for the template, whose values arrive as `String` and `&str` alike.
+pub fn same(a: &str, b: &str) -> bool {
+    a == b
+}
+/// A resource's number as its field shows it: what was just refused stays to be corrected.
+pub fn shown_number(feedback: &Feedback, resource: &ResourceView) -> String {
+    if feedback.error("resources")
+        && feedback.resource == resource.name
+        && !feedback.value.starts_with('{')
+    {
+        feedback.value.clone()
+    } else {
+        resource.number.clone()
+    }
 }

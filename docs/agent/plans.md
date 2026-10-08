@@ -336,7 +336,9 @@ entry counts as edges to the unit's exit steps for cycles.
 that must not overlap (both edit one file) or must happen in order. It is not a data edge, so
 `a` re-running with a different result does not make the step stale. `"tags": ["e2e", "heavy"]`
 label steps so you can pause, cancel, retry or select them together; `unit:<name>` and `exit`
-are the tags the model itself reads.
+are the tags the model itself reads. `cadence:<n>m|h|d` tells the dashboard how long a running
+step may write nothing before it reads as quiet (default 2 h): tag a watch loop that speaks only
+on news `cadence:1d` so its silence is not flagged.
 
 ## Manual values
 - `plan_set_input(project, name, value)`: provide a plan input the plan is waiting on. Changing

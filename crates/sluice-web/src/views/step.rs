@@ -9,6 +9,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response, Sse, sse::KeepAlive},
 };
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sluice_model::{
     commands::StepStatus,
@@ -29,6 +30,9 @@ pub struct FieldView {
     pub available: bool,
     pub kind: String,
     pub source: String,
+    /// A small flat object's names and values (kind `pairs`): `{"type": "normal", "model":
+    /// "sol"}` reads "type normal · model sol", not as JSON.
+    pub pairs: Vec<(String, String)>,
 }
 impl FieldView {
     pub fn new(
@@ -43,13 +47,17 @@ impl FieldView {
             ty: ty.into(),
             doc: doc.into(),
             value: value
-                .map(|v| match v {
-                    serde_json::Value::String(s) => s.clone(),
+                .map(|v| match (v, file_path(v)) {
+                    (_, Some(path)) => path.to_owned(),
+                    (serde_json::Value::String(s), _) => s.clone(),
                     _ => serde_json::to_string_pretty(v).expect("JSON value"),
                 })
                 .unwrap_or_default(),
             available: value.is_some(),
+            pairs: value.and_then(pairs).unwrap_or_default(),
             kind: match value {
+                Some(v) if file_path(v).is_some() => "file",
+                Some(v) if pairs(v).is_some() => "pairs",
                 Some(serde_json::Value::Null) => "null",
                 Some(serde_json::Value::Bool(true)) => "true",
                 Some(serde_json::Value::Bool(false)) => "false",
@@ -75,7 +83,35 @@ impl FieldView {
         };
         Self::new(name, ty, "", value, &reference.0)
     }
+    /// A long text value as markdown in the body's font: a spec, a summary, a report.
+    pub fn prose_html(&self) -> TrustedHtml {
+        crate::markdown::render(&self.value)
+    }
+    /// Its type in a few words: a JSON schema reads as its `type` ("object"), not as JSON.
+    pub fn ty_words(&self) -> String {
+        match serde_json::from_str::<serde_json::Value>(&self.ty) {
+            Ok(serde_json::Value::Object(schema)) => schema
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("object")
+                .to_owned(),
+            _ => self.ty.clone(),
+        }
+    }
+    /// Its source is worth a line: a reference, a file, a plan input, a submission so far. A
+    /// default, or the value its run received, is what an input usually is: said once, under
+    /// the section's head, not on every row.
+    pub fn shows_source(&self) -> bool {
+        !self.source.is_empty()
+            && !matches!(
+                self.source.as_str(),
+                "Its default" | "As its run received it"
+            )
+    }
     pub fn long(&self) -> bool {
+        if self.kind == "pairs" {
+            return false;
+        }
         self.value.contains('\n') || self.value.chars().count() > 90
     }
     pub fn source_href(&self, project: &ProjectId) -> String {
@@ -102,6 +138,32 @@ impl FieldView {
             self.source.clone()
         }
     }
+}
+/// A small flat object's names and values: at most 8, each a string, number, true or false.
+fn pairs(value: &serde_json::Value) -> Option<Vec<(String, String)>> {
+    let object = value.as_object()?;
+    if object.is_empty() || object.len() > 8 {
+        return None;
+    }
+    object
+        .iter()
+        .map(|(k, v)| {
+            let shown = match v {
+                serde_json::Value::String(s) if s.chars().count() <= 60 && !s.contains('\n') => {
+                    s.clone()
+                }
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => return None,
+            };
+            Some((k.clone(), shown))
+        })
+        .collect()
+}
+/// A file reference's path: `{"file": "<path>"}`, an input read from a file when the run starts.
+fn file_path(value: &serde_json::Value) -> Option<&str> {
+    let object = value.as_object()?;
+    (object.len() == 1).then(|| object.get("file")?.as_str())?
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct RunView {
@@ -186,9 +248,8 @@ pub struct StepView {
     /// Pending with its gates met: the next to start (`is-next`). A finished step is never.
     pub ready: bool,
     pub blocked: bool,
+    /// Running and quiet past its `quiet_after`.
     pub quiet: bool,
-    /// Running and quiet for two hours or more.
-    pub long_quiet: bool,
     pub waits: Vec<String>,
     pub gates: Vec<String>,
     pub queued: Vec<String>,
@@ -209,6 +270,8 @@ pub struct StepView {
     pub finishing: Option<sluice_model::attempt::Finishing>,
     /// Its latest progress (`step_progress`) while that is fresher than its outputs.
     pub progress: Option<ProgressView>,
+    /// While it runs: the latest message in its thread, what it is doing now.
+    pub now: Option<NowView>,
     /// Its current run's times, for its card's timer.
     pub timing: Option<RunTiming>,
 }
@@ -263,6 +326,16 @@ pub fn spoken_duration(seconds: f64) -> String {
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+/// The latest message in a running step's thread: who wrote it, when, and its start.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct NowView {
+    pub from: String,
+    pub at: String,
+    /// Its first words, as plain text.
+    pub excerpt: String,
+    /// The excerpt leaves some of it out.
+    pub more: bool,
 }
 /// A step's progress as its page shows it: the fields, when they were set, and whether the
 /// step still runs (live) or the run has ended (kept until the next run starts).
@@ -398,7 +471,6 @@ impl StepView {
             ready: next,
             blocked: false,
             quiet: false,
-            long_quiet: false,
             waits,
             gates: step.after.iter().map(|g| g.entry()).collect(),
             queued: entry.queued,
@@ -416,6 +488,7 @@ impl StepView {
             revision: 0,
             finishing: None,
             progress: None,
+            now: None,
             timing: None,
         };
         if let Some(failure) = failure {
@@ -472,7 +545,14 @@ impl StepView {
         )
     }
     pub fn caption(&self) -> String {
-        if self.blocked {
+        if self.status == "failed" {
+            if self.cancelled() {
+                "cancelled"
+            } else {
+                "failed"
+            }
+            .into()
+        } else if self.blocked {
             "blocked".into()
         } else if !self.queued.is_empty() {
             "queued".into()
@@ -627,6 +707,24 @@ struct StepTemplate<'a> {
     /// On its own page: its id is the page's `h1`.
     page: bool,
 }
+impl StepTemplate<'_> {
+    /// What the inputs' values are, said once under their head: their run's, or defaults.
+    fn inputs_note(&self) -> &'static str {
+        let sources: Vec<&str> = self.step.inputs.iter().map(|f| f.source.as_str()).collect();
+        if sources.contains(&"As its run received it") {
+            "As its last run received them."
+        } else if sources.contains(&"Its default") {
+            "A value not otherwise set is its default."
+        } else {
+            ""
+        }
+    }
+    /// A section's heading: under the page's `h1` an `h2`, in the drawer (its id an `h2`) an
+    /// `h3`, so no level is skipped.
+    fn h(&self) -> &'static str {
+        if self.page { "h2" } else { "h3" }
+    }
+}
 /// Run history is current-generation only; a reused step id never inherits an
 /// old declaration's runs. Frozen attempted inputs come from durable results.
 pub fn load_detail(
@@ -750,9 +848,27 @@ pub fn load_detail(
             at: p.at,
             live: p.live,
         });
+    step.now = None;
+    if step.status == "running" {
+        let latest: Option<(String, String, String)> = c
+            .prepare_cached("SELECT \"from\",body,at FROM messages WHERE project_id=?1 AND thread=?2 ORDER BY id DESC LIMIT 1")?
+            .query_row((project.to_string(), format!("step-{}", step.id)), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .optional()?;
+        step.now = latest.map(|(from, body, at)| {
+            let plain = crate::markdown::plain(&body);
+            let excerpt = crate::markdown::cut(&plain, 360);
+            NowView {
+                from,
+                at,
+                more: excerpt != plain,
+                excerpt,
+            }
+        });
+    }
     (step.messages,step.awaiting) = c.prepare_cached("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2")?.query_row((project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
     let mut q = c.prepare_cached("SELECT sub.outputs FROM submissions sub JOIN runs r USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL ORDER BY r.created_at DESC LIMIT 1")?;
-    use rusqlite::OptionalExtension;
     let submitted: Option<String> = q
         .query_row((project.to_string(), step.id.as_str()), |r| r.get(0))
         .optional()?;
@@ -896,7 +1012,7 @@ pub async fn step_page(
         step.page_body(&view.project.name, unit)
             .and_then(|body| {
                 super::render_layout(
-                    id.as_str(),
+                    &format!("{id} · {}", view.project.name),
                     &body,
                     &nav,
                     &Viewer::from_headers(&headers),
@@ -968,7 +1084,6 @@ pub async fn run_file_page(
     let owned = state
         .reads
         .snapshot(move |c| {
-            use rusqlite::OptionalExtension;
             Ok(c.query_row(
                 "SELECT 1 FROM runs WHERE project_id=?1 AND run_id=?2",
                 (project.to_string(), run.to_string()),
@@ -982,14 +1097,15 @@ pub async fn run_file_page(
         Ok(true) => {}
         Ok(false) => {
             return board::error_response(PublicError::NotFound {
-                message: format!("run {run} is not a run of this project"),
+                message: format!("Run {run} is not a run of this project."),
             });
         }
         Err(e) => return board::error_response(e.into_public(true)),
     }
+    let (asked, wanted) = (run, name.clone());
     let read = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
         use std::io::{Read, Seek, SeekFrom};
-        let path = run_file(&home, &run, &name)?;
+        let path = run_file(&home, &asked, &wanted)?;
         let mut file = std::fs::File::open(path).ok()?;
         let size = file.metadata().ok()?.len();
         let mut bytes = Vec::new();
@@ -1021,7 +1137,14 @@ pub async fn run_file_page(
         )
             .into_response(),
         None => board::error_response(PublicError::NotFound {
-            message: "this run has no such file".into(),
+            message: format!(
+                "Run {run} has no {name}{}.",
+                if RUN_FILES.contains(&name.as_str()) {
+                    ": it wrote none, or it was cleaned up with the run"
+                } else {
+                    "; a run's files are pane-at-failure.txt, stderr.log, stderr-tail.log and summary.txt"
+                }
+            ),
         }),
     }
 }

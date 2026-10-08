@@ -261,28 +261,37 @@ pub struct Band<'a> {
     pub label: &'static str,
     pub layers: Vec<Vec<&'a UnitView>>,
 }
-/// The board as drawn: the bands of live and pending units, then every done unit on one shelf.
+/// The board as drawn: the bands of live and pending units, then the done units on one shelf.
 pub struct Layout<'a> {
     pub bands: Vec<Band<'a>>,
+    /// The done units the shelf draws, the latest finished first: all of them under Show: Done
+    /// or a search, else the latest `SHELF`.
     pub done: Vec<&'a UnitView>,
+    /// Every done unit, and their steps: what the shelf's line counts.
+    pub total: usize,
+    pub total_steps: usize,
     /// The shelf drawn open: the view asks for done units (Show: Done) or a search matched in it.
     pub open: bool,
 }
 impl Layout<'_> {
-    pub fn steps(&self) -> usize {
-        self.done.iter().map(|u| u.steps.len()).sum()
-    }
-    /// The done units drawn as a card alone; then those drawn as a line that opens.
-    pub fn done_solo(&self) -> Vec<&UnitView> {
-        self.done.iter().copied().filter(|u| u.solo).collect()
-    }
-    pub fn done_boxed(&self) -> Vec<&UnitView> {
-        self.done.iter().copied().filter(|u| !u.solo).collect()
+    /// The done units the shelf leaves out; "Show all" draws them (Show: Done).
+    pub fn more(&self) -> usize {
+        self.total - self.done.len()
     }
 }
+/// How many done units the shelf draws unless every one is asked for: the latest finished.
+pub const SHELF: usize = 20;
 impl UnitView {
     pub fn key(&self) -> String {
         format!("u:{}", self.id)
+    }
+    /// When its last step's run ended (RFC 3339), "" when none did (outputs set by hand).
+    pub fn finished(&self) -> &str {
+        self.steps
+            .iter()
+            .filter_map(|s| s.timing.as_ref()?.finished.as_deref())
+            .max()
+            .unwrap_or("")
     }
     /// How many lanes the box lays side by side: its widest row's cards.
     pub fn lanes(&self) -> usize {
@@ -655,7 +664,7 @@ impl ProjectView {
                                 continue;
                             }
                             let doing = match mark {
-                                "running" | "failed" | "stale" | "paused" => mark,
+                                "running" | "failed" | "cancelled" | "stale" | "paused" => mark,
                                 "external" => "outside",
                                 _ => "",
                             };
@@ -716,9 +725,25 @@ impl ProjectView {
                     layers: self.layers(units, &mut placed),
                 })
                 .collect(),
-            done: self.units.iter().filter(|u| u.done).collect(),
+            done: self.shelf(),
+            total: self.units.iter().filter(|u| u.done).count(),
+            total_steps: self.units.iter().filter(|u| u.done).map(|u| u.steps.len()).sum(),
             open: self.show == "done" || !self.q.is_empty(),
         }
+    }
+    /// The done units the shelf draws: the latest finished first, all of them when the view
+    /// asks for done units or searches, else the latest `SHELF`.
+    fn shelf(&self) -> Vec<&UnitView> {
+        let mut done: Vec<&UnitView> = self.units.iter().filter(|u| u.done).collect();
+        done.sort_by(|a, b| b.finished().cmp(a.finished()));
+        if self.show != "done" && self.q.is_empty() {
+            done.truncate(SHELF);
+        }
+        done
+    }
+    /// Every done unit, under this view's order: where the shelf's "Show all" leads.
+    pub fn all_done_href(&self) -> String {
+        format!("{}?order={}&show=done", self.href(), self.order)
     }
     /// `units` in layers by the longest chain of them each comes after (a cycle between units
     /// counts once), each layer ordered by where the units it follows were placed. `placed`
@@ -839,8 +864,27 @@ impl ProjectView {
     pub fn about(&self) -> (TrustedHtml, Option<TrustedHtml>) {
         crate::markdown::render_folded(&self.project.description)
     }
+    /// The relations among what the page draws: the live units and the done units on the
+    /// shelf, with the plan's inputs and outputs. A relation inside a done unit the shelf
+    /// leaves out has no card to join, so it is not sent (on lash, most of the plan).
     pub fn edges_json(&self) -> String {
-        serde_json::to_string(&self.relations).expect("typed relations serialize")
+        let drawn: BTreeSet<&str> = self
+            .units
+            .iter()
+            .filter(|u| !u.done)
+            .chain(self.shelf())
+            .map(|u| u.id.as_str())
+            .collect();
+        let on_page = |key: &str| match self.facts.unit_of(key) {
+            Some(unit) => drawn.contains(unit.as_str()),
+            None => true,
+        };
+        let relations: Vec<&Relation> = self
+            .relations
+            .iter()
+            .filter(|r| on_page(&r.from.key()) && on_page(&r.to.key()))
+            .collect();
+        serde_json::to_string(&relations).expect("typed relations serialize")
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&ProjectTemplate {
@@ -1054,6 +1098,11 @@ pub fn load_board(
                 }
             }
             step.revision = revision as u64;
+            if step.cancelled()
+                && let Some(fact) = board.facts.steps.get_mut(&step.key())
+            {
+                fact.1 = "cancelled".into();
+            }
         }
         if let Some(id) = detail
             && let Some(step) = unit.steps.iter_mut().find(|s| &s.id == id)
@@ -1064,6 +1113,8 @@ pub fn load_board(
             }
         }
     }
+    // a wait on a cancelled step says so
+    board.settle();
     Ok((board, plan))
 }
 /// Each step's current run times (its card's timer), from its current generation's runs: its
@@ -1282,7 +1333,6 @@ async fn load(
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
             let run = running.iter().find(|r| r.step == step.id.as_str());
             step.quiet = run.is_some_and(|r| r.quiet);
-            step.long_quiet = run.is_some_and(|r| r.long_quiet);
         }
     }
     Ok((shared, board, loaded))
@@ -1318,7 +1368,7 @@ impl BoardQuery {
             (match show {
                 "active" => !u.done,
                 // what needs a look: a failed or stale step, or one running quiet for 2h+
-                "attention" => u.rank() == 0 || u.steps.iter().any(|s| s.long_quiet),
+                "attention" => u.rank() == 0 || u.steps.iter().any(|s| s.quiet),
                 "done" => u.done,
                 _ => true,
             }) && self.tag.as_deref().is_none_or(|tag| {
@@ -1556,7 +1606,7 @@ pub async fn unit_page(
         let drawn = unit_batch(&shared, &view, &unit, &viewer)?;
         let nav = NavView::new(&shared, Some(project), "plan")?;
         super::render_layout(
-            unit.as_str(),
+            &format!("{unit} · {}", view.project.name),
             &drawn.regions[0].html,
             &nav,
             &viewer,

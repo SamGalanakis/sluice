@@ -57,6 +57,7 @@ const shown = (n) => (n.checkVisibility ? n.checkVisibility() : n.getClientRects
 const SVG = "http://www.w3.org/2000/svg";
 const HEAD_W = 3.5, HEAD_H = 6;  // the arrowhead: a shape of its own, which lights up with its edge
 const CLEAR = 7;                 // the least space between an edge and a card it passes
+const TILE_CLEAR = 12;           // and the more it keeps from a unit's box: never along its border
 const SIDE = 5;                  // between edges sharing a gap
 const LEFT = 40;                 // how much nearer a gap on the left must be: bypasses keep right
 
@@ -120,6 +121,9 @@ function drawEdges(host, data) {
   // passes them, not just their cards
   const tileEls = $$(".layer > .box", plane).filter(shown);
   const tiles = tileEls.map((t) => at(t.getBoundingClientRect()));
+  // a box's label ("fig-5193") is passed like a card: a line into the box never strikes it
+  const labels = $$(".layer > .box > .box-label", plane).filter(shown)
+    .map((l) => ({ ...at(l.getBoundingClientRect()), tile: tileEls.indexOf(l.parentElement) }));
   for (const n of $$("[data-node]", plane)) {
     if (!shown(n)) continue;
     rect.set(n.dataset.node, { ...at(n.getBoundingClientRect()),
@@ -136,8 +140,10 @@ function drawEdges(host, data) {
     if (!rowsOf.has(key)) {
       const cards = [...rect.entries()].filter(([k, r]) => !k.startsWith("u:")
         && (!inBox || r.box === ra.box)).map(([, r]) => r);
-      const others = inBox ? [] : tiles.filter((_, i) => i !== ra.tile && i !== rb.tile);
-      const rows = cards.concat(others);
+      const others = inBox ? [] : tiles.filter((_, i) => i !== ra.tile && i !== rb.tile)
+        .map((t) => ({ ...t, span: [t.span[0] - TILE_CLEAR, t.span[1] + TILE_CLEAR] }));
+      const marks = inBox ? [] : labels;
+      const rows = cards.concat(others, marks);
       let lo = -CLEAR * 2, hi = box.width + CLEAR * 2;
       if (inBox && boxed) {
         const l = boxes[ra.box].getBoundingClientRect();
@@ -151,8 +157,26 @@ function drawEdges(host, data) {
   // of the cards shown (a search may leave a step out), one path a pair (see merge)
   const ends = merge((Array.isArray(data) ? data : []).filter(([a, b]) => rect.has(a) && rect.has(b)));
   const cx = (key) => rect.get(key).left + rect.get(key).width / 2;
-  const spread = (key, others) => {
-    const r = rect.get(key), sorted = [...others].sort((p, q) => cx(p.other) - cx(q.other));
+  // Where each line passes the rows between its ends, routed once from card centre to card
+  // centre on a scratch board: its first pass and its last, so the lines leaving a card are
+  // spread along its foot in the order they head off, and those arriving along its top in the
+  // order they come in. A bypass on the right leaves and arrives on the right: hooks never cross.
+  const passes = new Map(), scratch = new Map();
+  const rowsBetween = (a, b) => {
+    const y1 = rect.get(a).bottom, tip = rect.get(b).top - 1;
+    const { rows: things, lo, hi, key } = route(a, b);
+    return { y1, tip, lo, hi, key,
+             rows: bands(things.filter((r) => r.top > y1 + 1 && r.bottom < tip - 1)) };
+  };
+  for (const [index, [a, b]] of ends.entries()) {
+    const { y1, tip, lo, hi, key, rows } = rowsBetween(a, b);
+    const xa = cx(a), xb = cx(b);
+    const xs = rows.map((row) => passAt(row, xa + (xb - xa) * (((row.top + row.bottom) / 2 - y1) / (tip - y1)),
+                                        lo, hi, scratch, `${key}:${Math.round(row.top)}`));
+    passes.set(index, { first: xs.length ? xs[0] : xb, last: xs.length ? xs[xs.length - 1] : xa });
+  }
+  const spread = (key, others, toward) => {
+    const r = rect.get(key), sorted = [...others].sort((p, q) => toward(p) - toward(q));
     return new Map(sorted.map((o, i) => [o.index, r.left + r.width * (i + 1) / (sorted.length + 1)]));
   };
   const outs = new Map(), ins = new Map();
@@ -163,9 +187,9 @@ function drawEdges(host, data) {
     ins.get(b).push({other: a, index});
   }
   // Where each edge into a card ends: spread along its top, in the order of their sources.
-  const arrive = (key, others) => new Map([...spread(key, others)].map(([index, x]) =>
-    [index, { x, y: rect.get(key).top - 1 }]));
-  const outX = new Map([...outs].map(([k, v]) => [k, spread(k, v)]));
+  const arrive = (key, others) => new Map([...spread(key, others, (o) => passes.get(o.index).last)]
+    .map(([index, x]) => [index, { x, y: rect.get(key).top - 1 }]));
+  const outX = new Map([...outs].map(([k, v]) => [k, spread(k, v, (o) => passes.get(o.index).first)]));
   const inX = new Map([...ins].map(([k, v]) => [k, arrive(k, v)]));
   const used = new Map(), labelLanes = new Map();
   const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
@@ -176,10 +200,9 @@ function drawEdges(host, data) {
     const tip = rect.get(b).top - 1;
     const y2 = end.y - HEAD_H;  // straight down, into the head
     const pts = [[x1, y1]];
-    const { rows: things, lo, hi, key } = route(a, b);
     // the rows of what lies wholly between the two ends: a card under the source in its own
     // box counts, a unit beside the source (begun above it) does not
-    const rows = bands(things.filter((r) => r.top > y1 + 1 && r.bottom < tip - 1));
+    const { lo, hi, key, rows } = rowsBetween(a, b);
     rows.forEach((row) => {
       const t = ((row.top + row.bottom) / 2 - y1) / (tip - y1);
       const x = passAt(row, x1 + (x2 - x1) * t, lo, hi, used, `${key}:${Math.round(row.top)}`);

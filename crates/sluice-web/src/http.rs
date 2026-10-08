@@ -64,7 +64,12 @@ pub fn router(
         .layer(middleware::from_fn_with_state(state, policy))
         // outside the policy, which reads an error's body as text: pages, styles, scripts and
         // JSON go out as brotli or gzip when the client takes it (never a stream's events)
-        .layer(tower_http::compression::CompressionLayer::new())
+        // quality 6: brotli's default (4) comes out larger than gzip's on the styles and
+        // scripts; at 6 it is smaller, and still fast enough for a large board page
+        .layer(
+            tower_http::compression::CompressionLayer::new()
+                .quality(tower_http::CompressionLevel::Precise(6)),
+        )
 }
 pub fn error_response(error: PublicError) -> Response {
     let status = match &error {

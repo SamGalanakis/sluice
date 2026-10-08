@@ -23,6 +23,10 @@ const GEOMETRY: &str = r#"(() => {
           board: box('#board-pane'), sum: box('#plan-pane .sumline'),
           navFits: (l => l.scrollWidth <= l.clientWidth)(nav.querySelector('.links')), tabs: box('.view-switch'), split: box('.splitter'),
           view: document.querySelector('#project-board').dataset.view ?? null,
+          h1: box('#plan-pane .p-title'),
+          // the page is as tall as its main column (or the window): nothing hangs below it
+          below: document.documentElement.scrollHeight - Math.max(innerHeight,
+            Math.ceil(document.querySelector('main').getBoundingClientRect().bottom + scrollY)),
           clipped: [...document.querySelectorAll('#board-pane *')].filter(e => {
             const r = e.getBoundingClientRect(); return r.width > 0 && r.right > document.documentElement.clientWidth + 0.5; }).length,
           errors: window.browserErrors};
@@ -50,6 +54,10 @@ fn check(g: &Value, label: &str) {
         "{label}: not centred {g}"
     );
     assert_eq!(g["clipped"], 0, "{label}: clipped {g}");
+    assert!(
+        g["below"].as_f64().unwrap() <= 1.0,
+        "{label}: the page runs on past main {g}"
+    );
     assert_eq!(
         g["navFits"], true,
         "{label}: a section hides in the nav {g}"
@@ -134,6 +142,7 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                         ("board", 390) => {
                             assert!(g["tabs"].is_object() && g["board"].is_object() && plan.is_null(), "{label}: {g}");
                             assert_eq!(g["view"], "board", "{label}: {g}");
+                            assert!(g["h1"].is_object(), "{label}: the project's title stays over its board {g}");
                             assert!(g["tabs"]["top"].as_f64().unwrap() > g["sum"]["top"].as_f64().unwrap(), "{label}: the switch after the summary {g}");
                         }
                         ("board", _) => {
@@ -219,6 +228,27 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         let g = browser.eval(GEOMETRY).unwrap();
         assert_eq!(g["view"], "plan", "remembered {g}");
         assert!(g["plan"].is_object() && g["board"].is_null(), "{g}");
+        // an address that asks for a search, a Show or an Order opens on the plan, whatever
+        // view was picked last
+        browser
+            .eval("document.querySelector('[data-view-tab=board]').click()")
+            .unwrap();
+        for query in ["q=alpha", "show=attention", "order=plan"] {
+            browser
+                .navigate(&format!("{base}/projects/id/{lanes}?{query}"))
+                .unwrap();
+            browser.wait(ready).unwrap();
+            let g = browser.eval(GEOMETRY).unwrap();
+            assert_eq!(g["view"], "plan", "{query}: {g}");
+        }
+        browser
+            .navigate(&format!("{base}/projects/id/{lanes}"))
+            .unwrap();
+        browser.wait(ready).unwrap();
+        assert_eq!(browser.eval(GEOMETRY).unwrap()["view"], "board", "the pick is kept");
+        browser
+            .eval("document.querySelector('[data-view-tab=plan]').click()")
+            .unwrap();
         // The splitter: End and Home take the board to its bounds, the width is remembered,
         // a double-click forgets it; Board shows the board alone.
         browser.viewport(1440, "light").unwrap();

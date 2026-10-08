@@ -56,7 +56,7 @@
   --border: light-dark(oklch(0.308 0.112 262 / 11%), oklch(0.955 0.022 88 / 11%));
   --border-strong: light-dark(oklch(0.308 0.112 262 / 24%), oklch(0.955 0.022 88 / 24%));
   --input: light-dark(oklch(0.308 0.112 262 / 22%), oklch(0.955 0.022 88 / 20%));
-  --edge: light-dark(oklch(0.46 0.07 258 / 45%), oklch(0.8 0.05 240 / 42%));
+  --edge: light-dark(oklch(0.46 0.07 258 / 70%), oklch(0.8 0.05 240 / 52%));  /* 3.2:1 or more on the page, a card and a unit box */
   --edge-head: light-dark(oklch(0.46 0.07 258 / 78%), oklch(0.8 0.05 240 / 72%));
   --status-idle: light-dark(oklch(0.6 0.025 262), oklch(0.66 0.03 262));
   --status-success: light-dark(oklch(0.53 0.14 150), oklch(0.76 0.16 150));
@@ -99,7 +99,7 @@
   --border: oklch(0.3 0.07 40 / 12%);
   --border-strong: oklch(0.3 0.07 40 / 26%);
   --input: oklch(0.3 0.07 40 / 24%);
-  --edge: oklch(0.44 0.06 60 / 45%);
+  --edge: oklch(0.44 0.06 60 / 68%);
   --edge-head: oklch(0.44 0.06 60 / 78%);
   --status-idle: oklch(0.58 0.015 20);
   --status-success: oklch(0.52 0.13 140);
@@ -137,7 +137,7 @@
   --border: oklch(0.3 0.07 158 / 12%);
   --border-strong: oklch(0.3 0.07 158 / 26%);
   --input: oklch(0.3 0.07 158 / 24%);
-  --edge: oklch(0.42 0.05 150 / 45%);
+  --edge: oklch(0.42 0.05 150 / 68%);
   --edge-head: oklch(0.42 0.05 150 / 78%);
   --status-idle: oklch(0.58 0.025 140);
   --status-success: oklch(0.52 0.14 138);
@@ -175,7 +175,7 @@
   --border: oklch(0.27 0.025 230 / 12%);
   --border-strong: oklch(0.27 0.025 230 / 26%);
   --input: oklch(0.27 0.025 230 / 24%);
-  --edge: oklch(0.42 0.04 205 / 45%);
+  --edge: oklch(0.42 0.04 205 / 68%);
   --edge-head: oklch(0.42 0.04 205 / 78%);
   --status-idle: oklch(0.59 0.02 220);
   --status-success: oklch(0.52 0.13 150);
@@ -213,7 +213,7 @@
   --border: oklch(0.945 0.02 90 / 11%);
   --border-strong: oklch(0.945 0.02 90 / 24%);
   --input: oklch(0.945 0.02 90 / 20%);
-  --edge: oklch(0.8 0.06 280 / 42%);
+  --edge: oklch(0.8 0.06 280 / 53%);
   --edge-head: oklch(0.8 0.06 280 / 72%);
   --status-idle: oklch(0.68 0.035 280);
   --status-success: oklch(0.78 0.15 150);
@@ -251,7 +251,7 @@
   --border: oklch(0.935 0.03 85 / 11%);
   --border-strong: oklch(0.935 0.03 85 / 24%);
   --input: oklch(0.935 0.03 85 / 20%);
-  --edge: oklch(0.8 0.05 90 / 42%);
+  --edge: oklch(0.8 0.05 90 / 55%);
   --edge-head: oklch(0.8 0.05 90 / 72%);
   --status-idle: oklch(0.67 0.03 60);
   --status-success: oklch(0.76 0.15 135);
@@ -490,8 +490,6 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
 /* cancelled: the owner stopped it on purpose, so a calm stop sign in muted ink, never failure's ink */
 .g-cancelled { color: var(--muted-foreground); }
 /* succeeded and failed are settled: Lucide's ring filled to a disc, its mark cut in the card */
-.g-succeeded circle, .g-failed circle { fill: currentColor; }
-.g-succeeded path, .g-failed path { stroke: var(--card); }
 .spin { animation: spin 1.1s linear infinite; }  /* the whole icon turns, about its centre */
 @keyframes spin { to { transform: rotate(360deg); } }
 .flip { animation: flip 220ms cubic-bezier(.2, .8, .2, 1); }
@@ -662,8 +660,12 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .node.is-skipped { border-style: dashed; }
 .node.is-running, .node.is-external {
   border-color: color-mix(in oklch, var(--status-active) 65%, transparent); }
-.node.is-failed { border-color: var(--foreground); box-shadow: inset 0 0 0 .5px var(--foreground);
-                  background: color-mix(in srgb, var(--foreground) 6%, var(--card)); }
+/* a failed card: a tinted fill and its caption say it; its border stays a card's, so it never
+   reads as the open step's ring or the keyboard's */
+.node.is-failed { border-color: color-mix(in srgb, var(--foreground) 45%, var(--card));
+                  background: color-mix(in srgb, var(--foreground) 9%, var(--card)); }
+.node.is-failed .dur { color: var(--foreground); font-weight: 600; }
+.node.is-cancelled { border-color: var(--border-strong); }
 /* a pending step a failure holds up: dashed in ink, and it says "blocked" */
 .node.is-blocked { border: 1px dashed color-mix(in oklch, var(--foreground) 45%, transparent); }
 .node.is-blocked .dur { color: var(--foreground); font-weight: 500; }
@@ -731,6 +733,18 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .d-meta { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
 .d-meta code { font-size: 12.5px; border: 0; background: none; padding: 0; color: var(--foreground); }
 .d-sec { margin-top: 26px; }
+/* a section's head: an h2 under the step page's h1, an h3 in the drawer; one look for both */
+#step-detail :is(.d-sec, .d-sec-h) > :is(h2, h3) { font: 600 15px/22px var(--font-sans);
+  font-stretch: 100%; letter-spacing: 0; margin: 0; color: var(--foreground); }
+/* what a running step is doing now: its thread's latest message, then its live progress */
+.d-now .now-msg { margin-top: 6px; padding: 10px 12px; border: 1px solid var(--border);
+                  border-radius: var(--radius); background: var(--card); max-width: 72ch; }
+.now-who { margin-bottom: 4px; }
+.now-from { font-weight: 600; color: var(--foreground); }
+.now-text { line-height: 21px; overflow-wrap: anywhere; }
+.now-more { display: inline-block; margin-top: 6px; font-size: 13px; }
+.now-progress { margin-top: 12px; }
+.d-resume { margin-top: 10px; max-width: 72ch; overflow-wrap: anywhere; }
 .d-sec-h { display: flex; align-items: baseline; gap: 12px;
            margin-bottom: 10px; }
 .d-sec-h .label { margin: 0; }
@@ -787,6 +801,22 @@ dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
                                         background: var(--muted); border: 1px solid var(--border);
                                         border-radius: var(--radius-md); white-space: pre-wrap; }
 .f-v .v.md, .f-v .clip.md, .f-v .v.prose, .f-v .clip.prose { max-width: 72ch; }
+/* a long text value reads as prose, in the body's font; JSON and code keep the mono */
+.f-v .clip.md { font-size: 14.5px; line-height: 22px; }
+.f-v .clip.md > :first-child { margin-top: 0; }
+.f-v .clip.md :is(h1, h2, h3, h4) { font: 600 15px/22px var(--font-sans); font-stretch: 100%;
+                                    margin: 12px 0 4px; color: var(--foreground); }
+.f-v .clip.md p + p, .f-v .clip.md :is(ul, ol, pre) { margin-top: 8px; }
+code.v.path { font-size: 12.5px; overflow-wrap: anywhere; }
+/* a small object's names and values on one line: "type normal · model sol · effort high" */
+dl.v.pairs { display: flex; flex-wrap: wrap; gap: 2px 16px; margin: 0; }
+dl.v.pairs > div { display: flex; gap: 6px; align-items: baseline; }
+dl.v.pairs dt { font-size: 13px; color: var(--muted-foreground); }
+dl.v.pairs dd { margin: 0; }
+/* what a failed agent said: prose, in the body's font, its lines kept */
+.err-box.said { padding: 10px 12px; }
+.err-text { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; font-size: 14px;
+            line-height: 21px; }
 .f-v .v.md > * { margin-top: 0; }
 /* values by kind */
 .v.num { font-variant-numeric: tabular-nums; }
@@ -873,8 +903,16 @@ code.v { border: 0; background: none; padding: 0; }
 .type.inline { display: inline; }
 /* ---- messages: a step's thread with the orchestrator -------------------------------- */
 .msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
-.m { padding-left: 12px; border-left: 2px solid var(--border-strong); min-width: 0; }
-.m-lead { margin-left: 28px; border-left-color: color-mix(in oklch, var(--accent) 60%, transparent); }
+/* each message a card: the step's at the left, the orchestrator's and the owner's set in from
+   it; the owner's own tinted, so one sees at a glance what one said */
+.m { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+     background: var(--card); }
+.m-lead, .m-owner { margin-left: 28px; }
+/* inside a card (an inbox note) a message is flat: no card within a card */
+.item .m { padding: 0; border: 0; background: none; margin-left: 0; }
+.item .msgs { gap: 12px; }
+.m-owner { background: color-mix(in oklch, var(--primary) 7%, var(--card));
+           border-color: color-mix(in oklch, var(--primary) 30%, var(--border)); }
 .m-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13px;
           line-height: 18px; color: var(--muted-foreground); }
 .m-from { font-weight: 600; color: var(--foreground); }
@@ -921,7 +959,9 @@ ul.now li { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; 
 /* the step's id first, its doc after in muted ink; on a narrow row its time and quiet tag
    take the next line rather than squeeze the id */
 ul.now a { display: flex; gap: 6px; flex: 1 1 16rem; min-width: 0; text-decoration: none; }
-ul.now .ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the step's id, then its doc in up to two lines: a doc reads, it is not cut at a word */
+ul.now .ttl { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
+              -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; }
 ul.now .r-id { font-weight: 600; }
 ul.now .r-doc { color: var(--muted-foreground); }
 ul.now .r-meta { display: inline-flex; flex: none; align-items: center; gap: 8px;
@@ -980,7 +1020,10 @@ nav.seg a:hover { color: var(--foreground); }
 nav.seg a[aria-current] { color: var(--foreground); background: var(--secondary);
                           box-shadow: 0 0 0 1px var(--border-strong); }
 table.log { font-size: 12.5px; }
-table.log td { padding: 5px 8px; vertical-align: baseline; }
+table.log td { padding: 3px 8px; vertical-align: baseline; line-height: 1.45; }
+table.log summary { padding: 3px 0; min-height: 24px; }
+.log-place { font-weight: 600; color: var(--muted-foreground); }
+.log-place::after { content: " ·"; font-weight: 400; }
 table.log td.what { min-width: 14rem; width: 100%; }
 table.log .num { color: var(--muted-foreground); font-size: 12px; }
 table.log .at { white-space: nowrap; color: var(--muted-foreground); font-size: 12px; }
@@ -1003,7 +1046,7 @@ table.log summary { color: var(--foreground); overflow-wrap: anywhere; }
 .fn-group[hidden], .fn[hidden] { display: none; }
 .fn { padding: 12px 0; border-top: 1px solid var(--border); }
 .fn-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; overflow-wrap: anywhere; }
-.fn-head b { font: 600 13px var(--font-mono); }
+.fn-head b { font: 600 15px/22px var(--font-mono); }  /* the name leads its entry */
 .fn-doc { margin-top: 4px; max-width: 72ch; color: var(--muted-foreground); font-size: 14px; line-height: 21px; }
 .fn-doc p { margin: 0 0 6px; }
 .fn:target { scroll-margin-top: 16px; }
@@ -1017,6 +1060,11 @@ table.log summary { color: var(--foreground); overflow-wrap: anywhere; }
 article.item { background: var(--card); border: 1px solid var(--border);
                border-radius: var(--radius); padding: 14px 16px; margin: 12px 0; }
 .item > h3 { font: 750 17px/23px var(--font-display); font-stretch: 105%; }
+/* a history card's name: a quiet link at body weight, never a display heading */
+#messages-view .item > h2.t-name { margin: 0; font: 600 15.5px/22px var(--font-sans);
+                                    font-stretch: 100%; color: var(--foreground); }
+.t-name a { color: inherit; text-decoration: none; }
+.t-name a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .item > .meta { margin: 2px 0 6px; }
 /* an open item whose asker has stopped: said in the attention gold, once, under its meta */
 .item > .gone { margin: 0 0 6px; color: var(--status-attention); font-weight: 500; }
@@ -1088,6 +1136,8 @@ dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
 .unit-h .g, .unit-h .g svg, .p-title .g, .p-title .g svg { width: 22px; height: 22px; }
 .unit-sum { margin: 4px 0 16px; }
 .unit-page .board { padding: 0; }
+/* the h1 names the unit: its box does not again */
+.unit-page .box-label, .unit-page .fold-box > summary .sid { display: none; }
 .unit-last .md { max-width: 72ch; }
 
 /* ---- the project page's title and its summary's attention tags ------------------------------ */
@@ -1102,24 +1152,34 @@ dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
 
 /* ---- the index: a cancel is said in muted ink, after any failure ----------------------------- */
 .attn-line { font-weight: 500; overflow-wrap: anywhere; }
+/* the runner stopped: it outweighs every project's tags, since nothing new starts anywhere */
+.runner-off { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 16px;
+              padding: 12px 14px; font-size: 15px; line-height: 22px;
+              border: 1px solid color-mix(in oklch, var(--status-attention) 55%, transparent);
+              border-radius: var(--radius);
+              background: color-mix(in oklch, var(--status-attention) 9%, var(--background)); }
+.runner-off strong { color: var(--status-attention); }
+.runner-off .ro-icon { flex: none; margin-top: 1px; color: var(--status-attention); }
 .attn-line .cancelled-words { color: var(--muted-foreground); font-weight: 400; }
 .b-cancelled { background: color-mix(in srgb, var(--muted-foreground) 55%, var(--secondary)); }
 
 /* ---- messages: questions, the ones nobody waits on, notes read on sight ---------------------- */
-.q-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; margin-top: 10px; }
-.q-actions > details { flex: 1 1 100%; order: 1; }
-.q-actions > details:not([open]) { flex: none; order: 0; }
-/* Answer opens the box: a button until then */
-details.q-answer > summary { display: inline-flex; align-items: center; min-height: 32px;
-  padding: 0 14px; list-style: none; border-radius: var(--radius-md); font-weight: 500;
-  background: var(--primary); color: var(--primary-foreground); border: 1px solid var(--primary); }
-details.q-answer > summary::-webkit-details-marker { display: none; }
-details.q-answer > summary:hover { background: color-mix(in srgb, var(--primary) 88%, var(--foreground)); }
-details.q-answer[open] > summary { background: var(--card); color: var(--foreground);
-                                   border-color: var(--input); margin-bottom: 0; }
+/* Answer and Close keep their places; the answer box opens under them */
+.q-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
+.q-actions button { min-height: 32px; }
+.q-toggle[aria-expanded="true"] { background: var(--card); color: var(--foreground);
+                                  border-color: var(--input); }
+.q-box { margin-top: 10px; }
+@media (scripting: enabled) { .q-box:not([data-open]) { display: none; } }
+@media (scripting: none) { .q-toggle { display: none; } }
+/* a question between agents: the owner may answer, but it is not theirs to; quieter */
+.q-group + .q-group { margin-top: 28px; }
+.q-group > h2 { margin-top: 20px; }
+.item.q.agents > h3 { font: 600 15px/22px var(--font-sans); font-stretch: 100%; }
+.item.q.agents .md { color: var(--muted-foreground); }
 .q-close button { min-height: 32px; }
 .stopped, .notes { margin-top: 24px; }
-#inbox-items > .empty { padding: 12px 0; }
+#inbox-items > .empty, .q-group > .empty { padding: 4px 0 8px; }
 .stopped-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
                 gap: 8px 16px; }
 .stopped-head h2 { margin: 0; }
@@ -1156,7 +1216,7 @@ details.read-now .item { opacity: .85; }
                  list-style: none; font-weight: 500; }
 .missing-links a { display: inline-flex; align-items: center; min-height: 32px; }
 @media (max-width: 720px) {
-  details.q-answer > summary, .q-close button, .crumbs a, .missing-links a, details.pane > summary,
+  .q-actions button, .q-close button, .crumbs a, .missing-links a, details.pane > summary,
   details.kinds > summary, .stopped-list summary, .close-all button, .mark-all { min-height: 44px; }
   .stopped-list summary { padding-top: 10px; }
   dl.a-facts { grid-template-columns: minmax(0, 1fr); }
@@ -1165,7 +1225,7 @@ details.read-now .item { opacity: .85; }
 
 /* ---- narrow screens: one card per line, no edges; the drawer is a sheet ------------- */
 @media (max-width: 720px) {
-  .m-lead { margin-left: 14px; }
+  .m-lead, .m-owner { margin-left: 14px; }
   .stuck a { white-space: normal; }  /* a long id may break rather than overflow */
 
   :root { --gutter: 16px; --nav-pad: 8px; --stripe: 3px; }
@@ -1190,7 +1250,8 @@ details.read-now .item { opacity: .85; }
                              overflow-wrap: anywhere; }
   .fold-box .fb-meta { grid-column: 2; white-space: normal; }
   .fold-box .fb-last { display: none; }
-  .fold-box .chev { grid-column: 3; grid-row: 1 / span 2; }
+  .fold-box > summary .fb-ago { grid-column: 2; margin-left: 0; }
+  .fold-box .chev { grid-column: 3; grid-row: 1 / span 3; }
   /* its main fn's icon under the glyph, beside the count, as the id takes the line */
   .fold-box > summary:has(> .ficon) .g { grid-row: 1; }
   .fold-box > summary > .ficon { grid-column: 1; grid-row: 2; justify-self: center; }
@@ -1306,7 +1367,9 @@ details.read-now .item { opacity: .85; }
 .project-page { min-width: 0; }
 .plan-pane { min-width: 0; container: plan / inline-size; }
 .board-side { min-width: 0; }
-.board-pane { min-width: 0; margin-top: 32px; container: board / inline-size; }
+/* positioned: the board's visually hidden words (absolute) take the pane as their box, so its
+   scroll clips them; else they would hang from the sticky column and lengthen the page */
+.board-pane { position: relative; min-width: 0; margin-top: 32px; container: board / inline-size; }
 /* the board's head: the program's own title (else "Board"), when it was written under it */
 .board-head { margin: 0 0 var(--space-md); }
 .board-h { display: flex; align-items: center; gap: var(--space-sm); margin: 0; }
@@ -1317,17 +1380,18 @@ details.read-now .item { opacity: .85; }
 .plan-pane > .attn-note { margin-top: var(--space-sm); }
 .plan-pane > .about { margin-top: var(--space-md); }
 .plan-pane .sumline .bar { width: clamp(200px, 32%, 480px); }  /* the slivers read */
-.about-more > summary { display: inline-flex; align-items: center; gap: 2px; margin-top: 2px;
+.more-fold > summary { display: inline-flex; cursor: pointer; align-items: center; gap: 2px; margin-top: 2px;
                         list-style: none; font-size: 13px; line-height: 18px; font-weight: 500;
                         color: var(--muted-foreground); border-radius: var(--radius-sm); }
-.about-more > summary::-webkit-details-marker { display: none; }
-.about-more > summary:hover { color: var(--foreground); }
-.about-more > summary:hover > span { text-decoration: underline; text-underline-offset: 3px;
+.more-fold > summary::-webkit-details-marker { display: none; }
+.more-fold > summary:hover { color: var(--foreground); }
+.more-fold > summary:hover > span { text-decoration: underline; text-underline-offset: 3px;
                                      text-decoration-color: var(--border-strong); }
-.about-more[open] > summary { margin-bottom: var(--space-sm); }
-.about-more[open] .chev { transform: rotate(180deg); }
-.about-more .am-less, .about-more[open] .am-more { display: none; }
-.about-more[open] .am-less { display: inline; }
+.more-fold[open] > summary { margin-bottom: var(--space-sm); }
+.more-fold[open] .chev { transform: rotate(180deg); }
+.more-fold .m-less, .more-fold[open] .m-more { display: none; }
+.more-fold[open] .m-less { display: inline; }
+.doc-more { margin-top: var(--space-sm); }
 .plan-pane > .board-tools { margin: var(--space-xl) 0 var(--space-md); }
 .board-tools label { display: inline-flex; align-items: center; gap: 6px;
                      color: var(--muted-foreground); font-weight: 500; }
@@ -1388,7 +1452,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 /* the board alone: of the plan's pane only the summary line's switch stays, over the board */
 @media (scripting: enabled) {
   .has-panel .view-switch { display: flex; }
-  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > :not(.sumline) { display: none; }
+  html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > :not(.sumline, .p-title) { display: none; }
   html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane > .sumline {
     margin-bottom: var(--space-lg); }
 }
@@ -1454,7 +1518,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
   .sumline > .view-switch { order: 2; margin-left: 0; }
   .has-panel .sumline::before { content: ""; order: 1; flex-basis: 100%; }
   .plan-pane .sumline .bar { width: 120px; }
-  .about-more > summary { min-height: 44px; margin-top: 0; }
+  .more-fold > summary { min-height: 44px; margin-top: 0; }
   .board-tools .q-field { flex-basis: 100%; max-width: none; }
   .board-tools input[type=search], .board-tools .tool-link { height: 44px; }
   .board-tools .q-clear { right: 0; width: 44px; height: 44px; }
@@ -1602,7 +1666,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .graph > .empty { text-align: left; }
 .band + .band, .graph > .layer + .band, .graph > .band + .layer,
 .graph > :is(.band, .layer) + .done-shelf { margin-top: 32px; }
-.band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans); color: var(--muted-foreground); }
+main h2.band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans); color: var(--muted-foreground); }
 .layer { display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start;
          gap: 16px 32px; }
 .layer + .layer { margin-top: 40px; }  /* room for the lines between layers */
@@ -1652,10 +1716,15 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .done-shelf > summary .chev { margin-left: auto; flex: none; }
 .done-shelf[open] > summary .chev { transform: rotate(180deg); }
 .done-shelf[open] > summary { margin-bottom: 12px; }
-.shelf-cards { display: flex; flex-wrap: wrap; gap: 10px 12px; }
-.shelf-cards > .box { flex: none; max-width: 100%; }
-.shelf-cards + .boxes.units { margin-top: 14px; }
+/* the latest done units first, each a line with when it finished: a unit of several steps its
+   fold, a one-step unit its card */
 .done-shelf > .boxes.units { gap: 8px 14px; }
+.shelf-list > .box.solo { display: flex; align-items: center; gap: 10px; padding: 0; background: none; }
+.fb-ago { flex: none; font-size: 12.5px; line-height: 18px; color: var(--muted-foreground);
+          white-space: nowrap; }
+.fold-box > summary .fb-ago { margin-left: auto; }
+.fold-box > summary .fb-ago + .chev { margin-left: 0; }
+.shelf-more { margin: 12px 0 0; }
 .plane.tracing .done-shelf.near > summary { box-shadow: inset 0 0 0 1.5px var(--foreground); }
 @container plan (min-width: 720px) {
   .done-shelf > .boxes.units {

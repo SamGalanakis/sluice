@@ -30,6 +30,8 @@ struct Named {
     project: Option<ProjectId>,
     step: Option<String>,
     unit: Option<String>,
+    /// A run's file: `runs/<run>/files/<name>`.
+    file: Option<(String, String)>,
 }
 fn named(path: &str) -> Named {
     let mut parts = path.trim_start_matches('/').split('/');
@@ -41,6 +43,11 @@ fn named(path: &str) -> Named {
     match (parts.next(), parts.next()) {
         (Some("steps"), Some(step)) => named.step = Some(decode(step)),
         (Some("units"), Some(unit)) => named.unit = Some(decode(unit)),
+        (Some("runs"), Some(run)) => {
+            if let (Some("files"), Some(file)) = (parts.next(), parts.next()) {
+                named.file = Some((decode(run), decode(file)));
+            }
+        }
         _ => {}
     }
     named
@@ -79,6 +86,7 @@ pub async fn page(
     if project.is_none() {
         named.step = None;
         named.unit = None;
+        named.file = None;
     }
     // how long done units stay, as the project's settings set it
     let retire = match project {
@@ -127,6 +135,18 @@ pub async fn page(
                 "No such step".to_owned(),
                 format!("{} has no step {step} now.", p.name),
                 gone,
+            )
+        }
+        (Some(p), _, _) if named.file.is_some() && status == StatusCode::NOT_FOUND => {
+            links.push((p.href(), format!("Back to the {} plan", p.name)));
+            links.push((
+                format!("{}/log?kind=run", p.href()),
+                "See the runs in the log".to_owned(),
+            ));
+            (
+                "No such run file".to_owned(),
+                message.to_owned(),
+                String::new(),
             )
         }
         (Some(p), _, Some(unit)) if status == StatusCode::NOT_FOUND => {

@@ -71,6 +71,18 @@ function watch(root) {
   }
 }
 
+// ---- Answer: opens the box under the buttons, which keep their places --------------------------
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest?.("button.q-toggle");
+  if (!toggle) return;
+  const box = document.getElementById(toggle.getAttribute("aria-controls"));
+  if (!box) return;
+  const open = !box.hasAttribute("data-open");
+  box.toggleAttribute("data-open", open);
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open) box.querySelector("textarea, input, select, button")?.focus({ preventScroll: true });
+});
+
 // ---- closing a question: at once, without leaving the page --------------------------------
 document.addEventListener("submit", async (event) => {
   const form = event.target;

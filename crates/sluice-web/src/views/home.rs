@@ -97,7 +97,7 @@ struct HomeTemplate<'a> {
 /// A status's glyph (DESIGN.md, the Shape Carries It Rule): its Lucide icon, named for screen
 /// readers by the status word.
 pub fn glyph(status: &str) -> TrustedHtml {
-    use super::icons::{Icon, icon};
+    use super::icons::{Icon, solid};
     let (status, shape, class) = match status {
         "running" => ("running", Icon::LoaderCircle, "spin"),
         "succeeded" => ("succeeded", Icon::CircleCheck, ""),
@@ -112,7 +112,7 @@ pub fn glyph(status: &str) -> TrustedHtml {
     };
     TrustedHtml::owned(format!(
         "<span class=\"g g-{status}\" role=\"img\" aria-label=\"{status}\">{}</span>",
-        icon(shape, 16, class)
+        solid(shape, 16, class)
     ))
 }
 #[derive(Clone, Debug)]

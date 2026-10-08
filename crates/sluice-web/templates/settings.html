@@ -1,9 +1,11 @@
+{% macro capacity(id, number, function, fns) %}<fieldset class="cap-choice"><legend class="vh">Capacity</legend><div class="cap-opt"><label><input type="radio" name="capacity" value="number"{% if function.is_empty() %} checked{% endif %}> A number</label><input id="{{ id }}" name="number" type="number" min="0" step="1" inputmode="numeric" value="{{ number }}" aria-label="Capacity as a number"></div><div class="cap-opt"><label><input type="radio" name="capacity" value="fn"{% if !function.is_empty() %} checked{% endif %}> From a fn</label><select name="capacity_fn" aria-label="The fn that gives the capacity">{% if fns.is_empty() %}<option value="">No fn returns a capacity</option>{% endif %}{% for f in fns %}<option{% if crate::settings::same(f, function) %} selected{% endif %}>{{ f }}</option>{% endfor %}</select></div></fieldset>{% endmacro -%}
 <link rel="stylesheet" href="{{ css }}">
 <div class="settings-page">
 <!--settings-live--><header id="settings-live" data-revision="{{ view.project.settings_rev }}" data-name="{{ view.project.name }}" data-paused="{{ view.project.paused }}" data-archived="{{ view.project.archived }}" data-page-title="{{ view.project.name }} · Settings · sluice">
 <h1>{{ view.project.name }}{% if view.project.paused %} <span class="tag">Paused</span>{% endif %}</h1>
 <p class="settings-lead">Project settings{% if view.project.archived %} · Archived{% endif %}</p></header><!--/settings-live-->
-<p class="setting-help">Each Apply commits one change right away. <a href="/projects/id/{{ view.project.project_id }}/log?kinds=project">View authored changes</a>.</p>
+<nav class="settings-index" aria-label="Sections"><a href="#details-heading">Details</a><a href="#resources-heading">Resources</a><a href="#board-heading">Board</a><a href="#retire-heading">Retiring</a><a href="#activity-heading">Activity</a><a href="#danger-heading">Delete</a></nav>
+<p class="setting-help">Each Apply commits one change right away. <a href="/projects/id/{{ view.project.project_id }}/log?kind=project">View authored changes</a>.</p>
 <section aria-labelledby="details-heading"><h2 id="details-heading">Details</h2>
 <dl class="settings-fields">
 <div class="setting-row"><dt><label for="project-name">Name</label></dt><dd>
@@ -29,21 +31,20 @@
 </form><div data-upload hidden><label for="icon-file">Or upload an image, up to 256 KiB</label><input id="icon-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><button type="button" data-upload-button>Apply image</button></div></dd></div>
 </dl></section>
 <section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
-<p class="setting-help">Use a nonnegative capacity, {"capacity_fn":"fn"} for a dynamic capacity, or null to remove. Lowering capacity holds new work while active work continues.</p>
+<p class="setting-help">A capacity is a whole number, or a fn that reports it about every 10 seconds. Lowering it holds new work while active work continues.</p>
 <!--resource-status--><div id="resource-status"><ul class="resource-list">
 {% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · queued steps not counted: the plan's fns are not all loaded yet{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
 {% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
 </ul></div><!--/resource-status-->
 <div id="resource-editors"><dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources">
 <input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<input id="resource-{{ r.name }}" name="value" value="{% if feedback.error("resources") && feedback.resource == r.name %}{{ feedback.value }}{% else %}{{ r.value }}{% endif %}" aria-label="Capacity for {{ r.name }}">
+{% call capacity(format!("resource-{}", r.name), crate::settings::shown_number(feedback, r), r.function, view.capacity_fns(r.function)) %}{% endcall %}
 <div class="setting-actions"><button type="submit">Apply capacity</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" && feedback.resource == r.name %}{{ feedback.message }}{% endif %}</span></div>
-</form></dd></div>{% endfor %}</dl></div>
+</form><form method="post" action="{{ view.path() }}" data-setting="resources" class="cap-remove"><input type="hidden" name="field" value="resources"><input type="hidden" name="resource" value="{{ r.name }}"><input type="hidden" name="capacity" value="remove"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}"><button type="submit" class="link-button">Remove {{ r.name }}</button><span class="settings-feedback" role="status"></span></form></dd></div>{% endfor %}</dl></div>
 <dl class="settings-fields"><div class="setting-row"><dt>New resource</dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource">
 <input type="hidden" name="field" value="resources"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required>
-<label for="resource-value">Capacity</label><input id="resource-value" name="value" value="{% if feedback.error("resources") %}{{ feedback.value }}{% else %}1{% endif %}" required>
-</div><div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></dd></div></dl></section>
+<div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required></div>
+{% call capacity("resource-value", "1", "", view.capacity_fns("")) %}{% endcall %}<div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></dd></div></dl></section>
 <section aria-labelledby="board-heading" id="board-settings"><h2 id="board-heading">Board</h2>
 <p class="setting-help">An OpenUI Lang program drawn beside the plan (its own section on a phone), with live units, step states, outputs, metrics, tables and charts. Agents set it with <code>board_set</code>; <code>docs("board")</code> lists the components.</p>
 <form method="post" action="{{ view.path() }}/board" data-setting="board" id="board-form">
@@ -51,7 +52,7 @@
 <label for="board-program">Program{% if view.project.board_rev.0 > 0 %} · rev {{ view.project.board_rev }}{% endif %}</label>
 <textarea id="board-program" name="program" class="board-program" spellcheck="false" aria-describedby="board-feedback">{{ feedback.value("board", view.project.board.as_deref().unwrap_or("")) }}</textarea>
 <div class="setting-actions"><button type="submit" name="op" value="save">Save board</button><button type="submit" name="op" value="clear"{% if view.project.board.is_none() %} disabled{% endif %}>Clear board</button><span id="board-feedback" class="settings-feedback board-feedback{% if feedback.error("board") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "board" %}{{ feedback.message }}{% endif %}</span></div>
-</form><p class="setting-help" data-board-preview-label hidden>Preview</p><div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div>
+</form><details class="preview-fold more-fold" data-board-preview-label hidden><summary><span class="m-more">Show the preview</span><span class="m-less">Hide the preview</span>{{ crate::views::icons::icon(crate::views::icons::Icon::ChevronDown, 16, "chev")|safe }}</summary><div id="board-preview" class="settings-preview board-preview" aria-label="Board preview" hidden></div></details>
 <h3 id="doc-heading">Document</h3>
 <p class="setting-help">The board's hand-written part, drawn where the program has <code>Doc()</code>. Agents read it with <code>board_doc_read</code> and change it with <code>board_doc_write</code> or <code>board_doc_edit</code>.</p>
 <!--board-doc--><div id="board-doc"><p class="setting-help doc-status">{% if view.doc.rev.0 > 0 %}Rev {{ view.doc.rev }}{% if let Some(at) = view.doc.at %} · edited <time data-ago datetime="{{ at }}">{{ ProjectSettingsView::minute(at) }}</time>{% endif %}{% if let Some(author) = view.doc.author %} by {{ author }}{% endif %}{% else %}Not written yet.{% endif %}{% if !view.doc_drawn() %} The program has no <code>Doc()</code>, so the board does not show it.{% endif %}</p>

@@ -30,11 +30,17 @@ const page = () => document.querySelector("#project-board");
 const chosen = {};  // this tab's choice, should storage refuse it
 const mode = () => (WIDE.matches ? "wide" : "narrow");
 const viewKey = (m, id) => (m === "wide" ? `sluice.view-wide.${id}` : `sluice.view.${id}`);
+// an address that asks for a search, a Show or an Order is about the plan
+const planAsked = () => {
+  const q = new URLSearchParams(location.search);
+  return ["q", "show", "order"].some(k => q.get(k));
+};
 function viewOf(p) {
   if (!p.classList.contains("has-panel")) return "plan";
   const m = mode();
   const views = m === "wide" ? ["plan", "both", "board"] : ["plan", "board"];
   const v = chosen[m] ?? store.get(viewKey(m, p.dataset.project));
+  if (!(m in chosen) && planAsked()) return m === "wide" && v === "plan" ? "plan" : m === "wide" ? "both" : "plan";
   if (views.includes(v)) return v;
   return m === "wide" ? "both" : PHONE.matches ? "board" : "plan";
 }
@@ -51,7 +57,19 @@ function sync() {
   }
   restoreWidth(p);
   restoreAbout(p);
+  openDoc(p);
 }
+// The board's document past its first section: open where the board has the room, folded on
+// a narrower screen so the parts after it (the live widgets) stay near the top; a toggle by
+// hand is kept.
+function openDoc(p) {
+  for (const more of p.querySelectorAll("details.doc-more:not([data-touched])")) {
+    if (more.open !== WIDE.matches) more.open = WIDE.matches;
+  }
+}
+document.addEventListener("click", event => {
+  event.target.closest?.("details.doc-more > summary")?.parentElement.setAttribute("data-touched", "");
+});
 
 document.addEventListener("click", event => {
   const tab = event.target.closest?.("[data-view-tab]");
@@ -63,6 +81,9 @@ document.addEventListener("click", event => {
   frameSplitter();
 });
 WIDE.addEventListener("change", () => { sync(); frameSplitter(); });
+// the page's width moves without the window's (a scrollbar comes or goes as the plan grows):
+// the separator's bounds follow
+new ResizeObserver(() => requestAnimationFrame(frameSplitter)).observe(document.documentElement);
 PHONE.addEventListener("change", sync);
 
 // ---- the splitter -----------------------------------------------------------------------------

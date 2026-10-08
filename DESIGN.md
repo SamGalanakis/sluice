@@ -15,7 +15,7 @@ colors:
   hairline: "oklch(0.308 0.112 262 / 11%)"
   hairline-strong: "oklch(0.308 0.112 262 / 24%)"
   ring: "oklch(0.617 0.2 257)"
-  edge: "oklch(0.46 0.07 258 / 45%)"
+  edge: "oklch(0.46 0.07 258 / 70%)"
   box: "oklch(0.945 0.024 240)"
   nav: "oklch(0.308 0.112 262)"
   nav-ink: "oklch(0.975 0.017 88)"
@@ -253,11 +253,14 @@ Each status keeps its drawn glyph; colour repeats it.
   attention voice.
 - **Paused**: plum, a hold someone chose.
 - **Pending** and skipped: idle, a grey navy.
-- **Failed**: ink, never coral: the cross in a disc and a full-ink border.
+- **Failed**: ink, never coral: the cross in a disc; on a card a 9% ink fill, a border of ink at
+  45% (never a full-ink ring, which would read as the open step's or the keyboard's) and the
+  caption "failed" in ink at 600.
 - **Cancelled** (a failed step the owner cancelled, read from its stored error by
   `views::failure`): a stop on purpose, not a fault, so muted ink: a ring with a square in it,
-  the word "cancelled", counted apart ("n cancelled", after any failure and quieter than it),
-  and Retry a plain button, never the primary.
+  the word "cancelled" (the card's caption too, its border the strong hairline), counted apart
+  ("n cancelled", after any failure and quieter than it), and Retry a plain button, never the
+  primary.
 - **Blocked**: a pending step behind a failed or stale one: a dashed border and the caption
   "blocked".
 
@@ -302,7 +305,7 @@ Every preset keeps these, measured when it is added:
   from each other, and the glyphs still carry every state.
 - **Contrast**: text at least 4.5:1 on the canvas, the card and the box; `nav-ink` and
   `nav-muted` at least 4.5:1 on the band; `primary-foreground` on `primary` and `badge-ink` on
-  `badge` at least 4.5:1; status glyphs, the ring and edge arrowheads at least 3:1.
+  `badge` at least 4.5:1; status glyphs, the ring, the edges (the plan's wait-lines, on the page, a card and a unit box) and their arrowheads at least 3:1.
 - **The mark** keeps its own colours in every theme: it is an `<img>`, never recoloured.
 
 **Adding a theme**: an entry in `THEMES` in `src/views.rs` (its place there is its place in the
@@ -393,22 +396,27 @@ link), when it last changed; for one with failures or cancels a sentence, "Stopp
 · c cancelled · n paused" (each step a link; "Stopped:" only while nothing runs; the failures
 in ink at 500, the cancels after them in muted ink); its description's opening; a progress bar
 with "n of m"; then either its running steps (glyph, the step's id at 600 and its doc after it
-in muted ink, its live time and a gold "quiet" tag once a run has written nothing for 15
-minutes: "quiet 42m", or "quiet" alone when it has written nothing since it started; on a
-narrow row the time and tag take the next line, never squeezing the id) or one line on what
+in muted ink, up to two lines, its live time and a gold "quiet" tag once a run has written
+nothing for its cadence (its plan's `cadence:` tag, else 2 hours; one threshold for every page):
+"quiet 2h 42m", or "quiet" alone when it has written nothing since it started; on a narrow row
+the time and tag take the next line, never squeezing the id) or one line on what
 stops it ("Paused.", "Stopped: nothing is running."). Projects with no steps fold under "No
 steps yet (n)", the archived ones under "Archived (n)". While nothing holds the
-scheduler lease, one attention line heads the list: "Runner stopped · nothing new starts until
-`sluice loop` runs".
+scheduler lease a box heads the list and outweighs every tag under it: a hairline of the
+attention gold at 55% all round on a 9% gold wash, the 14px corner, Lucide `triangle-alert` in
+gold, "**Runner stopped.** No step starts until `sluice loop` runs; running steps carry on." at
+15/22.
 
 ### Board (`/projects/id/<p>`)
 Top down:
 0. **Title**: the project's status glyph (22px), icon and name, the page's `h1` (28/34).
-1. **Summary line**: the progress bar (succeeded, running, failed, the rest; it grows with the
-   line, 200 to 480px, so a few failures among hundreds still read), "N steps · n succeeded ·
-   n running", then, only when there are some, weighted tags that lead to Show: Attention:
-   "n failed" (the failed glyph, ink border, 600), "n cancelled" (the cancelled glyph, muted)
-   and "n quiet 2h+" (gold: running and silent for two hours or more); and a Paused tag; then "Paused: no step starts." or "Archived: listed
+1. **Summary line**: the progress bar (succeeded, running, failed, cancelled, the rest; a
+   segment only for a count above zero; it grows with the line, 200 to 480px, so a few
+   failures among hundreds still read), "N steps · n succeeded" and "· n running" when some
+   run, then, only when there are some, weighted tags that lead to Show: Attention: "n failed"
+   (the failed glyph, ink border, 600), "n cancelled" (the cancelled glyph, muted) and "n
+   quiet" (gold: running and silent past its cadence); and a Paused tag. The title stays over
+   the board when the board is shown alone, on a phone too; then "Paused: no step starts." or "Archived: listed
    apart from other projects." when so; then, 12px below, the project's description as
    markdown: its first block (a heading takes the block after it too) and the rest folded in a
    `<details>` under a quiet "More" (a chevron; "Less" when open), closed by default and
@@ -433,7 +441,8 @@ Top down:
    an arrowhead is "this, then that", a quiet label names each band.
    - **Bands**: under Live first, "Running" (a unit with a step running or outside), then
      "Stopped" (a step failed or stale, or held up by one), then "Waiting" (the rest not
-     done), each label in meta (13px, 500, muted ink) at the column's left edge, 32px after
+     done), each label an `h2` under the page's `h1`, set in meta (13px, 500, muted ink) at the
+     column's left edge, 32px after
      the band before. Under Plan order there is one band and no label. Show and the search
      only leave units out; the bands keep their order.
    - **Layers**: a band lays its units in layers by the longest chain of waits among them, so
@@ -450,8 +459,9 @@ Top down:
    - **The done shelf**: every done unit (every step succeeded or skipped), under either order,
      on one `<details class="done-shelf">` after the bands: the success glyph, "44 done units ·
      44 steps" (14px, 500) on the box tone with the 14px corner, and a chevron; closed by
-     default and remembered per tab. Open, its one-step units are their cards, wrapping
-     (10px by 12px apart), then each other unit one line, a `<details>`: the success glyph, the
+     default and remembered per tab. Open, the latest 20 done units, finished newest first,
+     each with when it finished at its line's end ("2h ago", 12.5px muted): a one-step unit
+     its card, any other one line, a `<details>`: the success glyph, the
      unit id, its steps as the board's lane strings write them (`fork✓ work✓ land✓ rm–`, data
      mono 12px in muted ink, the step's id without the unit's prefix and its mark, a step named
      as its unit its mark alone; each mark in ink at 700 and 13px so a ✓ never passes for the
@@ -459,7 +469,8 @@ Top down:
      chevron, in a grid of wider cells (`minmax(360px, 1fr)`); the line opens to its cards. A
      search that matches in a done unit, or Show: Done, draws the shelf and the matching units
      open (under ids of their own); opening a step on the shelf in the drawer opens the shelf
-     and its unit.
+     and its unit. Under the 20, "The latest 20, newest first. Show all n" in meta, its link
+     Show: Done, which draws every one; the page sends the lines' data only for what it draws.
    - **Empty**: a board with no units to show says why, for the view: "Nothing needs
      attention." (Attention), "Every unit is done." (Active), "No unit is done yet." (Done),
      else "No units match this view.", at the column's left edge.
@@ -473,11 +484,14 @@ Top down:
    A path whose order a longer path already gives (its source reaches its dependent through
    two lines or more) is not drawn, a value passed along it too: the board shows what comes
    after what; a condition and an `after?` stay, each saying more than the order. Every line
-   looks alike: 1.5px in the edge colour, an arrowhead on the card it enters. It leaves the
-   bottom of its source's card (a unit gate, the bottom of its box) and enters the top of the
-   card that waits, spread along each in the order of the cards at the other ends; between
-   units it passes every card and every other unit in between through the gaps of each row,
-   never over a unit. What a line carries beyond order is in words, shown by its far end while
+   looks alike: 1.5px in the edge colour (3:1 or more on the page, a card and a unit box, still
+   quieter than the arrowhead), an arrowhead on the card it enters. It leaves the bottom of its
+   source's card (a unit gate, the bottom of its box) and enters the top of the card that
+   waits, spread along each in the order the lines head off and come in (a bypass on the right
+   leaves and enters on the right, so hooks never cross); between units it passes every card
+   and every other unit in between through the gaps of each row, never over a unit, 12px
+   further from a unit's box than from a card so it never runs along a box's border, and past
+   a box's label as past a card. What a line carries beyond order is in words, shown by its far end while
    a card is traced and in its `<title>`: "text → data" for a value passed, "if ok" and "if
    not ok" for a condition, "even if skipped" for an `after?`; plain order needs none. The
    lines are drawn on the client and kept across the stream's patches (`data-ignore-morph`),
@@ -521,7 +535,8 @@ project's live data. It is the owner's instrument for that project, never a seco
   parts then take the pane's width up to 1680px, every table as wide as the rest so they share
   one right edge; prose keeps its 72ch); the choice is remembered per project. It is part of
   the summary line, at its right end, as wide as its words; with the board alone, the summary
-  line keeps only it, at the right above the board. With the
+  line keeps only it, at the right above the board, under the project's title. An address that
+  asks for a search, a Show or an Order opens on the plan whatever was picked. With the
   step drawer open the drawer takes the side: the plan shows, the board and the switch step
   away until it closes.
 - **The splitter** (script only): a 32px track between plan and board, a `role="separator"`
@@ -552,8 +567,9 @@ project's live data. It is the owner's instrument for that project, never a seco
   word, then its age in meta), the steps' marks in data mono (on one line; the table scrolls
   sideways in its own wrap before a lane breaks) and what it waits on in muted ink (breaking
   anywhere, so a long path never widens the table); under it a one-line key to the marks it shows
-  (✓ succeeded, ▶ running, ▷ finishing, · pending, ≡ queued, ‖ paused, ✗ failed, ~ stale,
-  – skipped). In a board under 600px each row is a block: the unit, its state and its marks on
+  (✓ succeeded, ▶ running, ▷ finishing, · pending, ≡ queued, ‖ paused, ✗ failed, ■ cancelled,
+  ~ stale, – skipped); a unit whose every stopped step was cancelled reads "cancelled" with the
+  cancelled glyph, never "failed". In a board under 600px each row is a block: the unit, its state and its marks on
   one line where they fit (the marks take the next line whole when they do not, breaking
   between steps only past the board's width), then what it waits on. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
   under it in meta. Output is its name in meta over the value; a value from the step's progress
@@ -567,7 +583,10 @@ project's live data. It is the owner's instrument for that project, never a seco
   ink at 12px, its caption in meta under it. Doc, Markdown and LatestMessage are markdown at
   the text's 15/22 and 72ch measure, drawn as message bodies draw (escaped, unsafe links
   dropped). Doc is the board's document, the hand-written part that reads as one piece of
-  prose: its first rank of headings in the board's heading voice (Archivo 750 at 17/23), the
+  prose. Its first section shows (up to its second heading); the rest folds under "Read more"
+  (a chevron; "Read less" when open), open where the board has the room (1280px and up) and
+  closed below, so on a phone the live parts after it (the Units table, the quick check) stay
+  near the top while the author's order is kept; a toggle by hand is kept: its first rank of headings in the board's heading voice (Archivo 750 at 17/23), the
   next at 15/21 and any under that at 14/20 in muted ink, 18px above a heading and 4px under
   it; quotes a 1px strong
   hairline at the left in muted ink; under it "Edited 12m ago by orchestrator" in meta (the time
@@ -593,7 +612,9 @@ page from 1200px, `min(680px, 45vw)`; over the page on a scrim below that; full 
 phone) and puts the card's ring on; without script the card's link opens the step's own page.
 The step reads top down:
 - on its own page only, a way back above it, in 14px muted ink: "← <project> plan / unit <u>"
-  (Lucide `arrow-left`); there its id is the page's `h1`, in the drawer a 22px `h2`;
+  (Lucide `arrow-left`); there its id is the page's `h1` and each section's head an `h2`, in
+  the drawer its id a 22px `h2` and each head an `h3` (one look either way: 15/22 at 600), so
+  no level is skipped; the tab reads "<step> · <project> · sluice";
 - its id with badges: the status glyph and word, "finishing", "blocked", "quiet",
   "done/total runs" when scattered; its doc; "Running for 2h 14m" or "Ended 3h ago · took
   10h 0m"; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
@@ -604,13 +625,22 @@ The step reads top down:
   a cancelled one it stays a plain button),
   Cancel (pending or running), 14px apart; then a link "Thread · n messages" and a gold "n
   awaiting reply" tag on the same line, the feedback's fold on a line of its own under them;
+  a failure that says how to resume ("To resume it, bind the step's session input…") under
+  them in meta at 72ch, its tool call as code;
+- while it runs, **Now** first: its thread's latest message on the card colour (a hairline,
+  the 14px corner, 72ch): the sender at 600 and "10m ago" in meta, its first 360 characters as
+  plain text (an ellipsis when cut, then "Read it in the thread"), or "Nothing in its thread
+  yet."; then its live progress, "Progress, set 2m ago. Not final: no step reads it.", and its
+  fields (no Progress section of its own while it runs);
 - facts: "Waits on" (each reason) and "After" (its gate entries);
 - sections under small heads, in need order: Queued, Skipped, Finishing (when it submitted,
   as a relative time, the record's seq and the release in mono, then a meta note that
   `step_settle` settles a run that lingers), "Why it failed" (or "Cancelled"): one plain
-  sentence from its failure kind at 500 ("Stopped at its wall-clock cap after 10h 0m.", "Its
-  fn failed: <its first line>", for a cancel its reason), what it said under it (one line in
-  13px data, several in the mono box), the pane its agent left folded under "Pane at failure"
+  sentence from its failure kind at 500 ("Stopped at its wall-clock cap after 10h 0m.", for a
+  fn its traceback's last exception, a wall-clock cap read as the agent's, else "Its fn
+  failed: <its first line>"; for a cancel its reason), what it said under it (one line in 13px
+  data; several as prose in the body's font, lines kept, in the muted box), the traceback
+  folded under "Traceback", the pane its agent left folded under "Pane at failure"
   (a chevron; the rows in 12px data, scrolling in their own box), and "Run files" linking each
   file the run has (`file-text` icons) as plain text,
   Outside sluice (an external step's doc and how to settle it), Progress, Outputs, Inputs,
@@ -625,30 +655,42 @@ The step reads top down:
   switch at the Outputs head or the display preference) in a narrow column of meta, its doc
   and "From <source>" (linking to the source step) under the name at 12.5px, the value beside
   it, so every value starts at one x; a value reads by its kind (text, a tabular number, a
-  `true`/`false` pill, a muted "none"); a long value folds, its name, doc and source across the
-  row above it. The outputs not set yet are named on one line after the set ones, "7 outputs
+  `true`/`false` pill, a muted "none", a file reference's path in code, a small flat object as
+  names and values on one line, "type normal · model sol"); a long value folds, its name, doc
+  and source across the row above it: long text as markdown in the body's font at 14.5/22 and
+  72ch, JSON and code in the mono box. A type that is a JSON schema reads as its type
+  ("object"). Where a value comes from shows only when it says something (a source step, a
+  file, a plan input, "Submitted so far"); "As its last run received them." or "A value not
+  otherwise set is its default." says the rest once under the Inputs head. The outputs not set yet are named on one line after the set ones, "7 outputs
   not set yet: summary, final, …" (each name's doc its title); an unset input reads "No value
   yet."
 - Runs: one row per run, numbered, with its own outcome's glyph and word (Running, Succeeded,
   Failed, Cancelled) and "ended 3h ago · took 2h 14m" (or "started 5m ago"), its failure's
-  sentence, then its result as labelled facts in 13px (Kind in data, Said, Outputs by name, On
-  completion, Engine, Session, Run, Files), never escaped JSON; the current run last on the
+  sentence (not on a failed step's last run, whose sentence leads the page), then its result as
+  labelled facts in 13px (Kind in data, Said, Outputs by name, On completion, Engine, Session,
+  Run, Files), never escaped JSON; the current run last on the
   secondary fill, inside the column (no bleed past its edges).
 
 ### Unit (`/projects/id/<p>/units/<u>`)
 A way back ("← <project> plan"), the unit's id as the page's `h1` (with the success glyph when
-done) and "n steps" in meta; its box as the board draws it, a done unit open to its cards;
+done) and "n steps" in meta; its box as the board draws it without its label (the h1 names
+it), a done unit open to its cards;
 no lines are drawn on this page, so each card that waits on another unit says it in words
 ("Waits for l-a1 (running), not in this view"); "Last message": when, then its body as markdown at the 72ch
 measure.
 
 ### Messages (`/inbox`, `/questions`, `/history`, `/projects/id/<p>/…`)
 A page title and a small segmented control (Inbox · Questions · History, the current one in the
-secondary fill). Each question someone waits on is a card: its title (Archivo 17px; without
-one, its body's first line, cut at a word with an ellipsis, never "Question"), a meta line
-("project · thread" linking to the thread, "from X", when, "sets <input>"), the body as
-markdown, then Answer (the primary button; it opens the answer box, open from the start for a
-question with a `ui`) and Close question. A question with a `ui` draws its OpenUI program (its
+secondary fill). The questions someone waits on come in two groups, each an `h2` with its
+count: "For you" ("Questions for you" on the inbox; what the nav's Inbox counts) and "Between
+agents" (one agent's question to another, under a meta line that its addressee answers it).
+Each is a card: its title (an `h3`, Archivo 17px; without one, its body's first line, cut at a
+word with an ellipsis, never "Question"), a meta line ("project · thread" linking to the
+thread, "from X", "to Y" when not the owner, when, "sets <input>"), the body as markdown, then
+a row of two buttons that keep their places: Answer (primary; "Answer as owner", plain, between
+agents) and Close question; Answer opens the answer box under the row (open from the start
+for a question with a `ui`). A question between agents is quieter: its title at 600 in the
+body's font, its body in muted ink. A question with a `ui` draws its OpenUI program (its
 fields and buttons) above a folded "Answer in words instead". The questions nobody is waiting
 on (their askers stopped) follow under "Nobody is waiting n" with "Close all n" at its right:
 one list on the card colour, a line each (a chevron, the title at 600, "project · why" in
@@ -657,9 +699,14 @@ meta) that opens to the body, and Close at its end. The inbox then lists "Unread
 you", else its first message's title or first line). A note is marked read once it has been on
 screen (half of it, or half a screen of a tall one) for 2 s, never on render; one read moves
 under a "Read just now" fold, kept on the page for the session. History lists the threads with
-the owner by the same names, each with its project, message count and "last 3h ago", and a
-preview cut at a word with an ellipsis. A thread page (`thread?thread=<name>`) is titled by the
-thread's name, the project and thread id in meta under it, then every message, each a head
+the owner by the same names (an `h2` at 600 in the body's font, a link without an underline
+until hovered), each with its project, message count and "last 3h ago", and a preview cut at
+a word with an ellipsis. "Unread notes n" counts notes, not threads. A thread page
+(`thread?thread=<name>`) has no segmented control: a way back, "← <project> plan / step <s>"
+(or "/ History"), then the thread's name as its title, the project and thread id in meta under
+it, then every message, each a card (the card colour, a hairline, the 14px corner; the
+orchestrator's and the owner's set 28px in from the step's, 14px on a phone; the owner's own
+tinted with 7% of the primary blue and a blue hairline; never a side rule), each a head
 (from → to, when, an "Awaiting reply" or state tag, "Reply to n"), an optional title, the body,
 "Answer as sent" folded, and an open question's answer form; under them a "Message to
 <recipient>" box (the thread's step while it is in the plan, else the orchestrator) with "Ask a
@@ -673,10 +720,14 @@ and its thread's messages), a Thread field ("any thread"), the kind checkboxes f
 bordered "Kinds: all" (open only when a custom set is chosen) and Apply; a meta line says that
 fn calls that succeeded are left out (they are noise: a capacity fn runs every few seconds)
 unless the `call` kind is chosen. Then a table of seq, time ("12m ago"), kind (12px data) and a
-one-line summary in words ("fig-5294-rm running → succeeded", "w lane held 1 land", "unit
-fig-5294 settled, 6 steps") that opens to the record's JSON, 50 records a page with
-"« newest", "‹ newer" and "older ›", in a focusable region named "Log records". The home log
-shows records without a project. On a phone each record is a block (seq, time and kind on a
+one-line sentence ("fig-5294-rm running → succeeded", "w lane held 1 land", "Unit fig-5294
+settled, 6 steps", a failure as its step page says it, "harness: Cancelled while it ran.",
+"The board's document changed by cli: standup refresh"; never JSON) that opens to the
+record's JSON, each row at least 24px tall, 50 records a page with "« newest", "‹ newer" and
+"older ›", in a focusable region named "Log records". A status record that changes nothing (a
+restart, running → running) is left out unless `step.status` is chosen. The global log holds
+every project's records, each sentence led by its project's name at 600 in muted ink, and says
+so in the meta line. On a phone each record is a block (seq, time and kind on a
 line, what it was under them), so the log never scrolls sideways.
 
 ### Functions (`/fns`)
@@ -696,12 +747,18 @@ lash plan", "Search the log for nope") and "HTTP 404" in meta.
 
 ### Project settings (`/projects/id/<p>/settings`)
 The project's name as title, "Project settings", and "Each Apply commits one change right away"
-with a link to the authored changes. Details: Name (with its rules; links and running work keep
+with a link to the authored changes, under an index of the sections (Details · Resources ·
+Board · Retiring · Activity · Delete) that sticks to the top as the page scrolls (14px muted
+links over a hairline). Help lines keep about 72 characters (62ch of the 13px sans). Details: Name (with its rules; links and running work keep
 the project id), Description (with a Preview), Icon (a text icon up to 16 characters, or an
 image up to 256 KiB). Resources: a line per resource (static capacity or capacity fn, in use,
-waiting, the step queue) and a capacity field each, then a new resource's name and capacity.
+waiting, the step queue) and an editor each: a choice of "A number" (a whole-number field, 0
+or more, the browser refusing a negative) or "From a fn" (a select of the fns that return a
+capacity), Apply capacity, and a quiet "Remove <name>" link-button; then a new resource's name
+and the same choice.
 Board: the program in a monospace textarea (with its rev), Save board and Clear board, and under
-them a live preview, drawn as the board column would draw it (its width), as one types (a save's
+them a live preview folded under "Show the preview", drawn as the board column would draw it
+(its width), as one types (a save's
 warnings, each "Warning: line N: …", follow "Saved (rev N)" in its status); then Document (a 15px
 heading): a help line, a status line ("Rev 3 · edited <time> by orch", or "Not written yet.",
 and "The program has no `Doc()`, so the board does not show it." when it has none), and the
@@ -754,7 +811,10 @@ comma: the card's parts are flex items, which the name already parts with a spac
   corner; gold (`attn`) for "quiet" and "n awaiting reply", muted for a closed or answered
   state.
 - **Icons**: every icon is Lucide (lucide-static 1.52.0, ISC), the published SVG unmodified in
-  `crates/sluice-web/assets/icons/` and inlined by `views::icons::icon`: Lucide's 24-unit grid
+  `crates/sluice-web/assets/icons/`, each a `<symbol>` in the one sprite a page carries
+  (`views::icons::sprite`), drawn by `views::icons::icon` as a `<use>` of it (the solid
+  success and failure glyphs are symbols of their own, since a rule cannot reach into a
+  `<use>`): Lucide's 24-unit grid
   and 2-unit round stroke, in `currentColor` so it takes its control's ink, hover and focus, and
   `aria-hidden` (the control carries the name). 20px in the nav (the inbox tray, project
   settings, display preferences) and for the drawer's close (`x`), 16px for status glyphs, chevrons, the theme tick, the board's

@@ -110,6 +110,8 @@ type QueryOutcome = Result<QueryTable, String>;
 struct UnitsData {
     rows: Vec<UnitRow>,
     done: Option<(usize, usize)>,
+    /// The units stopped only by cancels (`views::failure`): "cancelled", not "failed".
+    cancelled: BTreeSet<String>,
 }
 /// An Output's value: the step's output, or its progress when that is fresher (`step_progress`).
 #[derive(Clone, Debug)]
@@ -352,11 +354,12 @@ pub(crate) fn gather(
                     .collect();
                 let wanted = (!filter.is_empty()).then_some(wanted.as_slice());
                 sluice_runtime::status::unit_rows(c, project, plan, wanted)
-                    .map(|v| UnitsData {
-                        rows: v.rows,
-                        done: v.done,
-                    })
                     .map_err(|e| e.into_public(true).to_string())
+                    .and_then(|v| {
+                        let stopped = super::failure::stopped_steps(c, &project.to_string())
+                            .map_err(|e| e.to_string())?;
+                        Ok(cancels(plan, v, &stopped))
+                    })
             }
         };
         loaded.units.insert(filter, rows);
@@ -589,10 +592,73 @@ fn placeholders(sql: &str) -> Result<usize, String> {
     Ok(highest)
 }
 
+/// The units view with each cancelled step marked as one (`■`, not `✗`) and the units whose
+/// every stopped step was cancelled named apart: a cancel is not a failure of the work.
+fn cancels(
+    plan: &sluice_model::Plan,
+    view: sluice_model::status::UnitsView,
+    stopped: &BTreeMap<String, bool>,
+) -> UnitsData {
+    let mut cancelled = BTreeSet::new();
+    let mut rows = view.rows;
+    for row in &mut rows {
+        let Some(unit) = plan.units().iter().find(|(n, _)| n.as_str() == row.unit).map(|(_, u)| u) else {
+            continue;
+        };
+        // the marks are the unit's steps in order, one word each
+        let marks: Vec<String> = row
+            .steps
+            .split(' ')
+            .zip(&unit.steps)
+            .map(|(word, id)| match stopped.get(id.as_str()) {
+                Some(true) => format!("{}■", word.trim_end_matches('✗')),
+                _ => word.to_owned(),
+            })
+            .collect();
+        row.steps = marks.join(" ");
+        let stops: Vec<bool> = unit
+            .steps
+            .iter()
+            .filter_map(|id| stopped.get(id.as_str()).copied())
+            .collect();
+        if row.state == UnitState::Failed && !stops.is_empty() && stops.iter().all(|c| *c) {
+            cancelled.insert(row.unit.clone());
+        }
+    }
+    UnitsData {
+        rows,
+        done: view.done,
+        cancelled,
+    }
+}
+
+/// A rendered document's first section and the rest: it splits before its second heading
+/// (a heading in code is escaped, so never matches); a document with one section or none is
+/// all first.
+fn first_section(html: &str) -> (&str, &str) {
+    let heading = |at: usize| {
+        let b = html.as_bytes();
+        b[at] == b'<'
+            && b.get(at + 1) == Some(&b'h')
+            && b.get(at + 2).is_some_and(|c| (b'1'..=b'6').contains(c))
+            && b.get(at + 3).is_some_and(|c| *c == b'>' || *c == b' ')
+    };
+    let mut seen = 0;
+    for (at, _) in html.match_indices('<') {
+        if heading(at) {
+            seen += 1;
+            if seen == 2 {
+                return html.split_at(at);
+            }
+        }
+    }
+    (html, "")
+}
+
 // ---- drawing -------------------------------------------------------------------------------
 
 /// The units tool's step marks (`sluice_model::status`), in the order the key lists them.
-const MARKS: [(char, &str); 9] = [
+const MARKS: [(char, &str); 10] = [
     ('✓', "succeeded"),
     ('▶', "running"),
     ('▷', "finishing"),
@@ -600,6 +666,7 @@ const MARKS: [(char, &str); 9] = [
     ('≡', "queued"),
     ('‖', "paused"),
     ('✗', "failed"),
+    ('■', "cancelled"),
     ('~', "stale"),
     ('–', "skipped"),
 ];
@@ -1063,17 +1130,23 @@ impl Draw<'_> {
         self.out.push_str("<div class=\"scroll ou-table-wrap\"><table class=\"ou-table board-units\" role=\"table\"><thead role=\"rowgroup\"><tr role=\"row\"><th scope=\"col\" role=\"columnheader\">Unit</th><th scope=\"col\" role=\"columnheader\">State</th><th scope=\"col\" role=\"columnheader\">Steps</th><th scope=\"col\" role=\"columnheader\">Waiting on</th></tr></thead><tbody role=\"rowgroup\">");
         let mut marks = BTreeSet::new();
         for row in &data.rows {
+            let cancelled = data.cancelled.contains(&row.unit);
             let glyph = match row.state {
                 UnitState::Running => "running",
+                UnitState::Failed if cancelled => "cancelled",
                 UnitState::Failed => "failed",
                 UnitState::Settled => "succeeded",
                 UnitState::Blocked => "paused",
                 UnitState::Queued | UnitState::Pending => "pending",
             };
-            let state = serde_json::to_value(row.state)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_default();
+            let state = if cancelled {
+                "cancelled".to_owned()
+            } else {
+                serde_json::to_value(row.state)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            };
             let age = row
                 .age
                 .map(|_| sluice_model::status::age_text(row.age))
@@ -1239,7 +1312,21 @@ impl Draw<'_> {
         self.out.push_str("<div class=\"board-doc\">");
         match self.loaded.doc.as_ref().filter(|d| !d.markdown.trim().is_empty()) {
             Some(doc) => {
-                self.out.push_str(&markdown(&doc.markdown, "", self.depth + 1));
+                // its first section, then the rest folded: on a phone the parts after the
+                // document (the live widgets, the quick check) stay near the top; board.js
+                // opens the fold where the board has the room
+                let inner = keep_ids(
+                    crate::markdown::render_from(&doc.markdown, self.depth + 1).as_str(),
+                );
+                let (first, rest) = first_section(&inner);
+                let _ = write!(self.out, "<div class=\"md board-md\">{first}</div>");
+                if !rest.is_empty() {
+                    let _ = write!(
+                        self.out,
+                        "<details class=\"doc-more more-fold\" data-preserve-attr=\"open\"><summary><span class=\"m-more\">Read more</span><span class=\"m-less\">Read less</span>{}</summary><div class=\"md board-md\">{rest}</div></details>",
+                        super::icons::icon(super::icons::Icon::ChevronDown, 16, "chev"),
+                    );
+                }
                 if let Some(at) = &doc.at {
                     // the board's one "when": the head leaves it to this line
                     let by = doc

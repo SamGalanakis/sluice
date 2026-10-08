@@ -399,3 +399,133 @@ fn regex_like_rfc3339(text: &str) -> bool {
             && w[..4].iter().all(u8::is_ascii_digit)
     })
 }
+
+#[tokio::test]
+async fn the_log_says_each_record_in_a_sentence_and_the_global_log_spans_projects() {
+    let home = tempfile::tempdir().unwrap();
+    let writer = Writer::open(home.path()).unwrap();
+    let project = writer
+        .write(RetrySafety::NonIdempotent, |tx| {
+            projects::project_create(
+                tx,
+                CreateProject {
+                    name: "said".parse().unwrap(),
+                    description: String::new(),
+                    icon: None,
+                    resources: None,
+                    author: "owner".into(),
+                },
+                &EmptyPlanInitializer,
+                &NoResourceSettings,
+            )
+        })
+        .await
+        .unwrap()
+        .project_id;
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            use sluice_model::{commands::StepStatus, error::PublicError};
+            let status = |step: &str, from, to, error| Event::StepStatus {
+                step: step.parse().unwrap(),
+                from: Some(from),
+                to,
+                error,
+                run_ids: vec![],
+                needs: Default::default(),
+            };
+            tx.append_record(
+                Some(project),
+                status(
+                    "harness",
+                    StepStatus::Running,
+                    StepStatus::Failed,
+                    Some(PublicError::Cancelled {
+                        message: "cancel requested".into(),
+                    }),
+                ),
+            )?;
+            tx.append_record(
+                Some(project),
+                status(
+                    "bump",
+                    StepStatus::Running,
+                    StepStatus::Failed,
+                    Some(PublicError::FnFailure {
+                        message: "exit code 1\nTraceback (most recent call last):\n  File \"m.py\"\nRuntimeError: codex ran past the wall-clock cap of 600 min (SLUICE_AGENT_MAX_MIN)\nsession: s".into(),
+                    }),
+                ),
+            )?;
+            // a running step restarted under a new run: no change to show
+            tx.append_record(
+                Some(project),
+                status("watch", StepStatus::Running, StepStatus::Running, None),
+            )?;
+            tx.append_record(
+                Some(project),
+                Event::ProjectUpdate {
+                    fields: vec!["board_doc".into(), "prune_done_after".into()],
+                    reason: Some("standup refresh".into()),
+                    author: "cli".into(),
+                },
+            )?;
+            tx.append_record(
+                Some(project),
+                Event::ProjectPause {
+                    paused: true,
+                    reason: None,
+                    author: "owner".into(),
+                },
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let reads = ReadPool::open(home.path(), 1).unwrap();
+    let page = log::load(&reads, Some(project), LogQuery::default())
+        .await
+        .unwrap();
+    let said: Vec<&str> = page.rows.iter().map(|r| r.summary.as_str()).collect();
+    assert!(
+        said.contains(&"harness: Cancelled while it ran."),
+        "{said:?}"
+    );
+    assert!(
+        said.contains(&"bump: Stopped at its wall-clock cap of 10h 0m."),
+        "{said:?}"
+    );
+    assert!(
+        said.contains(
+            &"The board's document and when done units retire changed by cli: standup refresh"
+        ),
+        "{said:?}"
+    );
+    assert!(said.contains(&"Project paused by owner"), "{said:?}");
+    assert!(
+        said.iter().all(|s| !s.contains('{')),
+        "never JSON: {said:?}"
+    );
+    assert!(!said.iter().any(|s| s.starts_with("watch")), "{said:?}");
+    // asked for, the status records keep the restart too
+    let statuses = log::load(
+        &reads,
+        Some(project),
+        LogQuery::parse("kind=step.status").unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        statuses
+            .rows
+            .iter()
+            .any(|r| r.summary == "watch running → running")
+    );
+    // the global log holds every project's records, each under its project's name
+    let global = log::load(&reads, None, LogQuery::default()).await.unwrap();
+    assert!(global.rows.len() >= 4, "{:?}", global.rows);
+    assert!(
+        global
+            .rows
+            .iter()
+            .any(|r| r.place.0 == "said" && r.summary == "Project paused by owner")
+    );
+}

@@ -112,6 +112,17 @@ async fn the_doc_draws_its_markdown_with_who_edited_it_and_its_fallback_before()
     // Its headings nest under the column's h2 ("Release"): ## is h3, ### h4.
     assert!(doc.contains("<h3>Phase</h3>"), "{doc}");
     assert!(doc.contains("<h4>Needs you</h4>"), "{doc}");
+    // its first section shows; the rest folds under "Read more" (board.js opens it where the
+    // board has the room), its headings at the levels the whole document gives them
+    let fold = doc
+        .find("<details class=\"doc-more more-fold\"")
+        .expect("a fold");
+    assert!(doc.find("<h3>Phase</h3>").unwrap() < fold, "{doc}");
+    assert!(doc.find("<h4>Needs you</h4>").unwrap() > fold, "{doc}");
+    assert!(
+        doc.contains("<span class=\"m-more\">Read more</span>"),
+        "{doc}"
+    );
     assert!(doc.contains("<strong>Main green</strong>"), "{doc}");
     // An id is kept on one line.
     assert!(

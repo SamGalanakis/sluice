@@ -1,4 +1,4 @@
 <div id="messages-view"><h1>History</h1>{% include "seg.html" %}<div class="threads">
-{% for thread in view.threads %}<article class="item"><h3><a href="{{ thread.href() }}">{{ thread.name() }}</a></h3><p class="meta">{{ thread.project_name }} · {{ thread.messages.len() }} {% if thread.messages.len() == 1 %}message{% else %}messages{% endif %} · last {{ crate::views::ago_html(thread.last_at())|safe }}</p><p class="m-body">{{ thread.preview() }}</p></article>{% endfor %}
+{% for thread in view.threads %}<article class="item"><h2 class="t-name"><a href="{{ thread.href() }}">{{ thread.name() }}</a></h2><p class="meta">{{ thread.project_name }} · {{ thread.messages.len() }} {% if thread.messages.len() == 1 %}message{% else %}messages{% endif %} · last {{ crate::views::ago_html(thread.last_at())|safe }}</p><p class="m-body">{{ thread.preview() }}</p></article>{% endfor %}
 {% if view.threads.is_empty() %}<p class="empty">No conversations with the owner yet.</p>{% endif %}
 </div></div>

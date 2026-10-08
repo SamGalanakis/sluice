@@ -85,7 +85,7 @@ impl ThreadView {
     pub fn preview(&self) -> String {
         self.messages
             .last()
-            .map(|m| cut(&plain(&m.message.body), 160))
+            .map(|m| crate::markdown::cut(&crate::markdown::plain(&m.message.body), 160))
             .unwrap_or_default()
     }
     /// The thread by what it is about: a step's ("Step k2-owner"), the orchestrator's, or a
@@ -107,6 +107,12 @@ impl ThreadView {
             .unwrap_or_else(|| self.thread.clone())
     }
     /// When its last message came.
+    /// The plan step whose thread this is, while the plan has it.
+    pub fn step(&self) -> Option<&str> {
+        self.thread
+            .strip_prefix("step-")
+            .filter(|s| *s == self.recipient)
+    }
     pub fn last_at(&self) -> &str {
         self.messages
             .last()
@@ -117,41 +123,14 @@ impl ThreadView {
         format!("/projects/id/{}/messages/read", self.project)
     }
 }
-/// Markdown read as one line of plain words: its marks and line breaks dropped.
-fn plain(text: &str) -> String {
-    text.lines()
-        .map(|l| {
-            l.trim()
-                .trim_start_matches(['#', '>', '-', '*', ' '])
-                .replace(['*', '`', '_'], "")
-        })
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-/// At most `most` characters, cut at a word, with an ellipsis when cut.
-fn cut(text: &str, most: usize) -> String {
-    if text.chars().count() <= most {
-        return text.to_owned();
-    }
-    let head: String = text.chars().take(most).collect();
-    let at = head
-        .rfind(' ')
-        .filter(|&i| i > most / 2)
-        .unwrap_or(head.len());
-    format!(
-        "{}…",
-        head[..at].trim_end_matches([',', '.', ';', ':', ' '])
-    )
-}
 /// A body's first line as a title.
 fn headline(body: &str, most: usize) -> String {
     let first = body
         .lines()
-        .map(plain)
+        .map(crate::markdown::plain)
         .find(|l| !l.is_empty())
         .unwrap_or_default();
-    cut(&first, most)
+    crate::markdown::cut(&first, most)
 }
 pub fn thread_url(project: ProjectId, thread: &str) -> String {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
@@ -175,6 +154,20 @@ impl InboxView {
             MessageView::Thread => "Thread",
         }
     }
+    /// The tab's title: a thread by its name, a project's pages with the project's name.
+    pub fn page_title(&self) -> String {
+        let what = match (&self.view, self.threads.first()) {
+            (MessageView::Thread, Some(thread)) => thread.name(),
+            _ => self.title().to_owned(),
+        };
+        match self
+            .project
+            .and_then(|id| self.nav.projects.iter().find(|p| p.id == id))
+        {
+            Some(project) => format!("{what} · {}", project.name),
+            None => what,
+        }
+    }
     /// The nav section it is under: a project's Messages, or none (the tray is the inbox).
     pub fn tab(&self) -> &str {
         if self.project.is_some() {
@@ -186,6 +179,25 @@ impl InboxView {
     /// The open questions someone is waiting on.
     pub fn waiting(&self) -> Vec<&MessageItem> {
         self.questions.iter().filter(|q| !q.stopped()).collect()
+    }
+    /// The notes not read yet, across their threads (a thread card says how many it holds).
+    pub fn unread_notes(&self) -> usize {
+        self.threads.iter().map(|t| t.messages.len()).sum()
+    }
+    /// The open questions someone waits on that are put to the owner: what the nav's Inbox
+    /// counts.
+    pub fn for_you(&self) -> Vec<&MessageItem> {
+        self.waiting()
+            .into_iter()
+            .filter(|q| q.recipient() == "owner")
+            .collect()
+    }
+    /// The open questions one agent put to another; the owner may answer them too.
+    pub fn between_agents(&self) -> Vec<&MessageItem> {
+        self.waiting()
+            .into_iter()
+            .filter(|q| q.recipient() != "owner")
+            .collect()
     }
     /// The open questions nobody is waiting on any more.
     pub fn stopped(&self) -> Vec<&MessageItem> {
@@ -228,7 +240,7 @@ impl InboxView {
     ) -> Result<TrustedHtml, PublicError> {
         let nav = NavView::new(&self.nav, self.project, self.tab())?;
         render_layout(
-            self.title(),
+            &self.page_title(),
             &self.body()?,
             &nav,
             viewer,
@@ -307,7 +319,14 @@ pub async fn load(
                         body: crate::markdown::render(&message.body),
                         state,
                         stopped,
-                        sender_class: if is_step { "step" } else { "lead" }.into(),
+                        sender_class: if is_step {
+                            "step"
+                        } else if message.from == "owner" {
+                            "owner"
+                        } else {
+                            "lead"
+                        }
+                        .into(),
                         answer_json: message
                             .answer
                             .as_ref()

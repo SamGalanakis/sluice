@@ -125,3 +125,31 @@ pub fn render_folded(text: &str) -> (TrustedHtml, Option<TrustedHtml>) {
     }
     (render(&lines[..cut].join("\n")), Some(render(&rest)))
 }
+
+/// Markdown read as one line of plain words: its marks and line breaks dropped.
+pub fn plain(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            l.trim()
+                .trim_start_matches(['#', '>', '-', '*', ' '])
+                .replace(['*', '`', '_'], "")
+        })
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+/// At most `most` characters, cut at a word, with an ellipsis when cut.
+pub fn cut(text: &str, most: usize) -> String {
+    if text.chars().count() <= most {
+        return text.to_owned();
+    }
+    let head: String = text.chars().take(most).collect();
+    let at = head
+        .rfind(' ')
+        .filter(|&i| i > most / 2)
+        .unwrap_or(head.len());
+    format!(
+        "{}…",
+        head[..at].trim_end_matches([',', '.', ';', ':', ' '])
+    )
+}

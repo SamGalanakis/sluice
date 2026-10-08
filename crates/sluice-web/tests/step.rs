@@ -651,3 +651,114 @@ async fn the_index_counts_a_cancel_apart_from_a_failure() {
     assert_eq!(snapshot.projects[0].counts.status(), "cancelled");
     writer.shutdown().await.unwrap();
 }
+
+/// A running step's drawer and page lead with what it is doing now: its thread's latest
+/// message (who, when, its first words), then its live progress; the page's sections are h2s
+/// under its h1, the drawer's h3s under its h2, so no level is skipped.
+#[tokio::test]
+async fn a_running_step_says_what_it_is_doing_now() {
+    use sluice_model::ids::{AttemptId, RunId};
+    let (_home, writer, state, project) = fixture().await;
+    let run = RunId::new();
+    let long = format!(
+        "**Landed** the seams on main. {}",
+        "Then the rest of the lane. ".repeat(30)
+    );
+    writer.write(RetrySafety::NonIdempotent, move |tx| {
+        let attempt = AttemptId::new();
+        tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES(?1,?2,'work','executing','{}','fixture','now')", (attempt.to_string(),project.to_string()))?;
+        tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,started_at) VALUES(?1,?2,?3,'work','2026-10-05T09:00:00Z','2026-10-05T09:00:00Z')", (run.to_string(),project.to_string(),attempt.to_string()))?;
+        tx.sql().execute("UPDATE steps SET status='running',run_ids=?2 WHERE project_id=?1 AND step_id='work'", (project.to_string(),json!([run]).to_string()))?;
+        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES (900001,?1,'step-work','orchestrator','work','Start with the seams.','2026-10-05T09:01:00Z')", [project.to_string()])?;
+        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES (900002,?1,'step-work','work','orchestrator',?2,'2026-10-05T09:40:00Z')", (project.to_string(), long))?;
+        tx.changed(Some(project), "project");
+        Ok(())
+    }).await.unwrap();
+    let work = "work".parse().unwrap();
+    let registry = Registry(Arc::new(Exact));
+    let (_, _, step) = views::board::step_snapshot(&state, project, Some(&registry), &work)
+        .await
+        .unwrap();
+    let drawer = step.body().unwrap();
+    let drawer = drawer.as_str();
+    let now = &drawer[drawer
+        .find("<section class=\"d-sec d-now\">")
+        .expect("a Now section")..];
+    let now = &now[..now.find("</section>").unwrap()];
+    assert!(
+        now.starts_with("<section class=\"d-sec d-now\"><h3>Now</h3>"),
+        "{now}"
+    );
+    assert!(
+        now.contains("<span class=\"now-from\">work</span>"),
+        "{now}"
+    );
+    assert!(now.contains("datetime=\"2026-10-05T09:40:00Z\""), "{now}");
+    assert!(
+        now.contains("<p class=\"now-text\">Landed the seams on main."),
+        "{now}"
+    );
+    assert!(
+        now.contains("…</p>") && now.contains("Read it in the thread"),
+        "{now}"
+    );
+    assert!(
+        !now.contains("Start with the seams"),
+        "the latest only: {now}"
+    );
+    // the Now section comes before everything else under the head
+    assert!(drawer.find("d-now").unwrap() < drawer.find("<h3>Inputs</h3>").unwrap_or(usize::MAX));
+    let page = step.page_body("p", None).unwrap();
+    let page = page.as_str();
+    assert!(page.contains("<h1 id=\"d-title\">work</h1>"), "{page}");
+    assert!(
+        page.contains("<h2>Now</h2>") && !page.contains("<h3"),
+        "{page}"
+    );
+}
+
+/// A fn's failure reads as its traceback's last exception, the traceback folded; a hint how to
+/// resume sits with the actions, its tool call as code.
+#[test]
+fn a_fn_failure_reads_as_its_exception_with_the_resume_hint_by_retry() {
+    let plan = Plan::parse_json(
+        br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+        &Signatures,
+    )
+    .unwrap();
+    let mut state = StateSnapshot::default();
+    state.steps.insert(
+        "w".parse().unwrap(),
+        StepState {
+            status: StepStatus::Failed,
+            error: Some("exit code 1".into()),
+            ..Default::default()
+        },
+    );
+    let mut view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
+    view.set_failure(sluice_web::views::failure::Failure::parse(
+        r#"{"error":"fn_failure","message":"exit code 1\nremains active.\ncodex: still waiting.\nTraceback (most recent call last):\n  File \"x.py\", line 1, in main\nRuntimeError: codex ran past the wall-clock cap of 600 min (SLUICE_AGENT_MAX_MIN)\nsession: s-1. To resume it, bind the step's session input to it and retry: step_set_input(project, step, \"session\", \"s-1\"), then step_retry."}"#,
+        None,
+    ));
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(
+        html.contains("<p class=\"err-line\">Stopped at its wall-clock cap of 10h 0m.</p>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<p class=\"err-text\">remains active.\ncodex: still waiting.</p>"),
+        "{html}"
+    );
+    assert!(
+        html.contains(
+            "Traceback</summary><pre class=\"pane-rows\">Traceback (most recent call last):"
+        ),
+        "{html}"
+    );
+    assert!(
+        html.contains("<p class=\"d-resume meta\">To resume it, bind the step&#39;s session input to it and retry: <code>step_set_input(project, step, &#34;session&#34;, &#34;s-1&#34;)</code>, then step_retry.</p>"),
+        "{html}"
+    );
+    assert!(!html.contains("Its fn failed"), "{html}");
+}

@@ -622,6 +622,22 @@ async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
     assert!(page.contains("<h1>No such project</h1>"), "{page}");
     let page = text_body(get_with(&fixture, "/nowhere", &html).await).await;
     assert!(page.contains("<h1>Nothing here</h1>"), "{page}");
+    // a run's file names the run and the file
+    let run = sluice_model::ids::RunId::new();
+    let file = format!("/projects/id/{}/runs/{run}/files/nope.txt", fixture.id);
+    let page = text_body(get_with(&fixture, &file, &html).await).await;
+    assert!(page.contains("<h1>No such run file</h1>"), "{page}");
+    assert!(
+        page.contains(&format!("Run {run} is not a run of this project.")),
+        "{page}"
+    );
+    // every icon is a use of the page's one sprite, never its shapes again
+    assert_eq!(page.matches("<svg class=\"sprite\"").count(), 1, "{page}");
+    assert!(page.contains("<symbol id=\"i-arrow-left\""), "{page}");
+    assert!(
+        !page.contains("<svg class=\"icon") || page.contains("<use href=\"#i-"),
+        "{page}"
+    );
     // a client asking for JSON, a stream and a script's fetch keep the JSON error
     for (path, headers) in [
         (step.as_str(), &[][..]),
@@ -703,4 +719,20 @@ async fn assets_are_compressed_versioned_and_revalidated() {
     assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
     assert!(text_body(again).await.is_empty());
     fixture.writer.shutdown().await.unwrap();
+}
+
+/// One threshold says a running step has gone quiet: its plan's `cadence:` tag, else two hours.
+#[test]
+fn quiet_is_two_hours_or_the_steps_own_cadence() {
+    use sluice_web::views::quiet_after;
+    assert_eq!(quiet_after(&[]), 7200);
+    assert_eq!(
+        quiet_after(&["unit:watch".into(), "cadence:1d".into()]),
+        86400
+    );
+    assert_eq!(quiet_after(&["cadence:45m".into()]), 2700);
+    assert_eq!(quiet_after(&["cadence:6h".into()]), 21600);
+    for bad in ["cadence:", "cadence:0h", "cadence:2w", "cadence:h"] {
+        assert_eq!(quiet_after(&[bad.into()]), 7200, "{bad}");
+    }
 }

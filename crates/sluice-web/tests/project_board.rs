@@ -587,17 +587,16 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
         "{head}"
     );
     assert!(html.contains("<span class=\"metric-v\">2</span><span class=\"metric-l\">Red</span>"));
+    // While it runs its live progress is part of what it is doing now, under its thread's
+    // latest message, not a section of its own.
     let (_, detail) = f.get(&step).await;
-    let section = between(
-        &detail,
-        "<section class=\"d-sec d-progress\">",
-        "</section>",
-    );
+    assert!(!detail.contains("d-progress"), "{detail}");
+    let section = between(&detail, "<section class=\"d-sec d-now\">", "</section>");
     assert!(
-        section.contains("<h3>Progress</h3>") && section.contains("live</span>"),
+        section.contains(">Now</") && section.contains("Progress, set"),
         "{section}"
     );
-    assert!(section.contains("by its current run"), "{section}");
+    assert!(section.contains("Nothing in its thread yet."), "{section}");
     assert!(
         section.contains("<span class=\"v num\">2</span>"),
         "{section}"
@@ -753,9 +752,9 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
     // Live first: running, then waiting by depth (k4 a layer under k3), then one done shelf
     let at = |s: &str| plane.find(s).unwrap_or_else(|| panic!("no {s}: {plane}"));
     let order = [
-        "<h3 class=\"band-h\">Running</h3>",
+        "<h2 class=\"band-h\">Running</h2>",
         "id=\"unit-k2\"",
-        "<h3 class=\"band-h\">Waiting</h3>",
+        "<h2 class=\"band-h\">Waiting</h2>",
         "id=\"unit-k3\"",
         "id=\"unit-k4\"",
         "class=\"done-shelf\"",
@@ -785,4 +784,119 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
     let (_, html) = f.get(&format!("/projects/id/{}", f.plain)).await;
     assert!(html.contains("The plan has no steps yet."), "{html}");
     assert!(!html.contains("class=\"board-tools\""), "{html}");
+}
+
+#[tokio::test]
+async fn a_cancel_reads_as_cancelled_in_the_units_table_and_on_its_card() {
+    let f = Fixture::new().await;
+    let id = f.id;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET error=?2 WHERE project_id=?1 AND step_id='beta-build'",
+                (
+                    id.to_string(),
+                    json!({"error":"fn_failure","message":"cancelled: pivot (Sam)"}).to_string(),
+                ),
+            )?;
+            tx.changed(Some(id), "plan");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (status, html) = f.get(&format!("/projects/id/{}", f.id)).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    let board = between(&html, "<aside id=\"board-pane\"", "</aside>");
+    let units = between(board, "board-units", "</table>");
+    // the unit stopped only by a cancel: "cancelled", its step marked ■, never ✗ failed
+    assert!(units.contains("<span>cancelled</span>"), "{units}");
+    assert!(!units.contains("<span>failed</span>"), "{units}");
+    assert!(units.contains("build■"), "{units}");
+    let key = between(board, "u-key", "</p>");
+    assert!(
+        key.contains("■</span> cancelled") && !key.contains("failed"),
+        "{key}"
+    );
+    // its card says so in words, after its id
+    let card = between(&html, "id=\"n-beta-build\"", "</a>");
+    assert!(
+        card.contains("is-cancelled") && card.contains("<span class=\"dur\">cancelled</span>"),
+        "{card}"
+    );
+}
+
+#[tokio::test]
+async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
+    let f = Fixture::new().await;
+    // 25 one-step units, each after the one before, all done
+    let mut steps = serde_json::Map::new();
+    let mut statuses = vec![];
+    for i in 0..25 {
+        let id = format!("u{i:02}");
+        let mut step = json!({"run":"custom.open","tags":[format!("unit:{id}")]});
+        if i > 0 {
+            step["after"] = json!([format!("u{:02}", i - 1)]);
+        }
+        steps.insert(id.clone(), step);
+        statuses.push((&*Box::leak(id.into_boxed_str()), "succeeded"));
+    }
+    let id = f.project("shelf", json!({"steps": steps}), &statuses).await;
+    // their runs ended a minute apart, u24 last
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for i in 0..25 {
+                let attempt = format!("019a2b3c-4d5e-7f01-8234-5678900000{i:02}");
+                let run = format!("019a2b3c-4d5e-7f01-8234-5678901000{i:02}");
+                tx.sql().execute(
+                    "INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,?3,1,1,'terminal','{}','hash','now')",
+                    (&attempt, id.to_string(), format!("u{i:02}")),
+                )?;
+                tx.sql().execute(
+                    "INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at,started_at,finished_at) VALUES (?1,?2,?3,?4,1,1,'2026-10-06T10:00:00Z','2026-10-06T10:00:00Z',?5)",
+                    (&run, id.to_string(), &attempt, format!("u{i:02}"), format!("2026-10-06T11:{i:02}:00Z")),
+                )?;
+            }
+            tx.changed(Some(id), "plan");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (status, html) = f.get(&format!("/projects/id/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    let shelf = between(&html, "class=\"done-shelf\"", "class=\"shelf-more");
+    assert!(shelf.contains("25 done units · 25 steps"), "{shelf}");
+    assert_eq!(
+        shelf.matches("class=\"box solo done\"").count(),
+        20,
+        "{shelf}"
+    );
+    // newest first, each with when it finished
+    assert!(
+        shelf.find("id=\"n-u24\"").unwrap() < shelf.find("id=\"n-u23\"").unwrap(),
+        "{shelf}"
+    );
+    assert!(!shelf.contains("id=\"n-u04\""), "{shelf}");
+    assert!(
+        shelf.contains("<span class=\"fb-ago\"><time data-ago=\"2026-10-06T11:24:00Z\""),
+        "{shelf}"
+    );
+    assert!(
+        html.contains(&format!(
+            "<a href=\"/projects/id/{id}?order=live&#38;show=done\">Show all 25</a>"
+        )),
+        "{html}"
+    );
+    // the edges data holds only the relations among what the page draws
+    let drawn = edges(&html);
+    assert!(drawn.len() < 24, "{drawn:?}");
+    for e in &drawn {
+        assert!(
+            html.contains(&format!("id=\"n-{}\"", e["to"]["id"].as_str().unwrap())),
+            "{e}"
+        );
+    }
+    // Show: Done draws every one
+    let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
+    assert_eq!(html.matches("class=\"box solo done\"").count(), 25);
+    assert_eq!(edges(&html).len(), 24);
 }

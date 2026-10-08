@@ -1280,21 +1280,21 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 
 | route | page |
 |---|---|
-| `/` | projects, most urgent first (a failed step, a quiet run, running, idle): each with its status glyph, progress, what stops it ("a, b failed · c cancelled") and its running steps by id (their doc after it); projects with no steps and archived ones folded. "Runner stopped" heads it while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
+| `/` | projects, most urgent first (a failed step, a quiet run, running, idle): each with its status glyph, progress, what stops it ("a, b failed · c cancelled") and its running steps by id (their doc after it, up to two lines); projects with no steps and archived ones folded. "Runner stopped", nothing new starts, heads it in a box of its own while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
-| `/projects/id/<p>` | the board; query `order=live\|plan` (live: the running units, then the stopped (a step failed or stale, or held up by one), then the waiting; plan: every unit not done in one band; each band in layers by the waits between its units, the plan's order where they tie), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed, cancelled or stale step or a step running quiet for 2 h or more, done), `q=` (a search: the steps whose id, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it. Every done unit (every step succeeded or skipped) is on one shelf after the rest, "n done units · m steps", closed unless `show=done` or a search matches in it, which draws the shelf and the matching units open; on it a one-step unit is its card, any other one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards. A one-step unit is drawn as its card alone. The page's `edges` hold the plan's relations, each marked `cross` (its ends in two units, or a plan input or output) and `line` (drawn: within a unit, or between units a source not yet succeeded or skipped and a waiting step the view shows in a unit not done); a step's waits on other units are also in words under its card, shown on a phone, without script, or when the view leaves a source out |
+| `/projects/id/<p>` | the board; query `order=live\|plan` (live: the running units, then the stopped (a step failed or stale, or held up by one), then the waiting; plan: every unit not done in one band; each band in layers by the waits between its units, the plan's order where they tie), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed, cancelled or stale step or a quiet running step (below), done), `q=` (a search: the steps whose id, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it. Every done unit (every step succeeded or skipped) is on one shelf after the rest, "n done units · m steps", closed unless `show=done` or a search matches in it, which draws the shelf and the matching units open; it draws the latest 20 finished, newest first, each with when it finished, and "Show all n" (`show=done`, or a search) draws every one; on it a one-step unit is its card, any other one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards. A one-step unit is drawn as its card alone. The page's `edges` hold the plan's relations among what it draws (the units not done and the done units on the shelf, the plan's inputs and outputs), each marked `cross` (its ends in two units, or a plan input or output) and `line` (drawn: within a unit, or between units a source not yet succeeded or skipped and a waiting step the view shows in a unit not done); a step's waits on other units are also in words under its card, shown on a phone, without script, or when the view leaves a source out |
 | `/projects/id/<p>/units/<u>` | one unit: its id, its cards (a done unit open, each wait on another unit in words under its card), its last message |
-| `/projects/id/<p>/steps/<s>` | one step, under a way back to its plan and unit: status, actions (Retry first and primary on a failed step, not on a cancelled one), finishing, why it failed (one sentence from its failure kind, what it said, the pane at failure folded, its run's files), progress (while fresher than the outputs, §6.4), outputs (those not set yet named on one line), inputs, runs (each its outcome, kind, what it said, outputs, engine, session and files) |
+| `/projects/id/<p>/steps/<s>` | one step, under a way back to its plan and unit: status, actions (Retry first and primary on a failed step, not on a cancelled one, and a failure's "To resume …" hint under them), while it runs what it is doing now (its thread's latest message: who, when, its first words; then its live progress), finishing, why it failed (one sentence from its failure kind, or a fn's from its traceback's last exception, a wall-clock cap's as the agent's; what it said; the traceback and the pane at failure folded; its run's files), progress (while fresher than the outputs, §6.4), outputs (those not set yet named on one line), inputs, runs (each its outcome, kind, what it said, outputs, engine, session and files) |
 | `/projects/id/<p>/runs/<run>/files/<name>` | one of a run's files as plain text, read-only: `pane-at-failure.txt` (its newest invocation's), `stderr.log`, `stderr-tail.log`, `summary.txt`; only a run of that project, only from its own directory, never through a link; a large file's last 2 MiB |
 | `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel`, `revision`, `message` (retry feedback) |
-| `/inbox`, `/questions`, `/history` | the message views across projects (the nav's Inbox) |
-| `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project (its nav section Messages); `thread?thread=<name>` |
+| `/inbox`, `/questions`, `/history` | the message views across projects (the nav's Inbox, whose count is the questions put to the owner that someone still waits on: Questions' "For you"); Questions lists those, then "Between agents" (one agent's question to another, answerable as the owner), then the ones nobody waits on |
+| `/projects/id/<p>/{inbox,questions,history,thread}` | the same for one project (its nav section Messages); `thread?thread=<name>`, under a way back to its plan and its step (or History) |
 | `POST /projects/id/<p>/messages` | post an answer or reply as `owner` |
 | `POST /projects/id/<p>/messages/read` | mark messages read |
 | `POST /messages/close` | close several questions as `owner` (each `m=<project>/<message>`), then to `next` |
-| `/log`, `/projects/id/<p>/log` | the log, 50 records a page, filtered by kinds, threads (`thread=`), one step (`step=`, its records and its thread's messages) or failures (`errors=1`: steps that failed, failed calls, orphaned runs); a fn call that succeeded is left out unless `kind=call` asks for calls |
+| `/log`, `/projects/id/<p>/log` | the log, 50 records a page, each in a sentence (a failure as its step page says it, a cancel as a cancel, never JSON; the record under it), filtered by kinds, threads (`thread=`), one step (`step=`, its records and its thread's messages) or failures (`errors=1`: steps that failed, failed calls, orphaned runs); a fn call that succeeded is left out unless `kind=call` asks for calls, a status record that changes nothing unless `kind=step.status` does. `/log` holds every project's records, each under its project's name |
 | `/fns` | the functions a project (`?project=`) or the home sees |
-| `/projects/id/<p>/settings` (GET, POST), `/preview`, `/icon`, `/delete` | project settings |
+| `/projects/id/<p>/settings` (GET, POST), `/preview`, `/icon`, `/delete` | project settings, under an index of its sections; a resource's capacity is a number or the fn that reports it (the form's `capacity=number\|fn\|remove`, `number`, `capacity_fn`) |
 | `POST /projects/id/<p>/settings/board` | the Board section: `op=save\|clear`, `program`, `expected_rev`; the page with the outcome |
 | `POST /projects/id/<p>/settings/board/preview` | the body (a draft program) drawn as the board would draw it, with the project's data |
 | `POST /projects/id/<p>/board/action` | a board Button: `board_rev`, `button` (its number), `field-<n>`; JSON `{ok, message}` with `Accept: application/json`, else a redirect to the board |
@@ -1307,10 +1307,15 @@ the layout: what is missing ("No such step"), why it may be gone (a plan edit, o
 project's retiring of done units) and the ways back (its plan, the log searched for it); a
 JSON client, a stream and a script's fetch keep the JSON error.
 
+A running step is quiet once it has written nothing (its run's files) for its cadence: its
+plan's `cadence:<n>m|h|d` tag, else 2 hours. One threshold for the index's tags and order, the
+drawer's badge, the tab title's count, the project's "n quiet" tag and Show: Attention.
+
 A failed step the owner cancelled is shown as cancelled: its stored error is `cancelled`, an
 agent failure of kind `Cancelled`, or a fn's message `cancelled: <reason>`. It keeps
 `failed` in the store and every tool; the dashboard gives it its own glyph and word, counts it
-apart ("n cancelled") and makes Retry a plain button on it.
+apart ("n cancelled"), names it so in the board's Units table (its unit "cancelled", its mark
+■) and the log, and makes Retry a plain button on it.
 
 Times read one way on every page. The server writes a time as "2026-10-07 20:47 UTC" (never raw
 RFC 3339) in a `<time>`; the page's script reads it as "12m ago" or "3d 12h ago", a running
@@ -1343,10 +1348,13 @@ snapshot, with each running run's activity (its run files' modification times) r
 nothing that changes meanwhile fails the page. The version a page carries (`ver`) is a
 fingerprint of the HTML its stream patches (a ticking `<time data-since>`'s text left out), so a stream opened at it sends nothing until
 something shown changes. A page that fails answers the shared JSON error with its status, its
-message never empty. Assets linked with their fingerprint (`?v=`) are served immutable; a
+message never empty. Assets linked with their fingerprint (`?v=`, the favicon and logo
+included) are served immutable; a
 module another imports by name is mapped to its fingerprinted URL by the page's import map;
 any other asset URL carries its fingerprint as an ETag and revalidates to a 304. Pages, styles,
-scripts and JSON are compressed (brotli or gzip, as the client accepts); streams are not.
+scripts and JSON are compressed (brotli or gzip at quality 6, as the client accepts); streams
+are not. Each page carries its icons once, as a sprite of `<symbol>`s, and draws each with a
+`<use>`.
 
 **Questions with a ui.** A question's `ui` is an OpenUI Lang program drawn by the inbox page:
 one statement per line, the first drawn, components `Stack`, `Heading`, `Text`, `Callout`,

@@ -132,9 +132,10 @@ pub struct RunningView {
     pub step: String,
     pub title: String,
     pub started: String,
+    /// Nothing written for longer than `quiet_after`: maybe stuck.
     pub quiet: bool,
-    /// Quiet for two hours or more: what the board's Attention view shows.
-    pub long_quiet: bool,
+    /// How long it may write nothing before it reads as quiet, in seconds (`quiet_after`).
+    pub quiet_after: u64,
     pub run_id: String,
     pub activity: Option<u64>,
 }
@@ -157,9 +158,9 @@ impl ProjectView {
     pub fn href(&self) -> String {
         format!("/projects/id/{}", self.id)
     }
-    /// Its running steps quiet for two hours or more.
-    pub fn long_quiet(&self) -> usize {
-        self.running.iter().filter(|r| r.long_quiet).count()
+    /// Its running steps gone quiet (`quiet_after`).
+    pub fn quiet(&self) -> usize {
+        self.running.iter().filter(|r| r.quiet).count()
     }
     pub fn summary(&self) -> &str {
         self.description.split("\n\n").next().unwrap_or("")
@@ -629,8 +630,31 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
     }
     response
 }
+/// The default time a running step may write nothing before it reads as quiet: two hours.
+pub const QUIET_AFTER: u64 = 2 * 3600;
+/// How long a running step may write nothing before it reads as quiet, in seconds: its own
+/// cadence when its plan tags it `cadence:<n>m|h|d` (a watch loop that speaks only on news,
+/// `cadence:1d`), else two hours. One threshold for the index, the board, the drawer and the
+/// tab title.
+pub fn quiet_after(tags: &[String]) -> u64 {
+    tags.iter()
+        .filter_map(|t| t.strip_prefix("cadence:"))
+        .find_map(|d| {
+            let (n, unit) = d.split_at(d.len().checked_sub(1)?);
+            let n: u64 = n.parse().ok().filter(|n| *n > 0)?;
+            Some(
+                n * match unit {
+                    "m" => 60,
+                    "h" => 3600,
+                    "d" => 86400,
+                    _ => return None,
+                },
+            )
+        })
+        .unwrap_or(QUIET_AFTER)
+}
 /// Each running run's activity: the newest of its start and its run files' modification times,
-/// in seconds; quiet after 15 minutes without any.
+/// in seconds; quiet once none is newer than its `quiet_after`.
 pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
@@ -657,8 +681,7 @@ pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot
             }
         }
         run.activity = newest;
-        run.quiet = newest.is_some_and(|at| now.saturating_sub(at) >= 900);
-        run.long_quiet = newest.is_some_and(|at| now.saturating_sub(at) >= 7200);
+        run.quiet = newest.is_some_and(|at| now.saturating_sub(at) >= run.quiet_after);
     }
 }
 
@@ -712,16 +735,14 @@ pub fn load_snapshot(
                 _ => {}
             }
         }
-        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
+        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]') FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
         // a failed step's error says whether the owner cancelled it: counted apart
         let mut step_rows = steps.query([&raw])?;
         while let Some(r) = step_rows.next()? {
             let status: String = r.get(2)?;
             if status == "failed" {
                 let error: Option<String> = r.get(5)?;
-                let cancelled = error
-                    .and_then(|e| serde_json::from_str::<PublicError>(&e).ok())
-                    .is_some_and(|e| failure::is_cancel(&e));
+                let cancelled = error.as_deref().is_some_and(failure::stored_is_cancel);
                 if cancelled {
                     view.counts.failed -= 1;
                     view.counts.cancelled += 1;
@@ -735,7 +756,10 @@ pub fn load_snapshot(
                     title: r.get(1)?,
                     started: r.get(3)?,
                     quiet: false,
-                    long_quiet: false,
+                    quiet_after: quiet_after(
+                        &serde_json::from_str::<Vec<String>>(&r.get::<_, String>(6)?)
+                            .unwrap_or_default(),
+                    ),
                     run_id: r.get(4)?,
                     activity: None,
                 });
@@ -756,7 +780,9 @@ pub fn load_snapshot(
         }
         projects.push(view);
     }
-    let inbox: i64 = c.query_row("SELECT count(*) FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND m.\"to\"='owner' AND needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL",[],|r|r.get(0))?;
+    // the questions put to the owner that someone still waits on, as Questions' "For you"
+    // lists them: one whose asking run has stopped is under "Nobody is waiting", not counted
+    let inbox: i64 = c.query_row("SELECT count(*) FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND m.\"to\"='owner' AND m.needs_reply=1 AND m.resolved_by IS NULL AND m.closed_at IS NULL AND NOT EXISTS (SELECT 1 FROM (SELECT coalesce((SELECT qa.run_id FROM question_attachments qa WHERE qa.project_id=m.project_id AND qa.message_id=m.id AND qa.detached_at IS NULL), m.run_id) AS run) asker WHERE asker.run IS NOT NULL AND NOT EXISTS (SELECT 1 FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.project_id=m.project_id AND r.run_id=asker.run AND r.finished_at IS NULL AND a.phase!='terminal' AND NOT a.cancel_requested))",[],|r|r.get(0))?;
     // The scheduler lease lives as long as its holder's connection to the coordinator.
     let runner_stopped: bool = c.query_row(
         "SELECT scheduler_owner IS NULL FROM maintenance WHERE singleton=1",

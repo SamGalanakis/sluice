@@ -1,16 +1,16 @@
 <!doctype html>
 <html lang="en"{% if viewer.theme.is_some() %} data-theme="{{ viewer.theme_id() }}"{% endif %}{% if viewer.types %} class="show-types"{% endif %}>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ title }} · sluice</title><link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<title>{{ title }} · sluice</title><link rel="icon" href="{{ crate::views::asset_url("favicon.svg") }}" type="image/svg+xml">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/archivo@5.3.0/wdth.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/public-sans@5.3.0/index.css">
 <link rel="stylesheet" href="{{ style_url }}">
 <script type="importmap">{{ import_map|safe }}</script>
 {% if !stream.is_empty() %}<script type="module" data-datastar-runtime src="{{ datastar_url }}"></script>{% endif %}
-</head><body data-signals="{{ signals }}">
+</head><body data-signals="{{ signals }}">{{ crate::views::icons::sprite()|safe }}
 <a class="skip" href="#content">Skip to content</a>
 <nav id="top-nav" class="top" aria-label="Sections">
-<a class="brand" href="/" aria-label="sluice: all projects"><img class="mark" src="/static/logo.svg" width="27" height="26" alt=""><span class="wordmark">sluice</span></a>
+<a class="brand" href="/" aria-label="sluice: all projects"><img class="mark" src="{{ crate::views::asset_url("logo.svg") }}" width="27" height="26" alt=""><span class="wordmark">sluice</span></a>
 <details class="switcher" data-preserve-attr="open"><summary aria-label="Project: {{ nav.label }}"><span class="sw-name">{{ nav.label }}</span>{{ crate::views::icons::icon(crate::views::icons::Icon::ChevronDown, 16, "chev")|safe }}</summary>
 <div class="menu"><a class="all" href="/"{% if nav.selected.is_none() %} aria-current="page"{% endif %}>All projects</a>
 {% for project in nav.projects %}{% if !project.archived %}<a href="{{ project.href() }}"{% if nav.is_selected(project.id) %} aria-current="page"{% endif %}>{{ crate::views::home::glyph(project.counts.status())|safe }}{% if !project.icon_url.is_empty() %}<img class="proj-icon" src="{{ project.icon_url }}" alt="">{% endif %}<span>{{ project.icon_text }} {{ project.name }}</span></a>{% endif %}{% endfor %}

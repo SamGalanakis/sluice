@@ -2,7 +2,23 @@
 .project-settings[aria-current]::before { background:color-mix(in srgb,var(--nav-ink) 18%,transparent); }
 .settings-page { min-width:0; }
 .settings-page > * { max-width:760px; }  /* the measure: rows read across, never 140 characters */
-.settings-page .setting-help, .settings-page section > p { max-width:72ch; }
+/* 62ch of this small sans is about 72 characters a line */
+.settings-page .setting-help, .settings-page section > p { max-width:62ch; }
+/* the sections, one tap away while the page scrolls */
+.settings-index { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:4px 18px; padding:10px 0; margin:0 0 8px; background:var(--background); border-bottom:1px solid var(--border); font-size:14px; }
+.settings-index a { white-space:nowrap; color:var(--muted-foreground); text-decoration:none; padding:2px 0; }
+.settings-index a:hover { color:var(--foreground); text-decoration:underline; text-underline-offset:3px; }
+.settings-page h2[id] { scroll-margin-top:56px; }
+/* a capacity: a whole number, or the fn that reports it */
+.cap-choice { border:0; padding:0; margin:0; display:grid; gap:8px; min-width:0; }
+.cap-opt { display:grid; grid-template-columns:8.5rem minmax(0,16rem); align-items:center; gap:6px 12px; }
+.settings-page .cap-opt label { display:inline-flex; align-items:center; gap:8px; font-size:14px; color:var(--foreground); }
+.settings-page .cap-opt input[type=radio] { width:auto; min-height:0; margin:0; }
+.cap-opt select { min-height:36px; min-width:0; }
+.cap-remove { margin-top:4px; display:flex; align-items:center; gap:8px; }
+.settings-page .link-button { min-height:32px; padding:0; border:0; background:none; color:var(--muted-foreground); text-decoration:underline; text-underline-offset:3px; font-size:13px; }
+.settings-page .link-button:hover { color:var(--status-attention); }
+.preview-fold { margin-top:12px; }
 .settings-page h1 { overflow-wrap:anywhere; margin-bottom:8px; }
 .settings-page .settings-lead { color:var(--muted-foreground); margin:0 0 28px; }
 .settings-page section { margin:28px 0; }
@@ -47,6 +63,8 @@
  .settings-page button, .settings-page input:not([type=hidden]) { min-height:44px; }
  .settings-danger { padding:16px; }
  .settings-switch { flex-wrap:wrap; }
+ .cap-opt { grid-template-columns:minmax(0,1fr); }
+ .settings-page .cap-opt input[type=radio] { min-height:0; }
 }
 .settings-page textarea.board-program { min-height:220px; font:12.5px/19px var(--font-mono); tab-size:2; }
 .board-feedback { white-space:pre-line; }

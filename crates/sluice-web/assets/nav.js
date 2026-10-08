@@ -111,7 +111,7 @@ function spoken(seconds) {
   return parts.filter(Boolean).join(" ");
 }
 const ago = (seconds) => (seconds < 60 ? "just now" : `${short(seconds)} ago`);
-const QUIET = 15 * 60;  // seconds without a write before a running step has gone quiet
+const QUIET = 2 * 3600;  // the default seconds without a write before a running step is quiet (data-quiet-after)
 
 function tick() {
   const now = Date.now();
@@ -144,7 +144,7 @@ function tick() {
   for (const tag of document.querySelectorAll("[data-quiet-since]")) {
     const age = now / 1000 - Number(tag.dataset.quietSince);
     const ran = (now - Date.parse(tag.dataset.runSince)) / 1000;
-    tag.hidden = !(age >= QUIET);
+    tag.hidden = !(age >= Number(tag.dataset.quietAfter || QUIET));
     if (tag.hidden) continue;
     const text = Math.abs(ran - age) < 60 ? "quiet" : `quiet ${short(age)}`;
     if (tag.textContent !== text) tag.textContent = text;

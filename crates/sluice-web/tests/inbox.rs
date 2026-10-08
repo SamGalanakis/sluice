@@ -557,14 +557,50 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         .unwrap();
     let html = html.as_str();
     assert!(!html.contains("<h3>Question</h3>"));
+    // Answer and Close keep their places; the box opens under them
     assert!(
-        html.contains(
-            r#"<details class="q-answer" data-preserve-attr="open"><summary>Answer</summary>"#
-        ),
+        html.contains(r#"<button type="button" class="q-toggle primary" aria-expanded="false""#),
         "the answer box opens on Answer"
+    );
+    assert!(html.contains(r#"<div class="q-box" id="qbox-"#), "{html}");
+    assert!(
+        html.contains("Questions for you <span class=\"n\">1</span>"),
+        "the inbox counts the questions put to the owner"
     );
     assert!(html.contains("Nobody is waiting <span class=\"n\">3</span>"));
     assert!(html.contains("<button>Close all 3</button>"));
+    // the nav's Inbox counts what the page lists as yours: not the ones nobody waits on
+    assert_eq!(page.nav.inbox, page.for_you().len());
+    // a question one agent put to another is listed apart, quieter, answerable as the owner
+    let between = post(
+        &writer,
+        project,
+        serde_json::json!({"needs_reply":true,"to":"reviewer","thread":"t9","body":"Is the parser change yours?"}),
+    )
+    .await;
+    let questions = threads::load(&state.dashboard.reads, None, MessageView::Questions, None)
+        .await
+        .unwrap();
+    assert_eq!(questions.for_you().len(), 1);
+    assert_eq!(questions.between_agents().len(), 1);
+    assert_eq!(questions.between_agents()[0].id(), between);
+    assert_eq!(
+        questions.nav.inbox, 1,
+        "the agents' question is not the owner's"
+    );
+    let html = questions
+        .render(&Viewer::default(), "/questions", "/questions/stream")
+        .unwrap();
+    let html = html.as_str();
+    let agents = &html[html
+        .find("<section class=\"q-group agents\"")
+        .expect("between agents")..];
+    assert!(
+        agents.contains("<h2 id=\"between-h\">Between agents <span class=\"n\">1</span></h2>"),
+        "{agents}"
+    );
+    assert!(agents.contains(">Answer as owner</button>"), "{agents}");
+    assert!(html.find("id=\"yours-h\"").unwrap() < html.find("id=\"between-h\"").unwrap());
     assert!(
         html.contains("src=\"/static/inbox.js?v="),
         "the inbox's script is versioned"

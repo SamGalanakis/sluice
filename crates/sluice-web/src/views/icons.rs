@@ -1,5 +1,7 @@
 //! The dashboard's icons: Lucide (lucide-static 1.52.0, ISC, `assets/icons/LICENSE`). Each is
-//! the published SVG, embedded unmodified, and inlined in the page so it takes `currentColor`.
+//! the published SVG, embedded unmodified, as a `<symbol>` in one sprite every page carries
+//! (`sprite`); each use of it is a small `<svg><use href="#i-…"></svg>` that takes
+//! `currentColor`, so a page with a thousand glyphs does not repeat their shapes.
 use super::TrustedHtml;
 use std::sync::LazyLock;
 
@@ -10,6 +12,11 @@ macro_rules! icons {
         pub enum Icon { $($variant),* }
         impl Icon {
             const ALL: &[Icon] = &[$(Icon::$variant),*];
+            fn name(self) -> &'static str {
+                match self {
+                    $(Icon::$variant => $file,)*
+                }
+            }
             fn source(self) -> &'static str {
                 match self {
                     $(Icon::$variant => include_str!(concat!("../../assets/icons/", $file, ".svg")),)*
@@ -56,13 +63,56 @@ fn body(source: &str) -> String {
     source[start..end].lines().map(str::trim).collect()
 }
 
-/// The icon as an inline `<svg>`, `size` px square, on Lucide's own 24-unit grid and stroke,
-/// drawn in `currentColor` and hidden from assistive tech: the control it sits in carries the
-/// name. `class` is added after `icon`.
-pub fn icon(icon: Icon, size: u16, class: &str) -> TrustedHtml {
+/// The icons whose glyph is drawn solid (`glyph`'s succeeded and failed): the circle filled in
+/// `currentColor`, the mark cut out of it in the card's colour. A rule cannot reach into a
+/// `<use>`, so the sprite carries these as symbols of their own.
+const SOLID: [Icon; 2] = [Icon::CircleCheck, Icon::CircleX];
+
+/// Every icon's shapes as a `<symbol>`, once per page (the layout puts it first in the body).
+pub fn sprite() -> TrustedHtml {
+    static SPRITE: LazyLock<String> = LazyLock::new(|| {
+        let mut out = String::from(
+            "<svg class=\"sprite\" width=\"0\" height=\"0\" aria-hidden=\"true\" focusable=\"false\" style=\"position:absolute\">",
+        );
+        for icon in Icon::ALL {
+            let body = &BODIES[*icon as usize];
+            out.push_str(&format!(
+                "<symbol id=\"i-{}\" viewBox=\"0 0 24 24\">{body}</symbol>",
+                icon.name()
+            ));
+            if SOLID.contains(icon) {
+                let solid = body
+                    .replace("<circle ", "<circle style=\"fill:currentColor\" ")
+                    .replace("<path ", "<path style=\"stroke:var(--card)\" ");
+                out.push_str(&format!(
+                    "<symbol id=\"i-{}-solid\" viewBox=\"0 0 24 24\">{solid}</symbol>",
+                    icon.name()
+                ));
+            }
+        }
+        out.push_str("</svg>");
+        out
+    });
+    TrustedHtml::owned(SPRITE.clone())
+}
+
+fn draw(name: &str, size: u16, class: &str) -> TrustedHtml {
     let sep = if class.is_empty() { "" } else { " " };
     TrustedHtml::owned(format!(
-        "<svg class=\"icon{sep}{class}\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">{}</svg>",
-        BODIES[icon as usize]
+        "<svg class=\"icon{sep}{class}\" width=\"{size}\" height=\"{size}\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><use href=\"#i-{name}\"/></svg>"
     ))
+}
+/// The icon, `size` px square, on Lucide's own 24-unit grid and stroke, drawn in
+/// `currentColor` and hidden from assistive tech: the control it sits in carries the name.
+/// `class` is added after `icon`.
+pub fn icon(icon: Icon, size: u16, class: &str) -> TrustedHtml {
+    draw(icon.name(), size, class)
+}
+/// The icon drawn solid (see `SOLID`); any other icon as it is.
+pub fn solid(icon: Icon, size: u16, class: &str) -> TrustedHtml {
+    if SOLID.contains(&icon) {
+        draw(&format!("{}-solid", icon.name()), size, class)
+    } else {
+        draw(icon.name(), size, class)
+    }
 }

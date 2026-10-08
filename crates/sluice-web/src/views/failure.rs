@@ -21,6 +21,10 @@ pub struct Failure {
     /// Where the whole screen was written, as the error names it.
     pub pane_file: String,
     pub session: String,
+    /// The fn's Python traceback, folded under its headline.
+    pub trace: String,
+    /// How to resume its agent's session, as the failure says it ("To resume it, …").
+    pub resume: String,
 }
 
 /// A stored error (the step's or a run's `error` JSON) is a cancel: its kind `cancelled`, an
@@ -33,6 +37,32 @@ pub fn is_cancel(error: &PublicError) -> bool {
         PublicError::FnFailure { message } => cancel_reason(message).is_some(),
         _ => false,
     }
+}
+/// A stored error (JSON, or a bare message from an older release) is a cancel.
+pub fn stored_is_cancel(stored: &str) -> bool {
+    match serde_json::from_str::<PublicError>(stored) {
+        Ok(error) => is_cancel(&error),
+        Err(_) => cancel_reason(stored).is_some(),
+    }
+}
+/// The project's steps that have stopped (failed or stale), each with whether it was a cancel:
+/// what the Units table and anything else naming a step's state reads "cancelled" from.
+pub fn stopped_steps(
+    sql: &rusqlite::Connection,
+    project: &str,
+) -> rusqlite::Result<std::collections::BTreeMap<String, bool>> {
+    let mut q = sql.prepare_cached(
+        "SELECT step_id,status,error FROM steps WHERE project_id=?1 AND status IN ('failed','stale')",
+    )?;
+    let rows = q.query_map([project], |r| {
+        let status: String = r.get(1)?;
+        let error: Option<String> = r.get(2)?;
+        Ok((
+            r.get::<_, String>(0)?,
+            status == "failed" && error.as_deref().is_some_and(stored_is_cancel),
+        ))
+    })?;
+    rows.collect()
 }
 fn cancel_reason(message: &str) -> Option<&str> {
     message
@@ -65,6 +95,8 @@ impl Failure {
             other => (message_of(other), String::new()),
         };
         let (said, pane, pane_file) = split_pane(message);
+        // a fn's traceback: folded; its last exception line is the cause
+        let (said, trace, cause, resume) = split_trace(&said);
         let after = took
             .map(|s| format!(" after {}", super::step::short_duration(s)))
             .unwrap_or_default();
@@ -117,10 +149,13 @@ impl Failure {
                     "cancelled".into(),
                     format!("Cancelled: {}", sentence(reason)),
                 ),
-                None => (
-                    "fn_failure".into(),
-                    format!("Its fn failed: {}", sentence(first_line(&said))),
-                ),
+                None => match &cause {
+                    Some(cause) => ("fn_failure".into(), cause_sentence(cause, &after)),
+                    None => (
+                        "fn_failure".into(),
+                        format!("Its fn failed: {}", sentence(first_line(&said))),
+                    ),
+                },
             },
             PublicError::ProcessLost { .. } => {
                 ("process_lost".into(), "Its process was lost.".into())
@@ -147,7 +182,7 @@ impl Failure {
         }
         // what the headline already quotes is not said twice
         let cancelled = is_cancel(error);
-        let quoted = (kind == "fn_failure" && !said.contains('\n')) || cancelled;
+        let quoted = (kind == "fn_failure" && cause.is_none() && !said.contains('\n')) || cancelled;
         Self {
             cancelled,
             kind,
@@ -156,6 +191,23 @@ impl Failure {
             pane,
             pane_file,
             session,
+            trace,
+            resume,
+        }
+    }
+    /// The resume hint with its tool call apart, so the call can be set as code: (before, call,
+    /// after).
+    pub fn resume_parts(&self) -> (&str, &str, &str) {
+        let text = self.resume.as_str();
+        match text.find("step_set_input(") {
+            Some(start) => {
+                let end = text[start..]
+                    .find("), ")
+                    .or_else(|| text[start..].rfind(')'))
+                    .map_or(text.len(), |e| start + e + 1);
+                (&text[..start], &text[start..end], &text[end..])
+            }
+            None => (text, "", ""),
         }
     }
     /// A cancel's sentence under its "Cancelled" head: the reason, without the word again.
@@ -189,6 +241,84 @@ fn first_line(text: &str) -> &str {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
         .trim()
+}
+/// A fn's message split at its Python traceback: what came before it (its `exit code` line
+/// dropped), the traceback itself, its last exception's message (the cause) and any "To
+/// resume …" hint after it.
+fn split_trace(said: &str) -> (String, String, Option<String>, String) {
+    const HEAD: &str = "Traceback (most recent call last):";
+    let Some(at) = said.find(HEAD) else {
+        return (said.to_owned(), String::new(), None, String::new());
+    };
+    let before = said[..at]
+        .lines()
+        .filter(|l| !(l.starts_with("exit code ") && l[10..].trim().parse::<i64>().is_ok()))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned();
+    let rest = &said[at..];
+    // the exception line: unindented `Name: message` (or a bare `Name`), the last such
+    let lines: Vec<&str> = rest.lines().collect();
+    let found = lines.iter().rposition(|l| exception_name(l).is_some());
+    let Some(found) = found else {
+        return (before, rest.trim_end().to_owned(), None, String::new());
+    };
+    let cause = lines[found]
+        .split_once(':')
+        .map(|(_, m)| m.trim().to_owned());
+    let trace = lines[..=found].join("\n");
+    let after = lines[found + 1..].join("\n");
+    let resume = after
+        .find("To resume")
+        .map(|i| after[i..].split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    (before, trace, cause.filter(|c| !c.is_empty()), resume)
+}
+/// An exception line's class (`RuntimeError: …`, `sluice.Rejected: …`): unindented, a dotted
+/// name ending as Python's exceptions do.
+fn exception_name(line: &str) -> Option<&str> {
+    if line.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let name = line.split_once(':').map_or(line, |(n, _)| n).trim();
+    let ident = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '_');
+    let ends = [
+        "Error",
+        "Exception",
+        "Exit",
+        "Interrupt",
+        "Warning",
+        "Rejected",
+        "Invalid",
+    ]
+    .iter()
+    .any(|e| name.ends_with(e));
+    (ident && ends).then_some(name)
+}
+/// A fn's exception as the step's sentence; a wall-clock cap reads as the agent's cap does.
+fn cause_sentence(cause: &str, after: &str) -> String {
+    if let Some(at) = cause.find("wall-clock cap of ") {
+        let minutes: Option<f64> = cause[at + 18..]
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse().ok());
+        if let Some(minutes) = minutes {
+            return format!(
+                "Stopped at its wall-clock cap of {}{after}.",
+                super::step::short_duration(minutes * 60.0)
+            );
+        }
+        return format!("Stopped at its wall-clock cap{after}.");
+    }
+    let mut chars = sentence(cause).chars().collect::<Vec<_>>();
+    if let Some(c) = chars.first_mut() {
+        *c = c.to_ascii_uppercase();
+    }
+    chars.into_iter().collect()
 }
 /// A message as the end of a sentence: its first letter kept, a full stop when it has none.
 fn sentence(text: &str) -> String {
@@ -236,6 +366,20 @@ mod tests {
         assert_eq!(f.pane, "✻ Brewed for 2m\n> done");
         assert_eq!(f.pane_file, "/h/runs/r/invocations/i/pane-at-failure.txt");
         assert_eq!(f.session, "s-1");
+    }
+    #[test]
+    fn a_fn_traceback_reads_as_its_last_exception() {
+        let stored = r#"{"error":"fn_failure","message":"exit code 1\nremains active.\ncodex: Still awaiting.\nTraceback (most recent call last):\n  File \"x.py\", line 1, in main\n    raise RuntimeError(f\"{a}\")\nRuntimeError: codex ran past the wall-clock cap of 600 min (SLUICE_AGENT_MAX_MIN)\nsession: s-9. To resume it, bind the step's session input to it and retry: step_set_input(project, step, \"session\", \"s-9\"), then step_retry."}"#;
+        let f = Failure::parse(stored, None);
+        assert_eq!(f.headline, "Stopped at its wall-clock cap of 10h 0m.");
+        assert_eq!(f.said, "remains active.\ncodex: Still awaiting.");
+        assert!(f.trace.starts_with("Traceback") && f.trace.ends_with("(SLUICE_AGENT_MAX_MIN)"));
+        assert!(f.resume.starts_with("To resume it, bind"), "{}", f.resume);
+        let plain = Failure::parse(
+            r#"{"error":"fn_failure","message":"Traceback (most recent call last):\n  File \"m.py\"\nValueError: no such branch: main2"}"#,
+            None,
+        );
+        assert_eq!(plain.headline, "No such branch: main2.");
     }
     #[test]
     fn every_cancel_reads_as_a_cancel() {

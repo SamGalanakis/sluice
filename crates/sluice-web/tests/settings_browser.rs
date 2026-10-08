@@ -234,8 +234,10 @@ try:
  # Restore compact content so later states expose controls.
  chrome.eval("document.querySelector('#project-description').value='A calm description';document.querySelector('[data-preview]').click()")
  chrome.wait("document.querySelector('#description-preview').textContent==='A calm description\\n'")
- chrome.eval("document.querySelector('#resource-workers').value='-1';document.querySelector('#resource-workers').form.requestSubmit()")
- chrome.wait("document.querySelector('#resource-workers').form.querySelector('.settings-feedback').textContent.includes('expected')")
+ # a capacity is a whole number of 0 or more: the field refuses -1 before anything is sent
+ chrome.eval("window.requests=[]; document.querySelector('#resource-workers').value='-1';document.querySelector('#resource-workers').form.requestSubmit()")
+ assert chrome.eval("document.querySelector('#resource-workers').validity.rangeUnderflow")
+ assert not chrome.eval("requests.some(r=>r.endsWith('/settings'))")
  assert chrome.eval("document.querySelector('#resource-workers').value==='-1'")
  states('resource-error')
  apply('paused','true')
