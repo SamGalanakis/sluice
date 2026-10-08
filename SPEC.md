@@ -568,11 +568,32 @@ and every pending one is external or not ready.
 ### 6.8 Recipes
 
 A recipe is `recipes/<name>.json` in the home (global) or in `projects/<id>/` (the project's
-wins on a name clash): `{"name", "doc"?, "params"?: {name: type | {"type", "doc"}}, "steps"}`,
-`name` matching the file. `unit` (a step id) is always a param. In every step id and string,
+wins on a name clash): `{"name", "doc"?, "params"?: {name: type | {"type", "doc"}}, "steps",
+"title"?, "view"?}`, `name` matching the file. `unit` (a step id) is always a param. In every step id and string,
 `{param}` is replaced by the value (a non-string as JSON); a string that is exactly `{param}`
 becomes the value with its type; `{{`/`}}` are literal braces; an unknown `{x}` is an error. A
 recipe step with `when` is broken.
+
+A recipe's **stages** are its step ids without the leading `{unit}-` (`fork`, `work`, `land`),
+in its order. `title` is a template for its units' title (`"{ticket}: {spec}"`): `{param}` and
+`{unit}` as in steps, any other `{x}` making the recipe broken. A param bound to `{"file":
+"{p}"}` in a step stands in a title for that file's title (below). `view` is an OpenUI Lang
+program (§13, the unit view) drawing a unit's summary; one that does not check leaves the recipe
+usable (`recipe_list` reports `view_error`, the dashboard a note). Nothing about a recipe is
+stored with the plan: a unit's recipe is found again from the plan, the first recipe (the
+project's, then the global ones, each by name) whose `{unit}-` step ids, filled with the unit,
+are exactly the unit's step ids and whose steps run the same fns; its params are read back by
+matching the recipe's step strings against the stored ones (the first binding wins). A unit no
+recipe matches has no recipe, title template or view.
+
+**Titles.** Every step and unit has a title, derived when read, never stored. A step's own title
+is its doc's first line, else the first heading (or first line) of its `spec`, `prompt` or `task`
+input, a literal string or a `{"file"}` read from its first 4 KiB, cut to 160 characters. A
+unit's title is its recipe's `title` filled with its params, else the first own title among its
+steps in plan order. A step's title is, in order: its unit's title from its recipe's `title`,
+its own title, its unit's title when the unit has a recipe, else its id. A step of a unit of
+more than one step has a **stage**, its id without `<unit>-`, shown before its title (`land · Ship the cron
+fix`). Every surface names a step by its title, its id after it in mono.
 
 `unit_add(project, recipe, unit, params, after?, inputs?, tags?, start?)` checks the params,
 expands the recipe, tags every new step `unit:<unit>` (then the recipe's tags, then `tags`;
@@ -1154,7 +1175,7 @@ unknown step `not_found`.
 | `fn_save` | `fn`, `main_py`, `project?` | `{name, scope, path, generation}` |
 | `fn_call` | `name`, `inputs={}`, `project?`, `wait?` (seconds, default 0), `direct=false`, `author?` | `{call, project_id, status, inputs, outputs, error, direct}`; `direct` runs it now through a guardian and ignores `wait` |
 | `call_status` | `call`, `project?` | as `fn_call`, plus `finishing?` (§6.4) |
-| `recipe_list` | `project` | `[{name, doc, params, scope}]`, a broken file as `{name, scope, error}` |
+| `recipe_list` | `project` | `[{name, doc, params, scope, stages, title?, view?, title_error?, view_error?}]`, a broken file as `{name, scope, error}`; a view that does not check is `view_error`, the recipe still usable |
 
 An `icon` is a text icon (at most 16 characters), an absolute or `~/` path to an SVG, PNG,
 WebP, JPEG or GIF file of at most 256 KiB, which the coordinator reads once and stores, or
@@ -1226,7 +1247,9 @@ pending step that is not about to start has `waiting`, the reasons in order: `pa
 input <name> has no value`), each gate not satisfied (`after <entry> (<why>)`), the resource
 shortfall (`queued: needs lane 1 (4/4 held)`, with `queued` listing the resources), and for a
 `core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, board_rev, paused, resources?,
-units: [{unit, state, age, engine, steps, blocked, last, line, finishing?}], done_units?}`;
+units: [{unit, title, recipe, state, age, engine, steps, blocked, last, line, finishing?}], done_units?}`
+(`recipe` the matched recipe's name or empty; the steps view gives each step `title` and, in a
+unit of more than one step, `stage`);
 `finishing` lists the unit's finishing steps `[{step, since, submission_seq, release}]`, whose
 mark in `steps` is `▷` and which `line` names (`finishing <step>`) when nothing blocks it; `state` one of
 `running`, `failed`, `settled`, `blocked`, `queued`, `pending`, filterable with `state`
@@ -1280,11 +1303,11 @@ The wire also carries `mark_read` (advance a reader's position on a thread), `ba
 
 | route | page |
 |---|---|
-| `/` | projects, most urgent first (a failed step, a quiet run, running, idle): each with its status glyph, progress, what stops it ("a, b failed · c cancelled") and its running steps by id (their doc after it, up to two lines); projects with no steps and archived ones folded. "Runner stopped", nothing new starts, heads it in a box of its own while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
+| `/` | projects, most urgent first (a failed step, a quiet run, running, idle): each with its status glyph, progress, what stops it ("a, b failed · c cancelled") and its running steps by title (their stage before it, their id after it in mono); projects with no steps and archived ones folded. "Runner stopped", nothing new starts, heads it in a box of its own while nothing holds the scheduler lease (no `loop`, no `serve` without `--no-runner`) |
 | `/projects/<name>` | redirects (307) to `/projects/id/<uuid>` |
-| `/projects/id/<p>` | the board; query `order=live\|plan` (live: the stopped units (a step failed or stale, or held up by one), then the running, then the waiting; plan: every unit not done in one band; each band in layers by the waits between its units, the plan's order where they tie), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed, cancelled or stale step or a quiet running step (below), done), `q=` (a search: the steps whose id, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it. Every done unit (every step succeeded or skipped) is on one shelf after the rest, "n done units · m steps", closed unless `show=done` or a search matches in it, which draws the shelf and the matching units open; it draws the latest 20 finished, newest first, each with when it finished, and "Show all n" (`show=done`, or a search) draws every one; on it a one-step unit is its card, any other one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards. A one-step unit is drawn as its card alone. The page's `edges` hold the plan's relations among what it draws (the units not done and the done units on the shelf, the plan's inputs and outputs), each marked `cross` (its ends in two units, or a plan input or output) and `line` (drawn: within a unit, or between units a source not yet succeeded or skipped and a waiting step the view shows in a unit not done); a step's waits on other units are also in words under its card, shown on a phone, without script, or when the view leaves a source out |
-| `/projects/id/<p>/units/<u>` | one unit: its id, its steps summed by state ("6 steps · 1 running · 4 pending · 1 succeeded"), its cards with the lines inside it (a done unit open, each wait on another unit in words under its card), its last message and who sent it |
-| `/projects/id/<p>/steps/<s>` | one step, under a way back to its plan and unit: status, actions (Retry first and primary on a failed step, not on a cancelled one, and a failure's "To resume …" hint under them), while it runs what it is doing now (how long it has written nothing when quiet; what it said last, its live progress or its own latest message to anyone, whichever is newer; then the latest message to it since), when it ended (from its result when no run is kept, and Runs says none is), finishing, why it failed (one sentence from its failure kind, or a fn's from its traceback's last exception, a wall-clock cap's as the agent's; what it said; the traceback and the pane at failure folded; its run's files), progress (while fresher than the outputs, §6.4), outputs (those not set yet named on one line), inputs, runs (each its outcome, kind, what it said, outputs, engine, session and files) |
+| `/projects/id/<p>` | the board; query `order=live\|plan` (live: the stopped units (a step failed or stale, or held up by one), then the running, then the waiting; plan: every unit not done in one band; each band in layers by the waits between its units, the plan's order where they tie), `show=all\|active\|attention\|done` (which units: every one, not done, with a failed, cancelled or stale step or a quiet running step (below), done), `q=` (a search: the steps whose id, title, doc or unit id contain every word of it, any case and order, at most 200 characters; units without one hide; the page says how many matched), `tag=`, `format=mermaid` (the `plan_view` Mermaid; `all=true` keeps the done units). They combine; its `…/stream` takes the same query and draws the board under it. Every done unit (every step succeeded or skipped) is on one shelf after the rest, "n done units · m steps", closed unless `show=done` or a search matches in it, which draws the shelf and the matching units open; it draws the latest 20 finished, newest first, each with when it finished, and "Show all n" (`show=done`, or a search) draws every one; on it a one-step unit is its card, any other one line, its steps in the lane marks (`fork✓ work✓ rm–`), opening to its cards. A one-step unit is drawn as its card alone. The page's `edges` hold the plan's relations among what it draws (the units not done and the done units on the shelf, the plan's inputs and outputs), each marked `cross` (its ends in two units, or a plan input or output) and `line` (drawn: within a unit, or between units a source not yet succeeded or skipped and a waiting step the view shows in a unit not done); a step's waits on other units are also in words under its card, shown on a phone, without script, or when the view leaves a source out |
+| `/projects/id/<p>/units/<u>` | one unit: its title, its id and recipe under it, its recipe's view drawn whole (below), its steps summed by state ("6 steps · 1 running · 4 pending · 1 succeeded"), its cards with the lines inside it (a done unit open, each wait on another unit in words under its card), its last message and who sent it |
+| `/projects/id/<p>/steps/<s>` | one step, under a way back to its plan and unit: its stage and title the heading, its id under it (the tab its title), the rest of its doc, status, actions (Retry first and primary on a failed step, not on a cancelled one, and a failure's "To resume …" hint under them), while it runs what it is doing now (how long it has written nothing when quiet; what it said last, its live progress or its own latest message to anyone, whichever is newer; then the latest message to it since), when it ended (from its result when no run is kept, and Runs says none is), finishing, why it failed (one sentence from its failure kind, or a fn's from its traceback's last exception, a wall-clock cap's as the agent's; what it said; the traceback and the pane at failure folded; its run's files), progress (while fresher than the outputs, §6.4), outputs (those not set yet named on one line), inputs, runs (each its outcome, kind, what it said, outputs, engine, session and files) |
 | `/projects/id/<p>/runs/<run>/files/<name>` | one of a run's files as plain text, read-only: `pane-at-failure.txt` (its newest invocation's), `stderr.log`, `stderr-tail.log`, `summary.txt`; only a run of that project, only from its own directory, never through a link; a large file's last 2 MiB |
 | `POST /projects/id/<p>/steps/<s>/actions` | `action=pause\|unpause\|retry\|cancel`, `revision`, `message` (retry feedback) |
 | `/inbox`, `/questions`, `/history` | the message views across projects (the nav's Inbox, whose count is the questions put to the owner that someone still waits on: Questions' "For you"); Questions lists those, then "Between agents" (one agent's question to another, answerable as the owner), then the ones nobody waits on |
@@ -1408,6 +1431,37 @@ document, read-only and drawn as markdown, with its rev, when it was last edited
 and a note when the program has no `Doc()`. Its Retiring section sets §6.11's
 `prune_done_after` in hours (empty is off) and `prune_keep` (patterns separated by commas or
 spaces), and says whether retiring is on and when it last retired how many steps.
+
+**Steps by title.** Every page names a step by its title (§6.8), its stage before it ("land ·",
+muted) and its id after it in mono, muted: the index, the board's cards (a solo unit's title
+over its card, a unit's title in its box label), the unit and step pages and their tab titles,
+the log, threads and the inbox. A step whose title is its id shows the id alone.
+
+**The lane matrix.** A recipe with a `view` draws its units that are not done as one matrix
+before the bands, headed by the recipe's name and its units counted ("3 units · 1 failed ·
+1 running · 1 waiting"): a row per unit, the rows with a failed, cancelled, stale or quiet step
+first, then the running, then the waiting, the plan's order where they tie; a column per stage,
+each cell the stage's card as a pill (glyph, caption, timer; a link to the step); the first
+column the unit's status glyph, its title linking to its unit page, its id in mono and any
+alarm, then a column with the view drawn in the row (its parts in a line, values cut to 140
+characters). Lines inside a row are not drawn (the columns say the order); a wait between rows,
+or between a row and a unit outside the matrix, is drawn and runs down the matrix's left gutter
+to the row. On a phone (720 px and narrower) a row is a block: glyph and title, id, the stages
+as a lane string (`fork✓ work▶ land·`, each stage linking to its step) and the view under it.
+A view whose program does not check draws the matrix without its summary and one note above it
+in the attention colour ("This recipe's view does not check, so its summary is left out: …").
+The board's search, `show` and `tag` filter its rows as they filter units.
+
+**The unit view.** A recipe's `view` is an OpenUI Lang program with its own vocabulary, drawn on
+the server inside the frame sluice owns (the matrix row, the unit page), every value escaped:
+`Stack(children, direction?)` (`col` or `row`), `Text(text, tone?)` (`muted`), `Markdown(text)`,
+`Link(label, href)` (an `http(s)://` or `/` href; another is drawn as text), `Param(name)` (the
+unit's param, its file's title for a file param; nothing when empty), `Output(step, field)` (a
+stage's output as the board's Output reads it, its progress first while fresher, nothing until
+set), `StepStatus(step)` (a stage's glyph, word and caption) and `LastMessage(chars?)` (the
+unit's last message and who sent it, in the matrix row only: the unit page says it whole). A
+`step` is a stage name; `{param}` in any string is the unit's param. Every check (an unknown
+component, a stage or param the recipe lacks, an unknown `{x}`) names its line.
 
 ## 14. CLI
 

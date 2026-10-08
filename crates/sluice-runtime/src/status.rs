@@ -95,6 +95,13 @@ pub(crate) fn status(
     let resources = resources_value(sql, id, plan)?;
     let paused = state.paused.is_paused();
     let mut finishing = sluice_store::attempts::finishing(sql, id)?;
+    // each step's and unit's title (SPEC §13), derived from the plan, its recipes and prompts
+    let home = sql
+        .path()
+        .and_then(|p| std::path::Path::new(p).parent())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let names = crate::naming::for_project(sql, &home, id)?;
     if query.view == StatusView::Units {
         let facts = facts(sql, id, &queued, finishing)?;
         let last = last_messages(sql, id)?;
@@ -112,7 +119,16 @@ pub(crate) fn status(
         if !resources.is_empty() {
             out["resources"] = json!(resources);
         }
-        out["units"] = serde_json::to_value(&view.rows)?;
+        let mut rows = serde_json::to_value(&view.rows)?;
+        for row in rows.as_array_mut().into_iter().flatten() {
+            let unit = row["unit"].as_str().unwrap_or_default().to_owned();
+            let named = names.naming.unit(&unit);
+            row["title"] = json!(names.naming.unit_title(&unit));
+            if let Some(recipe) = named.map(|n| n.recipe.as_str()).filter(|r| !r.is_empty()) {
+                row["recipe"] = json!(recipe);
+            }
+        }
+        out["units"] = rows;
         if let Some((units, steps)) = view.done {
             out["done_units"] = json!({"units":units,"steps":steps});
         }
@@ -147,6 +163,18 @@ pub(crate) fn status(
             *outputs = status::brief(outputs);
         }
         if let (Some(spec), Value::Object(row)) = (plan.steps().get(&step), &mut row) {
+            row.insert(
+                "title".into(),
+                json!(names.naming.step_title(step.as_str())),
+            );
+            if let Some(stage) = names
+                .naming
+                .step(step.as_str())
+                .map(|n| n.stage.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                row.insert("stage".into(), json!(stage));
+            }
             match &spec.paused {
                 Pause::No => {}
                 Pause::Yes => {

@@ -9,6 +9,7 @@ pub mod events;
 pub mod gates;
 pub mod hash;
 pub mod ids;
+pub mod naming;
 pub mod openui;
 pub mod plan;
 pub mod recipe;

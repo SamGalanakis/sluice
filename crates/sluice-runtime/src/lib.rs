@@ -8,6 +8,7 @@ pub mod coordinator;
 pub mod drain;
 pub mod inline;
 mod models;
+pub mod naming;
 pub mod notify;
 pub mod python;
 pub mod registry;

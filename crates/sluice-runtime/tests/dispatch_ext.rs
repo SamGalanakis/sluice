@@ -1733,3 +1733,116 @@ async fn standing_log_wait_sleeps_through_unrelated_records_and_wakes_on_the_fir
     );
     f.close().await;
 }
+
+#[tokio::test]
+async fn status_names_steps_and_units_and_recipe_list_reports_titles_and_views_over_socket() {
+    let f = Fixture::new().await;
+    let spec = f.home.path().join("fig-1.md");
+    std::fs::write(
+        &spec,
+        "Notes first\n\n# Fix the cron driver on Postgres\n\nBody.",
+    )
+    .unwrap();
+    f.recipe(
+        "project",
+        "named",
+        json!({"name":"named","params":{"ticket":"string","spec":"string","quiet":"string?"},
+            "title":"{ticket}: {spec}",
+            "view":"root = Stack([Param(\"ticket\"), Output(\"work\", \"ok\")], \"row\")",
+            "steps":{
+                "{unit}-work":{"run":"core.external","in":{"ticket":{"default":"{ticket}"},"spec":{"file":"{spec}"}},"outputs":{"ok":"boolean"}},
+                "{unit}-land":{"run":"core.external","after":["{unit}-work"],"outputs":{"ok":"boolean"}}}}),
+    );
+    // a broken title and view are reported, and the recipe still adds units
+    f.recipe(
+        "project",
+        "rough",
+        json!({"name":"rough","params":{"quiet":"string?"},"title":"{quiet} lane",
+            "view":"root = Stack([Output(\"nope\", \"ok\"), Chart(\"bar\", \"SELECT 1\")])",
+            "steps":{"{unit}-only":{"run":"core.external","outputs":{"ok":"boolean"}}}}),
+    );
+    let recipes = data(f.call("recipe_list", json!({})).await.unwrap());
+    let named = recipes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "named")
+        .unwrap();
+    assert_eq!(named["title"], "{ticket}: {spec}");
+    assert_eq!(named["stages"], json!(["work", "land"]));
+    assert!(
+        named.get("view_error").is_none() && named.get("title_error").is_none(),
+        "{named}"
+    );
+    let rough = recipes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "rough")
+        .unwrap();
+    let title_error = rough["title_error"].as_str().unwrap();
+    assert!(
+        title_error.contains("{quiet} is a param no step uses"),
+        "{title_error}"
+    );
+    let view_error = rough["view_error"].as_str().unwrap();
+    assert!(
+        view_error.contains("line 1: Chart is not a unit view component"),
+        "{view_error}"
+    );
+    assert!(view_error.contains("not \"nope\""), "{view_error}");
+    for (recipe, unit, params) in [
+        (
+            "named",
+            "fig-1",
+            json!({"ticket":"FIG-1","spec":spec.to_str().unwrap()}),
+        ),
+        ("rough", "r-1", json!({})),
+    ] {
+        f.call(
+            "unit_add",
+            json!({"recipe":recipe,"unit":unit,"params":params,"after":{},"edit":options(false)}),
+        )
+        .await
+        .unwrap();
+    }
+    f.patch(json!([{"op":"add","path":"/steps/watch","value":{"run":"core.external","doc":"Watches main for red\nand says so","outputs":{"ok":"boolean"}}}])).await;
+    let status = data(
+        f.call("status", json!({"selection":{"steps":null,"tags":null}}))
+            .await
+            .unwrap(),
+    );
+    let steps = &status["steps"];
+    assert_eq!(
+        steps["fig-1-work"]["title"],
+        "FIG-1: Fix the cron driver on Postgres"
+    );
+    assert_eq!(steps["fig-1-work"]["stage"], "work");
+    assert_eq!(
+        steps["fig-1-land"]["title"],
+        "FIG-1: Fix the cron driver on Postgres"
+    );
+    assert_eq!(steps["fig-1-land"]["stage"], "land");
+    assert_eq!(steps["watch"]["title"], "Watches main for red");
+    assert!(steps["watch"].get("stage").is_none());
+    // no title of its own and none to borrow: its id
+    assert_eq!(steps["work"]["title"], "work");
+    assert_eq!(steps["r-1-only"]["title"], "r-1-only");
+    let units = data(
+        f.call(
+            "status",
+            json!({"selection":{"steps":null,"tags":null},"view":"units"}),
+        )
+        .await
+        .unwrap(),
+    );
+    let row = units["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["unit"] == "fig-1")
+        .unwrap();
+    assert_eq!(row["title"], "FIG-1: Fix the cron driver on Postgres");
+    assert_eq!(row["recipe"], "named");
+    f.close().await;
+}

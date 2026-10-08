@@ -35,6 +35,22 @@ Say what an input or a step is for with an optional `doc`. A plan input takes th
 
 `plan_get` returns them with the plan, and the dashboard and `plan_view` show them.
 
+## Titles: how a step is named on the dashboard
+Every step has a title the owner reads instead of its id; the id stays beside it in mono. Give
+your steps titles by writing what you already write:
+
+- a step's `doc`: its first line is its title, the rest says more ("Port the ledger shard\n
+  It owns the write path…");
+- else the first heading (or first line) of its `spec`, `prompt` or `task` input: a literal
+  string, or the file a `{"file": path}` names (its first 4 KiB is read);
+- in a recipe's unit, the recipe's `title` (below) names every step of the unit, each with its
+  stage before it ("work · FIG-12: Fix the cron driver").
+
+A step with none of these is shown by its id. Titles are read from the plan when it is drawn,
+never stored: edit the doc or the spec file and the title follows. `status` returns each step's
+`title` (and `stage` in a unit of several steps) and each unit's `title`, so you can name steps
+the way the owner sees them.
+
 ## Binding a step input
 - `{"default": <json>}`: a literal value.
 - `{"source": "repo"}`: a plan input.
@@ -282,6 +298,27 @@ directory `projects/<p>/recipes/` (the project's wins on a name clash):
   `step_retry`, `step_remove` or `plan_prune` by `tags=["arc:auth"]`. `unit_tag(project, unit,
   add=[...], remove=[...])` retags a unit later and returns the edit result with the unit's
   `steps`; tags already as asked are no edit. `unit:` tags are reserved.
+- **Title and view.** A recipe may say how its units read on the dashboard. `"title"` is a
+  template filled with the unit's params: `"title": "{ticket}: {spec}"`. A param bound as
+  `{"file": "{spec}"}` stands for that file's title (its first heading), not its path. `"view"`
+  is an OpenUI Lang program drawing a unit's one-line summary; every recipe with a view draws
+  its live units as one **lane matrix** on the board (a row a unit, a column a stage, the units
+  that need someone first) and the view whole on the unit's page:
+
+  ```json
+  "title": "{spec}",
+  "view": "root = Stack([Param(\"engine\"), Output(\"land\", \"landed_sha\"), LastMessage(140)], \"row\")"
+  ```
+
+  The view's vocabulary is `Stack(children, direction?)`, `Text(text, tone?)`,
+  `Markdown(text)`, `Link(label, href)`, `Param(name)`, `Output(stage, field)`,
+  `StepStatus(stage)` and `LastMessage(chars?)`; a stage is a step id without `{unit}-`, and
+  `{param}` works in any string. `recipe_list` returns each recipe's `stages`, its `title` and
+  `view` as written, and `title_error` or `view_error` when one does not check (the recipe still
+  adds units; the matrix then shows a note instead of the summary). Nothing is stored with the
+  plan: the dashboard finds a unit's recipe again from its step ids and fns, and reads its
+  params back from its steps, so a unit you reshape by hand no longer matches and is drawn as a
+  plain unit.
 - Substitution is tiny on purpose: `{param}` in step ids and in every string is replaced by the
   param's value; a string that is exactly `{param}` becomes the value with its type. `{{` and
   `}}` are literal braces; an unknown `{x}` is an error. `unit` (a valid step id) is always a

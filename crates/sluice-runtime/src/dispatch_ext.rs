@@ -93,7 +93,22 @@ pub(crate) fn load_recipes(
 }
 fn recipe_list(entries: IndexMap<String, RecipeEntry>) -> Value {
     json!(entries.values().map(|entry| match &entry.recipe {
-        Ok(recipe) => json!({"name":entry.name,"scope":entry.scope,"doc":recipe.doc(),"params":recipe.params().iter().map(|(name,decl)| (name.clone(), if let Some(doc)=&decl.doc {json!({"type":decl.ty,"doc":doc})} else {json!(decl.ty)})).collect::<serde_json::Map<_,_>>()}),
+        Ok(recipe) => {
+            let mut out = json!({"name":entry.name,"scope":entry.scope,"doc":recipe.doc(),"params":recipe.params().iter().map(|(name,decl)| (name.clone(), if let Some(doc)=&decl.doc {json!({"type":decl.ty,"doc":doc})} else {json!(decl.ty)})).collect::<serde_json::Map<_,_>>(),"stages":recipe.stages()});
+            // a title or view that does not check is reported, and the recipe still adds units
+            for (key, source, error) in [
+                ("title", recipe.title_source(), recipe.title_error()),
+                ("view", recipe.view_source(), recipe.view_error()),
+            ] {
+                if let Some(source) = source {
+                    out[key] = json!(source);
+                }
+                if let Some(error) = error {
+                    out[format!("{key}_error")] = json!(error);
+                }
+            }
+            out
+        }
         Err(errors) => json!({"name":entry.name,"scope":entry.scope,"error":errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")}),
     }).collect::<Vec<_>>())
 }

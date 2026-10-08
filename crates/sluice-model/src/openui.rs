@@ -726,6 +726,120 @@ pub const DATA_COMPONENTS: &[ComponentSpec] = &[
         data: true,
     },
 ];
+/// What a recipe's unit view may draw (`docs("plans")`, recipes): plain parts, links and the
+/// unit-scoped data parts. No SQL: a view draws one unit, many times on one page. A `step` is a
+/// stage of the recipe (`"land"`), never an id; `{param}` in any string is the unit's param.
+pub const VIEW_COMPONENTS: &[ComponentSpec] = &[
+    ComponentSpec {
+        name: "Stack",
+        props: &[
+            req("children", T::Components),
+            opt("direction", T::OneOf(&["col", "row"])),
+        ],
+        data: false,
+    },
+    ComponentSpec {
+        name: "Text",
+        props: &[
+            req("text", T::String),
+            opt("tone", T::OneOf(&["default", "muted"])),
+        ],
+        data: false,
+    },
+    ComponentSpec {
+        name: "Markdown",
+        props: &[req("text", T::String)],
+        data: false,
+    },
+    ComponentSpec {
+        name: "Link",
+        props: &[req("label", T::String), req("href", T::String)],
+        data: false,
+    },
+    ComponentSpec {
+        name: "Output",
+        props: &[req("step", T::String), req("field", T::String)],
+        data: true,
+    },
+    ComponentSpec {
+        name: "StepStatus",
+        props: &[req("step", T::String)],
+        data: true,
+    },
+    ComponentSpec {
+        name: "Param",
+        props: &[req("name", T::String)],
+        data: true,
+    },
+    ComponentSpec {
+        name: "LastMessage",
+        props: &[opt("chars", T::Number)],
+        data: true,
+    },
+];
+pub fn view_spec(name: &str) -> Option<&'static ComponentSpec> {
+    VIEW_COMPONENTS.iter().find(|c| c.name == name)
+}
+/// Parse and check a recipe's unit view against the view vocabulary (`VIEW_COMPONENTS`):
+/// its root, and every problem with its line. The recipe checks its stages and params.
+pub fn check_view(src: &str) -> Result<Component, Vec<Problem>> {
+    match check_view_parts(src) {
+        (Some(root), problems) if problems.is_empty() => Ok(root),
+        (_, problems) => Err(problems),
+    }
+}
+/// `check_view`'s root (when it parses to one) and every problem, so a caller can add its own.
+pub fn check_view_parts(src: &str) -> (Option<Component>, Vec<Problem>) {
+    let (root, mut problems) = check_program(src, &Vocabulary::View);
+    if let Some(root) = &root {
+        visit_tree(root, &mut |c| {
+            if c.name == "LastMessage"
+                && let Some(Value::Number(n)) = c.args.first()
+                && !(n.fract() == 0.0 && *n >= 1.0 && *n <= MAX_MESSAGE_CHARS as f64)
+            {
+                problems.push(Problem {
+                    line: c.line,
+                    message: format!(
+                        "LastMessage: chars must be a whole number from 1 to {MAX_MESSAGE_CHARS}"
+                    ),
+                });
+            }
+            if c.name == "Link"
+                && let Some(Value::String(href)) = c.args.get(1)
+                && !(href.starts_with("https://")
+                    || href.starts_with("http://")
+                    || (href.starts_with('/') && !href.starts_with("//")))
+            {
+                problems.push(Problem {
+                    line: c.line,
+                    message: "Link: href must start with https://, http:// or / (a page here)"
+                        .into(),
+                });
+            }
+        });
+    }
+    (root, problems)
+}
+/// Every component of a view or board tree, the root first.
+pub fn components(root: &Component) -> Vec<&Component> {
+    fn go<'a>(c: &'a Component, out: &mut Vec<&'a Component>) {
+        out.push(c);
+        for arg in &c.args {
+            go_value(arg, out);
+        }
+    }
+    fn go_value<'a>(v: &'a Value, out: &mut Vec<&'a Component>) {
+        match v {
+            Value::Component(c) => go(c, out),
+            Value::Array(items) => items.iter().for_each(|i| go_value(i, out)),
+            Value::Object(fields) => fields.iter().for_each(|(_, i)| go_value(i, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    go(root, &mut out);
+    out
+}
 /// What a `Count` counts, as the dashboard's own summary line counts it: steps by state (a
 /// cancel is "cancelled", never "failed"; "quiet" is running and quiet past its threshold;
 /// "running" counts the quiet ones too), or every step.
@@ -816,11 +930,70 @@ impl Board {
 /// not a statement, an unknown component, a missing, extra or mistyped argument, a name used
 /// but never defined (or defined twice, or in a cycle), and a statement nothing uses.
 pub fn check_board(src: &str) -> Result<Board, Vec<Problem>> {
+    let (root, mut problems) = check_program(src, &Vocabulary::Board);
+    if let Some(root) = &root {
+        // One document per board: a second Doc() (or one statement drawn twice) is refused.
+        let mut docs = vec![];
+        visit_tree(root, &mut |c| {
+            if c.name == "Doc" {
+                docs.push(c.line);
+            }
+        });
+        if let Some(first) = docs.first() {
+            for line in &docs[1..] {
+                problems.push(Problem {
+                    line: *line,
+                    message: format!("a board draws one Doc(), and line {first} already draws it"),
+                });
+            }
+        }
+    }
+    problems.sort();
+    problems.dedup();
+    match root {
+        Some(root) if problems.is_empty() => Ok(Board { root }),
+        _ => Err(problems),
+    }
+}
+
+/// Which components a program may use: a board's, or a recipe's unit view's.
+enum Vocabulary {
+    Board,
+    View,
+}
+impl Vocabulary {
+    fn spec(&self, name: &str) -> Option<&'static ComponentSpec> {
+        match self {
+            Self::Board => board_spec(name),
+            Self::View => view_spec(name),
+        }
+    }
+    fn unknown(&self, name: &str) -> String {
+        match self {
+            Self::Board if name == "Slot" => SLOT_REPLACED.to_owned(),
+            Self::Board => format!("{name} is not a board component"),
+            Self::View => format!(
+                "{name} is not a unit view component (a view draws {})",
+                VIEW_COMPONENTS
+                    .iter()
+                    .map(|c| c.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
+/// Parse a program, resolve its names and check each component against `vocabulary`.
+fn check_program(src: &str, vocabulary: &Vocabulary) -> (Option<Component>, Vec<Problem>) {
     if src.len() > MAX_PROGRAM_BYTES {
-        return Err(vec![Problem {
-            line: 1,
-            message: format!("the program is over {} KiB", MAX_PROGRAM_BYTES / 1024),
-        }]);
+        return (
+            None,
+            vec![Problem {
+                line: 1,
+                message: format!("the program is over {} KiB", MAX_PROGRAM_BYTES / 1024),
+            }],
+        );
     }
     let (program, mut problems) = parse(src);
     if program.statements.len() > MAX_STATEMENTS {
@@ -851,7 +1024,7 @@ pub fn check_board(src: &str) -> Result<Board, Vec<Problem>> {
             });
         }
         problems.sort();
-        return Err(problems);
+        return (None, problems);
     };
     let mut resolver = Resolver {
         names: &names,
@@ -883,29 +1056,9 @@ pub fn check_board(src: &str) -> Result<Board, Vec<Problem>> {
         }
     };
     if let Some(root) = &root {
-        check_component(root, &mut problems);
-        // One document per board: a second Doc() (or one statement drawn twice) is refused.
-        let mut docs = vec![];
-        visit_tree(root, &mut |c| {
-            if c.name == "Doc" {
-                docs.push(c.line);
-            }
-        });
-        if let Some(first) = docs.first() {
-            for line in &docs[1..] {
-                problems.push(Problem {
-                    line: *line,
-                    message: format!("a board draws one Doc(), and line {first} already draws it"),
-                });
-            }
-        }
+        check_component(root, vocabulary, &mut problems);
     }
-    problems.sort();
-    problems.dedup();
-    match root {
-        Some(root) if problems.is_empty() => Ok(Board { root }),
-        _ => Err(problems),
-    }
+    (root, problems)
 }
 
 struct Resolver<'a> {
@@ -970,19 +1123,15 @@ impl Resolver<'_> {
     }
 }
 
-fn check_component(c: &Component, problems: &mut Vec<Problem>) {
+fn check_component(c: &Component, vocabulary: &Vocabulary, problems: &mut Vec<Problem>) {
     let mut fail = |message: String| {
         problems.push(Problem {
             line: c.line,
             message,
         })
     };
-    let Some(spec) = board_spec(&c.name) else {
-        fail(if c.name == "Slot" {
-            SLOT_REPLACED.to_owned()
-        } else {
-            format!("{} is not a board component", c.name)
-        });
+    let Some(spec) = vocabulary.spec(&c.name) else {
+        fail(vocabulary.unknown(&c.name));
         return;
     };
     if c.args.len() > spec.props.len() {
@@ -1015,7 +1164,7 @@ fn check_component(c: &Component, problems: &mut Vec<Problem>) {
             ));
         }
     }
-    if c.name == "LatestMessage" {
+    if c.name == "LatestMessage" && matches!(vocabulary, Vocabulary::Board) {
         if let Some(Value::String(from)) = c.args.first()
             && from.trim().is_empty()
         {
@@ -1033,7 +1182,9 @@ fn check_component(c: &Component, problems: &mut Vec<Problem>) {
         }
     }
     for arg in &c.args {
-        visit_components(arg, &mut |child| check_component(child, problems));
+        visit_components(arg, &mut |child| {
+            check_component(child, vocabulary, problems)
+        });
     }
 }
 /// Every component of the tree under `root`, `root` first.
