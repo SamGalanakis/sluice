@@ -110,6 +110,11 @@ pub fn bar(tally: &Tally, class: &str) -> TrustedHtml {
 
 // ---- time and duration -----------------------------------------------------------------------
 
+/// Whole seconds of a duration, rounded to the millisecond first: durations come from julian-day
+/// differences, so 38 minutes reads 2279.99998 seconds and must not floor to 37m.
+fn whole_seconds(seconds: f64) -> u64 {
+    ((seconds.max(0.0) * 1000.0).round() / 1000.0).floor() as u64
+}
 /// A stored time as every page draws it before its script reads it: "2026-10-07 20:47 UTC".
 pub fn at_text(at: &str) -> String {
     match (at.get(..10), at.get(10..11), at.get(11..16)) {
@@ -144,7 +149,7 @@ fn time(at: &str, mode: &str) -> TrustedHtml {
 /// A duration in the board's two largest units: "<1s", "45s", "12m", "2h 14m", "1d 3h"
 /// (`sluice.js` ticks a running one in the same words).
 pub fn duration_text(seconds: f64) -> String {
-    let s = seconds.max(0.0).floor() as u64;
+    let s = whole_seconds(seconds);
     let (d, h, m) = (s / 86_400, s % 86_400 / 3_600, s % 3_600 / 60);
     match s {
         0 => "<1s".into(),
@@ -157,7 +162,7 @@ pub fn duration_text(seconds: f64) -> String {
 /// The same duration in words, for a screen reader: "under a second", "45 seconds",
 /// "2 hours 14 minutes", "1 day".
 pub fn duration_words(seconds: f64) -> String {
-    let s = seconds.max(0.0).floor() as u64;
+    let s = whole_seconds(seconds);
     let (d, h, m) = (s / 86_400, s % 86_400 / 3_600, s % 3_600 / 60);
     let parts = match s {
         0 => return "under a second".into(),
@@ -375,5 +380,22 @@ impl StepRef {
             },
             self.html(chars)
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_duration_from_julian_days_does_not_lose_a_minute() {
+        // 22:17 to 22:55 as julian days: (to - from) * 86400 is a hair under 2280
+        let from = 2_461_322.428_472_222_3_f64;
+        let to = from + 38.0 / 1_440.0;
+        let seconds = (to - from) * 86_400.0;
+        assert_eq!(duration_text(seconds), "38m");
+        assert_eq!(duration_text(2_279.999_98), "38m");
+        assert_eq!(duration_words(2_279.999_98), "38 minutes");
+        assert_eq!(duration_text(59.4), "59s");
     }
 }

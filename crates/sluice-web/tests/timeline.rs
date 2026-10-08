@@ -18,6 +18,32 @@ fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
     &html[start..end]
 }
 
+/// A minute `minutes` after a base an hour before now, as stored ("…T…Z") and as drawn ("… UTC"):
+/// a run still going runs to the real now, so its seeds sit just before it, never on a fixed date.
+fn recent(minutes: i64) -> (&'static str, String) {
+    // read once, so a minute turning over mid-test never splits seeds from their assertions
+    static BASE: std::sync::OnceLock<time::OffsetDateTime> = std::sync::OnceLock::new();
+    let base = *BASE.get_or_init(|| {
+        let now = time::OffsetDateTime::now_utc();
+        now.replace_second(0)
+            .unwrap()
+            .replace_nanosecond(0)
+            .unwrap()
+            - time::Duration::minutes(60)
+    });
+    let t = base + time::Duration::minutes(minutes);
+    let stored = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:00Z",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute()
+    );
+    let drawn = format!("{} UTC", stored[..16].replace('T', " "));
+    (Box::leak(stored.into_boxed_str()), drawn)
+}
+
 /// Runs for `step` in `project`: each its start, its end (none while it runs) and its result's
 /// status ("failed" with an error, "succeeded", or none).
 async fn runs(
@@ -173,11 +199,7 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
         &f,
         id,
         "l1-fork",
-        &[(
-            "2026-10-07T09:00:00Z",
-            Some("2026-10-07T09:02:00Z"),
-            "succeeded",
-        )],
+        &[(recent(0).0, Some(recent(2).0), "succeeded")],
     )
     .await;
     runs(
@@ -185,12 +207,8 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
         id,
         "l1-work",
         &[
-            (
-                "2026-10-07T09:02:00Z",
-                Some("2026-10-07T09:40:00Z"),
-                "failed",
-            ),
-            ("2026-10-07T09:41:00Z", None, ""),
+            (recent(2).0, Some(recent(40).0), "failed"),
+            (recent(41).0, None, ""),
         ],
     )
     .await;
@@ -241,16 +259,18 @@ async fn a_unit_page_draws_its_runs_on_one_axis_its_long_waits_collapsed_and_its
         "{work}"
     );
     assert!(
-        work.contains(
-            "aria-label=\"Run 1 failed after 38 minutes. Run 2 running since 2026-10-07 09:41 UTC\""
-        ),
+        work.contains(&format!(
+            "aria-label=\"Run 1 failed after 38 minutes. Run 2 running since {}\"",
+            recent(41).1
+        )),
         "{work}"
     );
     // its words say the runs, the time they took, the running one's ticking time
     assert!(
-        work.contains(
-            "<p class=\"tl-words\">2 runs · 38m · running <time data-since=\"2026-10-07T09:41:00Z\""
-        ),
+        work.contains(&format!(
+            "<p class=\"tl-words\">2 runs · 38m · running <time data-since=\"{}\"",
+            recent(41).0
+        )),
         "{work}"
     );
     assert!(

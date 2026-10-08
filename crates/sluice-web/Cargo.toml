@@ -29,5 +29,6 @@ futures-util.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+time.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 tempfile.workspace = true
