@@ -1,5 +1,5 @@
 // The message pages' script: answer forms (drawn by openui.js, loaded once a page has one),
-// read marks, closing questions and the thread's message box.
+// read marks and closing questions (the message box is the kit's: kit.js).
 
 // ---- answers: openui.js draws each answer area and posts it as JSON ---------------------------
 let openui = null;
@@ -95,34 +95,13 @@ document.addEventListener("submit", async (event) => {
   }
 });
 
-// ---- the thread's message box --------------------------------------------------------------
-function replies(root) {
-  root.querySelectorAll?.(".thread-reply").forEach((form) => {
-    if (form.dataset.bound) return;
-    form.dataset.bound = "1";
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const status = form.querySelector(".ou-status");
-      const data = new FormData(form);
-      try {
-        const response = await fetch(form.action, { method: "POST", headers: { "content-type": "application/json" },
-                                                     body: JSON.stringify({ body: data.get("body"), to: data.get("to"), ask: data.get("ask") === "true" }) });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.message ?? "Sluice did not take the message.");
-        status.textContent = "Sent."; form.reset();
-      } catch (error) { status.textContent = unreached(error); }
-    });
-  });
-}
-
 function bind(root) {
   answers(root);
   marks();
-  replies(root);
 }
 bind(document);
 new MutationObserver(() => bind(document)).observe(document.body, { childList: true, subtree: true });
 
 // ---- a thread opened without an anchor starts at its end: its newest message and the box ----
-const replyBox = document.querySelector("#messages-view .thread-reply");
+const replyBox = document.querySelector("#messages-view .composer");
 if (replyBox && !location.hash) requestAnimationFrame(() => replyBox.scrollIntoView({ block: "end" }));

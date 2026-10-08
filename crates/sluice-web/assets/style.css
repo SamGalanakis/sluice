@@ -533,7 +533,7 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
 .stuck .g { margin-top: 3px; display: flex; }
 .stuck a { white-space: nowrap; }  /* a step's id never breaks at its hyphens */
 .d-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; }
-.d-actions .tag { margin-left: -6px; }  /* with the thread link it counts for */
+.d-actions a.tag { text-decoration: none; }  /* "2 awaiting reply": to the Thread tab */
 /* its buttons apart, the thread link after them; on a failed step Retry, the primary, leads;
    the retry's feedback folds on a line of its own */
 .d-actions form { display: contents; }
@@ -792,18 +792,18 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 .d-meta code { font-size: 12.5px; border: 0; background: none; padding: 0; color: var(--foreground); }
 .d-sec { margin-top: 26px; }
 /* a section's head: an h2 under the step page's h1, an h3 in the drawer; one look for both */
-#step-detail :is(.d-sec, .d-sec-h) > :is(h2, h3) { font: 650 16px/22px var(--font-sans);
+#step-detail :is(.d-sec, .d-sec-h) > :is(h2, h3, h4) { font: 650 16px/22px var(--font-sans);
   font-stretch: 100%; letter-spacing: 0; margin: 0; color: var(--foreground); }
-/* what a running step is doing now: its thread's latest message, then its live progress */
-.d-now .now-msg, .d-failure .now-msg { margin-top: 6px; padding: 10px 12px; border: 1px solid var(--border);
-                  border-radius: var(--radius); background: var(--card); max-width: var(--measure); }
-.now-who { margin-bottom: 4px; }
+/* what a running step is doing now: its latest exchange as messages (its own latest, the latest
+   to it since), its live progress, its activity in a line */
+.d-now .convo { margin-top: 8px; }
 .now-from { font-weight: 600; color: var(--foreground); }
-.now-text { line-height: 21px; overflow-wrap: anywhere; }
-.now-more { display: inline-block; margin-top: 6px; font-size: 13px; }
 .now-progress { margin-top: 12px; }
+.now-act { margin: 10px 0 0; }
 /* a failed step's own last message, after its failure: what its agent last said, in its words */
-.d-failure .now-msg.f-last { margin-top: 12px; }
+.d-said { margin-top: 12px; }
+.d-said-h { margin: 0 0 6px; }
+.d-key .d-sec-h { align-items: baseline; }
 .a-id { font-size: 12px; color: var(--muted-foreground); border: 0; background: none; padding: 0; }
 /* quiet: how long its run has written nothing, before what it last said */
 /* a retry's run before this one: its number (a link to it under Runs), how it ended and why */
@@ -811,12 +811,6 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 .d-failure .err-log { margin: 4px 0 0; }
 .now-quiet { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-weight: 600;
              color: var(--status-attention); }
-/* the latest message to it since its own: under its own, quieter, labelled */
-.now-in { margin-top: 10px; padding: 8px 12px; max-width: var(--measure);
-          border-left: 1px solid var(--border-strong); color: var(--muted-foreground); }
-.now-in .now-text { color: var(--foreground); }
-.now-label { font-weight: 600; color: var(--foreground); }
-.now-text code { font-size: 12.5px; }
 .d-resume { margin-top: 10px; max-width: var(--measure); overflow-wrap: anywhere; }
 .d-sec-h { display: flex; align-items: baseline; gap: 12px;
            margin-bottom: 10px; }
@@ -866,6 +860,11 @@ dl.facts dd p { margin: 0; }
 .f-about { flex-basis: 100%; display: flex; flex-direction: column; align-items: flex-start;
            min-width: 0; margin-top: 1px; white-space: normal; overflow-wrap: anywhere; }
 .f-about .f-doc { font: 400 12.5px/17px var(--font-sans); }
+/* where a value comes from (an input) or what set it (an output): under its name, quieter */
+.f-src { font: 400 12px/17px var(--font-sans); color: var(--muted-foreground); }
+.f-src code { font-size: 11.5px; padding: 0; border: 0; background: none; color: inherit; }
+.f-src a { color: inherit; }
+.f-same a { color: inherit; }
 /* outputs not set yet: one line naming them */
 .f-unset { margin: 0; font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
 .f-unset .f-uname { white-space: nowrap; }
@@ -978,24 +977,148 @@ code.v { border: 0; background: none; padding: 0; }
                padding: 10px 12px; background: var(--muted); border: 1px solid var(--border);
                border-radius: var(--radius-md); max-width: var(--measure); }
 .type.inline { display: inline; }
-/* ---- messages: a step's thread with the orchestrator -------------------------------- */
-.msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
-/* each message a card: the step's at the left, the orchestrator's and the owner's set in from
-   it; the owner's own tinted, so one sees at a glance what one said */
-.m { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+/* ---- the kit (views::ui; DESIGN.md, Components; every part in every state on /_ui) ----------
+   Tabs, panels, a fold, an empty state, cards, tags and the conversation, each one look on
+   every page. Ideas and CSS adapted from knadh/oat and hunvreus/basecoat (MIT), on this
+   file's tokens; their behaviour is kit.js. */
+
+/* tabs: a bar of words under a hairline, the chosen one in ink at 650 over a 2px ink bar (the
+   nav's current section's mark, in the page's ink); a count after a word in muted figures. The
+   bar sticks to the top of what scrolls (the window; in the drawer, under its close band) and
+   scrolls sideways inside itself on a narrow screen, so the page never does */
+.tabs { margin-top: 20px; min-width: 0; }
+.tabbar { position: sticky; top: 0; z-index: 4; margin: 0 0 18px; background: var(--background);
+          box-shadow: inset 0 -1px 0 var(--border); }
+.drawer .tabbar { top: calc(60px - var(--d-pad-t)); background: var(--card); }
+.tablist { display: flex; gap: 2px; overflow-x: auto; overscroll-behavior-x: contain;
+           scrollbar-width: none; scroll-padding-inline: 8px; }
+.tablist::-webkit-scrollbar { display: none; }
+/* more tabs past its end: the bar fades out there (kit.js marks it) */
+.tablist[data-more] { mask-image: linear-gradient(to right, black calc(100% - 36px), transparent); }
+.tablist > [role=tab] { position: relative; flex: none; display: inline-flex; align-items: center;
+  gap: 6px; height: 42px; padding: 0 12px; border: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: none; color: var(--muted-foreground); font: 500 14.5px/20px var(--font-sans);
+  white-space: nowrap; cursor: pointer; }
+.tablist > [role=tab]:first-child { margin-left: -12px; }
+.tablist > [role=tab]:hover { color: var(--foreground); background: none; }
+.tablist > [role=tab]:hover::after { content: ""; position: absolute; left: 12px; right: 12px;
+  bottom: 0; height: 2px; border-radius: 2px; background: var(--border-strong); }
+.tablist > [role=tab][aria-selected=true] { color: var(--foreground); font-weight: 650; }
+.tablist > [role=tab][aria-selected=true]::after { content: ""; position: absolute; left: 12px;
+  right: 12px; bottom: 0; height: 2px; border-radius: 2px; background: var(--foreground); }
+.tablist > [role=tab]:focus-visible { outline-offset: -3px; border-radius: var(--radius-md); }
+.tablist > [role=tab] .n { font: 500 12.5px/18px var(--font-sans); color: var(--muted-foreground);
+                           font-variant-numeric: tabular-nums; }
+.tp { min-width: 0; }
+.tp:focus-visible { outline: 2px solid var(--ring); outline-offset: 6px; border-radius: var(--radius-sm); }
+/* a panel's head: with script the tab names it (kept for a screen reader); without, every panel
+   stands stacked under its own head, apart by a hairline */
+#step-detail .tp > .tp-h, .tp > .tp-h { margin: 0 0 12px; font: 650 18px/24px var(--font-sans);
+                                        font-stretch: 100%; color: var(--foreground); }
+@media (scripting: enabled) {
+  [data-tabs] > .tp:not([data-chosen]) { display: none; }
+  [data-tabs] > .tp > .tp-h { position: absolute; width: 1px; height: 1px; overflow: hidden;
+                              clip-path: inset(50%); white-space: nowrap; margin: 0; }
+}
+@media (scripting: none) {
+  .tabbar { display: none; }
+  [data-tabs] > .tp + .tp { margin-top: 36px; padding-top: 22px; border-top: 1px solid var(--border); }
+}
+/* what opens a panel: its first section sits at the bar */
+.tp > .tp-h + :is(.d-sec, dl.facts, .d-sec-h, .convo, .empty-state) { margin-top: 0; }
+.tp-top { justify-content: space-between; align-items: center; min-height: 24px; }
+.tp-top .meta { margin: 0; }
+
+/* a card: a region on the card colour, the hairline and the region's corner (never a card in
+   a card) */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 14px 16px; min-width: 0; }
+/* an empty state: one sentence in muted ink in a dashed region, a way on under it */
+.empty-state { max-width: var(--measure); padding: 16px 18px; border: 1px dashed var(--border-strong);
+               border-radius: var(--radius); color: var(--muted-foreground); }
+.empty-state .es-more { margin-top: 6px; font-size: 13px; }
+/* a question waiting on the owner: the one coral tag (the One Coral Rule's other place) */
+.tag.ask { background: var(--badge); color: var(--badge-ink); border-color: transparent;
+           font-weight: 650; }
+
+/* ---- a conversation: one column, as a transcript reads ---------------------------------------
+   Each run of messages from one sender is a group under who sent it and to whom; a day's start
+   and the first message not read yet are lines across the column; a question's reply sits in it,
+   under it. What a message is reads from its words and its fill: from the step the page is
+   about on the card colour, to it on the muted fill, the owner's tinted with the primary blue */
+.convo { display: grid; gap: 12px; min-width: 0; max-width: 78ch; }
+.convo-of { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; }
+.convo-of .jump { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground);
+                  text-underline-offset: 3px; }
+.convo-more { margin: 0; }
+.convo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; }
+.m-day, .m-new { display: flex; align-items: center; gap: 10px; font: 500 12.5px/18px var(--font-sans);
+                 color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.m-day::after, .m-new::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.m-new { color: var(--foreground); font-weight: 650; }
+.m-new::after { background: var(--foreground); opacity: .55; }
+.mg { display: grid; gap: 6px; min-width: 0; }
+.mg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin: 0;
+           font-size: 13px; line-height: 20px; color: var(--muted-foreground); }
+.mg-head .mg-to { flex: none; width: 14px; height: 14px; }
+.who { font-weight: 600; color: var(--foreground); min-width: 0; overflow-wrap: anywhere; }
+.who .sref-a { text-decoration: none; }
+.who .sref-a:hover .sref-t { text-decoration: underline; text-decoration-color: var(--accent);
+                             text-underline-offset: 3px; }
+.who .sref-t { font-weight: 600; }
+.who .sref-id { font-size: 11.5px; }
+.mg-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
+.m { min-width: 0; padding: 9px 14px 12px; border: 1px solid var(--border); border-radius: var(--radius);
      background: var(--card); }
-.m-lead, .m-owner { margin-left: 28px; }
-/* inside a card (an inbox note) a message is flat: no card within a card */
-.item .m { padding: 0; border: 0; background: none; margin-left: 0; }
-.item .msgs { gap: 12px; }
-.m-owner { background: color-mix(in oklch, var(--primary) 7%, var(--card));
-           border-color: color-mix(in oklch, var(--primary) 30%, var(--border)); }
-.m-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13px;
-          line-height: 18px; color: var(--muted-foreground); }
-.m-from { font-weight: 600; color: var(--foreground); }
-.m-body { margin-top: 4px; max-width: 68ch; overflow-wrap: anywhere; }
+.mg-in .m { background: var(--muted); }
+.mg-you .m { background: color-mix(in oklch, var(--primary) 7%, var(--card));
+             border-color: color-mix(in oklch, var(--primary) 30%, var(--border)); }
+.m-ask { border-color: var(--border-strong); }
+.m-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin: 0;
+          font-size: 12.5px; line-height: 20px; color: var(--muted-foreground); }
+.m-meta .tag { height: 20px; }
+.m-id { padding: 0; border: 0; background: none; font-size: 11.5px; color: var(--muted-foreground); }
+.m-q { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; color: var(--foreground); }
+.m-q svg { width: 15px; height: 15px; }
+.m-to { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+.m-re a { color: inherit; }
+.m-title { margin: 4px 0 0; font: 650 15px/22px var(--font-sans); }
+.m-body { margin-top: 6px; max-width: 72ch; overflow-wrap: anywhere; }
 .m-body p { margin: 0; }
 .m-body p + p, .m-body ul, .m-body ol, .m-body pre { margin-top: 8px; }
+.m-body pre { padding: 8px 10px; background: var(--muted); border: 1px solid var(--border);
+              border-radius: var(--radius-md); }
+.mg-in .m-body pre { background: var(--card); }
+.m-long > .clip { max-height: 240px; max-width: 72ch; }
+.m-long > .fold-toggle { margin-top: 4px; }
+.m-text { margin-top: 6px; line-height: 21px; overflow-wrap: anywhere; max-width: 72ch; }
+.m-text code { font-size: 12.5px; }
+.m-whole { display: inline-block; margin-top: 6px; font-size: 13px; }
+.m-answer { margin-top: 8px; }
+.m .gone { margin-top: 6px; color: var(--status-attention); font-weight: 500; }
+/* a question's replies, under it: the muted fill inside its card (the card colour inside a
+   message on the muted fill) */
+.m-replies { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.m-reply { min-width: 0; padding: 7px 12px 10px; border-radius: var(--radius-md); background: var(--muted); }
+.mg-in .m-reply { background: var(--card); }
+.m-reply .m-ri { flex: none; width: 15px; height: 15px; }
+/* inside a card (an inbox note) a message is flat: no card within a card */
+.item .m { padding: 0; border: 0; background: none; }
+.item .mg-msgs { gap: 12px; }
+.item .convo { margin-top: 8px; }
+/* the message box, at a conversation's end */
+.composer { display: grid; gap: 8px; margin-top: 4px; padding: 12px 14px; border: 1px solid var(--border-strong);
+            border-radius: var(--radius); background: var(--card); min-width: 0; }
+.composer-to { font: 600 13px/18px var(--font-sans); }
+.composer textarea { width: 100%; min-width: 0; min-height: 76px; resize: vertical; }
+.composer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+                gap: 8px 14px; }
+.composer label.check { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+.composer .ou-status:empty { display: none; }
+/* an inbox question's line: its state, who asked whom, when, its id and where */
+.q-meta { margin: 4px 0 6px; }
+.q-meta .q-where { color: inherit; }
+.m-by { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
 
@@ -1544,13 +1667,9 @@ details.read-today > summary .n { font: 500 14px/22px var(--font-sans); color: v
 details.read-today:not([open]) > summary .chev { transform: rotate(-90deg); }
 details.read-today .item { opacity: .85; }
 .notes-none { margin-top: 24px; }
-.m-title { margin: 6px 0 0; font: 600 15px/22px var(--font-sans); }
 .thread-of { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
              gap: 6px 12px; margin: 8px 0 14px; }
 .thread-of .meta { margin: 0; }
-.thread-of .jump { color: var(--muted-foreground); text-underline-offset: 3px; }
-.thread-reply { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-top: 18px; }
-.thread-reply textarea { width: 100%; }
 
 /* ---- a page that cannot be drawn: what is missing, why, and the ways back -------------------- */
 .missing { padding: 24px 0 8px; max-width: 64ch; }
@@ -1561,7 +1680,9 @@ details.read-today .item { opacity: .85; }
 .missing-links a { display: inline-flex; align-items: center; min-height: 32px; }
 @media (max-width: 720px) {
   .q-actions button, .q-close button, .crumbs a, .missing-links a, details.pane > summary,
-  details.kinds > summary, .stopped-list summary, .confirm-flow > summary, .mark-all, .mark-read, details.read-today > summary { min-height: 44px; }
+  details.kinds > summary, .stopped-list summary, .confirm-flow > summary, .mark-all, .mark-read, details.read-today > summary,
+  .composer button, .composer label.check, .convo-of .jump, .m-whole { min-height: 44px; }
+  .tablist > [role=tab] { height: 44px; }
   .stopped-list summary { padding-top: 10px; }
   dl.a-facts { grid-template-columns: minmax(0, 1fr); }
   dl.a-facts dd { margin-bottom: 4px; }
@@ -1569,7 +1690,6 @@ details.read-today .item { opacity: .85; }
 
 /* ---- narrow screens: one card per line, no edges; the drawer is a sheet ------------- */
 @media (max-width: 720px) {
-  .m-lead, .m-owner { margin-left: 14px; }
   .stuck a { white-space: normal; }  /* a long id may break rather than overflow */
 
   :root { --gutter: 16px; --nav-pad: 8px; --stripe: 3px; }
@@ -2325,3 +2445,39 @@ a.node.mx-dot:hover { background: var(--secondary); }
   :is(.fold-box > summary, .shelf-step) .fb-name .sref-t { white-space: normal; overflow: visible; }
   .shelf-step .fb-name { white-space: normal; overflow-wrap: anywhere; }
 }
+
+/* ---- /_ui, the kit's gallery: each part in the house pair's light and dark, side by side
+   (stacked under 900px of the column) ------------------------------------------------------ */
+.gal-lead { margin: 10px 0 0; max-width: var(--measure); color: var(--muted-foreground); }
+.gal-index ul { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 16px 0 0; padding: 0;
+                list-style: none; font-size: 14px; }
+.gal-index a { display: inline-flex; align-items: center; min-height: 32px; }
+.gal-sec { margin-top: 36px; min-width: 0; }
+.gal-sec > h2 { margin: 0 0 4px; font-size: 18px; line-height: 24px; }
+.gal-about { margin: 0 0 12px; max-width: var(--measure); }
+.gal-about code, .gal-cap code { font-size: 12px; }
+.gal-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@container (min-width: 900px) { .gal-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.gallery { container-type: inline-size; }
+.gal-th { min-width: 0; padding: 14px 16px 18px; border: 1px solid var(--border-strong);
+          border-radius: var(--radius); background: var(--background); color: var(--foreground); }
+.gal-theme { margin: 0 0 10px; font: 500 12px/16px var(--font-sans); color: var(--muted-foreground); }
+.gal-th .tabbar { position: static; background: var(--background); }
+.gal-states { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.gal-states li { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 2px 10px;
+                 align-items: baseline; }
+.gal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.gal-cap { margin: 14px 0 6px; }
+.gal-cap:first-child { margin-top: 0; }
+.gal-card { margin-top: 14px; }
+.gal-fold { margin-top: 14px; }
+.gal-th .empty-state + .empty-state { margin-top: 10px; }
+@media (max-width: 720px) {
+  .gal-states li { grid-template-columns: minmax(0, 1fr); }
+  .gal-index a { min-height: 44px; }
+}
+/* a target inside a tab's panel scrolls to below the sticky tab bar (and the drawer's band) */
+.tp [id] { scroll-margin-top: 64px; }
+.drawer .tp [id] { scroll-margin-top: 112px; }
+.tp > .chain-link { margin-top: 22px; }
+.tp > .tp-h + .chain-link { margin-top: 0; }

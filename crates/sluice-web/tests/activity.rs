@@ -276,7 +276,8 @@ async fn failures_show_through_every_fold() {
     assert!(shown[1].contains("id=\"act-r1-t4\""), "{}", shown[1]);
     assert!(
         activity.contains("2 earlier turns not shown, none with a failed call. <a href=\"")
-            && activity.contains("?activity=all#activity\">Show earlier turns</a>"),
+            && activity
+                .contains("?activity=all&#38;tab=activity#activity\">Show earlier turns</a>"),
         "{activity}"
     );
     // a turn with a failure says so in its meta line, in ink with the failed glyph
@@ -463,7 +464,8 @@ const GEOMETRY: &str = r#"(() => {
 })()"#;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_draws_the_outline_in_one_column_on_a_phone_and_opens_on_the_failure() {
+async fn chromium_draws_the_outline_in_one_column_on_a_phone_and_its_failure_link_opens_on_the_call()
+ {
     let f = fixture("claude", "failed").await;
     let router = f.app.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -480,6 +482,13 @@ async fn chromium_draws_the_outline_in_one_column_on_a_phone_and_opens_on_the_fa
                 browser.viewport(width, theme).unwrap();
                 browser.navigate(&page).unwrap();
                 browser.wait(ready).unwrap();
+                // a failed step opens on Overview, the failure first; Activity waits in its tab
+                let opened = browser
+                    .eval("[document.querySelector('[role=tab][aria-selected=true]').dataset.tab, document.querySelector('#tp-overview .d-failure').checkVisibility(), document.querySelector('#activity').checkVisibility()]")
+                    .unwrap();
+                assert_eq!(opened, serde_json::json!(["overview", true, false]), "{width} {theme}");
+                // "Its last failed call" opens the Activity tab on it
+                browser.eval("document.querySelector('.act-why a').click()").unwrap();
                 browser
                     .eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
                     .unwrap();
@@ -505,17 +514,25 @@ async fn chromium_draws_the_outline_in_one_column_on_a_phone_and_opens_on_the_fa
                 }
             }
         }
-        // in the drawer beside the board, the failing call is brought into view as it arrives
+        // in the drawer beside the board the step opens on its failure; its link opens the
+        // Activity tab on the failing call, and the drawer stays open on the step
         browser.viewport(1440, "light").unwrap();
         let board = page.rsplit_once("/steps/").unwrap().0.to_owned();
         browser.navigate(&format!("{board}#step:work")).unwrap();
         browser
-            .wait("document.querySelector('#drawer [data-act-fail]') && document.querySelector('#drawer').scrollTop > 0")
+            .wait("!!document.querySelector('#drawer .d-failure')?.checkVisibility() && !document.querySelector('#drawer #activity').checkVisibility()")
+            .unwrap();
+        browser.eval("document.querySelector('#drawer .act-why a').click()").unwrap();
+        browser
+            .wait("document.querySelector('#drawer #activity').checkVisibility()")
+            .unwrap();
+        browser
+            .eval("new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))")
             .unwrap();
         let g = browser
-            .eval("(() => { const d = document.querySelector('#drawer').getBoundingClientRect(), f = document.querySelector('#drawer [data-act-fail] > summary').getBoundingClientRect(); return f.top >= d.top && f.bottom <= d.bottom; })()")
+            .eval("(() => { const d = document.querySelector('#drawer').getBoundingClientRect(), f = document.querySelector('#drawer [data-act-fail] > summary').getBoundingClientRect(); return [f.top >= d.top && f.bottom <= d.bottom, location.hash]; })()")
             .unwrap();
-        assert_eq!(g, true, "the drawer opened on the failing call");
+        assert_eq!(g, serde_json::json!([true, "#step:work"]), "the drawer opened Activity on the failing call");
         if let Some(dir) = &screens {
             browser
                 .screenshot(&dir.join("drawer-failed-1440-light.png"))

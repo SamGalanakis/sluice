@@ -266,6 +266,11 @@ pub fn registration() -> PageRegistration {
                 bytes: include_bytes!("../../assets/nav.js"),
             },
             Asset {
+                names: &["kit.js"],
+                media_type: "text/javascript",
+                bytes: include_bytes!("../../assets/kit.js"),
+            },
+            Asset {
                 names: &["datastar-rocket-1.0.4.js"],
                 media_type: "text/javascript",
                 bytes: include_bytes!("../../assets/datastar-rocket-1.0.4.js"),

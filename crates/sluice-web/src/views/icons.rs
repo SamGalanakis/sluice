@@ -66,6 +66,10 @@ icons! {
     Globe => "globe",
     MessageSquare => "message-square",
     Wrench => "wrench",
+    ArrowRight => "arrow-right",
+    ArrowDown => "arrow-down",
+    CornerDownRight => "corner-down-right",
+    MessageCircleQuestion => "message-circle-question",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.

@@ -38,6 +38,13 @@ pub struct FieldView {
     /// A small flat object's names and values (kind `pairs`): `{"type": "normal", "model":
     /// "sol"}` reads "type normal · model sol", not as JSON.
     pub pairs: Vec<(String, String)>,
+    /// An input: its value is the one its last run received (its source still says where
+    /// that came from).
+    #[serde(default)]
+    pub received: bool,
+    /// An output: what set it, when that is not what set the rest ("Run 2", "Set by hand").
+    #[serde(default)]
+    pub set_by: String,
 }
 impl FieldView {
     /// A true or false value its fn gives no doc for.
@@ -76,6 +83,8 @@ impl FieldView {
             }
             .into(),
             source: source.into(),
+            received: false,
+            set_by: String::new(),
         }
     }
     pub fn reference(
@@ -101,45 +110,70 @@ impl FieldView {
     pub fn ty_words(&self) -> String {
         super::ui::type_words(&self.ty)
     }
-    /// Its source is worth a line: a reference, a file, a plan input, a submission so far. A
-    /// default, or the value its run received, is what an input usually is: said once, under
-    /// the section's head, not on every row.
-    pub fn shows_source(&self) -> bool {
-        !self.source.is_empty()
-            && !matches!(
-                self.source.as_str(),
-                "Its default" | "As its run received it"
-            )
-    }
     pub fn long(&self) -> bool {
         if self.kind == "pairs" {
             return false;
         }
         self.value.contains('\n') || self.value.chars().count() > 90
     }
-    pub fn source_href(&self, project: &ProjectId) -> String {
-        ValueRef::parse(&self.source)
-            .ok()
-            .and_then(|r| r.parts().ok())
-            .and_then(|p| p.step)
-            .map(|id| format!("/projects/id/{project}/steps/{id}"))
-            .unwrap_or_default()
-    }
     pub fn key(&self, prefix: &str) -> String {
         format!("{prefix}:{}", self.name)
     }
-    /// Where its value comes from, in words: "From build/text" for a reference (its sources
-    /// joined), else the source's own phrase ("Its default", "As its run received it").
-    pub fn source_words(&self) -> String {
-        let reference = self
-            .source
-            .split(", ")
-            .all(|part| ValueRef::parse(part).is_ok());
-        if reference {
-            format!("From {}", self.source)
-        } else {
-            self.source.clone()
+    /// Where its value comes from, under its name: "Default", "From <step> · <output>" (each
+    /// source step a link), "Plan input <name>", "A file, read when the run starts", "Submitted
+    /// so far"; for an output what set it when that differs from the rest ("Run 2"). Nothing
+    /// when it says nothing.
+    pub fn about_html(&self, project: &ProjectId) -> TrustedHtml {
+        use super::ui::esc;
+        let mut parts: Vec<String> = vec![];
+        let refs: Option<Vec<sluice_model::gates::Reference>> = (!self.source.is_empty())
+            .then(|| {
+                self.source
+                    .split(", ")
+                    .map(|part| ValueRef::parse(part).ok()?.parts().ok())
+                    .collect()
+            })
+            .flatten();
+        match (self.source.as_str(), refs) {
+            ("", _) => {}
+            ("Its default", _) => parts.push("Default".into()),
+            (_, Some(refs)) => {
+                let named: Vec<String> = refs
+                    .iter()
+                    .map(|r| {
+                        let field = if r.fields.is_empty() {
+                            String::new()
+                        } else {
+                            format!(".{}", r.fields.join("."))
+                        };
+                        match &r.step {
+                            Some(step) => format!(
+                                "<a href=\"/projects/id/{project}/steps/{step}\" data-opens=\"{step}\"><code>{s}</code></a> · {o}{f}",
+                                s = esc(step.as_str()),
+                                o = esc(&r.name),
+                                f = esc(&field),
+                            ),
+                            None => format!("plan input <code>{}{}</code>", esc(&r.name), esc(&field)),
+                        }
+                    })
+                    .collect();
+                let from = named.join(", ");
+                parts.push(match from.strip_prefix("plan input ") {
+                    Some(rest) if refs.len() == 1 => format!("Plan input {rest}"),
+                    _ => format!("From {from}"),
+                });
+            }
+            (other, None) => parts.push(esc(other)),
         }
+        if !self.set_by.is_empty() {
+            parts.push(esc(&self.set_by));
+        }
+        TrustedHtml::owned(
+            parts
+                .into_iter()
+                .map(|p| format!("<span class=\"f-src\">{p}</span>"))
+                .collect(),
+        )
     }
 }
 /// A small flat object's names and values: at most 8, each a string, number, true or false.
@@ -373,8 +407,14 @@ pub struct StepView {
     pub finishing: Option<sluice_model::attempt::Finishing>,
     /// Its latest progress (`step_progress`) while that is fresher than its outputs.
     pub progress: Option<ProgressView>,
-    /// While it runs: its own latest message and the latest to it since.
-    pub now: NowView,
+    /// Its conversation (`threads::Conversation`): its own thread and what it sent or was sent
+    /// on any other, the Thread tab's; read when its page or drawer draws.
+    #[serde(skip)]
+    pub thread: super::threads::Conversation,
+    /// Its own latest message (to anyone) as its first words, and while it runs the latest to
+    /// it since: what Overview quotes.
+    #[serde(skip)]
+    pub exchange: super::threads::Conversation,
     /// While it runs: when its run last wrote anything (RFC 3339), as the board observed its
     /// run files. Read with `quiet`; it moves with every write, so no part of the version.
     #[serde(skip)]
@@ -466,36 +506,6 @@ impl GateView {
             .is_some_and(|s| s.spec().band == sluice_model::shown::Band::Done)
     }
 }
-/// What a running step is doing now: its own latest message (to anyone), and the latest
-/// message to it since, which it has not answered yet.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct NowView {
-    pub own: Option<NowMessage>,
-    pub inbound: Option<NowMessage>,
-}
-/// One message as Now quotes it.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct NowMessage {
-    pub thread: String,
-    pub from: String,
-    pub to: String,
-    pub at: String,
-    /// Its body's first 4000 characters: Now quotes at most 360 of them.
-    pub body: String,
-}
-impl NowMessage {
-    /// Its first words as one line of inline HTML, code spans kept.
-    pub fn excerpt(&self) -> TrustedHtml {
-        crate::markdown::excerpt(&self.body, 360).0
-    }
-    /// The excerpt leaves some of it out.
-    pub fn more(&self) -> bool {
-        crate::markdown::excerpt(&self.body, 360).1
-    }
-    pub fn thread_href(&self, project: &ProjectId) -> String {
-        super::threads::thread_url(*project, &self.thread)
-    }
-}
 /// A step's progress as its page shows it: the fields, when they were set, and whether the
 /// step still runs (live) or the run has ended (kept until the next run starts).
 #[derive(Clone, Debug, Serialize)]
@@ -570,9 +580,15 @@ impl StepView {
     /// Now leads with what the step itself wrote last: its live progress when that is newer
     /// than its own latest message.
     pub fn progress_first(&self) -> bool {
+        let own = self.exchange.rows.iter().find_map(|row| match row {
+            super::threads::Row::Group(g) if g.from == super::threads::Who::This => {
+                g.entries.first().map(|e| e.item.message.at.as_str())
+            }
+            _ => None,
+        });
         self.progress
             .as_ref()
-            .is_some_and(|p| p.live && self.now.own.as_ref().is_none_or(|own| p.at > own.at))
+            .is_some_and(|p| p.live && own.is_none_or(|at| p.at.as_str() > at))
     }
     pub fn new(project: ProjectId, plan: &Plan, state: &StateSnapshot, id: &StepId) -> Self {
         let step = &plan.steps()[id];
@@ -733,7 +749,8 @@ impl StepView {
             revision: 0,
             finishing: None,
             progress: None,
-            now: NowView::default(),
+            thread: Default::default(),
+            exchange: Default::default(),
             active_at: String::new(),
             result_at: String::new(),
             failure_record: None,
@@ -904,7 +921,12 @@ impl StepView {
     }
     /// "2 awaiting reply", gold: questions on its thread nobody has answered.
     pub fn awaiting_tag(&self) -> TrustedHtml {
-        super::ui::tag(&format!("{} awaiting reply", self.awaiting), "attn", None)
+        super::ui::tag_link(
+            "#tp-thread",
+            &format!("{} awaiting reply", self.awaiting),
+            "attn",
+            None,
+        )
     }
     pub fn href(&self) -> String {
         format!("/projects/id/{}/steps/{}", self.project, self.id)
@@ -1205,9 +1227,11 @@ impl StepView {
         let n = self.runs.len() - 1;
         Some((n, &self.runs[n - 1]))
     }
-    /// While it runs, the earlier run its outputs came from: its number and when it ended.
+    /// The run its outputs came from: its number and when it ended (the latest finished run
+    /// whose result carried outputs; while it runs, an earlier one); none for a value set by
+    /// hand or only submitted so far.
     pub fn outputs_from(&self) -> Option<(usize, &str)> {
-        if !self.running()
+        if self.manual
             || self
                 .outputs_set()
                 .iter()
@@ -1215,13 +1239,38 @@ impl StepView {
         {
             return None;
         }
-        let current = self.runs.len().saturating_sub(1);
-        self.runs[..current]
+        self.runs
             .iter()
             .enumerate()
             .rev()
             .find(|(_, r)| !r.outputs.is_empty() && !r.finished.is_empty())
             .map(|(i, r)| (i + 1, r.finished.as_str()))
+    }
+    /// Each output says what set it when that is not the run the rest came from: an earlier
+    /// run ("Run 1"), or the owner ("Set by hand").
+    fn mark_setters(&mut self) {
+        let from = self.outputs_from().map(|(n, _)| n);
+        let setters: Vec<(String, String)> = self
+            .outputs
+            .iter()
+            .filter(|f| f.available && f.source.is_empty())
+            .filter_map(|f| {
+                if self.manual {
+                    return Some((f.name.clone(), "Set by hand".to_owned()));
+                }
+                let n = self
+                    .runs
+                    .iter()
+                    .rposition(|r| !r.finished.is_empty() && r.outputs.contains(&f.name))?
+                    + 1;
+                (Some(n) != from).then(|| (f.name.clone(), format!("Run {n}")))
+            })
+            .collect();
+        for (name, by) in setters {
+            if let Some(f) = self.outputs.iter_mut().find(|f| f.name == name) {
+                f.set_by = by;
+            }
+        }
     }
     /// The inputs drawn as fields: all but the undocumented switches (`switches`).
     pub fn input_rows(&self) -> Vec<&FieldView> {
@@ -1287,6 +1336,32 @@ impl StepView {
             "It stops; Retry starts it over.".to_owned()
         }
     }
+    /// Cancel's confirmation: titled by its title, its id after it ("Cancel Fix the parser
+    /// `l1-work`?"), naming the run, with an optional reason.
+    pub fn cancel_confirm(&self) -> super::ui::Confirm {
+        super::ui::Confirm {
+            opener: "Cancel".into(),
+            title: if self.titled() {
+                format!("Cancel {}", self.name().text(60))
+            } else {
+                format!("Cancel {}?", self.id)
+            },
+            id: if self.titled() {
+                self.id.to_string()
+            } else {
+                String::new()
+            },
+            action: format!("{}/actions", self.href()),
+            hidden: vec![
+                ("revision", self.revision.to_string()),
+                ("action", "cancel".into()),
+            ],
+            copy: self.cancel_prompt(),
+            reason: Some("Why stop this run?"),
+            confirm: "Cancel the run",
+            keep: "Keep running",
+        }
+    }
     /// Cancel applies: running and not already stopping (a cancel asked for is not offered
     /// again), or pending work outside sluice (`step_cancel` takes no other).
     pub fn cancellable(&self) -> bool {
@@ -1299,18 +1374,120 @@ impl StepView {
             | StepStatus::Skipped => false,
         }
     }
-    /// The step as the drawer draws it: its id a second-level heading under the page's.
-    pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
+    /// Its tabs, each only when it has something to show, with a count where one helps:
+    /// Overview always, then Activity, Thread (its messages), Inputs, Outputs (set of all) and
+    /// Runs.
+    pub fn tabs(&self) -> Vec<super::ui::Tab> {
+        use super::ui::{Tab, count};
+        let mut tabs = vec![Tab::new("overview", "Overview")];
+        if let Some(a) = &self.activity {
+            let turns = a.turns.len() + a.earlier;
+            tabs.push(
+                Tab::new("activity", "Activity")
+                    .counted(turns.to_string(), count(turns, "turn", "turns")),
+            );
+        }
+        if !self.thread.is_empty() {
+            tabs.push(Tab::new("thread", "Thread").counted(
+                self.thread.count.to_string(),
+                count(self.thread.count, "message", "messages"),
+            ));
+        }
+        if !self.inputs.is_empty() {
+            tabs.push(Tab::new("inputs", "Inputs").counted(self.inputs.len().to_string(), ""));
+        }
+        if !self.outputs.is_empty() {
+            let set = self.outputs_set().len();
+            let all = self.outputs.len();
+            tabs.push(if set == all {
+                Tab::new("outputs", "Outputs").counted(all.to_string(), "all set")
+            } else {
+                Tab::new("outputs", "Outputs")
+                    .counted(format!("{set}/{all}"), format!("{set} of {all} set"))
+            });
+        }
+        if !self.runs.is_empty() {
+            tabs.push(Tab::new("runs", "Runs").counted(self.runs.len().to_string(), ""));
+        } else if self.no_run_kept() {
+            tabs.push(Tab::new("runs", "Runs"));
+        }
+        tabs
+    }
+    /// The tab a page opens on: the one asked for (`?tab=`) when it has one, else Overview.
+    pub fn tab_on(&self, asked: &str) -> &'static str {
+        self.tabs()
+            .into_iter()
+            .find(|t| t.key == asked)
+            .map_or("overview", |t| t.key)
+    }
+    /// It finished, and no run of it is kept: an earlier release ran it, or its runs were
+    /// cleared since.
+    pub fn no_run_kept(&self) -> bool {
+        self.runs.is_empty() && (self.failed() || self.succeeded()) && !self.manual
+    }
+    /// The output its Overview leads with: the first set of `summary`, `result`, `report`,
+    /// `final`, `answer` or `verdict`.
+    pub fn key_output(&self) -> Option<&FieldView> {
+        ["summary", "result", "report", "final", "answer", "verdict"]
+            .iter()
+            .find_map(|name| self.outputs.iter().find(|f| f.available && f.name == *name))
+    }
+    /// Overview has nothing else to say: its state's own sentence stands in.
+    pub fn overview_empty(&self) -> bool {
+        !self.running()
+            && !self.failed()
+            && self.page_waits().is_empty()
+            && self.hold.is_none()
+            && self.gates.is_empty()
+            && !self.chained
+            && self.queued.is_empty()
+            && self.skipped.is_empty()
+            && !self.external
+            && self.progress.is_none()
+            && self.key_output().is_none()
+            && self.exchange.is_empty()
+    }
+    /// What its state means, in a sentence (the status table's): Overview's when it has nothing
+    /// else to say.
+    pub fn state_help(&self) -> &'static str {
+        self.shown().spec().help
+    }
+    /// The outputs drawn as fields, each with the name of an earlier one whose value it repeats
+    /// ("same as summary"): a long value is said once.
+    pub fn output_rows(&self) -> Vec<(&FieldView, &str)> {
+        let set = self.outputs_set();
+        set.iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let same = (matches!(f.kind.as_str(), "text" | "json" | "file")
+                    && f.value.chars().count() >= 24)
+                    .then(|| {
+                        set[..i]
+                            .iter()
+                            .find(|e| e.kind == f.kind && e.value == f.value)
+                            .map(|e| e.name.as_str())
+                    })
+                    .flatten()
+                    .unwrap_or("");
+                (*f, same)
+            })
+            .collect()
+    }
+    /// The step as the drawer draws it: its id a second-level heading under the page's; `tab`
+    /// the tab it opens on.
+    pub fn body(&self, tab: &str) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&StepTemplate {
             step: self,
             page: false,
+            tab: self.tab_on(tab),
         })
     }
     /// The step as its own page draws it (and that page's stream): its id the page's heading.
-    pub fn own_body(&self) -> Result<TrustedHtml, askama::Error> {
+    pub fn own_body(&self, tab: &str) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&StepTemplate {
             step: self,
             page: true,
+            tab: self.tab_on(tab),
         })
     }
     /// Its own page: a way back to the plan (and its unit), then the step.
@@ -1319,6 +1496,7 @@ impl StepView {
         &self,
         project: &str,
         unit: Option<(&str, &str)>,
+        tab: &str,
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
@@ -1336,7 +1514,7 @@ impl StepView {
             step: self,
             project,
             unit,
-            body: self.own_body()?,
+            body: self.own_body(tab)?,
             js_url: super::asset_url("sluice.js"),
         })
     }
@@ -1347,12 +1525,14 @@ struct StepTemplate<'a> {
     step: &'a StepView,
     /// On its own page: its id is the page's `h1`.
     page: bool,
+    /// The tab it opens on.
+    tab: &'static str,
 }
 impl StepTemplate<'_> {
     /// What the inputs' values are, said once under their head: their run's, or defaults.
     fn inputs_note(&self) -> &'static str {
         let sources: Vec<&str> = self.step.inputs.iter().map(|f| f.source.as_str()).collect();
-        if sources.contains(&"As its run received it") {
+        if self.step.inputs.iter().any(|f| f.received) {
             "As its last run received them."
         } else if sources.contains(&"Its default") {
             "A value not otherwise set is its default."
@@ -1375,6 +1555,10 @@ impl StepTemplate<'_> {
     /// The first heading level inside a value: one under its section's head.
     fn value_top(&self) -> u8 {
         if self.page { 3 } else { 4 }
+    }
+    /// A section's heading inside a tab's panel: one under the panel's.
+    fn sub(&self) -> u8 {
+        self.level() + 1
     }
 }
 /// Its progress (`step_progress`) while the outputs have not superseded it, each field typed
@@ -1426,6 +1610,85 @@ pub fn failure_log_href(project: &ProjectId, step: &str, seq: i64) -> String {
         .append_pair("before", &(seq + 1).to_string())
         .finish();
     format!("/projects/id/{project}/log?{query}#r{seq}")
+}
+/// Its conversation, the Thread tab's (its latest 60 messages and the replies to them), and
+/// what Overview quotes of it: while it runs its own latest message and the latest to it since,
+/// once it failed its own latest message.
+fn load_conversation(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    step: &mut StepView,
+) -> sluice_store::Result<()> {
+    use super::threads::{Build, Composer, Conversation};
+    let messages = sluice_store::messages::conversation(c, project, step.id.as_str())?;
+    if messages.is_empty() {
+        step.thread = Conversation::default();
+        step.exchange = Conversation::default();
+        return Ok(());
+    }
+    let steps = super::threads::step_names(c, project)?;
+    let name: String = c
+        .query_row(
+            "SELECT name FROM projects WHERE project_id=?1",
+            [project.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    let items = messages
+        .into_iter()
+        .map(|m| super::threads::item(c, project, &name, &steps, m))
+        .collect::<Result<Vec<_>, _>>()?;
+    let unread = super::threads::unread_ids(c, project, &items)?;
+    let id = step.id.to_string();
+    let own = items.iter().rposition(|m| m.message.from == id);
+    let mut quoted = vec![];
+    {
+        if let Some(own) = own {
+            quoted.push(items[own].clone());
+        }
+        if step.running()
+            && let Some(inbound) = items[own.map_or(0, |i| i + 1)..]
+                .iter()
+                .rev()
+                .find(|m| m.message.from != id)
+        {
+            quoted.push(inbound.clone());
+        }
+    }
+    let here = |m: &super::threads::MessageItem| format!("#message-{}", m.id());
+    step.exchange = Conversation::build(
+        Build {
+            project,
+            subject: Some(&id),
+            steps: &steps,
+            unread: &Default::default(),
+            most: None,
+            excerpt: true,
+            href: &here,
+        },
+        quoted,
+    );
+    let whole = super::threads::thread_url(project, &format!("step-{id}"));
+    step.thread = Conversation::build(
+        Build {
+            project,
+            subject: Some(&id),
+            steps: &steps,
+            unread: &unread,
+            most: Some(60),
+            excerpt: false,
+            href: &here,
+        },
+        items,
+    )
+    .with_head(whole)
+    .with_composer(Some(Composer {
+        project,
+        to: id.clone(),
+        label: format!("Message to {}", step.name().text(48)),
+    }));
+    Ok(())
 }
 pub fn load_detail(
     c: &rusqlite::Connection,
@@ -1531,10 +1794,16 @@ pub fn load_detail(
             profile: String::new(),
         });
     }
+    // the values its last run received, each still saying where it came from
     if let Some(last) = step.runs.last() {
         for frozen in &last.inputs {
             if let Some(field) = step.inputs.iter_mut().find(|f| f.name == frozen.name) {
-                *field = frozen.clone();
+                let source = std::mem::take(&mut field.source);
+                *field = FieldView {
+                    source,
+                    received: true,
+                    ..frozen.clone()
+                };
             }
         }
     }
@@ -1559,48 +1828,9 @@ pub fn load_detail(
     } else {
         None
     };
-    step.now = NowView::default();
-    // a running step's Now, and a failed one's last words
-    if step.running() || step.failed() {
-        let row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, NowMessage)> {
-            let body: String = r.get(4)?;
-            Ok((
-                r.get(0)?,
-                NowMessage {
-                    thread: r.get(1)?,
-                    from: r.get(2)?,
-                    to: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                    body: body.chars().take(4000).collect(),
-                    at: r.get(5)?,
-                },
-            ))
-        };
-        let own = c
-            .prepare_cached("SELECT id,thread,\"from\",\"to\",body,at FROM messages WHERE project_id=?1 AND \"from\"=?2 ORDER BY id DESC LIMIT 1")?
-            .query_row((project.to_string(), step.id.as_str()), row)
-            .optional()?;
-        let after = own.as_ref().map_or(0, |(id, _)| *id);
-        let inbound = step.running()
-            .then(|| c
-            .prepare_cached("SELECT id,thread,\"from\",\"to\",body,at FROM messages WHERE project_id=?1 AND (\"to\"=?2 OR thread=?3) AND \"from\"<>?2 AND id>?4 ORDER BY id DESC LIMIT 1")?
-            .query_row(
-                (
-                    project.to_string(),
-                    step.id.as_str(),
-                    format!("step-{}", step.id),
-                    after,
-                ),
-                row,
-            )
-            .optional())
-            .transpose()?
-            .flatten();
-        step.now = NowView {
-            own: own.map(|(_, m)| m),
-            inbound: inbound.map(|(_, m)| m),
-        };
-    }
+    load_conversation(c, project, step)?;
     (step.messages,step.awaiting) = c.prepare_cached("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2")?.query_row((project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
+    step.mark_setters();
     let mut q = c.prepare_cached("SELECT sub.outputs FROM submissions sub JOIN runs r USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL ORDER BY r.created_at DESC LIMIT 1")?;
     let submitted: Option<String> = q
         .query_row((project.to_string(), step.id.as_str()), |r| r.get(0))
@@ -1727,11 +1957,14 @@ async fn execute_action(
         Err(e) => board::error_response(e),
     }
 }
-/// `?activity=all` draws every turn and call of its activity outline, not only the latest.
+/// `?activity=all` draws every turn and call of its activity outline, not only the latest;
+/// `?tab=` the tab its page opens on (Overview when it has no such tab).
 #[derive(Deserialize, Default)]
 pub struct ActivityQuery {
     #[serde(default)]
     activity: String,
+    #[serde(default)]
+    tab: String,
 }
 impl ActivityQuery {
     fn all(&self) -> bool {
@@ -1762,10 +1995,10 @@ pub async fn step_page(
             .map(|(id, title)| (id.as_str(), title.as_str()));
         // the version its stream's first batch has when it draws the same: nothing to patch
         let drawn = step
-            .own_body()
+            .own_body(&shown.tab)
             .map(|body| RenderedBatch::new(vec![PatchRegion::new("step-detail", body)]).version)
             .map_err(render_error)?;
-        step.page_body(&detail.project, unit)
+        step.page_body(&detail.project, unit, &shown.tab)
             .and_then(|body| {
                 super::render_layout(
                     &format!("{} · {}", step.tab_title(), detail.project),
@@ -1818,6 +2051,8 @@ pub async fn step_stream(
     Query(shown): Query<ActivityQuery>,
 ) -> Response {
     let all = shown.all();
+    // the tab the page holds as it connects: its first batch draws that one chosen
+    let tab = query.signal("tab");
     let stop = state.stop.clone();
     // its own page's stream is the page's (`ver`, and its stale says so in the page's banner);
     // the drawer's has its own (`sver`), so a drawer never says the board's updates paused
@@ -1835,6 +2070,7 @@ pub async fn step_stream(
         let state = state.clone();
         let id = id.clone();
         let registry = registry.clone();
+        let tab = tab.clone();
         async move {
             let (_, detail) =
                 board::step_detail(&state, project, registry.as_ref().map(|r| &r.0), &id, false)
@@ -1853,9 +2089,9 @@ pub async fn step_stream(
             Ok(RenderedBatch::new(vec![PatchRegion::new(
                 "step-detail",
                 if own.page {
-                    step.own_body()
+                    step.own_body(&tab)
                 } else {
-                    step.body()
+                    step.body(&tab)
                 }
                 .map_err(render_error)?,
             )]))

@@ -176,9 +176,9 @@ impl TurnView {
     }
 }
 impl ActivityView {
-    /// The section, its head at `level`.
-    pub fn render(&self, level: u8) -> Result<TrustedHtml, askama::Error> {
-        TrustedHtml::from_template(&ActivityTemplate { a: self, level })
+    /// The outline, its tab's panel's content (the panel's head names it).
+    pub fn render(&self) -> Result<TrustedHtml, askama::Error> {
+        TrustedHtml::from_template(&ActivityTemplate { a: self })
     }
     /// "8 turns · 34 tool calls · 2 failed".
     pub fn summary(&self) -> String {
@@ -192,17 +192,16 @@ impl ActivityView {
         parts.join(" · ")
     }
     pub fn all_href(&self) -> String {
-        format!("{}?activity=all#activity", self.step_href)
+        format!("{}?activity=all&tab=activity#activity", self.step_href)
     }
     pub fn latest_href(&self) -> String {
-        format!("{}#activity", self.step_href)
+        format!("{}?tab=activity#activity", self.step_href)
     }
 }
 #[derive(Template)]
 #[template(path = "activity.html")]
 struct ActivityTemplate<'a> {
     a: &'a ActivityView,
-    level: u8,
 }
 
 /// A run's calls by tool as one meta line: "Bash 42 · Edit 9 · Read 17 · 2 failed", four tools

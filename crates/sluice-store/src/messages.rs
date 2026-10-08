@@ -961,6 +961,23 @@ pub fn read_notes(
         .collect()
 }
 
+/// A step's conversation, oldest first: its own thread (`step-<step>`) and every message it sent
+/// or was sent on any other thread (a question it put to another step, that step's reply).
+pub fn conversation(sql: &Connection, project: ProjectId, step: &str) -> Result<Vec<Message>> {
+    let mut stmt = sql.prepare_cached(&format!(
+        "SELECT {MESSAGE_JSON} FROM messages WHERE project_id=?1 AND (thread=?2 OR \"to\"=?3 OR \"from\"=?3) ORDER BY id"
+    ))?;
+    let json = stmt
+        .query_map(
+            params![project.to_string(), format!("step-{step}"), step],
+            |r| r.get::<_, String>(0),
+        )?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    json.into_iter()
+        .map(|s| serde_json::from_str(&s).map_err(StoreError::from))
+        .collect()
+}
+
 /// The caller's inbox: its open questions lead, followed by its unread notes grouped
 /// by thread, unread by `identity`'s read watermarks. History is every message in
 /// any conversation `identity` took part in.

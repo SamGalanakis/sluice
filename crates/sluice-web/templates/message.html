@@ -1,8 +1,0 @@
-<li class="m m-{{ item.sender_class }}" id="message-{{ item.id() }}" data-seq="{{ item.id() }}">
-<div class="m-head"><span class="m-from">{{ item.message.from }}</span><span class="m-to">→ {{ item.recipient() }}</span>{{ crate::views::ui::ago(item.message.at)|safe }}{% if item.state == "open" %}{{ crate::views::ui::tag("Awaiting reply", "attn", None)|safe }}{% else %}{{ crate::views::ui::tag(item.state, "muted", None)|safe }}{% endif %}{% if item.message.to_message.is_some() %}<a href="#message-{{ item.message.to_message.unwrap().0 }}">Reply to {{ item.message.to_message.unwrap().0 }}</a>{% endif %}</div>
-{% if item.message.title.is_some() %}<p class="m-title">{{ item.title() }}</p>{% endif %}
-<div class="md m-body">{{ item.body|safe }}</div>
-{% if !item.answer_json.is_empty() %}<details data-preserve-attr="open"><summary>Answer as sent</summary><pre>{{ item.answer_json }}</pre></details>{% endif %}
-{% if !item.stopped.is_empty() %}<p class="meta gone">Nobody is waiting: {{ item.stopped }}</p>{% endif %}
-{% if item.answerable() %}{% include "answer.html" %}{% endif %}
-</li>

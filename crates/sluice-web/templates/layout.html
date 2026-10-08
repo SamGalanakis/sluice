@@ -28,4 +28,4 @@
 <main id="content" tabindex="-1"{% if !stream.is_empty() %} data-init="@get('{{ stream }}', {retry: 'always', retryMaxCount: 10, retryMaxWait: 30000, requestCancellation: 'cleanup'})"{% endif %}>
 <p id="stream-state" class="stream-state attn" role="status" aria-live="polite" hidden><span class="stream-words">Updates paused. Reconnecting…</span> <button type="button" class="stream-retry">Reconnect</button></p><p id="release-state" class="stream-state release-state" role="status" aria-live="polite" hidden>sluice was updated · <button type="button" class="release-reload">Reload</button></p>
 {{ body|safe }}
-</main><dialog id="confirmation" class="confirmation" aria-labelledby="confirmation-title" data-ignore-morph><h2 id="confirmation-title"></h2><div id="confirmation-body"></div></dialog><script type="module" src="{{ nav_url }}"></script></body></html>
+</main><dialog id="confirmation" class="confirmation" aria-labelledby="confirmation-title" data-ignore-morph><h2 id="confirmation-title"></h2><div id="confirmation-body"></div></dialog><script type="module" src="{{ nav_url }}"></script><script type="module" src="{{ kit_url }}"></script></body></html>

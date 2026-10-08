@@ -383,6 +383,200 @@ impl StepRef {
     }
 }
 
+// ---- the kit: tabs, panels, a fold, an empty state, a confirmation -----------------------------
+// Server-drawn parts with one look each (DESIGN.md, Components; the gallery at `/_ui` shows every
+// one in every state). Their behaviour is `kit.js`: a page works without it, each part falling
+// back to plain HTML (tabs to their panels stacked under their heads, a fold to its details, a
+// confirmation to its form inline).
+
+/// One tab of a tab set: its key (the `?tab=` word and its panel's id), its label and a count
+/// after it ("15", "3/7"), with the count's words for a screen reader ("3 of 7 set").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tab {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub count: String,
+    pub said: String,
+}
+impl Tab {
+    pub fn new(key: &'static str, label: &'static str) -> Self {
+        Self {
+            key,
+            label,
+            count: String::new(),
+            said: String::new(),
+        }
+    }
+    /// With a count after its label, and the words a screen reader hears for it.
+    pub fn counted(mut self, count: impl Into<String>, said: impl Into<String>) -> Self {
+        self.count = count.into();
+        self.said = said.into();
+        self
+    }
+}
+/// A tab set's opening and its bar: an ARIA tablist (arrow keys, Home and End move along it;
+/// `kit.js`), the tab `selected` chosen. Its panels follow (`panel_open` … `panel_close`), then
+/// `tabs_close`. `prefix` keeps two tab sets on one page apart; `url` mirrors the chosen tab
+/// into the address's `?tab=`. The chosen tab is the container's `data-current`, which a stream
+/// patch never resets (`data-preserve-attr`): the script owns it once the page is drawn.
+pub fn tabs_open(
+    prefix: &str,
+    label: &str,
+    tabs: &[Tab],
+    selected: &str,
+    url: bool,
+) -> TrustedHtml {
+    let selected = tabs
+        .iter()
+        .find(|t| t.key == selected)
+        .or(tabs.first())
+        .map_or("", |t| t.key);
+    let mut bar = String::new();
+    for tab in tabs {
+        let on = tab.key == selected;
+        let count = if tab.count.is_empty() {
+            String::new()
+        } else if tab.said.is_empty() {
+            format!(" <span class=\"n\">{}</span>", esc(&tab.count))
+        } else {
+            format!(
+                " <span class=\"n\" aria-hidden=\"true\">{}</span><span class=\"vh\">, {}</span>",
+                esc(&tab.count),
+                esc(&tab.said)
+            )
+        };
+        bar.push_str(&format!(
+            "<button type=\"button\" role=\"tab\" id=\"{p}tt-{k}\" aria-controls=\"{p}tp-{k}\" aria-selected=\"{on}\" tabindex=\"{ti}\" data-tab=\"{k}\" data-preserve-attr=\"aria-selected tabindex\">{label}{count}</button>",
+            p = esc(prefix),
+            k = tab.key,
+            ti = if on { 0 } else { -1 },
+            label = esc(tab.label),
+        ));
+    }
+    TrustedHtml::owned(format!(
+        "<div class=\"tabs\" data-tabs data-current=\"{selected}\"{url} data-preserve-attr=\"data-current\"><div class=\"tabbar\"><div class=\"tablist\" role=\"tablist\" aria-label=\"{label}\">{bar}</div></div>",
+        url = if url { " data-tab-url" } else { "" },
+        label = esc(label),
+    ))
+}
+pub fn tabs_close() -> TrustedHtml {
+    TrustedHtml::owned("</div>".into())
+}
+/// A tab's panel: a section under its own head (at `level`), which stands alone without script
+/// (every panel stacked) and is the tab's words for a screen reader with it. With `region`, a
+/// stream patches the panel on its own (`<!--r:…-->`).
+pub fn panel_open(
+    prefix: &str,
+    key: &str,
+    label: &str,
+    level: u8,
+    selected: bool,
+    region: bool,
+) -> TrustedHtml {
+    let level = level.clamp(1, 6);
+    let id = format!("{}tp-{}", esc(prefix), esc(key));
+    TrustedHtml::owned(format!(
+        "{open}<section class=\"tp\" id=\"{id}\" role=\"tabpanel\" aria-labelledby=\"{p}tt-{k}\" data-tab=\"{k}\"{on} data-preserve-attr=\"data-chosen tabindex\"><h{level} class=\"tp-h\">{label}</h{level}>",
+        open = if region {
+            format!("<!--r:{id}-->")
+        } else {
+            String::new()
+        },
+        p = esc(prefix),
+        k = esc(key),
+        on = if selected { " data-chosen" } else { "" },
+        label = esc(label),
+    ))
+}
+pub fn panel_close(prefix: &str, key: &str, region: bool) -> TrustedHtml {
+    TrustedHtml::owned(if region {
+        format!("</section><!--/r:{}tp-{}-->", esc(prefix), esc(key))
+    } else {
+        "</section>".into()
+    })
+}
+/// A long text's toggle under it: "Show all", then "Show less" (the text itself sits in a
+/// `.clip` before it, never inside the toggle). Its state survives a stream patch.
+pub fn fold_toggle() -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<details class=\"fold-toggle more-fold\" data-preserve-attr=\"open\"><summary><span class=\"m-more\">Show all</span><span class=\"m-less\">Show less</span>{}</summary></details>",
+        super::icons::icon(Icon::ChevronDown, 16, "chev")
+    ))
+}
+/// A fold around HTML that may run long: its first lines, faded, and the toggle under them.
+pub fn fold(class: &str, html: &TrustedHtml) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"long\"><div class=\"clip {}\">{html}</div>{}</div>",
+        esc(class),
+        fold_toggle()
+    ))
+}
+/// What a place says when it has nothing to show: one plain sentence.
+pub fn empty(text: &str) -> TrustedHtml {
+    empty_with(text, &TrustedHtml::owned(String::new()))
+}
+/// The same with a way on after it (a link).
+pub fn empty_with(text: &str, more: &TrustedHtml) -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<div class=\"empty-state\"><p>{}</p>{}</div>",
+        esc(text),
+        if more.as_str().is_empty() {
+            String::new()
+        } else {
+            format!("<p class=\"es-more\">{more}</p>")
+        }
+    ))
+}
+/// A confirmation (Cancel, Close all): the server's `<details>`, its summary the opener and its
+/// form what is confirmed. With script its summary opens the shared dialog (`kit.js`), titled
+/// `title` with `id` after it in data mono; without, the details open the same form inline.
+#[derive(Clone, Debug, Default)]
+pub struct Confirm {
+    pub opener: String,
+    pub title: String,
+    pub id: String,
+    pub action: String,
+    pub hidden: Vec<(&'static str, String)>,
+    pub copy: String,
+    /// A reason field's placeholder: none when the confirmation takes no reason.
+    pub reason: Option<&'static str>,
+    pub confirm: &'static str,
+    pub keep: &'static str,
+}
+impl Confirm {
+    pub fn html(&self) -> TrustedHtml {
+        let hidden: String = self
+            .hidden
+            .iter()
+            .map(|(n, v)| {
+                format!(
+                    "<input type=\"hidden\" name=\"{}\" value=\"{}\">",
+                    esc(n),
+                    esc(v)
+                )
+            })
+            .collect();
+        let reason = self.reason.map_or(String::new(), |placeholder| format!(
+            "<label class=\"confirm-reason\">Reason (optional)<textarea name=\"message\" rows=\"3\" maxlength=\"16384\" placeholder=\"{}\"></textarea></label>",
+            esc(placeholder)
+        ));
+        TrustedHtml::owned(format!(
+            "<details class=\"confirm-flow\" data-confirm-title=\"{title}\"{id}><summary>{opener}</summary><form method=\"post\" action=\"{action}\">{hidden}<p class=\"confirm-copy\">{copy}</p>{reason}<div class=\"confirm-actions\"><button class=\"primary\">{confirm}</button><button type=\"button\" data-keep>{keep}</button></div></form></details>",
+            title = esc(&self.title),
+            id = if self.id.is_empty() {
+                String::new()
+            } else {
+                format!(" data-confirm-id=\"{}\"", esc(&self.id))
+            },
+            opener = esc(&self.opener),
+            action = esc(&self.action),
+            copy = esc(&self.copy),
+            confirm = esc(self.confirm),
+            keep = esc(self.keep),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

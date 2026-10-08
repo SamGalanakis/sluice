@@ -352,6 +352,14 @@ impl StreamQuery {
             })
             .unwrap_or_default()
     }
+    /// A signal the page holds, as text ("" when it holds none): the step's chosen `tab`.
+    pub fn signal(&self, name: &str) -> String {
+        self.datastar
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get(name).and_then(|v| v.as_str().map(str::to_owned)))
+            .unwrap_or_default()
+    }
 }
 pub async fn home_stream(
     State(state): State<DashboardState>,

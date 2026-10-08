@@ -67,7 +67,7 @@ fn detail_preserves_missing_null_default_bindings_and_escapes_error() {
             .value
             .contains("/tmp/a")
     );
-    let html = view.body().unwrap();
+    let html = view.body("").unwrap();
     assert!(!html.as_str().contains("<script>"));
     assert!(html.as_str().contains("&#60;script&#62;"));
     assert!(view.retryable());
@@ -87,7 +87,7 @@ fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_lin
         },
     );
     let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
-    let html = view.body().unwrap();
+    let html = view.body("").unwrap();
     let html = html.as_str();
     assert!(
         html.contains("<button name=\"action\" value=\"retry\" class=\"primary\">Retry</button>"),
@@ -113,7 +113,7 @@ fn a_failed_steps_drawer_leads_with_retry_and_names_its_unset_outputs_on_one_lin
         .insert("summary".into(), json!("Fixed it").try_into().unwrap());
     w.status = StepStatus::Succeeded;
     let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
-    let html = view.body().unwrap();
+    let html = view.body("").unwrap();
     let html = html.as_str();
     assert!(html.contains("<span class=\"f-name\">summary</span> <span class=\"f-type\">&#34;string&#34;</span><span class=\"f-about\"><span class=\"f-doc\">What changed</span></span></dt><dd class=\"f-v\"><span class=\"v\">Fixed it</span></dd>"), "{html}");
     assert!(html.contains("2 outputs not set yet:"), "{html}");
@@ -359,7 +359,7 @@ async fn durable_detail_uses_current_generation_frozen_inputs_and_live_submissio
     let mut ended = step.clone();
     ended.runs[0].finished = "2026-10-05T12:14:00Z".into();
     ended.runs[0].seconds = Some(8040.0);
-    let ended_html = ended.body().unwrap();
+    let ended_html = ended.body("").unwrap();
     assert!(ended_html.as_str().contains(" · took 2h 14m"));
     assert!(!ended_html.as_str().contains("took took"));
     let mut timed = step.clone();
@@ -431,10 +431,10 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
         .1
         .unwrap()
         .step;
-    let html = step.body().unwrap();
+    let html = step.body("").unwrap();
     let html = html.as_str();
     assert!(html.contains("finishing · running for <time"), "{html}");
-    assert!(html.contains("<h3>Finishing</h3>"), "{html}");
+    assert!(html.contains("<h4>Finishing</h4>"), "{html}");
     assert!(html.contains("datetime=\"2026-10-05T09:30:00Z\""), "{html}");
     assert!(
         html.contains("release <code style=\"white-space:nowrap\">0123456789ab</code>"),
@@ -600,11 +600,11 @@ fn a_cancelled_step_reads_as_cancelled_not_failed() {
     assert_eq!(view.shown(), sluice_web::views::ui::Shown::Cancelled);
     assert_eq!(view.status, StepStatus::Failed);
     assert!(view.retryable() && !view.retry_first());
-    let html = view.body().unwrap();
+    let html = view.body("").unwrap();
     let html = html.as_str();
     assert!(html.contains("g-cancelled"), "{html}");
     assert!(
-        html.contains("<h3>Cancelled</h3><p class=\"err-line\">pivot: audit instead (Sam)</p>"),
+        html.contains("<h4>Cancelled</h4><p class=\"err-line\">pivot: audit instead (Sam)</p>"),
         "{html}"
     );
     assert!(!html.contains("Why it failed"));
@@ -638,7 +638,7 @@ fn a_long_after_is_a_sentence_over_its_linked_steps() {
     );
     let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
     assert_eq!(view.gates_words(), "6 steps: 5 done, 1 running");
-    let html = view.body().unwrap();
+    let html = view.body("").unwrap();
     let html = html.as_str();
     assert!(
         html.contains("<summary><span>6 steps: 5 done, 1 running</span>"),
@@ -662,7 +662,7 @@ fn a_long_after_is_a_sentence_over_its_linked_steps() {
     );
     let view = StepView::new(ProjectId::new(), &plan, &failed, &"w".parse().unwrap());
     assert!(!view.pausable());
-    assert!(!view.body().unwrap().as_str().contains("value=\"pause\""));
+    assert!(!view.body("").unwrap().as_str().contains("value=\"pause\""));
 }
 /// A failure leads with one sentence from its kind; the pane its agent left is folded under
 /// "Pane at failure", never shown as escaped JSON.
@@ -689,9 +689,9 @@ fn a_failure_leads_with_its_sentence_and_folds_the_pane() {
     ));
     assert_eq!(view.shown(), sluice_web::views::ui::Shown::Failed);
     assert!(view.retry_first());
-    let html = view.body().unwrap();
+    let html = view.body("").unwrap();
     let html = html.as_str();
-    assert!(html.contains("<h3>Why it failed</h3><p class=\"err-line\">Stopped at its wall-clock cap after 10h 0m.</p>"), "{html}");
+    assert!(html.contains("<h4>Why it failed</h4><p class=\"err-line\">Stopped at its wall-clock cap after 10h 0m.</p>"), "{html}");
     assert!(
         html.contains("<p class=\"err-said\">engine operation deadline exceeded</p>"),
         "{html}"
@@ -874,23 +874,27 @@ async fn a_running_step_says_what_it_is_doing_now() {
         .1
         .unwrap()
         .step;
-    let drawer = step.body().unwrap();
+    let drawer = step.body("").unwrap();
     let drawer = drawer.as_str();
     let now = &drawer[drawer
         .find("<section class=\"d-sec d-now\">")
         .expect("a Now section")..];
     let now = &now[..now.find("</section>").unwrap()];
+    // Now is the Overview tab's first section, a level under the drawer's panel heads
     assert!(
-        now.starts_with("<section class=\"d-sec d-now\"><h3>Now</h3>"),
+        now.starts_with("<section class=\"d-sec d-now\"><h4>Now</h4>"),
         "{now}"
     );
+    // its latest exchange as messages: its own latest (to the orchestrator), its first words
+    let this = "<span class=\"who who-this\">This step</span>";
+    let orchestrator = "<span class=\"who\">Orchestrator</span>";
     assert!(
-        now.contains("<span class=\"now-from\">work</span>"),
+        now.contains(&format!("<p class=\"mg-head\">{this}")),
         "{now}"
     );
     assert!(now.contains("datetime=\"2026-10-05T09:40:00Z\""), "{now}");
     assert!(
-        now.contains("<p class=\"now-text\">Landed the seams on main."),
+        now.contains("<p class=\"m-text\">Landed the seams on main."),
         "{now}"
     );
     assert!(
@@ -901,19 +905,17 @@ async fn a_running_step_says_what_it_is_doing_now() {
         !now.contains("Start with the seams"),
         "the latest only: {now}"
     );
-    // its own voice leads; what was said to it since comes under it, labelled, identifiers whole
+    // its own voice leads; what was said to it since comes under it, named by who sent it,
+    // identifiers whole
+    let own = now.find(&format!("<p class=\"mg-head\">{this}")).unwrap();
+    let to_it = &now[now
+        .find(&format!("<p class=\"mg-head\">{orchestrator}"))
+        .expect("the message to it")..];
+    assert!(own < now.len() - to_it.len(), "{now}");
+    assert!(to_it.contains(this), "{to_it}");
     assert!(
-        now.contains("<span class=\"now-from\">work</span> to orchestrator"),
+        now.contains("class=\"mg mg-out\"") && now.contains("class=\"mg mg-in\""),
         "{now}"
-    );
-    let to_it = &now[now.find("now-in").expect("the message to it")..];
-    assert!(
-        now.find("now-msg").unwrap() < now.find("now-in").unwrap(),
-        "{now}"
-    );
-    assert!(
-        to_it.contains("To it</span> from <span class=\"now-from\">orchestrator</span>"),
-        "{to_it}"
     );
     assert!(
         to_it.contains(
@@ -928,12 +930,19 @@ async fn a_running_step_says_what_it_is_doing_now() {
         "{now}"
     );
     // the Now section comes before everything else under the head
-    assert!(drawer.find("d-now").unwrap() < drawer.find("<h3>Inputs</h3>").unwrap_or(usize::MAX));
-    let page = step.page_body("p", None).unwrap();
+    assert!(
+        drawer.find("d-now").unwrap()
+            < drawer
+                .find("<h3 class=\"tp-h\">Inputs</h3>")
+                .unwrap_or(usize::MAX)
+    );
+    let page = step.page_body("p", None, "").unwrap();
     let page = page.as_str();
     assert!(page.contains("<h1 id=\"d-title\">work</h1>"), "{page}");
     assert!(
-        page.contains("<h2>Now</h2>") && !page.contains("<h3"),
+        page.contains("<h2 class=\"tp-h\">Overview</h2>")
+            && page.contains("<h3>Now</h3>")
+            && !page.contains("<h4"),
         "{page}"
     );
 }
@@ -961,7 +970,7 @@ fn a_fn_failure_reads_as_its_exception_with_the_resume_hint_by_retry() {
         r#"{"error":"fn_failure","message":"exit code 1\nremains active.\ncodex: still waiting.\nTraceback (most recent call last):\n  File \"x.py\", line 1, in main\nRuntimeError: codex ran past the wall-clock cap of 600 min (SLUICE_AGENT_MAX_MIN)\nsession: s-1. To resume it, bind the step's session input to it and retry: step_set_input(project, step, \"session\", \"s-1\"), then step_retry."}"#,
         None,
     ));
-    let html = view.body().unwrap();
+    let html = view.body("").unwrap();
     let html = html.as_str();
     assert!(
         html.contains("<p class=\"err-line\">Stopped at its wall-clock cap after 10h 0m.</p>"),

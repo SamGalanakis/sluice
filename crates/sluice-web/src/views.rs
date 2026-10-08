@@ -8,7 +8,7 @@ macro_rules! register_pages {
         const PAGES: &[fn() -> PageRegistration] = &[$($module::registration),*];
     };
 }
-register_pages! { home, board, inbox, log, project_settings, panel }
+register_pages! { home, board, inbox, log, project_settings, panel, gallery }
 pub mod activity;
 pub mod failure;
 pub mod icons;
@@ -471,6 +471,7 @@ struct Layout<'a> {
     path: &'a str,
     style_url: String,
     nav_url: String,
+    kit_url: String,
     datastar_url: String,
     import_map: &'static str,
     /// The build that drew the page (`streams::release`): a stream from another says so.
@@ -496,6 +497,7 @@ pub fn render_layout(
         path,
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),
+        kit_url: asset_url("kit.js"),
         datastar_url: asset_url("datastar-rocket-1.0.4.js"),
         import_map: import_map(),
         release: crate::streams::release(),
