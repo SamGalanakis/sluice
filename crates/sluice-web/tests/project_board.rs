@@ -366,7 +366,7 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
     assert!(html.contains("1 step matches “PARSER”."));
     // A wait whose source the search left out is said in words, shown where lines are drawn.
     assert!(
-        html.contains(&format!("<p class=\"waits said\">Waits for <a href=\"{base}/steps/alpha-review\" data-opens=\"alpha-review\" data-from=\"s:alpha-review\" data-to=\"s:beta-review\">alpha-review</a>, not in this view</p>")),
+        html.contains(&format!("<p class=\"waits said\">Waits for <a href=\"{base}/steps/alpha-review\" data-opens=\"alpha-review\" data-from=\"s:alpha-review\" data-to=\"s:beta-review\"><span class=\"sref\"><span class=\"sref-t\">alpha-review</span></span></a>, not in this view</p>")),
         "{html}"
     );
     assert!(!page("").await.contains("not in this view"));
@@ -727,10 +727,11 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
     for gone in ["legend", "lg-line", "xout", "xref", "→"] {
         assert!(!plane.contains(gone), "{gone}: {plane}");
     }
-    // the waits in words, named and linked, with what a source is doing; a satisfied one unsaid
+    // the waits in words, named (by title, else id) and linked, with what a source is doing; a
+    // satisfied one unsaid
     let to = |step: &str, from: &str| {
         format!(
-            "<a href=\"{base}/steps/{from}\" data-opens=\"{from}\" data-from=\"s:{from}\" data-to=\"s:{step}\">{from}</a>"
+            "<a href=\"{base}/steps/{from}\" data-opens=\"{from}\" data-from=\"s:{from}\" data-to=\"s:{step}\"><span class=\"sref\"><span class=\"sref-t\">{from}</span></span></a>"
         )
     };
     assert!(

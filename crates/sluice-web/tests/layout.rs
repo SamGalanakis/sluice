@@ -22,6 +22,7 @@ fn fixture() -> DashboardSnapshot {
                 step: "broken".into(),
                 cancelled: false,
                 headline: "Its fn failed: exit code 1.".into(),
+                record: None,
             }],
             names: Default::default(),
         }],

@@ -198,6 +198,34 @@ impl Failure {
         }
         words
     }
+    /// Its card's caption, the kind of failure in a word, so "retry it" reads apart from "read
+    /// it" before the card is opened: "cap" (a wall-clock cap), "stalled", "quota", "auth",
+    /// "engine" (its engine would not start, take its input or keep its session), "lost" (its
+    /// process), "no submit", "invalid" (outputs), "rejected" (inputs), "transient",
+    /// "cancelled"; "failed" for the work's own failure.
+    pub fn caption(&self) -> &'static str {
+        if self.cancelled {
+            return "cancelled";
+        }
+        // a fn's cap reads as an agent's (`cause_sentence`)
+        if self.headline.starts_with(WALL_CAP) {
+            return "cap";
+        }
+        match self.kind.as_str() {
+            "StallCap" => "stalled",
+            "QuotaExhausted" => "quota",
+            "AuthFailed" => "auth",
+            "ReadyTimeout" | "TurnStartTimeout" | "EngineExited" | "MissingSession"
+            | "BlockedScreen" | "LockConflict" | "SessionCwd" | "CapabilityMismatch"
+            | "UnknownAcceptance" | "Cleanup" => "engine",
+            "process_lost" => "lost",
+            "ExitedWithoutSubmit" | "exited_without_submit" => "no submit",
+            "invalid" | "Invalid" => "invalid",
+            "rejected" => "rejected",
+            "transient" | "Transient" => "transient",
+            _ => "failed",
+        }
+    }
     /// A cancel's sentence under its "Cancelled" head: the reason, without the word again.
     pub fn cancel_words(&self) -> &str {
         self.headline
@@ -304,13 +332,12 @@ fn cause_sentence(cause: &str, took: Option<f64>) -> String {
 }
 /// One wording for a run stopped at its wall-clock cap, an agent's or a fn's: "Stopped at its
 /// wall-clock cap after 10h 0m." (the cap when the fn names it, else how long it ran).
+/// How a wall-clock cap's sentence starts, an agent's or a fn's: its caption reads "cap" by it.
+const WALL_CAP: &str = "Stopped at its wall-clock cap";
 fn wall_cap(seconds: Option<f64>) -> String {
     match seconds {
-        Some(s) => format!(
-            "Stopped at its wall-clock cap after {}.",
-            super::ui::duration_text(s)
-        ),
-        None => "Stopped at its wall-clock cap.".into(),
+        Some(s) => format!("{WALL_CAP} after {}.", super::ui::duration_text(s)),
+        None => format!("{WALL_CAP}."),
     }
 }
 /// A message as the end of a sentence: its first letter kept, a full stop when it has none (a

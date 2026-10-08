@@ -406,7 +406,9 @@ the board (`--board-w`). With the step drawer open beside the page (from 1200px)
 
 **The One Click Rule.** The board is names and states. Everything else (inputs, outputs,
 errors, runs) is one click away on the step's page, or under the board for the plan as a
-whole.
+whole. Two things are said before that click, each in a few words: why a stopped step stopped
+(its one sentence under its card or its matrix row, as a wait is said in words) and, on a
+retry, its run's number with how the runs before it ended.
 
 ### Navigation
 - **One bar** (the band, `nav-bg`, full width with its content on the column, its three
@@ -456,7 +458,7 @@ last changed; for one
 with failures or cancels a list of its stopped steps, a row each: the step's glyph (failed, or
 cancelled in muted ink), the step named as every page names it (title, then its id in data
 mono; a link that opens it in the drawer) and its failure's headline cut with an ellipsis in
-meta, the failures first and at most four rows, then "and n more" (a link to Show: Attention);
+meta, a link to the failure's own record on the log when the log keeps it, the failures first and at most four rows, then "and n more" (a link to Show: Attention);
 its description's opening; a progress bar (a segment a state, as the board's) with "n of m"
 and "· n paused" in plum when some are; then either its running steps (the glyph of how each
 reads: running, quiet, finishing, stopping, with a muted "stopping" or "finishing" tag; the step named as every page names it,
@@ -523,14 +525,19 @@ Top down:
    its unit page, two lines at most), its id in data mono and any alarm under it; then the
    view's summary in 13/18 (its parts in a line: a param at 500 in ink, an output in data mono,
    a message clamped to two lines), its column headed by what the view shows ("Ticket · last
-   message"); then a column per stage, headed by the stage in 12.5px meta, each cell that
+   message"); then a column per stage, headed by the stage in 12.5px meta and, when its
+   column holds something that needs a look, what in ink at 600 ("land · 2 failed · 1 quiet",
+   the attention states counted in the ramp's order), each cell that
    stage's card as a compact pill (28px, glyph, caption and timer, no id: the column says it),
    centred; a stage nothing has reached yet (pending, paused, blocked or held) is a 24px mark
    instead of a pill (pending a small dot, the others their glyph at 14px), so a row's live
    work stands out from its tail. Rows go in the status ramp's order of the state each unit
-   reads as, the plan's order where they tie; rows part by a hairline. A matrix is a table and draws no
-   lines: what a row waits for is said in words under its title ("Waits for l2-land
-   (failed)"), and no line from elsewhere crosses its cells (a line to or from a row would have
+   reads as, the plan's order where they tie; rows part by a hairline. The head row sticks to
+   the window's top while a tall matrix's rows pass under it (its wrap clips rather than
+   scrolls, so nothing between it and the page scrolls). A row with a failed or cancelled
+   stage says why under its id: that stage's one sentence, muted, a link to the step. A matrix is a table and draws no
+   lines: what a row waits for is said in words under its title ("Waits for land · Stop the
+   parser leak `l2-land` (failed)"), and no line from elsewhere crosses its cells (a line to or from a row would have
    to). A view that does not check is one line above the table in the attention colour with
    `triangle-alert`, and the table draws without the summary column. The matrix keys off the
    `plan` container, never the window: at 720px of pane and narrower a row is a block: the
@@ -584,7 +591,9 @@ Top down:
      Show: Done, which draws every one; the page sends the lines' data only for what it draws.
    - **Empty**: a board with no units to show says why, for the view: "Nothing needs
      attention." (Attention), "Every unit is done." (Active), "No unit is done yet." (Done),
-     else "No units match this view.", at the column's left edge.
+     else "No units match this view.", at the column's left edge; under a Show that left units
+     out it says how many and offers them back: "Nothing needs attention. 12 units hidden by
+     Show: Attention. Show all", the link the same view with Show: All.
    The plan pane is a size container named `plan`: what lays out the plan keys off the pane's
    width, which the splitter changes, never the window's.
 5. **Lines** (the `<sluice-board>` element draws them in an SVG over the measured cards, from
@@ -608,11 +617,16 @@ Top down:
    lines are drawn on the client and kept across the stream's patches (`data-ignore-morph`),
    redrawn when the cards move, a box opens or the board resizes.
    - **Waits in words**: under a card that waits on another unit, one sentence in meta (13px,
-     muted ink), "Waits for l-a1 (running) and l-d1": each source a link in ink to its step
+     muted ink), "Waits for land · Ship the docs `l-a1` (running) and unit Kit `kit`": each
+     source named as every page names a step (its title, its stage before it, its id after it
+     in data mono; a unit "unit" and its title and id), a link in ink to its step
      (the drawer with script), what it is doing in brackets when it is not merely waiting
      itself (its state's word: running, failed, cancelled, stale, quiet, paused, outside, …);
      past four sources the first three, then
-     "and 79 more", a link to the waiting step, whose page lists them all. Each link is a 24px
+     "and 79 more", a link to the waiting step, whose page lists them all. A name wraps with the
+     sentence (its comma kept with it), and these words and a stopped card's sentence sit over
+     the lines on their own fill, so a line leaving the card above passes behind them, as behind
+     a label. Each link is a 24px
      target. The sentence shows where no line says it: on a phone, on a page without script,
      and where the view leaves a source out ("…, not in this view"). Hovering or focusing a
      name traces its source.
@@ -753,7 +767,9 @@ The step reads top down:
   them in meta at the measure, its tool call as code; a meta line under the description says
   when it ended ("Ended 3h ago · took 2h 14m", "Failed 8d ago" from its result when no run is
   kept);
-- while it runs, **Now** first, in the step's own voice: when it is quiet, "Nothing written for
+- while it runs, **Now** first, in the step's own voice: on a retry, one meta line for the run
+  before ("Run 2 failed 2h ago: Its engine hit a usage cap.", a cancel's reason after its
+  colon, "Run 2" a link to that run under Runs); when it is quiet, "Nothing written for
   6h 18m." in gold at 600 with the hourglass; then what it said last, its live progress or its
   own latest message (to anyone), whichever is newer: a message on the card colour (a
   hairline, the 14px corner, the measure), "l-i1 to orchestrator · 10m ago" in meta, its first
@@ -777,7 +793,8 @@ The step reads top down:
   sentence from its failure kind at 500 ("Stopped at its wall-clock cap after 10h 0m.", one
   wording for an agent's cap and a fn's; for a fn its traceback's last exception, else "Its fn
   failed: <its first line>", a trailing colon giving way to the full stop; for a cancel its
-  reason), what it said under it (a captured tail that starts mid-sentence led by "…") (one line in 13px
+  reason), then "Its log record 4521" in meta, a link to the failure's own record on the log
+  (the step's records up to it, it first and marked), what it said under it (a captured tail that starts mid-sentence led by "…") (one line in 13px
   data; several as prose in the body's font, lines kept, in the muted box), the traceback
   folded under "Traceback", the pane its agent left folded under "Pane at failure"
   (a chevron; the rows in 12px data, scrolling in their own box), and "Run files" linking each
@@ -922,7 +939,8 @@ settled, 6 steps", a failure as its step page says it, "harness: Cancelled while
 "The board's document changed by cli: standup refresh"; never JSON; message bodies read as
 Now reads them), with a small "JSON" toggle at the row's right end (its name "Record 12345 as
 JSON") that opens the record's JSON under the sentence; records in a row that say the same are
-one row with "×10"; Errors leaves out the owner's cancels; each row at least 24px tall, 50 records a page with "« newest", "‹ newer" and
+one row with "×10"; Errors leaves out the owner's cancels; the record a link names (`#r4521`,
+a failure's "Its log record") is on the secondary fill, its seq in ink at 700; each row at least 24px tall, 50 records a page with "« newest", "‹ newer" and
 "older ›", in a focusable region named "Log records". A status record that changes nothing (a
 restart, running → running) is left out unless `step.status` is chosen. The global log holds
 every project's records, each sentence led by its project's name at 600 in muted ink, and says
@@ -992,16 +1010,28 @@ are ends, not work. The done shelf's lines and a done unit's line are rows of a 
 ## Components
 
 - **Step card**: a pill with the status glyph, the step id (14.5px, 600) and, in 12px meta, a
-  caption: its state's word where the status ramp says a card says it ("failed", "cancelled",
+  caption: its state's word where the status ramp says a card says it ("cancelled",
   "quiet", "blocked", "stopping", "finishing", "outside", "held", "queued") or `done/total`,
   each with a title from the same table that says what it means ("Waits on a step that
-  failed, was cancelled or went stale"), so the board needs no legend. After the caption, a
+  failed, was cancelled or went stale"), so the board needs no legend. A failed card's caption
+  is its failure's kind in a word, so "retry it" reads apart from "read it" before it is
+  opened: "cap" (a wall-clock cap), "stalled", "quota", "auth", "engine" (its engine would not
+  start, take its input or keep its session), "lost" (its process), "no submit", "invalid",
+  "rejected", "transient", else "failed" for the work's own failure; its title, and a
+  cancel's, is the failure's one sentence. The pill stays the ink pill whatever the kind. After the caption, a
   timer in the board's two-unit durations ("45s", "12m", "2h 14m", "1d 3h"), tabular figures:
   a running step's says how long its current run (the latest, a retry's own) has gone, in ink,
   ticking, and holds the width of "2h 14m" with its figures at the pill's end so a tick never
   moves the card or its edges; a succeeded or failed step's says how long its last run took,
   in muted ink and still. A pending, blocked, queued, paused, stale or skipped step, and a value
-  set by hand, has none. Its title counts the runs ("3 runs; this one took 2h 14m"); a screen
+  set by hand, has none. A running or failed step on its second run or later says so after
+  the timer, in muted 12px tabular figures: a 12px mark for how each of its last three earlier
+  runs ended (oldest first, "+2" before them for more) and "run 3"; its title "Run 3, after 2
+  failed", a screen reader hears ", after 2 failed" after it; a quiet run keeps it (the quiet
+  time replaces the timer, never the count), and the matrix pill and the drawer's badges say
+  it too, the phone's lane string as "land✗ (run 3)". Under a stopped card (failed or
+  cancelled) its one sentence in meta (13px, muted, at most 40ch), a link to the step. The
+  timer's title counts the runs ("3 runs; this one took 2h 14m"); a screen
   reader hears "running fig-5240-work for 2 hours 14 minutes" or "… took 12 minutes" (no
 comma: the card's parts are flex items, which the name already parts with a space). On a
   phone the card keeps one line: the id gives way before the timer. Running cards take a blue border,
@@ -1010,7 +1040,8 @@ comma: the card's parts are flex items, which the name already parts with a spac
   line (ready) keeps a strong hairline. Every card's boundary (`--card-edge`, a pending card's
   too) holds 1.5:1 or more against the page and a unit box, in both themes. A solo card's title
   above it wraps balanced (`text-wrap: balance`). Inline `core.*` steps are chips: dashed and muted. Its
-  accessible description carries the doc, what it waits on and its error. The card in the drawer
+  accessible description carries the doc, what it waits on and why it stopped, each a
+  sentence (never the stored error's JSON). The card in the drawer
   wears the blue ring 2px outside its border; the keyboard's focus is a 2px ink ring on the
   pill itself, no gap, so a card the drawer hands the focus back to never reads as running or
   open. "Next" (a strong hairline) is only ever a pending step whose gates are met.

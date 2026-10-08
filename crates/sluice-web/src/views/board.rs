@@ -196,7 +196,10 @@ impl RelationKind {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Wait {
     pub key: String,
-    pub name: String,
+    /// Its source as the page names it: a step's title (its stage before it) and id; a unit's
+    /// title and id (`unit` says it is one).
+    pub name: super::ui::StepRef,
+    pub unit: bool,
     pub href: String,
     /// A source step, which opens in the drawer.
     pub opens: String,
@@ -215,7 +218,7 @@ pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama
     const SHOWN: usize = 3;
     #[derive(Template)]
     #[template(
-        source = "<p class=\"waits{% if said %} said{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{{ w.name }}</a>{% let off = !w.shown && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
+        source = "<p class=\"waits{% if said %} said{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{% if w.unit %}unit {% endif %}{{ w.name.html(40)|safe }}</a>{% let off = !w.shown && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
         ext = "html"
     )]
     struct Words<'a> {
@@ -507,18 +510,27 @@ impl UnitView {
     }
     /// Its stages as a lane string of links (a phone's matrix row): each stage's name and mark,
     /// opening its step.
+    /// Its first step (in stage order) that failed or was cancelled: its row says why.
+    pub fn why_step(&self) -> Option<&StepView> {
+        self.steps.iter().find(|s| !s.why().is_empty())
+    }
     pub fn lane_links_html(&self) -> String {
         self.steps
             .iter()
             .map(|s| {
+                // a retry says its run: "land✗ (run 3)"
+                let run = s.retries().map(|(n, _)| n);
                 format!(
-                    "<a href=\"{}\" data-opens=\"{}\" aria-label=\"{} {}\">{}<span class=\"lm\">{}</span></a>",
+                    "<a href=\"{}\" data-opens=\"{}\" aria-label=\"{} {}{}\">{}<span class=\"lm\">{}</span>{}</a>",
                     s.href(),
                     s.id,
                     s.id,
                     s.shown().word(),
+                    run.map(|n| format!(", run {n}")).unwrap_or_default(),
                     super::ui::esc(if s.stage.is_empty() { s.id.as_str() } else { &s.stage }),
-                    s.shown().spec().lane
+                    s.shown().spec().lane,
+                    run.map(|n| format!(" <span class=\"lm-run\">(run {n})</span>"))
+                        .unwrap_or_default(),
                 )
             })
             .collect::<Vec<_>>()
@@ -607,6 +619,18 @@ impl Matrix<'_> {
         query.append_pair("recipe", &self.recipe).append_pair("show", "all");
         format!("/projects/id/{project}?{}", query.finish())
     }
+    /// What its stage's column has that needs a look, for the column's head: "2 failed · 1
+    /// quiet"; "" when nothing does.
+    pub fn stage_words(&self, stage: &str) -> String {
+        let tally: Tally = self
+            .rows
+            .iter()
+            .filter_map(|u| u.stage_step(stage))
+            .map(StepView::shown)
+            .filter(|s| s.spec().attention)
+            .collect();
+        super::ui::states_words(&tally)
+    }
     /// The summary column's head, from what its view shows: "Ticket · last message".
     pub fn summary_head(&self) -> String {
         self.view
@@ -686,6 +710,8 @@ pub struct ProjectView {
     pub depth: usize,
     /// A recipe's units, done ones too (`?recipe=lane&show=all`); "" for every unit.
     pub recipe: String,
+    /// How many units the view's Show leaves out.
+    pub hidden: usize,
     /// The project's board, drawn beside the plan (`docs("board")`), when it has one.
     pub panel: Option<super::panel::Panel>,
     /// Its steps' and units' names, and the recipes they came from.
@@ -844,6 +870,7 @@ impl ProjectView {
             down: false,
             depth: 0,
             recipe: String::new(),
+            hidden: 0,
             panel: None,
             names: Default::default(),
             usual: BTreeMap::new(),
@@ -899,6 +926,7 @@ impl ProjectView {
     /// page lists every gate.
     fn settle(&mut self) {
         let facts = &self.facts;
+        let names = &self.names;
         let project = self.project.id;
         let mut shown = BTreeSet::new();
         let mut places = BTreeMap::new();
@@ -975,7 +1003,7 @@ impl ProjectView {
                         wait.line |= relation.line;
                         continue;
                     }
-                    let (name, href, opens, doing) = match &relation.from {
+                    let (name, unit, href, opens, doing) = match &relation.from {
                         Endpoint::Step(id) => {
                             let shown = facts.steps.get(&from).map(|(_, s)| *s);
                             if shown.is_some_and(|s| s.spec().band == Placed::Done) {
@@ -987,14 +1015,25 @@ impl ProjectView {
                                 Some(shown) => shown.word(),
                             };
                             let href = format!("/projects/id/{project}/steps/{id}");
-                            (id.to_string(), href, id.to_string(), doing)
+                            let name =
+                                super::ui::StepRef::new(id.as_str(), names.naming.step(id.as_str()));
+                            (name, false, href, id.to_string(), doing)
                         }
                         Endpoint::Unit(id) => {
                             if facts.done.contains(id.as_str()) {
                                 continue;
                             }
                             let href = format!("/projects/id/{project}/units/{id}");
-                            (format!("unit {id}"), href, String::new(), "")
+                            let name = super::ui::StepRef {
+                                id: id.to_string(),
+                                title: names
+                                    .naming
+                                    .unit(id.as_str())
+                                    .map(|u| u.title.clone())
+                                    .unwrap_or_default(),
+                                stage: String::new(),
+                            };
+                            (name, true, href, String::new(), "")
                         }
                         Endpoint::Input(_) | Endpoint::Output(_) => continue,
                     };
@@ -1003,6 +1042,7 @@ impl ProjectView {
                         line: relation.line,
                         key: from,
                         name,
+                        unit,
                         href,
                         opens,
                         note: doing.to_owned(),
@@ -1398,6 +1438,34 @@ impl ProjectView {
     /// The plan has no steps at all: nothing to find, order or filter.
     pub fn plan_empty(&self) -> bool {
         self.facts.steps.is_empty()
+    }
+    /// When its Show leaves units out: "12 units hidden by Show: Attention."; "" otherwise.
+    pub fn hidden_words(&self) -> String {
+        let label = match self.show.as_str() {
+            "active" => "Active",
+            "attention" => "Attention",
+            "done" => "Done",
+            _ => return String::new(),
+        };
+        if self.hidden == 0 {
+            return String::new();
+        }
+        format!(
+            "{} hidden by Show: {label}.",
+            super::ui::count(self.hidden, "unit", "units")
+        )
+    }
+    /// The board as it is, with Show: All (its order, tag and search kept).
+    pub fn show_all_href(&self) -> String {
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        for (key, value) in url::form_urlencoded::parse(self.query.as_bytes()) {
+            if key == "show" {
+                query.append_pair("show", "all");
+            } else {
+                query.append_pair(&key, &value);
+            }
+        }
+        format!("{}?{}", self.href(), query.finish())
     }
     /// What the board says when it shows no unit, for the view's Show.
     pub fn empty_words(&self) -> &'static str {
@@ -1824,7 +1892,7 @@ pub fn usual_durations(units: &[UnitView]) -> BTreeMap<(String, String), f64> {
         .collect()
 }
 /// Each step's current run times (its card's timer) and every run of its current generation
-/// (its unit's timeline): its latest run, or for a scatter its latest round's item runs, from the
+/// (its unit's timeline, and how its earlier runs ended for its card's "run 3"): its latest run, or for a scatter its latest round's item runs, from the
 /// first start to the last end. One pass over the project's runs; a run still going is measured
 /// to the read's `now` for the timer, and has no end in its span.
 fn run_timings(
@@ -1891,12 +1959,20 @@ fn run_timings(
                 .map(|r| r.finished.clone())
                 .collect::<Option<Vec<_>>>()
                 .and_then(|ends| ends.into_iter().max());
+            // its runs (a scatter's rounds), each as its timeline draws it; the earlier ones'
+            // ends for its card's "run 3"
+            let spans = spans(&all);
+            let earlier = spans[..spans.len().saturating_sub(1)]
+                .iter()
+                .filter_map(|s| s.outcome)
+                .collect();
             let timing = RunTiming {
                 started: first.started.clone(),
                 finished,
-                runs: all.len(),
+                runs: spans.len(),
+                earlier,
                 seconds: (to - from) * 86_400.0,
-                spans: spans(&all),
+                spans,
             };
             Some((step, timing))
         })
@@ -2142,14 +2218,15 @@ impl BoardQuery {
                 message: "invalid board filter".into(),
             });
         }
+        let shows = |u: &UnitView| match show {
+            "active" => !u.done,
+            // what needs a look: a step whose state needs attention (`shown`)
+            "attention" => u.needs_attention(),
+            "done" => u.done,
+            _ => true,
+        };
         view.units.retain(|u| {
-            (match show {
-                "active" => !u.done,
-                // what needs a look: a step whose state needs attention (`shown`)
-                "attention" => u.needs_attention(),
-                "done" => u.done,
-                _ => true,
-            }) && self.tag.as_deref().is_none_or(|tag| {
+            self.tag.as_deref().is_none_or(|tag| {
                 tag.is_empty() || u.steps.iter().any(|s| s.tags.iter().any(|t| t == tag))
             })
         });
@@ -2178,6 +2255,9 @@ impl BoardQuery {
             });
             (view.root, view.up, view.down, view.depth) = (root.into(), up, down, depth);
         }
+        let before = view.units.len();
+        view.units.retain(shows);
+        view.hidden = before - view.units.len();
         view.order = order.into();
         view.show = show.into();
         let q: String = self.q.as_deref().unwrap_or("").trim().chars().take(200).collect();

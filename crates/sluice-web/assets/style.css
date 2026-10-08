@@ -680,6 +680,18 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
               color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .node .took.live { min-width: 6ch; text-align: end; color: var(--foreground); }
 .node .sep { font-size: 0; line-height: 0; vertical-align: top; }  /* read, not seen */
+/* a retry: "run 3" after the timer, a small mark for how each of its last three earlier runs
+   ended ("+2" before them for more), muted; on a failed card in the card's colour */
+.tries { display: inline-flex; flex: none; align-items: center; gap: 3px; font-size: 12px;
+         line-height: 16px; color: var(--muted-foreground); white-space: nowrap;
+         font-variant-numeric: tabular-nums; }
+.tries-m { display: inline-flex; align-items: center; gap: 1px; }
+.tries-m:empty { display: none; }
+.tries .g, .tries .g svg { width: 12px; height: 12px; margin: 0; }
+.tries-more { margin-right: 1px; font-size: 11px; }
+.node.is-failed .tries { color: var(--card); }
+.d-badges .tries { font-size: 13px; }
+.lm-run { color: var(--muted-foreground); font-size: 12px; }
 .node .tag { margin-left: -2px; }
 /* two colours mix in sRGB: in oklch, navy and cream meet by way of teal */
 .is-pending .sid, .is-skipped .sid, .is-held .sid, .is-queued .sid, .is-blocked .sid {
@@ -794,6 +806,9 @@ a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, v
 .d-failure .now-msg.f-last { margin-top: 12px; }
 .a-id { font-size: 12px; color: var(--muted-foreground); border: 0; background: none; padding: 0; }
 /* quiet: how long its run has written nothing, before what it last said */
+/* a retry's run before this one: its number (a link to it under Runs), how it ended and why */
+.now-retry { margin: 6px 0 0; max-width: var(--measure); overflow-wrap: anywhere; }
+.d-failure .err-log { margin: 4px 0 0; }
 .now-quiet { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-weight: 600;
              color: var(--status-attention); }
 /* the latest message to it since its own: under its own, quieter, labelled */
@@ -1083,6 +1098,10 @@ nav.seg a[aria-current] { color: var(--foreground); background: var(--secondary)
                           box-shadow: 0 0 0 1px var(--border-strong); }
 table.log { font-size: 12.5px; }
 table.log td { padding: 3px 8px; vertical-align: baseline; line-height: 1.45; }
+/* the record a link names (a failure's "Its log record"): on the secondary fill, its seq in ink */
+table.log tr:target { background: var(--secondary); }
+table.log tr:target > td.num { color: var(--foreground); font-weight: 700; }
+table.log tr { scroll-margin-top: 72px; }
 .log-place { font-weight: 600; color: var(--muted-foreground); }
 a.log-place { text-decoration: none; }
 a.log-place:hover { color: var(--foreground); text-decoration: underline; }
@@ -1436,6 +1455,8 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
                                  text-underline-offset: 3px; }
 .stopped-rows .sr-why { grid-column: 2; font-size: 13px; line-height: 18px; color: var(--muted-foreground);
                         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stopped-rows a.sr-why { text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+.stopped-rows a.sr-why:hover { color: var(--foreground); text-decoration-color: currentColor; }
 .stopped-rows .sr-cancelled .sref-t { color: var(--muted-foreground); font-weight: 400; }
 .stopped-rows .sr-more { display: block; padding-left: 24px; font-size: 13px; line-height: 18px; }
 .stopped-rows .sr-more a { color: var(--muted-foreground); text-underline-offset: 3px; }
@@ -2049,7 +2070,9 @@ main :is(h2, h3).band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans)
    links to its source, a target 24px tall. */
 .waits { display: none; max-width: 40ch; margin: 2px 0 0; font-size: 13px; line-height: 18px;
          color: var(--muted-foreground); text-align: left; }
-.waits a { display: inline-block; padding: 3px 0; color: var(--foreground);
+/* inline, so a long name wraps with the sentence and its comma stays with it; its padding
+   still makes the target 24px tall */
+.waits a { display: inline; padding: 3px 0; color: var(--foreground);
            text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
 .waits a:hover { text-decoration-color: currentColor; }
 /* said: a wait no line draws (in a lane matrix's row, across a matrix, up the board, or from a
@@ -2059,6 +2082,19 @@ main :is(h2, h3).band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans)
 .stack { display: flex; flex-direction: column; align-items: center; min-width: 0;
          max-width: 100%; }
 .stack > .waits { text-align: center; }
+/* why a stopped step stopped, its one sentence under its card or its matrix row's title,
+   muted, a link to the step: the line the owner opens it for, said before it is opened */
+.why { max-width: 40ch; margin: 2px 0 0; font-size: 13px; line-height: 18px;
+       color: var(--muted-foreground); text-align: left; overflow-wrap: anywhere; }
+.why a { display: inline-block; padding: 3px 0; color: inherit;
+         text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+.why a:hover { color: var(--foreground); text-decoration-color: currentColor; }
+.stack > .why { text-align: center; }
+/* a line from the card above passes behind the words under a card, as behind a label: they sit
+   over the lines on the fill they are drawn on */
+:is(.stack, .box.solo) > :is(.why, .waits) { position: relative; z-index: 2; }
+.box:not(.solo) .stack > :is(.why, .waits) { background: var(--box); }
+.box.solo > :is(.why, .waits) { background: var(--background); }
 /* a unit that a traced card names (a unit gate) */
 .plane.tracing .box.near { box-shadow: inset 0 0 0 1.5px var(--foreground); }
 /* the done shelf: every done unit on one line at the end, "44 done units · 44 steps", closed
@@ -2178,11 +2214,15 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 main .mx-h .mx-name { color: var(--foreground); font-weight: 600; text-decoration: none; }
 main .mx-h a.mx-name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .mx-tally { font-variant-numeric: tabular-nums; }
-.mx-wrap { overflow-x: auto; border-radius: var(--radius); background: var(--box);
+/* clipped, not a scroller, so its stage heads stick to the page's top while its rows pass */
+.mx-wrap { overflow-x: clip; border-radius: var(--radius); background: var(--box);
            padding: 6px 14px; }
 .mx { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 20px; }
 .mx thead th { font: 500 12.5px/18px var(--font-sans); color: var(--muted-foreground);
-               text-align: center; padding: 6px 8px; white-space: nowrap; }
+               text-align: center; padding: 6px 8px; white-space: nowrap;
+               position: sticky; top: 0; z-index: 3; background: var(--box); }
+/* what a stage's column has that needs a look: "land · 2 failed" */
+.mx-hc { color: var(--foreground); font-weight: 600; }
 .mx thead th:is(.mx-unit, .mx-sum) { text-align: left; }
 .mx tbody tr + tr > * { border-top: 1px solid var(--border); }
 .mx tbody th, .mx tbody td { padding: 8px 6px; vertical-align: middle; font-weight: 400; }
@@ -2196,7 +2236,7 @@ main .mx-h a.mx-name:hover { text-decoration: underline; text-underline-offset: 
 .mx-title:hover { text-decoration: underline; text-underline-offset: 3px; }
 .mx-id { margin: 2px 0 0 24px; font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
 .mx-id .box-alarm { color: var(--foreground); font-weight: 600; }
-.mx th.mx-unit .waits { margin-left: 24px; }
+.mx th.mx-unit :is(.waits, .why) { margin-left: 24px; }
 td.mx-sum { width: 30%; min-width: 9rem; padding-right: 14px; font-size: 13px; line-height: 18px;
             color: var(--muted-foreground); }
 td.mx-cell { text-align: center; white-space: nowrap; }

@@ -132,8 +132,18 @@ pub struct StoppedView {
     pub step: String,
     pub cancelled: bool,
     pub headline: String,
+    /// The log record that says it failed (its latest `step.status` to failed), when kept.
+    #[serde(default)]
+    pub record: Option<i64>,
 }
 impl StoppedView {
+    /// Its failure's own record on its project's log, that record in view and marked
+    /// (`step::failure_log_href`); "" when the log no longer keeps it.
+    pub fn log_href(&self, project: &ProjectId) -> String {
+        self.record
+            .map(|seq| step::failure_log_href(project, &self.step, seq))
+            .unwrap_or_default()
+    }
     pub fn shown(&self) -> ui::Shown {
         if self.cancelled {
             ui::Shown::Cancelled
@@ -781,6 +791,7 @@ pub fn load_snapshot(
                     step,
                     cancelled: failure.cancelled,
                     headline: failure.headline,
+                    record: None,
                 };
                 if stopped.cancelled {
                     cancels.push(stopped);
@@ -806,6 +817,13 @@ pub fn load_snapshot(
             }
         }
         view.stopped.extend(cancels);
+        // each stopped step's failure as its log records it, so its row links that record
+        if !view.stopped.is_empty() {
+            let records = step::failure_records(c, id)?;
+            for stopped in &mut view.stopped {
+                stopped.record = records.get(&stopped.step).copied();
+            }
+        }
         // its runs' activity, read once: whether each is quiet
         observe_activity(&home_of(c), &mut view.running);
         // every step by how it reads from what the store says (the board evaluates the plan

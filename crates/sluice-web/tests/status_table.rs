@@ -184,10 +184,15 @@ async fn every_state_reads_the_same_on_every_surface() {
         );
         assert!(card.contains(&glyph(state)), "{state:?}: {card}");
         if state.spec().caption {
+            // a failure's or a cancel's caption says its own sentence (a failure its kind)
+            let help = match state {
+                Shown::Failed => "It failed.",
+                Shown::Cancelled => "Cancelled: not needed.",
+                _ => state.spec().help,
+            };
             assert!(
                 card.contains(&format!(
-                    "<span class=\"dur\" title=\"{}\">{}</span>",
-                    state.spec().help,
+                    "<span class=\"dur\" title=\"{help}\">{}</span>",
                     state.word()
                 )),
                 "{state:?}: {card}"

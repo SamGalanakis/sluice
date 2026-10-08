@@ -292,6 +292,24 @@ impl Outcome {
     }
 }
 impl RunView {
+    /// How it ended, after its number: "failed", "cancelled", "ended with no result recorded".
+    pub fn ended_words(&self) -> String {
+        match &self.outcome {
+            Outcome::Running => "is still running".into(),
+            Outcome::Ended(shown) => shown.word().into(),
+            Outcome::Unrecorded => "ended with no result recorded".into(),
+            Outcome::Unknown(status) => format!("ended “{status}”"),
+        }
+    }
+    /// What its failure says after its end, for a line that already says how it ended: the
+    /// headline ("Its engine hit a usage cap."), a cancel's reason; "" when nothing more.
+    pub fn ended_sentence(&self) -> &str {
+        match &self.failure {
+            Some(f) if f.cancelled => f.headline.strip_prefix("Cancelled: ").unwrap_or(""),
+            Some(f) => &f.headline,
+            None => "",
+        }
+    }
     pub fn file_href(&self, project: &ProjectId, name: &str) -> String {
         format!("/projects/id/{project}/runs/{}/files/{name}", self.id)
     }
@@ -363,6 +381,9 @@ pub struct StepView {
     pub active_at: String,
     /// When its current result (its outputs, or its failure) was recorded; "" without one.
     pub result_at: String,
+    /// A failed step's failure as its project's log records it (the record's seq), once its
+    /// page has read it.
+    pub failure_record: Option<i64>,
     /// Its current run's times, for its card's timer.
     pub timing: Option<RunTiming>,
     /// How long its stage usually takes: the median of its recipe's done units' runs of the
@@ -386,8 +407,12 @@ pub struct RunTiming {
     pub started: String,
     /// When it ended; none while it runs.
     pub finished: Option<String>,
-    /// How many runs the step has had in its current generation, this one included.
+    /// How many runs the step has had in its current generation, this one included (a
+    /// scatter's rounds).
     pub runs: usize,
+    /// How each earlier run (a scatter's round: the first state among its items) ended, oldest
+    /// first; a run with no result recorded is left out.
+    pub earlier: Vec<Shown>,
     /// Seconds it ran, or has run as of the read. It moves with the clock while the run does, so
     /// it is no part of the step's version.
     #[serde(skip)]
@@ -711,6 +736,7 @@ impl StepView {
             now: NowView::default(),
             active_at: String::new(),
             result_at: String::new(),
+            failure_record: None,
             timing: None,
             usually: None,
             timeline: None,
@@ -897,6 +923,12 @@ impl StepView {
             url::form_urlencoded::byte_serialize(self.id.as_str().as_bytes()).collect::<String>()
         )
     }
+    /// Its failure's own record on its project's log, when kept: "" otherwise.
+    pub fn failure_log_href(&self) -> String {
+        self.failure_record
+            .map(|seq| failure_log_href(&self.project, self.id.as_str(), seq))
+            .unwrap_or_default()
+    }
     /// Its records and its thread's messages on the project's log.
     pub fn log_href(&self) -> String {
         format!("/projects/id/{}/log?step={}", self.project, self.id)
@@ -934,11 +966,17 @@ impl StepView {
             | Shown::Skipped => false,
         }
     }
-    /// Its card's caption: its state's word when the table says a card says it ("failed",
-    /// "quiet", "outside"), else a scatter's items done ("3/5").
+    /// Its card's caption: a failure's kind in a word ("cap", "quota", "engine", "failed"),
+    /// else its state's word when the table says a card says it ("cancelled", "quiet",
+    /// "outside"), else a scatter's items done ("3/5").
     pub fn caption(&self) -> String {
         let shown = self.shown();
-        if shown.spec().caption {
+        if shown == Shown::Failed
+            && let Some(failure) = &self.failure
+        {
+            // the kind of failure in a word: "cap", "quota", "engine", …
+            failure.caption().into()
+        } else if shown.spec().caption {
             shown.word().into()
         } else if let Some(total) = self.total {
             format!("{}/{total}", self.done)
@@ -946,10 +984,56 @@ impl StepView {
             String::new()
         }
     }
-    /// What its caption means, for the caption's title (no legend: each says itself).
+    /// Why it stopped, in one sentence, when it failed or was cancelled: its failure's
+    /// headline ("Stopped at its wall-clock cap after 10h 0m.", "Cancelled: a reason").
+    pub fn why(&self) -> &str {
+        match (self.shown(), &self.failure) {
+            (Shown::Failed | Shown::Cancelled, Some(f)) => &f.headline,
+            _ => "",
+        }
+    }
+    /// Its card's description for a screen reader: its doc, what it waits on, why it is
+    /// queued and why it stopped, each its own sentence.
+    pub fn description(&self) -> String {
+        let doc = self.doc.trim();
+        let mut parts: Vec<String> = vec![];
+        if !doc.is_empty() {
+            parts.push(doc.trim_end_matches('.').to_owned());
+        }
+        parts.extend(self.waits.iter().cloned());
+        parts.extend(self.queued.iter().map(|q| format!("queued: {q}")));
+        if !self.why().is_empty() {
+            parts.push(self.why().trim_end_matches('.').to_owned());
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            parts.join(". ") + "."
+        }
+    }
+    /// That sentence under its card or its matrix row, muted, a link to the step.
+    pub fn why_html(&self) -> TrustedHtml {
+        if self.why().is_empty() {
+            return TrustedHtml::owned(String::new());
+        }
+        TrustedHtml::owned(format!(
+            "<p class=\"why\"><a href=\"{}\" data-opens=\"{}\">{}</a></p>",
+            self.href(),
+            super::ui::esc(self.id.as_str()),
+            super::ui::esc(self.why())
+        ))
+    }
+    /// What its caption means, for the caption's title (no legend: each says itself): a
+    /// failure's or a cancel's one sentence.
     pub fn caption_help(&self) -> String {
         let shown = self.shown();
-        if shown.spec().caption {
+        if let Some(failure) = self
+            .failure
+            .as_ref()
+            .filter(|_| matches!(shown, Shown::Failed | Shown::Cancelled))
+        {
+            failure.headline.clone()
+        } else if shown.spec().caption {
             shown.spec().help.into()
         } else {
             self.total
@@ -1055,6 +1139,71 @@ impl StepView {
         self.usually
             .map(|s| format!("usually {}", super::ui::duration_text(s)))
             .unwrap_or_default()
+    }
+    /// Its run's number and how its earlier runs ended (oldest first), when it has had more
+    /// than one and the latest is its own (running, or failed); a quiet run keeps its count.
+    pub fn retries(&self) -> Option<(usize, &[Shown])> {
+        let t = self.timing.as_ref()?;
+        let current = matches!(self.status, StepStatus::Running | StepStatus::Failed);
+        (current && t.runs > 1).then_some((t.runs, t.earlier.as_slice()))
+    }
+    /// Its earlier runs in words: "after 2 failed", "after 1 failed and 1 cancelled"; "" when
+    /// none says how it ended.
+    pub fn retries_words(&self) -> String {
+        let Some((_, earlier)) = self.retries() else {
+            return String::new();
+        };
+        let tally: super::ui::Tally = earlier.iter().copied().collect();
+        let parts: Vec<String> = tally
+            .iter()
+            .map(|(s, n)| format!("{n} {}", s.word()))
+            .collect();
+        match parts.as_slice() {
+            [] => String::new(),
+            [one] => format!("after {one}"),
+            [rest @ .., last] => format!("after {} and {last}", rest.join(", ")),
+        }
+    }
+    /// "run 3" on its card, matrix pill or drawer, after a mark for each of its last three
+    /// earlier runs' ends ("+2" before them for more); nothing on its first run.
+    pub fn retries_html(&self) -> TrustedHtml {
+        const MARKS: usize = 3;
+        let Some((run, earlier)) = self.retries() else {
+            return TrustedHtml::owned(String::new());
+        };
+        let words = self.retries_words();
+        let mut marks = String::new();
+        if earlier.len() > MARKS {
+            marks.push_str(&format!(
+                "<span class=\"tries-more\">+{}</span>",
+                earlier.len() - MARKS
+            ));
+        }
+        for shown in &earlier[earlier.len().saturating_sub(MARKS)..] {
+            marks.push_str(super::ui::mark(*shown).as_str());
+        }
+        let title = if words.is_empty() {
+            format!("Run {run}")
+        } else {
+            format!("Run {run}, {words}")
+        };
+        TrustedHtml::owned(format!(
+            "<span class=\"tries\" title=\"{title}\"><span class=\"tries-m\" aria-hidden=\"true\">{marks}</span>run {run}{vh}</span>",
+            title = super::ui::esc(&title),
+            vh = if words.is_empty() {
+                String::new()
+            } else {
+                format!("<span class=\"vh\">, {}</span>", super::ui::esc(&words))
+            },
+        ))
+    }
+    /// A running step's run before this one, for Now: its number and the run.
+    pub fn previous_run(&self) -> Option<(usize, &RunView)> {
+        if !self.running() || self.runs.len() < 2 {
+            return None;
+        }
+        let n = self.runs.len() - 1;
+        Some((n, &self.runs[n - 1]))
     }
     /// While it runs, the earlier run its outputs came from: its number and when it ended.
     pub fn outputs_from(&self) -> Option<(usize, &str)> {
@@ -1262,6 +1411,25 @@ pub fn load_progress(
 }
 /// Run history is current-generation only; a reused step id never inherits an
 /// old declaration's runs. Frozen attempted inputs come from durable results.
+/// Each step's latest failure as its project's log records it: the seq of its latest
+/// `step.status` record to failed, by step id.
+pub fn failure_records(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+) -> sluice_store::Result<std::collections::BTreeMap<String, i64>> {
+    let mut q = c.prepare_cached("SELECT step_id,max(seq) FROM records WHERE project_id=?1 AND kind='step.status' AND step_id IS NOT NULL AND json_extract(payload,'$.to')='failed' GROUP BY step_id")?;
+    let rows = q.query_map([project.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+/// A failure's own record on its project's log: the step's records up to it, it first and
+/// marked (`#r<seq>`, the log's `:target`).
+pub fn failure_log_href(project: &ProjectId, step: &str, seq: i64) -> String {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("step", step)
+        .append_pair("before", &(seq + 1).to_string())
+        .finish();
+    format!("/projects/id/{project}/log?{query}#r{seq}")
+}
 pub fn load_detail(
     c: &rusqlite::Connection,
     project: ProjectId,
@@ -1387,6 +1555,13 @@ pub fn load_detail(
         hold.by = by;
         hold.at = at;
     }
+    // a failed step's failure as the log records it, which "Why it failed" links
+    step.failure_record = if step.failed() {
+        c.prepare_cached("SELECT max(seq) FROM records WHERE project_id=?1 AND kind='step.status' AND step_id=?2 AND json_extract(payload,'$.to')='failed'")?
+            .query_row((project.to_string(), step.id.as_str()), |r| r.get(0))?
+    } else {
+        None
+    };
     step.now = NowView::default();
     // a running step's Now, and a failed one's last words
     if step.running() || step.failed() {
