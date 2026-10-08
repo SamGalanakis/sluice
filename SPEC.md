@@ -231,9 +231,11 @@ version; the coordinator's writer adds any that are missing, and any view added 
 marks a home left at the interim board schema 2 as 1), in one transaction when it opens the
 home or a restore, before anything else touches it, and readers refuse a home still missing a
 column. New state is never a new table: every release counts the home's 23 tables and refuses
-any other number, so a pinned one could not read a home with a 24th. A board's slots are
-therefore the column `projects.board_slots` (a JSON object of key to `{markdown, at,
-author}`) and the view `board_slots`, and automatic retiring's setting (§6.11) is the columns
+any other number, so a pinned one could not read a home with a 24th. A board's document is
+therefore the columns `projects.board_doc` (its markdown), `board_doc_rev` (0 before the first
+write), `board_doc_at` and `board_doc_author`; the retired slots' column `projects.board_slots`
+and view `board_slots` stay, unread and unwritten, for the pinned releases that read them; and
+automatic retiring's setting (§6.11) is the columns
 `projects.prune_done_after` (seconds, null when off) and `projects.prune_keep` (a JSON array of
 patterns, null when none). Only
 the coordinator writes, through one writer task; reads use a pool of read-only connections and
@@ -254,9 +256,11 @@ as it is, so `SELECT json_extract(progress, '$.red'), progress_at FROM steps WHE
 Views for agents' queries (§12.4 `query`): `outcomes` (removed steps' results), `log` (each
 record as the log tools return it), `step_changes` (`step.status` records as rows), `edits`
 (`plan_edits`), `questions` (the questions, `ask`s, plus derived `state`
-open|answered|closed and `waiting`) and `board_slots` (`project_id, key, markdown, updated_at,
-author`: each live project's board slots). Public tables are keyed by the immutable `project_id`,
-never by name.
+open|answered|closed and `waiting`) and `board_slots` (retired: the slots the board's document
+replaced, kept for older releases). A step's tags are in its `declaration` (`steps.declaration`,
+`$.tags`), so `EXISTS (SELECT 1 FROM json_each(declaration, '$.tags') WHERE value = 'x')`
+selects the steps tagged `x`. Public tables are keyed by the immutable `project_id`, never by
+name.
 
 Ids: projects, runs, attempts, results and invocations are UUIDv7; message ids and record
 seqs share one increasing integer sequence.
@@ -593,9 +597,15 @@ capacity; no cycles. Errors are a list with paths
 Every edit tool produces RFC 6902 ops against the plan document, validates the result, and
 commits the new plan, a `plan_edits` row and a `plan.edit` record `{rev, author, reason, ops}`
 in one transaction. The reply is the **edit result** `{project: {project_id, name}, rev,
-preview, steps?}`, `preview` being `{ops, would_start, would_queue, would_skip, would_stale,
-errors}` and `steps` the steps the edit was about (`unit_add`'s new steps, `unit_tag`'s unit,
-`step_pause`'s selection, `plan_prune`'s removed steps).
+preview, steps?, board_warnings?}`, `preview` being `{ops, would_start, would_queue,
+would_skip, would_stale, errors}`, `steps` the steps the edit was about (`unit_add`'s new
+steps, `unit_tag`'s unit, `step_pause`'s selection, `plan_prune`'s removed steps) and
+`board_warnings` each step the project's board names (§13) that the edit took out of the plan,
+in `board_set`'s warning form; the edit is made all the same. It is worked out while the edit
+is prepared (outside the writer, unless the edit falls back to being prepared in it), from the
+plans before and after it and the board's program, without running the board's queries. A run on an older release, whose guardian does not know
+the field, gets the result without it, and the reply a run's attempt keeps for a repeated
+request leaves it out.
 With `dry_run: true` the reply is the preview alone and nothing is written. The simulation uses
 cached capacities and never runs fns; `core.external` steps never appear in `would_start`.
 
@@ -963,7 +973,7 @@ seqs have gaps. Kinds:
 | `message` | the message's fields, with `posted_at` for its time |
 | `project.pause` | `paused, reason, author` |
 | `project.archive` | `archived, reason, author` |
-| `project.update` | `fields, reason, author`; a board slot's change names `board_slot:<key>` in `fields`, with `reason` `"cleared"` for a clear |
+| `project.update` | `fields, reason, author`; a change to the board's document names `board_doc` in `fields` (older homes also hold `board_slot:<key>` from the retired slots) |
 | `project.board` | `rev, cleared, reason, author` (never the program) |
 | `project.rename` | `old_name, new_name, author` |
 | `project.delete` | `project_id, name, author` |
@@ -1133,9 +1143,11 @@ unknown step `not_found`.
 | `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
 | `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `author?` | `{project_id, name}` |
 | `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
-| `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …`; the same program again changes nothing; writes `project.board` |
-| `board_slot_set` | `project`, `key`, `markdown` (`""` or null clears), `author?` | `{key, updated_at, cleared, changed}`; no revision; `key` is `[a-z0-9][a-z0-9_.-]{0,63}`, `markdown` at most 16 KiB, a project at most 64 slots and 256 KiB of them, else `invalid`; the same markdown again changes nothing; writes `project.update` with `fields` `["board_slot:<key>"]` |
+| `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev, warnings}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …` (a `Slot` is told it was replaced by `Doc`); the same program again changes nothing; writes `project.board`. `warnings` lists each step the program names that the plan cannot give it (`docs("board")`), as `line N: <Component> names step `x`, which is not in the plan` or `… selects `tag:x`, which no plan step carries`; it never refuses |
 | `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
+| `board_doc_read` | `project` | `{rev, updated_at, author, markdown, numbered}`: the board's document (`rev` 0 and `markdown` "" before the first write), `numbered` its lines with right-aligned numbers and a tab, as `cat -n` |
+| `board_doc_write` | `project`, `markdown`, `expected_rev?`, `reason?`, `author?` | `{rev, changed}`; replaces the whole document (at most 64 KiB, else `invalid`); a stale `expected_rev` is `conflict` with `current_rev`; the same text again changes nothing |
+| `board_doc_edit` | `project`, `expected_rev`, `edits` (`[{start, end, text}]`), `reason?`, `author?` | `{rev, changed}`; each edit replaces lines `start..end` (1-based, inclusive, of `expected_rev`) with `text`'s lines; `end = start - 1` inserts, `start = lines + 1` appends; edits must not overlap and apply all or none; another current rev is `conflict` with `current_rev`, a bad range or an overlap `invalid` naming the edit |
 | `project_delete` | `project`, `confirm_name`, `expected_settings_rev` (from `projects_list`), `author?` | `{project_id, name, deleted}`; the project must be archived, and nothing of it live |
 | `fn_list` | `project?` | `[{name, doc, inputs, outputs, scope, submits?, icon?, open?}]` |
 | `fn_get` | `name`, `project?` | the fn.json plus `scope` and `path` (null for a builtin) |
@@ -1150,8 +1162,11 @@ WebP, JPEG or GIF file of at most 256 KiB, which the coordinator reads once and 
 
 Each call's status changes are `call` records. `core.external` cannot be called.
 
-A step's run may call `board_set`, `board_slot_set` (and `board_get`) for its own project, as
-it may the plan edits; another project's board is outside its authority.
+A step's run may call `board_set`, `board_doc_write`, `board_doc_edit` (and `board_get`,
+`board_doc_read`) for its own project, as it may the plan edits; another project's board is
+outside its authority. The document tools refuse (`invalid`) while the board's program has no
+`Doc()`. Each document change writes one `project.update` record with `fields`
+`["board_doc"]`, its `reason` and `author`, and never moves the board's `rev`.
 
 **Plan edits**
 
@@ -1334,24 +1349,30 @@ freshest value: the step's progress for that field while it is fresher than the 
 marked "live" with the running glyph while the step runs and "progress" after, with when it
 was set; otherwise the output), `Metric(label, query)`, `Query(query, caption?)`,
 `Chart(kind, query, caption?)` (bar or
-line, an inline SVG), `Slot(key, fallback?)` (a slot's markdown, set per event by
-`board_slot_set`, with "Updated <time>" under it; unset, its fallback muted or "Not set
-yet.") and `LatestMessage(from, chars?)` (the project's newest message whose `from` is
+line, an inline SVG), `Doc(fallback?)` (the board's document, `board_doc_write`, as markdown
+with "Edited <time> by <author>" under it; before it says anything, its fallback muted or "Not
+written yet."; at most one per program) and `LatestMessage(from, chars?)` (the project's newest message whose `from` is
 `from`, with its time linking to it in its thread, its body cut to `chars`, default 280, with
 an ellipsis and a link to the whole; none, "No message from <from> yet."); `Markdown(text)`
-draws its text as markdown. Slot, Markdown and LatestMessage use the dashboard's markdown
+draws its text as markdown. A step argument (`StepStatus`, `Output`, `LatestMessage`'s `from`)
+may be `tag:<tag>`, the one plan step carrying it; none or several is the component's error
+box, naming the tag and the count. A Metric, Query, Chart or LatestMessage whose step (a
+`step_id` literal in its SQL, or its sender, when that was once a step) is not in the plan draws
+a line in the attention colour above it: "Names step `x`, which is not in the plan; this shows
+its last data." Doc, Markdown and LatestMessage use the dashboard's markdown
 renderer (escaped, unsafe link schemes refused); `Text` stays plain. A query runs through the
 `query` tool's path, views and limits, every `?` bound to the project's id, at most 16 per
 board; a stream reruns them when the project's log, plan, board or step progress changes (a
-slot change is both of the first) and at least every 30 s. A component that cannot be drawn (a bad
+document edit is both of the first) and at least every 30 s. A component that cannot be drawn (a bad
 query, an unknown step, a non-numeric chart) is an inline error box naming it, its line and the
 reason; the page still renders. A Button sends `say(to: "orchestrator")` as `owner` with body
 `Board: <label>` and data `{board_rev, action, params, values}` (a primary button checks its
 form's rules first, `invalid` otherwise); if the board's rev changed since the page was drawn
 it is refused (`conflict`, shown under the board) and nothing is sent. The board never edits
 the plan. Project settings has a Board section: the program, a live preview, Save (fenced by
-`expected_rev`) and Clear, then the board's slots, read-only, by key: each with when it was
-updated, by whom, and its text on one line. Its Retiring section sets §6.11's
+`expected_rev`) and Clear (a save shows `board_set`'s warnings under it), then the board's
+document, read-only and drawn as markdown, with its rev, when it was last edited and by whom,
+and a note when the program has no `Doc()`. Its Retiring section sets §6.11's
 `prune_done_after` in hours (empty is off) and `prune_keep` (patterns separated by commas or
 spaces), and says whether retiring is on and when it last retired how many steps.
 

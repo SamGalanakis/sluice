@@ -432,8 +432,12 @@ async fn edit_extension<H: ExecutionHost>(
                 if prepared.dry_run {
                     return Ok(Err(prepared.preview));
                 }
+                let warnings = crate::coordinator::board_drops(sql, id, &plan, &prepared.plan)?;
                 if !staged || evidence.is_some() {
-                    return Ok(Ok(Prepared::Direct(id, Box::new(prepared), evidence)));
+                    return Ok(Ok((
+                        Prepared::Direct(id, Box::new(prepared), evidence),
+                        warnings,
+                    )));
                 }
                 let prune = prepared.prune.clone();
                 let effect = plans::edit_effect(
@@ -453,16 +457,19 @@ async fn edit_extension<H: ExecutionHost>(
                     });
                     (Box::new(effect), plan)
                 });
-                Ok(Ok(Prepared::Staged {
-                    id,
-                    witness,
-                    effect,
-                    prune,
-                }))
+                Ok(Ok((
+                    Prepared::Staged {
+                        id,
+                        witness,
+                        effect,
+                        prune,
+                    },
+                    warnings,
+                )))
             }))
             .await
             .map_err(public)?;
-        let prepared = match prepared {
+        let (prepared, warnings) = match prepared {
             Ok(prepared) => prepared,
             Err(preview) => return Ok(CommandReply::Preview(preview)),
         };
@@ -479,7 +486,7 @@ async fn edit_extension<H: ExecutionHost>(
             if let Some(plan) = plan {
                 broker.plan_cache().put(plan);
             }
-            return Ok(reply);
+            return Ok(crate::coordinator::with_board_warnings(reply, warnings));
         }
         log.retries += 1;
     }

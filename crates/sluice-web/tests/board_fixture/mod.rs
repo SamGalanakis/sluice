@@ -66,8 +66,9 @@ impl MessageCommands for Commands {
     }
 }
 
-pub const BOARD: &str = r#"root = Stack([title, lanes, row, failed, summary, table, bars, line, broken, form])
+pub const BOARD: &str = r#"root = Stack([title, doc, lanes, row, failed, summary, table, bars, line, broken, form])
 title = Heading("Lanes", 1)
+doc = Doc("Nothing written yet.")
 lanes = Units()
 row = Stack([steps, done], "row")
 steps = Metric("Steps", "SELECT count(*) FROM steps WHERE project_id = ?")

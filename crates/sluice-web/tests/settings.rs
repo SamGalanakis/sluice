@@ -533,8 +533,13 @@ async fn injected_command_receives_id_revision_and_owner_and_preserves_errors() 
             &self,
             _: ProjectId,
             _: projects::SetBoard,
-        ) -> BoxFuture<'_, Result<Revision, PublicError>> {
-            Box::pin(async { Ok(Revision(1)) })
+        ) -> BoxFuture<'_, Result<projects::BoardSetOutcome, PublicError>> {
+            Box::pin(async {
+                Ok(projects::BoardSetOutcome {
+                    rev: Revision(1),
+                    warnings: vec![],
+                })
+            })
         }
     }
     let mut f = Fixture::new().await;

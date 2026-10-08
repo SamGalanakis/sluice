@@ -689,15 +689,23 @@ pub struct SetBoard {
     pub reason: Option<String>,
     pub author: String,
 }
+/// What `board_set` did: the board's revision, and each step its program names that the
+/// plan cannot give it (`Board::warnings`), which never refuses the program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoardSetOutcome {
+    pub rev: Revision,
+    pub warnings: Vec<String>,
+}
 /// Set or clear a project's board in one transaction with its `project.board` record (which
 /// leaves the program out). A stale `expected_rev` is a conflict; a program that does not
 /// check against the board vocabulary is invalid, each problem with its line. Setting the
-/// board it already has (or clearing none) changes nothing and returns the current rev.
+/// board it already has (or clearing none) changes nothing and returns the current rev. The
+/// outcome warns for each step the program names that is not in the plan (`board_warnings`).
 pub fn board_set(
     tx: &mut WriteTransaction<'_>,
     selector: &ProjectSelector,
     request: SetBoard,
-) -> Result<Revision> {
+) -> Result<BoardSetOutcome> {
     let project = resolve(tx.sql(), selector)?;
     if request.expected_rev.is_some_and(|r| r != project.board_rev) {
         return Err(PublicError::Conflict {
@@ -706,21 +714,34 @@ pub fn board_set(
         }
         .into());
     }
-    if let Some(program) = &request.program
-        && let Err(problems) = sluice_model::openui::check_board(program)
+    let board = match request
+        .program
+        .as_deref()
+        .map(sluice_model::openui::check_board)
     {
-        return Err(PublicError::Invalid {
-            message: format!(
-                "the board program has {} problem{}",
-                problems.len(),
-                if problems.len() == 1 { "" } else { "s" }
-            ),
-            errors: problems.iter().map(ToString::to_string).collect(),
+        Some(Err(problems)) => {
+            return Err(PublicError::Invalid {
+                message: format!(
+                    "the board program has {} problem{}",
+                    problems.len(),
+                    if problems.len() == 1 { "" } else { "s" }
+                ),
+                errors: problems.iter().map(ToString::to_string).collect(),
+            }
+            .into());
         }
-        .into());
-    }
+        Some(Ok(board)) => Some(board),
+        None => None,
+    };
+    let warnings = match &board {
+        Some(board) => board_warnings(tx.sql(), project.project_id, board)?,
+        None => vec![],
+    };
     if request.program == project.board {
-        return Ok(project.board_rev);
+        return Ok(BoardSetOutcome {
+            rev: project.board_rev,
+            warnings,
+        });
     }
     let id = project.project_id;
     let rev = Revision(project.board_rev.0 + 1);
@@ -744,176 +765,263 @@ pub fn board_set(
     tx.changed(Some(id), "board");
     tx.changed(Some(id), "status");
     tx.changed(None, "projects");
-    Ok(rev)
+    Ok(BoardSetOutcome { rev, warnings })
 }
-/// The most bytes a project's slots take together, as stored (so the `board_slots` view, read
-/// under the `query` tool's 1 MiB value limit, always reads).
-pub const MAX_SLOTS_BYTES: usize = 256 * 1024;
-#[derive(Debug, Clone, Default)]
-pub struct SetBoardSlot {
-    pub key: String,
-    /// The slot's markdown; `None` or "" clears it.
-    pub markdown: Option<String>,
-    pub author: String,
+/// A project's plan and history as a board checks against them, read as stored: a step is a
+/// row of `steps`, a tag one its declaration carries, and a name was once a step when a step
+/// result, a message from one of its runs or a status record names it.
+pub struct StoredSteps<'a> {
+    pub sql: &'a Connection,
+    pub project: ProjectId,
+    /// Whether `was_step` may also scan the project's status records (a board_set may; a
+    /// page drawn on every change of the project does not).
+    pub records: bool,
 }
-/// One of a project's board slots: its markdown, when it last changed and who changed it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BoardSlot {
-    pub key: String,
+impl sluice_model::openui::StepLookup for StoredSteps<'_> {
+    fn has_step(&self, id: &str) -> bool {
+        self.sql
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+                [self.project.to_string(), id.to_owned()],
+                |r| r.get(0),
+            )
+            .unwrap_or(false)
+    }
+    fn tagged(&self, tag: &str) -> usize {
+        self.sql
+            .query_row(
+                "SELECT count(*) FROM steps WHERE project_id=?1 AND EXISTS(SELECT 1 FROM json_each(declaration,'$.tags') WHERE value=?2)",
+                [self.project.to_string(), tag.to_owned()],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_or(0, |n| n as usize)
+    }
+    fn was_step(&self, name: &str) -> bool {
+        let mut queries = vec![
+            "SELECT EXISTS(SELECT 1 FROM step_results WHERE project_id=?1 AND step_id=?2)",
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE project_id=?1 AND \"from\"=?2 AND run_id IS NOT NULL)",
+        ];
+        if self.records {
+            queries.push("SELECT EXISTS(SELECT 1 FROM records WHERE project_id=?1 AND kind='step.status' AND step_id=?2)");
+        }
+        queries.into_iter().any(|sql| {
+            self.sql
+                .query_row(sql, [self.project.to_string(), name.to_owned()], |r| {
+                    r.get(0)
+                })
+                .unwrap_or(false)
+        })
+    }
+}
+/// The warnings `board_set` returns for `board`: each step it names that the project's plan
+/// cannot give it, checked against the stored plan and history (`StoredSteps`).
+pub fn board_warnings(
+    c: &Connection,
+    project: ProjectId,
+    board: &sluice_model::openui::Board,
+) -> Result<Vec<String>> {
+    Ok(board.warnings(&StoredSteps {
+        sql: c,
+        project,
+        records: true,
+    }))
+}
+/// The board's document as stored: its markdown, revision (0 before its first write), and
+/// when and by whom it was last edited.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BoardDoc {
+    pub rev: Revision,
     pub markdown: String,
-    pub at: String,
-    pub author: String,
+    pub at: Option<String>,
+    pub author: Option<String>,
 }
-/// What a `board_slot_set` did: the slot as it now is (`None` once cleared) and whether it
-/// changed (the same markdown again, or clearing a slot that is not set, changes nothing).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlotChange {
-    pub slot: Option<BoardSlot>,
+/// What a document write or edit did: the revision it is at, and whether it changed (the
+/// same text again changes nothing and keeps the revision).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocChange {
+    pub rev: Revision,
     pub changed: bool,
 }
-/// A project's slots (`projects.board_slots`, a JSON object of key to `{markdown, at,
-/// author}`), by key. A malformed entry is left out.
-pub fn board_slots(c: &Connection, project: ProjectId) -> Result<Vec<BoardSlot>> {
-    let raw: Option<String> = c
+#[derive(Debug, Clone, Default)]
+pub struct WriteBoardDoc {
+    pub markdown: String,
+    pub expected_rev: Option<Revision>,
+    pub reason: Option<String>,
+    pub author: String,
+}
+#[derive(Debug, Clone)]
+pub struct EditBoardDoc {
+    pub expected_rev: Revision,
+    pub edits: Vec<sluice_model::commands::DocEdit>,
+    pub reason: Option<String>,
+    pub author: String,
+}
+/// A live project's board document.
+pub fn board_doc(c: &Connection, project: ProjectId) -> Result<BoardDoc> {
+    let (markdown, rev, at, author): (Option<String>, i64, Option<String>, Option<String>) = c
         .query_row(
-            "SELECT board_slots FROM projects WHERE project_id=?1 AND deleted_at IS NULL",
+            "SELECT board_doc,board_doc_rev,board_doc_at,board_doc_author FROM projects WHERE project_id=?1 AND deleted_at IS NULL",
             [project.to_string()],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?
-        .flatten();
-    Ok(parse_slots(raw.as_deref()))
-}
-fn parse_slots(raw: Option<&str>) -> Vec<BoardSlot> {
-    let Some(Value::Object(map)) = raw.and_then(|r| serde_json::from_str::<Value>(r).ok()) else {
-        return vec![];
-    };
-    let mut out: Vec<BoardSlot> = map
-        .into_iter()
-        .filter_map(|(key, v)| {
-            Some(BoardSlot {
-                markdown: v.get("markdown")?.as_str()?.to_owned(),
-                at: v.get("at")?.as_str()?.to_owned(),
-                author: v
-                    .get("author")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned(),
-                key,
+        .ok_or_else(|| {
+            StoreError::from(PublicError::NotFound {
+                message: format!("project {project} not found"),
             })
-        })
-        .collect();
-    out.sort_by(|a, b| a.key.cmp(&b.key));
-    out
+        })?;
+    Ok(BoardDoc {
+        rev: Revision(rev as u64),
+        markdown: markdown.unwrap_or_default(),
+        at,
+        author,
+    })
 }
-/// Set or clear one board slot in one transaction with its record: a `project.update` whose
-/// `fields` is `["board_slot:<key>"]` (reason "cleared" for a clear). A slot needs no
-/// revision. The key must be `valid_slot_key`, the markdown at most `MAX_SLOT_BYTES`, a
-/// project at most `MAX_BOARD_SLOTS` slots and `MAX_SLOTS_BYTES` in all; anything else is
-/// `invalid`. The settings revision is left alone, so slot updates never fence a settings
-/// save.
-pub fn board_slot_set(
+/// The document tools work on a board that draws its document: refused otherwise.
+fn require_doc(project: &Project) -> Result<()> {
+    let drawn = project
+        .board
+        .as_deref()
+        .and_then(|program| sluice_model::openui::check_board(program).ok())
+        .is_some_and(|board| board.has_doc());
+    if drawn {
+        return Ok(());
+    }
+    let message = "this board's program has no Doc(): add one where the document goes (board_set), then write it".to_owned();
+    Err(PublicError::Invalid {
+        errors: vec![message.clone()],
+        message,
+    }
+    .into())
+}
+/// `board_doc_read`: the project's board document, refused when its board has no `Doc()`.
+pub fn board_doc_read(c: &Connection, selector: &ProjectSelector) -> Result<BoardDoc> {
+    let project = resolve(c, selector)?;
+    require_doc(&project)?;
+    board_doc(c, project.project_id)
+}
+fn doc_conflict(current: Revision) -> StoreError {
+    PublicError::Conflict {
+        message: format!(
+            "the board's document changed: it is at rev {current}; read it again (board_doc_read)"
+        ),
+        current_rev: Some(current),
+    }
+    .into()
+}
+/// Store `markdown` as the project's document unless it is what the document already says:
+/// a new revision, when and by whom, and one `project.update` record whose `fields` is
+/// `["board_doc"]` with the edit's reason. The board's own revision is left alone, so a press
+/// of one of its buttons stays valid.
+fn store_doc(
     tx: &mut WriteTransaction<'_>,
-    selector: &ProjectSelector,
-    request: SetBoardSlot,
-) -> Result<SlotChange> {
-    use sluice_model::openui::{MAX_BOARD_SLOTS, MAX_SLOT_BYTES, SLOT_KEY_RULE, valid_slot_key};
-    let refuse = |message: String| -> StoreError {
-        PublicError::Invalid {
+    project: ProjectId,
+    current: &BoardDoc,
+    markdown: String,
+    reason: Option<String>,
+    author: String,
+) -> Result<DocChange> {
+    use sluice_model::openui::MAX_DOC_BYTES;
+    if markdown.len() > MAX_DOC_BYTES {
+        let message = format!(
+            "the document would be {} bytes, over its {} KiB",
+            markdown.len(),
+            MAX_DOC_BYTES / 1024
+        );
+        return Err(PublicError::Invalid {
             errors: vec![message.clone()],
             message,
         }
-        .into()
-    };
-    if !valid_slot_key(&request.key) {
-        return Err(refuse(format!(
-            "key: {:?} is not a slot key ({SLOT_KEY_RULE})",
-            request.key
-        )));
+        .into());
     }
-    let markdown = request.markdown.filter(|m| !m.is_empty());
-    if let Some(text) = &markdown
-        && text.len() > MAX_SLOT_BYTES
-    {
-        return Err(refuse(format!(
-            "markdown: {} bytes is over the slot's {} KiB",
-            text.len(),
-            MAX_SLOT_BYTES / 1024
-        )));
-    }
-    let project = resolve(tx.sql(), selector)?;
-    let id = project.project_id;
-    let raw: Option<String> = tx.sql().query_row(
-        "SELECT board_slots FROM projects WHERE project_id=?1",
-        [id.to_string()],
-        |r| r.get(0),
-    )?;
-    let mut slots = match raw.as_deref().map(serde_json::from_str::<Value>) {
-        Some(Ok(Value::Object(map))) => map,
-        _ => serde_json::Map::new(),
-    };
-    let current = slots
-        .get(&request.key)
-        .and_then(|v| v.get("markdown"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    if current == markdown {
-        let slot = parse_slots(raw.as_deref())
-            .into_iter()
-            .find(|s| s.key == request.key);
-        return Ok(SlotChange {
-            slot,
+    if markdown == current.markdown {
+        return Ok(DocChange {
+            rev: current.rev,
             changed: false,
         });
     }
-    let at = now()?;
-    let slot = match markdown {
-        Some(markdown) => {
-            if current.is_none() && slots.len() >= MAX_BOARD_SLOTS {
-                return Err(refuse(format!(
-                    "the board has {MAX_BOARD_SLOTS} slots, its most: clear one first"
-                )));
-            }
-            slots.insert(
-                request.key.clone(),
-                json!({"markdown": markdown, "at": at, "author": request.author}),
-            );
-            Some(BoardSlot {
-                key: request.key.clone(),
-                markdown,
-                at,
-                author: request.author.clone(),
-            })
-        }
-        None => {
-            slots.remove(&request.key);
-            None
-        }
-    };
-    let stored = (!slots.is_empty()).then(|| Value::Object(slots).to_string());
-    if stored.as_ref().is_some_and(|s| s.len() > MAX_SLOTS_BYTES) {
-        return Err(refuse(format!(
-            "the board's slots would take over {} KiB together",
-            MAX_SLOTS_BYTES / 1024
-        )));
-    }
-    tx.sql().execute(
-        "UPDATE projects SET board_slots=?2 WHERE project_id=?1",
-        rusqlite::params![id.to_string(), stored],
-    )?;
-    tx.append_record(
-        Some(id),
+    let rev = Revision(current.rev.0 + 1);
+    // the record's time is the document's, so the board's head and its line agree
+    let record = tx.append_record(
+        Some(project),
         Event::ProjectUpdate {
-            fields: vec![format!("board_slot:{}", request.key)],
-            reason: slot.is_none().then(|| "cleared".to_owned()),
-            author: request.author,
+            fields: vec!["board_doc".to_owned()],
+            reason,
+            author: author.clone(),
         },
     )?;
-    tx.changed(Some(id), "board");
-    Ok(SlotChange {
-        slot,
-        changed: true,
-    })
+    tx.sql().execute(
+        "UPDATE projects SET board_doc=?2,board_doc_rev=?3,board_doc_at=?4,board_doc_author=?5 WHERE project_id=?1",
+        rusqlite::params![
+            project.to_string(),
+            markdown,
+            i64::try_from(rev.0).map_err(|_| invalid("document revision overflow"))?,
+            record.at,
+            author
+        ],
+    )?;
+    tx.changed(Some(project), "board");
+    Ok(DocChange { rev, changed: true })
+}
+/// `board_doc_write`: replace the whole document. A stale `expected_rev` is a conflict
+/// (with the current rev) and nothing changes; the same text again changes nothing.
+pub fn board_doc_write(
+    tx: &mut WriteTransaction<'_>,
+    selector: &ProjectSelector,
+    request: WriteBoardDoc,
+) -> Result<DocChange> {
+    let project = resolve(tx.sql(), selector)?;
+    require_doc(&project)?;
+    let current = board_doc(tx.sql(), project.project_id)?;
+    if request.expected_rev.is_some_and(|r| r != current.rev) {
+        return Err(doc_conflict(current.rev));
+    }
+    store_doc(
+        tx,
+        project.project_id,
+        &current,
+        sluice_model::doc::normalize(&request.markdown),
+        request.reason,
+        request.author,
+    )
+}
+/// `board_doc_edit`: apply line edits made against `expected_rev` (`doc::apply_edits`), all
+/// or none. Another current rev is a conflict; a bad range or an overlap is invalid, naming
+/// the edit; an edit that leaves the text as it was changes nothing.
+pub fn board_doc_edit(
+    tx: &mut WriteTransaction<'_>,
+    selector: &ProjectSelector,
+    request: EditBoardDoc,
+) -> Result<DocChange> {
+    let project = resolve(tx.sql(), selector)?;
+    require_doc(&project)?;
+    let current = board_doc(tx.sql(), project.project_id)?;
+    if request.expected_rev != current.rev {
+        return Err(doc_conflict(current.rev));
+    }
+    let edits: Vec<_> = request
+        .edits
+        .into_iter()
+        .map(|mut e| {
+            e.text = sluice_model::doc::normalize(&e.text);
+            e
+        })
+        .collect();
+    let markdown =
+        sluice_model::doc::apply_edits(&current.markdown, &edits).map_err(|message| {
+            StoreError::from(PublicError::Invalid {
+                errors: vec![message.clone()],
+                message,
+            })
+        })?;
+    store_doc(
+        tx,
+        project.project_id,
+        &current,
+        markdown,
+        request.reason,
+        request.author,
+    )
 }
 /// Coordinator can add live-process knowledge not yet reflected in attempt rows.
 /// This check runs under the writer transaction and must not perform external I/O.
@@ -1075,7 +1183,7 @@ pub fn project_delete(
         )?;
     }
     tx.sql().execute("UPDATE maintenance SET paused_projects=(SELECT coalesce(json_group_array(value),'[]') FROM json_each(maintenance.paused_projects) WHERE value<>?1),revision=revision+1 WHERE EXISTS(SELECT 1 FROM json_each(maintenance.paused_projects) WHERE value=?1)",[id.to_string()])?;
-    tx.sql().execute("UPDATE projects SET deleted_at=?2,changed_at=?2,settings_rev=settings_rev+1,icon_text=NULL,icon_type=NULL,icon_hash=NULL,description='',board=NULL,board_slots=NULL WHERE project_id=?1",[id.to_string(),now()?])?;
+    tx.sql().execute("UPDATE projects SET deleted_at=?2,changed_at=?2,settings_rev=settings_rev+1,icon_text=NULL,icon_type=NULL,icon_hash=NULL,description='',board=NULL,board_doc=NULL WHERE project_id=?1",[id.to_string(),now()?])?;
     tx.append_record(
         None,
         Event::ProjectDelete {

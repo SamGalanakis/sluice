@@ -4819,6 +4819,13 @@
         "items": {
           "$ref": "#/$defs/StepId"
         }
+      },
+      "board_warnings": {
+        "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       }
     },
     "additionalProperties": false,
@@ -5165,6 +5172,13 @@
           "$ref": "#/$defs/StepId"
         }
       },
+      "board_warnings": {
+        "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
       "changed": {
         "type": "array",
         "items": {
@@ -5483,6 +5497,13 @@
         ],
         "items": {
           "$ref": "#/$defs/StepId"
+        }
+      },
+      "board_warnings": {
+        "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+        "type": "array",
+        "items": {
+          "type": "string"
         }
       },
       "units": {
@@ -10661,23 +10682,6 @@
             "properties": {
               "command": {
                 "type": "string",
-                "const": "board_slot_set"
-              },
-              "args": {
-                "$ref": "#/$defs/BoardSlotSet"
-              }
-            },
-            "required": [
-              "command",
-              "args"
-            ],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "command": {
-                "type": "string",
                 "const": "board_get"
               },
               "args": {
@@ -10691,6 +10695,57 @@
                 "required": [
                   "project"
                 ]
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "board_doc_read"
+              },
+              "args": {
+                "$ref": "#/$defs/BoardDocRead"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "board_doc_write"
+              },
+              "args": {
+                "$ref": "#/$defs/BoardDocWrite"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "board_doc_edit"
+              },
+              "args": {
+                "$ref": "#/$defs/BoardDocEdit"
               }
             },
             "required": [
@@ -12110,19 +12165,40 @@
           "program"
         ]
       },
-      "BoardSlotSet": {
-        "description": "`board_slot_set`: set one named text slot of the project's board (markdown a board's\n`Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is\nits own value, so an orchestrator updates one per event without reading the board first.",
+      "BoardDocRead": {
+        "description": "`board_doc_read`: the board's document, the hand-written part a board's `Doc()` draws.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
+      "BoardDocWrite": {
+        "description": "`board_doc_write`: replace the board's whole document. With `expected_rev`, a document\nat another revision is a conflict and nothing changes; the same text again changes nothing.",
         "type": "object",
         "properties": {
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
-          "key": {
-            "description": "The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.",
+          "markdown": {
+            "description": "The whole document, as markdown (at most 64 KiB).",
             "type": "string"
           },
-          "markdown": {
-            "description": "The slot's markdown (at most 16 KiB); \"\" or null clears the slot.",
+          "expected_rev": {
+            "description": "The document's revision you read (board_doc_read); refused if it has changed since.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "reason": {
             "type": [
               "string",
               "null"
@@ -12138,8 +12214,73 @@
         "additionalProperties": false,
         "required": [
           "project",
-          "key",
           "markdown"
+        ]
+      },
+      "BoardDocEdit": {
+        "description": "`board_doc_edit`: replace line ranges of the board's document at `expected_rev`, all of\nthem or none.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "expected_rev": {
+            "description": "The document's revision the line numbers come from (board_doc_read); refused if it\nhas changed since.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "edits": {
+            "description": "The edits, by line numbers of that revision; none may overlap another.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DocEdit"
+            }
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "expected_rev",
+          "edits"
+        ]
+      },
+      "DocEdit": {
+        "description": "One edit of the board's document: lines `start` to `end` (1-based, inclusive) become\n`text`. `end = start - 1` inserts before `start`; `start = lines + 1` appends.",
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "end": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "text": {
+            "description": "The new lines (several, or \"\" to delete the range).",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "start",
+          "end",
+          "text"
         ]
       },
       "PlanPatch": {
@@ -14033,7 +14174,7 @@
             "additionalProperties": false
           },
           {
-            "description": "`board_set`'s reply: the board's new revision.",
+            "description": "`board_set`'s reply before it carried warnings (it is now `Data` `{rev, warnings}`),\nkept so a reply cached by an older release still decodes.",
             "type": "object",
             "properties": {
               "reply": {
@@ -14434,6 +14575,13 @@
             "items": {
               "$ref": "#/$defs/StepId"
             }
+          },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false,
@@ -14683,6 +14831,13 @@
               "$ref": "#/$defs/StepId"
             }
           },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "changed": {
             "type": "array",
             "items": {
@@ -14756,6 +14911,13 @@
             ],
             "items": {
               "$ref": "#/$defs/StepId"
+            }
+          },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           },
           "units": {
@@ -20753,23 +20915,6 @@
         "properties": {
           "command": {
             "type": "string",
-            "const": "board_slot_set"
-          },
-          "args": {
-            "$ref": "#/$defs/BoardSlotSet"
-          }
-        },
-        "required": [
-          "command",
-          "args"
-        ],
-        "additionalProperties": false
-      },
-      {
-        "type": "object",
-        "properties": {
-          "command": {
-            "type": "string",
             "const": "board_get"
           },
           "args": {
@@ -20783,6 +20928,57 @@
             "required": [
               "project"
             ]
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "board_doc_read"
+          },
+          "args": {
+            "$ref": "#/$defs/BoardDocRead"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "board_doc_write"
+          },
+          "args": {
+            "$ref": "#/$defs/BoardDocWrite"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "board_doc_edit"
+          },
+          "args": {
+            "$ref": "#/$defs/BoardDocEdit"
           }
         },
         "required": [
@@ -22202,19 +22398,40 @@
           "program"
         ]
       },
-      "BoardSlotSet": {
-        "description": "`board_slot_set`: set one named text slot of the project's board (markdown a board's\n`Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is\nits own value, so an orchestrator updates one per event without reading the board first.",
+      "BoardDocRead": {
+        "description": "`board_doc_read`: the board's document, the hand-written part a board's `Doc()` draws.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
+      "BoardDocWrite": {
+        "description": "`board_doc_write`: replace the board's whole document. With `expected_rev`, a document\nat another revision is a conflict and nothing changes; the same text again changes nothing.",
         "type": "object",
         "properties": {
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
-          "key": {
-            "description": "The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.",
+          "markdown": {
+            "description": "The whole document, as markdown (at most 64 KiB).",
             "type": "string"
           },
-          "markdown": {
-            "description": "The slot's markdown (at most 16 KiB); \"\" or null clears the slot.",
+          "expected_rev": {
+            "description": "The document's revision you read (board_doc_read); refused if it has changed since.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "reason": {
             "type": [
               "string",
               "null"
@@ -22230,8 +22447,73 @@
         "additionalProperties": false,
         "required": [
           "project",
-          "key",
           "markdown"
+        ]
+      },
+      "BoardDocEdit": {
+        "description": "`board_doc_edit`: replace line ranges of the board's document at `expected_rev`, all of\nthem or none.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "expected_rev": {
+            "description": "The document's revision the line numbers come from (board_doc_read); refused if it\nhas changed since.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "edits": {
+            "description": "The edits, by line numbers of that revision; none may overlap another.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DocEdit"
+            }
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "expected_rev",
+          "edits"
+        ]
+      },
+      "DocEdit": {
+        "description": "One edit of the board's document: lines `start` to `end` (1-based, inclusive) become\n`text`. `end = start - 1` inserts before `start`; `start = lines + 1` appends.",
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "end": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "text": {
+            "description": "The new lines (several, or \"\" to delete the range).",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "start",
+          "end",
+          "text"
         ]
       },
       "PlanPatch": {
@@ -24073,7 +24355,7 @@
         "additionalProperties": false
       },
       {
-        "description": "`board_set`'s reply: the board's new revision.",
+        "description": "`board_set`'s reply before it carried warnings (it is now `Data` `{rev, warnings}`),\nkept so a reply cached by an older release still decodes.",
         "type": "object",
         "properties": {
           "reply": {
@@ -24474,6 +24756,13 @@
             "items": {
               "$ref": "#/$defs/StepId"
             }
+          },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false,
@@ -24723,6 +25012,13 @@
               "$ref": "#/$defs/StepId"
             }
           },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "changed": {
             "type": "array",
             "items": {
@@ -24796,6 +25092,13 @@
             ],
             "items": {
               "$ref": "#/$defs/StepId"
+            }
+          },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           },
           "units": {
@@ -26891,7 +27194,7 @@
             "additionalProperties": false
           },
           {
-            "description": "`board_set`'s reply: the board's new revision.",
+            "description": "`board_set`'s reply before it carried warnings (it is now `Data` `{rev, warnings}`),\nkept so a reply cached by an older release still decodes.",
             "type": "object",
             "properties": {
               "reply": {
@@ -27292,6 +27595,13 @@
             "items": {
               "$ref": "#/$defs/StepId"
             }
+          },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false,
@@ -27541,6 +27851,13 @@
               "$ref": "#/$defs/StepId"
             }
           },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "changed": {
             "type": "array",
             "items": {
@@ -27614,6 +27931,13 @@
             ],
             "items": {
               "$ref": "#/$defs/StepId"
+            }
+          },
+          "board_warnings": {
+            "description": "Each step the project's board names that this edit took out of the plan, such as\n\"line 4: Metric names step `x`, which is not in the plan\". The edit is made all the same.",
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           },
           "units": {
@@ -32461,21 +32785,93 @@
       }
     }
   },
-  "BoardSlotSet": {
+  "BoardDocRead": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "title": "BoardSlotSet",
-    "description": "`board_slot_set`: set one named text slot of the project's board (markdown a board's\n`Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is\nits own value, so an orchestrator updates one per event without reading the board first.",
+    "title": "BoardDocRead",
+    "description": "`board_doc_read`: the board's document, the hand-written part a board's `Doc()` draws.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "BoardDocWrite": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "BoardDocWrite",
+    "description": "`board_doc_write`: replace the board's whole document. With `expected_rev`, a document\nat another revision is a conflict and nothing changes; the same text again changes nothing.",
     "type": "object",
     "properties": {
       "project": {
         "$ref": "#/$defs/ProjectSelector"
       },
-      "key": {
-        "description": "The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.",
+      "markdown": {
+        "description": "The whole document, as markdown (at most 64 KiB).",
         "type": "string"
       },
-      "markdown": {
-        "description": "The slot's markdown (at most 16 KiB); \"\" or null clears the slot.",
+      "expected_rev": {
+        "description": "The document's revision you read (board_doc_read); refused if it has changed since.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
+      "reason": {
         "type": [
           "string",
           "null"
@@ -32491,7 +32887,6 @@
     "additionalProperties": false,
     "required": [
       "project",
-      "key",
       "markdown"
     ],
     "$defs": {
@@ -32543,6 +32938,151 @@
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
       }
     }
+  },
+  "BoardDocEdit": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "BoardDocEdit",
+    "description": "`board_doc_edit`: replace line ranges of the board's document at `expected_rev`, all of\nthem or none.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "$ref": "#/$defs/ProjectSelector"
+      },
+      "expected_rev": {
+        "description": "The document's revision the line numbers come from (board_doc_read); refused if it\nhas changed since.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "edits": {
+        "description": "The edits, by line numbers of that revision; none may overlap another.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/DocEdit"
+        }
+      },
+      "reason": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "author": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "project",
+      "expected_rev",
+      "edits"
+    ],
+    "$defs": {
+      "ProjectSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "name"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectName"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "id"
+              },
+              "value": {
+                "$ref": "#/$defs/ProjectId"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProjectName": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+      },
+      "DocEdit": {
+        "description": "One edit of the board's document: lines `start` to `end` (1-based, inclusive) become\n`text`. `end = start - 1` inserts before `start`; `start = lines + 1` appends.",
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "end": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "text": {
+            "description": "The new lines (several, or \"\" to delete the range).",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "start",
+          "end",
+          "text"
+        ]
+      }
+    }
+  },
+  "DocEdit": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "DocEdit",
+    "description": "One edit of the board's document: lines `start` to `end` (1-based, inclusive) become\n`text`. `end = start - 1` inserts before `start`; `start = lines + 1` appends.",
+    "type": "object",
+    "properties": {
+      "start": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "end": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "text": {
+        "description": "The new lines (several, or \"\" to delete the range).",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "start",
+      "end",
+      "text"
+    ]
   },
   "BoardView": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

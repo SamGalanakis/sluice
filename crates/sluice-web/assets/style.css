@@ -1393,7 +1393,17 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
     grid-template-columns: var(--board-gap) minmax(0, 1fr); }
   .board-side > .board-pane { grid-column: 2; }  /* beside the splitter's track, script or not */
   .project-page.has-panel:not([data-view="plan"], [data-view="board"]) .board-pane {
-    max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+    max-height: var(--pane-max, calc(100vh - 32px)); overflow-y: auto; overscroll-behavior: contain;
+    /* scroll shadows: a soft shade at an edge while more of the board lies past it, gone at
+       its ends (the cover scrolls with the content, the shade stays with the box) */
+    background:
+      linear-gradient(var(--card) 30%, transparent) top / 100% 36px no-repeat local,
+      linear-gradient(transparent, var(--card) 70%) bottom / 100% 36px no-repeat local,
+      linear-gradient(color-mix(in oklch, var(--foreground) 12%, transparent), transparent)
+        top / 100% 12px no-repeat scroll,
+      linear-gradient(transparent, color-mix(in oklch, var(--foreground) 14%, transparent))
+        bottom / 100% 14px no-repeat scroll,
+      var(--card); }
   @media (scripting: enabled) {
     .project-page.has-panel:not([data-view="plan"], [data-view="board"]) .splitter { display: flex; } }
   .project-page.has-panel .board-pane {
@@ -1425,7 +1435,7 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 /* the board's parts: the question vocabulary's look, plus its live parts */
 .board-ui { margin: 0; gap: 12px; }
 .board-ui .ou-h { margin: 4px 0 0; font: 750 15px/21px var(--font-display); font-stretch: 105%; }
-.board-ui h3.ou-h { font-size: 17px; line-height: 23px; }
+.board-ui .ou-h.ou-h1 { font-size: 17px; line-height: 23px; }
 .board-ui .ou-text { max-width: 72ch; }
 .board-ui .ou-text.muted, .ou-note { color: var(--muted-foreground); }
 .board-ui .ou-sep { width: 100%; border: 0; border-top: 1px solid var(--border); margin: 2px 0; }
@@ -1453,9 +1463,34 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 .board-why { overflow-wrap: anywhere; }
 .board-output { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .board-output .v { overflow-wrap: anywhere; }
-/* Slot, Markdown and LatestMessage: markdown at the board's prose measure; a slot says when it
-   last changed under it, a message who sent it and when over it, both in meta */
-.board-slot, .board-message { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* Doc, Markdown and LatestMessage: markdown at the board's prose measure; the document says
+   when and by whom it was last edited under it, a message who sent it and when over it, both
+   in meta */
+.board-doc, .board-message { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.board-doc { padding-bottom: 6px; }  /* the hand-written part, a little apart from the live parts */
+/* markdown's own sections on the board (the document's above all), nested under the
+   column's h2: the first rank in the board's heading voice, the next a step down, more space
+   above a heading than under it */
+.board-md :is(h3, h4, h5, h6) { margin: 18px 0 4px; font-family: var(--font-display);
+                                font-stretch: 105%; font-weight: 750; }
+.board-md h3 { font-size: 17px; line-height: 23px; }
+.board-md h4 { font-size: 15px; line-height: 21px; }
+.board-md :is(h5, h6) { font-size: 14px; line-height: 20px; font-weight: 650;
+                        color: var(--muted-foreground); }
+.board-md > :first-child { margin-top: 0; }
+.board-md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 1px solid var(--border-strong);
+                       color: var(--muted-foreground); }
+/* a Metric, Query, Chart or LatestMessage whose data names a step the plan no longer has:
+   one line above it, the attention mark and its words, so a frozen value never passes for
+   a live one */
+.board-warned { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ou-row > .board-warned { flex: 1 1 90px; }
+.ou-row:has(> .board-warned) { align-items: flex-end; }  /* its parts keep one baseline */
+.board-stale { display: flex; gap: 6px; align-items: flex-start; margin: 0;
+               font-size: 13px; line-height: 18px; color: var(--status-attention);
+               overflow-wrap: anywhere; }
+.board-stale .bs-icon { flex: none; margin-top: 2px; }
+.board-stale code { font-size: 12px; color: var(--foreground); white-space: nowrap; }
 .board-md { max-width: 72ch; min-width: 0; overflow-wrap: anywhere; }
 .board-md.muted { color: var(--muted-foreground); }
 .board-md :is(pre, table) { display: block; max-width: 100%; overflow: auto; }
@@ -1483,8 +1518,8 @@ html.resizing .board svg.edges { visibility: hidden; }  /* redrawn once the drag
 /* a part that cannot be drawn says so in place, in ink with the attention mark; the rest of
    the board still draws */
 .ou-error-box { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px;
-                border: 1px solid var(--border-strong);
-                border-left: 3px solid var(--status-attention); border-radius: var(--radius-md);
+                border: 1px solid color-mix(in oklch, var(--status-attention) 45%, transparent);
+                border-radius: var(--radius-md);
                 background: var(--muted); font-size: 13px; line-height: 18px;
                 overflow-wrap: anywhere; min-width: 0; }
 .ou-error-box .eb-icon { flex: none; margin-top: 1px; color: var(--status-attention); }

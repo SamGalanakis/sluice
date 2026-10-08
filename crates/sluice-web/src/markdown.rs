@@ -55,6 +55,13 @@ pub fn allowed_url(url: &str) -> bool {
 }
 
 pub fn render(text: &str) -> TrustedHtml {
+    render_from(text, 4)
+}
+
+/// `render`, its highest heading at level `top` (3 to 6) and the rest under it in turn, so
+/// the text nests under the heading it is drawn beneath without skipping a level.
+pub fn render_from(text: &str, top: u8) -> TrustedHtml {
+    let top = i16::from(top.clamp(1, 6));
     let arena = Arena::new();
     let mut options = Options::default();
     options.extension.table = true;
@@ -73,7 +80,7 @@ pub fn render(text: &str) -> TrustedHtml {
         let mut data = node.data.borrow_mut();
         match &mut data.value {
             NodeValue::Heading(h) => {
-                h.level = (i16::from(h.level) + 4 - i16::from(lowest)).clamp(4, 6) as u8
+                h.level = (i16::from(h.level) + top - i16::from(lowest)).clamp(top, 6) as u8
             }
             NodeValue::Link(link) | NodeValue::Image(link) if !allowed_url(&link.url) => {
                 link.url.clear()

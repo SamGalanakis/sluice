@@ -285,8 +285,8 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         tokio::time::sleep(Duration::from_millis(30)).await;
         let started = Instant::now();
         f.call(
-            "board_slot_set",
-            json!({"key":"note","markdown":"set while an edit is prepared"}),
+            "board_set",
+            json!({"program":"root = Doc(\"set while an edit is prepared\")"}),
         )
         .await
         .unwrap();
@@ -297,7 +297,7 @@ async fn small_edits_to_a_plan_of_two_thousand_steps_take_a_bounded_time() {
         panic!("an edit result")
     };
     assert_eq!(patched.rev.0, rev + 1);
-    eprintln!("a board slot set during an edit took {slot:?}");
+    eprintln!("a board set during an edit took {slot:?}");
     assert!(
         slot < CONCURRENT_BOUND,
         "a write during an edit took {slot:?}"

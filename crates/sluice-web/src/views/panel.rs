@@ -1,11 +1,13 @@
 //! The project's board (`docs("board")`): an OpenUI Lang program stored on the project, drawn
 //! here on the server beside the plan (its own section on a phone). The question components
 //! draw as the inbox draws them; the data components (Units, StepStatus, Output, Metric,
-//! Query, Chart, Slot, LatestMessage) are filled from the project when the page renders and
-//! again on each live patch; Slot, Markdown and LatestMessage draw markdown through the
-//! dashboard's renderer. A query runs read-only through the `query` tool's path and limits, with `?` bound to
-//! the project's id. A component that cannot be drawn becomes an inline error box; the page
-//! never fails for it. A Button sends the orchestrator a `say` from the owner.
+//! Query, Chart, Doc, LatestMessage) are filled from the project when the page renders and
+//! again on each live patch; Doc (the board's document), Markdown and LatestMessage draw
+//! markdown through the dashboard's renderer. A query runs read-only through the `query`
+//! tool's path and limits, with `?` bound to the project's id. A step is named by its id or as
+//! `tag:<tag>`, the one step carrying that tag. A component that cannot be drawn becomes an
+//! inline error box, and one whose data names a step the plan no longer has says so above it;
+//! the page never fails for either. A Button sends the orchestrator a `say` from the owner.
 use super::board::{self, CatalogSignatures, Registry};
 use super::icons::{Icon, icon};
 use super::step::StepView;
@@ -51,10 +53,13 @@ pub struct Panel {
     /// The program's own title: a level-1 Heading that leads it, drawn as the board's head
     /// instead of "Board" (and not again under it).
     pub title: Option<String>,
-    /// When the board's words last changed (its `project.board` record or a slot's
+    /// When the board's words last changed (its `project.board` record or a document edit's
     /// `project.update`), and whether the plan has changed since: what they may be behind.
     pub written: Option<String>,
     pub plan_changed: bool,
+    /// The board draws a written document, whose own line says when and by whom it was
+    /// last edited: the head then does not say it again.
+    pub doc_dated: bool,
     pub html: String,
 }
 impl Panel {
@@ -70,7 +75,7 @@ impl Panel {
             icon(Icon::LayoutDashboard, 16, ""),
             esc(self.title.as_deref().unwrap_or("Board"))
         );
-        if let Some(at) = self.written.as_deref().filter(|_| age) {
+        if let Some(at) = self.written.as_deref().filter(|_| age && !self.doc_dated) {
             let _ = write!(
                 out,
                 "<p class=\"meta board-age\">Updated {}{}.</p>",
@@ -122,13 +127,45 @@ pub(crate) struct Loaded {
     units: BTreeMap<Vec<String>, Result<UnitsData, String>>,
     outputs: BTreeMap<(String, String), Option<OutputValue>>,
     steps: BTreeMap<String, Option<StepView>>,
-    /// Every step of the plan, for Output's check.
-    known: std::collections::BTreeSet<String>,
-    /// The project's slots by key, read when the board draws a Slot.
-    slots: BTreeMap<String, sluice_store::projects::BoardSlot>,
+    /// Every step of the plan, for the step checks.
+    known: BTreeSet<String>,
+    /// Each tag the plan's steps carry, with the steps carrying it (`tag:<tag>`).
+    tags: BTreeMap<String, Vec<String>>,
+    /// The names the board uses as a sender or a message column's value that are not plan
+    /// steps but once were (`StepLookup::was_step`).
+    once: BTreeSet<String>,
+    /// The board's document, read when the board draws its Doc.
+    doc: Option<sluice_store::projects::BoardDoc>,
     /// Each LatestMessage sender's newest message in the project, if any.
     latest: BTreeMap<String, Option<LatestMessage>>,
     token: String,
+}
+impl openui::StepLookup for Loaded {
+    fn has_step(&self, id: &str) -> bool {
+        self.known.contains(id)
+    }
+    fn tagged(&self, tag: &str) -> usize {
+        self.tags.get(tag).map_or(0, Vec::len)
+    }
+    fn was_step(&self, name: &str) -> bool {
+        self.once.contains(name)
+    }
+}
+impl Loaded {
+    /// The step a component names: its id, or the one step carrying `tag:<tag>`; else why not.
+    fn step(&self, named: &str) -> Result<String, String> {
+        match openui::StepTarget::parse(named) {
+            openui::StepTarget::Step(id) => Ok(id),
+            openui::StepTarget::Tag(tag) => match self.tags.get(&tag).map(Vec::as_slice) {
+                Some([one]) => Ok(one.clone()),
+                None | Some([]) => Err(format!("no plan step carries the tag {tag} (tag:{tag})")),
+                Some(many) => Err(format!(
+                    "{} plan steps carry the tag {tag} (tag:{tag}); it must name one",
+                    many.len()
+                )),
+            },
+        }
+    }
 }
 /// A sender's newest message, as LatestMessage draws it.
 #[derive(Clone, Debug)]
@@ -192,11 +229,11 @@ pub(crate) fn gather(
     };
     let steps = || view.units.iter().flat_map(|u| &u.steps);
     let board = openui::check_board(&program);
-    // the last change to the board's words (the program, or a slot: a project.update whose
-    // fields name it), and whether a plan edit came after it (by record order)
+    // the last change to the board's words (the program, or its document: a project.update
+    // whose fields name it), and whether a plan edit came after it (by record order)
     let written: Option<(i64, String)> = c
         .query_row(
-            "SELECT seq,at FROM records WHERE project_id=?1 AND (kind='project.board' OR (kind='project.update' AND EXISTS(SELECT 1 FROM json_each(payload,'$.fields') WHERE value LIKE 'board_slot:%'))) ORDER BY seq DESC LIMIT 1",
+            "SELECT seq,at FROM records WHERE project_id=?1 AND (kind='project.board' OR (kind='project.update' AND EXISTS(SELECT 1 FROM json_each(payload,'$.fields') WHERE value='board_doc'))) ORDER BY seq DESC LIMIT 1",
             [project.to_string()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -217,11 +254,22 @@ pub(crate) fn gather(
         outputs: BTreeMap::new(),
         steps: BTreeMap::new(),
         known: steps().map(|s| s.id.to_string()).collect(),
-        slots: BTreeMap::new(),
+        tags: BTreeMap::new(),
+        once: BTreeSet::new(),
+        doc: None,
         latest: BTreeMap::new(),
         token: String::new(),
         board,
     };
+    for step in steps() {
+        for tag in &step.tags {
+            loaded
+                .tags
+                .entry(tag.clone())
+                .or_default()
+                .push(step.id.to_string());
+        }
+    }
     let Ok(board) = &loaded.board else {
         return Ok(Some(loaded));
     };
@@ -246,31 +294,54 @@ pub(crate) fn gather(
         seq.unwrap_or(0),
         progress_at.unwrap_or_default()
     );
+    // a sender or a message column's value not in the plan is stale only if it was a step
+    let history = sluice_store::projects::StoredSteps {
+        sql: c,
+        project,
+        records: false,
+    };
+    for r in board.step_refs() {
+        if let openui::StepTarget::Step(name) = &r.target
+            && matches!(
+                r.site,
+                openui::RefSite::Sender | openui::RefSite::Sql { step_column: false }
+            )
+            && !loaded.known.contains(name)
+            && openui::StepLookup::was_step(&history, name)
+        {
+            loaded.once.insert(name.clone());
+        }
+    }
     let mut wants_units = vec![];
-    let mut wants_slots = false;
+    let mut wants_doc = false;
+    let mut steps_named = vec![];
+    let mut outputs_named = vec![];
+    let mut senders = vec![];
     board.walk(&mut |c, _| match c.name.as_str() {
         "Units" => wants_units.push(c.strings_arg(0)),
-        "Slot" => wants_slots = true,
-        "LatestMessage" => {
-            if let Some(from) = c.str_arg(0) {
-                loaded.latest.insert(from.into(), None);
-            }
-        }
-        "StepStatus" => {
-            if let Some(step) = c.str_arg(0) {
-                loaded.steps.insert(
-                    step.into(),
-                    steps().find(|s| s.id.as_str() == step).cloned(),
-                );
-            }
-        }
+        "Doc" => wants_doc = true,
+        "LatestMessage" => senders.extend(c.str_arg(0).map(str::to_owned)),
+        "StepStatus" => steps_named.extend(c.str_arg(0).map(str::to_owned)),
         "Output" => {
             if let (Some(step), Some(field)) = (c.str_arg(0), c.str_arg(1)) {
-                loaded.outputs.insert((step.into(), field.into()), None);
+                outputs_named.push((step.to_owned(), field.to_owned()));
             }
         }
         _ => {}
     });
+    for named in steps_named {
+        let view = loaded
+            .step(&named)
+            .ok()
+            .and_then(|id| steps().find(|s| s.id.as_str() == id).cloned());
+        loaded.steps.insert(named, view);
+    }
+    for (named, field) in outputs_named {
+        loaded.outputs.insert((named, field), None);
+    }
+    for from in senders {
+        loaded.latest.insert(from, None);
+    }
     for filter in wants_units {
         let rows = match plan {
             None => Err("the plan cannot be compiled, so its units are unknown".into()),
@@ -291,7 +362,10 @@ pub(crate) fn gather(
         loaded.units.insert(filter, rows);
     }
     let keys: Vec<(String, String)> = loaded.outputs.keys().cloned().collect();
-    for (step, field) in keys {
+    for (named, field) in keys {
+        let Ok(step) = loaded.step(&named) else {
+            continue;
+        };
         let outputs: Option<String> = c
             .query_row(
                 "SELECT outputs FROM steps WHERE project_id=?1 AND step_id=?2",
@@ -318,16 +392,16 @@ pub(crate) fn gather(
                     progress: None,
                 }),
         };
-        loaded.outputs.insert((step, field), value);
+        loaded.outputs.insert((named, field), value);
     }
-    if wants_slots {
-        loaded.slots = sluice_store::projects::board_slots(c, project)?
-            .into_iter()
-            .map(|slot| (slot.key.clone(), slot))
-            .collect();
+    if wants_doc {
+        loaded.doc = Some(sluice_store::projects::board_doc(c, project)?);
     }
     let senders: Vec<String> = loaded.latest.keys().cloned().collect();
-    for from in senders {
+    for named in senders {
+        let Ok(from) = loaded.step(&named) else {
+            continue;
+        };
         let message = c
             .query_row(
                 "SELECT id,thread,body,at FROM messages WHERE project_id=?1 AND \"from\"=?2 ORDER BY id DESC LIMIT 1",
@@ -342,7 +416,7 @@ pub(crate) fn gather(
                 },
             )
             .optional()?;
-        loaded.latest.insert(from, message);
+        loaded.latest.insert(named, message);
     }
     Ok(Some(loaded))
 }
@@ -362,11 +436,15 @@ pub(crate) async fn draw(
         Err(_) => BTreeMap::new(),
     };
     let (html, title) = render(project, &loaded, &queries);
+    let doc_dated = loaded.doc.as_ref().is_some_and(|d| {
+        d.at.is_some() && !d.markdown.trim().is_empty()
+    });
     Ok(Some(Panel {
         rev: loaded.rev,
         title,
         written: loaded.written.clone(),
         plan_changed: loaded.plan_changed,
+        doc_dated,
         html,
     }))
 }
@@ -572,13 +650,58 @@ fn ago(at: &str) -> String {
         esc(&shown)
     )
 }
-/// Markdown drawn through the dashboard's renderer (escaped, unsafe link schemes refused).
-fn markdown(text: &str, class: &str) -> String {
+/// Markdown drawn through the dashboard's renderer (escaped, unsafe link schemes refused),
+/// its headings from level `top` down, each id in its text kept on one line (`keep_ids`).
+fn markdown(text: &str, class: &str, top: u8) -> String {
     format!(
         "<div class=\"md board-md{}{class}\">{}</div>",
         if class.is_empty() { "" } else { " " },
-        crate::markdown::render(text).as_str()
+        keep_ids(crate::markdown::render_from(text, top).as_str())
     )
+}
+/// Rendered HTML with each word that has a hyphen inside it (a step or unit id, `FIG-5004`)
+/// in its text wrapped to stay on one line, as `prose` keeps them; tags, attributes and code
+/// are left as they are.
+fn keep_ids(html: &str) -> String {
+    let mut out = String::with_capacity(html.len() + 32);
+    let mut code = 0usize;
+    let mut rest = html;
+    while !rest.is_empty() {
+        if rest.starts_with('<') {
+            let end = rest.find('>').map_or(rest.len(), |i| i + 1);
+            let tag = &rest[..end];
+            if tag.starts_with("<code") || tag.starts_with("<pre") {
+                code += 1;
+            } else if tag.starts_with("</code") || tag.starts_with("</pre") {
+                code = code.saturating_sub(1);
+            }
+            out.push_str(tag);
+            rest = &rest[end..];
+            continue;
+        }
+        let end = rest.find('<').unwrap_or(rest.len());
+        let text = &rest[..end];
+        if code > 0 {
+            out.push_str(text);
+        } else {
+            for (i, word) in text.split(' ').enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                let chars: Vec<char> = word.chars().collect();
+                if chars
+                    .windows(3)
+                    .any(|w| w[1] == '-' && w[0].is_alphanumeric() && w[2].is_alphanumeric())
+                {
+                    let _ = write!(out, "<span class=\"ou-id\">{word}</span>");
+                } else {
+                    out.push_str(word);
+                }
+            }
+        }
+        rest = &rest[end..];
+    }
+    out
 }
 /// `text` cut to at most `chars` characters, at a space when one is near the end, and
 /// whether it was cut.
@@ -610,6 +733,11 @@ struct Draw<'a> {
     project: ProjectId,
     /// The root Stack's leading Heading is the board's head: not drawn again.
     skip_lead: bool,
+    /// The board leads with its own title, so a level-2 Heading sits right under the head.
+    titled: bool,
+    /// The level of the heading drawn last (the column's head is 2): markdown's headings
+    /// start one under it.
+    depth: u8,
     loaded: &'a Loaded,
     queries: &'a BTreeMap<String, QueryOutcome>,
     buttons: usize,
@@ -636,6 +764,8 @@ fn render(
     let mut d = Draw {
         project,
         skip_lead: title.is_some(),
+        titled: title.is_some(),
+        depth: 2,
         loaded,
         queries,
         buttons: 0,
@@ -710,10 +840,15 @@ impl Draw<'_> {
                 self.out.push_str("</div>");
             }
             "Heading" => {
-                let level = c.num_arg(1).unwrap_or(2.0).round().clamp(1.0, 3.0) as u8 + 2;
+                // under the column's h2: a titled board's level 2 is h3, an untitled one's
+                // level 1 is; never a skipped level
+                let level = c.num_arg(1).unwrap_or(2.0).round().clamp(1.0, 3.0) as u8;
+                let tag = (level + if self.titled { 1 } else { 2 }).clamp(3, 6);
+                self.depth = tag;
                 let _ = write!(
                     self.out,
-                    "<h{level} class=\"ou-h\">{}</h{level}>",
+                    "<h{tag} class=\"ou-h{}\">{}</h{tag}>",
+                    if level == 1 { " ou-h1" } else { "" },
                     esc(c.str_arg(0).unwrap_or(""))
                 );
             }
@@ -785,13 +920,13 @@ impl Draw<'_> {
             "Units" => self.units(c),
             "StepStatus" => self.step_status(c),
             "Output" => self.output(c),
-            "Metric" | "Query" | "Chart" => self.query_component(c),
-            "Slot" => self.slot(c),
+            "Metric" | "Query" | "Chart" => self.warned(c, Self::query_component),
+            "Doc" => self.doc(c),
             "Markdown" => {
-                let html = markdown(c.str_arg(0).unwrap_or(""), "");
+                let html = markdown(c.str_arg(0).unwrap_or(""), "", self.depth + 1);
                 self.out.push_str(&html);
             }
-            "LatestMessage" => self.latest_message(c),
+            "LatestMessage" => self.warned(c, Self::latest_message),
             other => self.component_error(c, &format!("{other} is not a board component")),
         }
     }
@@ -1013,8 +1148,12 @@ impl Draw<'_> {
         }
     }
     fn step_status(&mut self, c: &Component) {
-        let step = c.str_arg(0).unwrap_or("");
-        let Some(Some(view)) = self.loaded.steps.get(step) else {
+        let named = c.str_arg(0).unwrap_or("");
+        let step = match self.loaded.step(named) {
+            Ok(step) => step,
+            Err(why) => return self.component_error(c, &why),
+        };
+        let Some(Some(view)) = self.loaded.steps.get(named) else {
             return self.component_error(c, &format!("the plan has no step {step}"));
         };
         let mut caption = view.caption();
@@ -1046,14 +1185,19 @@ impl Draw<'_> {
         self.out.push_str("</div>");
     }
     fn output(&mut self, c: &Component) {
-        let (step, field) = (c.str_arg(0).unwrap_or(""), c.str_arg(1).unwrap_or(""));
+        let (named, field) = (c.str_arg(0).unwrap_or(""), c.str_arg(1).unwrap_or(""));
+        let step = match self.loaded.step(named) {
+            Ok(step) => step,
+            Err(why) => return self.component_error(c, &why),
+        };
+        let step = step.as_str();
         if !self.loaded.known.contains(step) {
             return self.component_error(c, &format!("the plan has no step {step}"));
         }
         let value = self
             .loaded
             .outputs
-            .get(&(step.to_owned(), field.to_owned()))
+            .get(&(named.to_owned(), field.to_owned()))
             .cloned()
             .flatten();
         let progress = value.as_ref().and_then(|v| v.progress.clone());
@@ -1089,37 +1233,79 @@ impl Draw<'_> {
             esc(field)
         );
     }
-    /// The slot's markdown with when it last changed, else the fallback (or "Not set yet."),
-    /// muted.
-    fn slot(&mut self, c: &Component) {
-        let key = c.str_arg(0).unwrap_or("");
-        let _ = write!(self.out, "<div class=\"board-slot\" data-slot=\"{}\">", esc(key));
-        match self.loaded.slots.get(key) {
-            Some(slot) => {
-                self.out.push_str(&markdown(&slot.markdown, ""));
-                let _ = write!(
-                    self.out,
-                    "<p class=\"meta board-fresh\">Updated {}</p>",
-                    ago(&slot.at)
-                );
+    /// The board's document as markdown, with when and by whom it was last edited; until it
+    /// says something, the fallback (or "Not written yet."), muted.
+    fn doc(&mut self, c: &Component) {
+        self.out.push_str("<div class=\"board-doc\">");
+        match self.loaded.doc.as_ref().filter(|d| !d.markdown.trim().is_empty()) {
+            Some(doc) => {
+                self.out.push_str(&markdown(&doc.markdown, "", self.depth + 1));
+                if let Some(at) = &doc.at {
+                    // the board's one "when": the head leaves it to this line
+                    let by = doc
+                        .author
+                        .as_deref()
+                        .filter(|a| !a.is_empty())
+                        .map(|a| format!(" by {}", esc(a)))
+                        .unwrap_or_default();
+                    let _ = write!(
+                        self.out,
+                        "<p class=\"meta board-fresh\">Edited {}{by}{}</p>",
+                        ago(at),
+                        if self.loaded.plan_changed {
+                            "; the plan has changed since"
+                        } else {
+                            ""
+                        }
+                    );
+                }
             }
-            None => match c.str_arg(1) {
-                Some(fallback) => self.out.push_str(&markdown(fallback, "muted")),
+            None => match c.str_arg(0) {
+                Some(fallback) => self.out.push_str(&markdown(fallback, "muted", self.depth + 1)),
                 None => self
                     .out
-                    .push_str("<p class=\"ou-text muted\">Not set yet.</p>"),
+                    .push_str("<p class=\"ou-text muted\">Not written yet.</p>"),
             },
         }
+        self.out.push_str("</div>");
+    }
+    /// A component whose data names a step the plan no longer has (Metric, Query, Chart,
+    /// LatestMessage) drawn under a warning line, since what it shows is that step's last
+    /// data; the two kept together, so a row of parts keeps each line over its own part.
+    fn warned(&mut self, c: &Component, draw: fn(&mut Self, &Component)) {
+        let mut lines = String::new();
+        for r in openui::component_refs(c) {
+            let Some(openui::RefProblem::Missing(step)) = r.problem(self.loaded) else {
+                continue;
+            };
+            let _ = write!(
+                lines,
+                "<p class=\"board-stale\" role=\"note\">{}<span>Names step <code>{}</code>, which is not in the plan; this shows its last data.</span></p>",
+                icon(Icon::TriangleAlert, 14, "bs-icon"),
+                esc(&step)
+            );
+        }
+        if lines.is_empty() {
+            return draw(self, c);
+        }
+        self.out.push_str("<div class=\"board-warned\">");
+        self.out.push_str(&lines);
+        draw(self, c);
         self.out.push_str("</div>");
     }
     /// The newest message from the sender: who and when (a link to it in its thread), and
     /// its body as markdown, cut to `chars` with a link to the whole.
     fn latest_message(&mut self, c: &Component) {
-        let from = c.str_arg(0).unwrap_or("");
+        let named = c.str_arg(0).unwrap_or("");
+        let from = match self.loaded.step(named) {
+            Ok(from) => from,
+            Err(why) => return self.component_error(c, &why),
+        };
+        let from = from.as_str();
         let chars = c
             .num_arg(1)
             .map_or(openui::DEFAULT_MESSAGE_CHARS, |n| n as usize);
-        let Some(message) = self.loaded.latest.get(from).cloned().flatten() else {
+        let Some(message) = self.loaded.latest.get(named).cloned().flatten() else {
             let _ = write!(
                 self.out,
                 "<p class=\"ou-text muted board-message\">No message from {} yet.</p>",
@@ -1139,7 +1325,7 @@ impl Draw<'_> {
             prose(from),
             esc(&href),
             ago(&message.at),
-            markdown(&body, "")
+            markdown(&body, "", self.depth + 1)
         );
         if cut {
             let _ = write!(

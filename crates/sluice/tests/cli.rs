@@ -380,7 +380,7 @@ fn a_project_through_the_tools() {
         "{}",
         String::from_utf8_lossy(&board.stderr)
     );
-    assert_eq!(stdout(&board), json!({"rev": 1}));
+    assert_eq!(stdout(&board), json!({"rev": 1, "warnings": []}));
     let read = tool(home.path(), "board_get", r#"{"project":"demo"}"#);
     assert_eq!(stdout(&read)["program"], "root = StepStatus(\"a\")");
     let missing = tool(home.path(), "board_set", r#"{"project":"demo"}"#);
@@ -396,54 +396,148 @@ fn a_project_through_the_tools() {
         "board_set",
         r#"{"project":"demo","program":null}"#,
     );
-    assert_eq!(stdout(&cleared), json!({"rev": 2}));
-    // A slot: set by flags, refused without markdown, cleared with "".
-    let slot = run(
+    assert_eq!(stdout(&cleared), json!({"rev": 2, "warnings": []}));
+    // The document needs a Doc() on the board; board_set warns for a step not in the plan.
+    let refused = tool(home.path(), "board_doc_read", r#"{"project":"demo"}"#);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused)["message"]
+            .as_str()
+            .unwrap()
+            .contains("this board's program has no Doc()"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let board = tool(
+        home.path(),
+        "board_set",
+        r#"{"project":"demo","program":"root = Stack([Doc(), StepStatus(\"b\")])"}"#,
+    );
+    assert_eq!(
+        stdout(&board),
+        json!({"rev": 3, "warnings": ["line 1: StepStatus names step `b`, which is not in the plan"]})
+    );
+    // Written from a file by flags, then read with its lines numbered.
+    let file = home.path().join("doc.md");
+    std::fs::write(&file, "## Phase\nGreen soon.\n## Asks\n- one\n- two\n").unwrap();
+    let written = run(
         home.path(),
         &[
             "tool",
-            "board_slot_set",
+            "board_doc_write",
             "--project",
             "demo",
-            "--key",
-            "phase",
-            "--markdown",
-            "Main is **green**.",
+            "--markdown-file",
+            file.to_str().unwrap(),
+            "--expected-rev",
+            "0",
+            "--reason",
+            "first words",
         ],
     );
     assert!(
-        slot.status.success(),
+        written.status.success(),
         "{}",
-        String::from_utf8_lossy(&slot.stderr)
+        String::from_utf8_lossy(&written.stderr)
     );
-    assert_eq!(stdout(&slot)["changed"], true);
-    assert!(stdout(&slot)["updated_at"].is_string());
-    let missing = tool(
+    assert_eq!(stdout(&written), json!({"rev": 1, "changed": true}));
+    let read = tool(home.path(), "board_doc_read", r#"{"project":"demo"}"#);
+    let read = stdout(&read);
+    assert_eq!(
+        read["numbered"],
+        "     1\t## Phase\n     2\tGreen soon.\n     3\t## Asks\n     4\t- one\n     5\t- two\n"
+    );
+    assert_eq!((&read["rev"], &read["author"]), (&json!(1), &json!("cli")));
+    // Several edits at once by rev-1 numbers: replace, delete, insert and append.
+    let edited = run(
         home.path(),
-        "board_slot_set",
-        r#"{"project":"demo","key":"phase"}"#,
+        &[
+            "tool",
+            "board_doc_edit",
+            "--project",
+            "demo",
+            "--expected-rev",
+            "1",
+            "--edits",
+            r###"[{"start":2,"end":2,"text":"Green: **11** red left."},{"start":4,"end":4,"text":""},{"start":3,"end":2,"text":"Lanes cut."},{"start":6,"end":5,"text":"## Figments\n- none"}]"###,
+        ],
     );
-    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        edited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edited.stderr)
+    );
+    assert_eq!(stdout(&edited), json!({"rev": 2, "changed": true}));
+    let read = stdout(&tool(
+        home.path(),
+        "board_doc_read",
+        r#"{"project":"demo"}"#,
+    ));
+    assert_eq!(
+        read["markdown"],
+        "## Phase\nGreen: **11** red left.\nLanes cut.\n## Asks\n- two\n## Figments\n- none\n"
+    );
+    // A stale rev is a conflict naming the current one, and nothing changes.
+    let stale = tool(
+        home.path(),
+        "board_doc_edit",
+        r#"{"project":"demo","expected_rev":1,"edits":[{"start":1,"end":1,"text":"x"}]}"#,
+    );
+    assert_eq!(stale.status.code(), Some(1));
+    assert_eq!(
+        (&stderr(&stale)["error"], &stderr(&stale)["current_rev"]),
+        (&json!("conflict"), &json!(2))
+    );
+    let stale = tool(
+        home.path(),
+        "board_doc_write",
+        r#"{"project":"demo","markdown":"x","expected_rev":1}"#,
+    );
+    assert_eq!(stderr(&stale)["error"], "conflict");
+    // An overlap or a range past the end is invalid, naming the edit.
+    let overlap = tool(
+        home.path(),
+        "board_doc_edit",
+        r#"{"project":"demo","expected_rev":2,"edits":[{"start":1,"end":2,"text":"x"},{"start":2,"end":3,"text":"y"}]}"#,
+    );
+    assert_eq!(stderr(&overlap)["error"], "invalid");
+    assert!(
+        stderr(&overlap)["message"]
+            .as_str()
+            .unwrap()
+            .contains("edits[1] (start 2, end 3) overlaps edits[0] (start 1, end 2)")
+    );
+    let past = tool(
+        home.path(),
+        "board_doc_edit",
+        r#"{"project":"demo","expected_rev":2,"edits":[{"start":9,"end":9,"text":"x"}]}"#,
+    );
+    assert!(
+        stderr(&past)["message"]
+            .as_str()
+            .unwrap()
+            .contains("edits[0] (start 9, end 9): start is past the end")
+    );
+    let read = stdout(&tool(
+        home.path(),
+        "board_doc_read",
+        r#"{"project":"demo"}"#,
+    ));
+    assert_eq!(read["rev"], 2, "nothing changed");
+    // The same text again changes nothing.
+    let same = tool(
+        home.path(),
+        "board_doc_write",
+        &json!({"project":"demo","markdown":read["markdown"]}).to_string(),
+    );
+    assert_eq!(stdout(&same), json!({"rev": 2, "changed": false}));
+    let missing = tool(home.path(), "board_doc_write", r#"{"project":"demo"}"#);
     assert!(
         stderr(&missing)["message"]
             .as_str()
             .unwrap()
-            .contains("to clear the slot"),
-        "{}",
-        String::from_utf8_lossy(&missing.stderr)
+            .contains("board_doc_write needs markdown")
     );
-    let bad = tool(
-        home.path(),
-        "board_slot_set",
-        r#"{"project":"demo","key":"Phase","markdown":"x"}"#,
-    );
-    assert_eq!(stderr(&bad)["error"], "invalid");
-    let cleared = tool(
-        home.path(),
-        "board_slot_set",
-        r#"{"project":"demo","key":"phase","markdown":""}"#,
-    );
-    assert_eq!(stdout(&cleared)["cleared"], true);
 }
 
 #[test]

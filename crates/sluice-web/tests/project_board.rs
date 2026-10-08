@@ -71,7 +71,7 @@ async fn every_data_component_is_filled_from_the_project_and_a_bad_query_is_an_e
     // A bad query is an inline error box naming the component and its line; the rest draws.
     let error = between(board, "<div class=\"ou-error-box\"", "</div></div>");
     assert!(
-        error.contains("Query (line 12)") && error.contains("no such table"),
+        error.contains("Query (line 13)") && error.contains("no such table"),
         "{error}"
     );
     assert!(board.contains("<button type=\"submit\" name=\"button\" value=\"0\" class=\"primary\">Retry the lane</button>"));
@@ -276,8 +276,8 @@ async fn settings_save_clear_and_preview_the_board() {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(bytes.to_vec()).unwrap();
     for text in [
-        "<h4>A</h4>",
-        "<h6>B</h6>",
+        "<h3>A</h3>",
+        "<h5>B</h5>",
         "<table>",
         "<strong>text</strong>",
         "&lt;script&gt;",
@@ -456,16 +456,18 @@ async fn the_board_head_takes_the_programs_title_and_says_when_its_words_last_ch
     let (_, html) = f.get(&path).await;
     let head = between(&html, "<div class=\"board-head\">", "</div>").to_owned();
     assert!(head.contains("; the plan has changed since.</p>"), "{head}");
-    // A slot set after the plan edit brings the board's words up to date: its time is the head's.
+    // A document edit after the plan edit brings the board's words up to date: its time is
+    // the head's.
     let slot_at = f
         .writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::board_slot_set(
+            projects::board_doc_write(
                 tx,
                 &ProjectSelector::Id(id),
-                projects::SetBoardSlot {
-                    key: "phase".into(),
-                    markdown: Some("Now **green**.".into()),
+                projects::WriteBoardDoc {
+                    markdown: "Now **green**.".into(),
+                    expected_rev: None,
+                    reason: None,
                     author: "orch".into(),
                 },
             )?;
@@ -477,13 +479,16 @@ async fn the_board_head_takes_the_programs_title_and_says_when_its_words_last_ch
         })
         .await
         .unwrap();
+    // The written document's own line is then the board's one time: the head leaves it out.
     let (_, html) = f.get(&path).await;
     let head = between(&html, "<div class=\"board-head\">", "</div>").to_owned();
+    assert!(!head.contains("Updated"), "{head}");
+    let doc = between(&html, "<div class=\"board-doc\">", "</div></div>");
     assert!(
-        head.contains(&format!("datetime=\"{slot_at}\"")),
-        "{slot_at} {head}"
+        doc.contains(&format!("Edited <time data-ago datetime=\"{slot_at}\"")),
+        "{slot_at} {doc}"
     );
-    assert!(!head.contains("the plan has changed since"), "{head}");
+    assert!(!doc.contains("the plan has changed since"), "{doc}");
     // A program without a title of its own: "Board", which the narrow switch already names.
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
@@ -508,6 +513,8 @@ async fn the_board_head_takes_the_programs_title_and_says_when_its_words_last_ch
         "{head}"
     );
     assert!(!head.contains("the plan has changed since"), "{head}");
+    // Under the column's h2, without a title of its own: a level-2 Heading is h4, under the
+    // h3 a level-1 would be; with a title, h3.
     assert!(html.contains("class=\"ou-h\">Two</h4>"), "{html}");
 }
 

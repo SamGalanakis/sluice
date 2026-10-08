@@ -30,7 +30,7 @@ pub enum Retirement {
     /// blocked registry): no edit, and no retry before the project's next turn.
     Skipped(PublicError),
     /// One plan edit removed these units.
-    Retired(PruneResult),
+    Retired(Box<PruneResult>),
 }
 
 /// What a round would remove, read in one snapshot at `rev`.
@@ -107,7 +107,9 @@ pub async fn apply<H: ExecutionHost>(broker: &Coordinator<H>, candidate: Candida
         },
     });
     match broker.command(request).await {
-        Ok(CommandReply::Pruned(result)) if !result.units.is_empty() => Retirement::Retired(result),
+        Ok(CommandReply::Pruned(result)) if !result.units.is_empty() => {
+            Retirement::Retired(Box::new(result))
+        }
         Ok(_) => Retirement::Nothing,
         Err(error) => Retirement::Skipped(error),
     }

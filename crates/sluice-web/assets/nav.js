@@ -93,15 +93,30 @@ function duration(seconds) {
   const minutes = Math.floor(Math.max(0, seconds) / 60);
   return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
 }
+function agoText(seconds) {  // sluice.js's ago()
+  for (const [unit, size] of [["d", 86400], ["h", 3600], ["m", 60]]) {
+    if (seconds >= size) return `${Math.floor(seconds / size)}${unit} ago`;
+  }
+  return "just now";
+}
 function tick() {
   for (const element of document.querySelectorAll("[data-started]")) {
     const time = Date.parse(element.dataset.started);
     if (Number.isFinite(time)) element.textContent = duration((Date.now() - time) / 1000);
   }
-  // a step's own times (`data-since`, `data-ago`) are sluice.js's: a running time is a duration
+  // a step's own times (`data-since`) are sluice.js's: a running time is a duration
   for (const element of document.querySelectorAll("time[datetime]:not([data-since], [data-ago])")) {
     const time = Date.parse(element.dateTime);
     if (Number.isFinite(time)) element.textContent = `${duration((Date.now() - time) / 1000)} ago`;
+  }
+  // "2m ago" as sluice.js says it, on every page (settings has no sluice.js), so a board's
+  // times read alike everywhere and from the first paint
+  for (const element of document.querySelectorAll("time[data-ago]")) {
+    const time = Date.parse(element.dateTime);
+    if (Number.isFinite(time)) {
+      const text = agoText((Date.now() - time) / 1000);
+      if (element.textContent !== text) element.textContent = text;
+    }
   }
   let quiet = 0;
   for (const element of document.querySelectorAll("[data-quiet-since]")) {

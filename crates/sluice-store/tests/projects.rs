@@ -153,6 +153,7 @@ async fn set_board(
             projects::board_set(tx, &selector(id), request)
         })
         .await
+        .map(|outcome| outcome.rev)
 }
 
 #[tokio::test]
@@ -273,28 +274,29 @@ async fn a_home_marked_with_the_interim_board_schema_is_marked_one_again() {
     );
 }
 
-async fn set_slot(
+async fn write_doc(
     writer: &Writer,
     id: ProjectId,
-    key: &str,
-    markdown: Option<&str>,
-) -> Result<projects::SlotChange, PublicError> {
-    let request = projects::SetBoardSlot {
-        key: key.into(),
-        markdown: markdown.map(Into::into),
+    markdown: &str,
+) -> Result<projects::DocChange, PublicError> {
+    let request = projects::WriteBoardDoc {
+        markdown: markdown.into(),
+        expected_rev: None,
+        reason: None,
         author: "orch".into(),
     };
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::board_slot_set(tx, &selector(id), request)
+            projects::board_doc_write(tx, &selector(id), request)
         })
         .await
 }
 
-/// Slots are a column and a view added to an existing home, never a table: every pinned
-/// release counts the home's tables and refuses a 24th.
+/// The board's document is columns added to an existing home, never a table: every pinned
+/// release counts the home's tables and refuses a 24th. The retired slots' column and view
+/// stay for the releases that still read them.
 #[tokio::test]
-async fn a_home_from_before_slots_gains_them_when_its_writer_opens() {
+async fn a_home_from_before_the_document_gains_its_columns_when_its_writer_opens() {
     let home = ScratchHome::new().unwrap();
     let id = {
         let writer = Writer::open(home.path()).unwrap();
@@ -304,15 +306,22 @@ async fn a_home_from_before_slots_gains_them_when_its_writer_opens() {
     };
     {
         let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
-        c.execute_batch("DROP VIEW board_slots; ALTER TABLE projects DROP COLUMN board_slots;")
-            .unwrap();
+        c.execute_batch(
+            "ALTER TABLE projects DROP COLUMN board_doc; ALTER TABLE projects DROP COLUMN board_doc_rev;
+             ALTER TABLE projects DROP COLUMN board_doc_at; ALTER TABLE projects DROP COLUMN board_doc_author;",
+        )
+        .unwrap();
     }
     assert!(matches!(
         ReadPool::open(home.path(), 1).map(|_| ()),
         Err(StoreError::InvalidDatabase(_))
     ));
     let writer = Writer::open(home.path()).unwrap();
-    set_slot(&writer, id, "phase", Some("hello")).await.unwrap();
+    set_board(&writer, id, Some("root = Doc()"), Some(0))
+        .await
+        .unwrap();
+    let change = write_doc(&writer, id, "## Phase\nGreen.").await.unwrap();
+    assert_eq!((change.rev, change.changed), (Revision(1), true));
     let c = rusqlite::Connection::open(home.path().join("sluice.db")).unwrap();
     let tables: i64 = c
         .query_row(
@@ -322,14 +331,18 @@ async fn a_home_from_before_slots_gains_them_when_its_writer_opens() {
         )
         .unwrap();
     assert_eq!(tables, 23);
-    let row: (String, String, String) = c
+    let row: (String, i64, String) = c
         .query_row(
-            "SELECT project_id, key, markdown FROM board_slots",
+            "SELECT board_doc, board_doc_rev, board_doc_author FROM projects",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
-    assert_eq!(row, (id.to_string(), "phase".into(), "hello".into()));
+    assert_eq!(row, ("## Phase\nGreen.".into(), 1, "orch".into()));
+    let slots: i64 = c
+        .query_row("SELECT count(*) FROM board_slots", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(slots, 0, "the retired view still reads");
 }
 
 #[tokio::test]

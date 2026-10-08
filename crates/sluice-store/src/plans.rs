@@ -870,6 +870,7 @@ pub fn commit_effect(tx: &mut WriteTransaction<'_>, effect: EditEffect) -> Resul
             rev: effect.revision,
             preview: effect.preview,
             steps: effect.steps,
+            board_warnings: vec![],
         });
     };
     for id in &commit.removed {
@@ -907,6 +908,7 @@ pub fn commit_effect(tx: &mut WriteTransaction<'_>, effect: EditEffect) -> Resul
         rev: commit.revision,
         preview: effect.preview,
         steps: effect.steps,
+        board_warnings: vec![],
     })
 }
 

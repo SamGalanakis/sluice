@@ -133,19 +133,50 @@ pub struct BoardSet {
     pub author: Option<String>,
 }
 
-/// `board_slot_set`: set one named text slot of the project's board (markdown a board's
-/// `Slot(key)` draws), or clear it with an empty or null `markdown`. No revision: each slot is
-/// its own value, so an orchestrator updates one per event without reading the board first.
+/// `board_doc_read`: the board's document, the hand-written part a board's `Doc()` draws.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct BoardSlotSet {
+pub struct BoardDocRead {
     pub project: ProjectSelector,
-    /// The slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.
-    pub key: String,
-    /// The slot's markdown (at most 16 KiB); "" or null clears the slot.
-    #[schemars(required, extend("type" = ["string", "null"]))]
-    pub markdown: Option<String>,
+}
+
+/// `board_doc_write`: replace the board's whole document. With `expected_rev`, a document
+/// at another revision is a conflict and nothing changes; the same text again changes nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardDocWrite {
+    pub project: ProjectSelector,
+    /// The whole document, as markdown (at most 64 KiB).
+    pub markdown: String,
+    /// The document's revision you read (board_doc_read); refused if it has changed since.
+    pub expected_rev: Option<Revision>,
+    pub reason: Option<String>,
     pub author: Option<String>,
+}
+
+/// `board_doc_edit`: replace line ranges of the board's document at `expected_rev`, all of
+/// them or none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardDocEdit {
+    pub project: ProjectSelector,
+    /// The document's revision the line numbers come from (board_doc_read); refused if it
+    /// has changed since.
+    pub expected_rev: Revision,
+    /// The edits, by line numbers of that revision; none may overlap another.
+    pub edits: Vec<DocEdit>,
+    pub reason: Option<String>,
+    pub author: Option<String>,
+}
+/// One edit of the board's document: lines `start` to `end` (1-based, inclusive) become
+/// `text`. `end = start - 1` inserts before `start`; `start = lines + 1` appends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DocEdit {
+    pub start: u64,
+    pub end: u64,
+    /// The new lines (several, or "" to delete the range).
+    pub text: String,
 }
 
 /// A project's board as `board_get` reads it: no program while none is set.
@@ -741,6 +772,10 @@ pub struct EditResult {
     /// `step_pause`'s selection (subtree included), `plan_prune`'s removed steps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<Vec<StepId>>,
+    /// Each step the project's board names that this edit took out of the plan, such as
+    /// "line 4: Metric names step `x`, which is not in the plan". The edit is made all the same.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub board_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1004,10 +1039,12 @@ pub enum CommandRequest {
     ProjectUpdate(ProjectUpdate),
     ProjectDelete(ProjectDelete),
     BoardSet(BoardSet),
-    BoardSlotSet(BoardSlotSet),
     BoardGet {
         project: ProjectSelector,
     },
+    BoardDocRead(BoardDocRead),
+    BoardDocWrite(BoardDocWrite),
+    BoardDocEdit(BoardDocEdit),
     PlanPatch(PlanPatch),
     StepAdd(StepAdd),
     UnitAdd(UnitAdd),
@@ -1143,7 +1180,8 @@ pub enum CommandReply {
         id: MessageId,
     },
     Receipt(MessageReceipt),
-    /// `board_set`'s reply: the board's new revision.
+    /// `board_set`'s reply before it carried warnings (it is now `Data` `{rev, warnings}`),
+    /// kept so a reply cached by an older release still decodes.
     BoardRev {
         rev: Revision,
     },

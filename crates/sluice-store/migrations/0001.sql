@@ -26,6 +26,9 @@ CREATE TABLE projects (
   board TEXT,
   board_rev INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0),
   board_slots TEXT,
+  board_doc TEXT,
+  board_doc_rev INTEGER NOT NULL DEFAULT 0 CHECK (board_doc_rev >= 0),
+  board_doc_at TEXT, board_doc_author TEXT,
   -- Automatic retiring of done units (SPEC §6.11): the age in seconds, off when null, and
   -- the unit-name patterns it never removes, a JSON array of strings.
   prune_done_after INTEGER CHECK (prune_done_after IS NULL OR prune_done_after > 0),

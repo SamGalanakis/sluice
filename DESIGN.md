@@ -499,12 +499,17 @@ project's live data. It is the owner's instrument for that project, never a seco
 - **Wide (1280px and up):** the page spans the window (see the One Column Rule): the plan, a
   splitter, and the board as a right-hand column (`board-pane`) top-aligned with the summary
   line: the card colour with a hairline and the 14px corner, 14 by 16px padding, sticky 16px
-  from the top and at most the window's height, scrolling on its own. Its head (section voice,
+  from the top and at most the window's height, scrolling on its own: while more of it lies
+  past an edge, a soft 12px shade (ink at 12-14%) sits along that edge inside the box, gone at
+  its ends, so a board cut off mid-chart says it scrolls. Its head (section voice,
   `heading-accent`, Lucide `layout-dashboard`) is the program's own title when a level-1
   Heading leads it (drawn there once, not again under it), else "Board"; under it in meta,
   "Updated 2h ago" (the last change to its words: the program's `project.board` record or a
-  slot's `project.update`; the time in UTC without script), and "; the plan has changed since"
-  when a plan edit came after it, since the
+  document edit's `project.update`; the time in UTC without script), and "; the plan has changed since"
+  when a plan edit came after it. A board that draws a written document says it once, on the
+  document's own "Edited … by …" line, and the head leaves it out; every such time reads "2m
+  ago" on every page with script, the same at every width. The "plan has changed" note goes
+  where the time is, since the
   board's own words may then be behind while its live parts are not. Its width is
   `clamp(400px, 36%, 1040px)` until the splitter sets one (about 495px at 1440, 864px at
   2560), so its Units table keeps a lane's marks on one line beside the unit and its state. A small segmented control,
@@ -536,7 +541,10 @@ project's live data. It is the owner's instrument for that project, never a seco
 - **No board:** nothing at all: no column, no switch; the plan keeps the whole column.
 - **Its parts** keep the question forms' look (`ou-*`): headings in Archivo, text at 15/22,
   callouts, tables at 13px with hairline rows; a word with a hyphen inside it (a step or
-  unit id, `FIG-5004`) never breaks, so a narrow board breaks between ids. The board pane is a
+  unit id, `FIG-5004`) never breaks, in markdown too, so a narrow board breaks between ids.
+  Headings nest under the column's h2 without skipping a level: a titled board's level-2
+  Heading is an h3 (an untitled one's level 1 is), and markdown's headings start one level
+  under the heading drawn last; a level-1 Heading is 17/23, the others 15/21. The board pane is a
   size container named `board`. Units is a table of unit (a link), state (the status glyph and
   word, then its age in meta), the steps' marks in data mono (on one line; the table scrolls
   sideways in its own wrap before a lane breaks) and what it waits on in muted ink (breaking
@@ -553,17 +561,28 @@ project's live data. It is the owner's instrument for that project, never a seco
   final never passes for one. Metric is a number in Archivo
   800 at 28/34 over its label, on the box tone; metrics in a row share it. Chart is an inline
   SVG at most 520px wide: bars and the line in the accent, labels in ink and values in muted
-  ink at 12px, its caption in meta under it. Slot, Markdown and LatestMessage are markdown at
+  ink at 12px, its caption in meta under it. Doc, Markdown and LatestMessage are markdown at
   the text's 15/22 and 72ch measure, drawn as message bodies draw (escaped, unsafe links
-  dropped): a Slot has "Updated 3m ago" in meta under its text (the time a `data-ago`, UTC
-  without script), so the owner sees how fresh it is without the board saying it in words; an
-  unset slot is its fallback in muted ink, or "Not set yet."; LatestMessage leads with a meta
+  dropped). Doc is the board's document, the hand-written part that reads as one piece of
+  prose: its first rank of headings in the board's heading voice (Archivo 750 at 17/23), the
+  next at 15/21 and any under that at 14/20 in muted ink, 18px above a heading and 4px under
+  it; quotes a 1px strong
+  hairline at the left in muted ink; under it "Edited 12m ago by orchestrator" in meta (the time
+  a `data-ago`, UTC without script; "; the plan has changed since" when a plan edit came
+  after it), the board's one time, so the owner sees how fresh it is and who wrote it without
+  the board saying so twice; before it says anything, its fallback in muted ink, or "Not
+  written yet.". A Metric, Query, Chart or LatestMessage whose step is no longer in the plan
+  keeps drawing what it has, under one line in the attention gold at 13/18: Lucide
+  `triangle-alert` at 14px, then "Names step `x`, which is not in the plan; this shows its last
+  data.", the id in data mono in ink, so a frozen value never passes for a live one.
+  LatestMessage leads with a meta
   line, the sender in ink at 600 and its time as a link to the message in its thread, then the
   body, and when it is cut, an ellipsis and "The whole message" in meta under it. Buttons are the dashboard's buttons; what a press
   did (or why it was refused) is a status line under the board.
-- **A part that cannot be drawn** is a small box in its place: the muted fill, a strong
-  hairline, a 3px left rule in the attention gold and Lucide `triangle-alert` in gold; the
-  component and line in 600, the reason in data mono. Never coral, never red.
+- **A part that cannot be drawn** is a small box in its place: the muted fill, a hairline of
+  the attention gold at 45% all round and the 10px corner, Lucide `triangle-alert` in gold;
+  the component and line in 600, the reason in data mono. Never coral, never red, never a
+  side tab.
 
 ### Step (`/projects/id/<p>/steps/<s>`, and the drawer)
 On the board, opening a card with script loads the step into a right-hand drawer (beside the
@@ -637,10 +656,11 @@ the project id), Description (with a Preview), Icon (a text icon up to 16 charac
 image up to 256 KiB). Resources: a line per resource (static capacity or capacity fn, in use,
 waiting, the step queue) and a capacity field each, then a new resource's name and capacity.
 Board: the program in a monospace textarea (with its rev), Save board and Clear board, and under
-them a live preview, drawn as the board column would draw it (its width), as one types; then
-Slots (a 15px heading): a line per slot, by key, as the resources are listed (its key in code,
-"updated <time>" and by whom, its text on one line in muted 13px under it), read-only, or "No
-slots set.". Retiring: a help line, then a status line (an "On" tag and "Done units retire 6 h
+them a live preview, drawn as the board column would draw it (its width), as one types (a save's
+warnings, each "Warning: line N: …", follow "Saved (rev N)" in its status); then Document (a 15px
+heading): a help line, a status line ("Rev 3 · edited <time> by orch", or "Not written yet.",
+and "The program has no `Doc()`, so the board does not show it." when it has none), and the
+document read-only, drawn as markdown in the preview's box at the 72ch measure. Retiring: a help line, then a status line (an "On" tag and "Done units retire 6 h
 after their last step finished", with how many keep patterns, or a muted "Off" tag and "Done
 units stay until an edit removes them", then "Last retired <time>: N steps (rev R)" or "Nothing
 retired yet."), then two rows: "Retire done units after", a 9rem field (placeholder "Off") with

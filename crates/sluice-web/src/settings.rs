@@ -41,12 +41,12 @@ pub trait SettingsCommands: Send + Sync {
         id: ProjectId,
         request: projects::DeleteProject,
     ) -> BoxFuture<'_, Result<(), PublicError>>;
-    /// Set or clear the project's board (`board_set`); returns its revision.
+    /// Set or clear the project's board (`board_set`); returns its revision and warnings.
     fn board(
         &self,
         id: ProjectId,
         request: projects::SetBoard,
-    ) -> BoxFuture<'_, Result<Revision, PublicError>>;
+    ) -> BoxFuture<'_, Result<projects::BoardSetOutcome, PublicError>>;
 }
 #[derive(Clone)]
 pub struct StoreCommands {
@@ -93,7 +93,7 @@ impl SettingsCommands for StoreCommands {
         &self,
         id: ProjectId,
         request: projects::SetBoard,
-    ) -> BoxFuture<'_, Result<Revision, PublicError>> {
+    ) -> BoxFuture<'_, Result<projects::BoardSetOutcome, PublicError>> {
         Box::pin(async move {
             self.writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
@@ -184,13 +184,13 @@ impl SettingsState {
                         error: r.error.map(|e| e.to_string()).unwrap_or_default(),
                     })
                     .collect();
-                let slots = projects::board_slots(c, id)?;
+                let doc = projects::board_doc(c, id)?;
                 let retired = projects::last_retirement(c, id)?;
                 Ok(ProjectSettingsView {
                     shared,
                     project,
                     resources: rows,
-                    slots,
+                    doc,
                     retired,
                     blocker,
                 })
@@ -242,8 +242,8 @@ pub struct ProjectSettingsView {
     pub shared: DashboardSnapshot,
     pub project: Project,
     pub resources: Vec<ResourceView>,
-    /// The board's slots (`board_slot_set`), by key: listed under the program, read-only.
-    pub slots: Vec<projects::BoardSlot>,
+    /// The board's document (`board_doc_write`): shown under the program, read-only.
+    pub doc: projects::BoardDoc,
     /// The latest automatic retirement (SPEC §6.11), when there has been one.
     pub retired: Option<projects::Retirement>,
     pub blocker: Option<String>,
@@ -257,20 +257,17 @@ impl ProjectSettingsView {
     pub fn retire_keep(&self) -> String {
         self.project.prune_keep.join(", ")
     }
-    /// A slot's markdown as one line of plain text, cut short, for the Board section's list.
-    pub fn slot_preview(slot: &projects::BoardSlot) -> String {
-        let line = slot
-            .markdown
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if line.chars().count() > 140 {
-            let mut out: String = line.chars().take(139).collect();
-            out.push('…');
-            out
-        } else {
-            line
-        }
+    /// The board's document drawn as the board draws it.
+    pub fn doc_html(&self) -> TrustedHtml {
+        markdown::render(&self.doc.markdown)
+    }
+    /// Whether the board's program draws the document (has a `Doc()`).
+    pub fn doc_drawn(&self) -> bool {
+        self.project
+            .board
+            .as_deref()
+            .and_then(|p| sluice_model::openui::check_board(p).ok())
+            .is_some_and(|b| b.has_doc())
     }
     /// The UTC day and minute of a stored time, as the page shows it without script.
     pub fn minute(at: &str) -> String {
@@ -286,7 +283,7 @@ impl ProjectSettingsView {
         sluice_store::artifacts::fingerprint(&serde_json::to_vec(&serde_json::json!({
             "shared":self.shared,"revision":self.project.settings_rev,"resources":self.resources,"blocker":self.blocker,
             "retired":self.retired.as_ref().map(|r| r.rev),
-            "slots":self.slots.iter().map(|s| [&s.key, &s.at]).collect::<Vec<_>>()
+            "doc":self.doc.rev
         })).expect("owned views serialize"))
     }
     pub fn render(&self, viewer: &Viewer, feedback: &Feedback) -> Result<TrustedHtml, PublicError> {
@@ -332,7 +329,7 @@ impl ProjectSettingsView {
         let regions = [
             "settings-live",
             "resource-status",
-            "board-slots",
+            "board-doc",
             "retire-status",
             "delete-guard",
         ]
@@ -672,8 +669,11 @@ async fn board_change(
         resource: String::new(),
         saved: result.is_ok(),
         message: match &result {
-            Ok(rev) if clear => format!("Cleared (rev {rev})"),
-            Ok(rev) => format!("Saved (rev {rev})"),
+            Ok(outcome) if clear => format!("Cleared (rev {})", outcome.rev),
+            Ok(outcome) => std::iter::once(format!("Saved (rev {})", outcome.rev))
+                .chain(outcome.warnings.iter().map(|w| format!("Warning: {w}")))
+                .collect::<Vec<_>>()
+                .join("\n"),
             Err(PublicError::Invalid { message, errors }) => std::iter::once(message.clone())
                 .chain(errors.iter().cloned())
                 .collect::<Vec<_>>()

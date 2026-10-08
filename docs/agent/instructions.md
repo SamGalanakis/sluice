@@ -55,8 +55,11 @@ question with `reply(project, to_message=<its id>, body=...)`; a note (`say`) ne
 
 To give the owner a live view of a project (a lane overview, a few numbers, a chart, a button
 that asks you for something), set its board: `board_set(project, program)`, drawn beside the
-plan on the dashboard; then keep its words current with `board_slot_set(project, key,
-markdown)`, one call per event, for each `Slot(key)` it draws; see `docs("board")`.
+plan on the dashboard, with a `Doc()` where its document goes. The document is the board's
+hand-written part, plain prose for the owner: write it with `board_doc_write`, and whenever
+anything it says changes, read it (`board_doc_read`) and edit the lines that changed
+(`board_doc_edit`) or rewrite it. Name steps on the board as `tag:<tag>` so a rename changes
+nothing, and act on the `warnings` board_set and plan edits return; see `docs("board")`.
 
 Tool arguments are forgiving: an unknown tool or argument names the nearest valid ones, and an
 integer argument (a message id, a seq, a limit) may be given as a string of digits. From a

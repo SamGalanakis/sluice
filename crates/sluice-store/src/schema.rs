@@ -25,7 +25,18 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
         "board_rev",
         "INTEGER NOT NULL DEFAULT 0 CHECK (board_rev >= 0)",
     ),
+    // Retired (the board's document replaced its slots); kept for pinned older releases.
     ("projects", "board_slots", "TEXT"),
+    // The board's document (`board_doc_write`, `board_doc_edit`): its markdown, revision and
+    // last edit.
+    ("projects", "board_doc", "TEXT"),
+    (
+        "projects",
+        "board_doc_rev",
+        "INTEGER NOT NULL DEFAULT 0 CHECK (board_doc_rev >= 0)",
+    ),
+    ("projects", "board_doc_at", "TEXT"),
+    ("projects", "board_doc_author", "TEXT"),
     // A running step's latest values (`step_progress`), kept until its next run starts.
     (
         "steps",
@@ -48,7 +59,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
 ];
 /// Views added after homes existed, as `(name, definition)`: the writer creates the missing
 /// ones with the columns. A view is no table, so a release that counts the home's tables
-/// (every pinned one does) reads a home that has it.
+/// (every pinned one does) reads a home that has it. `board_slots` is retired with the slots
+/// but kept: a pinned older release may read it.
 const ADDED_VIEWS: &[(&str, &str)] = &[(
     "board_slots",
     "CREATE VIEW board_slots AS SELECT p.project_id AS project_id, s.key AS key,

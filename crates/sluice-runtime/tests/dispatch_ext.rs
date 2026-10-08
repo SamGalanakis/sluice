@@ -936,14 +936,20 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
         (
             "BoardSet",
             "board_set",
-            json!({"program":"root = Units()","expected_rev":null,"reason":null,"author":"test"}),
-        ),
-        (
-            "BoardSlotSet",
-            "board_slot_set",
-            json!({"key":"phase","markdown":"Main is **green**.","author":"test"}),
+            json!({"program":"root = Stack([Units(), Doc()])","expected_rev":null,"reason":null,"author":"test"}),
         ),
         ("BoardGet", "board_get", json!({})),
+        (
+            "BoardDocWrite",
+            "board_doc_write",
+            json!({"markdown":"## Phase\nMain is **green**.","author":"test"}),
+        ),
+        (
+            "BoardDocEdit",
+            "board_doc_edit",
+            json!({"expected_rev":1,"edits":[{"start":2,"end":2,"text":"Main is red."}],"author":"test"}),
+        ),
+        ("BoardDocRead", "board_doc_read", json!({})),
         (
             "PlanPatch",
             "plan_patch",
@@ -1140,8 +1146,10 @@ async fn every_command_variant_dispatches_through_a_real_socket() {
             "ProjectUpdate"
                 | "ProjectDelete"
                 | "BoardSet"
-                | "BoardSlotSet"
                 | "BoardGet"
+                | "BoardDocRead"
+                | "BoardDocWrite"
+                | "BoardDocEdit"
                 | "PlanPatch"
                 | "StepAdd"
                 | "UnitAdd"

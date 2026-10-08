@@ -138,6 +138,13 @@ impl Fixture {
         let text = result["content"][0]["text"].as_str().unwrap();
         serde_json::from_str(text).unwrap_or_else(|_| json!(text))
     }
+    /// The tool's raw MCP result, an error included.
+    async fn result(&self, name: &str, args: Value) -> Value {
+        let Value::Object(args) = args else {
+            panic!("args")
+        };
+        serde_json::to_value(self.mcp.call(name, args, Some("test")).await).unwrap()
+    }
     /// Calls the tool and checks the keys its description says it returns.
     async fn check(&self, name: &str, args: Value) -> Value {
         let tool = tools()
@@ -219,20 +226,23 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     let board = f
         .check(
             "board_set",
-            json!({"project":"p","program":"root = Units()","expected_rev":0,"reason":"lanes"}),
+            json!({"project":"p","program":"root = Stack([Units(), Doc()])","expected_rev":0,"reason":"lanes"}),
         )
         .await;
     assert_eq!(board["rev"], 1);
-    let slot = f
+    let written = f
         .check(
-            "board_slot_set",
-            json!({"project":"p","key":"phase","markdown":"Main is **green**."}),
+            "board_doc_write",
+            json!({"project":"p","markdown":"## Phase\nMain is **green**.","expected_rev":0}),
         )
         .await;
-    assert_eq!(
-        (slot["changed"].clone(), slot["cleared"].clone()),
-        (json!(true), json!(false))
-    );
+    assert_eq!(written, json!({"rev": 1, "changed": true}));
+    f.check(
+        "board_doc_edit",
+        json!({"project":"p","expected_rev":1,"edits":[{"start":3,"end":2,"text":"- lanes: 11"}]}),
+    )
+    .await;
+    f.check("board_doc_read", json!({"project":"p"})).await;
     f.check("board_get", json!({"project":"p"})).await;
     f.check(
         "step_add",
@@ -336,5 +346,181 @@ async fn tool_descriptions_name_the_keys_their_replies_have() {
     f.check("verify", json!({})).await;
     f.check("drain", json!({"projects":"p"})).await;
     f.check("release", json!({})).await;
+    f.close().await;
+}
+
+/// The board's document through MCP on a live coordinator: refused until the board has a
+/// Doc(); written, read with numbered lines and edited by several line edits at once; a
+/// stale rev or an overlap refused with nothing changed; each change one project.update
+/// record with its author. A program that still draws a Slot is told what replaced it, and a
+/// plan edit that takes a step the board names says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_board_document_through_mcp() {
+    let f = Fixture::new().await;
+    f.call(
+        "project_create",
+        json!({"name":"p","description":"","resources":{}}),
+    )
+    .await;
+    let refused = f.result("board_doc_read", json!({"project":"p"})).await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused
+            .to_string()
+            .contains("this board's program has no Doc()"),
+        "{refused}"
+    );
+    let slot = f
+        .result(
+            "board_set",
+            json!({"project":"p","program":"root = Stack([a])\na = Slot(\"phase\")"}),
+        )
+        .await;
+    assert!(
+        slot.to_string().contains("line 2: Slot was replaced by Doc: put the slots' text in the board's document (board_doc_write) and a Doc() where they were"),
+        "{slot}"
+    );
+    f.call(
+        "plan_patch",
+        json!({"project":"p","rev":1,"reason":"plan","ops":[{"op":"add","path":"/steps/tests-main",
+            "value":{"run":"fixture.echo","paused":true,"in":{"value":{"default":1}}}}]}),
+    )
+    .await;
+    let set = f
+        .call(
+            "board_set",
+            json!({"project":"p","program":"root = Stack([doc, red])\ndoc = Doc()\nred = Metric(\"Red\", \"SELECT count(*) FROM steps WHERE project_id = ? AND step_id = 'tests-main'\")"}),
+        )
+        .await;
+    assert_eq!(set, json!({"rev": 1, "warnings": []}));
+    let empty = f.call("board_doc_read", json!({"project":"p"})).await;
+    assert_eq!(
+        empty,
+        json!({"rev":0,"updated_at":null,"author":null,"markdown":"","numbered":""})
+    );
+    let written = f
+        .call(
+            "board_doc_write",
+            json!({"project":"p","markdown":"## Phase\nGreen soon.\n## Asks\n- one\n- two\n","reason":"first words","author":"orchestrator"}),
+        )
+        .await;
+    assert_eq!(written, json!({"rev": 1, "changed": true}));
+    let read = f.call("board_doc_read", json!({"project":"p"})).await;
+    assert_eq!(
+        read["numbered"],
+        "     1\t## Phase\n     2\tGreen soon.\n     3\t## Asks\n     4\t- one\n     5\t- two\n"
+    );
+    assert_eq!(read["author"], "orchestrator");
+    assert!(read["updated_at"].is_string(), "{read}");
+    let edited = f
+        .call(
+            "board_doc_edit",
+            json!({"project":"p","expected_rev":1,"reason":"lanes moved","author":"lane-7","edits":[
+                {"start":2,"end":2,"text":"Green: **11** red left.\nLanes cut."},
+                {"start":4,"end":4,"text":""},
+                {"start":1,"end":0,"text":"# Release"},
+                {"start":6,"end":5,"text":"## Figments\n- none"}]}),
+        )
+        .await;
+    assert_eq!(edited, json!({"rev": 2, "changed": true}));
+    let after = "# Release\n## Phase\nGreen: **11** red left.\nLanes cut.\n## Asks\n- two\n## Figments\n- none\n";
+    assert_eq!(
+        f.call("board_doc_read", json!({"project":"p"})).await["markdown"],
+        after
+    );
+    // A stale rev, an overlap and a range past the end are refused; nothing changes.
+    for (edits, rev, says) in [
+        (json!([{"start":1,"end":1,"text":"x"}]), 1, "\"conflict\""),
+        (
+            json!([{"start":1,"end":2,"text":"x"},{"start":2,"end":2,"text":"y"}]),
+            2,
+            "edits[1] (start 2, end 2) overlaps edits[0] (start 1, end 2)",
+        ),
+        (
+            json!([{"start":2,"end":12,"text":"x"}]),
+            2,
+            "end is past the last line (8)",
+        ),
+    ] {
+        let refused = f
+            .result(
+                "board_doc_edit",
+                json!({"project":"p","expected_rev":rev,"edits":edits}),
+            )
+            .await;
+        assert_eq!(refused["isError"], true, "{refused}");
+        assert!(refused.to_string().contains(says), "{says}: {refused}");
+    }
+    let stale = f
+        .result(
+            "board_doc_write",
+            json!({"project":"p","markdown":"x","expected_rev":1}),
+        )
+        .await;
+    assert!(stale.to_string().contains("\"current_rev\":2"), "{stale}");
+    let read = f.call("board_doc_read", json!({"project":"p"})).await;
+    assert_eq!(
+        (&read["rev"], &read["markdown"]),
+        (&json!(2), &json!(after))
+    );
+    // One project.update record per change, with its author and reason.
+    let log = f
+        .call(
+            "log_read",
+            json!({"project":"p","kinds":["project.update"]}),
+        )
+        .await;
+    let updates: Vec<(Value, Value, Value)> = log["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["fields"].clone(),
+                r["author"].clone(),
+                r["reason"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        updates,
+        [
+            (
+                json!(["board_doc"]),
+                json!("orchestrator"),
+                json!("first words")
+            ),
+            (json!(["board_doc"]), json!("lane-7"), json!("lanes moved")),
+        ]
+    );
+    // The board's own rev did not move: a button pressed on it stays valid.
+    assert_eq!(f.call("board_get", json!({"project":"p"})).await["rev"], 1);
+    // Removing the step the Metric names is made, and says so.
+    let removed = f
+        .call(
+            "step_remove",
+            json!({"project":"p","steps":"tests-main","reason":"renamed"}),
+        )
+        .await;
+    assert_eq!(
+        removed["board_warnings"],
+        json!(["line 3: Metric names step `tests-main`, which is not in the plan"])
+    );
+    // A board without a Doc() refuses the document tools.
+    f.call(
+        "board_set",
+        json!({"project":"p","program":"root = Units()"}),
+    )
+    .await;
+    let refused = f
+        .result("board_doc_write", json!({"project":"p","markdown":"x"}))
+        .await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused
+            .to_string()
+            .contains("this board's program has no Doc()"),
+        "{refused}"
+    );
     f.close().await;
 }

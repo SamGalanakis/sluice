@@ -82,6 +82,14 @@ fn conflict(message: impl Into<String>) -> PublicError {
         current_rev: None,
     }
 }
+/// A `Data` reply of a JSON value made in the writer.
+fn json_reply(value: Value) -> sluice_store::Result<CommandReply> {
+    Ok(CommandReply::Data(
+        rpc::JsonValue::try_from(value).map_err(|e| PublicError::Storage {
+            message: e.to_string(),
+        })?,
+    ))
+}
 fn data(value: impl Serialize) -> Result<CommandReply, PublicError> {
     Ok(CommandReply::Data(
         serde_json::to_value(value).map_err(storage)?.try_into()?,
@@ -506,6 +514,16 @@ impl<H: ExecutionHost> Coordinator<H> {
             },
             CommandRequest::PlanGet{project}=>self.reads().snapshot(move|sql|{let id=messages_project(sql,&project)?;let ctx=context(sql,id,&catalog)?;Ok(json!({"project":projects_identity(sql,id)?,"rev":ctx.revision,"plan":ctx.plan.document()}))}).await.map_err(|e|e.into_public(true)).and_then(data),
             CommandRequest::Status(query)=>self.reads().snapshot(move|sql|crate::status::status(sql,&catalog,query)).await.map_err(|e|e.into_public(true)).and_then(data),
+            CommandRequest::BoardDocRead(request) => self.reads().snapshot(move |sql| {
+                let doc = projects::board_doc_read(sql, &request.project)?;
+                Ok(json!({
+                    "rev": doc.rev,
+                    "updated_at": doc.at,
+                    "author": doc.author,
+                    "numbered": sluice_model::doc::numbered(&doc.markdown),
+                    "markdown": doc.markdown,
+                }))
+            }).await.map_err(|e| e.into_public(true)).and_then(data),
             CommandRequest::BoardGet { project } => self.reads().snapshot(move |sql| {
                 let p = projects::resolve(sql, &project)?;
                 Ok(CommandReply::Board(sluice_model::commands::BoardView {
@@ -1157,6 +1175,13 @@ impl<H: ExecutionHost> Coordinator<H> {
                 }
             }
         };
+        // A run's guardian decodes the reply with its own release's types: board warnings,
+        // which an older release does not know, go only to a run on this release.
+        let reply = if board_warned(&reply) && !self.run_on_this_release(id.run).await? {
+            clear_board_warnings(reply)
+        } else {
+            reply
+        };
         let reply = Ok(reply);
         log.finish(sluice_model::edit::edit_label(&command), &reply);
         let reply = reply?;
@@ -1166,6 +1191,25 @@ impl<H: ExecutionHost> Coordinator<H> {
                 .map_err(|e| e.into_public(false))?;
         }
         Ok(reply)
+    }
+    /// Whether `run` was started by this release, so its guardian decodes what this release
+    /// replies.
+    async fn run_on_this_release(&self, run: RunId) -> Result<bool, PublicError> {
+        let release: Option<String> = self
+            .reads()
+            .snapshot(move |sql| {
+                Ok(sql
+                    .query_row(
+                        "SELECT release_id FROM runs WHERE run_id=?1",
+                        [run.to_string()],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .flatten())
+            })
+            .await
+            .map_err(|e| e.into_public(true))?;
+        Ok(release.as_deref() == Some(crate::install::release_id("runtime-v1").as_str()))
     }
     async fn callback_transaction<F>(
         &self,
@@ -1242,7 +1286,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 let Some((reply, done)) = mutate(tx)? else {
                     return Ok(None);
                 };
-                cache.insert(key, json!({"command":command,"reply":reply}));
+                cache.insert(key, json!({"command":command,"reply":cached_reply(&reply)}));
                 tx.sql().execute(
                     "UPDATE attempts SET request=?2 WHERE attempt_id=?1",
                     (id.attempt.to_string(), frozen.to_string()),
@@ -1508,6 +1552,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                         command,
                         CommandRequest::PlanGet { .. }
                             | CommandRequest::BoardGet { .. }
+                            | CommandRequest::BoardDocRead(_)
                             | CommandRequest::Status(_)
                             | CommandRequest::Messages(_)
                             | CommandRequest::LogRead(_)
@@ -2128,6 +2173,7 @@ fn served_while_adopting(command: &CommandRequest) -> bool {
             | CommandRequest::Status(_)
             | CommandRequest::PlanGet { .. }
             | CommandRequest::BoardGet { .. }
+            | CommandRequest::BoardDocRead(_)
             | CommandRequest::PlanHistory { .. }
             | CommandRequest::PlanView { .. }
             | CommandRequest::StepContext { .. }
@@ -2725,6 +2771,8 @@ enum Staged {
         plan: Option<CachedPlan>,
         inputs: Option<edit::InputChanges>,
         prune: Option<sluice_model::units::PruneSet>,
+        /// The steps the board names that the edit takes away (`board_drops`).
+        board_warnings: Vec<String>,
     },
 }
 impl OutsideEdit {
@@ -2770,6 +2818,7 @@ impl OutsideEdit {
                         return Ok(Staged::Preview(prepared.preview));
                     }
                     let (inputs, prune) = (prepared.inputs.clone(), prepared.prune.clone());
+                    let board_warnings = board_drops(sql, id, &plan, &prepared.plan)?;
                     let mut effect = plans::edit_effect(
                         sql,
                         id,
@@ -2789,6 +2838,7 @@ impl OutsideEdit {
                         plan,
                         inputs,
                         prune,
+                        board_warnings,
                     })
                 });
                 Ok(Self {
@@ -2826,8 +2876,12 @@ fn commit_outside(
             plan,
             inputs,
             prune,
+            board_warnings,
         } => (
-            edit_reply(plans::commit_effect(tx, *effect)?, inputs, prune),
+            with_board_warnings(
+                edit_reply(plans::commit_effect(tx, *effect)?, inputs, prune),
+                board_warnings,
+            ),
             plan,
         ),
     }))
@@ -2916,7 +2970,8 @@ fn project_mutation(command: &CommandRequest) -> bool {
         command,
         CommandRequest::ProjectUpdate(_)
             | CommandRequest::BoardSet(_)
-            | CommandRequest::BoardSlotSet(_)
+            | CommandRequest::BoardDocWrite(_)
+            | CommandRequest::BoardDocEdit(_)
             | CommandRequest::StepRetry(_)
             | CommandRequest::StepCancel(_)
             | CommandRequest::StepSetOutput(_)
@@ -2955,7 +3010,7 @@ fn mutate_project(
             }))
         }
         CommandRequest::BoardSet(request) => {
-            let rev = projects::board_set(
+            let outcome = projects::board_set(
                 tx,
                 &request.project,
                 projects::SetBoard {
@@ -2965,30 +3020,33 @@ fn mutate_project(
                     author: request.author.unwrap_or_else(|| "cli".into()),
                 },
             )?;
-            Ok(CommandReply::BoardRev { rev })
+            json_reply(json!({"rev": outcome.rev, "warnings": outcome.warnings}))
         }
-        CommandRequest::BoardSlotSet(request) => {
-            let key = request.key.clone();
-            let change = projects::board_slot_set(
+        CommandRequest::BoardDocWrite(request) => {
+            let change = projects::board_doc_write(
                 tx,
                 &request.project,
-                projects::SetBoardSlot {
-                    key: request.key,
+                projects::WriteBoardDoc {
                     markdown: request.markdown,
+                    expected_rev: request.expected_rev,
+                    reason: request.reason,
                     author: request.author.unwrap_or_else(|| "cli".into()),
                 },
             )?;
-            Ok(CommandReply::Data(
-                sluice_model::rpc::JsonValue::try_from(serde_json::json!({
-                    "key": key,
-                    "updated_at": change.slot.as_ref().map(|s| s.at.clone()),
-                    "cleared": change.slot.is_none(),
-                    "changed": change.changed,
-                }))
-                .map_err(|e| PublicError::Storage {
-                    message: e.to_string(),
-                })?,
-            ))
+            json_reply(json!({"rev": change.rev, "changed": change.changed}))
+        }
+        CommandRequest::BoardDocEdit(request) => {
+            let change = projects::board_doc_edit(
+                tx,
+                &request.project,
+                projects::EditBoardDoc {
+                    expected_rev: request.expected_rev,
+                    edits: request.edits,
+                    reason: request.reason,
+                    author: request.author.unwrap_or_else(|| "cli".into()),
+                },
+            )?;
+            json_reply(json!({"rev": change.rev, "changed": change.changed}))
         }
         CommandRequest::StepRetry(request) => {
             crate::drain::ensure_admission(tx, &crate::drain::Admission::Plan)?;
@@ -3063,10 +3121,10 @@ fn mutate_project(
                 return Ok(CommandReply::Preview(prepared.preview));
             }
             let (inputs, prune) = (prepared.inputs.clone(), prepared.prune.clone());
-            Ok(edit_reply(
-                plans::apply_edit(tx, id, prepared)?,
-                inputs,
-                prune,
+            let board_warnings = board_drops(tx.sql(), id, &ctx.plan, &prepared.plan)?;
+            Ok(with_board_warnings(
+                edit_reply(plans::apply_edit(tx, id, prepared)?, inputs, prune),
+                board_warnings,
             ))
         }
     }
@@ -3078,6 +3136,96 @@ fn read_icon(icon: IconUpload) -> Result<projects::Icon, PublicError> {
     projects::Icon::from_upload(icon, home.as_deref()).map_err(|e| e.into_public(false))
 }
 
+/// The warnings a plan edit returns: each step the project's board names that the edit takes
+/// out of the plan (`Board::dropped`), from the plan before it and the plan it leaves. Only
+/// the board's program is read (one row); nothing the board queries is run.
+pub(crate) fn board_drops(
+    sql: &Connection,
+    project: ProjectId,
+    before: &Plan,
+    after: &Plan,
+) -> sluice_store::Result<Vec<String>> {
+    let program: Option<String> = sql
+        .query_row(
+            "SELECT board FROM projects WHERE project_id=?1",
+            [project.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(board) = program
+        .as_deref()
+        .and_then(|program| sluice_model::openui::check_board(program).ok())
+    else {
+        return Ok(vec![]);
+    };
+    use sluice_model::openui::PlanSteps;
+    Ok(board.dropped(
+        &PlanSteps {
+            plan: before,
+            was: None,
+        },
+        &PlanSteps {
+            plan: after,
+            was: Some(before),
+        },
+    ))
+}
+/// An edit reply with the board's warnings (`board_drops`) in its result.
+pub(crate) fn with_board_warnings(reply: CommandReply, warnings: Vec<String>) -> CommandReply {
+    if warnings.is_empty() {
+        return reply;
+    }
+    match reply {
+        CommandReply::Edit(mut edit) => {
+            edit.board_warnings = warnings;
+            CommandReply::Edit(edit)
+        }
+        CommandReply::Inputs(mut inputs) => {
+            inputs.edit.board_warnings = warnings;
+            CommandReply::Inputs(inputs)
+        }
+        CommandReply::Pruned(mut pruned) => {
+            pruned.edit.board_warnings = warnings;
+            CommandReply::Pruned(pruned)
+        }
+        other => other,
+    }
+}
+fn board_warned(reply: &CommandReply) -> bool {
+    match reply {
+        CommandReply::Edit(edit) => !edit.board_warnings.is_empty(),
+        CommandReply::Inputs(inputs) => !inputs.edit.board_warnings.is_empty(),
+        CommandReply::Pruned(pruned) => !pruned.edit.board_warnings.is_empty(),
+        _ => false,
+    }
+}
+fn clear_board_warnings(reply: CommandReply) -> CommandReply {
+    match reply {
+        CommandReply::Edit(mut edit) => {
+            edit.board_warnings.clear();
+            CommandReply::Edit(edit)
+        }
+        CommandReply::Inputs(mut inputs) => {
+            inputs.edit.board_warnings.clear();
+            CommandReply::Inputs(inputs)
+        }
+        CommandReply::Pruned(mut pruned) => {
+            pruned.edit.board_warnings.clear();
+            CommandReply::Pruned(pruned)
+        }
+        other => other,
+    }
+}
+/// A callback's reply as its attempt keeps it for a repeated request: without board
+/// warnings, so a release that does not know them still decodes it.
+fn cached_reply(reply: &CommandReply) -> Value {
+    let mut value = serde_json::to_value(reply).unwrap_or(Value::Null);
+    if let Some(data) = value.get_mut("data").and_then(Value::as_object_mut) {
+        data.remove("board_warnings");
+    }
+    value
+}
 /// The edit result, with `step_set_input`'s per-step report or `plan_prune`'s units.
 pub(crate) fn edit_reply(
     result: EditResult,

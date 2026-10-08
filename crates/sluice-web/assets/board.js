@@ -169,8 +169,27 @@ document.addEventListener("keydown", event => {
 });
 let resizing = 0;
 window.addEventListener("resize", () => {
-  if (!resizing) resizing = requestAnimationFrame(() => { resizing = 0; frameSplitter(); });
+  if (!resizing) resizing = requestAnimationFrame(() => { resizing = 0; frameSplitter(); fitPane(); });
 });
+// The board column scrolls on its own and is at most the window's height once it sticks; until
+// the page has scrolled it up to its sticky top, it ends where the window does, so its own end
+// (and the shade that says more lies past it) is always in view.
+function fitPane() {
+  const pane = boardPane();
+  if (!pane) return;
+  const top = Math.max(16, pane.getBoundingClientRect().top);
+  const height = `${Math.max(240, Math.floor(window.innerHeight - top - 16))}px`;
+  if (pane.style.getPropertyValue("--pane-max") !== height) pane.style.setProperty("--pane-max", height);
+}
+let fitting = 0;
+window.addEventListener("scroll", () => {
+  if (!fitting) fitting = requestAnimationFrame(() => { fitting = 0; fitPane(); });
+}, { passive: true });
+// a patch may redraw the column without the height it was given
+new MutationObserver(() => {
+  if (!fitting) fitting = requestAnimationFrame(() => { fitting = 0; fitPane(); });
+}).observe(document.querySelector("main") ?? document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["style"] });
+fitPane();
 
 // ---- the description's More -------------------------------------------------------------------
 

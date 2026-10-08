@@ -1444,7 +1444,7 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
         )
         .await
         .unwrap();
-    assert!(format!("{reply:?}").contains("BoardRev"), "{reply:?}");
+    assert!(format!("{reply:?}").contains("warnings"), "{reply:?}");
     let CommandReply::Board(board) = b
         .command(request(
             json!({"command":"board_get","args":{"project":{"kind":"id","value":p}}}),
@@ -1480,39 +1480,41 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
         panic!("status")
     };
     assert_eq!(status.as_value()["board_rev"], 1);
-    // A run sets its own project's board slots too, with no revision; another project's are
-    // outside its authority.
-    let slot = |id: &str, project: Value, markdown: Value| RpcRequest {
+    // The board's document: the owner puts a Doc() on the board; a run then writes its own
+    // project's document, with no other project's in its authority.
+    let set = data_of(&b, json!({"command":"board_set","args":{"project":{"kind":"id","value":p},"program":"root = Stack([Doc(), StepStatus(\"work\")])","author":"orch"}})).await;
+    assert_eq!(set, json!({"rev": 2, "warnings": []}));
+    let write = |id: &str, project: Value, markdown: &str| RpcRequest {
         protocol: 1,
         request_id: RequestId(id.into()),
         run_capability: Some(l.capability.clone()),
         command: request(
-            json!({"command":"board_slot_set","args":{"project":project,"key":"phase","markdown":markdown,"author":"step:work"}}),
+            json!({"command":"board_doc_write","args":{"project":project,"markdown":markdown,"expected_rev":0,"reason":"first words","author":"step:work"}}),
         ),
     };
     let reply = b
         .guardian(
             C::Callback {
                 identity: l.identity.clone(),
-                request: Box::new(slot(
-                    "slot",
+                request: Box::new(write(
+                    "doc",
                     json!({"kind":"id","value":p}),
-                    json!("Main is **green**."),
+                    "## Phase\nMain is **green**.\n",
                 )),
             },
             Some(&l.capability),
         )
         .await
         .unwrap();
-    assert!(format!("{reply:?}").contains("updated_at"), "{reply:?}");
+    assert!(format!("{reply:?}").contains("changed"), "{reply:?}");
     assert!(
         b.guardian(
             C::Callback {
                 identity: l.identity.clone(),
-                request: Box::new(slot(
-                    "slot-other",
+                request: Box::new(write(
+                    "doc-other",
                     json!({"kind":"id","value":other.project_id}),
-                    json!("x"),
+                    "x"
                 )),
             },
             Some(&l.capability),
@@ -1520,32 +1522,44 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
         .await
         .is_err()
     );
-    // The owner's path: the same slot again changes nothing; null clears it.
-    let again = data_of(&b, json!({"command":"board_slot_set","args":{"project":{"kind":"id","value":p},"key":"phase","markdown":"Main is **green**.","author":"orch"}})).await;
+    // The owner's path: an edit at the rev read; the board's own rev stays.
+    let edited = data_of(&b, json!({"command":"board_doc_edit","args":{"project":{"kind":"id","value":p},"expected_rev":1,"edits":[{"start":2,"end":2,"text":"Main is red."}],"reason":"a red run","author":"orch"}})).await;
+    assert_eq!(edited, json!({"rev": 2, "changed": true}));
+    let read = data_of(
+        &b,
+        json!({"command":"board_doc_read","args":{"project":{"kind":"id","value":p}}}),
+    )
+    .await;
     assert_eq!(
         (
-            again["key"].clone(),
-            again["changed"].clone(),
-            again["cleared"].clone()
+            &read["rev"],
+            &read["markdown"],
+            &read["numbered"],
+            &read["author"]
         ),
-        (json!("phase"), json!(false), json!(false))
+        (
+            &json!(2),
+            &json!("## Phase\nMain is red.\n"),
+            &json!("     1\t## Phase\n     2\tMain is red.\n"),
+            &json!("orch")
+        )
     );
-    assert!(again["updated_at"].is_string(), "{again}");
-    let cleared = data_of(&b, json!({"command":"board_slot_set","args":{"project":{"kind":"id","value":p},"key":"phase","markdown":null,"author":"orch"}})).await;
-    assert_eq!(
-        cleared,
-        json!({"key":"phase","updated_at":null,"cleared":true,"changed":true})
-    );
-    let bad = b
-        .command(request(json!({"command":"board_slot_set","args":{"project":{"kind":"id","value":p},"key":"Phase","markdown":"x","author":"orch"}})))
-        .await;
-    assert!(matches!(bad, Err(PublicError::Invalid { .. })), "{bad:?}");
-    let updates: Vec<(String, String)> = b
+    let CommandReply::Board(board) = b
+        .command(request(
+            json!({"command":"board_get","args":{"project":{"kind":"id","value":p}}}),
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("board")
+    };
+    assert_eq!(board.rev, sluice_model::ids::Revision(2));
+    let updates: Vec<(String, String, String)> = b
         .reads()
         .snapshot(move |sql| {
-            let mut q = sql.prepare("SELECT json_extract(payload,'$.fields[0]'), json_extract(payload,'$.author') FROM records WHERE project_id=?1 AND kind='project.update' ORDER BY seq")?;
+            let mut q = sql.prepare("SELECT json_extract(payload,'$.fields[0]'), json_extract(payload,'$.author'), json_extract(payload,'$.reason') FROM records WHERE project_id=?1 AND kind='project.update' ORDER BY seq")?;
             let rows = q
-                .query_map([p.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .query_map([p.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
@@ -1554,10 +1568,103 @@ async fn a_run_sets_its_projects_board_and_reads_it_back() {
     assert_eq!(
         updates,
         [
-            ("board_slot:phase".to_owned(), "step:work".to_owned()),
-            ("board_slot:phase".to_owned(), "orch".to_owned())
+            (
+                "board_doc".to_owned(),
+                "step:work".to_owned(),
+                "first words".to_owned()
+            ),
+            (
+                "board_doc".to_owned(),
+                "orch".to_owned(),
+                "a red run".to_owned()
+            )
         ]
     );
+    // A run's plan edit that takes a step the board names gets the warning (its run is on
+    // this release); the reply its attempt keeps for a repeat leaves it out, so a release
+    // that does not know board warnings still decodes it.
+    b.command(request(json!({"command":"step_add","args":{"project":{"kind":"id","value":p},"step":"extra","spec":{"run":"fixture.echo","in":{"value":{"default":1}}},"start":false,"edit":{"dry_run":false,"reason":"test","author":"test"}}})))
+        .await
+        .unwrap();
+    data_of(&b, json!({"command":"board_set","args":{"project":{"kind":"id","value":p},"program":"root = Stack([Doc(), StepStatus(\"extra\")])","author":"orch"}})).await;
+    let remove = RpcRequest {
+        protocol: 1,
+        request_id: RequestId("remove-extra".into()),
+        run_capability: Some(l.capability.clone()),
+        command: request(
+            json!({"command":"step_remove","args":{"project":{"kind":"id","value":p},"selection":{"steps":["extra"],"tags":null},"edit":{"dry_run":false,"reason":"gone","author":"step:work"}}}),
+        ),
+    };
+    let first = b
+        .guardian(
+            C::Callback {
+                identity: l.identity.clone(),
+                request: Box::new(remove.clone()),
+            },
+            Some(&l.capability),
+        )
+        .await
+        .unwrap();
+    assert!(
+        format!("{first:?}").contains("StepStatus names step `extra`, which is not in the plan"),
+        "{first:?}"
+    );
+    let replay = b
+        .guardian(
+            C::Callback {
+                identity: l.identity.clone(),
+                request: Box::new(remove),
+            },
+            Some(&l.capability),
+        )
+        .await
+        .unwrap();
+    assert!(!format!("{replay:?}").contains("names step"), "{replay:?}");
+    assert!(format!("{replay:?}").contains("Edit"), "{replay:?}");
+}
+
+/// A board that names a step not in the plan is set with a warning per name; a plan edit
+/// that takes away a step the board names is made, and says so in `board_warnings`.
+#[tokio::test]
+async fn board_set_and_plan_edits_warn_for_the_steps_the_board_loses() {
+    let (_home, b, _f, p) = setup().await;
+    let project = json!({"kind":"id","value":p});
+    b.command(request(json!({"command":"step_add","args":{"project":project,"step":"tests-main","spec":{"run":"fixture.echo","tags":["main-tests"],"in":{"value":{"default":1}}},"start":false,"edit":{"dry_run":false,"reason":"test","author":"test"}}})))
+        .await
+        .unwrap();
+    // A renamed step, in a StepStatus and a Metric's SQL; a sender that never was a step is
+    // no warning.
+    let set = data_of(&b, json!({"command":"board_set","args":{"project":project,"program":"root = Stack([a, b, c, d])\na = StepStatus(\"tests-main-old\")\nb = Metric(\"Red\", \"SELECT count(*) FROM steps WHERE project_id = ? AND step_id = 'tests-main'\")\nc = LatestMessage(\"reviewer\")\nd = StepStatus(\"tag:main-tests\")","author":"orch"}})).await;
+    assert_eq!(
+        set,
+        json!({"rev": 1, "warnings": ["line 2: StepStatus names step `tests-main-old`, which is not in the plan"]})
+    );
+    // Removing tests-main takes it from the Metric and leaves tag:main-tests with no step.
+    let reply = b
+        .command(request(json!({"command":"step_remove","args":{"project":project,"selection":{"steps":["tests-main"],"tags":null},"edit":{"dry_run":false,"reason":"renamed","author":"orch"}}})))
+        .await
+        .unwrap();
+    let CommandReply::Edit(edit) = reply else {
+        panic!("{reply:?}")
+    };
+    assert_eq!(
+        edit.board_warnings,
+        [
+            "line 3: Metric names step `tests-main`, which is not in the plan",
+            "line 5: StepStatus selects `tag:main-tests`, which no plan step carries"
+        ]
+    );
+    // An edit that takes nothing the board names says nothing.
+    let reply = b
+        .command(request(json!({"command":"step_add","args":{"project":project,"step":"other","spec":{"run":"fixture.echo","in":{"value":{"default":1}}},"start":false,"edit":{"dry_run":false,"reason":"test","author":"test"}}})))
+        .await
+        .unwrap();
+    let CommandReply::Edit(edit) = reply else {
+        panic!("{reply:?}")
+    };
+    assert!(edit.board_warnings.is_empty(), "{:?}", edit.board_warnings);
+    let encoded = serde_json::to_value(CommandReply::Edit(edit)).unwrap();
+    assert!(encoded["data"].get("board_warnings").is_none(), "{encoded}");
 }
 
 /// A tool's data reply.

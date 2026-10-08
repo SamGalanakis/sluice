@@ -331,11 +331,16 @@ const TOOLS: &[(&str, &str)] = &[
         "board_set",
         "set or clear (program null) the project's board",
     ),
-    (
-        "board_slot_set",
-        "set or clear (markdown \"\" or null) one named text slot of the board",
-    ),
     ("board_get", "the project's board program and its rev"),
+    (
+        "board_doc_read",
+        "the board's document, its rev and its lines numbered",
+    ),
+    ("board_doc_write", "replace the board's whole document"),
+    (
+        "board_doc_edit",
+        "replace line ranges of the board's document at a rev",
+    ),
     ("plan_get", "the plan document and its revision"),
     ("plan_history", "the plan's edit history"),
     ("plan_patch", "JSON-patch the plan at a required rev"),
@@ -439,7 +444,8 @@ fn fill_author(request: &mut CommandRequest, author: &str) {
         CommandRequest::ProjectUpdate(r) => fill(&mut r.author),
         CommandRequest::ProjectDelete(r) => fill(&mut r.author),
         CommandRequest::BoardSet(r) => fill(&mut r.author),
-        CommandRequest::BoardSlotSet(r) => fill(&mut r.author),
+        CommandRequest::BoardDocWrite(r) => fill(&mut r.author),
+        CommandRequest::BoardDocEdit(r) => fill(&mut r.author),
         CommandRequest::PlanPatch(r) => fill(&mut r.author),
         CommandRequest::StepAdd(r) => fill_edit(&mut r.edit),
         CommandRequest::UnitAdd(r) => fill_edit(&mut r.edit),
@@ -616,9 +622,9 @@ async fn normalize_args(
                 "board_set needs program: the board program, or null to clear the board",
             ));
         }
-        "board_slot_set" if !args.contains_key("markdown") => {
+        "board_doc_write" if !args.contains_key("markdown") => {
             return Err(bad_request(
-                "board_slot_set needs markdown: the slot's text, or \"\" (or null) to clear the slot",
+                "board_doc_write needs markdown: the whole document (--markdown-file reads it from a file)",
             ));
         }
         "step_add" | "step_update" | "unit_tag" | "edge_add" | "edge_remove" | "plan_set_input"

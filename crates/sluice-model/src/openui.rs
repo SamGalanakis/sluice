@@ -706,8 +706,8 @@ pub const DATA_COMPONENTS: &[ComponentSpec] = &[
         data: true,
     },
     ComponentSpec {
-        name: "Slot",
-        props: &[req("key", T::String), opt("fallback", T::String)],
+        name: "Doc",
+        props: &[opt("fallback", T::String)],
         data: true,
     },
     ComponentSpec {
@@ -721,25 +721,13 @@ pub const DATA_COMPONENTS: &[ComponentSpec] = &[
         data: true,
     },
 ];
-/// The most slots a project's board keeps (`board_slot_set`).
-pub const MAX_BOARD_SLOTS: usize = 64;
-/// The most bytes of one slot's markdown.
-pub const MAX_SLOT_BYTES: usize = 16 * 1024;
+/// The most bytes of a board's document (`board_doc_write`, `board_doc_edit`).
+pub const MAX_DOC_BYTES: usize = 64 * 1024;
 /// The most characters a LatestMessage shows; its default.
 pub const MAX_MESSAGE_CHARS: usize = 4000;
 pub const DEFAULT_MESSAGE_CHARS: usize = 280;
-/// A board slot's key: a lowercase letter or digit, then up to 63 of `a-z 0-9 _ . -`.
-pub fn valid_slot_key(key: &str) -> bool {
-    let mut chars = key.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && key.len() <= 64
-        && chars
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
-}
-pub const SLOT_KEY_RULE: &str =
-    "a slot key is a lowercase letter or digit, then up to 63 of a-z, 0-9, _, . and -";
+/// What a program that still draws a `Slot` is told: slots are gone.
+pub const SLOT_REPLACED: &str = "Slot was replaced by Doc: put the slots' text in the board's document (board_doc_write) and a Doc() where they were";
 /// The board's whole vocabulary: the question components, then the data components.
 pub fn board_components() -> impl Iterator<Item = &'static ComponentSpec> {
     QUESTION_COMPONENTS.iter().chain(DATA_COMPONENTS)
@@ -787,6 +775,12 @@ impl Board {
             }
         }
         go(&self.root, None, visit);
+    }
+    /// Whether the board draws its document (`Doc()`); a program draws at most one.
+    pub fn has_doc(&self) -> bool {
+        let mut found = false;
+        self.walk(&mut |c, _| found |= c.name == "Doc");
+        found
     }
     /// Every Button with the Form it is in, in drawing order.
     pub fn buttons(&self) -> Vec<(&Component, Option<&str>)> {
@@ -872,6 +866,21 @@ pub fn check_board(src: &str) -> Result<Board, Vec<Problem>> {
     };
     if let Some(root) = &root {
         check_component(root, &mut problems);
+        // One document per board: a second Doc() (or one statement drawn twice) is refused.
+        let mut docs = vec![];
+        visit_tree(root, &mut |c| {
+            if c.name == "Doc" {
+                docs.push(c.line);
+            }
+        });
+        if let Some(first) = docs.first() {
+            for line in &docs[1..] {
+                problems.push(Problem {
+                    line: *line,
+                    message: format!("a board draws one Doc(), and line {first} already draws it"),
+                });
+            }
+        }
     }
     problems.sort();
     problems.dedup();
@@ -951,7 +960,11 @@ fn check_component(c: &Component, problems: &mut Vec<Problem>) {
         })
     };
     let Some(spec) = board_spec(&c.name) else {
-        fail(format!("{} is not a board component", c.name));
+        fail(if c.name == "Slot" {
+            SLOT_REPLACED.to_owned()
+        } else {
+            format!("{} is not a board component", c.name)
+        });
         return;
     };
     if c.args.len() > spec.props.len() {
@@ -984,37 +997,32 @@ fn check_component(c: &Component, problems: &mut Vec<Problem>) {
             ));
         }
     }
-    match c.name.as_str() {
-        "Slot" => {
-            if let Some(Value::String(key)) = c.args.first()
-                && !valid_slot_key(key)
-            {
-                fail(format!(
-                    "Slot: \"{key}\" is not a slot key ({SLOT_KEY_RULE})"
-                ));
-            }
+    if c.name == "LatestMessage" {
+        if let Some(Value::String(from)) = c.args.first()
+            && from.trim().is_empty()
+        {
+            fail(
+                "LatestMessage: from names a sender (a step id or a name such as orchestrator)"
+                    .into(),
+            );
         }
-        "LatestMessage" => {
-            if let Some(Value::String(from)) = c.args.first()
-                && from.trim().is_empty()
-            {
-                fail(
-                    "LatestMessage: from names a sender (a step id or a name such as orchestrator)"
-                        .into(),
-                );
-            }
-            if let Some(Value::Number(n)) = c.args.get(1)
-                && !(n.fract() == 0.0 && *n >= 1.0 && *n <= MAX_MESSAGE_CHARS as f64)
-            {
-                fail(format!(
-                    "LatestMessage: chars must be a whole number from 1 to {MAX_MESSAGE_CHARS}"
-                ));
-            }
+        if let Some(Value::Number(n)) = c.args.get(1)
+            && !(n.fract() == 0.0 && *n >= 1.0 && *n <= MAX_MESSAGE_CHARS as f64)
+        {
+            fail(format!(
+                "LatestMessage: chars must be a whole number from 1 to {MAX_MESSAGE_CHARS}"
+            ));
         }
-        _ => {}
     }
     for arg in &c.args {
         visit_components(arg, &mut |child| check_component(child, problems));
+    }
+}
+/// Every component of the tree under `root`, `root` first.
+fn visit_tree(root: &Component, visit: &mut impl FnMut(&Component)) {
+    visit(root);
+    for arg in &root.args {
+        visit_components(arg, &mut |child| visit_tree(child, visit));
     }
 }
 fn visit_components(value: &Value, visit: &mut impl FnMut(&Component)) {
@@ -1081,6 +1089,341 @@ fn check_type(ty: PropType, value: &Value) -> Result<(), String> {
         }
         _ => Err(got()),
     }
+}
+
+// ---- step references -----------------------------------------------------------------------
+
+/// How a board names a plan step: by its id, or as `tag:<tag>`, the one step carrying that tag
+/// when the board draws (a step id never has a colon, so the two cannot be confused).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StepTarget {
+    Step(String),
+    Tag(String),
+}
+impl StepTarget {
+    pub fn parse(text: &str) -> Self {
+        match text.strip_prefix("tag:") {
+            Some(tag) => Self::Tag(tag.to_owned()),
+            None => Self::Step(text.to_owned()),
+        }
+    }
+}
+/// Where a board names a step: a widget's step argument (StepStatus, Output), a
+/// LatestMessage's sender, or a string a query's SQL compares with a column that holds step
+/// ids (`step_column`: `step_id`; else `from`, `to` or `thread`, which also hold other names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefSite {
+    Step,
+    Sender,
+    Sql { step_column: bool },
+}
+/// One step a board's component names, on the component's line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepRef {
+    pub line: usize,
+    pub component: String,
+    pub target: StepTarget,
+    pub site: RefSite,
+}
+/// What the board is checked against: the plan's steps and tags, and what the project's
+/// history says was once a step.
+pub trait StepLookup {
+    fn has_step(&self, id: &str) -> bool;
+    /// How many plan steps carry `tag`.
+    fn tagged(&self, tag: &str) -> usize;
+    /// Whether `name`, not a step now, was once one of the project's steps (its log or
+    /// messages say so): a sender or a `from`/`to`/`thread` value is only stale then.
+    fn was_step(&self, name: &str) -> bool;
+}
+/// Why a reference does not draw what it meant to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefProblem {
+    /// A step id the plan does not have.
+    Missing(String),
+    /// A tag that does not select exactly one step: how many it selects.
+    Tag(String, usize),
+}
+impl std::fmt::Display for RefProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing(step) => write!(f, "names step `{step}`, which is not in the plan"),
+            Self::Tag(tag, 0) => write!(f, "selects `tag:{tag}`, which no plan step carries"),
+            Self::Tag(tag, n) => write!(f, "selects `tag:{tag}`, which {n} plan steps carry"),
+        }
+    }
+}
+impl StepRef {
+    pub fn problem(&self, plan: &dyn StepLookup) -> Option<RefProblem> {
+        match &self.target {
+            StepTarget::Tag(tag) => {
+                let n = plan.tagged(tag);
+                (n != 1).then(|| RefProblem::Tag(tag.clone(), n))
+            }
+            StepTarget::Step(id) if plan.has_step(id) => None,
+            StepTarget::Step(id) => match self.site {
+                RefSite::Step | RefSite::Sql { step_column: true } => {
+                    Some(RefProblem::Missing(id.clone()))
+                }
+                RefSite::Sender | RefSite::Sql { step_column: false } => {
+                    plan.was_step(id).then(|| RefProblem::Missing(id.clone()))
+                }
+            },
+        }
+    }
+    /// The warning `board_set` and plan edits return: "line N: StepStatus names step …".
+    pub fn warning(&self, problem: &RefProblem) -> String {
+        format!("line {}: {} {problem}", self.line, self.component)
+    }
+}
+/// The names a sender may be that are not steps.
+const SENDER_NAMES: &[&str] = &["owner", "orchestrator"];
+/// Step statuses, which step_changes keeps in its own `from` and `to` columns.
+const STATUS_WORDS: &[&str] = &[
+    "pending",
+    "running",
+    "succeeded",
+    "failed",
+    "stale",
+    "skipped",
+];
+fn step_shaped(text: &str) -> bool {
+    text.as_bytes()
+        .first()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && text
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
+}
+/// The steps one component names (not its children's): StepStatus's and Output's step,
+/// LatestMessage's sender (unless `owner` or `orchestrator`), and the strings a Metric's,
+/// Query's or Chart's SQL compares with a step-id column (`sql_step_literals`).
+pub fn component_refs(c: &Component) -> Vec<StepRef> {
+    let mut out: Vec<StepRef> = vec![];
+    let mut push = |target: StepTarget, site: RefSite| {
+        let r = StepRef {
+            line: c.line,
+            component: c.name.clone(),
+            target,
+            site,
+        };
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    };
+    match c.name.as_str() {
+        "StepStatus" | "Output" => {
+            if let Some(step) = c.str_arg(0) {
+                push(StepTarget::parse(step), RefSite::Step);
+            }
+        }
+        "LatestMessage" => {
+            if let Some(from) = c.str_arg(0).filter(|f| !SENDER_NAMES.contains(f)) {
+                push(StepTarget::parse(from), RefSite::Sender);
+            }
+        }
+        "Metric" | "Query" | "Chart" => {
+            let sql = c
+                .str_arg(if c.name == "Query" { 0 } else { 1 })
+                .unwrap_or("");
+            for (column, literal) in sql_step_literals(sql) {
+                push(
+                    StepTarget::Step(literal),
+                    RefSite::Sql {
+                        step_column: column == "step_id",
+                    },
+                );
+            }
+        }
+        _ => {}
+    }
+    out
+}
+impl Board {
+    /// Every step the board names, in drawing order.
+    pub fn step_refs(&self) -> Vec<StepRef> {
+        let mut out = vec![];
+        self.walk(&mut |c, _| out.extend(component_refs(c)));
+        out
+    }
+    /// `board_set`'s warnings: each step the board names that the plan cannot give it.
+    pub fn warnings(&self, plan: &dyn StepLookup) -> Vec<String> {
+        self.step_refs()
+            .iter()
+            .filter_map(|r| r.problem(plan).map(|p| r.warning(&p)))
+            .collect()
+    }
+    /// A plan edit's warnings: each step the board names that the plan gave it before the
+    /// edit (`before`) and does not after it (`after`).
+    pub fn dropped(&self, before: &dyn StepLookup, after: &dyn StepLookup) -> Vec<String> {
+        self.step_refs()
+            .iter()
+            .filter(|r| r.problem(before).is_none())
+            .filter_map(|r| r.problem(after).map(|p| r.warning(&p)))
+            .collect()
+    }
+}
+/// A compiled plan as a `StepLookup`; `was` is the plan an edit started from, whose steps
+/// were steps.
+pub struct PlanSteps<'a> {
+    pub plan: &'a crate::plan::Plan,
+    pub was: Option<&'a crate::plan::Plan>,
+}
+impl StepLookup for PlanSteps<'_> {
+    fn has_step(&self, id: &str) -> bool {
+        has_plan_step(self.plan, id)
+    }
+    fn tagged(&self, tag: &str) -> usize {
+        self.plan
+            .steps()
+            .values()
+            .filter(|s| s.tags.iter().any(|t| t == tag))
+            .count()
+    }
+    fn was_step(&self, name: &str) -> bool {
+        self.was.is_some_and(|was| has_plan_step(was, name))
+    }
+}
+fn has_plan_step(plan: &crate::plan::Plan, id: &str) -> bool {
+    crate::ids::StepId::new(id).is_ok_and(|id| plan.steps().contains_key(&id))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SqlToken {
+    /// A name, unquoted (lowercased) or quoted with `"`, `` ` `` or `[]`.
+    Name(String),
+    /// A '...' string.
+    Text(String),
+    Punct(String),
+}
+fn sql_tokens(sql: &str) -> Vec<SqlToken> {
+    let chars: Vec<char> = sql.chars().collect();
+    let (mut out, mut i) = (vec![], 0);
+    let quoted = |i: &mut usize, close: char| {
+        let mut text = String::new();
+        *i += 1;
+        while *i < chars.len() {
+            if chars[*i] == close {
+                if close != ']' && chars.get(*i + 1) == Some(&close) {
+                    text.push(close);
+                    *i += 2;
+                    continue;
+                }
+                break;
+            }
+            text.push(chars[*i]);
+            *i += 1;
+        }
+        *i += 1;
+        text
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '-' if chars.get(i + 1) == Some(&'-') => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            '/' if chars.get(i + 1) == Some(&'*') => {
+                i += 2;
+                while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            '\'' => out.push(SqlToken::Text(quoted(&mut i, '\''))),
+            '"' => out.push(SqlToken::Name(quoted(&mut i, '"').to_lowercase())),
+            '`' => out.push(SqlToken::Name(quoted(&mut i, '`').to_lowercase())),
+            '[' => out.push(SqlToken::Name(quoted(&mut i, ']').to_lowercase())),
+            c if c.is_alphanumeric() || c == '_' => {
+                let start = i;
+                while i < chars.len()
+                    && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$')
+                {
+                    i += 1;
+                }
+                out.push(SqlToken::Name(
+                    chars[start..i].iter().collect::<String>().to_lowercase(),
+                ));
+            }
+            c if c.is_whitespace() => i += 1,
+            '=' if chars.get(i + 1) == Some(&'=') => {
+                out.push(SqlToken::Punct("=".into()));
+                i += 2;
+            }
+            c => {
+                out.push(SqlToken::Punct(c.to_string()));
+                i += 1;
+            }
+        }
+    }
+    out
+}
+/// The columns of the query views and tables that hold step ids: `step_id` (steps,
+/// step_results, outcomes, step_changes, runs, attempts, records, submissions,
+/// question_attachments), and a message's `from`, `to` and `thread`, which hold a step's id
+/// as well as names such as `owner`.
+const STEP_COLUMNS: &[&str] = &["step_id", "from", "to", "thread"];
+/// The step ids a query's SQL names: each string compared with a step-id column
+/// (`STEP_COLUMNS`, bare or qualified) by `=`, `==` or `IN (...)`, on either side of `=`, that
+/// looks like a step id. A status or `owner`/`orchestrator` compared with `from`, `to` or
+/// `thread` is left out. `NOT IN`, `<>`, `LIKE`, a value built by an expression and a step id
+/// held in JSON are not seen.
+pub fn sql_step_literals(sql: &str) -> Vec<(String, String)> {
+    use SqlToken::{Name, Punct, Text};
+    let tokens = sql_tokens(sql);
+    let column = |i: usize| match tokens.get(i) {
+        Some(Name(name))
+            if STEP_COLUMNS.contains(&name.as_str())
+                && tokens.get(i + 1) != Some(&Punct(".".into())) =>
+        {
+            Some(name.clone())
+        }
+        _ => None,
+    };
+    let mut out: Vec<(String, String)> = vec![];
+    let mut take = |column: &str, literal: &str| {
+        let other = column != "step_id";
+        if step_shaped(literal)
+            && !(other && (SENDER_NAMES.contains(&literal) || STATUS_WORDS.contains(&literal)))
+        {
+            let pair = (column.to_owned(), literal.to_owned());
+            if !out.contains(&pair) {
+                out.push(pair);
+            }
+        }
+    };
+    for i in 0..tokens.len() {
+        if let Some(name) = column(i) {
+            match (tokens.get(i + 1), tokens.get(i + 2)) {
+                (Some(Punct(eq)), Some(Text(literal))) if eq == "=" => take(&name, literal),
+                (Some(Name(word)), Some(Punct(open))) if word == "in" && open == "(" => {
+                    for token in tokens[i + 3..].iter() {
+                        match token {
+                            Text(literal) => take(&name, literal),
+                            Punct(p) if p == "," => {}
+                            _ => break,
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let (Some(Text(literal)), Some(Punct(eq))) = (tokens.get(i), tokens.get(i + 1))
+            && eq == "="
+        {
+            // 'x' = column, or 'x' = alias.column
+            let at = if matches!(tokens.get(i + 3), Some(Punct(dot)) if dot == ".") {
+                i + 4
+            } else {
+                i + 2
+            };
+            if let Some(name) = column(at) {
+                take(&name, literal);
+            }
+        }
+    }
+    out
 }
 
 /// A field rule (`required`, `email`, `url`, `numeric`, `min:N`, `max:N`, `minLength:N`,
@@ -1198,9 +1541,11 @@ mod tests {
     }
 
     #[test]
-    fn slots_markdown_and_messages_check_their_arguments() {
-        let ok = "root = Stack([a, b, c, d, e])\na = Slot(\"phase\")\nb = Slot(\"needs-sam.v2_1\", \"Nothing yet.\")\nc = Markdown(\"**bold** [x](https://x)\")\nd = LatestMessage(\"tests-main\")\ne = LatestMessage(\"orchestrator\", 120)";
-        assert!(check_board(ok).is_ok(), "{:?}", check_board(ok).err());
+    fn doc_markdown_and_messages_check_their_arguments() {
+        let ok = "root = Stack([a, b, c, d])\na = Doc(\"Nothing yet.\")\nc = Markdown(\"**bold** [x](https://x)\")\nd = LatestMessage(\"tests-main\")\nb = LatestMessage(\"orchestrator\", 120)";
+        let board = check_board(ok).unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(board.has_doc());
+        assert!(!check_board("root = Units()").unwrap().has_doc());
         let lines = |src: &str| -> Vec<String> {
             check_board(src)
                 .unwrap_err()
@@ -1208,15 +1553,20 @@ mod tests {
                 .map(ToString::to_string)
                 .collect()
         };
+        assert!(lines("root = Doc(3)")[0].contains("Doc: fallback must be string"));
+        // A board draws one document: a second Doc(), or one statement drawn twice, is refused.
         assert_eq!(
-            lines("root = Slot(\"Phase\")"),
-            [format!(
-                "line 1: Slot: \"Phase\" is not a slot key ({SLOT_KEY_RULE})"
-            )]
+            lines("root = Stack([a, b])\na = Doc()\nb = Doc()"),
+            ["line 3: a board draws one Doc(), and line 2 already draws it"]
         );
-        assert!(
-            lines("root = Slot()")[0]
-                .contains("Slot needs key (Slot(key: string, fallback?: string))")
+        assert_eq!(
+            lines("root = Stack([a, a])\na = Doc()"),
+            ["line 2: a board draws one Doc(), and line 2 already draws it"]
+        );
+        // Slots are gone: a program that still draws one is told what replaced them.
+        assert_eq!(
+            lines("root = Stack([a])\na = Slot(\"phase\")"),
+            [format!("line 2: {SLOT_REPLACED}")]
         );
         assert!(lines("root = Markdown([\"x\"])")[0].contains("Markdown: text must be string"));
         assert!(
@@ -1224,8 +1574,87 @@ mod tests {
         );
         assert!(lines("root = LatestMessage(\"a\", 5000)")[0].contains("from 1 to 4000"));
         assert!(lines("root = LatestMessage(\" \")")[0].contains("from names a sender"));
-        assert!(valid_slot_key(&"a".repeat(64)) && !valid_slot_key(&"a".repeat(65)));
-        assert!(!valid_slot_key("") && !valid_slot_key("_a") && !valid_slot_key("a b"));
+    }
+
+    #[test]
+    fn sql_names_the_steps_it_compares_with_step_id_columns() {
+        let found = |sql: &str| -> Vec<String> {
+            sql_step_literals(sql)
+                .into_iter()
+                .map(|(c, l)| format!("{c}={l}"))
+                .collect()
+        };
+        assert_eq!(
+            found("SELECT * FROM steps WHERE project_id = ? AND step_id = 'tests-main'"),
+            ["step_id=tests-main"]
+        );
+        assert_eq!(
+            found(
+                "SELECT 1 FROM steps s WHERE s.step_id IN ('a-build', 'b_2') -- step_id = 'gone'"
+            ),
+            ["step_id=a-build", "step_id=b_2"]
+        );
+        assert_eq!(found("SELECT 1 WHERE 'x' == s.\"step_id\""), ["step_id=x"]);
+        assert_eq!(
+            found(
+                "SELECT body FROM messages WHERE \"from\" = 'tests-main' AND \"to\" = 'orchestrator' AND thread='owner'"
+            ),
+            ["from=tests-main"]
+        );
+        // step_changes keeps statuses in from and to; they are not steps.
+        assert!(found("SELECT count(*) FROM step_changes WHERE \"to\" = 'failed'").is_empty());
+        // Not seen: NOT IN, LIKE, JSON, a value that is no step id, another column.
+        assert!(found("SELECT 1 FROM steps WHERE step_id NOT IN ('a') OR step_id LIKE 'b%' OR json_extract(outputs, '$.step_id') = 'c' OR status = 'running' OR step_id = 'Not An Id'").is_empty());
+    }
+
+    struct Fixed(
+        &'static [&'static str],
+        &'static [(&'static str, usize)],
+        &'static [&'static str],
+    );
+    impl StepLookup for Fixed {
+        fn has_step(&self, id: &str) -> bool {
+            self.0.contains(&id)
+        }
+        fn tagged(&self, tag: &str) -> usize {
+            self.1
+                .iter()
+                .find(|(t, _)| *t == tag)
+                .map_or(0, |(_, n)| *n)
+        }
+        fn was_step(&self, name: &str) -> bool {
+            self.2.contains(&name)
+        }
+    }
+
+    #[test]
+    fn a_board_warns_for_each_step_the_plan_cannot_give_it() {
+        let board = check_board(
+            "root = Stack([a, b, c, d, e, f, g, h])\na = StepStatus(\"tests-main\")\nb = Output(\"build\", \"x\")\nc = Metric(\"Red\", \"SELECT count(*) FROM steps WHERE project_id = ? AND step_id = 'tests-main'\")\nd = LatestMessage(\"tests-main\")\ne = LatestMessage(\"reviewer\")\nf = StepStatus(\"tag:main\")\ng = Output(\"tag:none\", \"x\")\nh = LatestMessage(\"owner\")",
+        )
+        .unwrap();
+        let plan = Fixed(&["build"], &[("main", 2)], &["tests-main"]);
+        assert_eq!(
+            board.warnings(&plan),
+            [
+                "line 2: StepStatus names step `tests-main`, which is not in the plan",
+                "line 4: Metric names step `tests-main`, which is not in the plan",
+                "line 5: LatestMessage names step `tests-main`, which is not in the plan",
+                "line 7: StepStatus selects `tag:main`, which 2 plan steps carry",
+                "line 8: Output selects `tag:none`, which no plan step carries",
+            ]
+        );
+        // A plan edit warns only for what it took away.
+        let before = Fixed(&["build", "tests-main"], &[("main", 1)], &[]);
+        assert_eq!(
+            board.dropped(&before, &plan),
+            [
+                "line 2: StepStatus names step `tests-main`, which is not in the plan",
+                "line 4: Metric names step `tests-main`, which is not in the plan",
+                "line 5: LatestMessage names step `tests-main`, which is not in the plan",
+                "line 7: StepStatus selects `tag:main`, which 2 plan steps carry",
+            ]
+        );
     }
 
     #[test]

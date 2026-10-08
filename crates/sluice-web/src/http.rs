@@ -423,9 +423,9 @@ impl settings::SettingsCommands for SocketSettings {
         &self,
         id: ProjectId,
         request: projects::SetBoard,
-    ) -> BoxFuture<'_, Result<Revision, PublicError>> {
+    ) -> BoxFuture<'_, Result<projects::BoardSetOutcome, PublicError>> {
         Box::pin(async move {
-            match self
+            let reply = self
                 .client
                 .command(CommandRequest::BoardSet(BoardSet {
                     project: ProjectSelector::Id(id),
@@ -434,13 +434,18 @@ impl settings::SettingsCommands for SocketSettings {
                     reason: request.reason,
                     author: Some(request.author),
                 }))
-                .await?
-            {
-                CommandReply::BoardRev { rev } => Ok(rev),
-                other => Err(PublicError::Storage {
-                    message: format!("unexpected board_set reply {other:?}"),
-                }),
-            }
+                .await?;
+            let unexpected = |reply: &dyn std::fmt::Debug| PublicError::Storage {
+                message: format!("unexpected board_set reply {reply:?}"),
+            };
+            let CommandReply::Data(data) = reply else {
+                return Err(unexpected(&reply));
+            };
+            let data = data.into_value();
+            Ok(projects::BoardSetOutcome {
+                rev: serde_json::from_value(data["rev"].clone()).map_err(|_| unexpected(&data))?,
+                warnings: serde_json::from_value(data["warnings"].clone()).unwrap_or_default(),
+            })
         })
     }
 }
