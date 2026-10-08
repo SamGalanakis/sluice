@@ -322,10 +322,13 @@ async fn log_hides_call_noise_and_offers_presets_and_a_step_field() {
         .await
         .unwrap();
     assert_eq!(
-        calls.rows.len(),
+        calls.rows.iter().map(|r| r.count).sum::<usize>(),
         50,
         "every call when the calls are asked for"
     );
+    // calls in a row that say the same are one line, counted
+    assert!(calls.rows.len() < 50, "{}", calls.rows.len());
+    assert!(calls.rows.iter().any(|r| r.count > 1));
     let errors = log::load(&reads, Some(project), LogQuery::parse("errors=1").unwrap())
         .await
         .unwrap();
@@ -490,7 +493,7 @@ async fn the_log_says_each_record_in_a_sentence_and_the_global_log_spans_project
         "{said:?}"
     );
     assert!(
-        said.contains(&"bump: Stopped at its wall-clock cap of 10h 0m."),
+        said.contains(&"bump: Stopped at its wall-clock cap after 10h 0m."),
         "{said:?}"
     );
     assert!(
@@ -505,6 +508,33 @@ async fn the_log_says_each_record_in_a_sentence_and_the_global_log_spans_project
         "never JSON: {said:?}"
     );
     assert!(!said.iter().any(|s| s.starts_with("watch")), "{said:?}");
+    // each sentence links the step it names to its page
+    let bump = page
+        .rows
+        .iter()
+        .find(|r| r.summary.starts_with("bump:"))
+        .unwrap();
+    assert_eq!(
+        bump.html.as_str(),
+        format!(
+            "<a href=\"/projects/id/{project}/steps/bump\">bump</a>: Stopped at its wall-clock cap after 10h 0m."
+        )
+    );
+    // Errors: the failure, not the owner's cancel
+    let errors = log::load(&reads, Some(project), LogQuery::parse("errors=1").unwrap())
+        .await
+        .unwrap();
+    let errs: Vec<&str> = errors.rows.iter().map(|r| r.summary.as_str()).collect();
+    assert_eq!(
+        errs,
+        ["bump: Stopped at its wall-clock cap after 10h 0m."],
+        "{errs:?}"
+    );
+    // the page: the sentence outside the JSON's toggle, whose name is short
+    let html = page.body().unwrap();
+    let html = html.as_str();
+    assert!(html.contains("<p class=\"log-what\"><a href=\""), "{html}");
+    assert!(html.contains("<summary aria-label=\"Record "), "{html}");
     // asked for, the status records keep the restart too
     let statuses = log::load(
         &reads,

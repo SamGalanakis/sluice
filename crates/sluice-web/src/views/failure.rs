@@ -112,7 +112,7 @@ impl Failure {
             PublicError::AgentFailure { kind, .. } => {
                 let headline = match kind.as_str() {
                     "Cancelled" => "Cancelled while it ran.".into(),
-                    "WallCap" => format!("Stopped at its wall-clock cap{after}."),
+                    "WallCap" => wall_cap(took),
                     "StallCap" => format!("Stopped: its agent wrote nothing for too long{after}."),
                     "ReadyTimeout" => "Its engine never became ready.".into(),
                     "TurnStartTimeout" => {
@@ -150,7 +150,7 @@ impl Failure {
                     format!("Cancelled: {}", sentence(reason)),
                 ),
                 None => match &cause {
-                    Some(cause) => ("fn_failure".into(), cause_sentence(cause, &after)),
+                    Some(cause) => ("fn_failure".into(), cause_sentence(cause, took)),
                     None => (
                         "fn_failure".into(),
                         format!("Its fn failed: {}", sentence(first_line(&said))),
@@ -183,6 +183,16 @@ impl Failure {
         // what the headline already quotes is not said twice
         let cancelled = is_cancel(error);
         let quoted = (kind == "fn_failure" && cause.is_none() && !said.contains('\n')) || cancelled;
+        // a captured tail (several lines) that starts mid-sentence says so
+        if said.contains('\n')
+            && said.starts_with(|c: char| c.is_lowercase())
+            && !said
+                .split_whitespace()
+                .next()
+                .is_some_and(|w| w.ends_with(':'))
+        {
+            said.insert(0, '…');
+        }
         Self {
             cancelled,
             kind,
@@ -300,19 +310,13 @@ fn exception_name(line: &str) -> Option<&str> {
     (ident && ends).then_some(name)
 }
 /// A fn's exception as the step's sentence; a wall-clock cap reads as the agent's cap does.
-fn cause_sentence(cause: &str, after: &str) -> String {
+fn cause_sentence(cause: &str, took: Option<f64>) -> String {
     if let Some(at) = cause.find("wall-clock cap of ") {
         let minutes: Option<f64> = cause[at + 18..]
             .split_whitespace()
             .next()
             .and_then(|n| n.parse().ok());
-        if let Some(minutes) = minutes {
-            return format!(
-                "Stopped at its wall-clock cap of {}{after}.",
-                super::step::short_duration(minutes * 60.0)
-            );
-        }
-        return format!("Stopped at its wall-clock cap{after}.");
+        return wall_cap(minutes.map(|m| m * 60.0).or(took));
     }
     let mut chars = sentence(cause).chars().collect::<Vec<_>>();
     if let Some(c) = chars.first_mut() {
@@ -320,9 +324,23 @@ fn cause_sentence(cause: &str, after: &str) -> String {
     }
     chars.into_iter().collect()
 }
-/// A message as the end of a sentence: its first letter kept, a full stop when it has none.
+/// One wording for a run stopped at its wall-clock cap, an agent's or a fn's: "Stopped at its
+/// wall-clock cap after 10h 0m." (the cap when the fn names it, else how long it ran).
+fn wall_cap(seconds: Option<f64>) -> String {
+    match seconds {
+        Some(s) => format!(
+            "Stopped at its wall-clock cap after {}.",
+            super::step::short_duration(s)
+        ),
+        None => "Stopped at its wall-clock cap.".into(),
+    }
+}
+/// A message as the end of a sentence: its first letter kept, a full stop when it has none (a
+/// trailing colon or comma, which led into lines no longer shown, gives way to it).
 fn sentence(text: &str) -> String {
-    let text = first_line(text);
+    let text = first_line(text)
+        .trim_end_matches([':', ';', ','])
+        .trim_end();
     if text.ends_with(['.', '!', '?', ')']) || text.is_empty() {
         text.to_owned()
     } else {
@@ -371,8 +389,9 @@ mod tests {
     fn a_fn_traceback_reads_as_its_last_exception() {
         let stored = r#"{"error":"fn_failure","message":"exit code 1\nremains active.\ncodex: Still awaiting.\nTraceback (most recent call last):\n  File \"x.py\", line 1, in main\n    raise RuntimeError(f\"{a}\")\nRuntimeError: codex ran past the wall-clock cap of 600 min (SLUICE_AGENT_MAX_MIN)\nsession: s-9. To resume it, bind the step's session input to it and retry: step_set_input(project, step, \"session\", \"s-9\"), then step_retry."}"#;
         let f = Failure::parse(stored, None);
-        assert_eq!(f.headline, "Stopped at its wall-clock cap of 10h 0m.");
-        assert_eq!(f.said, "remains active.\ncodex: Still awaiting.");
+        assert_eq!(f.headline, "Stopped at its wall-clock cap after 10h 0m.");
+        // the captured tail starts mid-sentence, and says so
+        assert_eq!(f.said, "…remains active.\ncodex: Still awaiting.");
         assert!(f.trace.starts_with("Traceback") && f.trace.ends_with("(SLUICE_AGENT_MAX_MIN)"));
         assert!(f.resume.starts_with("To resume it, bind"), "{}", f.resume);
         let plain = Failure::parse(
@@ -380,6 +399,15 @@ mod tests {
             None,
         );
         assert_eq!(plain.headline, "No such branch: main2.");
+        // a first line that led into lines not shown ends as a sentence, not ":."
+        let led = Failure::parse(
+            r#"{"error":"fn_failure","message":"kiln clippy failed after the rebase onto 299cf4ab35:\n    = note: all struct fields"}"#,
+            None,
+        );
+        assert_eq!(
+            led.headline,
+            "Its fn failed: kiln clippy failed after the rebase onto 299cf4ab35."
+        );
     }
     #[test]
     fn every_cancel_reads_as_a_cancel() {

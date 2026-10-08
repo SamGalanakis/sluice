@@ -4,7 +4,7 @@
 <!--settings-live--><header id="settings-live" data-revision="{{ view.project.settings_rev }}" data-name="{{ view.project.name }}" data-paused="{{ view.project.paused }}" data-archived="{{ view.project.archived }}" data-page-title="{{ view.project.name }} · Settings · sluice">
 <h1>{{ view.project.name }}{% if view.project.paused %} <span class="tag">Paused</span>{% endif %}</h1>
 <p class="settings-lead">Project settings{% if view.project.archived %} · Archived{% endif %}</p></header><!--/settings-live-->
-<nav class="settings-index" aria-label="Sections"><a href="#details-heading">Details</a><a href="#resources-heading">Resources</a><a href="#board-heading">Board</a><a href="#retire-heading">Retiring</a><a href="#activity-heading">Activity</a><a href="#danger-heading">Delete</a></nav>
+<nav class="settings-index" aria-label="Settings sections"><a href="#details-heading">Details</a><a href="#resources-heading">Resources</a><a href="#board-heading">Board</a><a href="#retire-heading">Retiring</a><a href="#activity-heading">Activity</a><a href="#danger-heading">Delete</a></nav>
 <p class="setting-help">Each Apply commits one change right away. <a href="/projects/id/{{ view.project.project_id }}/log?kind=project">View authored changes</a>.</p>
 <section aria-labelledby="details-heading"><h2 id="details-heading">Details</h2>
 <dl class="settings-fields">
@@ -20,7 +20,7 @@
 <input type="hidden" name="field" value="description"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
 <textarea id="project-description" name="value" aria-describedby="description-feedback">{{ feedback.value("description", view.project.description.as_str()) }}</textarea>
 <div class="setting-actions"><button type="submit">Apply description</button><button type="button" data-preview hidden>Preview</button><span id="description-feedback" class="settings-feedback{% if feedback.error("description") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "description" %}{{ feedback.message }}{% endif %}</span></div>
-</form><div id="description-preview" class="settings-preview" aria-label="Markdown preview">{{ preview|safe }}</div></dd></div>
+</form><details class="preview-fold more-fold" data-preserve-attr="open"><summary><span class="m-more">Show how it reads</span><span class="m-less">Hide how it reads</span>{{ crate::views::icons::icon(crate::views::icons::Icon::ChevronDown, 16, "chev")|safe }}</summary><div id="description-preview" class="settings-preview" aria-label="Markdown preview">{{ preview|safe }}</div></details></dd></div>
 <div class="setting-row"><dt><label for="project-icon">Icon</label></dt><dd>
 {% if !icon_url.is_empty() %}<img class="settings-icon" id="icon-preview" src="{{ icon_url }}" alt="Current project icon">{% endif %}
 <form method="post" action="{{ view.path() }}" data-setting="icon">
@@ -33,7 +33,7 @@
 <section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
 <p class="setting-help">A capacity is a whole number, or a fn that reports it about every 10 seconds. Lowering it holds new work while active work continues.</p>
 <!--resource-status--><div id="resource-status"><ul class="resource-list">
-{% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · queued steps not counted: the plan's fns are not all loaded yet{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
+{% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · steps queued: not known until the plan's fns have loaded{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
 {% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
 </ul></div><!--/resource-status-->
 <div id="resource-editors"><dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources">
@@ -60,7 +60,7 @@
 </div><!--/board-doc--></section>
 <section aria-labelledby="retire-heading" id="retire-settings"><h2 id="retire-heading">Retiring</h2>
 <p class="setting-help">Sluice removes done units from the plan once their last step finished this long ago, in one edit by <code>sluice</code>, checking every 5 minutes. A unit that a remaining step or plan output still uses stays, and each removed step's result stays in the <code>outcomes</code> view.</p>
-<!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}<span class="tag">On</span> Done units retire {{ retire_hours }} h after their last step finished{% if !view.project.prune_keep.is_empty() %}, except {{ view.project.prune_keep.len() }} pattern{% if view.project.prune_keep.len() != 1 %}s{% endif %}{% endif %}. {% else %}<span class="tag muted">Off</span> Done units stay until an edit removes them. {% endif %}{% if let Some(r) = view.retired %}Last retired <time data-ago datetime="{{ r.at }}">{{ ProjectSettingsView::minute(r.at) }}</time>: {{ r.steps }} step{% if r.steps != 1 %}s{% endif %} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
+<!--retire-status--><div id="retire-status"><p class="setting-help retire-status">{% if view.project.prune_done_after.is_some() %}<span class="tag">On</span> Done units retire {{ retire_hours }}h after their last step finished{% if !view.project.prune_keep.is_empty() %}, except {{ view.project.prune_keep.len() }} pattern{% if view.project.prune_keep.len() != 1 %}s{% endif %}{% endif %}. {% else %}<span class="tag muted">Off</span> Done units stay until an edit removes them. {% endif %}{% if let Some(r) = view.retired %}Last retired <time data-ago datetime="{{ r.at }}">{{ ProjectSettingsView::minute(r.at) }}</time>: {{ r.steps }} step{% if r.steps != 1 %}s{% endif %} (rev {{ r.rev }}).{% else %}Nothing retired yet.{% endif %}</p></div><!--/retire-status-->
 <dl class="settings-fields">
 <div class="setting-row"><dt><label for="prune-done-after">Retire done units after</label></dt><dd>
 <form method="post" action="{{ view.path() }}" data-setting="prune_done_after">
@@ -164,7 +164,7 @@ document.addEventListener('submit', event => {
 });
 document.querySelector('[data-preview]').addEventListener('click', async () => {
  const response = await fetch(base + '/preview', {method:'POST',body:document.querySelector('#project-description').value});
- if(response.ok) document.querySelector('#description-preview').innerHTML = await response.text();
+ if(response.ok) { const area = document.querySelector('#description-preview'); area.innerHTML = await response.text(); area.closest('details').open = true; }
 });
 document.querySelector('[data-upload-button]').addEventListener('click', async () => {
  const file = document.querySelector('#icon-file').files[0]; const feedback = document.querySelector('#icon-feedback');

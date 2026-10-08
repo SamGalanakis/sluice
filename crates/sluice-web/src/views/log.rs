@@ -170,6 +170,11 @@ pub struct LogRow {
     pub at: String,
     pub kind: String,
     pub summary: String,
+    /// The summary with its step, unit and thread linked to their pages.
+    pub html: TrustedHtml,
+    /// How many records in a row said the same (this the newest), and the oldest's seq.
+    pub count: usize,
+    pub oldest: i64,
     /// On the global log, the record's project: its name and page ("" for the home's own).
     pub place: (String, String),
     pub json: String,
@@ -269,7 +274,8 @@ pub async fn load(
             args.push(Value::Text(format!("step-{}", query.step)));
         }
         if query.errors {
-            condition.push_str(" AND ((kind='step.status' AND json_extract(payload,'$.to')='failed') OR (kind='call' AND json_extract(payload,'$.status')='failed') OR kind='run.orphan')");
+            // a cancel is the owner's choice, not an error (views::failure::is_cancel, in SQL)
+            condition.push_str(" AND ((kind='step.status' AND json_extract(payload,'$.to')='failed' AND NOT coalesce(json_extract(payload,'$.error.error')='cancelled' OR (json_extract(payload,'$.error.error')='agent_failure' AND json_extract(payload,'$.error.kind')='Cancelled') OR (json_extract(payload,'$.error.error')='fn_failure' AND (json_extract(payload,'$.error.message')='cancelled' OR json_extract(payload,'$.error.message') LIKE 'cancelled: %')),0)) OR (kind='call' AND json_extract(payload,'$.status')='failed') OR kind='run.orphan')");
         }
         let base_args = args.clone();
         let base_condition = condition.clone();
@@ -286,23 +292,87 @@ pub async fn load(
             let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("").into();
             let summary = summary(&event);
             let owner: Option<ProjectId> = owner.and_then(|p| p.parse().ok());
+            let html = linked(&summary, &links(&json, owner));
             // the global log names each record's project
             let place = match (project, owner) {
                 (None, Some(id)) => nav.projects.iter().find(|p| p.id == id).map(|p| (p.name.to_string(), p.href())).unwrap_or_else(|| ("a deleted project".into(), String::new())),
                 _ => (String::new(), String::new()),
             };
-            rows.push(LogRow { seq, at: at.clone(), kind, summary, place, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
+            rows.push(LogRow { seq, at: at.clone(), kind, summary, html, count: 1, oldest: seq, place, json: serde_json::to_string_pretty(&Record { seq: RecordSeq(seq), at, project: owner, event })? });
         }
         rows.sort_by_key(|r| std::cmp::Reverse(r.seq));
+        // records in a row that say the same are one line, "×10"
+        let mut grouped: Vec<LogRow> = Vec::with_capacity(rows.len());
+        for row in rows {
+            match grouped.last_mut() {
+                Some(last) if last.kind == row.kind && last.summary == row.summary && last.place == row.place => {
+                    last.count += 1;
+                    last.oldest = row.seq;
+                }
+                _ => grouped.push(row),
+            }
+        }
+        let rows = grouped;
         let base = project.map(|id| format!("/projects/id/{id}/log")).unwrap_or_else(|| "/log".into());
         let exists = |seq, comparator: &str| -> sluice_store::Result<bool> {
             let mut args = base_args.clone(); args.push(Value::Integer(seq));
             Ok(sql.query_row(&format!("SELECT EXISTS(SELECT 1 FROM records WHERE {base_condition} AND seq{comparator}?)"), params_from_iter(args), |r| r.get(0))?)
         };
-        let older = if let Some(last) = rows.last() { if exists(last.seq, "<")? { format!("{base}?{}", query.query(Some(last.seq), None)) } else { String::new() } } else { String::new() };
+        let older = if let Some(last) = rows.last() { if exists(last.oldest, "<")? { format!("{base}?{}", query.query(Some(last.oldest), None)) } else { String::new() } } else { String::new() };
         let newer = if let Some(first) = rows.first() { if exists(first.seq, ">")? { format!("{base}?{}", query.query(None, Some(first.seq))) } else { String::new() } } else { String::new() };
         Ok(LogView { nav, project, query, rows, older, newer })
     }).await.map_err(|e| e.into_public(true))
+}
+/// What a record's sentence names that has a page: its step, unit and thread (in its project).
+fn links(json: &serde_json::Value, project: Option<ProjectId>) -> Vec<(String, String)> {
+    let Some(project) = project else {
+        return vec![];
+    };
+    let field = |name: &str| json.get(name).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let mut links = vec![];
+    if let Some(thread) = field("thread") {
+        links.push((thread.to_owned(), super::threads::thread_url(project, thread)));
+    }
+    if let Some(step) = field("step") {
+        links.push((step.to_owned(), format!("/projects/id/{project}/steps/{step}")));
+    }
+    if let Some(unit) = field("unit") {
+        links.push((unit.to_owned(), format!("/projects/id/{project}/units/{unit}")));
+    }
+    links
+}
+/// `text`, HTML-escaped, with the first whole-word use of each name linked to its page.
+fn linked(text: &str, links: &[(String, String)]) -> TrustedHtml {
+    let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/');
+    let mut spans: Vec<(usize, usize, &str)> = vec![];
+    for (name, href) in links {
+        let found = text.match_indices(name.as_str()).find(|(at, _)| {
+            let before = text[..*at].chars().next_back();
+            let after = text[at + name.len()..].chars().next();
+            !before.is_some_and(word)
+                && !after.is_some_and(|c| word(c) && c != '.' && c != '/')
+                && !spans.iter().any(|(s, e, _)| at < e && at + name.len() > *s)
+        });
+        if let Some((at, _)) = found {
+            spans.push((at, at + name.len(), href));
+        }
+    }
+    spans.sort();
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let mut html = String::new();
+    let mut at = 0;
+    for (start, end, href) in spans {
+        html.push_str(&esc(&text[at..start]));
+        html.push_str(&format!("<a href=\"{}\">{}</a>", esc(href), esc(&text[start..end])));
+        at = end;
+    }
+    html.push_str(&esc(&text[at..]));
+    TrustedHtml::owned(html)
 }
 /// A record in one plain sentence: who did what to which step, unit, run or project. A
 /// failure reads as `views::failure` says it (a cancel as a cancel), never as a pane dump or
@@ -323,7 +393,7 @@ fn summary(event: &Event) -> String {
             m.thread,
             m.from,
             m.to.as_deref().unwrap_or("anyone"),
-            cut(&m.body, 160)
+            cut(&crate::markdown::plain(&m.body), 160)
         ),
         Event::StepStatus {
             step, from, to, error, ..

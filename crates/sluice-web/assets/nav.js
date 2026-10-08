@@ -1,6 +1,6 @@
 const runtimeUrl = document.querySelector("script[data-datastar-runtime]")?.src;
 const datastar = runtimeUrl ? await import(runtimeUrl) : null;
-// The nav's two menus, the project switcher and display preferences, are <details>: they open and
+// The nav's two menus (the project switcher, display preferences) and the plan's More menu are <details>: they open and
 // work without this. This closes them on a click elsewhere or Escape, as a menu does, and makes
 // a setting apply at once, without the menu's Save: the theme (its id as `data-theme` on
 // <html>; until one is picked, or after "Match system", the attribute is absent and the page
@@ -9,7 +9,7 @@ const datastar = runtimeUrl ? await import(runtimeUrl) : null;
 // every page is rendered from.
 
 const root = document.documentElement;
-const menus = () => document.querySelectorAll("nav.top details[open]");
+const menus = () => document.querySelectorAll("nav.top details[open], details.tool-more[open]");
 document.addEventListener("click", (ev) => {
   for (const d of menus()) if (!d.contains(ev.target)) d.open = false;
 });
@@ -147,7 +147,8 @@ function tick() {
     tag.hidden = !(age >= Number(tag.dataset.quietAfter || QUIET));
     if (tag.hidden) continue;
     const text = Math.abs(ran - age) < 60 ? "quiet" : `quiet ${short(age)}`;
-    if (tag.textContent !== text) tag.textContent = text;
+    const words = tag.querySelector(".qt") ?? tag;  // the hourglass stays
+    if (words.textContent !== text) words.textContent = text;
     if (!tag.closest("details.archived")) quiet++;
   }
   const title = document.querySelector("[data-page-title]");

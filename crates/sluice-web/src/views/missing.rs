@@ -32,6 +32,8 @@ struct Named {
     unit: Option<String>,
     /// A run's file: `runs/<run>/files/<name>`.
     file: Option<(String, String)>,
+    /// The address names a project by something that is not a project id (`/projects/id/nope`).
+    bad_project: Option<String>,
 }
 fn named(path: &str) -> Named {
     let mut parts = path.trim_start_matches('/').split('/');
@@ -39,7 +41,11 @@ fn named(path: &str) -> Named {
     if (parts.next(), parts.next()) != (Some("projects"), Some("id")) {
         return named;
     }
-    named.project = parts.next().and_then(|p| p.parse().ok());
+    let id = parts.next();
+    named.project = id.and_then(|p| p.parse().ok());
+    if named.project.is_none() {
+        named.bad_project = id.filter(|p| !p.is_empty()).map(decode);
+    }
     match (parts.next(), parts.next()) {
         (Some("steps"), Some(step)) => named.step = Some(decode(step)),
         (Some("units"), Some(unit)) => named.unit = Some(decode(unit)),
@@ -80,6 +86,12 @@ pub async fn page(
 ) -> Option<Response> {
     let snapshot = state.snapshot(None).await.ok()?;
     let mut named = named(path);
+    // an id that is not one names no project: the same calm page as an id that is gone
+    let status = if named.bad_project.is_some() && status == StatusCode::BAD_REQUEST {
+        StatusCode::NOT_FOUND
+    } else {
+        status
+    };
     let project = named
         .project
         .and_then(|id| snapshot.projects.iter().find(|p| p.id == id));
@@ -112,9 +124,9 @@ pub async fn page(
     let retire_words = retire.map(|s| {
         let hours = s as f64 / 3600.0;
         if hours.fract() == 0.0 {
-            format!("{hours:.0} h")
+            format!("{hours:.0}h")
         } else {
-            format!("{hours:.1} h")
+            format!("{hours:.1}h")
         }
     });
     let gone = match &retire_words {
@@ -169,7 +181,10 @@ pub async fn page(
                 String::new(),
             )
         }
-        (None, _, _) if named.project.is_some() && status == StatusCode::NOT_FOUND => {
+        (None, _, _)
+            if (named.project.is_some() || named.bad_project.is_some())
+                && status == StatusCode::NOT_FOUND =>
+        {
             links.push(("/".into(), "All projects".into()));
             links.push(("/log".into(), "The log".into()));
             (

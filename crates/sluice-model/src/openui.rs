@@ -692,6 +692,11 @@ pub const DATA_COMPONENTS: &[ComponentSpec] = &[
         data: true,
     },
     ComponentSpec {
+        name: "Count",
+        props: &[req("label", T::String), req("of", T::OneOf(COUNT_STATES))],
+        data: true,
+    },
+    ComponentSpec {
         name: "Query",
         props: &[req("query", T::String), opt("caption", T::String)],
         data: true,
@@ -720,6 +725,19 @@ pub const DATA_COMPONENTS: &[ComponentSpec] = &[
         props: &[req("from", T::String), opt("chars", T::Number)],
         data: true,
     },
+];
+/// What a `Count` counts, as the dashboard's own summary line counts it: steps by state (a
+/// cancel is "cancelled", never "failed"; "quiet" is running and quiet past its threshold;
+/// "running" counts the quiet ones too), or every step.
+pub const COUNT_STATES: &[&str] = &[
+    "failed",
+    "cancelled",
+    "running",
+    "quiet",
+    "stale",
+    "pending",
+    "succeeded",
+    "steps",
 ];
 /// The most bytes of a board's document (`board_doc_write`, `board_doc_edit`).
 pub const MAX_DOC_BYTES: usize = 64 * 1024;
@@ -1245,12 +1263,20 @@ impl Board {
         self.walk(&mut |c, _| out.extend(component_refs(c)));
         out
     }
-    /// `board_set`'s warnings: each step the board names that the plan cannot give it.
+    /// `board_set`'s warnings: each step the board names that the plan cannot give it, and
+    /// each query that counts failed steps with the owner's cancels among them.
     pub fn warnings(&self, plan: &dyn StepLookup) -> Vec<String> {
-        self.step_refs()
+        let mut out: Vec<String> = self
+            .step_refs()
             .iter()
             .filter_map(|r| r.problem(plan).map(|p| r.warning(&p)))
-            .collect()
+            .collect();
+        self.walk(&mut |c, _| {
+            if let Some(warning) = cancels_counted(c) {
+                out.push(warning);
+            }
+        });
+        out
     }
     /// A plan edit's warnings: each step the board names that the plan gave it before the
     /// edit (`before`) and does not after it (`after`).
@@ -1287,6 +1313,29 @@ fn has_plan_step(plan: &crate::plan::Plan, id: &str) -> bool {
     crate::ids::StepId::new(id).is_ok_and(|id| plan.steps().contains_key(&id))
 }
 
+/// A Metric's, Query's or Chart's SQL that compares `status` with 'failed' and never reads
+/// `error`: a cancel is a failed step to the store, so it counts the owner's cancels as
+/// failures, which the dashboard's own counts do not.
+fn cancels_counted(c: &Component) -> Option<String> {
+    let index = match c.name.as_str() {
+        "Query" => 0,
+        "Metric" | "Chart" => 1,
+        _ => return None,
+    };
+    let tokens = sql_tokens(c.str_arg(index)?);
+    let has = |t: &SqlToken| tokens.contains(t);
+    (has(&SqlToken::Name("status".into()))
+        && has(&SqlToken::Text("failed".into()))
+        && !tokens
+            .iter()
+            .any(|t| matches!(t, SqlToken::Name(n) if n == "error")))
+    .then(|| {
+        format!(
+            "line {}: {} counts status 'failed', which includes the steps the owner cancelled; Count(label, \"failed\") counts as the dashboard does",
+            c.line, c.name
+        )
+    })
+}
 #[derive(Debug, Clone, PartialEq)]
 enum SqlToken {
     /// A name, unquoted (lowercased) or quoted with `"`, `` ` `` or `[]`.
@@ -1655,6 +1704,22 @@ mod tests {
                 "line 7: StepStatus selects `tag:main`, which 2 plan steps carry",
             ]
         );
+    }
+
+    #[test]
+    fn a_query_that_counts_cancels_as_failures_warns_and_count_checks() {
+        let board = check_board(
+            "root = Stack([a, b, c, d])\na = Metric(\"Failed\", \"SELECT count(*) FROM steps WHERE project_id = ? AND status = 'failed'\")\nb = Metric(\"Failed\", \"SELECT count(*) FROM steps WHERE project_id = ? AND status = 'failed' AND error NOT LIKE '%cancel%'\")\nc = Count(\"Failed\", \"failed\")\nd = Count(\"Quiet\", \"quiet\")",
+        )
+        .unwrap();
+        let plan = Fixed(&[], &[], &[]);
+        assert_eq!(
+            board.warnings(&plan),
+            [
+                "line 2: Metric counts status 'failed', which includes the steps the owner cancelled; Count(label, \"failed\") counts as the dashboard does"
+            ]
+        );
+        assert!(check_board("root = Count(\"x\", \"everything\")").is_err());
     }
 
     #[test]

@@ -343,6 +343,10 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
         tx.changed(Some(project), "project");
         Ok(())
     }).await.unwrap();
+    // its run writes as it goes: not quiet
+    let dir = _home.path().join("runs").join(run.to_string());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("stderr.txt"), "working").unwrap();
     let work = "work".parse().unwrap();
     let registry = Registry(Arc::new(Exact));
     let (_, board) = views::board::snapshot(&state, project, Some(&registry))
@@ -434,18 +438,25 @@ async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_en
                 .unwrap()
         }
     };
+    let root = _home.path().to_owned();
     let run = |created: &'static str, finished: Option<&'static str>| {
         let writer = writer.clone();
+        let root = root.clone();
         async move {
+            let id = RunId::new();
             writer.write(RetrySafety::NonIdempotent, move |tx| {
                 let attempt = AttemptId::new();
                 // one live attempt a step: the one before has ended
                 tx.sql().execute("UPDATE attempts SET phase='terminal' WHERE project_id=?1", [project.to_string()])?;
                 tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES(?1,?2,'work','executing','{}','fixture',?3)", (attempt.to_string(),project.to_string(),created))?;
-                tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,started_at,finished_at) VALUES(?1,?2,?3,'work',?4,?4,?5)", (RunId::new().to_string(),project.to_string(),attempt.to_string(),created,finished))?;
+                tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,started_at,finished_at) VALUES(?1,?2,?3,'work',?4,?4,?5)", (id.to_string(),project.to_string(),attempt.to_string(),created,finished))?;
                 tx.changed(Some(project), "project");
                 Ok(())
-            }).await.unwrap()
+            }).await.unwrap();
+            // the run writes as it goes: it is not quiet
+            let dir = root.join("runs").join(id.to_string());
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("stderr.txt"), "working").unwrap();
         }
     };
     // failed without a run, then pending: no timer
@@ -533,6 +544,60 @@ fn a_cancelled_step_reads_as_cancelled_not_failed() {
     );
     assert!(!html.contains("Why it failed"));
     assert!(!html.contains("class=\"primary\">Retry"));
+}
+/// A long `after` is a few words ("6 steps: 5 done, 1 running") over the steps it names,
+/// folded, sorted and linked; a cancelled or failed step offers no Pause.
+#[test]
+fn a_long_after_is_a_sentence_over_its_linked_steps() {
+    let plan = Plan::parse_json(
+        br#"{"steps":{"f":{"run":"core.external","outputs":{"done":"boolean"}},"e":{"run":"core.external","outputs":{"done":"boolean"}},"d":{"run":"core.external","outputs":{"done":"boolean"}},"c":{"run":"core.external","outputs":{"done":"boolean"}},"b":{"run":"core.external","outputs":{"done":"boolean"}},"a":{"run":"core.external","outputs":{"done":"boolean"}},"w":{"run":"core.external","outputs":{"done":"boolean"},"after":["f","e","d","c","b","a"]}}}"#,
+        &Signatures,
+    )
+    .unwrap();
+    let mut state = StateSnapshot::default();
+    for id in ["a", "b", "c", "d", "e"] {
+        state.steps.insert(
+            id.parse().unwrap(),
+            StepState {
+                status: StepStatus::Succeeded,
+                ..Default::default()
+            },
+        );
+    }
+    state.steps.insert(
+        "f".parse().unwrap(),
+        StepState {
+            status: StepStatus::Running,
+            ..Default::default()
+        },
+    );
+    let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
+    assert_eq!(view.gates_words(), "6 steps: 5 done, 1 running");
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(
+        html.contains("<summary><span>6 steps: 5 done, 1 running</span>"),
+        "{html}"
+    );
+    let list = &html[html.find("gate-list").unwrap()..];
+    // sorted, each a link to its step
+    assert!(
+        list.find(">a</code>").unwrap() < list.find(">f</code>").unwrap(),
+        "{list}"
+    );
+    assert!(list.contains("/steps/a\"><code>a</code></a>"), "{list}");
+    let mut failed = StateSnapshot::default();
+    failed.steps.insert(
+        "w".parse().unwrap(),
+        StepState {
+            status: StepStatus::Failed,
+            error: Some("cancelled: pivot".into()),
+            ..Default::default()
+        },
+    );
+    let view = StepView::new(ProjectId::new(), &plan, &failed, &"w".parse().unwrap());
+    assert!(!view.pausable());
+    assert!(!view.body().unwrap().as_str().contains("value=\"pause\""));
 }
 /// A failure leads with one sentence from its kind; the pane its agent left is folded under
 /// "Pane at failure", never shown as escaped JSON.
@@ -671,6 +736,7 @@ async fn a_running_step_says_what_it_is_doing_now() {
         tx.sql().execute("UPDATE steps SET status='running',run_ids=?2 WHERE project_id=?1 AND step_id='work'", (project.to_string(),json!([run]).to_string()))?;
         tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES (900001,?1,'step-work','orchestrator','work','Start with the seams.','2026-10-05T09:01:00Z')", [project.to_string()])?;
         tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES (900002,?1,'step-work','work','orchestrator',?2,'2026-10-05T09:40:00Z')", (project.to_string(), long))?;
+        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES (900003,?1,'step-work','orchestrator','work','Rebase first: `lash-core-store__unit_test` and intent_hash_golden_vector are red.','2026-10-05T09:50:00Z')", [project.to_string()])?;
         tx.changed(Some(project), "project");
         Ok(())
     }).await.unwrap();
@@ -705,6 +771,32 @@ async fn a_running_step_says_what_it_is_doing_now() {
     assert!(
         !now.contains("Start with the seams"),
         "the latest only: {now}"
+    );
+    // its own voice leads; what was said to it since comes under it, labelled, identifiers whole
+    assert!(
+        now.contains("<span class=\"now-from\">work</span> to orchestrator"),
+        "{now}"
+    );
+    let to_it = &now[now.find("now-in").expect("the message to it")..];
+    assert!(
+        now.find("now-msg").unwrap() < now.find("now-in").unwrap(),
+        "{now}"
+    );
+    assert!(
+        to_it.contains("To it</span> from <span class=\"now-from\">orchestrator</span>"),
+        "{to_it}"
+    );
+    assert!(
+        to_it.contains(
+            "<code>lash-core-store__unit_test</code> and intent_hash_golden_vector are red."
+        ),
+        "{to_it}"
+    );
+    // it last said something days ago (its own message) and its run has written nothing since:
+    // quiet, and Now says for how long
+    assert!(
+        now.contains("<span>Nothing written for <time data-since=\"2026-10-05T09:40:00Z\""),
+        "{now}"
     );
     // the Now section comes before everything else under the head
     assert!(drawer.find("d-now").unwrap() < drawer.find("<h3>Inputs</h3>").unwrap_or(usize::MAX));
@@ -743,11 +835,11 @@ fn a_fn_failure_reads_as_its_exception_with_the_resume_hint_by_retry() {
     let html = view.body().unwrap();
     let html = html.as_str();
     assert!(
-        html.contains("<p class=\"err-line\">Stopped at its wall-clock cap of 10h 0m.</p>"),
+        html.contains("<p class=\"err-line\">Stopped at its wall-clock cap after 10h 0m.</p>"),
         "{html}"
     );
     assert!(
-        html.contains("<p class=\"err-text\">remains active.\ncodex: still waiting.</p>"),
+        html.contains("<p class=\"err-text\">…remains active.\ncodex: still waiting.</p>"),
         "{html}"
     );
     assert!(

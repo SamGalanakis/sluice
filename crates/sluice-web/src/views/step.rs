@@ -35,6 +35,10 @@ pub struct FieldView {
     pub pairs: Vec<(String, String)>,
 }
 impl FieldView {
+    /// A true or false value its fn gives no doc for.
+    pub fn is_switch(&self) -> bool {
+        self.available && self.doc.is_empty() && matches!(self.kind.as_str(), "true" | "false")
+    }
     pub fn new(
         name: &str,
         ty: &str,
@@ -84,8 +88,9 @@ impl FieldView {
         Self::new(name, ty, "", value, &reference.0)
     }
     /// A long text value as markdown in the body's font: a spec, a summary, a report.
-    pub fn prose_html(&self) -> TrustedHtml {
-        crate::markdown::render(&self.value)
+    /// Its text as markdown, its headings from `top` down so they nest under its section.
+    pub fn prose_html(&self, top: u8) -> TrustedHtml {
+        crate::markdown::render_from(&self.value, top)
     }
     /// Its type in a few words: a JSON schema reads as its `type` ("object"), not as JSON.
     pub fn ty_words(&self) -> String {
@@ -251,7 +256,8 @@ pub struct StepView {
     /// Running and quiet past its `quiet_after`.
     pub quiet: bool,
     pub waits: Vec<String>,
-    pub gates: Vec<String>,
+    /// What it runs after (`after`), each with where it leads and how it stands.
+    pub gates: Vec<GateView>,
     pub queued: Vec<String>,
     pub skipped: Vec<String>,
     pub error: String,
@@ -270,8 +276,14 @@ pub struct StepView {
     pub finishing: Option<sluice_model::attempt::Finishing>,
     /// Its latest progress (`step_progress`) while that is fresher than its outputs.
     pub progress: Option<ProgressView>,
-    /// While it runs: the latest message in its thread, what it is doing now.
-    pub now: Option<NowView>,
+    /// While it runs: its own latest message and the latest to it since.
+    pub now: NowView,
+    /// While it runs: when its run last wrote anything (RFC 3339), as the board observed its
+    /// run files. Read with `quiet`; it moves with every write, so no part of the version.
+    #[serde(skip)]
+    pub active_at: String,
+    /// When its current result (its outputs, or its failure) was recorded; "" without one.
+    pub result_at: String,
     /// Its current run's times, for its card's timer.
     pub timing: Option<RunTiming>,
 }
@@ -327,15 +339,49 @@ pub fn spoken_duration(seconds: f64) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
-/// The latest message in a running step's thread: who wrote it, when, and its start.
+/// One entry of a step's `after`: a step (linked, with its status), a unit (linked) or a
+/// condition.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct GateView {
+    pub entry: String,
+    pub href: String,
+    /// A step's status ("succeeded", "running", …); "" for a unit or a condition.
+    pub mark: String,
+}
+impl GateView {
+    pub fn done(&self) -> bool {
+        matches!(self.mark.as_str(), "succeeded" | "skipped")
+    }
+}
+/// What a running step is doing now: its own latest message (to anyone), and the latest
+/// message to it since, which it has not answered yet.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct NowView {
+    pub own: Option<NowMessage>,
+    pub inbound: Option<NowMessage>,
+}
+/// One message as Now quotes it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct NowMessage {
+    pub thread: String,
     pub from: String,
+    pub to: String,
     pub at: String,
-    /// Its first words, as plain text.
-    pub excerpt: String,
+    /// Its body's first 4000 characters: Now quotes at most 360 of them.
+    pub body: String,
+}
+impl NowMessage {
+    /// Its first words as one line of inline HTML, code spans kept.
+    pub fn excerpt(&self) -> TrustedHtml {
+        crate::markdown::excerpt(&self.body, 360).0
+    }
     /// The excerpt leaves some of it out.
-    pub more: bool,
+    pub fn more(&self) -> bool {
+        crate::markdown::excerpt(&self.body, 360).1
+    }
+    pub fn thread_href(&self, project: &ProjectId) -> String {
+        super::threads::thread_url(*project, &self.thread)
+    }
 }
 /// A step's progress as its page shows it: the fields, when they were set, and whether the
 /// step still runs (live) or the run has ended (kept until the next run starts).
@@ -356,6 +402,50 @@ pub fn status_name(status: &StepStatus) -> &'static str {
     }
 }
 impl StepView {
+    /// Its `after` in a few words: "98 steps, all done", "3 steps: 2 done, 1 running", with
+    /// any units and conditions counted after.
+    pub fn gates_words(&self) -> String {
+        let steps: Vec<&GateView> = self.gates.iter().filter(|g| !g.mark.is_empty()).collect();
+        let others = self.gates.len() - steps.len();
+        let noun =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let mut words = String::new();
+        if !steps.is_empty() {
+            let done = steps.iter().filter(|g| g.done()).count();
+            words = noun(steps.len(), "step", "steps");
+            if done == steps.len() {
+                words.push_str(if done == 1 { ", done" } else { ", all done" });
+            } else {
+                let mut by: Vec<(String, usize)> = vec![];
+                for g in steps.iter().filter(|g| !g.done()) {
+                    match by.iter_mut().find(|(m, _)| *m == g.mark) {
+                        Some((_, n)) => *n += 1,
+                        None => by.push((g.mark.clone(), 1)),
+                    }
+                }
+                let mut parts = vec![];
+                if done > 0 {
+                    parts.push(format!("{done} done"));
+                }
+                parts.extend(by.into_iter().map(|(m, n)| format!("{n} {m}")));
+                words.push_str(&format!(": {}", parts.join(", ")));
+            }
+        }
+        if others > 0 {
+            if !words.is_empty() {
+                words.push_str(" and ");
+            }
+            words.push_str(&noun(others, "unit or condition", "units or conditions"));
+        }
+        words
+    }
+    /// Now leads with what the step itself wrote last: its live progress when that is newer
+    /// than its own latest message.
+    pub fn progress_first(&self) -> bool {
+        self.progress
+            .as_ref()
+            .is_some_and(|p| p.live && self.now.own.as_ref().is_none_or(|own| p.at > own.at))
+    }
     pub fn new(project: ProjectId, plan: &Plan, state: &StateSnapshot, id: &StepId) -> Self {
         let step = &plan.steps()[id];
         let entry = state.steps.get(id).cloned().unwrap_or_default();
@@ -472,7 +562,35 @@ impl StepView {
             blocked: false,
             quiet: false,
             waits,
-            gates: step.after.iter().map(|g| g.entry()).collect(),
+            gates: {
+                let mut gates: Vec<GateView> = step
+                    .after
+                    .iter()
+                    .map(|g| match g {
+                        sluice_model::gates::Gate::Step { id, .. } => GateView {
+                            entry: g.entry(),
+                            href: format!("/projects/id/{project}/steps/{id}"),
+                            mark: state
+                                .steps
+                                .get(id)
+                                .map(|e| status_name(&e.status).to_owned())
+                                .unwrap_or_default(),
+                        },
+                        sluice_model::gates::Gate::Unit { name, .. } => GateView {
+                            entry: g.entry(),
+                            href: format!("/projects/id/{project}/units/{name}"),
+                            mark: String::new(),
+                        },
+                        _ => GateView {
+                            entry: g.entry(),
+                            href: String::new(),
+                            mark: String::new(),
+                        },
+                    })
+                    .collect();
+                gates.sort_by(|a, b| a.entry.cmp(&b.entry));
+                gates
+            },
             queued: entry.queued,
             skipped: entry.skipped.iter().map(|s| s.to_string()).collect(),
             error: entry.error.unwrap_or_default(),
@@ -488,7 +606,9 @@ impl StepView {
             revision: 0,
             finishing: None,
             progress: None,
-            now: None,
+            now: NowView::default(),
+            active_at: String::new(),
+            result_at: String::new(),
             timing: None,
         };
         if let Some(failure) = failure {
@@ -541,8 +661,12 @@ impl StepView {
             },
             self.mark,
             if self.blocked { " is-blocked" } else { "" },
-            if self.ready { " is-next" } else { "" }
-        )
+            if self.ready { " is-next" } else { "" },
+        ) + if self.is_quiet() { " is-quiet" } else { "" }
+    }
+    /// Running, and its run has written nothing for its `quiet_after`: its card says so.
+    pub fn is_quiet(&self) -> bool {
+        self.quiet && self.status == "running" && !self.active_at.is_empty()
     }
     pub fn caption(&self) -> String {
         if self.status == "failed" {
@@ -560,10 +684,32 @@ impl StepView {
             "outside".into()
         } else if self.finishing.is_some() && self.status == "running" {
             "finishing".into()
+        } else if self.is_quiet() {
+            "quiet".into()
         } else if let Some(total) = self.total {
             format!("{}/{total}", self.done)
         } else {
             String::new()
+        }
+    }
+    /// What its caption means, for the caption's title (no legend: each says itself).
+    pub fn caption_help(&self) -> String {
+        match self.caption().as_str() {
+            "failed" => "Its last run failed; Retry runs it again".into(),
+            "cancelled" => "Cancelled by its owner; Retry runs it again".into(),
+            "blocked" => "Waits on a step that failed or went stale".into(),
+            "queued" => "Ready, waiting for a resource to free up".into(),
+            "outside" => "Done outside sluice: set its outputs when the work lands".into(),
+            "finishing" => "Its agent submitted; its run is ending".into(),
+            "quiet" => {
+                "Running, but its run has written nothing for a while: the time since it last did"
+                    .into()
+            }
+            "" => String::new(),
+            _ => self
+                .total
+                .map(|total| format!("{} of its {total} items done", self.done))
+                .unwrap_or_default(),
         }
     }
     /// The run times its card shows: a running step's current run, ticking; how long a
@@ -596,6 +742,22 @@ impl StepView {
             said: String,
             title: String,
         }
+        if self.is_quiet() {
+            // how long it has written nothing, ticking, in place of its run's time
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let seconds =
+                super::timestamp(&self.active_at).map_or(0, |at| now.saturating_sub(at)) as f64;
+            let at = super::when(&self.active_at);
+            return Ok(TrustedHtml::owned(format!(
+                "<time data-since=\"{a}\" datetime=\"{a}\" class=\"took live\" title=\"Nothing written since {at}\"><span class=\"tk\" aria-hidden=\"true\">{shown}</span><span class=\"vh\"> for {said}</span></time>",
+                a = self.active_at,
+                shown = short_duration(seconds),
+                said = spoken_duration(seconds),
+            )));
+        }
         let Some(t) = self.shown_timing() else {
             return Ok(TrustedHtml::owned(String::new()));
         };
@@ -624,6 +786,15 @@ impl StepView {
             title,
         })
     }
+    /// The inputs drawn as fields: all but the undocumented switches (`switches`).
+    pub fn input_rows(&self) -> Vec<&FieldView> {
+        self.inputs.iter().filter(|f| !f.is_switch()).collect()
+    }
+    /// The inputs that are on/off switches its fn does not document (`listen`, `queued`): one
+    /// line under the fields, so plumbing does not read as the step's subject.
+    pub fn switches(&self) -> Vec<&FieldView> {
+        self.inputs.iter().filter(|f| f.is_switch()).collect()
+    }
     /// The outputs with a value, drawn as fields; the rest are named on one line.
     pub fn outputs_set(&self) -> Vec<&FieldView> {
         self.outputs.iter().filter(|f| f.available).collect()
@@ -647,8 +818,10 @@ impl StepView {
     pub fn retryable(&self) -> bool {
         matches!(self.status.as_str(), "succeeded" | "failed" | "stale")
     }
+    /// Pause holds a step that would start: a pending or stale one (a failed one starts only
+    /// when retried, so pausing it would mean nothing).
     pub fn pausable(&self) -> bool {
-        self.paused || matches!(self.status.as_str(), "pending" | "failed" | "stale")
+        self.paused || matches!(self.status.as_str(), "pending" | "stale")
     }
     pub fn last_run(&self) -> Option<&RunView> {
         self.runs.last()
@@ -724,6 +897,10 @@ impl StepTemplate<'_> {
     fn h(&self) -> &'static str {
         if self.page { "h2" } else { "h3" }
     }
+    /// The first heading level inside a value: one under its section's head.
+    fn value_top(&self) -> u8 {
+        if self.page { 3 } else { 4 }
+    }
 }
 /// Run history is current-generation only; a reused step id never inherits an
 /// old declaration's runs. Frozen attempted inputs come from durable results.
@@ -737,6 +914,12 @@ pub fn load_detail(
     step.total = total.map(|n| n as usize);
     step.done = done as usize;
     step.revision = revision as u64;
+    // when its current result was recorded: what a finished step with no run kept says
+    step.result_at = c
+        .prepare_cached("SELECT r.recorded_at FROM steps s JOIN step_results r USING(result_id) WHERE s.project_id=?1 AND s.step_id=?2")?
+        .query_row((project.to_string(), step.id.as_str()), |r| r.get::<_, String>(0))
+        .optional()?
+        .unwrap_or_default();
     let home = c
         .path()
         .and_then(|p| std::path::Path::new(p).parent())
@@ -848,24 +1031,42 @@ pub fn load_detail(
             at: p.at,
             live: p.live,
         });
-    step.now = None;
+    step.now = NowView::default();
     if step.status == "running" {
-        let latest: Option<(String, String, String)> = c
-            .prepare_cached("SELECT \"from\",body,at FROM messages WHERE project_id=?1 AND thread=?2 ORDER BY id DESC LIMIT 1")?
-            .query_row((project.to_string(), format!("step-{}", step.id)), |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+        let row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, NowMessage)> {
+            let body: String = r.get(4)?;
+            Ok((
+                r.get(0)?,
+                NowMessage {
+                    thread: r.get(1)?,
+                    from: r.get(2)?,
+                    to: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    body: body.chars().take(4000).collect(),
+                    at: r.get(5)?,
+                },
+            ))
+        };
+        let own = c
+            .prepare_cached("SELECT id,thread,\"from\",\"to\",body,at FROM messages WHERE project_id=?1 AND \"from\"=?2 ORDER BY id DESC LIMIT 1")?
+            .query_row((project.to_string(), step.id.as_str()), row)
             .optional()?;
-        step.now = latest.map(|(from, body, at)| {
-            let plain = crate::markdown::plain(&body);
-            let excerpt = crate::markdown::cut(&plain, 360);
-            NowView {
-                from,
-                at,
-                more: excerpt != plain,
-                excerpt,
-            }
-        });
+        let after = own.as_ref().map_or(0, |(id, _)| *id);
+        let inbound = c
+            .prepare_cached("SELECT id,thread,\"from\",\"to\",body,at FROM messages WHERE project_id=?1 AND (\"to\"=?2 OR thread=?3) AND \"from\"<>?2 AND id>?4 ORDER BY id DESC LIMIT 1")?
+            .query_row(
+                (
+                    project.to_string(),
+                    step.id.as_str(),
+                    format!("step-{}", step.id),
+                    after,
+                ),
+                row,
+            )
+            .optional()?;
+        step.now = NowView {
+            own: own.map(|(_, m)| m),
+            inbound: inbound.map(|(_, m)| m),
+        };
     }
     (step.messages,step.awaiting) = c.prepare_cached("SELECT count(*),coalesce(sum(needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL),0) FROM messages WHERE project_id=?1 AND thread=?2")?.query_row((project.to_string(),format!("step-{}",step.id)), |r| Ok((r.get::<_, i64>(0)? as usize,r.get::<_, i64>(1)? as usize)))?;
     let mut q = c.prepare_cached("SELECT sub.outputs FROM submissions sub JOIN runs r USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 AND r.finished_at IS NULL ORDER BY r.created_at DESC LIMIT 1")?;

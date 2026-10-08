@@ -620,6 +620,19 @@ async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
     let unknown = format!("/projects/id/{}", ProjectId::new());
     let page = text_body(get_with(&fixture, &unknown, &html).await).await;
     assert!(page.contains("<h1>No such project</h1>"), "{page}");
+    // an address whose id is no project id at all is the same calm page, never "Invalid URL"
+    let response = get_with(&fixture, "/projects/id/nope", &html).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let page = text_body(response).await;
+    assert!(page.contains("<h1>No such project</h1>"), "{page}");
+    assert!(!page.contains("Invalid URL"), "{page}");
+    // the band sits in a header, its landmark named apart from the settings' index
+    assert!(
+        page.contains(
+            "<header class=\"site-head\"><nav id=\"top-nav\" class=\"top\" aria-label=\"Main\">"
+        ),
+        "{page}"
+    );
     let page = text_body(get_with(&fixture, "/nowhere", &html).await).await;
     assert!(page.contains("<h1>Nothing here</h1>"), "{page}");
     // a run's file names the run and the file

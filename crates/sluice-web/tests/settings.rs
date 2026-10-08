@@ -616,7 +616,7 @@ async fn retiring_is_set_in_hours_with_keep_patterns_and_turned_off_when_empty()
     assert_eq!(status, 200, "{html}");
     let p = f.project().await;
     assert_eq!(p.prune_done_after, Some(21600));
-    assert!(html.contains("Done units retire 6 h after their last step finished"));
+    assert!(html.contains("Done units retire 6h after their last step finished"));
     assert!(html.contains("id=\"prune-done-after\" name=\"value\""));
     let (status, html) = f.post("prune_keep", "ta-*, fig-? release", "", 2).await;
     assert_eq!(status, 200, "{html}");

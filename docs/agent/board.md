@@ -31,8 +31,10 @@ or edited the document and whether the plan has changed since (under the documen
   uses. Nothing is stored until it checks.
 - `board_set` returns `{rev, warnings}`. Each warning is a step the program names that the
   plan cannot give it: `line N: StepStatus names step `x`, which is not in the plan`, or
-  `selects `tag:x`, which no plan step carries` (or several do). A warning never refuses the
-  program; fix the name, or name the step by its tag (below).
+  `selects `tag:x`, which no plan step carries` (or several do); or a query that counts the
+  owner's cancels as failures: `line N: Metric counts status 'failed', which includes the steps
+  the owner cancelled; …`. A warning never refuses the program; fix the name, or name the step
+  by its tag (below), or count with `Count`.
 - `board_get(project)` → `{project, rev, program}` (`rev` 0 and `program` null before any
   board). `status` and `projects_list` carry `board_rev`.
 - Each change is a `project.board` log record: `{rev, cleared, reason, author}` (the program
@@ -124,6 +126,9 @@ The checks behind the warnings read the program as text, so they catch what is w
   status word, `owner` or `orchestrator`).
 - Not caught: `NOT IN`, `<>`, `LIKE` and `GLOB`, a value built by an expression or held in
   JSON, an author such as `step:x`, and a step id in a Markdown or Text.
+- A Metric's, Query's or Chart's SQL that compares `status` with `'failed'` and never reads
+  `error`: it counts the steps the owner cancelled as failures, which the dashboard does not.
+  The warning names `Count(label, "failed")`, which counts as the dashboard does.
 
 On the page, a Metric, Query, Chart or LatestMessage whose step is not in the plan draws what it
 has under a line in the attention colour: "Names step `tests-main`, which is not in the plan;
@@ -163,6 +168,7 @@ Data, filled from the project when the page draws:
 - `Doc(fallback?: string)` — the board's document (above) as markdown, with "Edited 12m ago by orchestrator" under it; until it is written, `fallback` (markdown, muted) or "Not written yet.". At most one per program.
 - `StepStatus(step: string)` — the step's card: its status glyph and word (or "blocked", "queued", "outside"), and why it waits or what failed. A link to the step.
 - `Output(step: string, field: string)` — the step's freshest value of `field`, cut short; "Not set yet." until it has one. While the step's progress (`step_progress`, `docs("fns")`) is newer than its outputs, that is the value, marked "live" while the step runs ("progress" after its run ended) with when it was set; once the step finishes with outputs, the output.
+- `Count(label: string, of: "failed" | "cancelled" | "running" | "quiet" | "stale" | "pending" | "succeeded" | "steps")` — one number under its label, counted as the dashboard's own summary line counts it: a step the owner cancelled is `cancelled`, never `failed`; `quiet` is a running step that has written nothing past its threshold (two hours, or its `cadence:` tag); `running` includes the quiet ones; `steps` is every step. Prefer it to a Metric for these: a Metric's SQL sees a cancel as `status = 'failed'`.
 - `Metric(label: string, query: string)` — one number (the first column of the first row) under its label.
 - `Query(query: string, caption?: string)` — the result as a table (the first 50 rows).
 - `Chart(kind: "bar" | "line", query: string, caption?: string)` — a small chart of a two-column result: a label, then a number (the first 60 rows). `bar` draws a bar per row; `line` joins them in order.
@@ -206,9 +212,10 @@ A lane overview: the units still in play, two numbers and the steps by status.
 root = Stack([title, lanes, numbers, chart])
 title = Heading("Lanes", 1)
 lanes = Units(["running", "failed", "blocked", "queued"])
-numbers = Stack([running, failed], "row")
-running = Metric("Running", "SELECT count(*) FROM steps WHERE project_id = ? AND status = 'running'")
-failed = Metric("Failed", "SELECT count(*) FROM steps WHERE project_id = ? AND status = 'failed'")
+numbers = Stack([running, quiet, failed], "row")
+running = Count("Running", "running")
+quiet = Count("Quiet", "quiet")
+failed = Count("Failed", "failed")
 chart = Chart("bar", "SELECT status, count(*) FROM steps WHERE project_id = ? GROUP BY status ORDER BY 2 DESC", "Steps by status")
 ```
 

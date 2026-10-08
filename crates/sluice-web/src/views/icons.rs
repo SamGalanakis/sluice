@@ -50,6 +50,8 @@ icons! {
     X => "x",
     ArrowLeft => "arrow-left",
     FileText => "file-text",
+    Hourglass => "hourglass",
+    Ellipsis => "ellipsis",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.
@@ -83,7 +85,10 @@ pub fn sprite() -> TrustedHtml {
             if SOLID.contains(icon) {
                 let solid = body
                     .replace("<circle ", "<circle style=\"fill:currentColor\" ")
-                    .replace("<path ", "<path style=\"stroke:var(--card)\" ");
+                    .replace(
+                        "<path ",
+                        "<path style=\"stroke:var(--glyph-cut,var(--card))\" ",
+                    );
                 out.push_str(&format!(
                     "<symbol id=\"i-{}-solid\" viewBox=\"0 0 24 24\">{solid}</symbol>",
                     icon.name()

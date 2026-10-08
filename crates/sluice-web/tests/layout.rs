@@ -24,6 +24,7 @@ fn fixture() -> DashboardSnapshot {
             cancelled_steps: vec![],
         }],
         inbox: 2,
+        notes: 0,
         runner_stopped: true,
         functions: FunctionCatalog {
             version: "one".into(),

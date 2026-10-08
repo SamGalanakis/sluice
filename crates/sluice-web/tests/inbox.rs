@@ -206,6 +206,11 @@ async fn p605_views_keep_questions_separate_and_advance_only_the_rendered_thread
     assert_eq!(page.questions[0].id(), q);
     assert_eq!(page.threads.len(), 2);
     assert_eq!(page.nav.inbox, 1);
+    // the band's tray knows the unread notes too: in its name, and as a dot (coral is for
+    // questions) once no question is open
+    assert_eq!(page.nav.notes, 2);
+    let nav = sluice_web::views::NavView::new(&page.nav, None, "").unwrap();
+    assert_eq!(nav.inbox_label(), "Inbox, 1 open question, 2 unread notes");
     assert_eq!(
         commands.requests.lock().unwrap().len(),
         0,
@@ -557,6 +562,16 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         .unwrap();
     let html = html.as_str();
     assert!(!html.contains("<h3>Question</h3>"));
+    // its title is its first line whole: the body under it does not say it again
+    assert!(
+        html.contains("<h3>Ship the lane today? The tests pass.</h3>"),
+        "{html}"
+    );
+    assert!(
+        !html.contains("<strong>Ship the lane today?</strong>"),
+        "{html}"
+    );
+    assert!(html.contains("<p>More detail.</p>"), "{html}");
     // Answer and Close keep their places; the box opens under them
     assert!(
         html.contains(r#"<button type="button" class="q-toggle primary" aria-expanded="false""#),
@@ -568,7 +583,8 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
         "the inbox counts the questions put to the owner"
     );
     assert!(html.contains("Nobody is waiting <span class=\"n\">3</span>"));
-    assert!(html.contains("<button>Close all 3</button>"));
+    assert!(html.contains("<summary>Close all 3</summary>"));
+    assert!(html.contains("Close these 3 questions?"));
     // the nav's Inbox counts what the page lists as yours: not the ones nobody waits on
     assert_eq!(page.nav.inbox, page.for_you().len());
     // a question one agent put to another is listed apart, quieter, answerable as the owner

@@ -41,6 +41,24 @@ impl MessageItem {
             None => headline(&self.message.body, 90),
         }
     }
+    /// Its body under its title: without its first line when the title is that line whole,
+    /// so a question never says its opening twice.
+    pub fn shown_body(&self) -> TrustedHtml {
+        let titled = self
+            .message
+            .title
+            .as_deref()
+            .is_some_and(|t| !t.trim().is_empty());
+        let body = &self.message.body;
+        let mut lines = body.lines().skip_while(|l| l.trim().is_empty());
+        let first = lines.next().unwrap_or("");
+        let whole = crate::markdown::plain(first);
+        if titled || whole.is_empty() || headline(body, 90) != whole {
+            return self.body.clone();
+        }
+        let rest: Vec<&str> = lines.collect();
+        crate::markdown::render(&rest.join("\n"))
+    }
     /// Open, but whoever asked has stopped: nobody is waiting on the answer.
     pub fn stopped(&self) -> bool {
         !self.stopped.is_empty()

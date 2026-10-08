@@ -140,7 +140,16 @@ pub(crate) struct Loaded {
     doc: Option<sluice_store::projects::BoardDoc>,
     /// Each LatestMessage sender's newest message in the project, if any.
     latest: BTreeMap<String, Option<LatestMessage>>,
+    /// What each `Count` counts, as the summary line counts it (`set_quiet` adds the quiet
+    /// runs once their activity is observed).
+    counts: BTreeMap<&'static str, usize>,
     token: String,
+}
+impl Loaded {
+    /// The running steps gone quiet, observed after the store's snapshot.
+    pub(crate) fn set_quiet(&mut self, quiet: usize) {
+        self.counts.insert("quiet", quiet);
+    }
 }
 impl openui::StepLookup for Loaded {
     fn has_step(&self, id: &str) -> bool {
@@ -260,6 +269,19 @@ pub(crate) fn gather(
         once: BTreeSet::new(),
         doc: None,
         latest: BTreeMap::new(),
+        counts: {
+            let c = &view.project.counts;
+            BTreeMap::from([
+                ("failed", c.failed),
+                ("cancelled", c.cancelled),
+                ("running", c.running),
+                ("quiet", view.project.quiet()),
+                ("stale", c.stale),
+                ("pending", c.pending),
+                ("succeeded", c.succeeded),
+                ("steps", c.total()),
+            ])
+        },
         token: String::new(),
         board,
     };
@@ -988,6 +1010,19 @@ impl Draw<'_> {
             "StepStatus" => self.step_status(c),
             "Output" => self.output(c),
             "Metric" | "Query" | "Chart" => self.warned(c, Self::query_component),
+            "Count" => {
+                let of = c.str_arg(1).unwrap_or("");
+                match self.loaded.counts.get(of) {
+                    Some(n) => {
+                        let _ = write!(
+                            self.out,
+                            "<div class=\"board-metric\"><span class=\"metric-v\">{n}</span><span class=\"metric-l\">{}</span></div>",
+                            esc(c.str_arg(0).unwrap_or(""))
+                        );
+                    }
+                    None => self.component_error(c, &format!("Count cannot count {of}")),
+                }
+            }
             "Doc" => self.doc(c),
             "Markdown" => {
                 let html = markdown(c.str_arg(0).unwrap_or(""), "", self.depth + 1);
@@ -1323,7 +1358,7 @@ impl Draw<'_> {
                 if !rest.is_empty() {
                     let _ = write!(
                         self.out,
-                        "<details class=\"doc-more more-fold\" data-preserve-attr=\"open\"><summary><span class=\"m-more\">Read more</span><span class=\"m-less\">Read less</span>{}</summary><div class=\"md board-md\">{rest}</div></details>",
+                        "<details class=\"doc-more more-fold\" data-preserve-attr=\"open\"><summary><span class=\"m-more\">Read more</span><span class=\"m-less\">Read less</span>{}</summary><div class=\"md board-md\">{rest}</div><button type=\"button\" class=\"doc-less link-quiet\">Read less</button></details>",
                         super::icons::icon(super::icons::Icon::ChevronDown, 16, "chev"),
                     );
                 }

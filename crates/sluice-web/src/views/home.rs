@@ -16,7 +16,7 @@ pub struct HomeView {
 }
 /// How urgent a project is on the index: a failure stops its work, a quiet run may be stuck,
 /// running work moves, the rest waits.
-fn urgency(project: &ProjectView) -> u8 {
+pub fn urgency(project: &ProjectView) -> u8 {
     if project.counts.failed > 0 {
         0
     } else if project.running.iter().any(|r| r.quiet) {
@@ -113,6 +113,13 @@ pub fn glyph(status: &str) -> TrustedHtml {
     TrustedHtml::owned(format!(
         "<span class=\"g g-{status}\" role=\"img\" aria-label=\"{status}\">{}</span>",
         solid(shape, 16, class)
+    ))
+}
+/// A quiet step's mark: an hourglass in the attention colour, beside the status glyphs.
+pub fn quiet_glyph() -> TrustedHtml {
+    TrustedHtml::owned(format!(
+        "<span class=\"g g-quiet\" aria-hidden=\"true\">{}</span>",
+        super::icons::icon(super::icons::Icon::Hourglass, 16, "")
     ))
 }
 #[derive(Clone, Debug)]

@@ -247,6 +247,8 @@ pub struct UnitView {
     pub steps: Vec<StepView>,
     pub rows: Vec<Vec<StepView>>,
     pub last_message: String,
+    /// Who sent its last message.
+    pub last_from: String,
     pub changed: String,
     /// The unit is one step in the plan: the board draws that step's card alone, no box.
     pub solo: bool,
@@ -260,6 +262,9 @@ pub struct UnitView {
 pub struct Band<'a> {
     pub label: &'static str,
     pub layers: Vec<Vec<&'a UnitView>>,
+    /// Its units no line joins to any other: after the layers, tallest first, packed from the
+    /// start of the row (centring them would leave holes and imply a wait that is not there).
+    pub loose: Vec<&'a UnitView>,
 }
 /// The board as drawn: the bands of live and pending units, then the done units on one shelf.
 pub struct Layout<'a> {
@@ -282,6 +287,65 @@ impl Layout<'_> {
 /// How many done units the shelf draws unless every one is asked for: the latest finished.
 pub const SHELF: usize = 20;
 impl UnitView {
+    /// Its steps counted by how each reads, the states that need someone first: a quiet
+    /// running step counts as quiet, not running. Zero counts are left out.
+    pub fn tally(&self) -> Vec<(usize, &'static str)> {
+        let order = [
+            "failed",
+            "cancelled",
+            "stale",
+            "quiet",
+            "running",
+            "paused",
+            "pending",
+            "skipped",
+            "succeeded",
+        ];
+        let mut counts = [0usize; 9];
+        for step in &self.steps {
+            let word = if step.is_quiet() {
+                "quiet"
+            } else if step.paused && step.status != "running" {
+                "paused"
+            } else {
+                match step.mark.as_str() {
+                    "manual" => "succeeded",
+                    "external" => "running",
+                    m => m,
+                }
+            };
+            if let Some(i) = order.iter().position(|o| *o == word) {
+                counts[i] += 1;
+            }
+        }
+        order
+            .iter()
+            .zip(counts)
+            .filter(|(_, n)| *n > 0)
+            .map(|(w, n)| (n, *w))
+            .collect()
+    }
+    /// How tall its box draws, in rows of cards.
+    pub fn height(&self) -> usize {
+        if self.solo { 1 } else { self.rows.len() + 1 }
+    }
+    /// "1 running · 4 pending": every state it has, in `tally`'s order.
+    pub fn tally_words(&self) -> String {
+        self.tally()
+            .iter()
+            .map(|(n, w)| format!("{n} {w}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+    /// What in it needs someone, for its label: "1 failed", "1 quiet"; "" when nothing does.
+    pub fn alarm(&self) -> String {
+        self.tally()
+            .iter()
+            .filter(|(_, w)| ["failed", "cancelled", "stale", "quiet"].contains(w))
+            .map(|(n, w)| format!("{n} {w}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
     pub fn key(&self) -> String {
         format!("u:{}", self.id)
     }
@@ -369,16 +433,24 @@ impl UnitView {
     }
     /// The unit's own page: a way back to the plan, its id as the page's heading, its cards
     /// (a done unit open), what it waits on and its last message.
-    pub fn page_body(&self, project: &super::ProjectView) -> Result<TrustedHtml, askama::Error> {
+    pub fn page_body(
+        &self,
+        project: &super::ProjectView,
+        edges: &str,
+    ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(path = "unit_page.html")]
         struct UnitPage<'a> {
             unit: &'a UnitView,
             project: &'a super::ProjectView,
+            edges: &'a str,
+            js_url: String,
         }
         TrustedHtml::from_template(&UnitPage {
             unit: self,
             project,
+            edges,
+            js_url: super::asset_url("sluice.js"),
         })
     }
     /// Its last message, drawn as message bodies are.
@@ -527,6 +599,7 @@ impl ProjectView {
                     steps,
                     rows: rows.into_values().collect(),
                     last_message: String::new(),
+                    last_from: String::new(),
                     changed: project.changed.clone(),
                     solo: unit.steps.len() == 1,
                     waits: BTreeMap::new(),
@@ -720,9 +793,16 @@ impl ProjectView {
             bands: bands
                 .into_iter()
                 .filter(|(_, units)| !units.is_empty())
-                .map(|(label, units)| Band {
-                    label,
-                    layers: self.layers(units, &mut placed),
+                .map(|(label, units)| {
+                    let (mut loose, joined): (Vec<&UnitView>, Vec<&UnitView>) =
+                        units.into_iter().partition(|u| !self.joined(u));
+                    // tallest first, so a row's boxes are near one height
+                    loose.sort_by_key(|u| std::cmp::Reverse(u.height()));
+                    Band {
+                        label,
+                        layers: self.layers(joined, &mut placed),
+                        loose,
+                    }
                 })
                 .collect(),
             done: self.shelf(),
@@ -730,6 +810,16 @@ impl ProjectView {
             total_steps: self.units.iter().filter(|u| u.done).map(|u| u.steps.len()).sum(),
             open: self.show == "done" || !self.q.is_empty(),
         }
+    }
+    /// A line joins `unit` to another unit the board draws: it waits for one not done, or one
+    /// not done waits for it.
+    fn joined(&self, unit: &UnitView) -> bool {
+        let live = |id: &str| self.units.iter().any(|u| !u.done && u.id.as_str() == id);
+        let after = |id: &str| self.facts.after.get(id).into_iter().flatten();
+        after(unit.id.as_str()).any(|p| p != unit.id.as_str() && live(p))
+            || self.units.iter().any(|u| {
+                !u.done && u.id != unit.id && after(u.id.as_str()).any(|p| p == unit.id.as_str())
+            })
     }
     /// The done units the shelf draws: the latest finished first, all of them when the view
     /// asks for done units or searches, else the latest `SHELF`.
@@ -883,6 +973,16 @@ impl ProjectView {
             .relations
             .iter()
             .filter(|r| on_page(&r.from.key()) && on_page(&r.to.key()))
+            .collect();
+        serde_json::to_string(&relations).expect("typed relations serialize")
+    }
+    /// The lines inside one unit, for its own page.
+    pub fn unit_edges_json(&self, unit: &UnitView) -> String {
+        let inside = |key: &str| self.facts.unit_of(key).is_some_and(|u| u == unit.id.as_str());
+        let relations: Vec<&Relation> = self
+            .relations
+            .iter()
+            .filter(|r| inside(&r.from.key()) && inside(&r.to.key()))
             .collect();
         serde_json::to_string(&relations).expect("typed relations serialize")
     }
@@ -1081,9 +1181,10 @@ pub fn load_board(
     let finishing = sluice_store::attempts::finishing(c, project)?;
     let timings = run_timings(c, project)?;
     for unit in &mut board.units {
-        if let Some((message, at)) = last.remove(unit.id.as_str()) {
+        if let Some((message, at, from)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
+            unit.last_from = from;
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
             step.finishing = finishing.get(&step.id).cloned();
@@ -1189,7 +1290,7 @@ fn last_messages(
     c: &Connection,
     project: ProjectId,
     board: &ProjectView,
-) -> sluice_store::Result<BTreeMap<String, (String, String)>> {
+) -> sluice_store::Result<BTreeMap<String, (String, String, String)>> {
     let mut unit_of = BTreeMap::new();
     let mut steps = c.prepare("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
     let mut rows = steps.query([project.to_string()])?;
@@ -1213,7 +1314,7 @@ fn last_messages(
         ];
         for unit in units.into_iter().flatten() {
             if wanted.contains(unit.as_str()) && !last.contains_key(unit) {
-                last.insert(unit.clone(), (r.get(3)?, r.get(4)?));
+                last.insert(unit.clone(), (r.get(3)?, r.get(4)?, from.clone()));
             }
         }
     }
@@ -1257,7 +1358,10 @@ pub async fn page_snapshot(
     registry: Option<&Registry>,
     cache: Option<&super::panel::QueryCache>,
 ) -> Result<(DashboardSnapshot, ProjectView), PublicError> {
-    let (shared, mut view, panel) = load(state, project, registry, None, true).await?;
+    let (shared, mut view, mut panel) = load(state, project, registry, None, true).await?;
+    if let Some(panel) = panel.as_mut() {
+        panel.set_quiet(view.project.quiet());
+    }
     view.panel = super::panel::draw(state, project, panel, cache).await?;
     Ok((shared, view))
 }
@@ -1333,6 +1437,10 @@ async fn load(
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
             let run = running.iter().find(|r| r.step == step.id.as_str());
             step.quiet = run.is_some_and(|r| r.quiet);
+            step.active_at = run
+                .and_then(|r| r.activity)
+                .map(super::rfc3339)
+                .unwrap_or_default();
         }
     }
     Ok((shared, board, loaded))
@@ -1577,7 +1685,8 @@ fn unit_batch(
             message: format!("unit {unit} not found"),
         })?;
     unit.open = unit.done;  // on its own page a done unit shows its cards
-    // no line is drawn on a unit's page: its cards say every wait in words
+    // a wait on another unit is said in words under its card: the page draws only the
+    // lines inside the unit
     for wait in unit.waits.values_mut().flatten() {
         wait.drawn = false;
     }
@@ -1585,7 +1694,8 @@ fn unit_batch(
     Ok(RenderedBatch::new(vec![
         PatchRegion::new(
             "unit-detail",
-            unit.page_body(&view.project).map_err(render_error)?,
+            unit.page_body(&view.project, &view.unit_edges_json(&unit))
+                .map_err(render_error)?,
         ),
         PatchRegion::new(
             "top-nav",

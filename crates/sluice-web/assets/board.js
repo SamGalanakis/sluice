@@ -69,6 +69,16 @@ function openDoc(p) {
 }
 document.addEventListener("click", event => {
   event.target.closest?.("details.doc-more > summary")?.parentElement.setAttribute("data-touched", "");
+  // "Read less" sits at the document's end, where the reader is: it folds the rest and
+  // brings its head back into view
+  const less = event.target.closest?.("details.doc-more .doc-less");
+  if (!less) return;
+  const more = less.closest("details.doc-more");
+  more.setAttribute("data-touched", "");
+  more.open = false;
+  const head = more.querySelector(":scope > summary");
+  if (head.getBoundingClientRect().top < 0) head.scrollIntoView({ block: "center" });
+  head.focus({ preventScroll: true });
 });
 
 document.addEventListener("click", event => {
@@ -324,7 +334,7 @@ document.addEventListener("submit", async event => {
       status.textContent = got.message ?? "Sent.";
       return;
     }
-    status.textContent = got.message ?? `Could not send (${response.status}).`;
+    status.textContent = got.message ?? `Not sent: sluice refused it (${response.status}).`;
     for (const raw of got.errors ?? []) {
       let error;
       try { error = JSON.parse(raw); } catch { continue; }
@@ -335,7 +345,9 @@ document.addEventListener("submit", async event => {
       }
     }
   } catch (error) {
-    status.textContent = `Could not send: ${error.message}`;
+    status.textContent = error instanceof TypeError
+      ? "Not sent: sluice did not answer. Is it running? Try again in a moment."
+      : `Not sent: ${error.message}`;
   } finally {
     buttons.forEach(b => { b.disabled = false; });
   }

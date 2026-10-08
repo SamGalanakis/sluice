@@ -174,17 +174,19 @@ async function send(area, answer) {
     const res = await fetch(area.dataset.url, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(answer),
     });
-    const got = await res.json();
+    const got = await res.json().catch(() => ({}));
     if (res.ok) {
       area.replaceChildren(h("p", { class: "ou-status" }, "Answered."));
       answered(area);
       return;
     }
-    note.textContent = [got.message ?? `could not answer (${res.status})`,
+    note.textContent = [got.message ?? `Not answered: sluice refused it (${res.status}).`,
                         ...(got.errors ?? [])].join(" — ");
     if (res.status !== 409) area.querySelectorAll("button").forEach(b => { b.disabled = false; });
   } catch (err) {
-    note.textContent = `could not answer: ${err}`;
+    note.textContent = err instanceof TypeError
+      ? "Not answered: sluice did not answer. Is it running? Try again in a moment."
+      : `Not answered: ${err.message ?? err}`;
     area.querySelectorAll("button").forEach(b => { b.disabled = false; });
   }
 }

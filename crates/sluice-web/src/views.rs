@@ -138,6 +138,10 @@ pub struct RunningView {
     pub quiet_after: u64,
     pub run_id: String,
     pub activity: Option<u64>,
+    /// When the step last said anything itself (its progress, or a message in its thread),
+    /// RFC 3339; "" when it has not. Activity counts it with its run's files.
+    #[serde(default)]
+    pub said: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectView {
@@ -173,7 +177,8 @@ impl ProjectView {
         } else if self.counts.succeeded + self.counts.skipped == self.counts.total() {
             "Finished."
         } else if self.counts.failed > 0 {
-            "Stopped: nothing is running."
+            // its failure line already says "Stopped: … failed"
+            ""
         } else {
             "Nothing is running."
         }
@@ -216,6 +221,8 @@ impl CatalogSource for EmptyCatalog {
 pub struct DashboardSnapshot {
     pub projects: Vec<ProjectView>,
     pub inbox: usize,
+    /// Notes to the owner not yet read (the inbox's "Unread notes").
+    pub notes: usize,
     /// Nothing holds the scheduler lease (no `sluice loop`, no `serve` without --no-runner):
     /// nothing new starts.
     pub runner_stopped: bool,
@@ -286,6 +293,7 @@ pub struct NavView {
     pub label: String,
     pub links: Vec<NavLink>,
     pub inbox: usize,
+    pub notes: usize,
     pub settings_href: String,
     pub selected: Option<ProjectId>,
 }
@@ -311,8 +319,11 @@ impl NavView {
             .flat_map(|page| ((page)().nav)(project))
             .collect::<Vec<_>>();
         sections.sort_by_key(|entry| entry.order);
+        // the switcher lists projects as the index does: most urgent first
+        let mut projects = snapshot.projects.clone();
+        projects.sort_by_key(|p| (p.counts.total() == 0, home::urgency(p)));
         Ok(Self {
-            projects: snapshot.projects.clone(),
+            projects,
             label: chosen
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "All projects".into()),
@@ -325,6 +336,7 @@ impl NavView {
                 })
                 .collect(),
             inbox: snapshot.inbox,
+            notes: snapshot.notes,
             settings_href: chosen
                 .map(|p| format!("{}/settings", p.href()))
                 .unwrap_or_default(),
@@ -503,6 +515,21 @@ pub fn dashboard_router(state: DashboardState) -> Router {
     page_router(PageState::new(state))
 }
 impl NavView {
+    /// The inbox link's name: its open questions, then its unread notes.
+    pub fn inbox_label(&self) -> String {
+        let mut label = "Inbox".to_owned();
+        match self.inbox {
+            0 => {}
+            1 => label.push_str(", 1 open question"),
+            n => label.push_str(&format!(", {n} open questions")),
+        }
+        match self.notes {
+            0 => {}
+            1 => label.push_str(", 1 unread note"),
+            n => label.push_str(&format!(", {n} unread notes")),
+        }
+        label
+    }
     pub fn has_archived(&self) -> bool {
         self.projects.iter().any(|p| p.archived)
     }
@@ -544,9 +571,30 @@ fn time_html(at: &str, mode: &str) -> TrustedHtml {
     ))
 }
 
+/// Seconds since the epoch as the store writes a time: "2026-10-07T20:47:05Z".
+pub fn rfc3339(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rest = secs % 86_400;
+    // civil from days (Howard Hinnant)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
 /// UTC RFC3339 timestamps used by the store and heartbeat. Other timezone forms
 /// are rejected rather than interpreted in the machine's local timezone.
-fn timestamp(text: &str) -> Option<u64> {
+pub(crate) fn timestamp(text: &str) -> Option<u64> {
     let (date, time) = text.split_once('T')?;
     let mut date = date.split('-').map(|s| s.parse::<i64>().ok());
     let year = date.next()??;
@@ -662,7 +710,11 @@ pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot
         .map(|d| d.as_secs())
         .unwrap_or(0);
     for run in snapshot.projects.iter_mut().flat_map(|p| &mut p.running) {
-        let mut newest = timestamp(&run.started);
+        // what it said (progress, its own messages) counts as much as what its run wrote
+        let mut newest = [timestamp(&run.started), timestamp(&run.said)]
+            .into_iter()
+            .flatten()
+            .max();
         if run.run_id.parse::<sluice_model::ids::RunId>().is_ok() {
             let directory = home.join("runs").join(&run.run_id);
             for path in [
@@ -735,7 +787,7 @@ pub fn load_snapshot(
                 _ => {}
             }
         }
-        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]') FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
+        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]'),max(coalesce(progress_at,''),coalesce((SELECT at FROM messages m WHERE m.project_id=steps.project_id AND m.thread='step-'||steps.step_id AND m.\"from\"=steps.step_id ORDER BY m.id DESC LIMIT 1),'')) FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
         // a failed step's error says whether the owner cancelled it: counted apart
         let mut step_rows = steps.query([&raw])?;
         while let Some(r) = step_rows.next()? {
@@ -762,6 +814,7 @@ pub fn load_snapshot(
                     ),
                     run_id: r.get(4)?,
                     activity: None,
+                    said: r.get(7)?,
                 });
             }
         }
@@ -783,6 +836,7 @@ pub fn load_snapshot(
     // the questions put to the owner that someone still waits on, as Questions' "For you"
     // lists them: one whose asking run has stopped is under "Nobody is waiting", not counted
     let inbox: i64 = c.query_row("SELECT count(*) FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND m.\"to\"='owner' AND m.needs_reply=1 AND m.resolved_by IS NULL AND m.closed_at IS NULL AND NOT EXISTS (SELECT 1 FROM (SELECT coalesce((SELECT qa.run_id FROM question_attachments qa WHERE qa.project_id=m.project_id AND qa.message_id=m.id AND qa.detached_at IS NULL), m.run_id) AS run) asker WHERE asker.run IS NOT NULL AND NOT EXISTS (SELECT 1 FROM runs r JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.project_id=m.project_id AND r.run_id=asker.run AND r.finished_at IS NULL AND a.phase!='terminal' AND NOT a.cancel_requested))",[],|r|r.get(0))?;
+    let notes: i64 = c.query_row("SELECT count(*) FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND m.\"to\"='owner' AND m.needs_reply=0 AND m.id>coalesce((SELECT cursor FROM readers r WHERE r.project_id=m.project_id AND r.identity='owner' AND r.stream='owner' AND r.thread=m.thread),0)",[],|r|r.get(0))?;
     // The scheduler lease lives as long as its holder's connection to the coordinator.
     let runner_stopped: bool = c.query_row(
         "SELECT scheduler_owner IS NULL FROM maintenance WHERE singleton=1",
@@ -792,7 +846,22 @@ pub fn load_snapshot(
     Ok(DashboardSnapshot {
         projects,
         inbox: inbox as usize,
+        notes: notes as usize,
         runner_stopped,
         functions,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_time_reads_back_as_the_store_writes_it() {
+        for at in [
+            "2026-10-07T20:47:05Z",
+            "2024-02-29T00:00:00Z",
+            "1999-12-31T23:59:59Z",
+        ] {
+            assert_eq!(super::rfc3339(super::timestamp(at).unwrap()), at);
+        }
+    }
 }

@@ -71,7 +71,7 @@ async fn every_data_component_is_filled_from_the_project_and_a_bad_query_is_an_e
     // A bad query is an inline error box naming the component and its line; the rest draws.
     let error = between(board, "<div class=\"ou-error-box\"", "</div></div>");
     assert!(
-        error.contains("Query (line 13)") && error.contains("no such table"),
+        error.contains("Query (line 14)") && error.contains("no such table"),
         "{error}"
     );
     assert!(board.contains("<button type=\"submit\" name=\"button\" value=\"0\" class=\"primary\">Retry the lane</button>"));
@@ -587,8 +587,8 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
         "{head}"
     );
     assert!(html.contains("<span class=\"metric-v\">2</span><span class=\"metric-l\">Red</span>"));
-    // While it runs its live progress is part of what it is doing now, under its thread's
-    // latest message, not a section of its own.
+    // While it runs its live progress is part of what it is doing now (it leads: the step has
+    // written no message), not a section of its own.
     let (_, detail) = f.get(&step).await;
     assert!(!detail.contains("d-progress"), "{detail}");
     let section = between(&detail, "<section class=\"d-sec d-now\">", "</section>");
@@ -596,7 +596,10 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
         section.contains(">Now</") && section.contains("Progress, set"),
         "{section}"
     );
-    assert!(section.contains("Nothing in its thread yet."), "{section}");
+    assert!(
+        !section.contains("It has sent no message yet."),
+        "{section}"
+    );
     assert!(
         section.contains("<span class=\"v num\">2</span>"),
         "{section}"
@@ -817,10 +820,20 @@ async fn a_cancel_reads_as_cancelled_in_the_units_table_and_on_its_card() {
         key.contains("■</span> cancelled") && !key.contains("failed"),
         "{key}"
     );
+    // the board's own count agrees: a cancel is not a failure
+    assert!(
+        board.contains("<span class=\"metric-v\">0</span><span class=\"metric-l\">Failed</span>"),
+        "{board}"
+    );
+    // its unit's label says what in it needs someone
+    assert!(
+        html.contains("beta <span class=\"box-alarm\">· 1 cancelled</span>"),
+        "{html}"
+    );
     // its card says so in words, after its id
     let card = between(&html, "id=\"n-beta-build\"", "</a>");
     assert!(
-        card.contains("is-cancelled") && card.contains("<span class=\"dur\">cancelled</span>"),
+        card.contains("is-cancelled") && card.contains(">cancelled</span>"),
         "{card}"
     );
 }
@@ -899,4 +912,38 @@ async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
     let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
     assert_eq!(html.matches("class=\"box solo done\"").count(), 25);
     assert_eq!(edges(&html).len(), 24);
+}
+
+#[tokio::test]
+async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws_its_lines() {
+    let f = Fixture::new().await;
+    let (status, html) = f.get(&format!("/projects/id/{}", f.id)).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    let board = between(&html, "<aside id=\"board-pane\"", "</aside>");
+    assert!(
+        board.contains("<span class=\"metric-v\">1</span><span class=\"metric-l\">Failed</span>"),
+        "{board}"
+    );
+    // a failed step's unit says so at its head, so a phone reads it before its cards
+    assert!(
+        html.contains("beta <span class=\"box-alarm\">· 1 failed</span>"),
+        "{html}"
+    );
+    // the unit's own page: its steps summed, and the lines inside it drawn
+    let (status, page) = f.get(&format!("/projects/id/{}/units/alpha", f.id)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(
+        page.contains("<p class=\"meta unit-sum\">2 steps · 1 pending · 1 succeeded</p>"),
+        "{page}"
+    );
+    let edges = between(&page, "<sluice-board class=\"board\" edges=\"", "\">");
+    assert!(
+        edges.contains("alpha-build") && edges.contains("alpha-review"),
+        "{edges}"
+    );
+    assert!(
+        !edges.contains("beta"),
+        "only the lines inside the unit: {edges}"
+    );
+    assert!(page.contains("<svg class=\"edges\""), "{page}");
 }

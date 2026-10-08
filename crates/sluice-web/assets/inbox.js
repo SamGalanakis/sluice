@@ -14,6 +14,32 @@ function answers(root) {
 const SEEN = 2000;
 const sent = new Map();
 const timers = new Map();
+// a request that never reached sluice reads in our words, not the browser's ("Failed to fetch")
+const unreached = (error) =>
+  error instanceof TypeError ? "Sluice did not answer: is it running? Try again in a moment." : error.message;
+// read marks that did not go through: one quiet line at the top of the notes, not one under
+// every note (the mark is the page's own bookkeeping, not something the owner asked for)
+const unsent = new Set();
+function readFailed(node) {
+  unsent.add(node);
+  const group = node.closest("section.notes, #thread-view, main") ?? document.body;
+  let status = group.querySelector(":scope .read-status");
+  if (!status) {
+    status = Object.assign(document.createElement("p"), { className: "meta read-status", role: "status" });
+    const words = document.createElement("span");
+    const retry = Object.assign(document.createElement("button"), { type: "button", className: "link-button", textContent: "Try again" });
+    retry.onclick = () => {
+      const again = [...unsent];
+      unsent.clear();
+      status.remove();
+      again.forEach(markRead);
+    };
+    status.append(words, " ", retry);
+    const help = group.querySelector(".notes-help");
+    if (help) help.after(status); else group.prepend(status);
+  }
+  status.firstChild.textContent = `${unsent.size === 1 ? "A note was" : `${unsent.size} notes were`} not marked read: sluice did not take it.`;
+}
 async function markRead(node) {
   if (!node.isConnected) return;
   const key = node.dataset.readUrl + "/" + node.dataset.thread;
@@ -25,13 +51,9 @@ async function markRead(node) {
                                                          body: JSON.stringify({ thread: node.dataset.thread, through }) });
     if (!response.ok) throw new Error("Could not mark this note read.");
     keepRead(node);
-  } catch (error) {
+  } catch {
     sent.delete(key);
-    const status = document.createElement("p"); status.className = "ou-status"; status.role = "status";
-    status.textContent = error.message + " ";
-    const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Retry";
-    retry.onclick = () => { status.remove(); markRead(node); };
-    status.append(retry); node.append(status);
+    readFailed(node);
   }
 }
 function keepRead(node) {
@@ -93,12 +115,13 @@ document.addEventListener("submit", async (event) => {
   try {
     const response = await fetch(form.action, { method: "POST", headers: { "content-type": "application/json" },
                                                 body: JSON.stringify({ body: "", answer: { action: "close" } }) });
-    if (!response.ok) throw new Error((await response.json()).message ?? "Could not close it.");
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message ?? "Sluice did not close it.");
     form.closest("li, article.item")?.classList.add("closing");
     form.replaceChildren(Object.assign(document.createElement("span"), { className: "meta", textContent: "Closed." }));
   } catch (error) {
     button.disabled = false;
-    form.append(Object.assign(document.createElement("span"), { className: "ou-status", role: "status", textContent: ` ${error.message}` }));
+    form.querySelector(".ou-status")?.remove();
+    form.append(Object.assign(document.createElement("span"), { className: "ou-status", role: "status", textContent: ` ${unreached(error)}` }));
   }
 });
 
@@ -114,10 +137,10 @@ function replies(root) {
       try {
         const response = await fetch(form.action, { method: "POST", headers: { "content-type": "application/json" },
                                                      body: JSON.stringify({ body: data.get("body"), to: data.get("to"), ask: data.get("ask") === "true" }) });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.message);
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.message ?? "Sluice did not take the message.");
         status.textContent = "Sent."; form.reset();
-      } catch (error) { status.textContent = error.message; }
+      } catch (error) { status.textContent = unreached(error); }
     });
   });
 }
