@@ -292,7 +292,13 @@ pub fn redact(text: &str) -> String {
         let core = run.trim_end_matches('.');
         let digit = core.bytes().any(|b| b.is_ascii_digit());
         let alpha = core.bytes().any(|b| b.is_ascii_alphabetic());
-        let before = out
+        // what comes just before it (a credential word, then its separators): the output's
+        // last few characters, never the whole of it again, so a long text masks in one pass
+        let mut from = out.len().saturating_sub(64);
+        while !out.is_char_boundary(from) {
+            from += 1;
+        }
+        let before = out[from..]
             .trim_end_matches([' ', ':', '=', '"', '\''])
             .to_ascii_lowercase();
         let secret = (core.len() >= 16 && PREFIXES.iter().any(|p| core.starts_with(p)))

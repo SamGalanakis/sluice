@@ -1203,6 +1203,111 @@ dl.a-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
 .a-said { white-space: pre-wrap; max-height: 9em; overflow: auto; }
 .a-files { display: flex; flex-wrap: wrap; gap: 0 12px; }
+/* a run's calls by tool, one meta line under its outcome */
+.a-prof { margin: 2px 0 0; font-size: 13px; line-height: 18px; color: var(--muted-foreground);
+          font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* ---- a run's activity: one row per turn (what sluice sent, what the agent said last, its
+   calls counted), folding open to its calls as a tree drawn in hairlines, each call folding
+   open to its arguments and result. A failed call is ink and never folds away. */
+.act-sum a, .act-more a, .act-why a { color: var(--foreground); text-underline-offset: 3px; }
+.act-more { margin: 6px 0 0; max-width: var(--measure); }
+.act-why { margin: 10px 0 0; font-size: 14px; line-height: 20px; overflow-wrap: anywhere;
+           max-width: var(--measure); }
+.act-why .act-tool { font-weight: 600; }
+.act-why code { font-size: 12.5px; }
+ol.act-turns { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.act-turn { display: grid; grid-template-columns: 1.4em minmax(0, 1fr); column-gap: 10px; }
+.act-n { padding-top: 9px; font-size: 13px; line-height: 20px; color: var(--muted-foreground);
+         text-align: right; font-variant-numeric: tabular-nums; }
+details.act-t { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md);
+                background: var(--card); }
+.act-turn.is-running > details.act-t { border-color: var(--status-active); }
+.act-turn.has-failed > details.act-t { border-color: var(--border-strong); }
+details.act-t > summary { display: grid; grid-template-columns: minmax(0, 1fr) 16px;
+                          column-gap: 10px; padding: 9px 12px 10px; cursor: pointer;
+                          list-style: none; border-radius: var(--radius-md); }
+details.act-t > summary::-webkit-details-marker { display: none; }
+details.act-t > summary > .act-line { grid-column: 1; }
+details.act-t > summary > .chev { grid-column: 2; grid-row: 1; margin-top: 2px;
+                                  color: var(--muted-foreground); transition: transform 150ms; }
+details.act-t:not([open]) > summary > .chev { transform: rotate(-90deg); }
+details.act-t > summary:hover > .chev { color: var(--foreground); }
+.act-line { display: block; min-width: 0; }
+.act-sent, .act-said { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+                       font-size: 14px; line-height: 20px; overflow-wrap: anywhere;
+                       max-width: var(--measure); }
+.act-sent { -webkit-line-clamp: 2; font-weight: 500; }
+.act-said { -webkit-line-clamp: 3; margin-top: 3px; }
+.act-lab { margin-right: 2px; font-size: 13px; font-weight: 400; color: var(--muted-foreground); }
+.act-x code { font-size: 12.5px; }
+.act-meta { margin-top: 5px; font-size: 13px; line-height: 18px; color: var(--muted-foreground);
+            font-variant-numeric: tabular-nums; }
+.act-live, .act-failed { display: inline-flex; align-items: center; gap: 4px; vertical-align: top; }
+.act-live .g, .act-failed .g { margin-top: 1px; }
+.act-live { color: var(--foreground); }
+.act-failed { color: var(--foreground); font-weight: 600; }
+/* the calls: a hairline down the turn, an elbow to each row, the last one rounded */
+ol.act-calls { list-style: none; margin: 0; padding: 0 12px 10px 20px; }
+ol.act-calls > li { position: relative; padding-left: 20px; }
+ol.act-calls > li::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+                            border-left: 1px solid var(--border-strong); }
+ol.act-calls > li::after { content: ""; position: absolute; left: 0; top: 16px; width: 12px;
+                           border-top: 1px solid var(--border-strong); }
+ol.act-calls > li:last-child::before { bottom: auto; width: 12px; height: 16px;
+                                       border-bottom: 1px solid var(--border-strong);
+                                       border-bottom-left-radius: 6px; }
+ol.act-calls > li:last-child::after { content: none; }
+ol.act-calls > li.act-more { padding-top: 7px; padding-bottom: 5px; margin: 0; }
+.act-c > summary, .act-looks > details > summary {
+  display: flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer;
+  list-style: none; font-size: 13.5px; line-height: 20px; border-radius: var(--radius-sm); }
+.act-c > summary::-webkit-details-marker,
+.act-looks > details > summary::-webkit-details-marker { display: none; }
+.act-k { color: var(--muted-foreground); }
+.act-tool { flex: none; font-weight: 600; white-space: nowrap; }
+.act-key { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+           text-overflow: ellipsis; padding: 0; border: 0; background: none;
+           font: 12.5px/20px var(--font-mono); color: var(--muted-foreground); }
+.act-c > summary:hover .act-key { color: var(--foreground); }
+.act-end { display: inline-flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
+.act-end .g { margin-top: 0; }
+.act-took, .act-none { font-size: 12.5px; color: var(--muted-foreground);
+                       font-variant-numeric: tabular-nums; }
+.act-c.is-failed > summary .act-key { color: var(--foreground); }
+.act-looks > details > summary { font-size: 13px; color: var(--muted-foreground); }
+.act-looks > details > summary:hover { color: var(--foreground); }
+.act-looks > details > summary .chev { transition: transform 150ms; }
+.act-looks > details:not([open]) > summary .chev { transform: rotate(-90deg); }
+.act-looks ol.act-calls { padding: 0 0 4px 7px; }
+.act-body { padding: 2px 0 10px 24px; min-width: 0; }
+dl.act-args { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); gap: 2px 12px;
+              margin: 0; font-size: 12.5px; line-height: 19px; }
+dl.act-args > div { display: contents; }
+dl.act-args dt { min-width: 0; color: var(--muted-foreground); overflow-wrap: anywhere; }
+dl.act-args dd { margin: 0; min-width: 0; max-height: 9.5em; overflow: auto; white-space: pre-wrap;
+                 overflow-wrap: anywhere; font-family: var(--font-mono); }
+.act-rh { margin: 8px 0 4px; font-size: 12.5px; line-height: 18px; color: var(--muted-foreground); }
+pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); white-space: pre-wrap;
+              overflow-wrap: anywhere; background: var(--muted); border: 1px solid var(--border);
+              border-radius: var(--radius-md); }
+.act-body .long > .clip { max-width: none; }
+.act-err { max-height: 300px; margin-top: 0; }
+.act-err pre.act-out { border: 0; background: none; }
+@media (max-width: 720px) {
+  .act-turn { grid-template-columns: minmax(0, 1fr); }
+  .act-n { display: none; }
+  ol.act-calls { padding: 0 10px 8px 10px; }
+  ol.act-calls > li { padding-left: 16px; }
+  ol.act-calls > li::after { top: 22px; width: 10px; }
+  ol.act-calls > li:last-child::before { height: 22px; width: 10px; }
+  .act-c > summary, .act-looks > details > summary { min-height: 44px; flex-wrap: wrap;
+                                                     row-gap: 0; padding: 4px 0; }
+  .act-key { order: 5; flex-basis: 100%; padding-left: 24px; white-space: normal;
+             overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical;
+             -webkit-line-clamp: 2; }
+  .act-body { padding-left: 8px; }
+}
 
 /* ---- a unit's page ------------------------------------------------------------------------- */
 .unit-h { display: flex; align-items: center; gap: 10px; overflow-wrap: anywhere; }

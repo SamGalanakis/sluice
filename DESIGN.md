@@ -736,8 +736,36 @@ The step reads top down:
   folded under "Traceback", the pane its agent left folded under "Pane at failure"
   (a chevron; the rows in 12px data, scrolling in their own box), and "Run files" linking each
   file the run has (`file-text` icons) as plain text,
-  Outside sluice (an external step's doc and how to settle it), Progress, Outputs, Inputs,
-  Runs.
+  Outside sluice (an external step's doc and how to settle it), Activity, Progress, Outputs,
+  Inputs, Runs.
+- Activity (an agent run's, read from its transcript when the page draws): a meta line "Run 2 ·
+  8 turns · 34 tool calls · 2 failed · read from its Claude session transcript" (and a link to
+  the raw transcript when the run's directory holds one), then one row per turn, numbered in the
+  attempts' muted column (gone on a phone, where the turn takes the column's width): a card (the
+  hairline, `--radius-md`, the card colour) whose summary is what sluice sent ("Task", "Message"
+  or "Sent" in 13px muted, then its first words at 500, two lines at most), "Said" and the
+  agent's last words (three lines), and a meta line "12 tool calls · Bash 8 · Edit 3 · Read 1 ·
+  took 4m" with "· 1 failed" in ink at 600 behind the failed glyph; the live run's open turn
+  leads its meta with the running glyph and "running for 6m", ticking, and takes running's blue
+  border, a turn with a failure the strong hairline. A chevron at the summary's right turns as
+  it opens. Open, its calls hang from a hairline tree (a 1px rail, an elbow to each row, the
+  last one rounded; borders only), one 32px row each (44px on a phone): the call's kind as a
+  16px Lucide icon in muted ink (`terminal` a command, `file-pen` an edit, `file-text` a read,
+  `search` a search, `folder-open` a listing, `bot` a subagent, `globe` the web,
+  `message-square` a sluice tool, `wrench` anything else), the tool at 600, its key argument
+  in 12.5px data mono, muted and cut with an ellipsis on one line (two lines, wrapping, under
+  the tool on a phone), then at the row's end how long it took in tabular meta and, for a
+  failed call, the failed glyph (its key argument in ink); a call its run ended before it had a
+  result says "no result". Two or more reads, searches or listings in a row fold into one row,
+  "3 reads, 2 searches" with the search icon. A call opens to its arguments as name and value
+  rows (12.5px, the value in data mono, wrapping, a long one scrolling in its row) and its
+  result under "Result" (or "Error"), "12,408 characters; its start and end are kept" when
+  cut: in the mono box, a long one faded behind "Show all", a failed one's in the error box
+  scrolled to its end. Earlier turns with no failure fold to one line, "2 earlier turns not
+  shown, none with a failed call. Show earlier turns"; a failed call and its turn never fold. On
+  a failed step the last call that failed is open, "Why it failed" ends with "Its last failed
+  call: Bash `cargo test …`", a link to it, and the page (and the drawer) opens scrolled to it.
+  No colour but the status ramp's: failure is ink and its glyph, never red.
 - Progress (a step's `step_progress` values while they are fresher than its outputs): the
   small head "Progress" with the same badge as the board's Output ("live" with the running
   glyph while the step runs, else a muted "progress") on its centre line, a meta line "Set 2m
@@ -771,7 +799,8 @@ The step reads top down:
   sentence (not on a failed step's last run, whose sentence leads the page), then its result as
   labelled facts in 13px (Kind in plain words, "wall-clock cap", "fn failure"; Said, left out
   on a failed step's last run whose words lead the page; Outputs by name, On completion, Engine, Session,
-  Run, Files), never escaped JSON; the current run last on the
+  Run, Files), never escaped JSON; an agent run's calls by tool on a meta line under its
+  outcome ("Bash 42 · Edit 9 · Read 17 · 2 failed"); the current run last on the
   secondary fill, inside the column (no bleed past its edges).
 
 ### Unit (`/projects/id/<p>/units/<u>`)

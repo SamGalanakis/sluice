@@ -187,15 +187,35 @@ pub struct RunView {
     /// Seconds it ran (to its end, or to the read).
     #[serde(skip)]
     pub seconds: Option<f64>,
+    /// An agent run's calls by tool, read from its transcript (`activity::attach`): "Bash 42 ·
+    /// Edit 9 · Read 17 · 2 failed"; "" for any other run.
+    pub profile: String,
 }
 /// The run files a page may open, read-only and only from that run's own directory: its
-/// stderr, its tail, its summary and the pane its agent left when it failed (the newest
-/// invocation's).
-pub const RUN_FILES: [&str; 4] = [
+/// stderr, its tail, its summary, the pane its agent left when it failed, and the records its
+/// engine left there: Codex's readable log and protocol log, Devin's hook journal, log and
+/// export (each the run's own, else its newest invocation's). A transcript is served masked
+/// (`TRANSCRIPTS`).
+pub const RUN_FILES: [&str; 9] = [
     "pane-at-failure.txt",
     "stderr.log",
     "stderr-tail.log",
     "summary.txt",
+    "codex.log",
+    "codex-wire.jsonl",
+    "devin-hooks.jsonl",
+    "devin.log",
+    "devin.json",
+];
+/// The run files that are an engine's record, in the order the Activity section links the
+/// first a run has: what they hold is masked as an engine's notes are (`account::redact`)
+/// before it is served.
+pub const TRANSCRIPTS: [&str; 5] = [
+    "codex.log",
+    "codex-wire.jsonl",
+    "devin-hooks.jsonl",
+    "devin.log",
+    "devin.json",
 ];
 /// The path of one of a run's files under `home`, when the run has it as a plain file (never
 /// through a link): the run's directory is its id's, and the name one of `RUN_FILES`.
@@ -207,7 +227,10 @@ pub fn run_file(home: &std::path::Path, run: &RunId, name: &str) -> Option<std::
     if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
         return None;
     }
-    if *name == "pane-at-failure.txt" {
+    if TRANSCRIPTS.contains(name) && plain(&dir.join(name)) {
+        return Some(dir.join(name));
+    }
+    if *name == "pane-at-failure.txt" || TRANSCRIPTS.contains(name) {
         let invocations = dir.join("invocations");
         if !std::fs::symlink_metadata(&invocations).is_ok_and(|m| m.is_dir()) {
             return None;
@@ -297,6 +320,9 @@ pub struct StepView {
     /// It comes after a step or a step comes after it: its page links its chain on the plan
     /// (`board::step_snapshot`).
     pub chained: bool,
+    /// Its latest agent run's activity outline, read from its transcript when its page or
+    /// drawer draws (`activity::attach`).
+    pub activity: Option<super::activity::ActivityView>,
 }
 /// When a step's current run started and how long it ran or has run so far: its card's timer.
 /// The current run is its latest in its current generation; a scatter's is its latest round,
@@ -653,6 +679,7 @@ impl StepView {
             usually: None,
             timeline: None,
             chained: false,
+            activity: None,
         };
         if let Some(failure) = failure {
             view.set_failure(failure);
@@ -1220,6 +1247,7 @@ pub fn load_detail(
                 .into(),
             files,
             seconds,
+            profile: String::new(),
         });
     }
     if let Some(last) = step.runs.last() {
@@ -1411,15 +1439,28 @@ async fn execute_action(
         Err(e) => board::error_response(e),
     }
 }
+/// `?activity=all` draws every turn and call of its activity outline, not only the latest.
+#[derive(Deserialize, Default)]
+pub struct ActivityQuery {
+    #[serde(default)]
+    activity: String,
+}
+impl ActivityQuery {
+    fn all(&self) -> bool {
+        self.activity == "all"
+    }
+}
 pub async fn step_page(
     State(state): State<DashboardState>,
     registry: Option<Extension<board::Registry>>,
     Path((project, id)): Path<(ProjectId, StepId)>,
+    Query(shown): Query<ActivityQuery>,
     headers: HeaderMap,
 ) -> Response {
     let page = async {
-        let (shared, view, step) =
+        let (shared, view, mut step) =
             board::step_snapshot(&state, project, registry.as_ref().map(|r| &r.0), &id).await?;
+        super::activity::attach(&state, &mut step, shown.all()).await;
         let nav = NavView::new(&shared, Some(project), "plan")?;
         let unit = view
             .units
@@ -1438,7 +1479,11 @@ pub async fn step_page(
                     &body,
                     &nav,
                     &Viewer::from_headers(&headers),
-                    &format!("{}/stream?page=true", step.href()),
+                    &format!(
+                        "{}/stream?page=true{}",
+                        step.href(),
+                        if shown.all() { "&activity=all" } else { "" }
+                    ),
                     "",
                     &step.href(),
                 )
@@ -1462,7 +1507,9 @@ pub async fn step_stream(
     Path((project, id)): Path<(ProjectId, StepId)>,
     Query(query): Query<StreamQuery>,
     Query(own): Query<StepStreamQuery>,
+    Query(shown): Query<ActivityQuery>,
 ) -> Response {
+    let all = shown.all();
     let stop = state.stop.clone();
     let version = query.version(VersionSignal::Step);
     let loader = move || {
@@ -1470,8 +1517,9 @@ pub async fn step_stream(
         let id = id.clone();
         let registry = registry.clone();
         async move {
-            let (_, _, step) =
+            let (_, _, mut step) =
                 board::step_snapshot(&state, project, registry.as_ref().map(|r| &r.0), &id).await?;
+            super::activity::attach(&state, &mut step, all).await;
             Ok(RenderedBatch {
                 version: step.version(),
                 regions: vec![PatchRegion::new(
@@ -1561,7 +1609,11 @@ pub async fn run_file_page(
                     "default-src 'none'; sandbox",
                 ),
             ],
-            String::from_utf8_lossy(&bytes).into_owned(),
+            if TRANSCRIPTS.contains(&name.as_str()) {
+                sluice_agents::engines::account::redact(&String::from_utf8_lossy(&bytes))
+            } else {
+                String::from_utf8_lossy(&bytes).into_owned()
+            },
         )
             .into_response(),
         None => board::error_response(PublicError::NotFound {
@@ -1570,7 +1622,7 @@ pub async fn run_file_page(
                 if RUN_FILES.contains(&name.as_str()) {
                     ": it wrote none, or it was cleaned up with the run"
                 } else {
-                    "; a run's files are pane-at-failure.txt, stderr.log, stderr-tail.log and summary.txt"
+                    "; a run's files are pane-at-failure.txt, stderr.log, stderr-tail.log, summary.txt, codex.log, codex-wire.jsonl, devin-hooks.jsonl, devin.log and devin.json"
                 }
             ),
         }),

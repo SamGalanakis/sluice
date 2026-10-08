@@ -557,6 +557,7 @@ function setupDrawer(host) {
     let opener = null, stream = null, last = "";
     let focusFrame = 0, scrollTimer = 0;
     let pinned = true;  // the log follows its newest line until the reader scrolls up
+    let failShown = "";  // the step whose failing call the drawer brought into view
     // the drawer's stream: each call ends the previous one (Datastar's requestCancellation)
     window.sluiceStream = () => {
       stream?.abort();
@@ -612,6 +613,7 @@ function setupDrawer(host) {
         for (const board of $$("sluice-board")) untrace(board);
         opener = null;
         last = "";
+        failShown = "";
         return;
       }
       const changed = last !== sid;
@@ -678,6 +680,12 @@ function setupDrawer(host) {
     const follow = new MutationObserver(() => {
       const pre = $("#step-detail pre.tail", drawer);
       if (pre && pinned) pre.scrollTop = pre.scrollHeight;
+      // a failed step opens on the last call that failed: once, as its detail first arrives
+      const fail = $("#step-detail [data-act-fail]", drawer);
+      if (fail && last && failShown !== last) {
+        failShown = last;
+        fail.scrollIntoView({ block: "nearest" });
+      }
     });
     follow.observe(drawer, { childList: true, subtree: true, characterData: true });
     const close = () => window.sluiceClose();
@@ -709,6 +717,10 @@ function setupDrawer(host) {
       delete window.sluiceStream;
       delete window.sluiceClose;
     });
+}
+// a failed step's own page opens on the last call that failed (unless the address names a place)
+if (!location.hash && !document.querySelector("sluice-drawer")) {
+  document.querySelector("#step-detail [data-act-fail]")?.scrollIntoView({ block: "nearest" });
 }
 customElements.define("sluice-drawer", class extends HTMLElement {
   connectedCallback() { setupDrawer(this); }

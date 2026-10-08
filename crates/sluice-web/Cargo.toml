@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 sluice-model.workspace = true
 sluice-runtime.workspace = true
+sluice-agents.workspace = true
 sluice-store.workspace = true
 indexmap.workspace = true
 rusqlite.workspace = true

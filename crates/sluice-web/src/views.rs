@@ -9,6 +9,7 @@ macro_rules! register_pages {
     };
 }
 register_pages! { home, board, inbox, log, project_settings, panel }
+pub mod activity;
 pub mod failure;
 pub mod icons;
 pub mod missing;
@@ -281,6 +282,9 @@ pub struct DashboardState {
     pub catalog: Arc<dyn CatalogSource>,
     pub stop: Arc<std::sync::atomic::AtomicBool>,
     pub plans: board::PlanCache,
+    /// Claude's config home, where its session transcripts are (an agent run's activity):
+    /// `CLAUDE_CONFIG_DIR`, else `~/.claude`, as Claude finds it.
+    pub claude_home: Option<std::path::PathBuf>,
 }
 impl DashboardState {
     pub fn new(reads: ReadPool, catalog: Arc<dyn CatalogSource>) -> Self {
@@ -289,6 +293,7 @@ impl DashboardState {
             catalog,
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plans: board::PlanCache::default(),
+            claude_home: sluice_agents::activity::Homes::claude_from_env(),
         }
     }
     /// The catalog, one store snapshot and the runs' activity, each read once. A page renders

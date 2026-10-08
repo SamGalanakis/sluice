@@ -41,6 +41,11 @@ pub struct Hook {
 pub struct JournalEntry {
     pub invocation: String,
     pub hook: Hook,
+    /// When the hook ran, Unix milliseconds: Devin's hooks carry no time of their own, and the
+    /// dashboard's activity outline times each turn and call by it. A journal is read only by
+    /// the release whose hook wrote it, so an older line without it still reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
 }
 
 pub fn decode_hook(bytes: &[u8], event: &str) -> io::Result<Hook> {
@@ -65,9 +70,14 @@ pub fn append_hook(path: &Path, invocation: &str, hook: Hook) -> io::Result<()> 
         .custom_flags(0x20000 /* O_NOFOLLOW on Linux */)
         .open(path)?;
     file.lock()?;
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok());
     let mut bytes = serde_json::to_vec(&JournalEntry {
         invocation: invocation.into(),
         hook,
+        at,
     })
     .map_err(io::Error::other)?;
     bytes.push(b'\n');
