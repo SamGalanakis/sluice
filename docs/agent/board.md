@@ -148,6 +148,13 @@ the board.
 The dashboard names steps by their titles (a step's doc's first line, its spec's heading, or
 its recipe's `title`; `docs("plans")`, Titles), so a Text that repeats a step's id adds little.
 
+A recipe's matrix lists its live units; its name links to every unit it made, done ones too
+(`/projects/id/<p>?recipe=<name>&show=all`). A step's chain is `?root=<step>` (`&up=1` what it
+comes after, `&down=1` what comes after it, `&depth=N`), a link worth sending the owner instead
+of a list of ids. Each unit's page draws its runs on a timeline, and a running stage of a recipe
+says how long it usually takes (the median of its done units' runs), so neither belongs on the
+board.
+
 ## The language
 One statement per line, `name = Component(arg, ...)`; the first statement (conventionally
 `root`) is drawn. Arguments are positional, in the order of the signatures below; pass `null`

@@ -465,11 +465,18 @@ Top down:
    steps whose id, title, doc or unit id holds every word of it (any case, any order); a unit with
    none hides, and an empty board says "Clear the search to see every unit." A plan with no
    steps has no tools: it says "The plan has no steps yet."
+   A focused board says so in one meta line under the tools, at the measure, ending in "Show
+   everything" (muted, underlined; the board as a whole): a step's chain (`?root=`), "Showing
+   the chain of <the step named as every page names it>" ("Showing what … comes after", "…, 2
+   steps each way"), or a recipe's units (`?recipe=`), "Every unit of recipe `lane`: 189 units ·
+   4 running · 1 paused · 7 waiting · 177 done." The tools' form keeps the focus in hidden
+   fields, so Order and Show apply within it.
 3. **Lane matrices**, inside the bands: a recipe with a view (SPEC §13) draws its units that
    are not done as tables, one per band its units fall in, each first in its band (so a failed
    lane is under "Stopped", above the running lanes' matrix, never below a table of healthy
    rows), on the box fill with the 14px corner, headed like a band label with the recipe's
-   name in ink at 600 and its units counted ("3 units · 1 failed · 1 running"; waiting reads
+   name in ink at 600 (a link, underlined on hover, to every unit the recipe made, done ones too:
+   the board under `?recipe=`, its shelf open) and its units counted ("3 units · 1 failed · 1 running"; waiting reads
    "waiting", a paused unit "paused"). A row a unit: the first column its status glyph, its title (600, ink, a link to
    its unit page, two lines at most), its id in data mono and any alarm under it; then the
    view's summary in 13/18 (its parts in a line: a param at 500 in ink, an output in data mono,
@@ -684,7 +691,8 @@ The step reads top down:
   no level is skipped; the tab reads "<stage> · <title> · <project> · sluice" (the title cut at
 48 characters);
 - its id with badges: the status glyph and word, "running for 2h 14m" in the running tag
-  itself (no second line repeating it), "finishing", "blocked", "quiet", "done/total runs"
+  itself (no second line repeating it), "usually 24m" in meta after the tags while pending or
+  running (how long its stage usually takes; " · usually 24m" after "took …" once ended), "finishing", "blocked", "quiet", "done/total runs"
   when scattered; its doc; "Ended 3h ago · took 10h 0m" once it has ended; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
   unit's page);
 - the actions, one POST form carrying the plan revision: Pause or Unpause (where pausing acts:
@@ -710,6 +718,8 @@ The step reads top down:
   and its own messages with its run's files;
 - a failed step's latest own message (to anyone) first under its head, as Now draws one, so
   its agent's last words are read before the failure's detail;
+- "Show its chain on the plan" in meta, muted and underlined, under the facts (or in their place
+  when it has none), when it comes after a step or one comes after it: the board focused on it;
 - facts: "Waits on" (each reason; a pause in words with the paused glyph in plum, "Paused by
   the owner: <reason>. 3h ago" from the plan edit that paused it, "Paused." when no edit names
   who, "Its project is paused."; "after X" left out when After lists X) and "After": four entries or fewer inline; more as a sentence
@@ -753,7 +763,9 @@ The step reads top down:
   Outputs say whose they are under the head, "From run 2 · 1h ago": its last finished run's. The outputs not set yet are named on one line after the set ones, "7 outputs
   not set yet: summary, final, …" (each name's doc its title); an unset input reads "No value
   yet."
-- Runs: one row per run, numbered (its ordinal; its id in data mono among its facts as "Run
+- Runs: first, its unit's timeline folded under the head ("Its unit's timeline", "Timeline" for a
+  unit of one step; the fold's look, closed by default), the step's own row marked; then one row
+  per run, numbered (its ordinal; its id in data mono among its facts as "Run
   id"), with its own outcome's glyph and word (Running, Succeeded,
   Failed, Cancelled) and "ended 3h ago · took 2h 14m" (or "started 5m ago"), its failure's
   sentence (not on a failed step's last run, whose sentence leads the page), then its result as
@@ -772,7 +784,9 @@ running · 4 pending · 1 succeeded · Log", the link its log filtered to the un
 the board draws it, with the lines inside it, without its label (the h1 names it), its
 layers from the column's left edge, a done unit open to its cards; each card that waits on
 another unit says it in words ("Waits for l-a1 (running), not in this view"); "Last message":
-who sent it and when, then its body as markdown at the measure, and "Read the thread".
+who sent it and when, then its body as markdown at the measure, and "Read the thread". Between
+the box and the last message, once something in it has run, **Timeline** (a section head): see
+Components.
 
 ### Messages (`/inbox`, `/questions`, `/history`, `/projects/id/<p>/…`)
 A page title and a small segmented control (Inbox · Questions · History, the current one in the
@@ -932,6 +946,26 @@ comma: the card's parts are flex items, which the name already parts with a spac
   failed, cancelled, stale, quiet, running, outside, paused, blocked, pending, skipped, set by
   hand, succeeded, in that order of need; `state_counts` counts by it), so a change to one reads everywhere. A template never
   hand-builds these.
+- **Timeline** (`views::timeline`, `templates/timeline.html`): a unit's runs on one axis, no
+  legend. A grid: a 76px column of stage names (13px, muted; the current step's in ink at 650,
+  `aria-current`), then the track, 8px in from the column's edges so a glyph centred on a run's
+  end stays inside. Over the rows the axis in 12px muted tabular figures ("start", "waited 6h
+  12m" centred on its break, "+7h 20m" or "now" at the end, never nearer than 72px). Rows part by
+  a hairline; each a 24px track and its words under it in 13px meta ("3 runs · 52m · waited 6h
+  12m", the running time a ticking `<time data-since>`). A bar is 10px tall with the 3px corner
+  (never a pill): succeeded the success green at 62%, failed solid ink, cancelled muted ink at
+  45%, running the accent, a run with no recorded result the idle grey; each ends in its status
+  glyph on the canvas, a run too short to draw is the glyph alone. A run still going runs to
+  "now", its last 48px dashed (a mask, 4px on 3px off) under its turning glyph: its end open. A
+  long wait is a 48px break across the rows: the muted fill between two dashed strong hairlines.
+  Under 490px of its own width (a container), each row is one 44px line of words: the outcome
+  glyph and stage in ink at 600, "·", then its words. The spinner is the only motion, and it
+  stops under reduced motion.
+- **Usual time on a running card**: a card whose stage usually takes a known time draws, 3px
+  above its foot and 12px in (8px on a matrix pill), a 2px line in running's blue at 50% as long
+  as the run is along that time (full once past it), drawn by `nav.js` from the timer's
+  `data-usually`; never gold, which is quiet's. Its timer's title adds "; its stage usually
+  takes 24m".
 - **Tag** (`.tag`): a small fact set apart: 12px text at 500, a strong hairline and the 5px
   corner; gold (`attn`) for "quiet" and "n awaiting reply", muted for a closed or answered
   state.

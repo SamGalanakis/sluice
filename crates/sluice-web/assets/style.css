@@ -1219,6 +1219,89 @@ dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
 .unit-page .box-label, .unit-page .fold-box > summary .fb-name { display: none; }
 .unit-last .md { max-width: var(--measure); }
 
+/* ---- a unit's timeline: a row a stage, a bar a run, one time axis --------------------------- */
+/* The bars are drawn to scale but for the long waits, each a 48px break named on the axis
+   ("waited 6h 12m"); a run still going runs on through an open, dashed tail to "now" at the
+   axis's end. Each bar ends in its status glyph; its words under it. No legend. Narrower than
+   a usable track (the drawer on a laptop, a phone), each stage is one line of words. */
+.tl { container: tl / inline-size; margin-top: 2px; }
+.tl-in { display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 12px;
+         grid-template-rows: auto auto; }
+.tl-axis { grid-column: 2; grid-row: 1; position: relative; height: 22px;
+           font-size: 12px; line-height: 18px; color: var(--muted-foreground);
+           font-variant-numeric: tabular-nums; }
+.tl-tick { position: absolute; top: 0; white-space: nowrap; }
+.tl-tick.at-mid { transform: translateX(-50%); }
+.tl-tick.at-end { transform: translateX(-100%); }
+.tl-breaks { grid-column: 2; grid-row: 1 / span 2; position: relative; pointer-events: none; }
+.tl-break { position: absolute; top: 20px; bottom: 0; width: 48px; background: var(--muted);
+            border-inline: 1px dashed var(--border-strong); }
+.tl-rows { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: subgrid;
+           margin: 0; padding: 0; list-style: none; }
+.tl-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid;
+          padding: 6px 0 8px; border-top: 1px solid var(--border); }
+.tl-stage { grid-column: 1; grid-row: 1 / span 2; display: flex; align-items: center; gap: 6px;
+            min-width: 0; height: 24px; font-size: 13px; color: var(--muted-foreground);
+            text-decoration: none; }
+.tl-stage > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-stage .g { display: none; }
+.tl-stage:hover > span { color: var(--foreground); text-decoration: underline;
+                         text-underline-offset: 3px; }
+.tl-row.is-current .tl-stage { color: var(--foreground); font-weight: 650; }
+/* the track, axis and breaks keep 8px in from the column's edges: a glyph centred on a run's
+   start or end stays inside it */
+.tl-track { grid-column: 2; position: relative; z-index: 1; height: 24px; margin-inline: 8px; }
+.tl-axis, .tl-breaks { margin-inline: 8px; }
+.tl-bar { position: absolute; top: 7px; height: 10px; min-width: 2px; border-radius: 3px;
+          background: var(--status-idle); }
+.tl-succeeded { background: color-mix(in srgb, var(--status-success) 62%, transparent); }
+.tl-failed { background: var(--foreground); }
+.tl-cancelled { background: color-mix(in srgb, var(--muted-foreground) 45%, transparent); }
+.tl-running { background: var(--status-active); }
+/* the run goes on to now at the axis's end: its end open, the bar fading out in dashes under
+   its turning glyph */
+.tl-bar.tl-on { border-radius: 3px 0 0 3px;
+  -webkit-mask: linear-gradient(to right, #000 calc(100% - 48px), transparent 0),
+                repeating-linear-gradient(to right, #000 0 4px, transparent 4px 7px);
+  mask: linear-gradient(to right, #000 calc(100% - 48px), transparent 0),
+        repeating-linear-gradient(to right, #000 0 4px, transparent 4px 7px); }
+.tl-g { position: absolute; top: 4px; display: flex; transform: translateX(-50%);
+        border-radius: 50%; background: var(--background); }
+.tl-g.at-now { transform: translateX(-100%); }
+.tl-words { grid-column: 2; margin: 0; font-size: 13px; line-height: 18px;
+            color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.tl-row.is-current .tl-words { color: var(--foreground); }
+@container tl (max-width: 490px) {
+  .tl-in { display: block; }
+  .tl-axis, .tl-breaks, .tl-track { display: none; }
+  .tl-rows { display: block; }
+  .tl-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; min-height: 44px;
+            padding: 10px 0; }
+  .tl-stage { height: auto; color: var(--foreground); font-weight: 600; }
+  .tl-stage .g { display: inline-flex; margin: 0; }
+  .tl-stage::after { content: "·"; color: var(--muted-foreground); font-weight: 400; }
+}
+/* the step's Runs: its unit's timeline folded over them */
+.tl-fold { margin: 0 0 12px; }
+.tl-fold[open] { margin-bottom: 16px; }
+/* the step's facts lead to its chain on the plan */
+.chain-link { margin: 6px 0 0; }
+.chain-link a, .focus-note a { color: var(--muted-foreground); text-underline-offset: 3px; }
+.chain-link a:hover, .focus-note a:hover { color: var(--foreground); }
+@media (max-width: 720px) {
+  .chain-link a, .focus-note > a:last-child { display: inline-flex; align-items: center;
+                                               min-height: 44px; }
+}
+/* a running card whose stage usually takes so long (`data-usually`): how far along it is, a
+   faint line in running's blue along its foot, drawn by nav.js; full once past it. Never the
+   quiet gold, which says something else */
+.node:has(> time[data-usually])::after {
+  content: ""; position: absolute; left: 12px; bottom: 3px; height: 2px;
+  width: calc((100% - 24px) * var(--along, 0)); pointer-events: none;
+  background: color-mix(in srgb, var(--status-active) 50%, transparent); }
+.node.mx-pill:has(> time[data-usually])::after { left: 8px; bottom: 2px;
+  width: calc((100% - 16px) * var(--along, 0)); }
+
 /* ---- the project page's title and its summary's attention tags ------------------------------ */
 .p-title { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; min-width: 0;
            overflow-wrap: anywhere; }
@@ -1566,6 +1649,9 @@ details.read-today .item { opacity: .85; }
 @media (scripting: enabled) { .board-tools .apply { display: none; } }  /* each applies as it changes */
 .match-note { margin: calc(-1 * var(--space-xs)) 0 var(--space-md); }
 .match-note:empty { display: none; }
+/* a focused board (a step's chain, a recipe's units): what it shows and the way back */
+.focus-note { margin: calc(-1 * var(--space-xs)) 0 var(--space-md); max-width: var(--measure); }
+.focus-note code { font-size: 12.5px; }
 
 /* -- the switch: on the summary line, at its right end, as wide as its words -- */
 .view-switch { display: none; flex: none; gap: 2px; margin-left: auto; padding: 2px;
@@ -1976,7 +2062,8 @@ a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px;
 .matrix { position: relative; margin: 0 0 24px; }
 .band > .matrix:last-child { margin-bottom: 0; }
 .mx-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-main .mx-h .mx-name { color: var(--foreground); font-weight: 600; }
+main .mx-h .mx-name { color: var(--foreground); font-weight: 600; text-decoration: none; }
+main .mx-h a.mx-name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .mx-tally { font-variant-numeric: tabular-nums; }
 .mx-wrap { overflow-x: auto; border-radius: var(--radius); background: var(--box);
            padding: 6px 14px; }

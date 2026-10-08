@@ -289,6 +289,14 @@ pub struct StepView {
     pub result_at: String,
     /// Its current run's times, for its card's timer.
     pub timing: Option<RunTiming>,
+    /// How long its stage usually takes: the median of its recipe's done units' runs of the
+    /// same stage (`board::usual_durations`), none with fewer than three.
+    pub usually: Option<f64>,
+    /// Its unit's timeline, on its page and in the drawer (`board::step_snapshot`).
+    pub timeline: Option<super::timeline::Timeline>,
+    /// It comes after a step or a step comes after it: its page links its chain on the plan
+    /// (`board::step_snapshot`).
+    pub chained: bool,
 }
 /// When a step's current run started and how long it ran or has run so far: its card's timer.
 /// The current run is its latest in its current generation; a scatter's is its latest round,
@@ -305,6 +313,10 @@ pub struct RunTiming {
     /// it is no part of the step's version.
     #[serde(skip)]
     pub seconds: f64,
+    /// Every run of its current generation, oldest first (a scatter's round one): its unit's
+    /// timeline. What changes in them changes `runs`, `started` or `finished` too.
+    #[serde(skip)]
+    pub spans: Vec<super::timeline::RunSpan>,
 }
 /// What holds a pending step back: its own pause or its project's.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -638,6 +650,9 @@ impl StepView {
             active_at: String::new(),
             result_at: String::new(),
             timing: None,
+            usually: None,
+            timeline: None,
+            chained: false,
         };
         if let Some(failure) = failure {
             view.set_failure(failure);
@@ -716,6 +731,14 @@ impl StepView {
         format!(
             "/projects/id/{}/thread?thread=step-{}",
             self.project, self.id
+        )
+    }
+    /// The plan focused on its chain: what it comes after and what comes after it.
+    pub fn chain_href(&self) -> String {
+        format!(
+            "/projects/id/{}?root={}&up=1&down=1",
+            self.project,
+            url::form_urlencoded::byte_serialize(self.id.as_str().as_bytes()).collect::<String>()
         )
     }
     /// Its records and its thread's messages on the project's log.
@@ -831,7 +854,7 @@ impl StepView {
     pub fn timer_html(&self) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> for {{ said }}</span></time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> took {{ said }}</span></span>{% endif %}",
+            source = "{% if live %}<time data-since=\"{{ t.started }}\" datetime=\"{{ t.started }}\" class=\"took live\" title=\"{{ title }}\"{% if let Some(u) = usually %} data-usually=\"{{ u }}\"{% endif %}><span class=\"tk\" aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> for {{ said }}</span>{% if !usual_said.is_empty() %}<span class=\"vh tu\">, {{ usual_said }}</span>{% endif %}</time>{% else %}<span class=\"took\" title=\"{{ title }}\"><span aria-hidden=\"true\">{{ shown }}</span><span class=\"vh\"> took {{ said }}</span></span>{% endif %}",
             ext = "html"
         )]
         struct Timer<'a> {
@@ -840,6 +863,10 @@ impl StepView {
             shown: String,
             said: String,
             title: String,
+            /// While it runs, how long its stage usually takes, whole seconds: the page's script
+            /// draws how far along it is against that.
+            usually: Option<u64>,
+            usual_said: String,
         }
         if self.is_quiet() {
             // how long it has written nothing, ticking, in place of its run's time
@@ -868,7 +895,7 @@ impl StepView {
         } else {
             format!("took {shown}")
         };
-        let title = match t.runs {
+        let mut title = match t.runs {
             0 | 1 => {
                 let mut c = this.chars();
                 c.next()
@@ -877,13 +904,30 @@ impl StepView {
             }
             n => format!("{n} runs; this one {this}"),
         };
+        let usually = self.usually.filter(|_| live);
+        if let Some(u) = usually {
+            title = format!(
+                "{title}; its stage usually takes {}",
+                super::ui::duration_text(u)
+            );
+        }
         TrustedHtml::from_template(&Timer {
             t,
             live,
             shown,
             said: super::ui::duration_words(t.seconds),
             title,
+            usually: usually.map(|u| u.round() as u64),
+            usual_said: usually
+                .map(|u| format!("usually {}", super::ui::duration_words(u)))
+                .unwrap_or_default(),
         })
+    }
+    /// "usually 40m": how long its stage usually takes (`usually`), "" when that is not known.
+    pub fn usually_text(&self) -> String {
+        self.usually
+            .map(|s| format!("usually {}", super::ui::duration_text(s)))
+            .unwrap_or_default()
     }
     /// While it runs, the earlier run its outputs came from: its number and when it ended.
     pub fn outputs_from(&self) -> Option<(usize, &str)> {
@@ -1035,6 +1079,13 @@ impl StepTemplate<'_> {
     /// `h3`, so no level is skipped.
     fn level(&self) -> u8 {
         if self.page { 2 } else { 3 }
+    }
+    /// The Runs section's fold of the timeline: the step's own runs, or its unit's.
+    fn timeline_words(&self) -> &'static str {
+        match &self.step.timeline {
+            Some(t) if t.rows.len() > 1 => "Its unit's timeline",
+            _ => "Timeline",
+        }
     }
     /// The first heading level inside a value: one under its section's head.
     fn value_top(&self) -> u8 {

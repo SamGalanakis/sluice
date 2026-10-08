@@ -32,10 +32,11 @@ const page = () => document.querySelector("#project-board");
 const chosen = {};  // this tab's choice, should storage refuse it
 const mode = () => (WIDE.matches ? "wide" : "narrow");
 const viewKey = (m, id) => (m === "wide" ? `sluice.view-wide.${id}` : `sluice.view.${id}`);
-// an address that asks for a search, a Show or an Order is about the plan
+// an address that asks for a search, a Show, an Order, a step's chain or a recipe's units is
+// about the plan
 const planAsked = () => {
   const q = new URLSearchParams(location.search);
-  return ["q", "show", "order"].some(k => q.get(k));
+  return ["q", "show", "order", "root", "recipe"].some(k => q.get(k));
 };
 function viewOf(p) {
   if (!p.classList.contains("has-panel")) return "plan";

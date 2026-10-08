@@ -14,6 +14,7 @@ pub mod icons;
 pub mod missing;
 pub mod step;
 pub mod threads;
+pub mod timeline;
 pub mod ui;
 pub mod unit_view;
 
