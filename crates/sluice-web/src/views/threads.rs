@@ -29,8 +29,21 @@ impl MessageItem {
     pub fn id(&self) -> i64 {
         self.message.id.0
     }
-    pub fn title(&self) -> &str {
-        self.message.title.as_deref().unwrap_or("Question")
+    /// Its title, else its body's first line: a card never reads just "Question".
+    pub fn title(&self) -> String {
+        match self
+            .message
+            .title
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+        {
+            Some(title) => title.to_owned(),
+            None => headline(&self.message.body, 90),
+        }
+    }
+    /// Open, but whoever asked has stopped: nobody is waiting on the answer.
+    pub fn stopped(&self) -> bool {
+        !self.stopped.is_empty()
     }
     pub fn recipient(&self) -> &str {
         self.message.to.as_deref().unwrap_or("anyone")
@@ -68,15 +81,77 @@ impl ThreadView {
     pub fn href(&self) -> String {
         thread_url(self.project, &self.thread)
     }
+    /// The last message's opening, cut at a word with an ellipsis.
     pub fn preview(&self) -> String {
         self.messages
             .last()
-            .map(|m| m.message.body.chars().take(160).collect())
+            .map(|m| cut(&plain(&m.message.body), 160))
             .unwrap_or_default()
+    }
+    /// The thread by what it is about: a step's ("Step k2-owner"), the orchestrator's, or a
+    /// conversation's first message ("Can the lane land today?").
+    pub fn name(&self) -> String {
+        if let Some(step) = self.thread.strip_prefix("step-") {
+            return format!("Step {step}");
+        }
+        if self.thread == sluice_store::messages::ORCHESTRATOR_STREAM {
+            return "Orchestrator".into();
+        }
+        if self.thread == "owner" {
+            return "Notes to you".into();
+        }
+        self.messages
+            .first()
+            .map(MessageItem::title)
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| self.thread.clone())
+    }
+    /// When its last message came.
+    pub fn last_at(&self) -> &str {
+        self.messages
+            .last()
+            .map(|m| m.message.at.as_str())
+            .unwrap_or("")
     }
     pub fn read_url(&self) -> String {
         format!("/projects/id/{}/messages/read", self.project)
     }
+}
+/// Markdown read as one line of plain words: its marks and line breaks dropped.
+fn plain(text: &str) -> String {
+    text.lines()
+        .map(|l| {
+            l.trim()
+                .trim_start_matches(['#', '>', '-', '*', ' '])
+                .replace(['*', '`', '_'], "")
+        })
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+/// At most `most` characters, cut at a word, with an ellipsis when cut.
+fn cut(text: &str, most: usize) -> String {
+    if text.chars().count() <= most {
+        return text.to_owned();
+    }
+    let head: String = text.chars().take(most).collect();
+    let at = head
+        .rfind(' ')
+        .filter(|&i| i > most / 2)
+        .unwrap_or(head.len());
+    format!(
+        "{}…",
+        head[..at].trim_end_matches([',', '.', ';', ':', ' '])
+    )
+}
+/// A body's first line as a title.
+fn headline(body: &str, most: usize) -> String {
+    let first = body
+        .lines()
+        .map(plain)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default();
+    cut(&first, most)
 }
 pub fn thread_url(project: ProjectId, thread: &str) -> String {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
@@ -99,6 +174,22 @@ impl InboxView {
             MessageView::History => "History",
             MessageView::Thread => "Thread",
         }
+    }
+    /// The nav section it is under: a project's Messages, or none (the tray is the inbox).
+    pub fn tab(&self) -> &str {
+        if self.project.is_some() {
+            "messages"
+        } else {
+            ""
+        }
+    }
+    /// The open questions someone is waiting on.
+    pub fn waiting(&self) -> Vec<&MessageItem> {
+        self.questions.iter().filter(|q| !q.stopped()).collect()
+    }
+    /// The open questions nobody is waiting on any more.
+    pub fn stopped(&self) -> Vec<&MessageItem> {
+        self.questions.iter().filter(|q| q.stopped()).collect()
     }
     pub fn base(&self) -> String {
         self.project
@@ -135,7 +226,7 @@ impl InboxView {
         path: &str,
         stream: &str,
     ) -> Result<TrustedHtml, PublicError> {
-        let nav = NavView::new(&self.nav, self.project, &self.title().to_lowercase())?;
+        let nav = NavView::new(&self.nav, self.project, self.tab())?;
         render_layout(
             self.title(),
             &self.body()?,

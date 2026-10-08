@@ -1,0 +1,7 @@
+<div id="unit-detail" class="unit-page" data-page-title="{{ unit.id }} · {{ project.name }}">
+<nav class="crumbs" aria-label="Breadcrumb"><a href="{{ project.href() }}">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, "")|safe }}{{ project.name }} plan</a></nav>
+<h1 class="unit-h">{% if unit.done %}{{ crate::views::home::glyph("succeeded")|safe }}{% endif %}<span>{{ unit.id }}</span></h1>
+<p class="meta unit-sum">{{ unit.steps.len() }} {% if unit.steps.len() == 1 %}step{% else %}steps{% endif %}{% if unit.done %} · {{ unit.done_words() }}{% endif %}</p>
+<div class="board"><div class="boxes boxed">{{ unit.body()?|safe }}</div></div>
+{% if !unit.last_message.is_empty() %}<section class="d-sec unit-last"><h2>Last message</h2><p class="meta">{{ crate::views::ago_html(unit.changed)|safe }}</p><div class="md m-body">{{ unit.last_message_html()|safe }}</div></section>{% endif %}
+</div>

@@ -502,3 +502,152 @@ async fn a_cards_timer_ticks_while_its_current_run_goes_and_holds_once_it_has_en
     set("UPDATE steps SET manual=1 WHERE project_id=?1").await;
     assert!(!card(&state, project).await.contains("took"));
 }
+/// An owner's cancel is a state of its own: the stop glyph and word, a "Cancelled" section with
+/// the reason, and Retry a plain button, though the store keeps the step failed.
+#[test]
+fn a_cancelled_step_reads_as_cancelled_not_failed() {
+    let plan = Plan::parse_json(
+        br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+        &Signatures,
+    )
+    .unwrap();
+    let mut state = StateSnapshot::default();
+    state.steps.insert(
+        "w".parse().unwrap(),
+        StepState {
+            status: StepStatus::Failed,
+            error: Some("cancelled: pivot: audit instead (Sam)".into()),
+            ..Default::default()
+        },
+    );
+    let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
+    assert_eq!(view.mark, "cancelled");
+    assert_eq!(view.status, "failed");
+    assert!(view.retryable() && !view.retry_first());
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(html.contains("g-cancelled"), "{html}");
+    assert!(
+        html.contains("<h3>Cancelled</h3><p class=\"err-line\">pivot: audit instead (Sam)</p>"),
+        "{html}"
+    );
+    assert!(!html.contains("Why it failed"));
+    assert!(!html.contains("class=\"primary\">Retry"));
+}
+/// A failure leads with one sentence from its kind; the pane its agent left is folded under
+/// "Pane at failure", never shown as escaped JSON.
+#[test]
+fn a_failure_leads_with_its_sentence_and_folds_the_pane() {
+    let plan = Plan::parse_json(
+        br#"{"steps":{"w":{"run":"core.external","outputs":{"done":"boolean"}}}}"#,
+        &Signatures,
+    )
+    .unwrap();
+    let mut state = StateSnapshot::default();
+    state.steps.insert(
+        "w".parse().unwrap(),
+        StepState {
+            status: StepStatus::Failed,
+            error: Some("engine operation deadline exceeded".into()),
+            ..Default::default()
+        },
+    );
+    let mut view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
+    view.set_failure(sluice_web::views::failure::Failure::parse(
+        r#"{"error":"agent_failure","kind":"WallCap","message":"engine operation deadline exceeded\npane at failure (last rows; whole screen: /h/runs/r/invocations/i/pane-at-failure.txt):\n  > still thinking","session":"s"}"#,
+        Some(36_000.0),
+    ));
+    assert_eq!(view.mark, "failed");
+    assert!(view.retry_first());
+    let html = view.body().unwrap();
+    let html = html.as_str();
+    assert!(html.contains("<h3>Why it failed</h3><p class=\"err-line\">Stopped at its wall-clock cap after 10h 0m.</p>"), "{html}");
+    assert!(
+        html.contains("<p class=\"err-said\">engine operation deadline exceeded</p>"),
+        "{html}"
+    );
+    assert!(
+        html.contains(
+            "Pane at failure</summary><pre class=\"pane-rows\">&#62; still thinking</pre>"
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("\\n"));
+}
+/// The index and the project's counts tell a cancel from a failure: "a failed · b cancelled",
+/// counted apart, and a project whose only stop is a cancel is not marked failed.
+#[tokio::test]
+async fn the_index_counts_a_cancel_apart_from_a_failure() {
+    let home = tempfile::tempdir().unwrap();
+    let writer = Writer::open(home.path()).unwrap();
+    let id = writer
+        .write(RetrySafety::NonIdempotent, |tx| {
+            projects::project_create(
+                tx,
+                CreateProject {
+                    name: "stops".parse().unwrap(),
+                    description: String::new(),
+                    icon: None,
+                    resources: None,
+                    author: "owner".into(),
+                },
+                &EmptyPlanInitializer,
+                &NoResourceSettings,
+            )
+        })
+        .await
+        .unwrap()
+        .project_id;
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for (position, (step, error)) in [
+                ("broke", json!({"error":"fn_failure","message":"exit code 1"})),
+                ("dropped", json!({"error":"cancelled","message":"cancel requested"})),
+                ("pivoted", json!({"error":"agent_failure","kind":"Cancelled","message":"cancelled during transient backoff"})),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                tx.sql().execute("INSERT INTO steps(project_id,step_id,position,declaration,status,error) VALUES (?1,?2,?3,'{\"run\":\"core.external\"}','failed',?4)", (id.to_string(), step, position as i64, error.to_string()))?;
+            }
+            tx.changed(Some(id), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let reads = ReadPool::open(home.path(), 1).unwrap();
+    let snapshot = reads
+        .snapshot(|c| views::load_snapshot(c, views::FunctionCatalog::default()))
+        .await
+        .unwrap();
+    let project = &snapshot.projects[0];
+    assert_eq!((project.counts.failed, project.counts.cancelled), (1, 2));
+    assert_eq!(project.failed_steps, ["broke"]);
+    assert_eq!(project.cancelled_steps, ["dropped", "pivoted"]);
+    assert_eq!(project.counts.status(), "failed");
+    let html = views::home::HomeView::new(&snapshot).body().unwrap();
+    assert!(
+        html.as_str()
+            .contains("broke</a> failed</span> · <span class=\"cancelled-words\">"),
+        "{}",
+        html.as_str()
+    );
+    assert!(html.as_str().contains("pivoted</a> cancelled</span>"));
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "DELETE FROM steps WHERE project_id=?1 AND step_id='broke'",
+                [id.to_string()],
+            )?;
+            tx.changed(Some(id), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let snapshot = reads
+        .snapshot(|c| views::load_snapshot(c, views::FunctionCatalog::default()))
+        .await
+        .unwrap();
+    assert_eq!(snapshot.projects[0].counts.status(), "cancelled");
+    writer.shutdown().await.unwrap();
+}

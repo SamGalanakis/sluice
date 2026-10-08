@@ -26,7 +26,7 @@ specified published `0.25.15+spec-1.1.0` package.
 | rusqlite | `=0.40.2` | on | bundled, hooks, backup, limits | sluice-store, sluice-runtime, sluice-web, sluice |
 | axum | `=0.8.9` | on | query, json, http1, tokio | sluice-runtime tests, sluice-web |
 | tower | `=0.5.3` | on | util, limit, timeout | sluice-web |
-| tower-http | `=0.7.1` | on | trace, request-id, set-header, limit, compression-gzip | sluice-web |
+| tower-http | `=0.7.1` | on | trace, request-id, set-header, limit, compression-gzip, compression-br | sluice-web |
 | rmcp | `=3.5.0` | off | server, macros, transport-io, transport-streamable-http-server | sluice-web, sluice-web tests |
 | serde | `=1.0.229` | on | derive | sluice-model, sluice-process, sluice-agents, sluice-runtime, sluice-web, sluice |
 | serde_json | `=1.0.151` | on | preserve_order, float_roundtrip | sluice-model, sluice-store, sluice-process, sluice-agents, sluice-runtime, sluice-web, sluice |
@@ -977,9 +977,16 @@ sluice v0.1.0 (<workspace>/crates/sluice) []
 │   ├── tokio v1.53.2 [bytes,default,fs,io-std,io-util,libc,macros,mio,net,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,time,tokio-macros,windows-sys] (*)
 │   ├── tokio-util v0.7.19 [codec,default,futures-util,io,libc,rt] (*)
 │   ├── tower v0.5.3 [futures-core,futures-util,limit,log,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,tokio-util,tracing,util] (*)
-│   ├── tower-http v0.7.1 [compression-gzip,default,futures-core,limit,request-id,set-header,tokio-util,trace,tracing,uuid]
-│   │   ├── async-compression v0.4.50 [gzip,tokio]
-│   │   │   ├── compression-codecs v0.4.45 [flate2,gzip,memchr]
+│   ├── tower-http v0.7.1 [compression-br,compression-gzip,default,futures-core,limit,request-id,set-header,tokio-util,trace,tracing,uuid]
+│   │   ├── async-compression v0.4.50 [brotli,gzip,tokio]
+│   │   │   ├── compression-codecs v0.4.45 [brotli,flate2,gzip,memchr]
+│   │   │   │   ├── brotli v9.0.0 [alloc-stdlib,default,std]
+│   │   │   │   │   ├── alloc-no-stdlib v3.0.0 []
+│   │   │   │   │   ├── alloc-stdlib v0.3.0 []
+│   │   │   │   │   │   └── alloc-no-stdlib v3.0.0 []
+│   │   │   │   │   └── brotli-decompressor v6.0.1 [alloc-stdlib,std]
+│   │   │   │   │       ├── alloc-no-stdlib v3.0.0 []
+│   │   │   │   │       └── alloc-stdlib v0.3.0 [] (*)
 │   │   │   │   ├── compression-core v0.4.33 []
 │   │   │   │   ├── flate2 v1.1.10 [any_impl,default,miniz_oxide,runtime_detection,rust_backend] (*)
 │   │   │   │   └── memchr v2.8.3 [alloc,default,std]

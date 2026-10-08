@@ -59,6 +59,7 @@ pub fn router(state: MessageState) -> Router {
         )
         .route("/projects/id/{project}/messages/read", post(mark_read))
         .route("/projects/id/{project}/messages", post(post_message))
+        .route("/messages/close", post(close_many))
         .with_state(state)
 }
 #[derive(Clone, Deserialize, Default)]
@@ -158,7 +159,7 @@ async fn stream(
                 let page =
                     threads::load(&state.dashboard.reads, project, view(&path), query.thread)
                         .await?;
-                let nav = super::NavView::new(&page.nav, project, &page.title().to_lowercase())?;
+                let nav = super::NavView::new(&page.nav, project, page.tab())?;
                 Ok(RenderedBatch {
                     version: page.version(),
                     regions: vec![
@@ -331,6 +332,68 @@ async fn mutate(
         Err(error) => error_response(error),
     }
 }
+/// Close several questions at once (the inbox's "Close all n" for the questions nobody is
+/// waiting on): each `m` is `<project>/<message>`; then back to `next`. Each close is the
+/// owner's reply with the action `close`, as a question's own Close is.
+async fn close_many(State(state): State<MessageState>, body: Bytes) -> Response {
+    let mut next = "/inbox".to_owned();
+    let mut targets = vec![];
+    for (key, value) in url::form_urlencoded::parse(&body) {
+        match key.as_ref() {
+            "next" if value.starts_with('/') && !value.starts_with("//") && !value.contains('\\') => {
+                next = value.into_owned()
+            }
+            "m" => {
+                let parsed = value.split_once('/').and_then(|(p, m)| {
+                    Some((p.parse::<ProjectId>().ok()?, m.parse::<i64>().ok()?))
+                });
+                match parsed {
+                    Some(target) => targets.push(target),
+                    None => {
+                        return error_response(PublicError::BadRequest {
+                            message: format!("not a question: {value}"),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if targets.is_empty() || targets.len() > 500 {
+        return error_response(PublicError::BadRequest {
+            message: "name between 1 and 500 questions to close".into(),
+        });
+    }
+    let mut failed = vec![];
+    for (project, message) in targets {
+        let result = state
+            .commands
+            .command(CommandRequest::Reply(Reply {
+                project: ProjectSelector::Id(project),
+                to_message: MessageId(message),
+                body: String::new(),
+                answer: Some(MessageAnswer {
+                    action: "close".into(),
+                    params: None,
+                    values: None,
+                }),
+                run: None,
+                owner: true,
+            }))
+            .await;
+        if let Err(error) = result {
+            failed.push(format!("{message}: {error}"));
+        }
+    }
+    if failed.is_empty() {
+        axum::response::Redirect::to(&next).into_response()
+    } else {
+        error_response(PublicError::Conflict {
+            message: format!("could not close {}", failed.join("; ")),
+            current_rev: None,
+        })
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadBody {
@@ -369,21 +432,14 @@ pub fn registration() -> super::PageRegistration {
         nav: |project| {
             project
                 .map(|id| {
-                    vec![
-                        NavEntry::new("inbox", format!("/projects/id/{id}/inbox"), "Inbox", 20),
-                        NavEntry::new(
-                            "questions",
-                            format!("/projects/id/{id}/questions"),
-                            "Questions",
-                            30,
-                        ),
-                        NavEntry::new(
-                            "history",
-                            format!("/projects/id/{id}/history"),
-                            "History",
-                            50,
-                        ),
-                    ]
+                    // the project's messages, its inbox, questions and history behind one
+                    // section: the nav's one Inbox is the tray, which asks the person
+                    vec![NavEntry::new(
+                        "messages",
+                        format!("/projects/id/{id}/inbox"),
+                        "Messages",
+                        20,
+                    )]
                 })
                 .unwrap_or_default()
         },

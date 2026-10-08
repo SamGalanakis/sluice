@@ -4,91 +4,6 @@ const { rocket, mergePatch } = await import(runtimeUrl);
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-// ---- times ---------------------------------------------------------------------------------
-
-function dur(seconds) {
-  if (seconds < 10) return `${Math.max(seconds, 0).toFixed(1)}s`.replace(".0s", "s");
-  let s = Math.floor(seconds);
-  if (s < 60) return `${s}s`;
-  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600);
-  const m = Math.floor(s % 3600 / 60), sec = s % 60;
-  const parts = [[d, "d"], [h, "h"], [m, "m"]].concat(!d && !h ? [[sec, "s"]] : []);
-  return parts.filter(([n]) => n).map(([n, u]) => `${n}${u}`).join(" ") || "0s";
-}
-
-// a card's timer, as the server draws it: its two largest units, "45s", "12m", "2h 14m", "1d 3h"
-function short(seconds) {
-  const s = Math.floor(Math.max(seconds, 0));
-  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  if (s < 1) return "<1s";
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${m}m`;
-  return s < 86400 ? `${h}h ${m}m` : `${d}d ${h}h`;
-}
-
-// the same in words, for a screen reader: "45 seconds", "2 hours 14 minutes", "1 day"
-function spoken(seconds) {
-  const s = Math.floor(Math.max(seconds, 0));
-  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  const unit = (n, one) => (n === 0 ? "" : `${n} ${one}${n === 1 ? "" : "s"}`);
-  if (s < 1) return "under a second";
-  const parts = s < 60 ? [unit(s, "second")] : s < 3600 ? [unit(m, "minute")]
-    : s < 86400 ? [unit(h, "hour"), unit(m, "minute")] : [unit(d, "day"), unit(h, "hour")];
-  return parts.filter(Boolean).join(" ");
-}
-
-function ago(seconds) {
-  for (const [unit, size] of [["d", 86400], ["h", 3600], ["m", 60]]) {
-    if (seconds >= size) return `${Math.floor(seconds / size)}${unit} ago`;
-  }
-  return "just now";
-}
-
-const QUIET = 15 * 60;  // seconds without a write before a running step has gone quiet
-
-function tick() {
-  const now = Date.now();
-  let wider = false;
-  for (const t of $$("time[data-since]")) {
-    const seconds = (now - Date.parse(t.dataset.since)) / 1000;
-    if (!Number.isFinite(seconds)) continue;
-    const shown = $(":scope > .tk", t), said = $(":scope > .vh", t);
-    if (!shown) {  // the drawer's "Running 12m 5s"
-      const text = dur(seconds);
-      if (t.textContent !== text) t.textContent = text;
-      continue;
-    }
-    // a card's timer: its width is held, so only a longer text ("9h 59m" to "10h 0m") can move
-    // the edges that meet its card
-    const text = short(seconds), words = ` for ${spoken(seconds)}`;
-    if (shown.textContent !== text) {
-      wider ||= text.length > shown.textContent.length;
-      shown.textContent = text;
-    }
-    if (said && said.textContent !== words) said.textContent = words;
-  }
-  if (wider) window.dispatchEvent(new Event("sluice-resized"));
-  for (const t of $$("time[data-ago]")) {
-    const text = ago((now - Date.parse(t.getAttribute("datetime"))) / 1000);
-    if (t.textContent !== text) t.textContent = text;
-  }
-  for (const t of $$("[data-quiet]")) {  // a badge, to the minute: `quiet 42m`
-    const age = (now - Date.parse(t.dataset.quiet)) / 1000;
-    if (t.hidden !== (age < QUIET)) t.hidden = age < QUIET;
-    const text = age < QUIET ? "" : `quiet ${age >= 3600 ? dur(age) : `${Math.floor(age / 60)}m`}`;
-    const q = $(".qt", t);
-    if (q && q.textContent !== text) q.textContent = text;
-  }
-
-}
-tick();
-setInterval(tick, 5000);
-// a time a patch brings (the drawer's step, the board's head) reads as one at once
-let ticking = 0;
-new MutationObserver(() => {
-  if (!ticking) ticking = requestAnimationFrame(() => { ticking = 0; tick(); });
-}).observe(document.querySelector("main") ?? document.body, { childList: true, subtree: true });
-
 // ---- the open step ---------------------------------------------------------------------------
 
 function currentStep() {
@@ -499,7 +414,7 @@ rocket("sluice-board", {
       const said = new Set();
       for (const r of records) {
         if (r.target.closest?.("svg.edges")) continue;
-        // a card's timer ticking (tick() says when that widens a card)
+        // a card's timer ticking (nav.js says when that widens a card)
         const at = r.target.nodeType === Node.TEXT_NODE ? r.target.parentElement : r.target;
         if (r.type !== "attributes" && at?.closest?.("time[data-since]")) continue;
         if (r.type === "attributes" && r.attributeName === "class"

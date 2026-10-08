@@ -9,7 +9,9 @@ macro_rules! register_pages {
     };
 }
 register_pages! { home, board, inbox, log, project_settings, panel }
+pub mod failure;
 pub mod icons;
+pub mod missing;
 pub mod step;
 pub mod threads;
 
@@ -91,14 +93,23 @@ pub struct Counts {
     pub pending: usize,
     pub running: usize,
     pub succeeded: usize,
+    /// Failed, not counting the ones the owner cancelled.
     pub failed: usize,
+    /// Failed because the owner cancelled them (`failure::is_cancel`).
+    pub cancelled: usize,
     pub stale: usize,
     pub skipped: usize,
     pub paused: usize,
 }
 impl Counts {
     pub fn total(&self) -> usize {
-        self.pending + self.running + self.succeeded + self.failed + self.stale + self.skipped
+        self.pending
+            + self.running
+            + self.succeeded
+            + self.failed
+            + self.cancelled
+            + self.stale
+            + self.skipped
     }
     pub fn status(&self) -> &str {
         if self.failed > 0 {
@@ -107,6 +118,8 @@ impl Counts {
             "running"
         } else if self.stale > 0 {
             "stale"
+        } else if self.cancelled > 0 {
+            "cancelled"
         } else if self.total() > 0 && self.succeeded + self.skipped == self.total() {
             "succeeded"
         } else {
@@ -120,6 +133,8 @@ pub struct RunningView {
     pub title: String,
     pub started: String,
     pub quiet: bool,
+    /// Quiet for two hours or more: what the board's Attention view shows.
+    pub long_quiet: bool,
     pub run_id: String,
     pub activity: Option<u64>,
 }
@@ -136,10 +151,15 @@ pub struct ProjectView {
     pub counts: Counts,
     pub running: Vec<RunningView>,
     pub failed_steps: Vec<String>,
+    pub cancelled_steps: Vec<String>,
 }
 impl ProjectView {
     pub fn href(&self) -> String {
         format!("/projects/id/{}", self.id)
+    }
+    /// Its running steps quiet for two hours or more.
+    pub fn long_quiet(&self) -> usize {
+        self.running.iter().filter(|r| r.long_quiet).count()
     }
     pub fn summary(&self) -> &str {
         self.description.split("\n\n").next().unwrap_or("")
@@ -325,6 +345,7 @@ struct Layout<'a> {
     style_url: String,
     nav_url: String,
     datastar_url: String,
+    import_map: &'static str,
 }
 pub fn render_layout(
     title: &str,
@@ -347,6 +368,26 @@ pub fn render_layout(
         style_url: asset_url("style.css"),
         nav_url: asset_url("nav.js"),
         datastar_url: asset_url("datastar-rocket-1.0.4.js"),
+        import_map: import_map(),
+    })
+}
+/// Every script module's plain URL mapped to this build's fingerprinted one, so a module one
+/// imports by name (`/static/openui.js`, and what it imports in turn) is cached for good too.
+fn import_map() -> &'static str {
+    static MAP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut imports = serde_json::Map::new();
+        for asset in PAGES.iter().flat_map(|page| (page)().assets) {
+            if asset.media_type == "text/javascript" {
+                for name in asset.names {
+                    imports.insert(format!("/static/{name}"), asset_url(name).into());
+                }
+            }
+        }
+        // a script element's text: "</" never closes it early
+        serde_json::json!({ "imports": imports })
+            .to_string()
+            .replace("</", "<\\/")
     })
 }
 /// Render the shared stable nav target for a sibling page's patch batch.
@@ -418,22 +459,35 @@ struct AssetQuery {
 }
 /// A fingerprinted URL (`?v=` this build's fingerprint) never changes content, so the browser
 /// keeps it without asking again; any other URL is revalidated on every use.
-async fn static_asset(Path(name): Path<String>, Query(query): Query<AssetQuery>) -> Response {
+/// Any other URL carries the fingerprint as its ETag, so a revalidation that still matches is a
+/// bodiless 304.
+async fn static_asset(
+    Path(name): Path<String>,
+    Query(query): Query<AssetQuery>,
+    headers: HeaderMap,
+) -> Response {
     match asset(&name) {
         Some(asset) => {
+            let etag = format!("\"{}\"", asset.fingerprint);
             let cache = if query.v.as_ref() == Some(&asset.fingerprint) {
                 "public, max-age=31536000, immutable"
             } else {
                 "public, max-age=0, must-revalidate"
             };
-            (
-                [
-                    (header::CONTENT_TYPE, asset.media_type),
-                    (header::CACHE_CONTROL, cache),
-                ],
-                asset.bytes,
-            )
-                .into_response()
+            let fresh = headers
+                .get(header::IF_NONE_MATCH)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
+            let head = [
+                (header::CONTENT_TYPE, asset.media_type.to_owned()),
+                (header::CACHE_CONTROL, cache.to_owned()),
+                (header::ETAG, etag),
+            ];
+            if fresh {
+                (StatusCode::NOT_MODIFIED, head).into_response()
+            } else {
+                (head, asset.bytes).into_response()
+            }
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -456,6 +510,37 @@ impl NavView {
     pub fn is_selected(&self, id: &ProjectId) -> bool {
         self.selected.as_ref() == Some(id)
     }
+}
+
+/// A stored time as every page draws it before its script reads it: "2026-10-07 20:47 UTC".
+/// Nothing renders a raw RFC 3339 time; `nav.js` turns a `<time>` into the page's words.
+pub fn when(at: &str) -> String {
+    match (at.get(..10), at.get(10..11), at.get(11..16)) {
+        (Some(day), Some("T"), Some(time)) => format!("{day} {time} UTC"),
+        _ => at.to_owned(),
+    }
+}
+/// A past time as a page says it: "12m ago", "3d 12h ago" once its script reads it, the UTC
+/// day and minute before (and in its title, always).
+pub fn ago_html(at: &str) -> TrustedHtml {
+    time_html(at, "data-ago")
+}
+/// How long since a time, ticking: "45s", "12m", "2h 14m", "3d 12h".
+pub fn since_html(at: &str) -> TrustedHtml {
+    time_html(at, "data-since")
+}
+fn time_html(at: &str, mode: &str) -> TrustedHtml {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    };
+    let shown = esc(&when(at));
+    TrustedHtml::owned(format!(
+        "<time {mode}=\"{at}\" datetime=\"{at}\" title=\"{shown}\">{shown}</time>",
+        at = esc(at)
+    ))
 }
 
 /// UTC RFC3339 timestamps used by the store and heartbeat. Other timezone forms
@@ -516,9 +601,10 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
             _ => {}
         }
     }
+    // an empty theme is "Match system": the cookie goes, and the page follows the OS
     if theme
         .as_deref()
-        .is_some_and(|t| !THEMES.iter().any(|(id, _)| *id == t))
+        .is_some_and(|t| !t.is_empty() && !THEMES.iter().any(|(id, _)| *id == t))
         || types.as_deref().is_some_and(|t| t != "0" && t != "1")
     {
         return StatusCode::BAD_REQUEST.into_response();
@@ -533,8 +619,8 @@ pub async fn display_preferences(body: axum::body::Bytes) -> Response {
     let mut response = axum::response::Redirect::to(&next).into_response();
     for (name, value) in [("sluice_theme", theme), ("sluice_types", types)] {
         if let Some(value) = value {
-            let cookie =
-                format!("{name}={value}; Path=/; Max-Age=34560000; SameSite=Lax; HttpOnly");
+            let age = if value.is_empty() { 0 } else { 34_560_000 };
+            let cookie = format!("{name}={value}; Path=/; Max-Age={age}; SameSite=Lax; HttpOnly");
             response.headers_mut().append(
                 header::SET_COOKIE,
                 cookie.parse().expect("validated ASCII cookie"),
@@ -572,6 +658,7 @@ pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot
         }
         run.activity = newest;
         run.quiet = newest.is_some_and(|at| now.saturating_sub(at) >= 900);
+        run.long_quiet = newest.is_some_and(|at| now.saturating_sub(at) >= 7200);
     }
 }
 
@@ -607,6 +694,7 @@ pub fn load_snapshot(
             counts: Counts::default(),
             running: vec![],
             failed_steps: vec![],
+            cancelled_steps: vec![],
         };
         let mut counts = c.prepare_cached("SELECT status,count(*),sum(paused IS NOT NULL AND paused <> 'false') FROM steps WHERE project_id=?1 GROUP BY status")?;
         let mut count_rows = counts.query([&raw])?;
@@ -624,18 +712,30 @@ pub fn load_snapshot(
                 _ => {}
             }
         }
-        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),'') FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
+        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
+        // a failed step's error says whether the owner cancelled it: counted apart
         let mut step_rows = steps.query([&raw])?;
         while let Some(r) = step_rows.next()? {
             let status: String = r.get(2)?;
             if status == "failed" {
-                view.failed_steps.push(r.get(0)?);
+                let error: Option<String> = r.get(5)?;
+                let cancelled = error
+                    .and_then(|e| serde_json::from_str::<PublicError>(&e).ok())
+                    .is_some_and(|e| failure::is_cancel(&e));
+                if cancelled {
+                    view.counts.failed -= 1;
+                    view.counts.cancelled += 1;
+                    view.cancelled_steps.push(r.get(0)?);
+                } else {
+                    view.failed_steps.push(r.get(0)?);
+                }
             } else {
                 view.running.push(RunningView {
                     step: r.get(0)?,
                     title: r.get(1)?,
                     started: r.get(3)?,
                     quiet: false,
+                    long_quiet: false,
                     run_id: r.get(4)?,
                     activity: None,
                 });

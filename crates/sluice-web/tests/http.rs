@@ -562,3 +562,145 @@ async fn the_board_mermaid_is_the_plan_view_text() {
     assert!(text.contains("classDef succeeded"), "{text}");
     fixture.stop.cancel();
 }
+async fn get_with(
+    fixture: &Fixture,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> axum::response::Response {
+    let mut request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(header::HOST, "localhost");
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    fixture
+        .app
+        .clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+async fn text_body(response: axum::response::Response) -> String {
+    String::from_utf8(
+        to_bytes(response.into_body(), http::MAX_BODY * 2)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+}
+/// A dead link a browser follows is a page in the layout, saying what is missing, why it may be
+/// gone and how to get back; a JSON client (no HTML in its Accept) keeps the JSON error.
+#[tokio::test]
+async fn a_dead_link_is_a_page_for_a_browser_and_json_for_a_client() {
+    let fixture = Fixture::new().await;
+    let html = [("accept", "text/html,application/xhtml+xml,*/*;q=0.8")];
+    let step = format!("/projects/id/{}/steps/nope", fixture.id);
+    let response = get_with(&fixture, &step, &html).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(
+        response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let page = text_body(response).await;
+    assert!(page.contains("<h1>No such step</h1>"), "{page}");
+    assert!(page.contains("web has no step nope now."), "{page}");
+    assert!(page.contains(&format!(
+        "href=\"/projects/id/{}\">Back to the web plan",
+        fixture.id
+    )));
+    assert!(page.contains(&format!(
+        "href=\"/projects/id/{}/log?step=nope\">Search the log for nope",
+        fixture.id
+    )));
+    assert!(page.contains("id=\"top-nav\""), "inside the layout");
+    let unknown = format!("/projects/id/{}", ProjectId::new());
+    let page = text_body(get_with(&fixture, &unknown, &html).await).await;
+    assert!(page.contains("<h1>No such project</h1>"), "{page}");
+    let page = text_body(get_with(&fixture, "/nowhere", &html).await).await;
+    assert!(page.contains("<h1>Nothing here</h1>"), "{page}");
+    // a client asking for JSON, a stream and a script's fetch keep the JSON error
+    for (path, headers) in [
+        (step.as_str(), &[][..]),
+        (step.as_str(), &[("accept", "application/json")][..]),
+        ("/nowhere", &[("accept", "*/*")][..]),
+    ] {
+        let response = get_with(&fixture, path, headers).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            json_body(response).await["error"],
+            "not_found",
+            "{path} {headers:?}"
+        );
+    }
+    fixture.writer.shutdown().await.unwrap();
+}
+/// Pages, styles and scripts go out compressed when the client takes it; every script module is
+/// reached by its fingerprinted URL (an import map for those a module imports by name) and kept
+/// for good, and any other asset URL revalidates to a bodiless 304.
+#[tokio::test]
+async fn assets_are_compressed_versioned_and_revalidated() {
+    let fixture = Fixture::new().await;
+    for (path, encoding) in [
+        ("/static/style.css", "br"),
+        ("/", "gzip"),
+        ("/static/openui.js", "br"),
+    ] {
+        let response = get_with(&fixture, path, &[("accept-encoding", encoding)]).await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response.headers()[header::CONTENT_ENCODING],
+            encoding,
+            "{path}"
+        );
+    }
+    let page = text_body(get_with(&fixture, "/", &[]).await).await;
+    let map = page
+        .split("<script type=\"importmap\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</script>").next())
+        .expect("an import map");
+    let map: Value = serde_json::from_str(map).unwrap();
+    for module in [
+        "inbox.js",
+        "openui.js",
+        "lang-core-0.3.0.js",
+        "zod-4.6.5-v4.js",
+        "zod-4.6.5-v4-core.js",
+    ] {
+        let versioned = map["imports"][format!("/static/{module}")]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            versioned.starts_with(&format!("/static/{module}?v=")),
+            "{module}: {map}"
+        );
+        let response = get_with(&fixture, versioned, &[]).await;
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable",
+            "{module}"
+        );
+    }
+    // pages without answers load none of the message scripts
+    for path in ["/fns".to_owned(), "/".to_owned()] {
+        let page = text_body(get_with(&fixture, &path, &[]).await).await;
+        assert!(
+            !page.contains("src=\"/static/inbox.js") && !page.contains("src=\"/static/openui.js"),
+            "{path}"
+        );
+    }
+    let plain = get_with(&fixture, "/static/logo.svg", &[]).await;
+    assert_eq!(
+        plain.headers()[header::CACHE_CONTROL],
+        "public, max-age=0, must-revalidate"
+    );
+    let etag = plain.headers()[header::ETAG].to_str().unwrap().to_owned();
+    let again = get_with(&fixture, "/static/logo.svg", &[("if-none-match", &etag)]).await;
+    assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+    assert!(text_body(again).await.is_empty());
+    fixture.writer.shutdown().await.unwrap();
+}

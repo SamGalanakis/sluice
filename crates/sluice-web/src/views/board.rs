@@ -246,7 +246,6 @@ pub struct UnitView {
     pub settled: bool,
     pub steps: Vec<StepView>,
     pub rows: Vec<Vec<StepView>>,
-    pub blocked: Vec<String>,
     pub last_message: String,
     pub changed: String,
     /// The unit is one step in the plan: the board draws that step's card alone, no box.
@@ -359,16 +358,23 @@ impl UnitView {
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&UnitTemplate { unit: self })
     }
-    pub fn page_body(&self) -> Result<TrustedHtml, askama::Error> {
+    /// The unit's own page: a way back to the plan, its id as the page's heading, its cards
+    /// (a done unit open), what it waits on and its last message.
+    pub fn page_body(&self, project: &super::ProjectView) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
-        #[template(
-            source = "<div id=\"unit-detail\" class=\"board\"><div class=\"boxes boxed\">{{ unit.body()?|safe }}</div>{% if !unit.blocked.is_empty() %}<dl class=\"facts\"><div><dt>Waits on</dt><dd>{% for wait in unit.blocked %}<p>{{ wait }}</p>{% endfor %}</dd></div></dl>{% endif %}{% if !unit.last_message.is_empty() %}<section class=\"d-sec\"><h2>Last message</h2><p>{{ unit.last_message }}</p><p class=\"meta\">{{ unit.changed }}</p></section>{% endif %}</div>",
-            ext = "html"
-        )]
+        #[template(path = "unit_page.html")]
         struct UnitPage<'a> {
             unit: &'a UnitView,
+            project: &'a super::ProjectView,
         }
-        TrustedHtml::from_template(&UnitPage { unit: self })
+        TrustedHtml::from_template(&UnitPage {
+            unit: self,
+            project,
+        })
+    }
+    /// Its last message, drawn as message bodies are.
+    pub fn last_message_html(&self) -> TrustedHtml {
+        crate::markdown::render(&self.last_message)
     }
     pub fn rank(&self) -> u8 {
         if self
@@ -509,7 +515,6 @@ impl ProjectView {
                     tagged: unit.tagged,
                     done: unit.done(state),
                     settled: unit.settled(plan, state),
-                    blocked: steps.iter().flat_map(|s| s.waits.clone()).collect(),
                     steps,
                     rows: rows.into_values().collect(),
                     last_message: String::new(),
@@ -563,7 +568,7 @@ impl ProjectView {
                         &d.ty.to_string(),
                         d.doc.as_deref().unwrap_or(""),
                         state.inputs.0.get(n).map(|v| v.as_value()),
-                        "Plan input",
+                        "A plan input",
                     )
                 })
                 .collect(),
@@ -816,6 +821,11 @@ impl ProjectView {
             _ => "No units match this view.",
         }
     }
+    /// The board's Attention view, in the order shown: where a summary's failed, cancelled and
+    /// quiet tags lead.
+    pub fn attention_href(&self) -> String {
+        format!("{}?order={}&show=attention", self.href(), self.order)
+    }
     /// The board under the same order and show, without its search: the search's clear link.
     pub fn clear_href(&self) -> String {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
@@ -1018,11 +1028,11 @@ pub fn load_board(
     let mut last = last_messages(c, project, &board)?;
     // What a card shows; a step's runs, thread and submissions are its page's (load_detail).
     let mut cards = BTreeMap::new();
-    let mut rows = c.prepare_cached("SELECT step_id,manual,total,done FROM steps WHERE project_id=?1")?;
+    let mut rows = c.prepare_cached("SELECT step_id,manual,total,done,error FROM steps WHERE project_id=?1")?;
     let mut found = rows.query([project.to_string()])?;
     while let Some(r) = found.next()? {
-        let (manual, total, done): (bool, Option<i64>, i64) = (r.get(1)?, r.get(2)?, r.get(3)?);
-        cards.insert(r.get::<_, String>(0)?, (manual, total, done));
+        let card: (bool, Option<i64>, i64, Option<String>) = (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
+        cards.insert(r.get::<_, String>(0)?, card);
     }
     let finishing = sluice_store::attempts::finishing(c, project)?;
     let timings = run_timings(c, project)?;
@@ -1032,13 +1042,17 @@ pub fn load_board(
             unit.changed = at;
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
-            if let Some((manual, total, done)) = cards.get(step.id.as_str()) {
+            step.finishing = finishing.get(&step.id).cloned();
+            step.timing = timings.get(step.id.as_str()).cloned();
+            if let Some((manual, total, done, error)) = cards.get(step.id.as_str()) {
                 step.manual = *manual;
                 step.total = total.map(|n| n as usize);
                 step.done = *done as usize;
+                if let Some(error) = error {
+                    let took = step.timing.as_ref().map(|t| t.seconds);
+                    step.set_failure(super::failure::Failure::parse(error, took));
+                }
             }
-            step.finishing = finishing.get(&step.id).cloned();
-            step.timing = timings.get(step.id.as_str()).cloned();
             step.revision = revision as u64;
         }
         if let Some(id) = detail
@@ -1262,12 +1276,13 @@ async fn load(
         .find(|p| p.id == project)
         .map(|p| p.running.as_slice())
         .unwrap_or_default();
+    // the summary's quiet counts read the runs as observed, not as the store had them
+    board.project.running = running.to_vec();
     for unit in &mut board.units {
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
-            step.quiet = running
-                .iter()
-                .find(|r| r.step == step.id.as_str())
-                .is_some_and(|r| r.quiet);
+            let run = running.iter().find(|r| r.step == step.id.as_str());
+            step.quiet = run.is_some_and(|r| r.quiet);
+            step.long_quiet = run.is_some_and(|r| r.long_quiet);
         }
     }
     Ok((shared, board, loaded))
@@ -1302,7 +1317,8 @@ impl BoardQuery {
         view.units.retain(|u| {
             (match show {
                 "active" => !u.done,
-                "attention" => u.rank() == 0,
+                // what needs a look: a failed or stale step, or one running quiet for 2h+
+                "attention" => u.rank() == 0 || u.steps.iter().any(|s| s.long_quiet),
                 "done" => u.done,
                 _ => true,
             }) && self.tag.as_deref().is_none_or(|tag| {
@@ -1502,16 +1518,25 @@ fn unit_batch(
     unit: &UnitName,
     viewer: &Viewer,
 ) -> Result<RenderedBatch, PublicError> {
-    let unit = view
+    let mut unit = view
         .units
         .iter()
         .find(|u| &u.id == unit)
+        .cloned()
         .ok_or_else(|| PublicError::NotFound {
-            message: "unit not found".into(),
+            message: format!("unit {unit} not found"),
         })?;
+    unit.open = unit.done;  // on its own page a done unit shows its cards
+    // no line is drawn on a unit's page: its cards say every wait in words
+    for wait in unit.waits.values_mut().flatten() {
+        wait.drawn = false;
+    }
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
     Ok(RenderedBatch::new(vec![
-        PatchRegion::new("unit-detail", unit.page_body().map_err(render_error)?),
+        PatchRegion::new(
+            "unit-detail",
+            unit.page_body(&view.project).map_err(render_error)?,
+        ),
         PatchRegion::new(
             "top-nav",
             super::render_nav(&nav, viewer, &format!("{}/units/{}", view.href(), unit.id))
@@ -1603,6 +1628,10 @@ pub fn registration() -> super::PageRegistration {
                 .route(
                     "/projects/id/{project}/steps/{step}/actions",
                     axum::routing::post(super::step::action),
+                )
+                .route(
+                    "/projects/id/{project}/runs/{run}/files/{name}",
+                    get(super::step::run_file_page),
                 )
                 .with_state(state.dashboard.clone())
         },

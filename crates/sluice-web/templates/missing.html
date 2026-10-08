@@ -1,0 +1,8 @@
+<div id="missing" class="missing">
+<h1>{{ heading }}</h1>
+{% if !lead.is_empty() %}<p class="missing-lead">{{ lead }}</p>{% endif %}
+{% if !why.is_empty() %}<p class="missing-why">{{ why }}</p>{% endif %}
+{% if status != 404 && !message.is_empty() %}<p class="missing-why">{{ message }}</p>{% endif %}
+<ul class="missing-links">{% for (href, label) in links %}<li><a href="{{ href }}">{{ label }}</a></li>{% endfor %}</ul>
+<p class="meta">HTTP {{ status }}</p>
+</div>

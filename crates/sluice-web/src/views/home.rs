@@ -7,19 +7,35 @@ use axum::{
 };
 #[derive(Clone, Debug)]
 pub struct HomeView {
+    /// The live projects with steps, most urgent first: failed, quiet, running, idle.
     pub active: Vec<ProjectView>,
+    /// The live projects with no steps yet, folded under the rest.
+    pub empty: Vec<ProjectView>,
     pub archived: Vec<ProjectView>,
     pub runner_stopped: bool,
 }
+/// How urgent a project is on the index: a failure stops its work, a quiet run may be stuck,
+/// running work moves, the rest waits.
+fn urgency(project: &ProjectView) -> u8 {
+    if project.counts.failed > 0 {
+        0
+    } else if project.running.iter().any(|r| r.quiet) {
+        1
+    } else if !project.running.is_empty() {
+        2
+    } else {
+        3
+    }
+}
 impl HomeView {
     pub fn new(snapshot: &DashboardSnapshot) -> Self {
+        let live = snapshot.projects.iter().filter(|p| !p.archived);
+        let mut active: Vec<ProjectView> =
+            live.clone().filter(|p| p.counts.total() > 0).cloned().collect();
+        active.sort_by_key(urgency);  // stable: by name within each
         Self {
-            active: snapshot
-                .projects
-                .iter()
-                .filter(|p| !p.archived)
-                .cloned()
-                .collect(),
+            active,
+            empty: live.filter(|p| p.counts.total() == 0).cloned().collect(),
             archived: snapshot
                 .projects
                 .iter()
@@ -88,6 +104,7 @@ pub fn glyph(status: &str) -> TrustedHtml {
         "manual" => ("manual", Icon::CircleDot, ""),
         "stale" => ("stale", Icon::RotateCw, ""),
         "failed" => ("failed", Icon::CircleX, ""),
+        "cancelled" => ("cancelled", Icon::CircleStop, ""),
         "paused" => ("paused", Icon::CirclePause, ""),
         "skipped" => ("skipped", Icon::CircleSlash, ""),
         "external" => ("external", Icon::SquareArrowOutUpRight, ""),

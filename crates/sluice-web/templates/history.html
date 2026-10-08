@@ -1,4 +1,4 @@
-<div id="messages-view"><h1>History</h1><nav class="seg" aria-label="Messages"><a href="{{ view.base() }}/inbox">Inbox</a><a href="{{ view.base() }}/questions">Questions</a><a href="{{ view.base() }}/history" aria-current="page">History</a></nav><div class="threads">
-{% for thread in view.threads %}<article class="item"><h3><a href="{{ thread.href() }}">{{ thread.project_name }} · {{ thread.thread }}</a></h3><p class="meta">{{ thread.messages.len() }} {% if thread.messages.len() == 1 %}message{% else %}messages{% endif %}</p><p class="m-body">{{ thread.preview() }}</p></article>{% endfor %}
+<div id="messages-view"><h1>History</h1>{% include "seg.html" %}<div class="threads">
+{% for thread in view.threads %}<article class="item"><h3><a href="{{ thread.href() }}">{{ thread.name() }}</a></h3><p class="meta">{{ thread.project_name }} · {{ thread.messages.len() }} {% if thread.messages.len() == 1 %}message{% else %}messages{% endif %} · last {{ crate::views::ago_html(thread.last_at())|safe }}</p><p class="m-body">{{ thread.preview() }}</p></article>{% endfor %}
 {% if view.threads.is_empty() %}<p class="empty">No conversations with the owner yet.</p>{% endif %}
-</div><script type="module" src="/static/inbox.js"></script></div>
+</div></div>

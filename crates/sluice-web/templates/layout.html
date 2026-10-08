@@ -5,6 +5,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/archivo@5.3.0/wdth.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/public-sans@5.3.0/index.css">
 <link rel="stylesheet" href="{{ style_url }}">
+<script type="importmap">{{ import_map|safe }}</script>
 {% if !stream.is_empty() %}<script type="module" data-datastar-runtime src="{{ datastar_url }}"></script>{% endif %}
 </head><body data-signals="{{ signals }}">
 <a class="skip" href="#content">Skip to content</a>
@@ -17,9 +18,10 @@
 {% for project in nav.projects %}{% if project.archived %}<a href="{{ project.href() }}"><span>{{ project.icon_text }} {{ project.name }}</span></a>{% endif %}{% endfor %}</div></details>
 {% if !nav.settings_href.is_empty() %}<a class="project-settings" href="{{ nav.settings_href }}" aria-label="Project settings" title="Project settings"{% if path == nav.settings_href %} aria-current="page"{% endif %}>{{ crate::views::icons::icon(crate::views::icons::Icon::Settings, 20, "")|safe }}</a>{% endif %}
 <span class="links">{% for link in nav.links %}<a href="{{ link.href }}"{% if link.current %} aria-current="page"{% endif %}>{{ link.label }}</a>{% endfor %}</span>
-<a id="nav-inbox" href="/inbox">{{ crate::views::icons::icon(crate::views::icons::Icon::Inbox, 20, "")|safe }}<span class="inbox-word">Inbox</span>{% if nav.inbox > 0 %}<span class="badge">{{ nav.inbox }}<span class="vh"> open questions</span></span>{% endif %}</a>
+<a id="nav-inbox" href="/inbox" aria-label="Inbox{% if nav.inbox == 1 %}, 1 open question{% else if nav.inbox > 1 %}, {{ nav.inbox }} open questions{% endif %}"{% if path == "/inbox" || path == "/questions" || path == "/history" %} aria-current="page"{% endif %}>{{ crate::views::icons::icon(crate::views::icons::Icon::Inbox, 20, "")|safe }}<span class="inbox-word">Inbox</span>{% if nav.inbox > 0 %}<span class="badge" aria-hidden="true">{{ nav.inbox }}</span>{% endif %}</a>
 <details class="settings" data-preserve-attr="open"><summary aria-label="Display preferences" title="Display preferences">{{ crate::views::icons::icon(crate::views::icons::Icon::SlidersHorizontal, 20, "")|safe }}</summary>
 <div class="menu"><form class="prefs" method="post" action="/settings" aria-label="Display preferences"><input type="hidden" name="next" value="{{ path }}"><fieldset class="themes"><legend>Theme</legend>
+<label><input type="radio" name="theme" value=""{% if viewer.theme.is_none() %} checked{% endif %}>{{ crate::views::icons::icon(crate::views::icons::Icon::Check, 16, "tick")|safe }}<span>Match system</span><span class="swatch-pair" aria-hidden="true"><span class="swatch" data-theme="light">A</span><span class="swatch" data-theme="dark">a</span></span></label>
 {% for (id,name) in themes %}<label><input type="radio" name="theme" value="{{ id }}"{% if viewer.theme_id() == *id %} checked{% endif %}>{{ crate::views::icons::icon(crate::views::icons::Icon::Check, 16, "tick")|safe }}<span>{{ name }}</span><span class="swatch" data-theme="{{ id }}" aria-hidden="true">Aa</span></label>{% endfor %}
 </fieldset><input type="hidden" name="types" value="0"><label class="check"><input type="checkbox" name="types" value="1"{% if viewer.types %} checked{% endif %}>Show value types</label><button class="save" type="submit">Save</button></form></div></details>
 </nav>

@@ -180,12 +180,13 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             assert!(near(&tabs["right"], plan["right"].as_f64().unwrap()), "{label}: {g}");
             assert!(tabs["top"].as_f64().unwrap() >= sum["top"].as_f64().unwrap() - 1.0, "{label}: {g}");
         }
-        // A step's own times are sluice.js's: a running time is a duration, never "… ago".
+        // Every page's times are nav.js's, in one vocabulary: a running time is a two-unit
+        // duration, never "… ago".
         let since = browser
             .eval("(() => { const t = document.createElement('time'); t.id = 't-since'; const at = new Date(Date.now() - 3600e3).toISOString(); t.dataset.since = at; t.setAttribute('datetime', at); document.querySelector('main').append(t); return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => { document.dispatchEvent(new CustomEvent('datastar-signal-patch', {detail: {}})); r(t.textContent); }))); })()")
             .unwrap();
-        assert_eq!(since, "1h", "{since}");
-        assert_eq!(browser.eval("document.querySelector('#t-since').textContent").unwrap(), "1h");
+        assert_eq!(since, "1h 0m", "{since}");
+        assert_eq!(browser.eval("document.querySelector('#t-since').textContent").unwrap(), "1h 0m");
         browser.eval("document.querySelector('#t-since').remove()").unwrap();
         // On a phone the switch shows one section at a time (the board until one is picked)
         // and remembers the choice.

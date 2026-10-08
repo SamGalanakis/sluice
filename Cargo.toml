@@ -29,7 +29,7 @@ tokio-util = { version = "=0.7.19", features = ["rt", "codec"] }
 rusqlite = { version = "=0.40.2", features = ["bundled", "hooks", "backup", "limits"] }
 axum = { version = "=0.8.9", features = ["query", "json", "http1", "tokio"] }
 tower = { version = "=0.5.3", features = ["util", "limit", "timeout"] }
-tower-http = { version = "=0.7.1", features = ["trace", "request-id", "set-header", "limit", "compression-gzip"] }
+tower-http = { version = "=0.7.1", features = ["trace", "request-id", "set-header", "limit", "compression-gzip", "compression-br"] }
 rmcp = { version = "=3.5.0", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }

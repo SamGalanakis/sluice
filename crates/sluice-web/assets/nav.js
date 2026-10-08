@@ -3,8 +3,8 @@ const datastar = runtimeUrl ? await import(runtimeUrl) : null;
 // The nav's two menus, the project switcher and display preferences, are <details>: they open and
 // work without this. This closes them on a click elsewhere or Escape, as a menu does, and makes
 // a setting apply at once, without the menu's Save: the theme (its id as `data-theme` on
-// <html>; until one is picked the attribute is absent, the page follows the OS and the menu
-// marks the matching preset) and value types (`show-types`, which the Types switch in a
+// <html>; until one is picked, or after "Match system", the attribute is absent and the page
+// follows the OS) and value types (`show-types`, which the Types switch in a
 // step's drawer also turns), each kept by posting it to /settings, which sets the cookie
 // every page is rendered from.
 
@@ -42,16 +42,12 @@ export function setTypes(on) {
 const prefs = document.querySelector("form.prefs");
 if (prefs) {
   prefs.querySelector(".save").hidden = true;
-  // nothing picked yet: the page follows the OS, so the menu shows that theme as chosen
-  if (!root.dataset.theme) {
-    const os = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    const radio = prefs.querySelector(`input[name=theme][value=${os}]`);
-    if (radio) radio.checked = true;
-  }
   prefs.addEventListener("change", (ev) => {
     const input = ev.target;
     if (input.name === "theme") {
-      root.dataset.theme = input.value;
+      // "Match system" (no value) lets the page follow the OS again
+      if (input.value) root.dataset.theme = input.value;
+      else delete root.dataset.theme;
       keep("theme", input.value);
     } else if (input.name === "types") {
       setTypes(input.checked);
@@ -89,44 +85,76 @@ document.addEventListener("datastar-signal-patch", (event) => {
 // A stream with no version changes still sends keepalives. Fetch failures are
 // reported by Datastar, so an idle page is never marked stale by a timer.
 document.querySelector(".stream-retry")?.addEventListener("click", () => location.reload());
-function duration(seconds) {
-  const minutes = Math.floor(Math.max(0, seconds) / 60);
-  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+// ---- times: one vocabulary on every page ------------------------------------------------------
+// A <time> carries its instant in `datetime`; until this reads it, its text is the server's
+// "2026-10-07 20:47 UTC" (and its title keeps that). `data-since`: how long since, ticking, in
+// two units ("45s", "12m", "2h 14m", "3d 12h"); `data-ago`: "just now", "12m ago", "3d 12h ago".
+// A card's timer (`.tk`, and `.vh` for a screen reader) holds its width, so only a longer text
+// can move its card: then "sluice-resized" asks the board to redraw its edges. A stream patch
+// writes the server's text back, so a patch is read again at once (the observer below).
+export function short(seconds) {
+  const s = Math.floor(Math.max(seconds, 0));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (s < 1) return "<1s";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${m}m`;
+  return s < 86400 ? `${h}h ${m}m` : `${d}d ${h}h`;
 }
-function agoText(seconds) {  // sluice.js's ago()
-  for (const [unit, size] of [["d", 86400], ["h", 3600], ["m", 60]]) {
-    if (seconds >= size) return `${Math.floor(seconds / size)}${unit} ago`;
-  }
-  return "just now";
+// the same in words, for a screen reader: "45 seconds", "2 hours 14 minutes", "1 day"
+function spoken(seconds) {
+  const s = Math.floor(Math.max(seconds, 0));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  const unit = (n, one) => (n === 0 ? "" : `${n} ${one}${n === 1 ? "" : "s"}`);
+  if (s < 1) return "under a second";
+  const parts = s < 60 ? [unit(s, "second")] : s < 3600 ? [unit(m, "minute")]
+    : s < 86400 ? [unit(h, "hour"), unit(m, "minute")] : [unit(d, "day"), unit(h, "hour")];
+  return parts.filter(Boolean).join(" ");
 }
+const ago = (seconds) => (seconds < 60 ? "just now" : `${short(seconds)} ago`);
+const QUIET = 15 * 60;  // seconds without a write before a running step has gone quiet
+
 function tick() {
-  for (const element of document.querySelectorAll("[data-started]")) {
-    const time = Date.parse(element.dataset.started);
-    if (Number.isFinite(time)) element.textContent = duration((Date.now() - time) / 1000);
-  }
-  // a step's own times (`data-since`) are sluice.js's: a running time is a duration
-  for (const element of document.querySelectorAll("time[datetime]:not([data-since], [data-ago])")) {
-    const time = Date.parse(element.dateTime);
-    if (Number.isFinite(time)) element.textContent = `${duration((Date.now() - time) / 1000)} ago`;
-  }
-  // "2m ago" as sluice.js says it, on every page (settings has no sluice.js), so a board's
-  // times read alike everywhere and from the first paint
-  for (const element of document.querySelectorAll("time[data-ago]")) {
-    const time = Date.parse(element.dateTime);
-    if (Number.isFinite(time)) {
-      const text = agoText((Date.now() - time) / 1000);
-      if (element.textContent !== text) element.textContent = text;
+  const now = Date.now();
+  let wider = false;
+  for (const t of document.querySelectorAll("time[datetime]")) {
+    const seconds = (now - Date.parse(t.dateTime)) / 1000;
+    if (!Number.isFinite(seconds)) continue;
+    if (t.hasAttribute("data-since")) {
+      const shown = t.querySelector(":scope > .tk"), said = t.querySelector(":scope > .vh");
+      const text = short(seconds);
+      if (!shown) {
+        if (t.textContent !== text) t.textContent = text;
+        continue;
+      }
+      if (shown.textContent !== text) {
+        wider ||= text.length > shown.textContent.length;
+        shown.textContent = text;
+      }
+      const words = ` for ${spoken(seconds)}`;
+      if (said && said.textContent !== words) said.textContent = words;
+    } else {
+      const text = ago(seconds);
+      if (t.textContent !== text) t.textContent = text;
     }
   }
+  if (wider) window.dispatchEvent(new Event("sluice-resized"));
+  // a running step on the index gone quiet: "quiet" when it has written nothing since it
+  // started, else "quiet 42m"
   let quiet = 0;
-  for (const element of document.querySelectorAll("[data-quiet-since]")) {
-    const seconds = Date.now() / 1000 - Number(element.dataset.quietSince);
-    element.hidden = seconds < 900;
-    if (!element.hidden) { element.textContent = `quiet ${duration(seconds)}`; if (!element.closest("details.archived")) quiet++; }
+  for (const tag of document.querySelectorAll("[data-quiet-since]")) {
+    const age = now / 1000 - Number(tag.dataset.quietSince);
+    const ran = (now - Date.parse(tag.dataset.runSince)) / 1000;
+    tag.hidden = !(age >= QUIET);
+    if (tag.hidden) continue;
+    const text = Math.abs(ran - age) < 60 ? "quiet" : `quiet ${short(age)}`;
+    if (tag.textContent !== text) tag.textContent = text;
+    if (!tag.closest("details.archived")) quiet++;
   }
   const title = document.querySelector("[data-page-title]");
   if (title) title.dataset.pageTitle = title.dataset.pageTitle.replace(/(?:\d+ quiet · )?Projects/, `${quiet ? quiet + " quiet · " : ""}Projects`);
   if (title && document.title !== title.dataset.pageTitle) document.title = title.dataset.pageTitle;
 }
 tick();
-setInterval(tick, 10000);
+setInterval(tick, 5000);
+new MutationObserver(tick).observe(document.querySelector("main") ?? document.body,
+  { childList: true, subtree: true, characterData: true });

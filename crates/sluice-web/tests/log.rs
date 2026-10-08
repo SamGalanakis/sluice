@@ -236,3 +236,166 @@ async fn p605_thread_filter_uses_message_records_and_log_retention_cannot_erase_
         values: None,
     };
 }
+/// The log leads with signal: a capacity fn's successful calls stay out unless the calls are
+/// asked for; presets pick steps, runs, messages or errors; a Step field narrows to one step.
+/// The table scrolls in a named, focusable region and every time reads in the page's words.
+#[tokio::test]
+async fn log_hides_call_noise_and_offers_presets_and_a_step_field() {
+    let home = tempfile::tempdir().unwrap();
+    let writer = Writer::open(home.path()).unwrap();
+    let project = writer
+        .write(RetrySafety::NonIdempotent, |tx| {
+            projects::project_create(
+                tx,
+                CreateProject {
+                    name: "noisy".parse().unwrap(),
+                    description: String::new(),
+                    icon: None,
+                    resources: None,
+                    author: "owner".into(),
+                },
+                &EmptyPlanInitializer,
+                &NoResourceSettings,
+            )
+        })
+        .await
+        .unwrap()
+        .project_id;
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            use sluice_model::commands::StepStatus;
+            for step in ["build", "work"] {
+                tx.append_record(
+                    Some(project),
+                    Event::StepStatus {
+                        step: step.parse().unwrap(),
+                        from: Some(StepStatus::Running),
+                        to: if step == "work" {
+                            StepStatus::Failed
+                        } else {
+                            StepStatus::Succeeded
+                        },
+                        error: None,
+                        run_ids: vec![],
+                        needs: Default::default(),
+                    },
+                )?;
+            }
+            for n in 0..60 {
+                tx.append_record(
+                    Some(project),
+                    Event::Call {
+                        call: sluice_model::ids::RunId::new(),
+                        name: "lash.lane_capacity".into(),
+                        status: if n == 0 {
+                            StepStatus::Failed
+                        } else {
+                            StepStatus::Succeeded
+                        },
+                        inputs: None,
+                        outputs: None,
+                        error: None,
+                        direct: true,
+                        author: Some("capacity".into()),
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let reads = ReadPool::open(home.path(), 1).unwrap();
+    let all = log::load(&reads, Some(project), LogQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(all.query.preset(), "all");
+    assert_eq!(
+        all.rows.iter().filter(|r| r.kind == "call").count(),
+        1,
+        "only the failed call"
+    );
+    assert_eq!(
+        all.rows.iter().filter(|r| r.kind == "step.status").count(),
+        2
+    );
+    let calls = log::load(&reads, Some(project), LogQuery::parse("kind=call").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.rows.len(),
+        50,
+        "every call when the calls are asked for"
+    );
+    let errors = log::load(&reads, Some(project), LogQuery::parse("errors=1").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(errors.query.preset(), "errors");
+    let kinds: Vec<_> = errors
+        .rows
+        .iter()
+        .map(|r| (r.kind.as_str(), r.summary.as_str()))
+        .collect();
+    assert_eq!(kinds.len(), 2, "{kinds:?}");
+    assert!(
+        kinds
+            .iter()
+            .any(|(k, s)| *k == "step.status" && s.contains("work")),
+        "{kinds:?}"
+    );
+    assert!(kinds.iter().any(|(k, _)| *k == "call"), "{kinds:?}");
+    let step = log::load(
+        &reads,
+        Some(project),
+        LogQuery::parse("step=build").unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(step.rows.len(), 1);
+    assert!(step.rows[0].summary.starts_with("build "));
+    assert_eq!(LogQuery::parse("kind=step").unwrap().preset(), "step");
+    assert_eq!(LogQuery::parse("kind=step&kind=run").unwrap().preset(), "");
+    // a preset keeps the step and threads
+    assert_eq!(step.query.preset_query("errors"), "step=build&errors=1");
+    let html = step.body().unwrap();
+    let html = html.as_str();
+    assert!(
+        html.contains(
+            r#"<div class="scroll" tabindex="0" role="region" aria-label="Log records">"#
+        )
+    );
+    assert!(
+        html.contains(r#"aria-current="page">All</a>"#),
+        "the preset shown is marked"
+    );
+    assert!(html.contains(r#"name="step" value="build""#));
+    assert!(
+        html.contains(r#"<details class="kinds""#)
+            && !html.contains(r#"<details class="kinds" open"#),
+        "the kinds fold"
+    );
+    assert!(html.contains("<time data-ago="), "{html}");
+    // no raw RFC 3339 text outside a record's JSON: a time reads "2026-10-07 20:47 UTC" until
+    // the script reads it
+    let shown: String = html
+        .split("<pre>")
+        .map(|part| part.split_once("</pre>").map_or(part, |(_, after)| after))
+        .collect();
+    let text = shown
+        .split('>')
+        .filter_map(|s| s.split('<').next())
+        .collect::<String>();
+    assert!(!regex_like_rfc3339(&text), "{text}");
+    assert!(text.contains(" UTC"), "{text}");
+    writer.shutdown().await.unwrap();
+}
+/// Some "2026-10-07T20:47:08" in text.
+fn regex_like_rfc3339(text: &str) -> bool {
+    text.as_bytes().windows(19).any(|w| {
+        w[4] == b'-'
+            && w[7] == b'-'
+            && w[10] == b'T'
+            && w[13] == b':'
+            && w[16] == b':'
+            && w[..4].iter().all(u8::is_ascii_digit)
+    })
+}

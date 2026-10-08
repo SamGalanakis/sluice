@@ -32,6 +32,7 @@ icons! {
     CircleX => "circle-x",
     CirclePause => "circle-pause",
     CircleSlash => "circle-slash",
+    CircleStop => "circle-stop",
     SquareArrowOutUpRight => "square-arrow-out-up-right",
     TriangleAlert => "triangle-alert",
     LayoutDashboard => "layout-dashboard",
@@ -40,6 +41,8 @@ icons! {
     GripVertical => "grip-vertical",
     Search => "search",
     X => "x",
+    ArrowLeft => "arrow-left",
+    FileText => "file-text",
 }
 
 /// Each icon's shapes (what sits inside its `<svg>`), on one line, in `Icon` order.

@@ -31,7 +31,7 @@
 <section aria-labelledby="resources-heading"><h2 id="resources-heading">Resources</h2>
 <p class="setting-help">Use a nonnegative capacity, {"capacity_fn":"fn"} for a dynamic capacity, or null to remove. Lowering capacity holds new work while active work continues.</p>
 <!--resource-status--><div id="resource-status"><ul class="resource-list">
-{% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · Step queue unavailable{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
+{% for r in view.resources %}<li><code>{{ r.name }}</code> · {% if r.dynamic %}Dynamic{% else %}Static{% endif %} capacity {{ r.capacity }} · {{ r.held }} in use · {{ r.waiting }} waiting for capacity{% if let Some(queued) = r.queued %} · {{ queued }} steps queued{% else %} · queued steps not counted: the plan's fns are not all loaded yet{% endif %}{% if !r.error.is_empty() %}<p class="setting-error">{{ r.error }}</p>{% endif %}</li>{% endfor %}
 {% if view.resources.is_empty() %}<li class="setting-help">No resources declared.</li>{% endif %}
 </ul></div><!--/resource-status-->
 <div id="resource-editors"><dl class="settings-fields">{% for r in view.resources %}<div class="setting-row"><dt><label for="resource-{{ r.name }}">{{ r.name }}</label></dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources">
@@ -39,11 +39,11 @@
 <input id="resource-{{ r.name }}" name="value" value="{% if feedback.error("resources") && feedback.resource == r.name %}{{ feedback.value }}{% else %}{{ r.value }}{% endif %}" aria-label="Capacity for {{ r.name }}">
 <div class="setting-actions"><button type="submit">Apply capacity</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" && feedback.resource == r.name %}{{ feedback.message }}{% endif %}</span></div>
 </form></dd></div>{% endfor %}</dl></div>
-<form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource">
+<dl class="settings-fields"><div class="setting-row"><dt>New resource</dt><dd><form method="post" action="{{ view.path() }}" data-setting="resources" id="new-resource">
 <input type="hidden" name="field" value="resources"><input type="hidden" name="expected_settings_rev" value="{{ view.project.settings_rev }}">
-<label for="resource-name">Resource name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required>
+<div class="setting-pair"><label for="resource-name">Name</label><input id="resource-name" name="resource" value="{% if feedback.error("resources") %}{{ feedback.resource }}{% endif %}" required>
 <label for="resource-value">Capacity</label><input id="resource-value" name="value" value="{% if feedback.error("resources") %}{{ feedback.value }}{% else %}1{% endif %}" required>
-<div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></section>
+</div><div class="setting-actions"><button type="submit">Add resource</button><span class="settings-feedback{% if feedback.error("resources") %} setting-error{% else %} setting-saved{% endif %}" role="status">{% if feedback.field == "resources" %}{{ feedback.message }}{% endif %}</span></div></form></dd></div></dl></section>
 <section aria-labelledby="board-heading" id="board-settings"><h2 id="board-heading">Board</h2>
 <p class="setting-help">An OpenUI Lang program drawn beside the plan (its own section on a phone), with live units, step states, outputs, metrics, tables and charts. Agents set it with <code>board_set</code>; <code>docs("board")</code> lists the components.</p>
 <form method="post" action="{{ view.path() }}/board" data-setting="board" id="board-form">

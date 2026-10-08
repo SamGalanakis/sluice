@@ -21,6 +21,7 @@ fn fixture() -> DashboardSnapshot {
             },
             running: vec![],
             failed_steps: vec!["broken".into()],
+            cancelled_steps: vec![],
         }],
         inbox: 2,
         runner_stopped: true,

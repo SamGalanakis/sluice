@@ -1,6 +1,8 @@
 .project-settings[aria-current] { color:var(--nav-ink); }
 .project-settings[aria-current]::before { background:color-mix(in srgb,var(--nav-ink) 18%,transparent); }
 .settings-page { min-width:0; }
+.settings-page > * { max-width:760px; }  /* the measure: rows read across, never 140 characters */
+.settings-page .setting-help, .settings-page section > p { max-width:72ch; }
 .settings-page h1 { overflow-wrap:anywhere; margin-bottom:8px; }
 .settings-page .settings-lead { color:var(--muted-foreground); margin:0 0 28px; }
 .settings-page section { margin:28px 0; }
@@ -34,7 +36,7 @@
 .settings-switch button { display:flex; align-items:center; gap:8px; flex:none; }
 .settings-switch button::before { content:""; width:24px; height:14px; border-radius:10px; border:1px solid var(--border-strong); background:var(--secondary); }
 .settings-switch button[aria-checked=true]::before { background:var(--accent); }
-.settings-danger { border:1px solid color-mix(in srgb,var(--status-attention) 45%,var(--border)); border-left:3px solid var(--status-attention); padding:20px; border-radius:var(--radius); }
+.settings-danger { border:1px solid color-mix(in srgb,var(--status-attention) 55%,var(--border)); padding:20px; border-radius:var(--radius); background:color-mix(in srgb,var(--status-attention) 5%,var(--background)); }
 .settings-danger h2 { color:var(--status-attention); }
 .settings-danger button { color:var(--status-attention); border-color:var(--status-attention); }
 .settings-danger button:disabled { opacity:.6; cursor:not-allowed; }
@@ -62,3 +64,5 @@
 .settings-page input.mono-field { font-family:var(--font-mono); font-size:13px; }
 .retire-status .tag { margin-right:4px; }
 .doc-view blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 1px solid var(--border-strong); color: var(--muted-foreground); }
+.setting-pair { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:8px 12px; }
+.setting-pair label { margin:0; }

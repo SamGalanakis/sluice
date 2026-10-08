@@ -89,16 +89,89 @@ impl FieldView {
     pub fn key(&self, prefix: &str) -> String {
         format!("{prefix}:{}", self.name)
     }
+    /// Where its value comes from, in words: "From build/text" for a reference (its sources
+    /// joined), else the source's own phrase ("Its default", "As its run received it").
+    pub fn source_words(&self) -> String {
+        let reference = self
+            .source
+            .split(", ")
+            .all(|part| ValueRef::parse(part).is_ok());
+        if reference {
+            format!("From {}", self.source)
+        } else {
+            self.source.clone()
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct RunView {
     pub id: RunId,
     pub started: String,
     pub finished: String,
-    pub result: String,
     pub session: String,
     pub engine: String,
     pub inputs: Vec<FieldView>,
+    /// How it ended, as a status glyph names it: running (not ended), succeeded, failed,
+    /// cancelled; empty when its result is not recorded.
+    pub outcome: String,
+    /// Its result's error, read for a person.
+    pub failure: Option<super::failure::Failure>,
+    /// The outputs its result carried, by name.
+    pub outputs: Vec<String>,
+    /// What its completion action did ("applied", …), when it had one.
+    pub action: String,
+    /// The run's files the dashboard serves (`run_file`), those it has.
+    pub files: Vec<&'static str>,
+    /// Seconds it ran (to its end, or to the read).
+    #[serde(skip)]
+    pub seconds: Option<f64>,
+}
+/// The run files a page may open, read-only and only from that run's own directory: its
+/// stderr, its tail, its summary and the pane its agent left when it failed (the newest
+/// invocation's).
+pub const RUN_FILES: [&str; 4] = [
+    "pane-at-failure.txt",
+    "stderr.log",
+    "stderr-tail.log",
+    "summary.txt",
+];
+/// The path of one of a run's files under `home`, when the run has it as a plain file (never
+/// through a link): the run's directory is its id's, and the name one of `RUN_FILES`.
+pub fn run_file(home: &std::path::Path, run: &RunId, name: &str) -> Option<std::path::PathBuf> {
+    let name = RUN_FILES.iter().find(|n| **n == name)?;
+    let dir = home.join("runs").join(run.to_string());
+    let plain =
+        |p: &std::path::Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file());
+    if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+        return None;
+    }
+    if *name == "pane-at-failure.txt" {
+        let invocations = dir.join("invocations");
+        if !std::fs::symlink_metadata(&invocations).is_ok_and(|m| m.is_dir()) {
+            return None;
+        }
+        return std::fs::read_dir(&invocations)
+            .ok()?
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.path().join(name))
+            .filter(|p| plain(p))
+            .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    }
+    let path = dir.join(name);
+    plain(&path).then_some(path)
+}
+impl RunView {
+    pub fn file_href(&self, project: &ProjectId, name: &str) -> String {
+        format!("/projects/id/{project}/runs/{}/files/{name}", self.id)
+    }
+    /// "took 2h 14m" for an ended run.
+    pub fn took(&self) -> String {
+        match (self.finished.is_empty(), self.seconds) {
+            (false, Some(s)) => format!("took {}", short_duration(s)),
+            _ => String::new(),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct StepView {
@@ -114,11 +187,15 @@ pub struct StepView {
     pub ready: bool,
     pub blocked: bool,
     pub quiet: bool,
+    /// Running and quiet for two hours or more.
+    pub long_quiet: bool,
     pub waits: Vec<String>,
     pub gates: Vec<String>,
     pub queued: Vec<String>,
     pub skipped: Vec<String>,
     pub error: String,
+    /// What its stored error says, read for a person (a cancel among them).
+    pub failure: Option<super::failure::Failure>,
     pub inputs: Vec<FieldView>,
     pub outputs: Vec<FieldView>,
     pub runs: Vec<RunView>,
@@ -195,15 +272,6 @@ pub struct ProgressView {
     pub at: String,
     pub live: bool,
 }
-impl ProgressView {
-    /// When it was set as the page reads without script: "2026-10-06 14:05 UTC".
-    pub fn shown(&self) -> String {
-        match (self.at.get(..10), self.at.get(11..16)) {
-            (Some(day), Some(time)) => format!("{day} {time} UTC"),
-            _ => self.at.clone(),
-        }
-    }
-}
 pub fn status_name(status: &StepStatus) -> &'static str {
     match status {
         StepStatus::Pending => "pending",
@@ -251,7 +319,7 @@ impl StepView {
                     .unwrap_or_default();
                 match b {
                     Binding::Default(v) => {
-                        FieldView::new(n, &ty, "", Some(v.as_value()), "Default")
+                        FieldView::new(n, &ty, "", Some(v.as_value()), "Its default")
                     }
                     Binding::Source(r) => FieldView::reference(n, &ty, r, plan, state),
                     Binding::Sources(rs) => {
@@ -284,7 +352,7 @@ impl StepView {
                         &ty,
                         "",
                         Some(&serde_json::json!({"file":path})),
-                        "File, resolved when the run starts",
+                        "A file, read when the run starts",
                     ),
                 }
             })
@@ -314,7 +382,11 @@ impl StepView {
                 outputs.push(FieldView::new(n, "", "", Some(v.as_value()), ""));
             }
         }
-        Self {
+        let failure = entry
+            .error
+            .as_deref()
+            .map(|message| super::failure::Failure::parse(message, None));
+        let mut view = Self {
             project,
             id: id.clone(),
             function: step.run.clone(),
@@ -326,11 +398,13 @@ impl StepView {
             ready: next,
             blocked: false,
             quiet: false,
+            long_quiet: false,
             waits,
             gates: step.after.iter().map(|g| g.entry()).collect(),
             queued: entry.queued,
             skipped: entry.skipped.iter().map(|s| s.to_string()).collect(),
             error: entry.error.unwrap_or_default(),
+            failure: None,
             inputs,
             outputs,
             runs: vec![],
@@ -343,7 +417,27 @@ impl StepView {
             finishing: None,
             progress: None,
             timing: None,
+        };
+        if let Some(failure) = failure {
+            view.set_failure(failure);
         }
+        view
+    }
+    /// Its stored error, read: a failed step the owner cancelled is marked `cancelled`, a state of
+    /// its own on every page (its glyph, caption and counts), though the store keeps it failed.
+    pub fn set_failure(&mut self, failure: super::failure::Failure) {
+        if self.status == "failed" {
+            self.mark = if failure.cancelled {
+                "cancelled"
+            } else {
+                "failed"
+            }
+            .into();
+        }
+        self.failure = Some(failure);
+    }
+    pub fn cancelled(&self) -> bool {
+        self.mark == "cancelled"
     }
     pub fn href(&self) -> String {
         format!("/projects/id/{}/steps/{}", self.project, self.id)
@@ -429,11 +523,7 @@ impl StepView {
         let shown = short_duration(t.seconds);
         // a running run's title must not move with the clock: it names the start
         let this = if live {
-            let at = match (t.started.get(..10), t.started.get(11..16)) {
-                (Some(day), Some(time)) => format!("{day} {time} UTC"),
-                _ => t.started.clone(),
-            };
-            format!("started {at}")
+            format!("started {}", super::when(&t.started))
         } else {
             format!("took {shown}")
         };
@@ -469,9 +559,10 @@ impl StepView {
             if n == 1 { "output" } else { "outputs" }
         )
     }
-    /// A failed step's next move is Retry: the primary button.
+    /// A failed step's next move is Retry: the primary button. One the owner cancelled was
+    /// stopped on purpose, so Retry stays a plain button.
     pub fn retry_first(&self) -> bool {
-        self.status == "failed"
+        self.status == "failed" && !self.cancelled()
     }
     pub fn retryable(&self) -> bool {
         matches!(self.status.as_str(), "succeeded" | "failed" | "stale")
@@ -485,21 +576,43 @@ impl StepView {
     pub fn cancellable(&self) -> bool {
         matches!(self.status.as_str(), "pending" | "running")
     }
+    /// The step as the drawer draws it: its id a second-level heading under the page's.
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
-        TrustedHtml::from_template(&StepTemplate { step: self })
+        TrustedHtml::from_template(&StepTemplate {
+            step: self,
+            page: false,
+        })
     }
-    pub fn page_body(&self) -> Result<TrustedHtml, askama::Error> {
+    /// The step as its own page draws it (and that page's stream): its id the page's heading.
+    pub fn own_body(&self) -> Result<TrustedHtml, askama::Error> {
+        TrustedHtml::from_template(&StepTemplate {
+            step: self,
+            page: true,
+        })
+    }
+    /// Its own page: a way back to the plan (and its unit), then the step.
+    pub fn page_body(
+        &self,
+        project: &str,
+        unit: Option<&str>,
+    ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "{{ body|safe }}<script type=\"module\" src=\"{{ js_url }}\"></script>",
+            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit }}\">unit {{ unit }}</a>{% endif %}</nav>{{ body|safe }}<script type=\"module\" src=\"{{ js_url }}\"></script>",
             ext = "html"
         )]
-        struct Page {
+        struct Page<'a> {
+            step: &'a StepView,
+            project: &'a str,
+            unit: Option<&'a str>,
             body: TrustedHtml,
             js_url: String,
         }
         TrustedHtml::from_template(&Page {
-            body: self.body()?,
+            step: self,
+            project,
+            unit,
+            body: self.own_body()?,
             js_url: super::asset_url("sluice.js"),
         })
     }
@@ -511,6 +624,8 @@ impl StepView {
 #[template(path = "step.html")]
 struct StepTemplate<'a> {
     step: &'a StepView,
+    /// On its own page: its id is the page's `h1`.
+    page: bool,
 }
 /// Run history is current-generation only; a reused step id never inherits an
 /// old declaration's runs. Frozen attempted inputs come from durable results.
@@ -524,7 +639,11 @@ pub fn load_detail(
     step.total = total.map(|n| n as usize);
     step.done = done as usize;
     step.revision = revision as u64;
-    let mut q = c.prepare_cached("SELECT r.run_id,coalesce(r.started_at,r.created_at),coalesce(r.finished_at,''),coalesce(r.result,''),coalesce(s.session_id,''),coalesce(s.engine,''),a.request FROM runs r JOIN attempts a USING(attempt_id) LEFT JOIN sessions s USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 ORDER BY r.created_at,r.run_id")?;
+    let home = c
+        .path()
+        .and_then(|p| std::path::Path::new(p).parent())
+        .map(std::path::Path::to_path_buf);
+    let mut q = c.prepare_cached("SELECT r.run_id,coalesce(r.started_at,r.created_at),coalesce(r.finished_at,''),coalesce(r.result,''),coalesce(s.session_id,''),coalesce(s.engine,''),a.request,(julianday(coalesce(r.finished_at,'now'))-julianday(coalesce(r.started_at,r.created_at)))*86400.0 FROM runs r JOIN attempts a USING(attempt_id) LEFT JOIN sessions s USING(run_id) JOIN steps st ON st.project_id=r.project_id AND st.step_id=r.step_id AND st.generation=r.generation WHERE r.project_id=?1 AND r.step_id=?2 ORDER BY r.created_at,r.run_id")?;
     let mut rows = q.query((project.to_string(), step.id.as_str()))?;
     while let Some(r) = rows.next()? {
         let id: String = r.get(0)?;
@@ -545,22 +664,62 @@ pub fn load_detail(
                                 .unwrap_or(""),
                             "",
                             Some(v),
-                            "Frozen run input",
+                            "As its run received it",
                         )
                     })
                     .collect()
             })
             .unwrap_or_default();
+        let id: RunId = id
+            .parse()
+            .map_err(|e| sluice_store::StoreError::InvalidDatabase(format!("{e}")))?;
+        let finished: String = r.get(2)?;
+        let seconds: Option<f64> = r.get(7)?;
+        let result: String = r.get(3)?;
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap_or_default();
+        let failure = result
+            .get("error")
+            .filter(|e| !e.is_null())
+            .map(|e| super::failure::Failure::parse(&e.to_string(), seconds));
+        let outcome = match (
+            finished.is_empty(),
+            result.get("status").and_then(|s| s.as_str()),
+        ) {
+            (true, _) => "running",
+            (false, Some("succeeded")) => "succeeded",
+            (false, Some(_)) if failure.as_ref().is_some_and(|f| f.cancelled) => "cancelled",
+            (false, Some(_)) => "failed",
+            (false, None) => "",
+        };
+        let files = match &home {
+            Some(home) => RUN_FILES
+                .iter()
+                .copied()
+                .filter(|name| run_file(home, &id, name).is_some())
+                .collect(),
+            None => vec![],
+        };
         step.runs.push(RunView {
-            id: id
-                .parse()
-                .map_err(|e| sluice_store::StoreError::InvalidDatabase(format!("{e}")))?,
+            id,
             started: r.get(1)?,
-            finished: r.get(2)?,
-            result: r.get(3)?,
+            finished,
             session: r.get(4)?,
             engine: r.get(5)?,
             inputs,
+            outcome: outcome.into(),
+            failure,
+            outputs: result
+                .get("outputs")
+                .and_then(|o| o.as_object())
+                .map(|o| o.keys().cloned().collect())
+                .unwrap_or_default(),
+            action: result
+                .pointer("/action/outcome")
+                .and_then(|o| o.as_str())
+                .unwrap_or_default()
+                .into(),
+            files,
+            seconds,
         });
     }
     if let Some(last) = step.runs.last() {
@@ -726,17 +885,22 @@ pub async fn step_page(
     headers: HeaderMap,
 ) -> Response {
     let page = async {
-        let (shared, _, step) =
+        let (shared, view, step) =
             board::step_snapshot(&state, project, registry.as_ref().map(|r| &r.0), &id).await?;
         let nav = NavView::new(&shared, Some(project), "plan")?;
-        step.page_body()
+        let unit = view
+            .units
+            .iter()
+            .find(|u| u.tagged && u.steps.iter().any(|s| s.id == id))
+            .map(|u| u.id.as_str());
+        step.page_body(&view.project.name, unit)
             .and_then(|body| {
                 super::render_layout(
                     id.as_str(),
                     &body,
                     &nav,
                     &Viewer::from_headers(&headers),
-                    &format!("{}/stream", step.href()),
+                    &format!("{}/stream?page=true", step.href()),
                     "",
                     &step.href(),
                 )
@@ -748,11 +912,18 @@ pub async fn step_page(
         Err(e) => board::error_response(e),
     }
 }
+#[derive(Deserialize)]
+pub struct StepStreamQuery {
+    /// The step's own page streams it, its id the page's heading; the drawer does not.
+    #[serde(default)]
+    page: bool,
+}
 pub async fn step_stream(
     State(state): State<DashboardState>,
     registry: Option<Extension<board::Registry>>,
     Path((project, id)): Path<(ProjectId, StepId)>,
     Query(query): Query<StreamQuery>,
+    Query(own): Query<StepStreamQuery>,
 ) -> Response {
     let stop = state.stop.clone();
     let version = query.version(VersionSignal::Step);
@@ -767,7 +938,12 @@ pub async fn step_stream(
                 version: step.version(),
                 regions: vec![PatchRegion::new(
                     "step-detail",
-                    step.body().map_err(render_error)?,
+                    if own.page {
+                        step.own_body()
+                    } else {
+                        step.body()
+                    }
+                    .map_err(render_error)?,
                 )],
             })
         }
@@ -780,4 +956,72 @@ pub async fn step_stream(
     ))
     .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
     .into_response()
+}
+/// One of a run's files (`RUN_FILES`), read-only, as plain text: only a run of this project,
+/// only from its own directory, never through a link; a large file's last 2 MiB.
+pub async fn run_file_page(
+    State(state): State<DashboardState>,
+    Path((project, run, name)): Path<(ProjectId, RunId, String)>,
+) -> Response {
+    const MOST: u64 = 2 * 1024 * 1024;
+    let home = state.reads.home().to_owned();
+    let owned = state
+        .reads
+        .snapshot(move |c| {
+            use rusqlite::OptionalExtension;
+            Ok(c.query_row(
+                "SELECT 1 FROM runs WHERE project_id=?1 AND run_id=?2",
+                (project.to_string(), run.to_string()),
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+        })
+        .await;
+    match owned {
+        Ok(true) => {}
+        Ok(false) => {
+            return board::error_response(PublicError::NotFound {
+                message: format!("run {run} is not a run of this project"),
+            });
+        }
+        Err(e) => return board::error_response(e.into_public(true)),
+    }
+    let read = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = run_file(&home, &run, &name)?;
+        let mut file = std::fs::File::open(path).ok()?;
+        let size = file.metadata().ok()?.len();
+        let mut bytes = Vec::new();
+        if size > MOST {
+            file.seek(SeekFrom::Start(size - MOST)).ok()?;
+            bytes
+                .extend_from_slice(b"[the file's first part is left out: its last 2 MiB follow]\n");
+        }
+        file.take(MOST).read_to_end(&mut bytes).ok()?;
+        Some(bytes)
+    })
+    .await
+    .ok()
+    .flatten();
+    match read {
+        Some(bytes) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                ),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+                (
+                    axum::http::header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; sandbox",
+                ),
+            ],
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
+            .into_response(),
+        None => board::error_response(PublicError::NotFound {
+            message: "this run has no such file".into(),
+        }),
+    }
 }

@@ -62,6 +62,9 @@ pub fn router(
         })
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(middleware::from_fn_with_state(state, policy))
+        // outside the policy, which reads an error's body as text: pages, styles, scripts and
+        // JSON go out as brotli or gzip when the client takes it (never a stream's events)
+        .layer(tower_http::compression::CompressionLayer::new())
 }
 pub fn error_response(error: PublicError) -> Response {
     let status = match &error {
@@ -178,11 +181,19 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
             retryable: !write,
         });
     };
+    let page =
+        views::missing::wants_page(request.method(), request.headers(), request.uri().path())
+            .then(|| (request.uri().path().to_owned(), request.headers().clone()));
     if request.method() == Method::GET
         && let Some(response) =
             name_redirect(state, request.uri().path(), request.uri().query()).await
     {
-        return response;
+        return match page {
+            Some((path, headers)) if response.status().is_client_error() => {
+                missing_page(state, &path, &headers, response).await
+            }
+            _ => response,
+        };
     }
     let (parts, body) = request.into_parts();
     let bytes = match tokio::time::timeout(Duration::from_secs(10), to_bytes(body, MAX_BODY)).await
@@ -219,6 +230,19 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
                 });
             }
         };
+    // a browser that asked for a page gets one, in the layout, saying what is missing
+    if let Some((path, headers)) = page
+        && (response.status().is_client_error() || response.status().is_server_error())
+        && !(settings_response
+            && response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .is_some_and(|v| v.as_bytes().starts_with(b"text/html")))
+    {
+        response = missing_page(state, &path, &headers, response).await;
+        response.extensions_mut().insert(Arc::new(permit));
+        return response;
+    }
     if (response.status().is_client_error() || response.status().is_server_error())
         && !response
             .headers()
@@ -232,6 +256,38 @@ async fn handle_policy(state: &HttpState, request: Request, next: Next) -> Respo
     }
     response.extensions_mut().insert(Arc::new(permit));
     response
+}
+/// An error response as the page a browser asked for (the JSON error when the page cannot be
+/// drawn).
+async fn missing_page(
+    state: &HttpState,
+    path: &str,
+    headers: &HeaderMap,
+    response: Response,
+) -> Response {
+    let status = response.status();
+    let message = error_message(response).await;
+    match views::missing::page(&state.pages.dashboard, path, status, &message, headers).await {
+        Some(page) => page,
+        None => (
+            status,
+            axum::Json(if status == StatusCode::NOT_FOUND {
+                PublicError::NotFound { message }
+            } else {
+                PublicError::BadRequest { message }
+            }),
+        )
+            .into_response(),
+    }
+}
+/// What an error response says: a JSON error's message, else its text.
+async fn error_message(response: Response) -> String {
+    let bytes = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap_or_default();
+    serde_json::from_slice::<PublicError>(&bytes)
+        .map(|e| e.to_string())
+        .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).trim().to_owned())
 }
 /// A handler's non-JSON error as the shared JSON error, keeping its status and headers. Its
 /// body is the message; an empty one is named by its status, never left blank.

@@ -56,7 +56,8 @@ instead, the step fails `question closed`.
 ```
 
 While the step's run waits, its question is `waiting`; once the run stops (failed, cancelled,
-finished some other way) the dashboard shows "Nobody is waiting" with the reason. The
+finished some other way) the dashboard folds it under "Nobody is waiting" with the reason,
+where the owner may close them all at once. The
 question stays open: retrying the step takes it up again — a run of the same step asking the
 same title reuses its earlier open question, and an answer given while nobody was waiting is
 delivered to it. Answer or close a question you do not mean to ask again (a reply with

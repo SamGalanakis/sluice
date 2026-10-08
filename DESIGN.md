@@ -207,8 +207,9 @@ the board.
 
 The pages are server-rendered by `crates/sluice-web` (askama templates in `templates/`, views in
 `src/views/`), styled by `assets/style.css` and `assets/settings.css`, and kept live by Datastar
-streams; `assets/sluice.js` adds the drawer, edge drawing, tracing and live times, `nav.js` the
-menus, `inbox.js` and `openui.js` the answer forms, `board.js` the project page's view switch,
+streams; `assets/sluice.js` adds the drawer, edge drawing and tracing, `nav.js` the menus and
+every page's live times, `inbox.js` the message pages' read marks and closes (loading
+`openui.js`, the answer forms, only on a page with an answer), `board.js` the project page's view switch,
 splitter, description fold, board tools and the board's buttons. Every page works without JavaScript.
 
 ## Colors
@@ -253,6 +254,10 @@ Each status keeps its drawn glyph; colour repeats it.
 - **Paused**: plum, a hold someone chose.
 - **Pending** and skipped: idle, a grey navy.
 - **Failed**: ink, never coral: the cross in a disc and a full-ink border.
+- **Cancelled** (a failed step the owner cancelled, read from its stored error by
+  `views::failure`): a stop on purpose, not a fault, so muted ink: a ring with a square in it,
+  the word "cancelled", counted apart ("n cancelled", after any failure and quieter than it),
+  and Retry a plain button, never the primary.
 - **Blocked**: a pending step behind a failed or stale one: a dashed border and the caption
   "blocked".
 
@@ -307,7 +312,7 @@ every token above. Then measure it.
 **The Shape Carries It Rule.** Every status has its own glyph, a Lucide icon at 16px (dashed
 ring `circle-dashed` pending, the turning arc `loader-circle` running, a check in a filled disc
 `circle-check` succeeded, ring and dot `circle-dot` set by hand, circular arrow `rotate-cw`
-stale, a cross in a filled disc `circle-x` failed, ring with two bars `circle-pause` paused,
+stale, a cross in a filled disc `circle-x` failed, ring and square `circle-stop` cancelled, ring with two bars `circle-pause` paused,
 ring with a slash `circle-slash` skipped, an arrow leaving a box `square-arrow-out-up-right`
 external) plus a visually hidden word; colour only repeats what the shape says. Succeeded and
 failed fill Lucide's ring with the status colour and cut the mark in the card colour.
@@ -356,43 +361,54 @@ whole.
   rest (120 to 260px), so a long name gives way before a section does; its menu lists All projects, then every live project with
   its status glyph and icon, then the archived ones under "Archived". `nav.js` closes it on a
   click elsewhere or Escape.
-- **Sections**: in a project Plan, Inbox, Questions, Log, History, Functions; without one Log
-  and Functions (the index is the switcher's "All projects"). The current one is `nav-ink` with
+- **Sections**: in a project Plan, Messages, Log, Functions; without one Log and Functions (the
+  index is the switcher's "All projects"). Messages is the project's inbox, questions and
+  history behind one section (its tabs on the page): the one Inbox in the nav is the tray. The current one is `nav-ink` with
   a bar on the band's bottom edge and `aria-current`; the rest `nav-muted`.
 - **Inbox**: the tray (Lucide `inbox`), the word "Inbox" and the coral badge with the number of open
   questions to the owner across every project (none when nothing waits). It always leads to the
-  home-wide inbox.
+  home-wide inbox, is current there (and on Questions and History), and its name says the count
+  ("Inbox, 3 open questions") when the word gives way to the tray alone.
 - **Project settings**: the gear (Lucide `settings`) linking `/projects/id/<id>/settings`,
   shown only in a project. Its hover and its current state (on the settings page) are the same
   36px rounded fill as display preferences', its focus ring drawn on that fill.
 - **Display preferences**: horizontal sliders (Lucide `sliders-horizontal`, so it never reads
   as a second settings gear) opening a `<details>` menu: "Theme", a radio list of the seven
   themes (each its name and a swatch: "Aa" on the theme's canvas cut by its band and stripes,
-  a tick on the chosen one), then "Show value types". It is a form posting to `/settings`
+  a tick on the chosen one), led by "Match system" (the house pair's two swatches; chosen until
+  a theme is picked, and the way back to following the OS), then "Show value types". It is a form posting to `/settings`
   (cookies `sluice_theme`, `sluice_types`); without script its Save button sends it.
 - **A narrow band** (on a phone, or beside the open drawer): the band is a size container
   (`nav`), so it keys off its own width, never the window's. Under 880px of content it is
   compact: the brand gives way to the switcher (its label clips at 140px; the switcher's menu
   leads to All projects), Inbox shows only its tray and badge, the sections close up (14px,
   6px apart). Under 640px the sections take a second row of the band (44px tall, the current
-  one's bar on the band's bottom edge, spread across it under 420px), so none hides behind a
+  one's bar on the band's bottom edge, from the column's left edge), so none hides behind a
   sideways scroll; the first row is the switcher, the gear, Inbox and display preferences.
 
 ### Projects (`/`)
-One list of the live projects, each a row: its status glyph, icon and name (a link), when it
-last changed; for one with failures a sentence in ink, "Stopped: a, b failed · n paused" (each
-step a link; "Stopped:" only while nothing runs); its description's opening; a progress bar with
-"n of m"; then either its running steps (glyph, title, live time, a gold "quiet" tag once a run
-has written nothing for 15 minutes) or one line on what stops it ("Paused.", "Stopped: nothing
-is running."). The archived projects fold under "Archived (n)". While nothing holds the
+One list of the live projects, most urgent first: a failed step, then a quiet run, then
+running, then idle (by name within each). Each is a row: its status glyph, icon and name (a
+link), when it last changed; for one with failures or cancels a sentence, "Stopped: a, b failed
+· c cancelled · n paused" (each step a link; "Stopped:" only while nothing runs; the failures
+in ink at 500, the cancels after them in muted ink); its description's opening; a progress bar
+with "n of m"; then either its running steps (glyph, the step's id at 600 and its doc after it
+in muted ink, its live time and a gold "quiet" tag once a run has written nothing for 15
+minutes: "quiet 42m", or "quiet" alone when it has written nothing since it started; on a
+narrow row the time and tag take the next line, never squeezing the id) or one line on what
+stops it ("Paused.", "Stopped: nothing is running."). Projects with no steps fold under "No
+steps yet (n)", the archived ones under "Archived (n)". While nothing holds the
 scheduler lease, one attention line heads the list: "Runner stopped · nothing new starts until
 `sluice loop` runs".
 
 ### Board (`/projects/id/<p>`)
 Top down:
+0. **Title**: the project's status glyph (22px), icon and name, the page's `h1` (28/34).
 1. **Summary line**: the progress bar (succeeded, running, failed, the rest; it grows with the
    line, 200 to 480px, so a few failures among hundreds still read), "N steps · n succeeded ·
-   n running · n failed", and a Paused tag; then "Paused: no step starts." or "Archived: listed
+   n running", then, only when there are some, weighted tags that lead to Show: Attention:
+   "n failed" (the failed glyph, ink border, 600), "n cancelled" (the cancelled glyph, muted)
+   and "n quiet 2h+" (gold: running and silent for two hours or more); and a Paused tag; then "Paused: no step starts." or "Archived: listed
    apart from other projects." when so; then, 12px below, the project's description as
    markdown: its first block (a heading takes the block after it too) and the rest folded in a
    `<details>` under a quiet "More" (a chevron; "Less" when open), closed by default and
@@ -576,18 +592,27 @@ On the board, opening a card with script loads the step into a right-hand drawer
 page from 1200px, `min(680px, 45vw)`; over the page on a scrim below that; full width on a
 phone) and puts the card's ring on; without script the card's link opens the step's own page.
 The step reads top down:
-- its id (22px) with badges: the status glyph and word, "finishing", "blocked", "quiet",
-  "done/total runs" when scattered; its doc; "Running <time>" or "Ended <time ago>"; a meta line of the fn in mono
-  and its tags as badges;
+- on its own page only, a way back above it, in 14px muted ink: "← <project> plan / unit <u>"
+  (Lucide `arrow-left`); there its id is the page's `h1`, in the drawer a 22px `h2`;
+- its id with badges: the status glyph and word, "finishing", "blocked", "quiet",
+  "done/total runs" when scattered; its doc; "Running for 2h 14m" or "Ended 3h ago · took
+  10h 0m"; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
+  unit's page);
 - the actions, one POST form carrying the plan revision: Pause or Unpause (where pausing acts:
   pending, failed, stale, or any paused step), Retry with a folded "Feedback for retry" textarea
-  (succeeded, failed, stale; on a failed step Retry is the primary button and comes first),
+  (succeeded, failed, stale; on a failed step Retry is the primary button and comes first; on
+  a cancelled one it stays a plain button),
   Cancel (pending or running), 14px apart; then a link "Thread · n messages" and a gold "n
   awaiting reply" tag on the same line, the feedback's fold on a line of its own under them;
 - facts: "Waits on" (each reason) and "After" (its gate entries);
 - sections under small heads, in need order: Queued, Skipped, Finishing (when it submitted,
   as a relative time, the record's seq and the release in mono, then a meta note that
-  `step_settle` settles a run that lingers), Error (the error in a mono box),
+  `step_settle` settles a run that lingers), "Why it failed" (or "Cancelled"): one plain
+  sentence from its failure kind at 500 ("Stopped at its wall-clock cap after 10h 0m.", "Its
+  fn failed: <its first line>", for a cancel its reason), what it said under it (one line in
+  13px data, several in the mono box), the pane its agent left folded under "Pane at failure"
+  (a chevron; the rows in 12px data, scrolling in their own box), and "Run files" linking each
+  file the run has (`file-text` icons) as plain text,
   Outside sluice (an external step's doc and how to settle it), Progress, Outputs, Inputs,
   Runs.
 - Progress (a step's `step_progress` values while they are fresher than its outputs): the
@@ -604,37 +629,70 @@ The step reads top down:
   row above it. The outputs not set yet are named on one line after the set ones, "7 outputs
   not set yet: summary, final, …" (each name's doc its title); an unset input reads "No value
   yet."
-- Runs: one row per run, numbered, with the step's glyph, the run id in mono, "Started … ·
-  ended …", the engine and session, and the run's result; the current run last on the muted
-  fill.
+- Runs: one row per run, numbered, with its own outcome's glyph and word (Running, Succeeded,
+  Failed, Cancelled) and "ended 3h ago · took 2h 14m" (or "started 5m ago"), its failure's
+  sentence, then its result as labelled facts in 13px (Kind in data, Said, Outputs by name, On
+  completion, Engine, Session, Run, Files), never escaped JSON; the current run last on the
+  secondary fill, inside the column (no bleed past its edges).
+
+### Unit (`/projects/id/<p>/units/<u>`)
+A way back ("← <project> plan"), the unit's id as the page's `h1` (with the success glyph when
+done) and "n steps" in meta; its box as the board draws it, a done unit open to its cards;
+no lines are drawn on this page, so each card that waits on another unit says it in words
+("Waits for l-a1 (running), not in this view"); "Last message": when, then its body as markdown at the 72ch
+measure.
 
 ### Messages (`/inbox`, `/questions`, `/history`, `/projects/id/<p>/…`)
 A page title and a small segmented control (Inbox · Questions · History, the current one in the
-secondary fill). Each question is a card: its title (Archivo 17px), a meta line ("project ·
-thread" linking to the thread, "from X to Y", when, "sets <input>"), "Nobody is waiting: <why>"
-in gold when its asker has stopped, the body as markdown, then the answer form. A question with a
-`ui` draws its OpenUI program (its fields and buttons, and Close) above a folded "Answer in
-words instead"; without one, a text box with Answer and Close question. The inbox
-then lists "Unread notes". History lists the threads with the owner, each with its message
-count and a preview. A thread page (`thread?thread=<name>`) shows every message, each a head
+secondary fill). Each question someone waits on is a card: its title (Archivo 17px; without
+one, its body's first line, cut at a word with an ellipsis, never "Question"), a meta line
+("project · thread" linking to the thread, "from X", when, "sets <input>"), the body as
+markdown, then Answer (the primary button; it opens the answer box, open from the start for a
+question with a `ui`) and Close question. A question with a `ui` draws its OpenUI program (its
+fields and buttons) above a folded "Answer in words instead". The questions nobody is waiting
+on (their askers stopped) follow under "Nobody is waiting n" with "Close all n" at its right:
+one list on the card colour, a line each (a chevron, the title at 600, "project · why" in
+meta) that opens to the body, and Close at its end. The inbox then lists "Unread notes n" with
+"Mark all read": each thread a card named for what it is about ("Step k2-owner", "Notes to
+you", else its first message's title or first line). A note is marked read once it has been on
+screen (half of it, or half a screen of a tall one) for 2 s, never on render; one read moves
+under a "Read just now" fold, kept on the page for the session. History lists the threads with
+the owner by the same names, each with its project, message count and "last 3h ago", and a
+preview cut at a word with an ellipsis. A thread page (`thread?thread=<name>`) is titled by the
+thread's name, the project and thread id in meta under it, then every message, each a head
 (from → to, when, an "Awaiting reply" or state tag, "Reply to n"), an optional title, the body,
 "Answer as sent" folded, and an open question's answer form; under them a "Message to
 <recipient>" box (the thread's step while it is in the plan, else the orchestrator) with "Ask a
-question that needs a reply" (an ask; unchecked, a note) and Send. Messages shown are marked
-read.
+question that needs a reply" (an ask; unchecked, a note) and Send. Its messages are marked
+read once seen, as the inbox's notes are.
 
 ### Log (`/log`, `/projects/id/<p>/log`)
-A "Kinds" fieldset of checkboxes (every kind and group), a Threads field ("any") and Apply; then
-a table of seq, time, kind (12px data) and a one-line summary that opens to the record's JSON,
-50 records a page with "« newest", "‹ newer" and "older ›". The home log shows records without
-a project; the message fns' call noise (`message.ask`, `message.say`, `message.reply`,
-`message.post`) is left out. On a phone the kinds fold behind "Filter: all
-kinds" and the time column hides.
+Presets as a segmented control (All · Steps · Runs · Messages · Errors; Errors: steps that
+failed, failed calls and orphaned runs), then the filters: a Step field ("any step": its records
+and its thread's messages), a Thread field ("any thread"), the kind checkboxes folded behind a
+bordered "Kinds: all" (open only when a custom set is chosen) and Apply; a meta line says that
+fn calls that succeeded are left out (they are noise: a capacity fn runs every few seconds)
+unless the `call` kind is chosen. Then a table of seq, time ("12m ago"), kind (12px data) and a
+one-line summary in words ("fig-5294-rm running → succeeded", "w lane held 1 land", "unit
+fig-5294 settled, 6 steps") that opens to the record's JSON, 50 records a page with
+"« newest", "‹ newer" and "older ›", in a focusable region named "Log records". The home log
+shows records without a project. On a phone each record is a block (seq, time and kind on a
+line, what it was under them), so the log never scrolls sideways.
 
 ### Functions (`/fns`)
-"As seen by" a project select (or "no project") with Show; then Built-in, Global and Project
-groups, each fn its name in mono, its doc, a problem in ink when it has one, and Inputs and
-Outputs columns of `name: type` (one column on a phone).
+The title "Functions"; "As seen by" a project select (or "no project") with Show, and with
+script a "Find a function" field that keeps the functions whose name or doc holds every word
+(a polite count under it); an index of the groups with their counts (Built-in, Global,
+Project), each a link to its group; then the groups, each fn its name in mono, its doc as
+markdown (its `code` drawn as code) at the 72ch measure, a problem in ink when it has one, and
+Inputs and Outputs as `name type` runs (one column on a phone).
+
+### A page that cannot be drawn
+A browser that follows a dead link gets a page in the layout, in the calm voice: the title
+("No such step", "No such unit", "No such project", "Nothing here"), one line on what is
+missing ("lash has no step nope now."), one on why it may be gone (a plan edit, or the project
+retiring done units n h after their last step finished), the ways back as links ("Back to the
+lash plan", "Search the log for nope") and "HTTP 404" in meta.
 
 ### Project settings (`/projects/id/<p>/settings`)
 The project's name as title, "Project settings", and "Each Apply commits one change right away"
@@ -717,9 +775,12 @@ comma: the card's parts are flex items, which the name already parts with a spac
 - **Splitter**: see The project's board; the one control that resizes, a grip on a hairline
   that lights only when used.
 - **Live updates**: each page's stream patches only what changed; while it reconnects a gold
-  line says "Updates paused. Reconnecting…" with a Reconnect button. Times tick live (`data-since` a
-  duration, `data-ago` "2h ago"; `sluice.js` owns both and reads them at once, as a patch
-  brings them; `nav.js` ticks only the messages' times), and a running step's quiet tag appears after 15 minutes without a write.
+  line says "Updates paused. Reconnecting…" with a Reconnect button. Times have one vocabulary
+  on every page, and `nav.js` (on every page) owns them: the server writes "2026-10-07 20:47
+  UTC" (its title keeps it), the script reads `data-since` as a two-unit duration ("45s",
+  "12m", "2h 14m", "3d 12h") and `data-ago` as "just now", "12m ago", "3d 12h ago", and reads
+  a time again at once when a stream patch writes the server's text back; a running step's
+  quiet tag appears after 15 minutes without a write.
 
 ### Touch
 At 720px and below every control is at least 44px tall: the board tools (the search field and

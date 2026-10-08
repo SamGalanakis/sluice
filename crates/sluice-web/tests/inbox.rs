@@ -500,3 +500,108 @@ async fn the_owner_composes_ask_or_say_to_the_thread_step_or_the_orchestrator() 
         StatusCode::UNPROCESSABLE_ENTITY
     );
 }
+/// The questions read as a list a person can work through: each card titled from its body's
+/// first line when it has no title, the answer box behind Answer, and the questions nobody is
+/// waiting on folded to one line each, with one "Close all n" that closes every one of them.
+#[tokio::test]
+async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
+    let (_home, writer, project, state, commands) = fixture().await;
+    let live = post(
+        &writer,
+        project,
+        serde_json::json!({"needs_reply":true,"body":"**Ship the lane today?** The tests pass.\n\nMore detail."}),
+    )
+    .await;
+    let mut gone = vec![];
+    for n in 0..3 {
+        gone.push(
+            post(
+                &writer,
+                project,
+                serde_json::json!({"needs_reply":true,"thread":format!("t{n}"),"body":format!("Stale question {n}")}),
+            )
+            .await,
+        );
+    }
+    let stale = gone.clone();
+    writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for id in &stale {
+                // asked by a run that is gone: nobody waits on the answer
+                tx.sql().execute(
+                    "UPDATE messages SET run_id=?3 WHERE project_id=?1 AND id=?2",
+                    (
+                        project.to_string(),
+                        id,
+                        sluice_model::ids::RunId::new().to_string(),
+                    ),
+                )?;
+            }
+            tx.changed(Some(project), "messages");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let page = threads::load(&state.dashboard.reads, None, MessageView::Inbox, None)
+        .await
+        .unwrap();
+    assert_eq!(page.waiting().len(), 1);
+    assert_eq!(page.waiting()[0].id(), live);
+    assert_eq!(
+        page.waiting()[0].title(),
+        "Ship the lane today? The tests pass."
+    );
+    assert_eq!(page.stopped().len(), 3);
+    let html = page
+        .render(&Viewer::default(), "/inbox", "/inbox/stream")
+        .unwrap();
+    let html = html.as_str();
+    assert!(!html.contains("<h3>Question</h3>"));
+    assert!(
+        html.contains(
+            r#"<details class="q-answer" data-preserve-attr="open"><summary>Answer</summary>"#
+        ),
+        "the answer box opens on Answer"
+    );
+    assert!(html.contains("Nobody is waiting <span class=\"n\">3</span>"));
+    assert!(html.contains("<button>Close all 3</button>"));
+    assert!(
+        html.contains("src=\"/static/inbox.js?v="),
+        "the inbox's script is versioned"
+    );
+    for id in &gone {
+        assert!(html.contains(&format!("name=\"m\" value=\"{project}/{id}\"")));
+    }
+    let router = inbox::router(state.clone());
+    let form: String = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("next", "/questions")
+        .extend_pairs(gone.iter().map(|id| ("m", format!("{project}/{id}"))))
+        .finish();
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/messages/close")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()["location"], "/questions");
+    let closes = commands
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| matches!(r, CommandRequest::Reply(reply) if reply.owner && reply.answer.as_ref().is_some_and(|a| a.action == "close")))
+        .count();
+    assert_eq!(closes, 3);
+    let page = threads::load(&state.dashboard.reads, None, MessageView::Inbox, None)
+        .await
+        .unwrap();
+    assert!(page.stopped().is_empty());
+    assert_eq!(page.waiting().len(), 1);
+}

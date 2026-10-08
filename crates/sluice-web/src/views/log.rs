@@ -24,6 +24,10 @@ const PAGE_SIZE: usize = 50;
 pub struct LogQuery {
     pub kinds: Vec<String>,
     pub threads: Vec<String>,
+    /// Only what one step did and said: its records and its thread's messages.
+    pub step: String,
+    /// Only failures: steps that failed, failed calls and orphaned runs.
+    pub errors: bool,
     pub before: Option<i64>,
     pub after: Option<i64>,
 }
@@ -34,6 +38,8 @@ impl LogQuery {
             match key.as_ref() {
                 "kind" | "kinds" => split(&value, &mut result.kinds),
                 "thread" => split(&value, &mut result.threads),
+                "step" => result.step = value.trim().chars().take(200).collect(),
+                "errors" => result.errors = value == "1",
                 "before" | "after" => {
                     if value.is_empty() || value == "0" {
                         continue;
@@ -65,6 +71,12 @@ impl LogQuery {
         if !self.threads.is_empty() {
             query.append_pair("thread", &self.threads.join(","));
         }
+        if !self.step.is_empty() {
+            query.append_pair("step", &self.step);
+        }
+        if self.errors {
+            query.append_pair("errors", "1");
+        }
         if let Some(seq) = before {
             query.append_pair("before", &seq.to_string());
         }
@@ -75,6 +87,34 @@ impl LogQuery {
     }
     pub fn kinds_text(&self) -> String {
         self.kinds.join(",")
+    }
+    /// Which of the presets this is: "all" (no kind, no errors), a kind group's, "errors", or
+    /// none ("" for a custom choice of kinds).
+    pub fn preset(&self) -> &str {
+        match (self.errors, self.kinds.as_slice()) {
+            (true, []) => "errors",
+            (false, []) => "all",
+            (false, [one]) if ["step", "run", "message"].contains(&one.as_str()) => one,
+            _ => "",
+        }
+    }
+    pub fn is_preset(&self, preset: &str) -> bool {
+        self.preset() == preset
+    }
+    /// A preset's link: its kinds, the step and threads kept.
+    pub fn preset_query(&self, preset: &str) -> String {
+        let mut query = Self {
+            kinds: vec![],
+            threads: self.threads.clone(),
+            step: self.step.clone(),
+            errors: preset == "errors",
+            before: None,
+            after: None,
+        };
+        if ["step", "run", "message"].contains(&preset) {
+            query.kinds.push(preset.into());
+        }
+        query.query(None, None)
     }
     pub fn threads_text(&self) -> String {
         self.threads.join(",")
@@ -212,7 +252,17 @@ pub async fn load(
         if !query.threads.is_empty() {
             condition.push_str(" AND (kind!='message' OR thread IN ("); condition.push_str(&vec!["?"; query.threads.len()].join(",")); condition.push_str("))"); args.extend(query.threads.iter().cloned().map(Value::Text));
         }
-        if !query.kinds.iter().any(|k| k == "call") { condition.push_str(" AND NOT (kind='call' AND json_extract(payload,'$.fn') IN ('message.post','message.ask','message.say','message.reply') AND json_extract(payload,'$.status')!='failed')"); }
+        // a fn call that did not fail is noise (a capacity fn runs every few seconds) unless
+        // the calls were asked for
+        if !query.kinds.iter().any(|k| k == "call") { condition.push_str(" AND NOT (kind='call' AND coalesce(json_extract(payload,'$.status'),'')!='failed')"); }
+        if !query.step.is_empty() {
+            condition.push_str(" AND (step_id=? OR thread=?)");
+            args.push(Value::Text(query.step.clone()));
+            args.push(Value::Text(format!("step-{}", query.step)));
+        }
+        if query.errors {
+            condition.push_str(" AND ((kind='step.status' AND json_extract(payload,'$.to')='failed') OR (kind='call' AND json_extract(payload,'$.status')='failed') OR kind='run.orphan')");
+        }
         let base_args = args.clone();
         let base_condition = condition.clone();
         if let Some(before) = query.before { condition.push_str(" AND seq<?"); args.push(Value::Integer(before)); }
@@ -282,6 +332,51 @@ fn summary(event: &Event) -> String {
         Event::Call { name, status, .. } => format!(
             "{name} {}",
             serde_json::to_value(status).unwrap().as_str().unwrap()
+        ),
+        Event::StepRetry { step, author, .. } => format!("{step} retried by {author}"),
+        Event::StepCancel {
+            step,
+            author,
+            reason,
+        } => format!(
+            "{step} cancelled by {author}{}",
+            if reason.is_empty() {
+                String::new()
+            } else {
+                format!(": {reason}")
+            }
+        ),
+        Event::StepSubmit { step, outputs, .. } => format!(
+            "{step} submitted {}",
+            outputs.0.keys().cloned().collect::<Vec<_>>().join(", ")
+        ),
+        Event::StepLease {
+            step,
+            resource,
+            amount,
+            state,
+            ..
+        } => format!(
+            "{} {} {amount} {resource}",
+            step.as_ref().map_or("a run", |s| s.as_str()),
+            serde_json::to_value(state)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        ),
+        Event::StepQueued { step, reason, .. } => format!("{step} queued: {reason}"),
+        Event::ProjectCapacity {
+            resource,
+            capacity,
+            ..
+        } => format!(
+            "{resource} capacity {}",
+            capacity.map_or("unknown".to_owned(), |c| c.to_string())
+        ),
+        Event::UnitSettled { unit, steps, .. } => format!(
+            "unit {unit} settled, {} {}",
+            steps.len(),
+            if steps.len() == 1 { "step" } else { "steps" }
         ),
         _ => serde_json::to_string(event)
             .unwrap_or_default()

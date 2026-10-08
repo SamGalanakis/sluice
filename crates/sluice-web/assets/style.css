@@ -283,7 +283,7 @@ body {
 a { color: inherit; text-decoration-color: color-mix(in oklch, var(--accent) 55%, transparent);
     text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
 a:hover { text-decoration-color: var(--accent); }
-code, pre, .mono { font-family: var(--font-mono); font-size: 13px; }
+code, pre { font-family: var(--font-mono); font-size: 13px; }
 code { padding: 0 .3em; border: 1px solid var(--border); border-radius: var(--radius-sm);
        background: var(--muted); }
 pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 20px; }
@@ -401,7 +401,7 @@ details.switcher .menu a { display: flex; align-items: center; gap: 8px; padding
   white-space: nowrap; }
 details.switcher .menu a span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* Uploaded project icons come in any size; show them at one fixed size everywhere. */
-.proj-icon { width: 20px; height: 20px; flex: none; object-fit: contain; border-radius: 4px; }
+.proj-icon { width: 20px; height: 20px; flex: none; object-fit: contain; border-radius: var(--radius-sm); }
 details.switcher .menu a .g { margin-top: 0; }
 details.switcher .menu a:hover { background: var(--muted); }
 details.switcher .menu a[aria-current] { background: var(--muted); font-weight: 600; }
@@ -449,6 +449,11 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
 .prefs .themes label:has(:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; }
 .prefs .themes .tick { flex: none; visibility: hidden; }  /* its slot keeps the names aligned */
 .prefs .themes .swatch { margin-left: auto; }  /* the name first, its swatch at the end */
+/* Match system: the house pair's two swatches, light beside dark */
+.prefs .themes .swatch-pair { margin-left: auto; display: inline-flex; flex: none; }
+.swatch-pair .swatch { width: 29px; padding: 0 0 0 7px; background: var(--background); }
+.swatch-pair .swatch:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.swatch-pair .swatch:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
 .prefs .themes label:has(:checked) .tick { visibility: visible; }
 /* a theme's swatch: "Aa" in its ink on its canvas, and its signature cutting across the
    corner, the nav band and its three stripes, all in its own tokens (the chip carries its
@@ -472,29 +477,6 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
         border-radius: var(--radius-md); background: var(--card); transform: translateY(-300%); }
 .skip:focus { transform: none; box-shadow: var(--lift); }
 
-/* a project's title on its standalone page, which has no nav */
-.phead { margin: 8px 0 20px; }
-
-/* a project's icon, before its name (an image, or short text in the same 20px box) */
-img.picon, span.picon { width: 20px; height: 20px; flex: none; vertical-align: -0.15em; }
-img.picon { object-fit: contain; }
-span.picon { display: inline-flex; align-items: center; justify-content: center; }
-
-/* a fn's icon (SPEC §4): an SVG is a mask over currentColor, so it takes the theme's ink as
-   the status glyphs do; a PNG, WebP or text icon keeps its own colours. On a card it comes
-   after the id, smaller than the glyph and muted: the glyph stays the first and loudest mark */
-.ficon { flex: none; display: inline-flex; align-items: center; justify-content: center;
-         width: 1em; height: 1em; line-height: 1; white-space: nowrap; }
-.fi-mask { background: currentColor; -webkit-mask: var(--fi) center / contain no-repeat;
-           mask: var(--fi) center / contain no-repeat; }
-img.ficon { object-fit: contain; }
-.fi-text { width: auto; min-width: 1em; }
-.fi-card { font-size: 14px; color: var(--muted-foreground); }
-.fi-card:is(.fi-img, .fi-text) { opacity: .7; }
-.fi-card.fi-text { font-size: 12px; height: 14px; }
-.fi-meta { font-size: 16px; color: var(--muted-foreground); }
-.fi-full { font-size: 20px; color: var(--foreground); }
-
 /* ---- the status glyph ---------------------------------------------------------------- */
 .g { display: inline-flex; flex: none; width: 16px; height: 16px; margin-top: 2px; }
 .g svg { display: block; }
@@ -505,6 +487,8 @@ img.ficon { object-fit: contain; }
 .g-stale { color: var(--status-attention); }
 .g-paused { color: var(--status-paused); }
 .g-failed { color: var(--foreground); }
+/* cancelled: the owner stopped it on purpose, so a calm stop sign in muted ink, never failure's ink */
+.g-cancelled { color: var(--muted-foreground); }
 /* succeeded and failed are settled: Lucide's ring filled to a disc, its mark cut in the card */
 .g-succeeded circle, .g-failed circle { fill: currentColor; }
 .g-succeeded path, .g-failed path { stroke: var(--card); }
@@ -518,9 +502,6 @@ img.ficon { object-fit: contain; }
 .about { color: var(--muted-foreground); max-width: 72ch; }
 .sumline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .sum { margin: 0; flex: 1 1 auto; min-width: 0; }
-.switches { display: flex; gap: 8px; }
-form.switch button { font-size: 13px; padding: 3px 10px; color: var(--muted-foreground); }
-form.switch button:hover { color: var(--foreground); }
 .attn-note { font-size: 13px; color: var(--status-attention); }
 /* a project whose work a failure has stopped: said first, in ink (failure is never coral) */
 .stuck { display: flex; gap: 8px; align-items: flex-start; font-weight: 500;
@@ -550,7 +531,6 @@ details.about[open] > summary::after { content: "Show less"; }
               border-top: 1px solid var(--border); }
 .plan-facts:empty { display: none; }
 .plan-facts .label { margin: 0 0 8px; }
-.plan-facts dl.kv { font-size: 14px; }
 .plan-facts dd .meta { margin-top: 2px; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
@@ -747,7 +727,6 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .d-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
 .d-badges .tag { height: 24px; padding: 0 8px; font-size: 13px; }
 .d-badges .tag .g, .d-badges .tag .g svg { width: 16px; height: 16px; }
-.d-ago { font-size: 13px; line-height: 18px; color: var(--muted-foreground); margin-left: 2px; }
 .d-doc { margin: 8px 0 0; color: var(--muted-foreground); max-width: 72ch; }
 .d-meta { margin: 6px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
 .d-meta code { font-size: 12.5px; border: 0; background: none; padding: 0; color: var(--foreground); }
@@ -765,8 +744,6 @@ dl.facts > div { display: contents; }
 dl.facts dt { font-size: 13px; color: var(--muted-foreground); }
 dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 dl.facts code { font-size: 12.5px; border: 0; background: none; padding: 0; }
-.dep { white-space: nowrap; }
-.dep .g { vertical-align: -3px; margin: 0 4px 0 0; }
 /* named values, a field list: each name in a narrow muted column (one line, ellipsized, its
    type after it with Types on), its value beside it, so a short value is one row; a long one
    takes the full width below its name, where it comes from and its doc beside the name. The
@@ -829,24 +806,7 @@ ul.v.list > li:not(:last-child)::after { content: ", "; color: var(--muted-foreg
 .mid > .t { flex: none; }
 .v.id > code.mid { padding: 0; border: 0; background: none; font-size: 12.5px; line-height: 20px;
                    color: var(--foreground); }
-button.copy { position: relative; display: none; place-items: center; flex: none; width: 24px;
-              height: 24px; margin: -2px 0; padding: 0; border: 0; background: none;
-              border-radius: var(--radius-sm); color: var(--muted-foreground); cursor: pointer; }
-@media (scripting: enabled) { button.copy { display: inline-grid; } }
-button.copy:hover { color: var(--foreground); background: var(--muted); }
-button.copy .i-done, button.copy.done .i-copy { display: none; }
-button.copy.done .i-done { display: block; color: var(--status-success); }
-/* where a value comes from: a small quiet chip on the name's row, linking to the step */
-.f-from { display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
-.f-v > .f-from { flex: 1 1 0; min-width: min(12ch, 100%); max-width: max-content;
-                  margin-left: auto; }
-.src { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%;
-       height: 22px; padding: 0 7px 0 5px; border-radius: var(--radius-sm);
-       background: var(--muted); color: var(--muted-foreground); text-decoration: none;
-       font: 400 12px/16px var(--font-mono); }
-.src > svg { flex: none; }
-a.src:hover { color: var(--foreground); background: var(--secondary); }
-.d-sec-h .f-from { align-self: center; }
+
 /* the Types switch: a small quiet switch at the end of the first values section's head */
 .types-toggle { margin-left: auto; align-self: center; display: inline-flex; align-items: center;
                 gap: 7px; height: 24px; padding: 0 2px 0 6px; border: 0; background: none;
@@ -874,8 +834,7 @@ ol.attempts > li:not(:last-child)::before {
   content: ""; position: absolute; z-index: 1; left: calc(1.4em + 10px + 7.5px); top: 31px;
   bottom: -7px; width: 1px; background: var(--border-strong); }
 ol.attempts > li:has(+ .a-now)::before { bottom: -11px; }  /* past the fill's top margin */
-ol.attempts > li.a-now { margin: 4px calc(-1 * var(--a-bleed, 12px)) 0;
-                         padding: 8px var(--a-bleed, 12px) 12px; background: var(--secondary);
+ol.attempts > li.a-now { margin: 4px 0 0; padding: 8px 12px 12px; background: var(--secondary);
                          border-radius: var(--radius-md); }
 .a-n { font-size: 13px; line-height: 22px; color: var(--muted-foreground); text-align: right;
        font-variant-numeric: tabular-nums; }
@@ -887,25 +846,12 @@ ol.attempts > li.a-now { margin: 4px calc(-1 * var(--a-bleed, 12px)) 0;
 .a-now .a-o { font: 750 15px/22px var(--font-display); font-stretch: 105%; }
 .a-t { font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
 .a-err { margin: 4px 0 0; font-weight: 500; overflow-wrap: anywhere; max-width: 72ch; }
-.a-note { margin: 4px 0 0; color: var(--muted-foreground); overflow-wrap: anywhere;
-          max-width: 72ch; }
-details.a-full { margin-top: 4px; }
-details.a-full > summary { display: inline-block; list-style: none; font-size: 13px;
-                           text-decoration: underline; text-underline-offset: 3px;
-                           text-decoration-color: var(--border-strong); }
-details.a-full > summary::-webkit-details-marker { display: none; }
-details.a-full[open] .a-show, details.a-full:not([open]) .a-hide { display: none; }
-details.a-full .err-box { margin-top: 0; }
-details.a-full pre.err { font-size: 12px; line-height: 18px; }
 /* a core.external step's doc: who is doing its work, and where */
 .outside { max-width: 72ch; font-size: 14px; line-height: 21px; padding: 12px 14px;
            overflow-wrap: anywhere; background: var(--muted); border-radius: var(--radius); }
 .d-note { margin: 8px 0 0; font-size: 13px; line-height: 18px; color: var(--muted-foreground);
           max-width: 72ch; }
 .d-note code { font-size: 12.5px; }
-.prompt { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; font-size: 14px;
-          line-height: 21px; padding: 12px 14px; background: var(--muted);
-          border-radius: var(--radius); }
 /* a failure's cause, then all it said, scrolled to its end (column-reverse starts there) */
 .err-line { font-weight: 600; overflow-wrap: anywhere; max-width: 72ch; }
 .err-box { display: flex; flex-direction: column-reverse; max-height: 360px; overflow: auto;
@@ -916,11 +862,6 @@ pre.tail, pre.v.long, pre.err, .log pre, .answered pre {
   max-height: 360px; overflow: auto; padding: 10px 12px; background: var(--muted);
   border: 1px solid var(--border); border-radius: var(--radius-md); }
 pre.err { color: var(--foreground); }
-dl.kv { display: grid; grid-template-columns: minmax(80px, max-content) 1fr; gap: 10px 16px;
-        margin: 0; }
-dl.kv dt { font-weight: 500; overflow-wrap: anywhere; }
-dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-dl.kv > div { display: contents; }
 .type { font: 12px var(--font-mono); color: var(--muted-foreground); font-weight: 400;
         display: block; }
 code.v { border: 0; background: none; padding: 0; }
@@ -941,36 +882,8 @@ code.v { border: 0; background: none; padding: 0; }
 .m-body p { margin: 0; }
 .m-body p + p, .m-body ul, .m-body ol, .m-body pre { margin-top: 8px; }
 .threads { display: grid; gap: 10px; }
-details.thread { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
-details.thread > summary { display: grid; gap: 4px; padding: 12px 16px; list-style: none;
-                           color: var(--foreground); }
-details.thread > summary::-webkit-details-marker { display: none; }
-details.thread > summary:hover { background: var(--muted); border-radius: var(--radius); }
-details.thread[open] > summary { margin-bottom: 0; border-bottom: 1px solid var(--border);
-                                 border-radius: var(--radius) var(--radius) 0 0; }
-.th-top { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
-.th-name { font-weight: 600; }
-.th-doc { color: var(--muted-foreground); min-width: 0; overflow: hidden; text-overflow: ellipsis;
-          white-space: nowrap; flex: 1 1 200px; }
-.th-meta { font-size: 13px; color: var(--muted-foreground); }
-details.thread[open] .th-when { display: none; }  /* each message says when */
-.th-new:empty { display: none; }
-.th-new { font-size: 12px; line-height: 16px; padding: 0 7px; border-radius: 999px; font-weight: 650;
-          color: var(--accent-ink);
-          background: color-mix(in oklch, var(--accent) 13%, transparent); }
-details.earlier { padding: 12px 16px 0; }
-details.earlier > summary { display: inline-block; list-style: none; font-size: 13px;
-                            text-decoration: underline; text-underline-offset: 3px;
-                            text-decoration-color: var(--border-strong); }
-details.earlier > summary::-webkit-details-marker { display: none; }
-details.earlier[open] > summary { margin-bottom: 14px; }
-details.earlier > .msgs { padding-bottom: 14px; border-bottom: 1px dashed var(--border); }
-.th-last { font-size: 14px; color: var(--muted-foreground); overflow: hidden;
-           text-overflow: ellipsis; white-space: nowrap; }
-details.thread[open] .th-last { display: none; }
-details.thread > .msgs { padding: 14px 16px 4px; }
-details.thread > .more { padding: 0 16px 12px; }
-.more { font-size: 12.5px; margin-top: 8px; }
+.threads > .item { margin: 0; }
+
 details > summary { cursor: pointer; color: var(--muted-foreground); }
 details[open] > summary { margin-bottom: 6px; }
 table { border-collapse: collapse; width: 100%; }
@@ -978,10 +891,6 @@ td, th { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: l
          vertical-align: top; }
 th { font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
 td.num, th.num { text-align: right; }
-table.runs td { padding: 6px 8px 6px 0; }
-details.std { border-top: 1px solid var(--border); padding: 10px 0; }
-details.std > summary { display: flex; gap: 8px; color: var(--foreground); font-weight: 500; }
-details.std > summary::-webkit-details-marker { display: none; }
 
 /* ---- the index ---------------------------------------------------------------------- */
 .projects { list-style: none; margin: 0; padding: 0; background: var(--card);
@@ -1008,11 +917,16 @@ details.std > summary::-webkit-details-marker { display: none; }
 ul.now { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px;
          grid-template-columns: minmax(0, 1fr); }
 /* a running step's title gives way, so its time and quiet badge stay on its line */
-ul.now li { display: flex; gap: 8px; align-items: center; font-size: 14px; }
-ul.now a { display: flex; gap: 6px; min-width: 0; text-decoration: none; }
+ul.now li { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; font-size: 14px; }
+/* the step's id first, its doc after in muted ink; on a narrow row its time and quiet tag
+   take the next line rather than squeeze the id */
+ul.now a { display: flex; gap: 6px; flex: 1 1 16rem; min-width: 0; text-decoration: none; }
 ul.now .ttl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-ul.now li > .dur, ul.now li > .tag { flex: none; }
-ul.now a:hover .ttl { text-decoration: underline; }
+ul.now .r-id { font-weight: 600; }
+ul.now .r-doc { color: var(--muted-foreground); }
+ul.now .r-meta { display: inline-flex; flex: none; align-items: center; gap: 8px;
+                 margin-left: auto; }
+ul.now a:hover .r-id { text-decoration: underline; }
 ul.now .g { margin-top: 1px; }
 .dur { font-size: 13px; color: var(--muted-foreground); white-space: nowrap; }
 p.now { font-size: 14px; color: var(--muted-foreground); }
@@ -1022,16 +936,26 @@ details.archived .projects { margin-top: 10px; opacity: .85; }
 
 /* ---- log, functions, inbox ------------------------------------------------------------ */
 form.filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
-               margin: 14px 0; font-size: 12.5px; }
+               margin: 12px 0 8px; font-size: 13px; }
+form.filters label.field { display: inline-flex; align-items: center; gap: 8px; font-weight: 500;
+                           color: var(--muted-foreground); }
+form.filters label.field input { width: 11rem; height: 32px; }
+details.kinds { flex-basis: 100%; order: 1; }
+details.kinds > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 32px;
+                          padding: 0 10px 0 12px; list-style: none; font-weight: 500;
+                          border: 1px solid var(--input); border-radius: var(--radius-md);
+                          background: var(--card); color: var(--foreground); }
+details.kinds > summary::-webkit-details-marker { display: none; }
+details.kinds[open] .chev { transform: rotate(180deg); }
+details.kinds[open] > summary { margin-bottom: 6px; }
+.log-note { margin: 0 0 10px; }
+nav.seg.presets { margin-top: 12px; }
 form.filters fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap;
                         gap: 4px 12px; align-items: center; }
 form.filters legend { float: left; margin-right: 8px; font-size: 13px; line-height: 18px;
                       font-weight: 500; color: var(--muted-foreground); }
-details.kinds > summary { display: none; }  /* a phone's; open elsewhere */
-details.kinds[open] > summary { margin-bottom: 0; }
 form.filters label { white-space: nowrap; }
 form.filters .kline { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
-form.filters .kg { font-weight: 600; }
 input, button, select, textarea { font: inherit; color: inherit; }
 input:not([type=checkbox]):not([type=radio]), select, textarea {
   background: var(--card); border: 1px solid var(--input); border-radius: var(--radius-md);
@@ -1055,43 +979,47 @@ nav.seg a { padding: 2px 10px; border-radius: var(--radius-sm); text-decoration:
 nav.seg a:hover { color: var(--foreground); }
 nav.seg a[aria-current] { color: var(--foreground); background: var(--secondary);
                           box-shadow: 0 0 0 1px var(--border-strong); }
-.log-view:has(tbody tr) .log-empty, .log-view:not(:has(tbody tr)) .scroll { display: none; }
 table.log { font-size: 12.5px; }
 table.log td { padding: 5px 8px; vertical-align: baseline; }
-table.log td:last-child { min-width: 14rem; width: 100%; }
+table.log td.what { min-width: 14rem; width: 100%; }
 table.log .num { color: var(--muted-foreground); font-size: 12px; }
 table.log .at { white-space: nowrap; color: var(--muted-foreground); font-size: 12px; }
 table.log .kind { font: 12px var(--font-mono); white-space: nowrap;
                  color: var(--muted-foreground); }
 table.log summary { color: var(--foreground); overflow-wrap: anywhere; }
-table.log .s-failed { font-weight: 600; }
-table.log .s-skipped { color: var(--muted-foreground); }
-table.log .s-succeeded { color: var(--status-success); }
-table.log .s-running { color: var(--accent-ink); }
-table.log .s-stale { color: var(--status-attention); }
-.picker { margin: 12px 0 0; font-size: 12.5px; color: var(--muted-foreground); }
+.fn-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin: 14px 0 0; }
+.picker { font-size: 13px; color: var(--muted-foreground); display: flex; gap: 8px; align-items: center; }
+.picker label { display: inline-flex; gap: 8px; align-items: center; }
+.fn-find { position: relative; display: flex; align-items: center; flex: 1 1 240px; max-width: 360px; }
+.fn-find[hidden] { display: none; }
+.fn-find .q-icon { position: absolute; left: 9px; color: var(--muted-foreground); pointer-events: none; }
+#functions .fn-find input { width: 100%; height: 32px; padding: 0 10px 0 31px; font-size: 14px; }
+.fn-index { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 14px 0 0; font-size: 14px; font-weight: 500; }
+.fn-index a { text-decoration: none; color: var(--muted-foreground); }
+.fn-index a:hover { color: var(--foreground); text-decoration: underline; }
+.fn-index .n, .fn-group h2 .n { font: 500 13px var(--font-sans); color: var(--muted-foreground); }
+.fn-none { margin-top: 12px; }
+.fn-group { scroll-margin-top: 16px; }
+.fn-group[hidden], .fn[hidden] { display: none; }
 .fn { padding: 12px 0; border-top: 1px solid var(--border); }
-.fn-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
-.fn-head b { font: 600 12.5px var(--font-mono); }
-.fn-head .ficon { align-self: center; }
-.fn .ports p { overflow-wrap: anywhere; }
-.fn-index { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 0 0 10px;
-            font: 12.5px/20px var(--font-mono); }
-.fn-index a { color: var(--muted-foreground); text-underline-offset: 3px; }
-.fn-index a:hover { color: var(--foreground); }
+.fn-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; overflow-wrap: anywhere; }
+.fn-head b { font: 600 13px var(--font-mono); }
+.fn-doc { margin-top: 4px; max-width: 72ch; color: var(--muted-foreground); font-size: 14px; line-height: 21px; }
+.fn-doc p { margin: 0 0 6px; }
 .fn:target { scroll-margin-top: 16px; }
-.fn .ports { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 6px;
-             font-size: 12.5px; }
-.fn .ports .label { display: block; margin: 0 0 2px; }
+.fn .ports { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; margin: 6px 0 0; font-size: 13px; }
+.fn .ports > div { display: flex; gap: 8px; min-width: 0; }
+.fn .ports dt { flex: none; color: var(--muted-foreground); width: 4.5rem; }
+.fn .ports dd { margin: 0; display: flex; flex-wrap: wrap; gap: 2px 12px; min-width: 0; overflow-wrap: anywhere; }
+.fn .ports code { font-size: 12px; }
 .fn.problem { border-top-color: var(--foreground); }
-.fn.problem .err, p.fn.problem { color: var(--foreground); font-weight: 500; }
+.fn.problem .err { color: var(--foreground); font-weight: 500; }
 article.item { background: var(--card); border: 1px solid var(--border);
                border-radius: var(--radius); padding: 14px 16px; margin: 12px 0; }
 .item > h3 { font: 750 17px/23px var(--font-display); font-stretch: 105%; }
 .item > .meta { margin: 2px 0 6px; }
 /* an open item whose asker has stopped: said in the attention gold, once, under its meta */
 .item > .gone { margin: 0 0 6px; color: var(--status-attention); font-weight: 500; }
-.item > .gone-note { margin: 8px 0 0; }
 .item .md { max-width: 72ch; }
 .item .md > :first-child { margin-top: 6px; }
 .item .md > :last-child { margin-bottom: 6px; }
@@ -1115,15 +1043,131 @@ article.item { background: var(--card); border: 1px solid var(--border);
 .ou-warning { border-color: var(--status-attention); }
 .ou-dropped, .ou-status { color: var(--muted-foreground); font-size: 12.5px; }
 
-/* A project's head comes first: what follows it starts flush under its hairline. */
-main > .phead + * { margin-top: 0; }
+/* ---- the step's own page, its failure and runs ------------------------------------------- */
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 0 16px;
+          font-size: 14px; color: var(--muted-foreground); }
+.crumbs a { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground);
+            text-decoration: none; font-weight: 500; }
+.crumbs a:hover { color: var(--foreground); text-decoration: underline;
+                  text-decoration-color: var(--accent); }
+.d-head h1 { overflow-wrap: anywhere; min-width: 0; }
+.d-when { margin-top: 6px; }
+.d-meta a.tag { text-decoration: none; color: var(--foreground); }
+.d-meta a.tag:hover { border-color: var(--foreground); }
+/* why it failed: one sentence first, in ink; what it said under it; the pane folded */
+.d-failure .err-line { font-size: 15px; line-height: 22px; font-weight: 500; }
+.err-said { margin-top: 4px; font: 13px/20px var(--font-mono); color: var(--muted-foreground);
+            overflow-wrap: anywhere; max-width: 72ch; }
+.d-failure .err-box { margin-top: 8px; }
+details.pane { margin-top: 10px; }
+details.pane > summary { display: inline-flex; align-items: center; gap: 4px; min-height: 32px;
+                         font-size: 13px; font-weight: 500; list-style: none; }
+details.pane > summary::-webkit-details-marker { display: none; }
+details.pane:not([open]) > summary .chev { transform: rotate(-90deg); }
+pre.pane-rows { max-height: 420px; overflow: auto; padding: 10px 12px; background: var(--muted);
+                border: 1px solid var(--border); border-radius: var(--radius-md);
+                font-size: 12px; line-height: 18px; white-space: pre; overflow-wrap: normal; }
+.run-files { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 10px; }
+.run-files a, .a-files a { display: inline-flex; align-items: center; gap: 4px;
+                           font: 12.5px/20px var(--font-mono); color: var(--foreground); }
+.run-files a .icon { color: var(--muted-foreground); }
+.a-t time { font-variant-numeric: tabular-nums; }
+.a-h .a-t { margin-left: 2px; }
+/* a run's result as labelled facts, never escaped JSON */
+dl.a-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px;
+             margin: 6px 0 0; font-size: 13px; line-height: 20px; }
+dl.a-facts > div { display: contents; }
+dl.a-facts dt { color: var(--muted-foreground); }
+dl.a-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+dl.a-facts code { font-size: 12px; border: 0; background: none; padding: 0; }
+.a-said { white-space: pre-wrap; max-height: 9em; overflow: auto; }
+.a-files { display: flex; flex-wrap: wrap; gap: 0 12px; }
+
+/* ---- a unit's page ------------------------------------------------------------------------- */
+.unit-h { display: flex; align-items: center; gap: 10px; overflow-wrap: anywhere; }
+.unit-h .g, .unit-h .g svg, .p-title .g, .p-title .g svg { width: 22px; height: 22px; }
+.unit-sum { margin: 4px 0 16px; }
+.unit-page .board { padding: 0; }
+.unit-last .md { max-width: 72ch; }
+
+/* ---- the project page's title and its summary's attention tags ------------------------------ */
+.p-title { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; min-width: 0;
+           overflow-wrap: anywhere; }
+.p-title .proj-icon { width: 26px; height: 26px; }
+.sum a.tag { margin-left: 4px; text-decoration: none; font-weight: 600; vertical-align: 0; }
+.sum a.tag .g, .sum a.tag .g svg { width: 14px; height: 14px; }
+.sum a.tag:hover { border-color: var(--foreground); }
+.sum a.tag.t-failed { color: var(--foreground); border-color: var(--foreground); }
+.sum a.tag:not(.attn, .t-failed) { color: var(--muted-foreground); }
+
+/* ---- the index: a cancel is said in muted ink, after any failure ----------------------------- */
+.attn-line { font-weight: 500; overflow-wrap: anywhere; }
+.attn-line .cancelled-words { color: var(--muted-foreground); font-weight: 400; }
+.b-cancelled { background: color-mix(in srgb, var(--muted-foreground) 55%, var(--secondary)); }
+
+/* ---- messages: questions, the ones nobody waits on, notes read on sight ---------------------- */
+.q-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 10px; margin-top: 10px; }
+.q-actions > details { flex: 1 1 100%; order: 1; }
+.q-actions > details:not([open]) { flex: none; order: 0; }
+/* Answer opens the box: a button until then */
+details.q-answer > summary { display: inline-flex; align-items: center; min-height: 32px;
+  padding: 0 14px; list-style: none; border-radius: var(--radius-md); font-weight: 500;
+  background: var(--primary); color: var(--primary-foreground); border: 1px solid var(--primary); }
+details.q-answer > summary::-webkit-details-marker { display: none; }
+details.q-answer > summary:hover { background: color-mix(in srgb, var(--primary) 88%, var(--foreground)); }
+details.q-answer[open] > summary { background: var(--card); color: var(--foreground);
+                                   border-color: var(--input); margin-bottom: 0; }
+.q-close button { min-height: 32px; }
+.stopped, .notes { margin-top: 24px; }
+#inbox-items > .empty { padding: 12px 0; }
+.stopped-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+                gap: 8px 16px; }
+.stopped-head h2 { margin: 0; }
+.stopped-head .n { font: 500 15px/22px var(--font-sans); color: var(--muted-foreground); margin-left: 4px; }
+.stopped > .meta, .notes > .meta { margin: 4px 0 10px; }
+.stopped-list { list-style: none; margin: 0; padding: 0; background: var(--card);
+                border: 1px solid var(--border); border-radius: var(--radius); }
+.stopped-list > li { display: flex; align-items: flex-start; gap: 12px; padding: 8px 12px 8px 16px; }
+.stopped-list > li + li { border-top: 1px solid var(--border); }
+.stopped-list details { flex: 1 1 auto; min-width: 0; }
+.stopped-list summary { display: flex; flex-direction: column; gap: 0; min-height: 32px;
+                        padding: 4px 0 2px; list-style: none; color: var(--foreground); }
+.stopped-list summary > .meta { padding-left: 22px; }
+.stopped-list .s-title .chev { margin-right: 6px; vertical-align: -3px; }
+.stopped-list details:not([open]) .s-title .chev { transform: rotate(-90deg); }
+.stopped-list .s-body { padding-left: 22px; }
+.stopped-list summary::-webkit-details-marker { display: none; }
+.stopped-list .s-title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.stopped-list .s-body { padding-top: 4px; padding-bottom: 8px; }
+.stopped-list .s-body .md { max-width: 72ch; }
+.stopped-list form { flex: none; }
+li.closing, article.closing { opacity: .55; }
+details.read-now { margin-top: 24px; }
+details.read-now > summary { font-size: 14px; font-weight: 500; }
+details.read-now .item { opacity: .85; }
+.m-title { margin: 6px 0 0; font: 600 15px/22px var(--font-sans); }
+.thread-of { margin: 8px 0 14px; }
+
+/* ---- a page that cannot be drawn: what is missing, why, and the ways back -------------------- */
+.missing { padding: 24px 0 8px; max-width: 64ch; }
+.missing-lead { margin-top: 10px; font-size: 17px; line-height: 26px; }
+.missing-why { margin-top: 8px; color: var(--muted-foreground); }
+.missing-links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 18px 0 14px; padding: 0;
+                 list-style: none; font-weight: 500; }
+.missing-links a { display: inline-flex; align-items: center; min-height: 32px; }
+@media (max-width: 720px) {
+  details.q-answer > summary, .q-close button, .crumbs a, .missing-links a, details.pane > summary,
+  details.kinds > summary, .stopped-list summary, .close-all button, .mark-all { min-height: 44px; }
+  .stopped-list summary { padding-top: 10px; }
+  dl.a-facts { grid-template-columns: minmax(0, 1fr); }
+  dl.a-facts dd { margin-bottom: 4px; }
+}
 
 /* ---- narrow screens: one card per line, no edges; the drawer is a sheet ------------- */
 @media (max-width: 720px) {
   .m-lead { margin-left: 14px; }
   .stuck a { white-space: normal; }  /* a long id may break rather than overflow */
-  details.thread > summary, details.thread > .msgs, details.earlier {
-    padding-left: 12px; padding-right: 12px; }
+
   :root { --gutter: 16px; --nav-pad: 8px; --stripe: 3px; }
   body { font-size: 15px; }
   main { padding: 16px 0 40px; }
@@ -1150,6 +1194,7 @@ main > .phead + * { margin-top: 0; }
   /* its main fn's icon under the glyph, beside the count, as the id takes the line */
   .fold-box > summary:has(> .ficon) .g { grid-row: 1; }
   .fold-box > summary > .ficon { grid-column: 1; grid-row: 2; justify-self: center; }
+
   .fold-box > .rows, .fold-box > :where(.box-content) > .rows { padding: 8px 12px 12px; }
   .fold-box > .width-probe.rows { display: none; }
   .row .lane-start { margin-left: 0; }
@@ -1159,7 +1204,7 @@ main > .phead + * { margin-top: 0; }
   details.about .clip { max-height: calc(min(var(--lines, 2) * 2, 4) * 22px); }
   .drawer { width: 100vw; border-left: 0; --d-pad-t: 16px; --d-pad-x: 16px; --a-bleed: 10px; }
   /* tap targets at least 44px tall */
-  form.switch button, .pager a, nav.seg a, form.filters label, details.kinds > summary {
+  .pager a, nav.seg a, form.filters label, details.kinds > summary {
     min-height: 44px; display: inline-flex; align-items: center; }
   /* the board's toolbar in two lines: which boxes show across the width, its choices
      sharing it; then the tag and the order */
@@ -1173,28 +1218,29 @@ main > .phead + * { margin-top: 0; }
   .board-tools .hidden-note a { display: inline-flex; align-items: center; min-height: 44px; }
   .pager a { padding: 0 6px; }
   form.filters label { padding-right: 4px; }
-  details.kinds { flex-basis: 100%; }
-  details.kinds > summary { gap: 6px; padding: 0 12px; border: 1px solid var(--input);
-                            border-radius: var(--radius-md); color: var(--foreground); }
-  details.kinds[open] .chev { transform: rotate(180deg); }
-  details.kinds[open] > summary { margin-bottom: 8px; }
   /* in the drawer: the steps it links to, its thread and its folded log output */
-  .drawer dl.facts .dep a, .drawer .d-thread { display: inline-flex; align-items: center;
+  .drawer .d-thread { display: inline-flex; align-items: center;
                                                min-height: 44px; }
   .drawer dl.facts dt { line-height: 44px; }  /* level with the first line of links */
   .drawer .d-sec details:not(.fold) > summary { padding-block: 12px; }
   .drawer .d-sec details:not(.fold)[open] > summary { margin-bottom: 0; }
   /* the Types switch and a copy button keep their size; their targets are 44px */
   .types-toggle { position: relative; }
-  .types-toggle::after, button.copy::after { content: ""; position: absolute; inset: -10px; }
-  /* a source chip goes under a short value */
-  .f-v > .f-from { margin-left: 0; flex-basis: 100%; }
-  dl.kv { grid-template-columns: 1fr; gap: 2px; }
-  dl.kv dd { margin-bottom: 10px; }
+  .types-toggle::after { content: ""; position: absolute; inset: -10px; }
+
   .fn .ports { grid-template-columns: 1fr; gap: 6px; }
-  table.log .at { display: none; }
-  /* the longest kind (project.archive) and the summary share a phone's width */
-  table.log td:last-child { min-width: 12rem; }
+  /* each record a block: its seq, kind and time on a line, what it was under them, so the
+     log never scrolls sideways on a phone */
+  table.log, table.log tbody, table.log tr, table.log td { display: block; }
+  table.log thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  table.log tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 10px;
+                 padding: 6px 0; border-bottom: 1px solid var(--border); }
+  table.log td { padding: 0; border: 0; }
+  table.log td.kind { white-space: normal; overflow-wrap: anywhere; }
+  table.log td.what { grid-column: 1 / -1; min-width: 0; margin-top: 2px; }
+  table.log td.num { text-align: left; }
+  form.filters label.field { flex: 1 1 100%; }
+  form.filters label.field input { flex: 1 1 auto; width: auto; min-width: 0; height: 44px; }
   .bar { width: 120px; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1214,16 +1260,10 @@ main > .phead + * { margin-top: 0; }
 /* its ring is drawn on that fill, the same 36px square as display preferences' ring */
 .project-settings:focus-visible { outline: none; }
 .project-settings:focus-visible::before { outline: 2px solid var(--nav-ink); }
-.project-status { display: inline-block; width: 18px; text-align: center; flex: none; }
-.project-status.running { color: var(--status-active); }
-.project-status.succeeded { color: var(--status-success); }
-.project-status.stale { color: var(--status-attention); }
-.project-status.failed { color: var(--foreground); }
 .stream-state { margin: 0 0 16px; }
 #functions { min-width: 0; }
-#functions .fn-head { overflow-wrap: anywhere; }
 #nav-inbox { gap: 6px; }
-@media (max-width: 720px) { .picker button { min-height: 44px; } }
+@media (max-width: 720px) { .picker button, .picker select, .fn-find input { min-height: 44px; } }
 
 /* ---- the band when it is narrow: on a phone, or beside the open drawer ------------------
    First it is compact: the brand gives way to the switcher (whose menu leads to All
@@ -1243,9 +1283,6 @@ main > .phead + * { margin-top: 0; }
   nav.top .links { order: 1; flex-basis: 100%; min-height: 44px;
                    margin: 0 calc(-1 * var(--nav-pad)); }
   nav.top .links > a::before { inset: 6px 2px; }
-}
-@container nav (max-width: 420px) {
-  nav.top .links { justify-content: space-between; }  /* a phone's row: spread across it */
 }
 
 /* ==== page shell: the project page, its plan and its board ======================================
