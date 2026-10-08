@@ -518,6 +518,26 @@ pub fn classify(text: &str) -> EngineError {
     failure(kind, text.chars().take(2048).collect::<String>())
 }
 
+/// Claude Code's double-press window (2.1.284's `lW`, 800 ms): two Escapes it handles this
+/// close together on its composer open Rewind, or clear a draft. Claude handles keys only when
+/// its event loop is free, so two Escapes sent further apart can still reach it inside the
+/// window: resuming a long session, 2.1.284 took two sent 1.1 s and 2 s apart for a double
+/// press. Sluice therefore sends an Escape only to a surface that takes it, never to a screen
+/// still starting, and at most one per surface, `ESCAPE_GAP` after any other.
+const ESCAPE_GAP: Duration = Duration::from_secs(3);
+/// After an Escape, how long the composer must have been back before a paste: a dialog the
+/// Escape opened or closed late shows by then instead of swallowing the paste.
+const ESCAPE_SETTLE: Duration = Duration::from_millis(1500);
+/// How long a screen sluice does not recognize must cover a composer it has seen, unchanged
+/// and with Claude not working, before one Escape. Escape on a working Claude interrupts it.
+const COVER_WAIT: Duration = Duration::from_secs(2);
+/// How long a pasted draft may take to show in the composer.
+const DRAFT_WAIT: Duration = Duration::from_secs(5);
+/// How many pastes an input gets before it is given back as not accepted.
+const DRAFT_ATTEMPTS: u32 = 3;
+/// `RequestExit`'s input, which the supervisor's ledger does not hold.
+const EXIT: InputId = InputId::Continue { attempt: u32::MAX };
+
 #[derive(Clone, Copy)]
 enum PastePhase {
     Ready,
@@ -531,7 +551,17 @@ struct Delivery {
     since: Instant,
     retry_at: Instant,
     retry: Duration,
-    covered: bool,
+    /// Pastes whose draft never showed. Enter was not sent for any of them.
+    failed: u32,
+}
+/// A screen over the composer while an input waits for it, and the Escapes sent to it.
+#[derive(Default)]
+struct Cover {
+    /// The screen, and since when it has stood unchanged.
+    pane: String,
+    since: Option<Instant>,
+    /// What sluice sent its one Escape to since the composer last showed.
+    escaped: Option<String>,
 }
 pub struct Claude {
     binary: PathBuf,
@@ -553,6 +583,12 @@ pub struct Claude {
     started: bool,
     transient_fault: bool,
     outgoing: VecDeque<Delivery>,
+    /// Whether this launch has shown its composer. Before that Claude is starting or loading
+    /// a resumed session, and keys sent then can reach it together.
+    composer_seen: bool,
+    cover: Cover,
+    /// When sluice last sent Escape.
+    escaped_at: Option<Instant>,
     prepared_session: Option<String>,
     environment: BTreeMap<String, String>,
     /// How long a screen sluice does not recognize may stand unchanged before any turn.
@@ -582,6 +618,9 @@ impl Claude {
             started: false,
             transient_fault: false,
             outgoing: VecDeque::new(),
+            composer_seen: false,
+            cover: Cover::default(),
+            escaped_at: None,
             prepared_session: None,
             environment: super::super::environment::host_environment(),
             screen_grace: screen::DEFAULT_GRACE,
@@ -753,15 +792,71 @@ impl Claude {
         ])
         .await
     }
+    /// Sends `keys` to the pane in one `send-keys`.
+    async fn keys(&self, keys: &[&str]) -> Result<(), EngineError> {
+        let mut args = vec!["send-keys", "-t", self.pane.as_deref().unwrap_or_default()];
+        args.extend_from_slice(keys);
+        self.tmux(&args).await.map(|_| ())
+    }
     async fn key(&self, key: &str) -> Result<(), EngineError> {
-        self.tmux(&[
-            "send-keys",
-            "-t",
-            self.pane.as_deref().unwrap_or_default(),
-            key,
-        ])
-        .await
-        .map(|_| ())
+        self.keys(&[key]).await
+    }
+    /// Empties the composer without Escape, whose second press would open Rewind: from the end
+    /// of the draft's last line, each `C-e C-u BSpace` clears that line and joins it to the one
+    /// above, and a pasted-text chip (`[Pasted text #1 +40 lines]`) goes in one backspace.
+    async fn clear(&self, lines: usize) -> Result<(), EngineError> {
+        let keys: Vec<&str> = std::iter::repeat_n(["C-e", "C-u", "BSpace"], lines)
+            .flatten()
+            .collect();
+        self.keys(&keys).await
+    }
+    /// What covers the composer, if it gets an Escape now: a surface Escape closes
+    /// (`protocol::escapable`), or a screen sluice does not recognize once it has stood
+    /// unchanged for `COVER_WAIT` with Claude not working. Only over a composer this launch has
+    /// shown (before that Claude is starting, and keys reach it late and together), never
+    /// within `ESCAPE_GAP` of another Escape, and once per surface until the composer is back.
+    fn dismissal(&mut self, pane: &str, busy: bool) -> Option<String> {
+        if self.cover.since.is_none() || self.cover.pane != pane {
+            self.cover.pane = pane.into();
+            self.cover.since = Some(Instant::now());
+        }
+        if !self.composer_seen || self.escaped_at.is_some_and(|at| at.elapsed() < ESCAPE_GAP) {
+            return None;
+        }
+        let what = match protocol::escapable(pane) {
+            Some(what) => what,
+            None if !busy
+                && !pane.trim().is_empty()
+                && !protocol::answered_dialog(pane)
+                && !protocol::login_screen(pane)
+                && protocol::blocking_screen(pane).is_none()
+                && self
+                    .cover
+                    .since
+                    .is_some_and(|since| since.elapsed() >= COVER_WAIT) =>
+            {
+                "a screen sluice does not recognize".into()
+            }
+            None => return None,
+        };
+        (self.cover.escaped.as_deref() != Some(what.as_str())).then_some(what)
+    }
+    /// Gives every input not yet sent with Enter back to the supervisor as not accepted, and
+    /// fails the session as transient with `cause`: the next session delivers them again.
+    fn give_back(&mut self, cause: String) {
+        let held: Vec<InputId> = self
+            .outgoing
+            .drain(..)
+            .map(|delivery| delivery.id)
+            .filter(|id| *id != EXIT)
+            .collect();
+        self.state.pending.retain(|(id, _)| !held.contains(id));
+        for id in held {
+            if !self.state.observation.not_accepted.contains(&id) {
+                self.state.observation.not_accepted.push(id);
+            }
+        }
+        self.state.observation.error = Some(failure(EngineErrorKind::Transient, cause));
     }
     fn enqueue(&mut self, id: InputId, text: String) -> DeliveryOutcome {
         if self.state.observation.acknowledged.contains(&id) {
@@ -778,11 +873,21 @@ impl Claude {
             since: Instant::now(),
             retry_at: Instant::now(),
             retry: Duration::from_secs(1),
-            covered: false,
+            failed: 0,
         });
         DeliveryOutcome::Pending
     }
-    async fn advance_delivery(&mut self, pane: &str) -> Result<(), EngineError> {
+    /// Moves the oldest waiting input one step: paste it into a ready composer (`Ready`), send
+    /// Enter once its draft shows (`Draft`), then wait for `UserPromptSubmit` (`Submitted`).
+    /// `busy` is Claude's own status, `bracketed` whether it takes bracketed paste: a paste
+    /// without it would type the text's newlines as Enter, and with it no paste can submit, so
+    /// an input whose draft never showed was never taken.
+    async fn advance_delivery(
+        &mut self,
+        pane: &str,
+        busy: bool,
+        bracketed: bool,
+    ) -> Result<(), EngineError> {
         while self
             .outgoing
             .front()
@@ -805,7 +910,14 @@ impl Claude {
             .collect::<String>();
         match phase {
             PastePhase::Ready => {
-                if !protocol::composer_ready(pane) {
+                let ready = protocol::composer_ready(pane);
+                if ready {
+                    self.cover = Cover::default();
+                }
+                let settled = self
+                    .escaped_at
+                    .is_none_or(|at| at.elapsed() >= ESCAPE_SETTLE);
+                if !ready || !bracketed || !settled {
                     if front.since.elapsed() > Duration::from_secs(180) {
                         let delivery = self.outgoing.pop_front().unwrap();
                         self.state.pending.retain(|(id, _)| *id != delivery.id);
@@ -834,18 +946,22 @@ impl Claude {
                             "Down"
                         })
                         .await?;
-                    } else if protocol::occupied(pane) && front.covered {
+                    } else if !ready && let Some(what) = self.dismissal(pane, busy) {
+                        eprintln!("claude: one Escape to close {what}, over the composer");
                         self.key("Escape").await?;
+                        self.escaped_at = Some(Instant::now());
+                        self.cover.escaped = Some(what);
                     }
                     let front = self.outgoing.front_mut().unwrap();
-                    front.covered = protocol::occupied(pane);
                     front.retry_at = Instant::now() + Duration::from_millis(750);
                     return Ok(());
                 }
                 let path = self.context.as_ref().unwrap().run_dir.join("claude-paste");
-                private_write(&path, &protocol::paste_payload(&(text + "\n"))).map_err(io_error)?;
-                self.key("C-a").await?;
-                self.key("C-k").await?;
+                private_write(&path, &protocol::paste_payload(&(text.clone() + "\n")))
+                    .map_err(io_error)?;
+                // A draft of the text (a short one wraps nothing; a long one is a chip) or one
+                // left from an earlier paste takes at most this many lines.
+                self.clear(text.lines().count().min(8) + 2).await?;
                 self.tmux(&[
                     "load-buffer",
                     "-b",
@@ -877,11 +993,34 @@ impl Claude {
                     front.since = Instant::now();
                     front.retry_at = Instant::now() + Duration::from_secs(1);
                     self.key("Enter").await?;
-                } else if front.since.elapsed() >= Duration::from_secs(5) {
-                    return Err(failure(
-                        EngineErrorKind::UnknownAcceptance,
-                        "claude: pasted draft could not be verified",
-                    ));
+                } else if front.since.elapsed() >= DRAFT_WAIT {
+                    // Enter was not sent and a bracketed paste cannot submit, so Claude did
+                    // not take the input: clear the composer and paste again, in `Ready`.
+                    let failed = front.failed + 1;
+                    let showed = match protocol::escapable(pane) {
+                        Some(what) => what,
+                        None if protocol::composer_ready(pane) => {
+                            "its composer without the draft".into()
+                        }
+                        None => "no composer".into(),
+                    };
+                    eprintln!(
+                        "claude: pasted draft {failed} of {DRAFT_ATTEMPTS} did not show within {}s, so Enter was not sent; Claude showed {showed}: {}",
+                        DRAFT_WAIT.as_secs(),
+                        screen::tail(&screen::evidence(pane)).join(" | ")
+                    );
+                    if failed >= DRAFT_ATTEMPTS {
+                        self.give_back(format!(
+                            "claude: the pasted input did not show in the composer after {DRAFT_ATTEMPTS} pastes, so Enter was never sent and Claude did not take it; Claude showed {showed}: {}",
+                            screen::quote(pane)
+                        ));
+                        return Ok(());
+                    }
+                    let front = self.outgoing.front_mut().unwrap();
+                    front.failed = failed;
+                    front.phase = PastePhase::Ready;
+                    front.since = Instant::now();
+                    front.retry_at = Instant::now();
                 }
             }
             PastePhase::Submitted => {
@@ -1109,6 +1248,9 @@ impl EngineAdapter for Claude {
         self.transcript = None;
         self.started = false;
         self.outgoing.clear();
+        self.composer_seen = false;
+        self.cover = Cover::default();
+        self.escaped_at = None;
         self.prepared_session = session.map(str::to_owned);
         self.began = Instant::now();
         self.watch.reset();
@@ -1237,9 +1379,7 @@ impl EngineAdapter for Claude {
             EngineCommand::DeliverText { id, text } | EngineCommand::Steer { id, text } => {
                 Ok(self.enqueue(id, text))
             }
-            EngineCommand::RequestExit => {
-                Ok(self.enqueue(InputId::Continue { attempt: u32::MAX }, "/exit".into()))
-            }
+            EngineCommand::RequestExit => Ok(self.enqueue(EXIT, "/exit".into())),
         }
     }
     async fn observe(
@@ -1256,12 +1396,13 @@ impl EngineAdapter for Claude {
                 "-p",
                 "-t",
                 pane,
-                "#{pane_pid} #{pane_dead} #{pane_dead_status}",
+                "#{pane_pid} #{pane_dead} #{bracket_paste_flag} #{pane_dead_status}",
             ])
             .await?;
         let mut parts = display.split_whitespace();
         let pid = parts.next().unwrap_or_default();
         let dead = parts.next() == Some("1");
+        let bracketed = parts.next() == Some("1");
         let exit = parts.next();
         let status = protocol::read_json(&self.home.join("sessions").join(format!("{pid}.json")));
         let status = status.as_ref().filter(|v| {
@@ -1293,8 +1434,12 @@ impl EngineAdapter for Claude {
         {
             self.state.observation.error = Some(error);
         }
+        if protocol::composer_ready(&capture) {
+            self.composer_seen = true;
+        }
         if !dead {
-            self.advance_delivery(&capture).await?;
+            let busy = status.and_then(|v| v["status"].as_str()) == Some("busy");
+            self.advance_delivery(&capture, busy, bracketed).await?;
         }
         let mut observation = self.state.snapshot(
             status.and_then(|v| v["status"].as_str()),

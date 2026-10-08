@@ -21,3 +21,14 @@ out of usage credits, a model's limit, and an ordinary rejected 429.
 authenticate, from the owner's transcripts cut to their error fields: `authentication_failed`
 (OAuth session expired, login expired, not logged in, a 403 asking for /login),
 `oauth_org_not_allowed` and `account_on_hold`. They carry no credential.
+
+`real-rewind-pane.txt` is the bottom of the pane a resumed lane failed on (`pasted draft could
+not be verified`): Claude Code 2.1.284's Rewind dialog over a session with nothing to rewind to,
+which two Escapes within 800 ms open. `real-rewind-list-pane.txt`, `real-history-picker-pane.txt`
+and `real-composer-pane.txt` are 2.1.284 in a scratch home over a three-prompt session written for the check:
+Rewind with prompts to rewind to, the history picker (`ctrl+r`) and the bare composer. The fake
+takes Escape as 2.1.284 does (a second press within 800 ms on an empty composer opens Rewind,
+which takes every key and paste but Escape) and scripts a resume's covered composer and unread
+input (`cover_ms`, `hold_ms`), a dialog that takes the next paste (`modal_on_paste`) and pastes
+that leave no draft (`swallow_pastes`, counted across launches). It logs the keys and pastes it
+takes to `fixture-keys.jsonl` and each dialog it opens to `fixture-modals.jsonl`.

@@ -84,8 +84,26 @@ struct Fake {
     draft: String,
     paste: bool,
     input: Vec<u8>,
+    /// Since when `input` has held only the start of an escape sequence.
+    escape_wait: Option<Instant>,
     drop_enters: u64,
     wrap: usize,
+    /// When the composer last took an Escape, for Claude's 800 ms double press.
+    escaped: Option<Instant>,
+    /// The dialog over the composer (Rewind), which takes every key but Escape.
+    modal: Option<&'static str>,
+    /// Until when a screen covers the composer (`cover_ms`) and input waits unread
+    /// (`hold_ms`), as while Claude 2.1.284 loads a long resumed session.
+    cover_until: Option<Instant>,
+    hold_until: Option<Instant>,
+    held: Vec<u8>,
+    /// Pastes still to drop with no draft (`swallow_pastes`, counted across launches in the
+    /// home), and still to land under a Rewind dialog that opens as they arrive
+    /// (`modal_on_paste`).
+    swallow: u64,
+    modal_on_paste: u64,
+    /// The paste in progress is dropped.
+    dropping: bool,
 }
 impl Fake {
     fn hook(&self, event: &str, extra: Value) -> io::Result<()> {
@@ -141,6 +159,19 @@ impl Fake {
     }
     fn draw(&self) -> io::Result<()> {
         let mut out = io::stdout().lock();
+        if self.cover_until.is_some() {
+            write!(out, "\x1b[H\x1b[2J  Resuming the conversation\u{2026}\r\n")?;
+            return out.flush();
+        }
+        if let Some(title) = self.modal {
+            // 2.1.284's Rewind over an empty conversation; its top edge takes the composer's.
+            write!(
+                out,
+                "\x1b[H\x1b[2J{} \u{25d0} medium \u{b7} /effort \u{2594}\r\n   {title}\r\n\r\n   Nothing to rewind to yet.\r\n\r\n   Esc to cancel\r\n",
+                "\u{2594}".repeat(60)
+            )?;
+            return out.flush();
+        }
         write!(
             out,
             "\x1b[H\x1b[2J{}\r\n{}\r\n❯ ",
@@ -163,23 +194,97 @@ impl Fake {
         write!(out, "\r\n{}\r\n", "─".repeat(70))?;
         out.flush()
     }
+    fn log(&self, file: &str, value: Value) -> io::Result<()> {
+        append(&self.run.join(file), &value)
+    }
+    /// Escape as 2.1.284 takes it: it closes a dialog; on the composer a second press within
+    /// 800 ms opens Rewind (empty composer) or clears the draft.
+    fn escape(&mut self) -> io::Result<()> {
+        self.log("fixture-keys.jsonl", json!("Escape"))?;
+        if self.modal.take().is_some() {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if self
+            .escaped
+            .take()
+            .is_some_and(|at| now.duration_since(at) <= Duration::from_millis(800))
+        {
+            if self.draft.is_empty() {
+                self.modal = Some("Rewind");
+                self.log("fixture-modals.jsonl", json!("Rewind"))?;
+            } else {
+                self.draft.clear();
+            }
+        } else {
+            self.escaped = Some(now);
+        }
+        Ok(())
+    }
     fn feed(&mut self, bytes: &[u8]) -> io::Result<bool> {
+        if self.hold_until.is_some() {
+            self.held.extend(bytes);
+            return Ok(true);
+        }
         self.input.extend(bytes);
         while !self.input.is_empty() {
             if self.input.starts_with(b"\x1b[200~") {
                 self.input.drain(..6);
                 self.paste = true;
+                self.log("fixture-keys.jsonl", json!("paste"))?;
+                if self.modal.is_none() && self.modal_on_paste > 0 {
+                    self.modal_on_paste -= 1;
+                    self.modal = Some("Rewind");
+                    self.log("fixture-modals.jsonl", json!("Rewind"))?;
+                }
+                if self.modal.is_none() && self.swallow > 0 {
+                    self.swallow -= 1;
+                    let swallowed = fs::read_to_string(self.home.join("fixture.swallowed"))
+                        .ok()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    private_write(
+                        &self.home.join("fixture.swallowed"),
+                        (swallowed + 1).to_string().as_bytes(),
+                    )?;
+                    self.dropping = true;
+                }
                 continue;
             }
             if self.input.starts_with(b"\x1b[201~") {
                 self.input.drain(..6);
                 self.paste = false;
+                self.dropping = false;
                 continue;
             }
-            if self.input[0] == 27 && self.input.len() < 6 {
-                break;
+            if self.input[0] == 27 {
+                // The start of a paste's bracket waits for the rest; a lone ESC (tmux sends
+                // `Escape` as one byte) is the Escape key once nothing follows within 50 ms.
+                let partial = self.input.len() < 6
+                    && [&b"\x1b[200~"[..], &b"\x1b[201~"[..]]
+                        .iter()
+                        .any(|seq| seq.starts_with(&self.input));
+                if partial
+                    && self.escape_wait.get_or_insert_with(Instant::now).elapsed()
+                        < Duration::from_millis(50)
+                {
+                    break;
+                }
+                self.escape_wait = None;
+                if self.input.len() >= 3 && self.input[1] == b'[' && !partial {
+                    // An arrow key: Claude's composer has no use for it here.
+                    self.input.drain(..3);
+                    continue;
+                }
+                self.input.remove(0);
+                self.escape()?;
+                continue;
             }
             let byte = self.input.remove(0);
+            if self.modal.is_some() || self.dropping {
+                // A dialog takes the keys and the paste; a dropped paste leaves no draft.
+                continue;
+            }
             match byte {
                 b'\r' if !self.paste => {
                     if self.drop_enters > 0 {
@@ -197,8 +302,17 @@ impl Fake {
                     self.queue.push_back(text);
                 }
                 b'\r' => self.draft.push('\n'),
-                1 => {}
+                1 | 5 => {}
                 11 => self.draft.clear(),
+                // C-u clears the cursor's (the last) line; BSpace takes one character back,
+                // a newline too.
+                21 => {
+                    let at = self.draft.rfind('\n').map_or(0, |at| at + 1);
+                    self.draft.truncate(at);
+                }
+                127 => {
+                    self.draft.pop();
+                }
                 b if b >= 32 || b == b'\t' => self.draft.push(b as char),
                 _ => {}
             }
@@ -206,7 +320,22 @@ impl Fake {
         self.draw()?;
         Ok(true)
     }
-    fn tick(&mut self) -> io::Result<()> {
+    fn tick(&mut self) -> io::Result<bool> {
+        if self.cover_until.is_some_and(|at| Instant::now() >= at) {
+            self.cover_until = None;
+            self.draw()?;
+        }
+        if self.hold_until.is_some_and(|at| Instant::now() >= at) {
+            // Claude reads what waited all at once, so keys sent far apart arrive together.
+            self.hold_until = None;
+            let held = std::mem::take(&mut self.held);
+            if !self.feed(&held)? {
+                return Ok(false);
+            }
+        }
+        if self.escape_wait.is_some() && !self.feed(&[])? {
+            return Ok(false);
+        }
         if self.notification.is_some_and(|t| Instant::now() >= t) {
             self.notification = None;
             for child in &mut self.background.0 {
@@ -325,7 +454,7 @@ impl Fake {
             ));
             self.draw()?;
         }
-        Ok(())
+        Ok(true)
     }
 }
 /// `claude --help`, cut to the flags sluice's probe reads, as 2.1.284 prints them.
@@ -382,6 +511,21 @@ pub fn main(args: Vec<String>) -> io::Result<()> {
         .unwrap_or(0);
     let drop_enters = config["drop_enters"].as_u64().unwrap_or(0);
     let wrap = config["wrap"].as_u64().unwrap_or(0) as usize;
+    let swallowed = fs::read_to_string(home.join("fixture.swallowed"))
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    let swallow = config["swallow_pastes"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(swallowed);
+    let modal_on_paste = config["modal_on_paste"].as_u64().unwrap_or(0);
+    let after = |key: &str| {
+        config[key]
+            .as_u64()
+            .map(|ms| Instant::now() + Duration::from_millis(ms))
+    };
+    let (cover_until, hold_until) = (after("cover_ms"), after("hold_ms"));
     let mut fake = Fake {
         home,
         run,
@@ -400,8 +544,17 @@ pub fn main(args: Vec<String>) -> io::Result<()> {
         draft: String::new(),
         paste: false,
         input: vec![],
+        escape_wait: None,
         drop_enters,
         wrap,
+        escaped: None,
+        modal: None,
+        cover_until,
+        hold_until,
+        held: vec![],
+        swallow,
+        modal_on_paste,
+        dropping: false,
     };
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
@@ -484,7 +637,9 @@ pub fn main(args: Vec<String>) -> io::Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(_) => break,
         }
-        fake.tick()?;
+        if !fake.tick()? {
+            break;
+        }
     }
     let _ = fs::remove_file(&fake.status_file);
     Ok(())

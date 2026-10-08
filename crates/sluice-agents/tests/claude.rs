@@ -1536,3 +1536,222 @@ async fn supervisor_claude_required_update_at_exit_fails_as_blocked_screen() {
             .contains("needs an update.")
     );
 }
+
+/// What the fake logged to `file` in `dir` (one JSON string per line), empty without it.
+fn logged(dir: &Path, file: &str) -> Vec<String> {
+    fs::read_to_string(dir.join(file))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The lane that failed `UnknownAcceptance` on a resume: while Claude 2.1.284 loads a long
+/// session a screen covers the composer and it reads no input, then it draws the composer
+/// before it reads what waited. The adapter used to send Escape every 750 ms to that cover;
+/// Claude read the Escapes together (its double press, 800 ms), opened Rewind, and Rewind
+/// swallowed the paste that followed. Now nothing is sent before the composer first shows, and
+/// the message is delivered with no Escape and no Rewind.
+#[tokio::test]
+async fn fake_resumed_session_with_a_covered_composer_gets_its_message_and_no_rewind() {
+    let mut h = Harness::new(json!({"turns":[{"reply":"first work"},{"reply":"rebased"}]})).await;
+    h.launch(None).await;
+    let sid = h.turn(InputId::Task, "first", 1).await.session_id.unwrap();
+    h.cleanup().await;
+    fs::write(
+        h.scratch.0.join("config.json"),
+        serde_json::to_vec(
+            &json!({"cover_ms":2500,"hold_ms":3200,"turns":[{},{"reply":"rebased"}]}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    h.service = TransientService::for_test(RunId::new());
+    let started = Instant::now();
+    h.launch(Some(&sid)).await;
+    let s = h
+        .turn(
+            InputId::Message { id: MessageId(9) },
+            "You were sent back: rebase onto main.",
+            1,
+        )
+        .await;
+    assert_eq!(s.error, None);
+    assert_eq!(s.final_text, "rebased");
+    assert!(
+        s.acknowledged
+            .contains(&InputId::Message { id: MessageId(9) })
+    );
+    assert!(started.elapsed() >= Duration::from_millis(3200));
+    assert_eq!(
+        h.prompts(),
+        ["first", "You were sent back: rebase onto main."]
+    );
+    let run = &h.context.run_dir;
+    assert_eq!(logged(run, "fixture-keys.jsonl"), ["paste", "paste"]);
+    assert!(logged(run, "fixture-modals.jsonl").is_empty());
+    h.cleanup().await;
+}
+
+/// A dialog that comes up as the paste arrives takes it, so its draft never shows. Enter was
+/// not sent, so the input was not taken: the adapter closes the dialog with one Escape, waits
+/// for the composer, clears it and pastes again.
+#[tokio::test]
+async fn fake_paste_taken_by_a_dialog_is_pasted_again_after_one_escape() {
+    let mut h = Harness::new(json!({"modal_on_paste":1,"turns":[{"reply":"done"}]})).await;
+    h.launch(None).await;
+    let started = Instant::now();
+    let s = h.turn(InputId::Task, "the task", 1).await;
+    assert_eq!(s.error, None);
+    assert_eq!(s.final_text, "done");
+    assert!(s.acknowledged.contains(&InputId::Task));
+    assert!(started.elapsed() >= Duration::from_secs(5));
+    assert_eq!(h.prompts(), ["the task"]);
+    let run = &h.context.run_dir;
+    assert_eq!(logged(run, "fixture-modals.jsonl"), ["Rewind"]);
+    assert_eq!(
+        logged(run, "fixture-keys.jsonl"),
+        ["paste", "Escape", "paste"]
+    );
+    h.cleanup().await;
+}
+
+/// Three pastes whose drafts never show end the session `Transient`, not `UnknownAcceptance`:
+/// Enter was never sent, so every input the adapter held is given back as not accepted.
+#[tokio::test]
+async fn fake_three_unseen_drafts_end_transient_with_the_inputs_not_accepted() {
+    let mut h = Harness::new(json!({"swallow_pastes":3})).await;
+    h.launch(None).await;
+    for (id, text) in [
+        (InputId::Task, "the task"),
+        (InputId::Message { id: MessageId(3) }, "a message"),
+    ] {
+        let outcome = h
+            .adapter
+            .execute(
+                &h.context,
+                EngineCommand::DeliverText {
+                    id,
+                    text: text.into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, DeliveryOutcome::Pending);
+    }
+    let started = Instant::now();
+    let s = loop {
+        let s = h.poll().await;
+        if s.error.is_some() {
+            break s;
+        }
+        assert!(started.elapsed() < Duration::from_secs(40), "{s:?}");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    let error = s.error.unwrap();
+    assert_eq!(error.kind, EngineErrorKind::Transient, "{error:?}");
+    assert!(
+        error.message.starts_with(
+            "claude: the pasted input did not show in the composer after 3 pastes, so Enter was never sent and Claude did not take it; Claude showed its composer without the draft: "
+        ),
+        "{}",
+        error.message
+    );
+    assert!(started.elapsed() >= Duration::from_secs(15));
+    assert!(s.acknowledged.is_empty());
+    assert_eq!(
+        s.not_accepted,
+        [InputId::Task, InputId::Message { id: MessageId(3) }]
+    );
+    let run = &h.context.run_dir;
+    assert!(!run.join("fixture-prompts.jsonl").exists());
+    assert_eq!(
+        logged(run, "fixture-keys.jsonl"),
+        ["paste", "paste", "paste"]
+    );
+    h.cleanup().await;
+}
+
+/// The supervisor takes the transient for one: the session resumes and the task, given back
+/// as not accepted rather than left uncertain, is delivered again and submits.
+#[tokio::test]
+async fn supervisor_claude_unseen_drafts_resume_and_deliver_the_task_again() {
+    let h = Harness::new(
+        json!({"swallow_pastes":3,"turns":[{"reply":"done","submit":{"word":"blue"}}]}),
+    )
+    .await;
+    let (result, directory) = supervise_claude(&h, |cfg| {
+        cfg.limits.wall = Duration::from_secs(60);
+        cfg.limits.turn_start = Duration::from_secs(40);
+        cfg.limits.stall = Duration::from_secs(40);
+    })
+    .await;
+    let result = result.unwrap();
+    assert!(!result.session.is_empty());
+    let submitted: Value =
+        serde_json::from_slice(&fs::read(directory.join("fixture-submission.json")).unwrap())
+            .unwrap();
+    assert_eq!(submitted, json!({"word":"blue"}));
+    assert_eq!(
+        fs::read_to_string(h.scratch.0.join("claude/fixture.swallowed")).unwrap(),
+        "3"
+    );
+    // The resumed session's own continuation input follows the task.
+    let prompts = logged(&directory, "fixture-prompts.jsonl");
+    assert_eq!(
+        prompts[0], "Labelled scratch acceptance task",
+        "{prompts:?}"
+    );
+    assert_eq!(
+        prompts
+            .iter()
+            .filter(|p| p.contains("acceptance task"))
+            .count(),
+        1,
+        "{prompts:?}"
+    );
+    assert!(!h.client(&["list-sessions"]).status.success());
+}
+
+/// The screens sluice sends its one Escape to, as Claude Code 2.1.284 drew them: Rewind over
+/// the failed lane's resumed session and over a conversation with prompts, and its history
+/// picker. The composer, the dialogs the adapter answers and a screen nobody knows are not.
+#[test]
+fn rewind_and_dialogs_over_the_composer_are_recognised_and_nothing_else() {
+    let failed = include_str!("fixtures/claude/real-rewind-pane.txt");
+    assert!(!protocol::composer_ready(failed));
+    assert!(!protocol::draft_visible(failed, "Your task is in"));
+    assert_eq!(
+        protocol::escapable(failed).as_deref(),
+        Some("its Rewind dialog")
+    );
+    let listed = include_str!("fixtures/claude/real-rewind-list-pane.txt");
+    assert!(!protocol::composer_ready(listed));
+    assert!(!protocol::draft_visible(listed, "Your task is in"));
+    assert_eq!(
+        protocol::escapable(listed).as_deref(),
+        Some("its Rewind dialog")
+    );
+    let picker = include_str!("fixtures/claude/real-history-picker-pane.txt");
+    assert!(!protocol::composer_ready(picker));
+    assert_eq!(
+        protocol::escapable(picker).as_deref(),
+        Some("its Search prompts dialog")
+    );
+    let composer = include_str!("fixtures/claude/real-composer-pane.txt");
+    assert!(protocol::composer_ready(composer));
+    assert_eq!(protocol::escapable(composer), None);
+    let search = "─────────────\n❯ fix the\n─────────────\n  search prompts: fix the\n";
+    assert_eq!(
+        protocol::escapable(search).as_deref(),
+        Some("its prompt-history search")
+    );
+    for screen in [
+        "No, exit\n❯ Yes, I trust this folder\n\n Enter to confirm \u{b7} Esc to cancel\n",
+        THEME_PICKER,
+        " Something new is here.\n\n Press Enter to continue\u{2026}",
+        "",
+    ] {
+        assert_eq!(protocol::escapable(screen), None, "{screen}");
+    }
+}

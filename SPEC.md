@@ -1545,6 +1545,21 @@ message so far and API errors. A record over 1 MiB (Claude Code writes one for a
 result or file read) is skipped, never fatal, and the run's log says how many were skipped; the
 turn still ends at its `Stop` hook, which carries the final message, or on a stable idle pane.
 
+Input reaches Claude as one bracketed paste into its composer, sent with Enter once the draft
+shows, and the `UserPromptSubmit` that carries it accepts it. The adapter pastes only into a
+composer the pane shows and only while Claude has bracketed paste on, so a paste cannot submit;
+it empties the composer with `C-e C-u BSpace`, never with Escape. Claude opens Rewind on two
+Escapes it handles within 800 ms, and while it loads a long resumed session it handles keys late
+and together, so Escape goes only to a surface over a composer the launch has shown: one that
+closes on it (a dialog whose guide offers `Esc to cancel`, such as Rewind, or the prompt-history
+search), or a screen the adapter does not recognize that has stood unchanged for 2 s while
+Claude is not working. Each such surface gets one Escape, Escapes are at least 3 s apart, and a
+paste waits 1.5 s after one. A draft that does not show within 5 s was not taken, since Enter
+was not sent: the run's log gets the pane and the input is pasted again. After 3 pastes the
+adapter gives back every input it holds as not accepted and the session fails as `Transient`, so
+the retry delivers them again. Only an input sent with Enter whose draft stays in the composer
+for 20 s fails the run as `UnknownAcceptance`.
+
 A Devin turn ends at a `Stop` hook that no other hook follows for 10 s, once the pane no longer
 shows Devin working (the `(esc twice to interrupt)` spinner or the `Guide Devin while it works`
 placeholder). A tool or compaction hook after a `Stop` keeps the turn open, or reopens it: in

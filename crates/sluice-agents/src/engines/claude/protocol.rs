@@ -240,8 +240,58 @@ fn history_search(pane: &str) -> bool {
 pub fn composer_ready(pane: &str) -> bool {
     !history_search(pane) && composer_row(pane).is_some_and(|s| s.trim().starts_with('❯'))
 }
-pub fn occupied(pane: &str) -> bool {
-    !pane.trim().is_empty() && !composer_ready(pane)
+/// A surface Claude Code 2.1.284 draws instead of its composer and closes on one Escape, named
+/// for the run's log: its prompt-history search (`search prompts:`), or a dialog whose guide
+/// row offers `Esc to cancel` (or `close`, `dismiss`, `go back`), such as Rewind, which two
+/// Escapes on the composer within its 800 ms double-press window open:
+///
+/// ```text
+/// ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+///    Rewind
+///
+///    Nothing to rewind to yet.
+///
+///    Esc to cancel
+/// ```
+///
+/// A dialog is named by the row under its top edge (`▔`, or the rule its history picker,
+/// `Search prompts · everywhere`, draws). The dialogs the adapter answers
+/// itself (`answered_dialog`) and the screens it fails on (`blocking_screen`, `login_screen`)
+/// are none: an Escape there would refuse or leave them.
+pub fn escapable(pane: &str) -> Option<String> {
+    if composer_ready(pane)
+        || answered_dialog(pane)
+        || login_screen(pane)
+        || blocking_screen(pane).is_some()
+    {
+        return None;
+    }
+    if history_search(pane) {
+        return Some("its prompt-history search".into());
+    }
+    let lines = rows(pane);
+    let guide = lines[lines.len().saturating_sub(3)..].iter().any(|row| {
+        row.split('\u{b7}').any(|part| {
+            matches!(
+                part.trim().to_lowercase().as_str(),
+                "esc to cancel" | "esc to close" | "esc to dismiss" | "esc to go back"
+            )
+        })
+    });
+    if !guide {
+        return None;
+    }
+    let title = lines
+        .iter()
+        .rposition(|row| row.trim_start().starts_with(['\u{2594}', '─']))
+        .and_then(|at| lines.get(at + 1))
+        .and_then(|row| row.split(" \u{b7} ").next())
+        .map(str::trim)
+        .filter(|title| !title.is_empty() && title.chars().count() <= 60);
+    Some(match title {
+        Some(title) => format!("its {title} dialog"),
+        None => "a dialog".into(),
+    })
 }
 pub fn draft_visible(pane: &str, needle: &str) -> bool {
     let lines = rows(pane);
