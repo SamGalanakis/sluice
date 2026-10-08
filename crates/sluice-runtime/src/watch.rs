@@ -608,12 +608,13 @@ pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, Pub
     }
     Ok(match &record.event {
         Event::Message(m) => format!(
-            "{} {} {} -> {}: {}",
+            "{} #{} {} {} -> {}: {}",
             match m.verb {
                 MessageVerb::Ask => "ASK",
                 MessageVerb::Say => "SAY",
                 MessageVerb::Reply => "REPLY",
             },
+            m.id.0,
             m.thread,
             m.from,
             m.to.as_deref().unwrap_or("-"),

@@ -1853,15 +1853,17 @@ fn tool_help_lists_the_fields_with_types_and_descriptions() {
     assert!(help.contains("Reply to a message"), "{help}");
     assert!(
         help.contains(
-            "  --to-message <integer>  (required)\n      the id of the message replied to."
+            "  --to-message <integer>\n      the id of the message replied to; omit when using to."
         ),
         "{help}"
     );
+    assert!(help.contains("  --to <string>\n      the sender whose single open question addressed to you is answered."), "{help}");
+    assert!(help.contains("Give exactly one selector."), "{help}");
     assert!(help.contains("  --body <string>  (default \"\")"), "{help}");
     assert!(help.contains("--<field>-file PATH"), "{help}");
     let help = String::from_utf8(tool_with(home, &["messages", "-h"], &[], None).stdout).unwrap();
     assert!(
-        help.contains("--view <inbox|questions|history|thread>"),
+        help.contains("--view <inbox|questions|history|thread>  (default \"inbox\")"),
         "{help}"
     );
     // A tool MCP does not offer still lists its fields.

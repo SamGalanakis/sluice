@@ -580,7 +580,7 @@ fn decimal_strings_are_taken_for_integer_arguments() {
     ) else {
         panic!("reply")
     };
-    assert_eq!(reply.to_message, MessageId(24771));
+    assert_eq!(reply.to_message, Some(MessageId(24771)));
     let Ok(CommandRequest::LogRead(read)) =
         decode("log_read", json!({"since_seq":"5","limit":"10"}))
     else {

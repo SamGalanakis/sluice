@@ -7,7 +7,7 @@ use axum::{
 };
 use sluice_model::{
     commands::{CommandReply, CommandRequest, MessageView},
-    ids::{ProjectId, ProjectSelector},
+    ids::{MessageId, ProjectId, ProjectSelector},
 };
 use sluice_store::{
     ReadPool, RetrySafety, Writer,
@@ -71,9 +71,12 @@ impl MessageCommands for Commands {
                     CommandRequest::Say(m) => Ok(CommandReply::Receipt(
                         messages::post(tx, Post::try_from(m)?, &TypedInputs)?.receipt,
                     )),
-                    CommandRequest::Reply(m) => Ok(CommandReply::Receipt(
-                        messages::post(tx, Post::try_from(m)?, &TypedInputs)?.receipt,
-                    )),
+                    CommandRequest::Reply(m) => {
+                        let reply = messages::reply_post(tx.sql(), m)?;
+                        Ok(CommandReply::Receipt(
+                            messages::post(tx, reply, &TypedInputs)?.receipt,
+                        ))
+                    }
                     CommandRequest::MarkRead(read) => {
                         messages::mark_read(tx, read)?;
                         Ok(CommandReply::Ack)
@@ -288,7 +291,7 @@ async fn p605_typed_ui_reply_is_atomic_and_stale_buttons_conflict() {
     };
     assert!(post.owner);
     assert_eq!(post.run, None);
-    assert_eq!(post.to_message.0, question);
+    assert_eq!(post.to_message, Some(MessageId(question)));
     assert_eq!(post.project, ProjectSelector::Id(project));
     let json = serde_json::to_value(&post.answer).unwrap();
     assert_eq!(json["values"]["value"], 42);

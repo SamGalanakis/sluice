@@ -1811,3 +1811,308 @@ run(main)
     // Kept after the run, with its time, until the next run starts.
     assert_eq!(query(&g)["rows"][0][0], 1);
 }
+
+#[derive(Clone, Copy, Debug)]
+enum MessageTransport {
+    Cli,
+    Socket,
+    Mcp,
+}
+fn message_tool(
+    g: &Gate,
+    transport: MessageTransport,
+    name: &str,
+    mut args: Value,
+) -> Result<Value, sluice_model::error::PublicError> {
+    match transport {
+        MessageTransport::Socket => {
+            args["project"] = g.selector();
+            sluice_runtime::compose::reply_value(g.try_rpc(json!({"command":name,"args":args}))?)
+        }
+        MessageTransport::Cli => {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_sluice"));
+            command
+                .envs(&g.env)
+                .env_remove("SLUICE_RUN_ID")
+                .env_remove("SLUICE_PROJECT")
+                .env_remove("SLUICE_STEP")
+                .args(["tool", name, "--project", &format!("id:{}", g.project)]);
+            for (field, value) in args.as_object().unwrap() {
+                command.arg(format!("--{}", field.replace('_', "-")));
+                command.arg(
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string()),
+                );
+            }
+            let output = command.output().unwrap();
+            if output.status.success() {
+                Ok(serde_json::from_slice(&output.stdout).unwrap())
+            } else {
+                Err(serde_json::from_slice(&output.stderr).unwrap())
+            }
+        }
+        MessageTransport::Mcp => {
+            args["project"] = json!(format!("id:{}", g.project));
+            let server = sluice_web::mcp::McpServer::new(std::sync::Arc::new(
+                sluice_runtime::client::CoordinatorClient::new(&g.home),
+            ));
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(server.call(name, args.as_object().unwrap().clone(), Some("fixture")));
+            let result = serde_json::to_value(result).unwrap();
+            let value: Value =
+                serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+            if result["isError"] == true {
+                Err(serde_json::from_value(value).unwrap())
+            } else {
+                Ok(value)
+            }
+        }
+    }
+}
+fn owner_question(g: &Gate, to: &str, body: &str) -> Value {
+    let CommandReply::Receipt(receipt) = g.rpc(json!({"command":"ask","args":{
+        "project":g.selector(),"to":to,"body":body,"owner":true
+    }})) else {
+        panic!("receipt")
+    };
+    json!(receipt.id)
+}
+
+#[test]
+fn messages_default_to_inbox_through_cli_socket_and_mcp() {
+    for transport in [
+        MessageTransport::Cli,
+        MessageTransport::Socket,
+        MessageTransport::Mcp,
+    ] {
+        let g = Gate::new();
+        let question = owner_question(&g, "orchestrator", "Which parser?");
+        g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"orchestrator","body":"A note","owner":true}}));
+        g.rpc(json!({"command":"ask","args":{"project":g.selector(),"to":"owner","body":"Not in your inbox"}}));
+        let inbox = message_tool(&g, transport, "messages", json!({})).unwrap();
+        assert_eq!(
+            inbox["messages"].as_array().unwrap().len(),
+            2,
+            "{transport:?}: {inbox}"
+        );
+        assert_eq!(inbox["messages"][0]["id"], question);
+        assert_eq!(inbox["messages"][1]["body"], "A note");
+        assert_eq!(
+            inbox,
+            message_tool(&g, transport, "messages", json!({"view":"inbox"})).unwrap()
+        );
+    }
+}
+
+#[test]
+fn reply_by_sender_selects_one_open_question_through_cli_socket_and_mcp() {
+    for transport in [
+        MessageTransport::Cli,
+        MessageTransport::Socket,
+        MessageTransport::Mcp,
+    ] {
+        let g = Gate::new();
+        let question = owner_question(&g, "orchestrator", "Which parser?\nMore context");
+        // A question addressed to somebody else must never count as a candidate.
+        g.plan(json!({"lane":{"run":"core.external"}}));
+        owner_question(&g, "lane", "For the lane alone");
+        let reply = message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to":"owner","body":"Use the Rust parser"}),
+        )
+        .unwrap();
+        assert_eq!(reply["to"], "owner");
+        let history = message_tool(
+            &g,
+            transport,
+            "messages",
+            json!({"view":"thread","thread":"owner"}),
+        )
+        .unwrap();
+        assert_eq!(history["messages"][0]["id"], question);
+        assert_eq!(history["messages"][0]["answered_by"], reply["id"]);
+        assert_eq!(history["messages"][1]["to_message"], question);
+        let missing = message_tool(&g, transport, "reply", json!({"to":"owner","body":"Again"}))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            missing.contains("no open question")
+                && missing.contains("owner")
+                && missing.contains("orchestrator"),
+            "{transport:?}: {missing}"
+        );
+        let a = owner_question(&g, "orchestrator", "First choice\nDetails not in the error");
+        let b = owner_question(&g, "orchestrator", "Second choice\nOther details");
+        let before = message_tool(&g, transport, "messages", json!({"view":"questions"})).unwrap();
+        let ambiguous = message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to":"owner","body":"Ambiguous"}),
+        )
+        .unwrap_err()
+        .to_string();
+        for part in [format!("#{a} First choice"), format!("#{b} Second choice")] {
+            assert!(ambiguous.contains(&part), "{transport:?}: {ambiguous}");
+        }
+        assert!(!ambiguous.contains("Details not in the error"));
+        assert!(!ambiguous.contains("Other details"));
+        assert_eq!(
+            before,
+            message_tool(&g, transport, "messages", json!({"view":"questions"})).unwrap()
+        );
+        for args in [
+            json!({"body":"No selector"}),
+            json!({"to":"owner","to_message":a,"body":"Two selectors"}),
+            json!({"to":" ","body":"Blank"}),
+        ] {
+            assert!(message_tool(&g, transport, "reply", args).is_err());
+        }
+        // The explicit id still disambiguates and records the same wire shape.
+        message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to_message":a,"body":"First"}),
+        )
+        .unwrap();
+        message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to":"owner","body":"Second"}),
+        )
+        .unwrap();
+        // A running step can also speak by sender, and selection is scoped to that caller.
+        let g = Gate::new();
+        g.plan(json!({"lane":{"run":"message.ask","in":{
+            "to":{"default":"orchestrator"},"body":{"default":"Lane question"},"title":{"default":"Lane decision"},"wait":{"default":true}
+        }}}));
+        let _lease = g.lease();
+        g.wait(|g| {
+            message_tool(g, MessageTransport::Socket, "messages", json!({})).unwrap()["messages"]
+                .as_array()
+                .is_some_and(|m| m.len() == 1)
+        });
+        let run = g.run("lane");
+        let ask = message_tool(
+            &g,
+            transport,
+            "ask",
+            json!({"to":"lane","body":"A question for the lane"}),
+        )
+        .unwrap();
+        let own_reply = message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to":"orchestrator","body":"Lane response","run":run}),
+        )
+        .unwrap();
+        assert_eq!(own_reply["to"], "orchestrator");
+        let thread = message_tool(
+            &g,
+            transport,
+            "messages",
+            json!({"view":"thread","thread":"step-lane"}),
+        )
+        .unwrap();
+        assert!(
+            thread["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["to_message"] == ask["id"] && m["from"] == "lane")
+        );
+        let reply = message_tool(
+            &g,
+            transport,
+            "reply",
+            json!({"to":"lane","body":"Finish the lane"}),
+        )
+        .unwrap();
+        assert_eq!(reply["to"], "lane");
+        assert_eq!(g.terminal("lane")["status"], "succeeded");
+    }
+}
+
+#[test]
+fn next_message_lines_include_ids_and_log_wait_keeps_them() {
+    let g = Gate::new();
+    let ask = owner_question(&g, "orchestrator", "Question body");
+    let CommandReply::Receipt(say) = g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"orchestrator","body":"Note body","owner":true}})) else { panic!("receipt") };
+    let asked = message_tool(
+        &g,
+        MessageTransport::Socket,
+        "ask",
+        json!({"to":"owner","body":"Owner question"}),
+    )
+    .unwrap();
+    let CommandReply::Receipt(reply) = g.rpc(json!({"command":"reply","args":{"project":g.selector(),"to_message":asked["id"],"body":"Reply body","owner":true}})) else { panic!("receipt") };
+    let CommandReply::Next(next) = g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":"orchestrator","timeout_seconds":1,"all":false,"settle_seconds":1,"settle_max_seconds":2,"settles":"short"}})) else { panic!("next") };
+    let next = serde_json::to_value(next).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_sluice"))
+        .envs(&g.env)
+        .args([
+            "next",
+            "-p",
+            &format!("id:{}", g.project),
+            "--since-seq",
+            "0",
+            "--settles",
+            "short",
+            "--settle",
+            "1",
+            "--settle-max",
+            "2",
+            "--timeout",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    for (verb, id, body) in [
+        ("ASK", ask.as_i64().unwrap(), "Question body"),
+        ("SAY", say.id.0, "Note body"),
+        ("REPLY", reply.id.0, "Reply body"),
+    ] {
+        assert!(
+            text.lines()
+                .any(|line| line == format!("{verb} #{id} owner owner -> orchestrator: {body}")),
+            "{text}"
+        );
+        assert!(
+            next["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(next["notes"].as_array().unwrap())
+                .any(|m| m["id"] == id),
+            "{next}"
+        );
+    }
+    let CommandReply::Records(log) = g.rpc(json!({"command":"log_wait","args":{"read":{"project":g.selector(),"since_seq":0,"kinds":["message"],"limit":200},"timeout_seconds":1,"questions_only":false}})) else { panic!("log records") };
+    let log = serde_json::to_value(log).unwrap();
+    for id in [ask.as_i64().unwrap(), say.id.0, reply.id.0] {
+        assert!(
+            log["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m["id"] == id),
+            "{log}"
+        );
+    }
+}

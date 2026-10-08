@@ -70,13 +70,12 @@ async fn post(w: &Writer, p: ProjectId, value: Value) -> Message {
     let verb = value["verb"].as_str().unwrap().to_owned();
     value.as_object_mut().unwrap().remove("verb");
     value["project"] = json!({"kind":"id","value":p});
-    let post = match verb.as_str() {
-        "ask" => messages::Post::try_from(serde_json::from_value::<Ask>(value).unwrap()),
-        "say" => messages::Post::try_from(serde_json::from_value::<Say>(value).unwrap()),
-        _ => messages::Post::try_from(serde_json::from_value::<Reply>(value).unwrap()),
-    }
-    .unwrap();
     w.write(RetrySafety::NonIdempotent, move |tx| {
+        let post = match verb.as_str() {
+            "ask" => messages::Post::try_from(serde_json::from_value::<Ask>(value).unwrap()),
+            "say" => messages::Post::try_from(serde_json::from_value::<Say>(value).unwrap()),
+            _ => messages::reply_post(tx.sql(), serde_json::from_value::<Reply>(value).unwrap()),
+        }?;
         messages::post(tx, post, &messages::NoPlanInputs).map(|p| p.message)
     })
     .await

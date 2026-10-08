@@ -197,11 +197,12 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     // flow: its work runs and holds the one lane; it asks a question.
     f.unit("flow", true, json!({})).await;
     f.wait_for("flow-work", "running").await;
-    f.ok(
-        "ask",
-        json!({"project":"p","to":"flow-work","body":"Which crate\n  owns   the parser?"}),
-    )
-    .await;
+    let question = f
+        .ok(
+            "ask",
+            json!({"project":"p","to":"flow-work","body":"Which crate\n  owns   the parser?"}),
+        )
+        .await;
     // later: ready, but the lane is held.
     f.unit("later", true, json!({})).await;
     // done: added paused, every step set by hand.
@@ -281,7 +282,16 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     assert_eq!(row("later")["engine"], "codex·gpt-6-luna·max");
     assert_eq!(row("held")["engine"], "codex·fusion·high");
     assert_eq!(row("flow")["blocked"], "");
-    assert_eq!(row("flow")["last"], "Q: Which crate owns the parser?");
+    assert_eq!(
+        row("flow")["last"],
+        format!("#{} Q: Which crate owns the parser?", question["id"])
+    );
+    assert!(
+        row("flow")["line"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("#{} Q:", question["id"]))
+    );
     assert!(row("flow")["age"].as_i64().unwrap() >= 0);
     assert_eq!(row("later")["state"], "queued");
     assert_eq!(row("later")["steps"], "work≡ land· rm·");
@@ -305,7 +315,10 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     let flow_line = row("flow")["line"].as_str().unwrap().to_owned();
     assert!(flow_line.contains(" ▶ "), "{flow_line}");
     assert!(flow_line.contains("codex·sol·xhigh"), "{flow_line}");
-    assert!(flow_line.contains("\"Q: Which"), "{flow_line}");
+    assert!(
+        flow_line.contains(&format!("\"#{} Q: Which", question["id"])),
+        "{flow_line}"
+    );
     assert!(
         row("wait")["line"].as_str().unwrap().contains(" ‖ "),
         "{}",

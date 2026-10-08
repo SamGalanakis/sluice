@@ -168,7 +168,7 @@ fn error_envelope_and_required_command_fields_are_closed() {
         f.as_object_mut().unwrap().remove(match name {
             "StepSetInput" => "inputs",
             "ProjectDelete" => "confirm_name",
-            _ => "view",
+            _ => "project",
         });
         let wire = serde_json::to_vec(&f).unwrap();
         assert!(match name {

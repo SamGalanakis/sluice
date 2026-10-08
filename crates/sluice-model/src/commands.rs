@@ -455,7 +455,12 @@ pub struct Say {
 #[serde(deny_unknown_fields)]
 pub struct Reply {
     pub project: ProjectSelector,
-    pub to_message: MessageId,
+    /// Select exactly one of this message id or `to`, a sender with one open question.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_message: Option<MessageId>,
+    /// Answer this sender's single open question addressed to the caller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
     #[serde(default)]
     pub body: String,
     pub answer: Option<MessageAnswer>,
@@ -489,6 +494,7 @@ pub struct MessagePost {
 #[serde(deny_unknown_fields)]
 pub struct Messages {
     pub project: ProjectSelector,
+    #[serde(default)]
     pub view: MessageView,
     pub thread: Option<String>,
     pub since: Option<MessageId>,
@@ -968,9 +974,10 @@ pub enum PatchOperation {
     Test { path: String, value: JsonValue },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageView {
+    #[default]
     Inbox,
     Questions,
     History,

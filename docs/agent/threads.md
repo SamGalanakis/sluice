@@ -72,11 +72,15 @@ given:
 
 - `ask(project, to, body, title?, ui?, input?, data?)`: a question that needs a reply.
 - `say(project, to, body, data?)`: a note; no reply is expected.
-- `reply(project, to_message, body, answer?)`: a reply to that message, sent to its `from`
+- `reply(project, to_message?, to?, body, answer?)`: a reply to that message, sent to its `from`
   on its thread. A reply to an open question answers it (with `answer {"action": "close"}`
   it closes it instead). A reply to a question already answered or closed is just a message;
   one carrying an `answer` is refused (`conflict`). See `docs("inbox")` for `ui`, `answer`
   and the `input` an answer sets.
+  Give exactly one of `to_message` or `to`. With `to="work"`, answer `work`'s single open
+  question addressed to you. No match is a `conflict` saying so; several matches are a
+  `conflict` listing their ids and first body lines, cut to 200 characters. Choose an id to
+  disambiguate. In a run, "you" is that run's step; otherwise it is the orchestrator.
 
 From a shell, `sluice tool` takes the same arguments as one JSON object or as flags, a
 message's body from a file or stdin so it needs no quoting (`sluice tool reply --help` lists
@@ -127,8 +131,8 @@ needed a reply, else a note).
 - Read or wait: `log_wait("myproj", since_seq=42, threads=["step-work"])`. A message record
   is `{"seq", "at", "project", "kind": "message", "id", "verb", "from", "to", "thread",
   "body", ..., "posted_at"}`; `messages(project, "thread", thread="step-work")` reads a
-  thread's rows directly (`{project, messages, last_id}`). `messages(project, "inbox")` is
-  your inbox: your open questions, then the notes and replies to you not yet read (pass
+  thread's rows directly (`{project, messages, last_id}`). `messages(project)` defaults to
+  `view="inbox"` and reads your inbox: your open questions, then the notes and replies to you not yet read (pass
   `owner: true` to read the owner's).
 - Wake only on questions: `log_wait(..., wake="questions")` (and `message.wait`'s `wake`
   input) does not return for a note or a reply; they come back with the next question or
@@ -143,8 +147,9 @@ needed a reply, else a note).
 
 In a plan, the fns `message.ask`, `message.say` and `message.reply` take the tools'
 arguments and return `{id, receipt}` (`message.ask` also `reply`, below), speaking as the
-step. `message.wait` blocks a step until a message lands on a thread (`to` keeps only
-messages addressed to it; `timeout` defaults to 300 s, then `messages` is empty):
+step. The `message.reply` fn selects by `to_message`; sender selection is for the `reply` tool.
+`message.wait` blocks a step until a message lands on a thread (`to` keeps only messages
+addressed to it; `timeout` defaults to 300 s, then `messages` is empty):
 
 ```json
 {"inputs": {"question": "string"},
@@ -175,7 +180,8 @@ A person is never asked through a step's thread: when the orchestrator needs one
   step are delivered to its runs durably: each step keeps a delivery cursor, a run is
   assigned every message after it when it is reserved, and a retried step picks up where the
   last attempt left off.
-- To answer what it asks, `reply(project, to_message=<its id>, body=...)`.
+- To answer what it asks, `reply(project, to="work", body=...)`, or use its id with
+  `to_message=<id>`. From a shell, `sluice tool reply --project myproj --to work --body 'Use the Rust parser'`.
 - To read what the step asks back, watch its thread:
   `log_wait(project="myproj", since_seq=<last>, threads=["step-work"], wake="questions")`,
   or wait on everything you act on with `next(projects, since_seq)`: questions and notes come
@@ -189,8 +195,12 @@ A person is never asked through a step's thread: when the orchestrator needs one
 `sluice watch -p myproj [--kinds k1,k2] [--threads a,b] [--since-seq N] [--wake any|questions]`
 follows the log from now (or after `--since-seq`) and prints each matching record as one JSON
 line; it never exits. `sluice next` is the same wait as the `next` tool, printed one line per
-event and ending with `seq N`. In Claude Code, run it under the Monitor tool so every record arrives as an
-event:
+event and ending with `seq N`. Message lines have the form
+`ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>: <body>`: the second token always
+names the message, so an ASK can be answered directly with `--to-message <message-id>`.
+`log_wait` and JSON `next` carry `id` too. The last-message summary in `status(view="units")`
+begins with `#<message-id>`; the rendered line includes it when it shows that message.
+In Claude Code, run it under the Monitor tool so every record arrives as an event:
 
     Monitor("sluice watch -p myproj --kinds step.status,message")
 

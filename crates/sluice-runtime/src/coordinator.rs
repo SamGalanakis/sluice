@@ -554,9 +554,11 @@ impl<H: ExecutionHost> Coordinator<H> {
             CommandRequest::StepProgress(request)=>self.writer().write(RetrySafety::Idempotent,move|tx|attempts::step_progress(tx,request)).await.and_then(data),
             CommandRequest::StepSettle(request)=>self.step_settle(request).await,
             CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_) => {
-                let post = message_post(request)?;
                 let plans = self.inner.plans.clone();
-                self.writer().write(RetrySafety::NonIdempotent, move |tx| post_message(tx, &catalog, &plans, post).map(CommandReply::Receipt)).await
+                self.writer().write(RetrySafety::NonIdempotent, move |tx| {
+                    let post = message_post(tx.sql(), request)?;
+                    post_message(tx, &catalog, &plans, post).map(CommandReply::Receipt)
+                }).await
             }
             CommandRequest::MessagePost(request) => {
                 let post = bridge_post(request)?;
@@ -2252,12 +2254,15 @@ pub enum RuntimeCommand {
 pub use crate::client::CoordinatorClient;
 
 /// ask, say and reply as one store post.
-fn message_post(command: CommandRequest) -> Result<sluice_store::messages::Post, PublicError> {
+fn message_post(
+    sql: &rusqlite::Connection,
+    command: CommandRequest,
+) -> Result<sluice_store::messages::Post, PublicError> {
     use sluice_store::messages::Post;
     match command {
         CommandRequest::Ask(a) => Post::try_from(a),
         CommandRequest::Say(s) => Post::try_from(s),
-        CommandRequest::Reply(r) => Post::try_from(r),
+        CommandRequest::Reply(r) => sluice_store::messages::reply_post(sql, r),
         _ => return Err(conflict("not a message command")),
     }
     .map_err(|e| e.into_public(false))
@@ -2603,7 +2608,12 @@ fn callback_mutation(
             id: post_message(tx, catalog, plans, bridge_post(m)?)?.id,
         },
         command @ (CommandRequest::Ask(_) | CommandRequest::Say(_) | CommandRequest::Reply(_)) => {
-            CommandReply::Receipt(post_message(tx, catalog, plans, message_post(command)?)?)
+            CommandReply::Receipt(post_message(
+                tx,
+                catalog,
+                plans,
+                message_post(tx.sql(), command)?,
+            )?)
         }
         CommandRequest::AcquireLease(l) => {
             let lease = resources::request_lease_keyed(

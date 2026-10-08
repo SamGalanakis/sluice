@@ -16,7 +16,7 @@ a note is never read for having been shown.
   a step's run asking (with its `run`) asks as its step, on its own thread.
 - Wait for the answer with `log_wait(project, since_seq, wake="questions")`, or let `next`
   return it: a `message` record is written for the question and for the reply. Or read the
-  `messages(project, view)` views: `"inbox"` (your open questions, then your unread notes and
+  `messages(project, view="inbox")` views: `"inbox"` (your open questions, then your unread notes and
   replies; `owner: true` for the owner's), `"questions"` (every open question in the project,
   whoever it is addressed to), `"history"` (threads you took part in), `"thread"` (one thread
   in full). Each question shows its `state`: `open`, `answered` (with `answered_by`) or
@@ -25,6 +25,10 @@ a note is never read for having been shown.
   params?, values?})`. From the dashboard, a Button sends its `action` and `params` plus the
   `values` of its form's fields; the text box sends `{"action": "answer"}` with the text as
   the reply's body. The first reply to an open question answers it, atomically.
+  Instead of `to_message`, give `to=<sender>` to answer that sender's single open question
+  addressed to you. No match is a conflict; several matches list their ids and first body
+  lines. Give exactly one selector. `sluice tool reply --to <sender>` and MCP use the same rule.
+
 - A reply with an `answer` to a question that is no longer open is refused (`conflict`:
   "question is no longer open"), so a stale button can never answer twice; a later plain
   reply is just a message. A reply whose `answer.action` is `close` closes the question

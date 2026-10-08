@@ -24,9 +24,10 @@ impl MessageCommands for FixtureCommands {
                     CommandRequest::Say(m) => Ok(CommandReply::Receipt(
                         post(tx, Post::try_from(m)?, &NoPlanInputs)?.receipt,
                     )),
-                    CommandRequest::Reply(m) => Ok(CommandReply::Receipt(
-                        post(tx, Post::try_from(m)?, &NoPlanInputs)?.receipt,
-                    )),
+                    CommandRequest::Reply(m) => {
+                        let reply = sluice_store::messages::reply_post(tx.sql(), m)?;
+                        Ok(CommandReply::Receipt(post(tx, reply, &NoPlanInputs)?.receipt))
+                    }
                     CommandRequest::MarkRead(read) => {
                         sluice_store::messages::mark_read(tx, read)?;
                         Ok(CommandReply::Ack)

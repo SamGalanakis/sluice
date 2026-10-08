@@ -296,19 +296,68 @@ impl TryFrom<Say> for Post {
         })
     }
 }
-impl TryFrom<Reply> for Post {
-    type Error = StoreError;
-    fn try_from(r: Reply) -> Result<Self> {
-        Ok(Self {
-            project: r.project,
-            speaker: Speaker::of(r.owner, r.run)?,
-            body: r.body,
-            verb: Verb::Reply {
-                to_message: r.to_message,
-                answer: r.answer,
-            },
-        })
-    }
+/// Resolve a reply's sender selection in the same transaction that posts it.
+/// Only open questions addressed to the transport-derived caller are candidates.
+pub fn reply_post(sql: &Connection, reply: Reply) -> Result<Post> {
+    let speaker = Speaker::of(reply.owner, reply.run)?;
+    let to_message = match (reply.to_message, reply.to) {
+        (Some(id), None) => id,
+        (None, Some(sender)) if !sender.trim().is_empty() => {
+            let project = resolve_project(sql, &reply.project)?;
+            let caller = match speaker {
+                Speaker::Owner => OWNER_STREAM.to_owned(),
+                Speaker::Orchestrator => ORCHESTRATOR_STREAM.to_owned(),
+                Speaker::Sluice => "sluice".into(),
+                Speaker::Run(run) => run_info(sql, project, run)?
+                    .step
+                    .unwrap_or_else(|| ORCHESTRATOR_STREAM.into()),
+            };
+            let mut query = sql.prepare(
+                "SELECT id,substr(CASE WHEN body='' AND input IS NOT NULL THEN coalesce((SELECT json_extract(i.declaration,'$.doc') FROM inputs i WHERE i.project_id=messages.project_id AND i.name=messages.input),'') ELSE body END,1,200)
+                 FROM messages WHERE project_id=?1 AND \"from\"=?2 AND \"to\"=?3
+                 AND needs_reply=1 AND resolved_by IS NULL AND closed_at IS NULL ORDER BY id",
+            )?;
+            let candidates = query
+                .query_map(params![project.to_string(), sender, caller], |row| {
+                    Ok((MessageId(row.get(0)?), row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            match candidates.as_slice() {
+                [(id, _)] => *id,
+                [] => {
+                    return Err(conflict(format!(
+                        "no open question from {sender} addressed to {caller}"
+                    )));
+                }
+                _ => {
+                    let choices = candidates
+                        .iter()
+                        .map(|(id, body)| {
+                            format!("#{} {}", id.0, body.lines().next().unwrap_or(""))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Err(conflict(format!(
+                        "several open questions from {sender} addressed to {caller}; use to_message:\n{choices}"
+                    )));
+                }
+            }
+        }
+        _ => {
+            return Err(invalid(
+                "reply requires exactly one of to_message or a nonblank to",
+            ));
+        }
+    };
+    Ok(Post {
+        project: reply.project,
+        speaker,
+        body: reply.body,
+        verb: Verb::Reply {
+            to_message,
+            answer: reply.answer,
+        },
+    })
 }
 /// The retired message_post, as runs started on an older release still send it:
 /// accepted only with a run identity, a reply when it names `reply_to`, else a question

@@ -865,7 +865,12 @@ derived, never given:
 
 - `ask(project, to, body, title?, ui?, input?, data?)`: a question that needs a reply.
 - `say(project, to, body, data?)`: a note; no reply is expected.
-- `reply(project, to_message, body="", answer?)`: a reply to that message.
+- `reply(project, to_message?, to?, body="", answer?)`: a reply selected by id or sender.
+  Give exactly one of `to_message` (a message id) or `to` (a step id or sender name).
+  With `to`, it answers that sender's single open question addressed to the caller. Selection
+  and posting happen in one transaction. With no match it returns `conflict` saying so; with
+  several it returns `conflict` listing their ids and first body lines, at most 200 characters
+  each, so the caller can choose `to_message`. No refusal posts or answers anything.
 
 Each takes `run?` too: the run that speaks (agent and fn callers; `sluice tool` fills it in a
 run, §14). The dashboard speaks as the owner (`owner: true`, which MCP and `sluice
@@ -1273,8 +1278,8 @@ same graph.
 |---|---|---|
 | `ask` | `project`, `to`, `body`, `title?`, `ui?`, `input?`, `data?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
 | `say` | `project`, `to`, `body`, `data?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
-| `reply` | `project`, `to_message`, `body=""`, `answer?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
-| `messages` | `project`, `view`, `thread?`, `since?`, `owner=false` | `{project, messages, last_id}` |
+| `reply` | `project`, `to_message?` or `to?`, `body=""`, `answer?`, `run?` | `{id, to, thread, delivery, run?}` (§8) |
+| `messages` | `project`, `view="inbox"`, `thread?`, `since?`, `owner=false` | `{project, messages, last_id}` |
 | `log_read` | `project?`, `since_seq?`, `kinds?`, `threads?`, `statuses?`, `recipients?`, `limit=200` | `{records, last_seq}`; without `since_seq` the latest records; filters §9 |
 | `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"` | `{records, last_seq}` |
 | `step_wait` | `project`, `steps?` or `tags?`, `until`, `timeout=300` | `{met, steps, seq}` (§10) |
@@ -1503,10 +1508,14 @@ write that timed out, and connections dropped for want of a permit.
 | `agent hook --engine codex\|claude\|devin --event E [--run R]` | engine hook entry (internal) |
 | `guardian`, `payload-exec` | internal |
 
-`sluice next` prints one line per event: `MSG|NOTE <thread> <from> -> <to>: <body>`, `STEP <id>
+`sluice next` prints one line per event: `ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>: <body>`, `STEP <id>
 <from> -> <to>: <error tail>`, `UNIT <u> settled: <outputs>` (long outputs named with a hint to
 read them with `sluice query` or `--settles full`), `PROJECT <id> paused by <author>`, and last
 `seq N` or `timeout seq N`; `--json` prints the reply.
+The message id is a decimal integer after `#`, always the second token, for every verb
+and `--settles` mode. `log_wait` and JSON `next` records retain their `id` field.
+`status(view="units")` prefixes the last-message summary with `#<id>`; the rendered line
+includes it when it shows that message.
 
 `sluice tool` takes the wire argument names with these conveniences: `steps`/`tags` (and
 `after`, `projects`, `state`) as plain values or lists, `expected`/`dry_run`/`reason`/`author`

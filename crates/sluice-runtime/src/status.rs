@@ -7,7 +7,7 @@ use sluice_model::{
     commands::{StatusQuery, StatusView, StepStatus},
     error::PublicError,
     gates::{resolve_reference, wait_reasons},
-    ids::{ProjectId, StepId},
+    ids::{ProjectId, StepId, UnitName},
     plan::Pause,
     status::{self, LastMessage, StepFacts},
     types::BoundValue,
@@ -105,7 +105,7 @@ pub(crate) fn status(
     if query.view == StatusView::Units {
         let facts = facts(sql, id, &queued, finishing)?;
         let last = last_messages(sql, id)?;
-        let view = status::units_view(
+        let mut view = status::units_view(
             plan,
             &state,
             &facts,
@@ -114,6 +114,22 @@ pub(crate) fn status(
             query.all,
             query.state.as_deref(),
         );
+        // Tool summaries retain a replyable id; the dashboard's unit_rows is separate.
+        for row in &mut view.rows {
+            let name = row
+                .unit
+                .parse::<UnitName>()
+                .map_err(|e| sluice_store::StoreError::InvalidDatabase(e.to_string()))?;
+            if let Some(message) = plan.units().get(&name).and_then(|unit| {
+                unit.steps
+                    .iter()
+                    .filter_map(|id| last.get(id))
+                    .max_by_key(|m| m.id)
+            }) {
+                row.last = format!("#{} {}", message.id, row.last);
+                row.line = status::line(row);
+            }
+        }
         let mut out =
             json!({"project":project,"rev":ctx.revision,"board_rev":board_rev,"paused":paused});
         if !resources.is_empty() {

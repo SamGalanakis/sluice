@@ -276,7 +276,8 @@ async fn mutate(
         let command = match (reply_to, fields.to) {
             (Some(to_message), _) => CommandRequest::Reply(Reply {
                 project,
-                to_message,
+                to_message: Some(to_message),
+                to: None,
                 body: fields.body,
                 answer: fields.answer,
                 run: None,
@@ -370,7 +371,8 @@ async fn close_many(State(state): State<MessageState>, body: Bytes) -> Response 
             .commands
             .command(CommandRequest::Reply(Reply {
                 project: ProjectSelector::Id(project),
-                to_message: MessageId(message),
+                to_message: Some(MessageId(message)),
+                to: None,
                 body: String::new(),
                 answer: Some(MessageAnswer {
                     action: "close".into(),
