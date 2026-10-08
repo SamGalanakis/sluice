@@ -94,34 +94,6 @@ impl HomeView {
 struct HomeTemplate<'a> {
     view: &'a HomeView,
 }
-/// A status's glyph (DESIGN.md, the Shape Carries It Rule): its Lucide icon, named for screen
-/// readers by the status word.
-pub fn glyph(status: &str) -> TrustedHtml {
-    use super::icons::{Icon, solid};
-    let (status, shape, class) = match status {
-        "running" => ("running", Icon::LoaderCircle, "spin"),
-        "succeeded" => ("succeeded", Icon::CircleCheck, ""),
-        "manual" => ("manual", Icon::CircleDot, ""),
-        "stale" => ("stale", Icon::RotateCw, ""),
-        "failed" => ("failed", Icon::CircleX, ""),
-        "cancelled" => ("cancelled", Icon::CircleStop, ""),
-        "paused" => ("paused", Icon::CirclePause, ""),
-        "skipped" => ("skipped", Icon::CircleSlash, ""),
-        "external" => ("external", Icon::SquareArrowOutUpRight, ""),
-        _ => ("pending", Icon::CircleDashed, ""),
-    };
-    TrustedHtml::owned(format!(
-        "<span class=\"g g-{status}\" role=\"img\" aria-label=\"{status}\">{}</span>",
-        solid(shape, 16, class)
-    ))
-}
-/// A quiet step's mark: an hourglass in the attention colour, beside the status glyphs.
-pub fn quiet_glyph() -> TrustedHtml {
-    TrustedHtml::owned(format!(
-        "<span class=\"g g-quiet\" aria-hidden=\"true\">{}</span>",
-        super::icons::icon(super::icons::Icon::Hourglass, 16, "")
-    ))
-}
 #[derive(Clone, Debug)]
 pub struct FunctionGroup {
     pub title: String,

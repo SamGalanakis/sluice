@@ -438,7 +438,9 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
 
 #[test]
 fn a_cards_timer_reads_in_its_two_largest_units() {
-    use sluice_web::views::step::{short_duration, spoken_duration};
+    use sluice_web::views::ui::{
+        duration_text as short_duration, duration_words as spoken_duration,
+    };
     for (seconds, shown, said) in [
         (0.4, "<1s", "under a second"),
         (45.9, "45s", "45 seconds"),
@@ -750,11 +752,14 @@ async fn the_index_counts_a_cancel_apart_from_a_failure() {
     let html = views::home::HomeView::new(&snapshot).body().unwrap();
     assert!(
         html.as_str()
-            .contains("broke</a> failed</span> · <span class=\"cancelled-words\">"),
+            .contains("broke</span></span></a> failed</span> · <span class=\"cancelled-words\">"),
         "{}",
         html.as_str()
     );
-    assert!(html.as_str().contains("pivoted</a> cancelled</span>"));
+    assert!(
+        html.as_str()
+            .contains("pivoted</span></span></a> cancelled</span>")
+    );
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             tx.sql().execute(

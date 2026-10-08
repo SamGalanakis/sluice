@@ -1,8 +1,8 @@
-<div id="unit-detail" class="unit-page" data-page-title="{{ unit.id }} · {{ project.name }} · sluice">
+<div id="unit-detail" class="unit-page" data-page-title="{{ tab }} · {{ project.name }} · sluice">
 <nav class="crumbs" aria-label="Breadcrumb"><a href="{{ project.href() }}">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, "")|safe }}{{ project.name }} plan</a></nav>
-<h1 class="unit-h">{% if unit.done %}{{ crate::views::home::glyph("succeeded")|safe }}{% endif %}<span>{{ unit.id }}</span></h1>
-<p class="meta unit-sum">{% if unit.done %}{{ unit.done_words() }}{% else %}{{ unit.steps.len() }} {% if unit.steps.len() == 1 %}step{% else %}steps{% endif %} · {{ unit.tally_words() }}{% endif %}</p>
+<h1 class="unit-h">{% if unit.done %}{{ crate::views::ui::glyph("succeeded")|safe }}{% endif %}<span>{{ unit.heading() }}</span></h1>{% if unit.titled() || !unit.recipe.is_empty() %}<p class="d-id">{% if unit.titled() %}<code>{{ unit.id }}</code>{% endif %}{% if !unit.recipe.is_empty() %}<span class="meta">{% if unit.titled() %} · {% endif %}from recipe <code>{{ unit.recipe }}</code></span>{% endif %}</p>{% endif %}
+<p class="meta unit-sum">{% if unit.done %}{{ unit.done_words() }}{% else %}{{ crate::views::ui::count(unit.steps.len(), "step", "steps") }} · {{ unit.tally_words() }}{% endif %}</p>{% if let Some(error) = view_error %}{{ crate::views::unit_view::broken(error)|safe }}{% endif %}{% if let Some(view) = view %}<section class="unit-view" aria-label="Summary">{{ view|safe }}</section>{% endif %}
 <sluice-board class="board" edges="{{ edges }}"><div class="plane" data-ignore><div class="boxes boxed"><div class="layer">{{ unit.body()?|safe }}</div></div><svg class="edges" aria-hidden="true" data-ignore-morph></svg></div></sluice-board>
-{% if !unit.last_message.is_empty() %}<section class="d-sec unit-last"><h2>Last message</h2><p class="meta"><span class="now-from">{{ unit.last_from }}</span> · {{ crate::views::ago_html(unit.changed)|safe }}</p><div class="md m-body">{{ unit.last_message_html()|safe }}</div></section>{% endif %}
+{% if !unit.last_message.is_empty() %}<section class="d-sec unit-last">{{ crate::views::ui::head(2, "Last message", None, "")|safe }}<p class="meta"><span class="now-from">{{ unit.last_from }}</span> · {{ crate::views::ui::ago(unit.changed)|safe }}</p><div class="md m-body">{{ unit.last_message_html()|safe }}</div></section>{% endif %}
 <script type="module" src="{{ js_url }}"></script>
 </div>

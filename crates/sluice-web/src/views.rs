@@ -14,6 +14,8 @@ pub mod icons;
 pub mod missing;
 pub mod step;
 pub mod threads;
+pub mod ui;
+pub mod unit_view;
 
 use askama::Template;
 use axum::{
@@ -130,7 +132,6 @@ impl Counts {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunningView {
     pub step: String,
-    pub title: String,
     pub started: String,
     /// Nothing written for longer than `quiet_after`: maybe stuck.
     pub quiet: bool,
@@ -142,23 +143,6 @@ pub struct RunningView {
     /// RFC 3339; "" when it has not. Activity counts it with its run's files.
     #[serde(default)]
     pub said: String,
-}
-impl RunningView {
-    pub fn link_name(&self) -> String {
-        let title = self
-            .title
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("")
-            .trim();
-        let title = crate::markdown::plain(title);
-        let short: String = title.chars().take(72).collect();
-        if short.is_empty() || short == self.step {
-            self.step.clone()
-        } else {
-            format!("{} {short}", self.step)
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -175,8 +159,18 @@ pub struct ProjectView {
     pub running: Vec<RunningView>,
     pub failed_steps: Vec<String>,
     pub cancelled_steps: Vec<String>,
+    /// How the index names its running, failed and cancelled steps (`ui::StepRef`), by id.
+    #[serde(default)]
+    pub names: std::collections::BTreeMap<String, ui::StepRef>,
 }
 impl ProjectView {
+    /// How a page names one of its listed steps: its title and id, or its id alone.
+    pub fn step_ref(&self, id: &str) -> ui::StepRef {
+        self.names.get(id).cloned().unwrap_or_else(|| ui::StepRef {
+            id: id.to_owned(),
+            ..Default::default()
+        })
+    }
     pub fn href(&self) -> String {
         format!("/projects/id/{}", self.id)
     }
@@ -558,37 +552,13 @@ impl NavView {
     }
 }
 
-/// A stored time as every page draws it before its script reads it: "2026-10-07 20:47 UTC".
-/// Nothing renders a raw RFC 3339 time; `nav.js` turns a `<time>` into the page's words.
-pub fn when(at: &str) -> String {
-    match (at.get(..10), at.get(10..11), at.get(11..16)) {
-        (Some(day), Some("T"), Some(time)) => format!("{day} {time} UTC"),
-        _ => at.to_owned(),
-    }
+/// The home a read connection's database lives in.
+pub fn home_of(c: &rusqlite::Connection) -> std::path::PathBuf {
+    c.path()
+        .and_then(|p| std::path::Path::new(p).parent())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default()
 }
-/// A past time as a page says it: "12m ago", "3d 12h ago" once its script reads it, the UTC
-/// day and minute before (and in its title, always).
-pub fn ago_html(at: &str) -> TrustedHtml {
-    time_html(at, "data-ago")
-}
-/// How long since a time, ticking: "45s", "12m", "2h 14m", "3d 12h".
-pub fn since_html(at: &str) -> TrustedHtml {
-    time_html(at, "data-since")
-}
-fn time_html(at: &str, mode: &str) -> TrustedHtml {
-    let esc = |s: &str| {
-        s.replace('&', "&amp;")
-            .replace('"', "&quot;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    };
-    let shown = esc(&when(at));
-    TrustedHtml::owned(format!(
-        "<time {mode}=\"{at}\" datetime=\"{at}\" title=\"{shown}\">{shown}</time>",
-        at = esc(at)
-    ))
-}
-
 /// Seconds since the epoch as the store writes a time: "2026-10-07T20:47:05Z".
 pub fn rfc3339(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
@@ -788,6 +758,7 @@ pub fn load_snapshot(
             running: vec![],
             failed_steps: vec![],
             cancelled_steps: vec![],
+            names: Default::default(),
         };
         let mut counts = c.prepare_cached("SELECT status,count(*),sum(paused IS NOT NULL AND paused <> 'false') FROM steps WHERE project_id=?1 GROUP BY status")?;
         let mut count_rows = counts.query([&raw])?;
@@ -805,13 +776,13 @@ pub fn load_snapshot(
                 _ => {}
             }
         }
-        let mut steps = c.prepare_cached("SELECT step_id,coalesce(json_extract(declaration,'$.doc'),step_id),status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]'),max(coalesce(progress_at,''),coalesce((SELECT at FROM messages m WHERE m.project_id=steps.project_id AND m.thread='step-'||steps.step_id AND m.\"from\"=steps.step_id ORDER BY m.id DESC LIMIT 1),'')) FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
+        let mut steps = c.prepare_cached("SELECT step_id,status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]'),max(coalesce(progress_at,''),coalesce((SELECT at FROM messages m WHERE m.project_id=steps.project_id AND m.thread='step-'||steps.step_id AND m.\"from\"=steps.step_id ORDER BY m.id DESC LIMIT 1),'')) FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
         // a failed step's error says whether the owner cancelled it: counted apart
         let mut step_rows = steps.query([&raw])?;
         while let Some(r) = step_rows.next()? {
-            let status: String = r.get(2)?;
+            let status: String = r.get(1)?;
             if status == "failed" {
-                let error: Option<String> = r.get(5)?;
+                let error: Option<String> = r.get(4)?;
                 let cancelled = error.as_deref().is_some_and(failure::stored_is_cancel);
                 if cancelled {
                     view.counts.failed -= 1;
@@ -823,17 +794,34 @@ pub fn load_snapshot(
             } else {
                 view.running.push(RunningView {
                     step: r.get(0)?,
-                    title: r.get(1)?,
-                    started: r.get(3)?,
+                    started: r.get(2)?,
                     quiet: false,
                     quiet_after: quiet_after(
-                        &serde_json::from_str::<Vec<String>>(&r.get::<_, String>(6)?)
+                        &serde_json::from_str::<Vec<String>>(&r.get::<_, String>(5)?)
                             .unwrap_or_default(),
                     ),
-                    run_id: r.get(4)?,
+                    run_id: r.get(3)?,
                     activity: None,
-                    said: r.get(7)?,
+                    said: r.get(6)?,
                 });
+            }
+        }
+        // the steps the index lists, named (`sluice_model::naming`)
+        if !(view.running.is_empty()
+            && view.failed_steps.is_empty()
+            && view.cancelled_steps.is_empty())
+        {
+            let names = sluice_runtime::naming::for_project(c, &home_of(c), id)?;
+            for step in view
+                .running
+                .iter()
+                .map(|r| r.step.clone())
+                .chain(view.failed_steps.iter().cloned())
+                .chain(view.cancelled_steps.iter().cloned())
+                .collect::<Vec<_>>()
+            {
+                let named = ui::StepRef::new(&step, names.naming.step(&step));
+                view.names.insert(step, named);
             }
         }
         // The project's last record, by its index: records are appended in time order.

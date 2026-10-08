@@ -330,7 +330,7 @@ failed fill Lucide's ring with the status colour and cut the mark in the card co
 
 Two faces from cdn.jsdelivr.net (Fontsource), the system sans without them. **Archivo
 Variable** (weight and width axes) is the display voice: the wordmark (800, 22px), page titles
-(800, 28/34, 24/30 on a phone), the step's id on its page (800, 22/26), the board's title (750,
+(800, 28/34, 24/30 on a phone), a step's or unit's title on its page (800, 22/28), the board's title (750,
 18/24), a project's name on the index, a question's title (750, 17/23) and every step id on the
 board (600, 14.5/20, normal width). **Public Sans Variable** is the text face: 15/22 body, 14/20
 small, 13/18 meta and labels. Every section head on every page is one style: Public Sans at
@@ -338,7 +338,15 @@ small, 13/18 meta and labels. Every section head on every page is one style: Pub
 ink, tabular, and left out at zero (the empty line under the head says it). Prose holds one
 measure, `--measure` (64ch of the body face, about 72 characters a line): descriptions, docs,
 failures, help lines, notes, message bodies and values. The system monospace is for data only: errors, fn names, values,
-types, run ids, the log's seq and kind. Numerals are tabular.
+types, run ids, the log's seq and kind, and a step's or unit's id beside its title. Numerals are tabular.
+
+A step is named by its title, not its id (`views::ui::StepRef`): the title in the text face at
+500 in ink, its stage before it in muted ink ("land ·"), its id after it in data mono at 12.5px,
+muted and never broken. A step with no title of its own shows its id alone, in the title's
+place and weight. On its own page and its unit's the title is the `h1` (the stage muted inside
+it) and the id is a line under it in data mono; the board's cards stay ids (a card is a step's
+handle), with a solo unit's title over its card in 13px meta (two lines at most) and a unit's
+title in its box label, 600 14/19, two lines at most, over its id.
 
 ### Named Rules
 **The Meta Voice Rule.** What a run says about itself (times, counts, captions, labels) is 13px
@@ -408,11 +416,11 @@ running, then idle (by name within each). Each is a row: its status glyph, icon 
 link), when it last changed; for one with failures or cancels a sentence, "Stopped: a, b failed
 · c cancelled · n paused" (each step a link; "Stopped:" only while nothing runs; the failures
 in ink at 500, the cancels after them in muted ink); its description's opening; a progress bar
-with "n of m"; then either its running steps (glyph, the step's id at 600 and its doc after it
-in muted ink, up to two lines, its live time and a gold "quiet" tag once a run has written
+with "n of m"; then either its running steps (glyph, the step named as every page names it,
+its stage, title and id, the title cut at 96 characters, its live time and a gold "quiet" tag once a run has written
 nothing for its cadence (its plan's `cadence:` tag, else 2 hours; one threshold for every page):
 "quiet 2h 42m", or "quiet" alone when it has written nothing since it started; on a narrow row
-the time and tag take the next line, never squeezing the id) or one line on what
+the time and tag take the next line, never squeezing the title) or one line on what
 stops it ("Paused.", "Stopped: nothing is running."). Projects with no steps fold under "No
 steps yet (n)", the archived ones under "Archived (n)". While nothing holds the
 scheduler lease a box heads the list and outweighs every tag under it: a hairline of the
@@ -449,10 +457,27 @@ Top down:
    the stopped units, then the running, then the waiting, each band laid out by dependency
    depth; Plan order draws every unit not done in one band by depth, in the plan's order where
    depth ties. Either way every done unit is on one shelf at the end. The search keeps the
-   steps whose id, doc or unit id holds every word of it (any case, any order); a unit with
+   steps whose id, title, doc or unit id holds every word of it (any case, any order); a unit with
    none hides, and an empty board says "Clear the search to see every unit." A plan with no
    steps has no tools: it says "The plan has no steps yet."
-3. **The board**: the plan as a graph that reads top down with no key. Every mark explains
+3. **Lane matrices**, before the bands: a recipe with a view (SPEC §13) draws its units that
+   are not done as one table on the box fill with the 14px corner, headed like a band label
+   with the recipe's name in ink at 600 and its units counted ("3 units · 1 failed · 1
+   running"). A row a unit: the first column its status glyph, its title (600, ink, a link to
+   its unit page, two lines at most), its id in data mono and any alarm under it; then the
+   view's summary in 13/18 (its parts in a line: a param at 500 in ink, an output in data mono,
+   a message clamped to two lines); then a column per stage, headed by the stage in 12.5px meta,
+   each cell that stage's card as a compact pill (28px, glyph, caption and timer, no id: the
+   column says it), centred. Rows that need someone come first (a failed, cancelled, stale or
+   quiet step), then running, then waiting; rows part by a hairline. The matrix keeps a 28px
+   left gutter: a line from or to a row leaves and enters it there, runs down the gutter past
+   the rows between and turns into the row it means, so it never crosses another row's cells;
+   lines inside a row are not drawn. A view that does not check is one line above the table in
+   the attention colour with `triangle-alert`, and the table draws without the summary column.
+   At 720px and narrower a row is a block: the glyph and title, the id, then the stages as a
+   lane string in 13px (`fork✓ work▶ land·`, each a 44px-tall link to its step), then the
+   summary; the stage columns and head are gone.
+4. **The board**: the plan as a graph that reads top down with no key. Every mark explains
    itself: a card is a step (its glyph and id), a box is a unit of several steps, a line with
    an arrowhead is "this, then that", a quiet label names each band.
    - **Bands**: under Live first, "Stopped" (a step failed or stale, or held up by one), then "Running" (a unit with a step running or outside), then "Waiting" (the rest not
@@ -495,7 +520,7 @@ Top down:
      else "No units match this view.", at the column's left edge.
    The plan pane is a size container named `plan`: what lays out the plan keys off the pane's
    width, which the splitter changes, never the window's.
-4. **Lines** (the `<sluice-board>` element draws them in an SVG over the measured cards, from
+5. **Lines** (the `<sluice-board>` element draws them in an SVG over the measured cards, from
    the relations the server marks `line`): within a unit's box every relation; between units
    each wait, from a source that has not yet succeeded or been skipped to a step the view
    shows in a unit not done. A satisfied wait is history, so it has no line and no words; the
@@ -526,7 +551,7 @@ Top down:
    Below 720px there are no lines: the layers stack in one column, a one-step unit's card at
    the left with its waits under it (under its glyph's column), a box across the width
    stacking its lanes, each reading straight down.
-5. **Under the board**: Result (each plan output's value, or "No value yet.") and Plan inputs
+6. **Under the board**: Result (each plan output's value, or "No value yet.") and Plan inputs
    (value or "No value yet.", and the input's doc).
 
 ### The project's board (beside the plan)
@@ -708,8 +733,10 @@ The step reads top down:
   secondary fill, inside the column (no bleed past its edges).
 
 ### Unit (`/projects/id/<p>/units/<u>`)
-A way back ("← <project> plan"), the unit's id as the page's `h1` (with the success glyph when
-done) and a sum in meta ("6 steps · 1 running · 4 pending · 1 succeeded"); its box as the board
+A way back ("← <project> plan"), the unit's title as the page's `h1` (with the success glyph when
+done), its id in data mono under it with "· from recipe `lane`" in meta when a recipe made it,
+then its recipe's view drawn whole in a card-filled block at the measure (its parts in a
+row, a column stack as a grid), and a sum in meta ("6 steps · 1 running · 4 pending · 1 succeeded"); its box as the board
 draws it, with the lines inside it, without its label (the h1 names it), a done unit open to
 its cards; each card that waits on another unit says it in words ("Waits for l-a1 (running),
 not in this view"); "Last message": who sent it and when, then its body as markdown at the
@@ -856,6 +883,12 @@ comma: the card's parts are flex items, which the name already parts with a spac
   wears the blue ring 2px outside its border; the keyboard's focus is a 2px ink ring on the
   pill itself, no gap, so a card the drawer hands the focus back to never reads as running or
   open. "Next" (a strong hairline) is only ever a pending step whose gates are met.
+- **Shared components** (`views::ui`): every page draws a status (`status`: glyph and word),
+  a time (`ago`, `since`, `at`), a duration (`duration`: the short form, its words for a
+  screen reader), a count (`count`, `tally`: "6 steps · 1 running", a zero part left out), a
+  section head (`head`), a facts row (`field`), a step's name (`StepRef`) and a tag (`tag`,
+  `tag_link`) through one function each, so a change to one reads everywhere. A template never
+  hand-builds these.
 - **Tag** (`.tag`): a small fact set apart: 12px text at 500, a strong hairline and the 5px
   corner; gold (`attn`) for "quiet" and "n awaiting reply", muted for a closed or answered
   state.

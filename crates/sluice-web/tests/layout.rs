@@ -22,6 +22,7 @@ fn fixture() -> DashboardSnapshot {
             running: vec![],
             failed_steps: vec!["broken".into()],
             cancelled_steps: vec![],
+            names: Default::default(),
         }],
         inbox: 2,
         notes: 0,
@@ -174,11 +175,12 @@ async fn runner_line_follows_the_scheduler_lease_and_is_versioned() {
 }
 
 #[test]
-fn home_running_link_has_a_short_name_and_the_full_doc_as_description() {
+fn home_running_link_has_a_short_name_and_the_full_title_as_description() {
     let mut snapshot = fixture();
+    let title =
+        "Watch main tests and say on the thread which target went red, with its log".repeat(2);
     snapshot.projects[0].running.push(RunningView {
         step: "watch-main-tests".into(),
-        title: "Watch main tests\n\nA long explanation that should be a description. ".repeat(5),
         started: String::new(),
         quiet: false,
         quiet_after: QUIET_AFTER,
@@ -186,13 +188,31 @@ fn home_running_link_has_a_short_name_and_the_full_doc_as_description() {
         activity: None,
         said: String::new(),
     });
+    snapshot.projects[0].names.insert(
+        "watch-main-tests".into(),
+        sluice_web::views::ui::StepRef {
+            id: "watch-main-tests".into(),
+            title: title.clone(),
+            stage: String::new(),
+        },
+    );
     let html = HomeView::new(&snapshot).body().unwrap();
+    // the name starts with the words the link shows, cut short, then the id
+    let label = html
+        .as_str()
+        .split("aria-label=\"")
+        .find(|s| s.starts_with("Watch main tests"))
+        .map(|s| &s[..s.find('"').unwrap()])
+        .unwrap_or_else(|| panic!("{}", html.as_str()));
+    assert!(label.ends_with(" watch-main-tests"), "{label}");
     assert!(
-        html.as_str()
-            .contains("aria-label=\"watch-main-tests Watch main tests\"")
+        label.chars().count() <= 72 + 1 + "watch-main-tests".len(),
+        "{label}"
     );
     assert!(
         html.as_str()
-            .contains("aria-description=\"Watch main tests")
+            .contains(&format!("aria-description=\"{title}\"")),
+        "{}",
+        html.as_str()
     );
 }

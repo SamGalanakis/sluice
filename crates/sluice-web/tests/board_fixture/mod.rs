@@ -268,3 +268,101 @@ impl Fixture {
         )
     }
 }
+
+/// The `lane` recipe the matrix tests write: three stages, a title from the ticket and the
+/// spec file's heading, and a view of the ticket and the unit's last message.
+pub fn lane_recipe() -> Value {
+    json!({"name":"lane","params":{"ticket":"string","spec":"string"},
+        "title":"{ticket}: {spec}",
+        "view":"root = Stack([Param(\"ticket\"), LastMessage(80)], \"row\")",
+        "steps":{
+            "{unit}-fork":{"run":"custom.open"},
+            "{unit}-work":{"run":"custom.open","in":{"ticket":{"default":"{ticket}"},"spec":{"file":"{spec}"}},"after":["{unit}-fork"]},
+            "{unit}-land":{"run":"custom.open","after":["{unit}-work"]}}})
+}
+impl Fixture {
+    /// A project `titled` whose recipe `lane` has a view: lanes l1 (running), l2 (failed) and
+    /// l3 (waiting, its fork after l2's land), a unit `report` after l1's land, a step with a
+    /// doc, one with a literal prompt and one with neither; and the recipe `rough`, whose view
+    /// does not check, with its unit r1.
+    pub async fn titled(&self) -> ProjectId {
+        let specs = self._home.path().join("specs");
+        std::fs::create_dir_all(&specs).unwrap();
+        let mut steps = serde_json::Map::new();
+        for (unit, ticket, heading, extra_after) in [
+            ("l1", "FIG-1", "Fix the cron driver", None),
+            ("l2", "FIG-2", "Stop the parser leak", None),
+            ("l3", "FIG-3", "Ship the docs", Some("l2-land")),
+        ] {
+            let spec = specs.join(format!("{unit}.md"));
+            std::fs::write(&spec, format!("Intro line\n\n# {heading}\n\nThe body.")).unwrap();
+            let tags = json!([format!("unit:{unit}")]);
+            let mut fork = json!({"run":"custom.open","tags":tags});
+            if let Some(after) = extra_after {
+                fork["after"] = json!([after]);
+            }
+            steps.insert(format!("{unit}-fork"), fork);
+            steps.insert(
+                format!("{unit}-work"),
+                json!({"run":"custom.open","tags":tags,"after":[format!("{unit}-fork")],
+                "in":{"ticket":{"default":ticket},"spec":{"file":spec.to_str().unwrap()}}}),
+            );
+            steps.insert(
+                format!("{unit}-land"),
+                json!({"run":"custom.open","tags":tags,"after":[format!("{unit}-work")]}),
+            );
+        }
+        steps.insert(
+            "report".into(),
+            json!({"run":"custom.open","after":["l1-land"]}),
+        );
+        steps.insert(
+            "watch".into(),
+            json!({"run":"custom.open","doc":"Watches main for red\n\nIt says so on the thread."}),
+        );
+        steps.insert(
+            "bare".into(),
+            json!({"run":"custom.open","in":{"spec":{"default":"# Bare heading\nbody"}}}),
+        );
+        steps.insert("plain".into(), json!({"run":"custom.open"}));
+        steps.insert(
+            "r1-only".into(),
+            json!({"run":"custom.open","tags":["unit:r1"]}),
+        );
+        let id = self
+            .project(
+                "titled",
+                json!({"steps": steps}),
+                &[
+                    ("l1-fork", "succeeded"),
+                    ("l1-work", "running"),
+                    ("l2-fork", "succeeded"),
+                    ("l2-work", "failed"),
+                    ("watch", "running"),
+                ],
+            )
+            .await;
+        let recipes = self
+            ._home
+            .path()
+            .join("projects")
+            .join(id.to_string())
+            .join("recipes");
+        std::fs::create_dir_all(&recipes).unwrap();
+        std::fs::write(
+            recipes.join("lane.json"),
+            serde_json::to_vec(&lane_recipe()).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            recipes.join("rough.json"),
+            serde_json::to_vec(
+                &json!({"name":"rough","view":"root = Stack([Output(\"nope\", \"x\")])",
+                "steps":{"{unit}-only":{"run":"custom.open"}}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        id
+    }
+}

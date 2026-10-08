@@ -297,13 +297,6 @@ impl ProjectSettingsView {
             .and_then(|p| sluice_model::openui::check_board(p).ok())
             .is_some_and(|b| b.has_doc())
     }
-    /// The UTC day and minute of a stored time, as the page shows it without script.
-    pub fn minute(at: &str) -> String {
-        match (at.get(..10), at.get(11..16)) {
-            (Some(day), Some(time)) => format!("{day} {time} UTC"),
-            _ => at.to_owned(),
-        }
-    }
     pub fn path(&self) -> String {
         format!("/projects/id/{}/settings", self.project.project_id)
     }

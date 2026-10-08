@@ -241,6 +241,17 @@ pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama
 #[derive(Clone, Debug, Serialize)]
 pub struct UnitView {
     pub id: UnitName,
+    /// Its title (`sluice_model::naming`): "" when it has none and its id names it.
+    pub title: String,
+    /// The recipe it was made from, its stages and the params its steps give back ("" and
+    /// empty when no recipe matches it).
+    pub recipe: String,
+    pub stages: Vec<String>,
+    pub params: indexmap::IndexMap<String, String>,
+    /// Its recipe has a view: while not done it is a row of its recipe's lane matrix.
+    pub matrix: bool,
+    /// Its place in the plan's order.
+    pub pos: usize,
     pub tagged: bool,
     pub done: bool,
     pub settled: bool,
@@ -268,6 +279,8 @@ pub struct Band<'a> {
 }
 /// The board as drawn: the bands of live and pending units, then the done units on one shelf.
 pub struct Layout<'a> {
+    /// Each recipe with a view: its live units as one lane matrix, before the bands.
+    pub matrices: Vec<Matrix<'a>>,
     pub bands: Vec<Band<'a>>,
     /// The done units the shelf draws, the latest finished first: all of them under Show: Done
     /// or a search, else the latest `SHELF`.
@@ -385,16 +398,7 @@ impl UnitView {
                 } else {
                     s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str())
                 };
-                let mark = match s.status.as_str() {
-                    "succeeded" => '✓',
-                    "running" => '▶',
-                    "failed" => '✗',
-                    "stale" => '~',
-                    "skipped" => '–',
-                    _ if s.paused => '‖',
-                    _ => '·',
-                };
-                format!("{short}{mark}")
+                format!("{short}{}", lane_mark(s))
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -420,16 +424,103 @@ impl UnitView {
     /// The one line's words for a screen reader: "6 steps done" ("…, 1 skipped").
     pub fn done_words(&self) -> String {
         let skipped = self.steps.iter().filter(|s| s.status == "skipped").count();
-        let n = self.steps.len();
-        let steps = if n == 1 { "step" } else { "steps" };
+        let steps = super::ui::count(self.steps.len(), "step", "steps");
         if skipped > 0 {
-            format!("{n} {steps} done, {skipped} skipped")
+            format!("{steps} done, {skipped} skipped")
         } else {
-            format!("{n} {steps} done")
+            format!("{steps} done")
         }
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&UnitTemplate { unit: self })
+    }
+    /// It has a title apart from its id.
+    pub fn titled(&self) -> bool {
+        !self.title.is_empty() && self.title != self.id.as_str()
+    }
+    /// Its heading's words: its title, or its id.
+    pub fn heading(&self) -> &str {
+        if self.title.is_empty() {
+            self.id.as_str()
+        } else {
+            &self.title
+        }
+    }
+    pub fn href(&self, project: &ProjectId) -> String {
+        format!("/projects/id/{project}/units/{}", self.id)
+    }
+    /// Its step at `stage` ("land"), when it has one.
+    pub fn stage_step(&self, stage: &str) -> Option<&StepView> {
+        self.steps.iter().find(|s| s.stage == stage)
+    }
+    /// The mark that stands for the whole unit: its step that most needs someone.
+    pub fn mark(&self) -> &str {
+        let order = [
+            "failed",
+            "cancelled",
+            "stale",
+            "running",
+            "external",
+            "paused",
+            "pending",
+            "skipped",
+            "manual",
+            "succeeded",
+        ];
+        order
+            .into_iter()
+            .find(|m| self.steps.iter().any(|s| s.display_mark() == *m))
+            .unwrap_or("pending")
+    }
+    /// Where a lane matrix puts its row: 0 needs attention (a step failed, cancelled or stale,
+    /// or a quiet run), 1 running, 2 waiting.
+    pub fn row_rank(&self) -> u8 {
+        if self.steps.iter().any(|s| {
+            s.is_quiet() || matches!(s.status.as_str(), "failed" | "stale")
+        }) {
+            0
+        } else if self
+            .steps
+            .iter()
+            .any(|s| s.status == "running" || s.mark == "external")
+        {
+            1
+        } else {
+            2
+        }
+    }
+    /// Every wait of its steps on other units, once each, and the first step that waits.
+    pub fn all_waits(&self) -> Option<(&StepView, Vec<Wait>)> {
+        let mut out: Vec<Wait> = vec![];
+        let mut first = None;
+        for step in &self.steps {
+            for wait in self.waits_of(step) {
+                first.get_or_insert(step);
+                if !out.iter().any(|w| w.key == wait.key) {
+                    out.push(wait.clone());
+                }
+            }
+        }
+        first.map(|step| (step, out))
+    }
+    /// Its stages as a lane string of links (a phone's matrix row): each stage's name and mark,
+    /// opening its step.
+    pub fn lane_links_html(&self) -> String {
+        self.steps
+            .iter()
+            .map(|s| {
+                format!(
+                    "<a href=\"{}\" data-opens=\"{}\" aria-label=\"{} {}\">{}<span class=\"lm\">{}</span></a>",
+                    s.href(),
+                    s.id,
+                    s.id,
+                    super::ui::status_word(s.display_mark()),
+                    super::ui::esc(if s.stage.is_empty() { s.id.as_str() } else { &s.stage }),
+                    lane_mark(s)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
     /// The unit's own page: a way back to the plan, its id as the page's heading, its cards
     /// (a done unit open), what it waits on and its last message.
@@ -437,6 +528,7 @@ impl UnitView {
         &self,
         project: &super::ProjectView,
         edges: &str,
+        recipe: Option<&sluice_model::recipe::Recipe>,
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(path = "unit_page.html")]
@@ -445,12 +537,20 @@ impl UnitView {
             project: &'a super::ProjectView,
             edges: &'a str,
             js_url: String,
+            tab: String,
+            view: Option<TrustedHtml>,
+            view_error: Option<&'a str>,
         }
         TrustedHtml::from_template(&UnitPage {
             unit: self,
             project,
             edges,
             js_url: super::asset_url("sluice.js"),
+            tab: sluice_model::naming::cut(self.heading(), 48),
+            view: recipe
+                .and_then(|r| r.view())
+                .map(|root| super::unit_view::draw(root, self, false)),
+            view_error: recipe.and_then(|r| r.view_error()),
         })
     }
     /// Its last message, drawn as message bodies are.
@@ -500,6 +600,69 @@ impl UnitView {
         }
     }
 }
+/// A step's mark in a lane string: ✓ succeeded, ▶ running, ✗ failed, ■ cancelled, ~ stale,
+/// – skipped, ‖ paused, · anything else.
+fn lane_mark(s: &StepView) -> char {
+    match s.status.as_str() {
+        "succeeded" => '✓',
+        "running" => '▶',
+        "failed" if s.cancelled() => '■',
+        "failed" => '✗',
+        "stale" => '~',
+        "skipped" => '–',
+        _ if s.paused => '‖',
+        _ => '·',
+    }
+}
+/// One recipe's live units as a lane matrix: a row a unit, a column a stage; its rows the ones
+/// that need attention first, then running, then waiting, plan order within each.
+pub struct Matrix<'a> {
+    pub recipe: String,
+    pub stages: Vec<String>,
+    pub rows: Vec<&'a UnitView>,
+    pub view: Option<&'a sluice_model::openui::Component>,
+    pub view_error: Option<&'a str>,
+}
+impl Matrix<'_> {
+    /// "14 units · 1 failed · 3 quiet · 10 running": its rows counted by how each reads.
+    pub fn tally(&self) -> String {
+        let mut parts = vec![(self.rows.len(), if self.rows.len() == 1 { "unit" } else { "units" })];
+        for (word, test) in [
+            ("failed", "failed"),
+            ("cancelled", "cancelled"),
+            ("stale", "stale"),
+        ] {
+            parts.push((self.rows.iter().filter(|u| u.mark() == test).count(), word));
+        }
+        let quiet = self.rows.iter().filter(|u| u.steps.iter().any(StepView::is_quiet)).count();
+        let running = self
+            .rows
+            .iter()
+            .filter(|u| u.mark() == "running" && !u.steps.iter().any(StepView::is_quiet))
+            .count();
+        parts.push((quiet, "quiet"));
+        parts.push((running, "running"));
+        let waiting = self.rows.len() - parts[1..].iter().map(|(n, _)| n).sum::<usize>();
+        parts.push((waiting, "waiting"));
+        super::ui::tally(&parts)
+    }
+    /// A row's summary: its recipe's view drawn for the unit.
+    pub fn summary(&self, unit: &UnitView) -> TrustedHtml {
+        match self.view {
+            Some(root) => super::unit_view::draw(root, unit, true),
+            None => TrustedHtml::owned(String::new()),
+        }
+    }
+    pub fn html(&self, project: &ProjectId) -> Result<TrustedHtml, askama::Error> {
+        #[derive(Template)]
+        #[template(path = "matrix.html")]
+        struct MatrixTemplate<'a> {
+            m: &'a Matrix<'a>,
+            project: &'a ProjectId,
+        }
+        TrustedHtml::from_template(&MatrixTemplate { m: self, project })
+    }
+}
 /// What the board needs of the whole plan, whatever the view shows: each step's unit and
 /// status, which units are done, and which units each unit comes after.
 #[derive(Clone, Debug, Default)]
@@ -545,6 +708,9 @@ pub struct ProjectView {
     pub matched: usize,
     /// The project's board, drawn beside the plan (`docs("board")`), when it has one.
     pub panel: Option<super::panel::Panel>,
+    /// Its steps' and units' names, and the recipes they came from.
+    #[serde(skip)]
+    pub names: std::sync::Arc<sluice_runtime::naming::ProjectNaming>,
 }
 impl ProjectView {
     pub fn new(
@@ -593,6 +759,12 @@ impl ProjectView {
                 }
                 UnitView {
                     id: unit.name.clone(),
+                    title: String::new(),
+                    recipe: String::new(),
+                    stages: vec![],
+                    params: indexmap::IndexMap::new(),
+                    matrix: false,
+                    pos: 0,
                     tagged: unit.tagged,
                     done: unit.done(state),
                     settled: unit.settled(plan, state),
@@ -607,6 +779,10 @@ impl ProjectView {
                 }
             })
             .collect::<Vec<_>>();
+        let mut units = units;
+        for (pos, unit) in units.iter_mut().enumerate() {
+            unit.pos = pos;
+        }
         let mut facts = PlanFacts::default();
         for unit in &units {
             if unit.done {
@@ -681,9 +857,34 @@ impl ProjectView {
             q: String::new(),
             matched: 0,
             panel: None,
+            names: Default::default(),
         };
         view.settle();
         view
+    }
+    /// Name its steps and units (`sluice_runtime::naming`): titles, stages, recipes and their
+    /// params; a unit whose recipe has a view becomes a row of that recipe's lane matrix.
+    pub fn name(&mut self, names: std::sync::Arc<sluice_runtime::naming::ProjectNaming>) {
+        for unit in &mut self.units {
+            let id = unit.id.to_string();
+            if let Some(named) = names.naming.unit(&id) {
+                unit.title = named.title.clone();
+                unit.recipe = named.recipe.clone();
+                unit.stages = named.stages.clone();
+                unit.params = named.params.clone();
+            }
+            unit.matrix = names
+                .recipe_of(&id)
+                .is_some_and(|r| r.view_source().is_some());
+            for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
+                if let Some(named) = names.naming.step(step.id.as_str()) {
+                    step.title = named.title.clone();
+                    step.stage = named.stage.clone();
+                }
+            }
+        }
+        self.names = names;
+        self.settle();
     }
     /// Mark the relations the board draws as lines, and say on each step what it still waits
     /// for in other units. Within a box every relation is a line. Between units a line is a
@@ -713,9 +914,21 @@ impl ProjectView {
             _ => false,
         };
         // between units, a line is a wait: from a source not through yet to a step that waits
+        // a matrix row's stages are its columns: the order inside it needs no line
+        let rows: BTreeSet<String> = self
+            .units
+            .iter()
+            .filter(|u| u.matrix && !u.done)
+            .map(|u| u.id.to_string())
+            .collect();
         for relation in &mut self.relations {
             let (from, to) = (relation.from.key(), relation.to.key());
-            relation.line = !relation.cross || (live(&from) && live(&to) && !through(&from));
+            let in_row = !relation.cross
+                && facts
+                    .unit_of(&from)
+                    .is_some_and(|unit| rows.contains(&unit));
+            relation.line = !in_row
+                && (!relation.cross || (live(&from) && live(&to) && !through(&from)));
         }
         for unit in &mut self.units {
             unit.waits.clear();
@@ -777,19 +990,49 @@ impl ProjectView {
     /// units it follows (so lines run down and seldom cross), ties in the view's order. Every
     /// done unit is on one shelf at the end.
     pub fn layout(&self) -> Layout<'_> {
+        let in_matrix = |u: &UnitView| u.matrix && !u.done;
+        let mut matrices: Vec<Matrix<'_>> = vec![];
+        let mut by_pos: Vec<&UnitView> = self.units.iter().filter(|u| in_matrix(u)).collect();
+        by_pos.sort_by_key(|u| u.pos);
+        for unit in by_pos {
+            match matrices.iter_mut().find(|m| m.recipe == unit.recipe) {
+                Some(m) => m.rows.push(unit),
+                None => {
+                    let recipe = self.names.recipes.get(&unit.recipe);
+                    matrices.push(Matrix {
+                        recipe: unit.recipe.clone(),
+                        stages: unit.stages.clone(),
+                        rows: vec![unit],
+                        view: recipe.and_then(|r| r.view()),
+                        view_error: recipe.and_then(|r| r.view_error()),
+                    });
+                }
+            }
+        }
+        for m in &mut matrices {
+            m.rows.sort_by_key(|u| (u.row_rank(), u.pos));
+        }
         let bands: Vec<(&'static str, Vec<&UnitView>)> = if self.order == "live" {
             [("Stopped", 1), ("Running", 0), ("Waiting", 2)]
                 .into_iter()
                 .map(|(label, band)| {
-                    let units = self.units.iter().filter(|u| u.band() == band).collect();
+                    let units = self
+                        .units
+                        .iter()
+                        .filter(|u| u.band() == band && !in_matrix(u))
+                        .collect();
                     (label, units)
                 })
                 .collect()
         } else {
-            vec![("", self.units.iter().filter(|u| !u.done).collect())]
+            vec![(
+                "",
+                self.units.iter().filter(|u| !u.done && !in_matrix(u)).collect(),
+            )]
         };
         let mut placed = BTreeMap::new();
         Layout {
+            matrices,
             bands: bands
                 .into_iter()
                 .filter(|(_, units)| !units.is_empty())
@@ -936,6 +1179,60 @@ impl ProjectView {
             _ => "No units match this view.",
         }
     }
+    /// The summary line's counts: "1139 steps · 1077 succeeded · 14 running".
+    pub fn summary_counts(&self) -> String {
+        let c = &self.project.counts;
+        let mut words = format!(
+            "{} · {} succeeded",
+            super::ui::count(c.total(), "step", "steps"),
+            c.succeeded
+        );
+        if c.running > 0 {
+            words.push_str(&format!(" · {} running", c.running));
+        }
+        words
+    }
+    /// The summary line's tags, each leading to Show: Attention: failed, cancelled, quiet; and
+    /// Paused.
+    pub fn summary_tags(&self) -> TrustedHtml {
+        use super::ui::{glyph, quiet_glyph, tag, tag_link};
+        let c = &self.project.counts;
+        let href = self.attention_href();
+        let mut out = String::new();
+        if c.failed > 0 {
+            out.push_str(&tag_link(&href, &format!("{} failed", c.failed), "failed", Some(glyph("failed"))).0);
+        }
+        if c.cancelled > 0 {
+            out.push_str(&tag_link(&href, &format!("{} cancelled", c.cancelled), "", Some(glyph("cancelled"))).0);
+        }
+        let quiet = self.project.quiet();
+        if quiet > 0 {
+            out.push_str(
+                &tag_link(&href, &format!("{quiet} quiet"), "attn", Some(quiet_glyph()))
+                    .0
+                    .replacen(
+                        "<a ",
+                        "<a title=\"Running, and nothing written for 2 hours (or past its cadence)\" ",
+                        1,
+                    ),
+            );
+        }
+        if self.project.paused {
+            out.push_str(&tag("Paused", "", Some(glyph("paused"))).0);
+        }
+        TrustedHtml::owned(out)
+    }
+    /// What the search found: "12 steps match “land”", "No step matches “x”."
+    pub fn match_words(&self) -> String {
+        match self.matched {
+            0 => format!("No step matches “{}”.", self.q),
+            n => format!(
+                "{} “{}”.",
+                super::ui::count(n, "step matches", "steps match"),
+                self.q
+            ),
+        }
+    }
     /// The board's Attention view, in the order shown: where a summary's failed, cancelled and
     /// quiet tags lead.
     pub fn attention_href(&self) -> String {
@@ -979,10 +1276,15 @@ impl ProjectView {
     /// The lines inside one unit, for its own page.
     pub fn unit_edges_json(&self, unit: &UnitView) -> String {
         let inside = |key: &str| self.facts.unit_of(key).is_some_and(|u| u == unit.id.as_str());
-        let relations: Vec<&Relation> = self
+        // on its own page a unit is its box: every relation inside it is a line, a lane's too
+        let relations: Vec<Relation> = self
             .relations
             .iter()
             .filter(|r| inside(&r.from.key()) && inside(&r.to.key()))
+            .map(|r| Relation {
+                line: true,
+                ..r.clone()
+            })
             .collect();
         serde_json::to_string(&relations).expect("typed relations serialize")
     }
@@ -1169,6 +1471,11 @@ pub fn load_board(
         }
     }
     let mut board = ProjectView::new(summary.clone(), &plan, &state, revision as u64);
+    board.name(sluice_runtime::naming::for_project(
+        c,
+        &super::home_of(c),
+        project,
+    )?);
     let mut last = last_messages(c, project, &board)?;
     // What a card shows; a step's runs, thread and submissions are its page's (load_detail).
     let mut cards = BTreeMap::new();
@@ -1203,6 +1510,12 @@ pub fn load_board(
                 && let Some(fact) = board.facts.steps.get_mut(&step.key())
             {
                 fact.1 = "cancelled".into();
+            }
+        }
+        // a lane's view reads its stages' live progress
+        if unit.matrix && !unit.done {
+            for step in unit.steps.iter_mut().filter(|s| s.status == "running") {
+                super::step::load_progress(c, project, step)?;
             }
         }
         if let Some(id) = detail
@@ -1510,7 +1823,7 @@ impl BoardQuery {
         Ok(())
     }
 }
-/// Keep the steps whose id, doc or unit id holds every word of `q` (case-insensitive, in any
+/// Keep the steps whose id, title, doc or unit id holds every word of `q` (case-insensitive, in any
 /// order), and the units with one; rows left empty go. Returns how many steps matched.
 fn search(units: &mut Vec<UnitView>, q: &str) -> usize {
     let words: Vec<String> = q.split_whitespace().map(str::to_lowercase).collect();
@@ -1518,7 +1831,8 @@ fn search(units: &mut Vec<UnitView>, q: &str) -> usize {
     units.retain_mut(|unit| {
         let unit_id = unit.id.as_str().to_lowercase();
         let hit = |step: &StepView| {
-            let text = format!("{} {} {unit_id}", step.id.as_str(), step.doc).to_lowercase();
+            let text =
+                format!("{} {} {} {unit_id}", step.id.as_str(), step.title, step.doc).to_lowercase();
             words.iter().all(|w| text.contains(w.as_str()))
         };
         unit.steps.retain(|s| hit(s));
@@ -1694,8 +2008,12 @@ fn unit_batch(
     Ok(RenderedBatch::new(vec![
         PatchRegion::new(
             "unit-detail",
-            unit.page_body(&view.project, &view.unit_edges_json(&unit))
-                .map_err(render_error)?,
+            unit.page_body(
+                &view.project,
+                &view.unit_edges_json(&unit),
+                view.names.recipe_of(unit.id.as_str()).map(|r| r.as_ref()),
+            )
+            .map_err(render_error)?,
         ),
         PatchRegion::new(
             "top-nav",
@@ -1716,7 +2034,11 @@ pub async fn unit_page(
         let drawn = unit_batch(&shared, &view, &unit, &viewer)?;
         let nav = NavView::new(&shared, Some(project), "plan")?;
         super::render_layout(
-            &format!("{unit} · {}", view.project.name),
+            &format!(
+                "{} · {}",
+                sluice_model::naming::cut(view.names.naming.unit_title(unit.as_str()), 48),
+                view.project.name
+            ),
             &drawn.regions[0].html,
             &nav,
             &viewer,

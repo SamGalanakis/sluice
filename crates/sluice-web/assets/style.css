@@ -1004,11 +1004,9 @@ ul.now a { display: flex; gap: 6px; flex: 1 1 16rem; min-width: 0; text-decorati
 /* the step's id, then its doc in up to two lines: a doc reads, it is not cut at a word */
 ul.now .ttl { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
               -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; }
-ul.now .r-id { font-weight: 600; }
-ul.now .r-doc { color: var(--muted-foreground); }
 ul.now .r-meta { display: inline-flex; flex: none; align-items: center; gap: 8px;
                  margin-left: auto; }
-ul.now a:hover .r-id { text-decoration: underline; }
+ul.now a:hover .sref-t { text-decoration: underline; }
 ul.now .g { margin-top: 1px; }
 .dur { font-size: 13px; color: var(--muted-foreground); white-space: nowrap; }
 p.now { font-size: 14px; color: var(--muted-foreground); }
@@ -1157,6 +1155,9 @@ article.item { background: var(--card); border: 1px solid var(--border);
 .crumbs a:hover { color: var(--foreground); text-decoration: underline;
                   text-decoration-color: var(--accent); }
 .d-head h1 { overflow-wrap: anywhere; min-width: 0; }
+/* a step's or unit's title is a sentence, often two lines: the page title's face at the size
+   the step's id had (22/28), so a long one does not shout */
+.d-head h1, h1.unit-h { font-size: 22px; line-height: 28px; }
 .d-when { margin-top: 6px; }
 .d-meta a.tag { text-decoration: none; color: var(--foreground); }
 .d-meta a.tag:hover { border-color: var(--foreground); }
@@ -1842,6 +1843,7 @@ main h2.band-h { margin: 0 0 12px; font: 500 13px/18px var(--font-sans); color: 
   .layer + .layer { margin-top: 14px; }
   .box.solo > .waits { margin-left: 11px; }  /* under the card's glyph, its words */
   .box.solo { display: flex; flex-direction: column; align-items: flex-start; border-radius: 0; }
+  .solo-title { min-height: 0; }  /* one column: nothing to line up with */
   .waits { display: block; }
   .box .rows .stack { margin: 0 0 var(--row-gap); }
   .box .rows .stack > .node { margin: 0; }
@@ -1863,3 +1865,106 @@ details.gates > summary { margin-top: 0; font-size: 14px; color: var(--foregroun
 .f-switches { margin: 8px 0 0; max-width: var(--measure); }
 .f-switch { white-space: nowrap; }
 .f-switch b { font-weight: 600; color: var(--foreground); }
+
+/* ---- a step named (views::ui::StepRef): its title first, in the text face; its stage before
+   it, muted ("land ·"); its id after it in data mono, muted. Without a title, its id. ---- */
+.sref-t { font-weight: 500; color: var(--foreground); }
+.sref-stage { color: var(--muted-foreground); font-weight: 500; white-space: nowrap; }
+code.sref-id, .d-id code, .box-label .u-id, .mx-id code {
+  font: 400 12.5px/18px var(--font-mono); color: var(--muted-foreground); border: 0;
+  background: none; padding: 0; white-space: nowrap; }
+a.sref-a { text-decoration: none; color: inherit; }
+a.sref-a:hover .sref-t { text-decoration: underline; text-underline-offset: 3px; }
+.attn-line a.sref-a .sref-t { text-decoration: underline; text-decoration-color: var(--border-strong);
+                              text-underline-offset: 3px; }
+.attn-line .cancelled-words .sref-t { color: var(--muted-foreground); font-weight: 400; }
+/* a status as its glyph and word (views::ui::status) */
+.st { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+/* the step's and unit's page: the title is the heading, the id under it in data mono */
+.d-stage { color: var(--muted-foreground); }
+.d-id { margin: 2px 0 0; flex-basis: 100%; }
+.unit-page .d-id { margin: 4px 0 8px; }
+/* a unit's label on the board: its title (two lines at most) over its id and what needs
+   someone; the label never widens its box */
+.box-label { contain: inline-size; white-space: normal; }
+.box-label .u-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  line-clamp: 2; overflow: hidden; font: 600 14px/19px var(--font-sans); color: var(--foreground);
+  overflow-wrap: anywhere; margin-bottom: 2px; }
+.box-label .u-meta { display: block; font: 500 13px/18px var(--font-sans);
+                     color: var(--muted-foreground); white-space: nowrap; overflow: hidden;
+                     text-overflow: ellipsis; }
+.box.solo.titled { display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+                   border-radius: 0; }
+/* two lines held, the words at their foot, so the cards of one layer share a baseline */
+.solo-title { contain: inline-size; align-self: stretch; margin: 0 0 2px 4px; min-height: 36px;
+  display: flex; align-items: flex-end; font: 500 13px/18px var(--font-sans);
+  color: var(--muted-foreground); }
+.solo-title > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+
+/* ---- the lane matrix: a recipe's live units, a row a unit, a column a stage --------------- */
+.matrix { position: relative; margin: 0 0 32px; }
+.mx-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+main h2.mx-h .mx-name { color: var(--foreground); font-weight: 600; }
+.mx-tally { font-variant-numeric: tabular-nums; }
+.mx-wrap { overflow-x: auto; border-radius: var(--radius); background: var(--box);
+           padding: 6px 14px 6px var(--mx-gutter, 28px); }
+.mx { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 20px; }
+.mx thead th { font: 500 12.5px/18px var(--font-sans); color: var(--muted-foreground);
+               text-align: center; padding: 6px 4px; white-space: nowrap; }
+.mx thead th.mx-unit { text-align: left; }
+.mx tbody tr + tr > * { border-top: 1px solid var(--border); }
+.mx tbody th, .mx tbody td { padding: 8px 4px; vertical-align: middle; font-weight: 400; }
+.mx th.mx-unit { text-align: left; width: 34%; min-width: 14rem; padding-right: 14px; }
+.mx-who { display: flex; align-items: flex-start; gap: 8px; }
+.mx-who .g { margin-top: 2px; flex: none; }
+.mx-title { color: var(--foreground); font-weight: 600; text-decoration: none;
+            display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+            line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.mx-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.mx-id { margin: 2px 0 0 24px; font-size: 13px; line-height: 18px; color: var(--muted-foreground); }
+.mx-id .box-alarm { color: var(--foreground); font-weight: 600; }
+.mx th.mx-unit .waits { margin-left: 24px; }
+td.mx-sum { width: 30%; min-width: 10rem; padding-right: 14px; font-size: 13px; line-height: 18px;
+            color: var(--muted-foreground); }
+td.mx-cell { text-align: center; white-space: nowrap; }
+.node.mx-pill { padding: 3px 8px; gap: 5px; min-height: 28px; box-sizing: border-box; }
+.node.mx-pill .took.live { min-width: 0; }
+.mx-lane, .mx-sum-phone { display: none; }
+.plane.tracing .mx-row.near > th.mx-unit .mx-title { text-decoration: underline; }
+/* a recipe's view: its parts on one line in a row, a block on the unit page */
+.uv-in-row .uv-stack.uv-r, .uv-in-row .uv-stack.uv-c { display: flex; flex-wrap: wrap;
+  align-items: baseline; gap: 2px 10px; }
+.uv-page .uv-stack.uv-r { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.uv-page .uv-stack.uv-c { display: grid; gap: 6px; }
+.uv-param { color: var(--foreground); font-weight: 500; }
+.uv-out { font-family: var(--font-mono); font-size: 12.5px; color: var(--foreground);
+          overflow-wrap: anywhere; }
+.uv-out .g, .uv-out .g svg { width: 12px; height: 12px; vertical-align: -1px; margin-right: 3px; }
+.uv-msg { overflow-wrap: anywhere; }
+.uv-in-row .uv-msg { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+                     line-clamp: 2; overflow: hidden; flex-basis: 100%; }
+.uv-from { color: var(--foreground); font-weight: 500; }
+.uv-text.muted { color: var(--muted-foreground); }
+.uv-link { color: var(--foreground); text-underline-offset: 3px;
+           text-decoration-color: var(--border-strong); }
+.uv-status { display: inline-flex; align-items: center; gap: 6px; }
+.unit-view { margin: 12px 0 20px; padding: 14px 16px; max-width: var(--measure);
+             border: 1px solid var(--border); border-radius: var(--radius); background: var(--card);
+             font-size: 14px; line-height: 20px; color: var(--muted-foreground); }
+.uv-broken { display: flex; gap: 6px; align-items: flex-start; margin: 0 0 8px;
+             font-size: 13px; line-height: 18px; color: var(--status-attention); max-width: var(--measure); }
+.uv-broken svg { flex: none; margin-top: 2px; }
+@media (max-width: 720px) {
+  /* a row is a block: the unit, its stages as a lane string, its summary; no lines */
+  .mx-wrap { padding: 4px 12px; }
+  .mx, .mx tbody, .mx tr, .mx th.mx-unit { display: block; width: auto; min-width: 0; }
+  .mx thead, .mx td { display: none; }
+  .mx tbody th { padding: 10px 0; }
+  .mx-lane { display: block; margin: 4px 0 0 24px; white-space: normal; }
+  .mx-lane a { display: inline-block; padding: 6px 0; color: inherit; text-decoration: none; }
+  .mx-lane a:hover { text-decoration: underline; }
+  .mx-sum-phone { display: block; margin: 2px 0 0 24px; font-size: 13px; line-height: 18px;
+                  color: var(--muted-foreground); }
+  .mx th.mx-unit .waits { display: block; }
+}

@@ -439,10 +439,7 @@ async fn the_board_head_takes_the_programs_title_and_says_when_its_words_last_ch
         "{head}"
     );
     assert!(!board.contains("class=\"ou-h\">Lanes<"), "{board}");
-    assert!(
-        head.contains("Updated <time data-ago datetime=\""),
-        "{head}"
-    );
+    assert!(head.contains("Updated <time data-ago=\""), "{head}");
     assert!(!head.contains("the plan has changed since"), "{head}");
     // A plan edit after the board: its words may be behind.
     let id = f.id;
@@ -489,7 +486,7 @@ async fn the_board_head_takes_the_programs_title_and_says_when_its_words_last_ch
     assert!(!head.contains("Updated"), "{head}");
     let doc = between(&html, "<div class=\"board-doc\">", "</div></div>");
     assert!(
-        doc.contains(&format!("Edited <time data-ago datetime=\"{slot_at}\"")),
+        doc.contains(&format!("Edited <time data-ago=\"{slot_at}\"")),
         "{slot_at} {doc}"
     );
     assert!(!doc.contains("the plan has changed since"), "{doc}");
@@ -577,7 +574,7 @@ async fn output_shows_progress_while_it_is_fresher_than_the_outputs() {
     assert!(red.contains("<span class=\"v num\">2</span>"), "{red}");
     assert!(
         red.contains("<span class=\"tag live\">")
-            && red.contains("live</span><time data-ago datetime=\"2026-10-06T10:00:00.5Z\">2026-10-06 10:00 UTC</time>"),
+            && red.contains("live</span><time data-ago=\"2026-10-06T10:00:00.5Z\" datetime=\"2026-10-06T10:00:00.5Z\" title=\"2026-10-06 10:00 UTC\">2026-10-06 10:00 UTC</time>"),
         "{red}"
     );
     // A field the progress lacks shows the output, unmarked.
@@ -707,7 +704,7 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
         "{board}"
     );
     assert!(
-        board.contains("<p class=\"meta box-label\">lane</p>"),
+        board.contains("<p class=\"box-label\"><span class=\"u-meta\"><code class=\"u-id\">lane</code></span></p>"),
         "a unit of steps keeps its box"
     );
     // a step named as its unit is that unit's mark alone in a done line
@@ -828,7 +825,9 @@ async fn a_cancel_reads_as_cancelled_in_the_units_table_and_on_its_card() {
     );
     // its unit's label says what in it needs someone
     assert!(
-        html.contains("beta <span class=\"box-alarm\">· 1 cancelled</span>"),
+        html.contains(
+            "<code class=\"u-id\">beta</code> <span class=\"box-alarm\">· 1 cancelled</span>"
+        ),
         "{html}"
     );
     // its card says so in words, after its id
@@ -927,7 +926,9 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
     );
     // a failed step's unit says so at its head, so a phone reads it before its cards
     assert!(
-        html.contains("beta <span class=\"box-alarm\">· 1 failed</span>"),
+        html.contains(
+            "<code class=\"u-id\">beta</code> <span class=\"box-alarm\">· 1 failed</span>"
+        ),
         "{html}"
     );
     // the unit's own page: its steps summed, and the lines inside it drawn

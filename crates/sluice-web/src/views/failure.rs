@@ -98,7 +98,7 @@ impl Failure {
         // a fn's traceback: folded; its last exception line is the cause
         let (said, trace, cause, resume) = split_trace(&said);
         let after = took
-            .map(|s| format!(" after {}", super::step::short_duration(s)))
+            .map(|s| format!(" after {}", super::ui::duration_text(s)))
             .unwrap_or_default();
         let (kind, headline): (String, String) = match error {
             PublicError::Cancelled { message } => (
@@ -330,7 +330,7 @@ fn wall_cap(seconds: Option<f64>) -> String {
     match seconds {
         Some(s) => format!(
             "Stopped at its wall-clock cap after {}.",
-            super::step::short_duration(s)
+            super::ui::duration_text(s)
         ),
         None => "Stopped at its wall-clock cap.".into(),
     }

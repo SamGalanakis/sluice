@@ -235,7 +235,7 @@ impl RunView {
     /// "took 2h 14m" for an ended run.
     pub fn took(&self) -> String {
         match (self.finished.is_empty(), self.seconds) {
-            (false, Some(s)) => format!("took {}", short_duration(s)),
+            (false, Some(s)) => format!("took {}", super::ui::duration_text(s)),
             _ => String::new(),
         }
     }
@@ -244,6 +244,10 @@ impl RunView {
 pub struct StepView {
     pub project: ProjectId,
     pub id: StepId,
+    /// Its title (`sluice_model::naming`): "" when it has none and its id names it.
+    pub title: String,
+    /// Its stage in its unit ("land"), "" when it has none.
+    pub stage: String,
     pub function: String,
     pub doc: String,
     pub status: String,
@@ -302,42 +306,6 @@ pub struct RunTiming {
     /// it is no part of the step's version.
     #[serde(skip)]
     pub seconds: f64,
-}
-/// A card's timer as the board draws it: its two largest units, "<1s", "45s", "12m", "2h 14m",
-/// "1d 3h" (`sluice.js` ticks a running one in the same words).
-pub fn short_duration(seconds: f64) -> String {
-    let s = seconds.max(0.0).floor() as u64;
-    let (d, h, m) = (s / 86_400, s % 86_400 / 3_600, s % 3_600 / 60);
-    match s {
-        0 => "<1s".into(),
-        1..60 => format!("{s}s"),
-        60..3_600 => format!("{m}m"),
-        3_600..86_400 => format!("{h}h {m}m"),
-        _ => format!("{d}d {h}h"),
-    }
-}
-/// The same duration in words, for a screen reader: "under a second", "45 seconds",
-/// "2 hours 14 minutes", "1 day".
-pub fn spoken_duration(seconds: f64) -> String {
-    let s = seconds.max(0.0).floor() as u64;
-    let unit = |n: u64, one: &str| match n {
-        0 => String::new(),
-        1 => format!("1 {one}"),
-        _ => format!("{n} {one}s"),
-    };
-    let (d, h, m) = (s / 86_400, s % 86_400 / 3_600, s % 3_600 / 60);
-    let parts = match s {
-        0 => return "under a second".into(),
-        1..60 => [unit(s, "second"), String::new()],
-        60..3_600 => [unit(m, "minute"), String::new()],
-        3_600..86_400 => [unit(h, "hour"), unit(m, "minute")],
-        _ => [unit(d, "day"), unit(h, "hour")],
-    };
-    parts
-        .into_iter()
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 /// One entry of a step's `after`: a step (linked, with its status), a unit (linked) or a
 /// condition.
@@ -407,8 +375,7 @@ impl StepView {
     pub fn gates_words(&self) -> String {
         let steps: Vec<&GateView> = self.gates.iter().filter(|g| !g.mark.is_empty()).collect();
         let others = self.gates.len() - steps.len();
-        let noun =
-            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let noun = super::ui::count;
         let mut words = String::new();
         if !steps.is_empty() {
             let done = steps.iter().filter(|g| g.done()).count();
@@ -552,6 +519,8 @@ impl StepView {
         let mut view = Self {
             project,
             id: id.clone(),
+            title: String::new(),
+            stage: String::new(),
             function: step.run.clone(),
             doc: step.doc.clone().unwrap_or_default(),
             status,
@@ -631,6 +600,59 @@ impl StepView {
     }
     pub fn cancelled(&self) -> bool {
         self.mark == "cancelled"
+    }
+    /// How a page names it: its title (and stage), its id after it.
+    pub fn name(&self) -> super::ui::StepRef {
+        super::ui::StepRef {
+            id: self.id.to_string(),
+            title: self.title.clone(),
+            stage: self.stage.clone(),
+        }
+    }
+    /// Its heading's words: its title, or its id when it has none.
+    pub fn heading(&self) -> &str {
+        if self.title.is_empty() {
+            self.id.as_str()
+        } else {
+            &self.title
+        }
+    }
+    /// It has a title apart from its id.
+    pub fn titled(&self) -> bool {
+        !self.title.is_empty() && self.title != self.id.as_str()
+    }
+    /// Its doc as its page shows it: without its first line when that line is its title, so
+    /// the page never says it twice.
+    pub fn doc_rest(&self) -> &str {
+        let doc = self.doc.trim();
+        let mut lines = doc.splitn(2, '\n');
+        let first = lines.next().unwrap_or("");
+        if !self.title.is_empty() && sluice_model::naming::line_title(first) == self.title {
+            lines.next().unwrap_or("").trim()
+        } else {
+            doc
+        }
+    }
+    /// "3/5 runs": a scattered step's items done.
+    pub fn runs_tag(&self) -> TrustedHtml {
+        super::ui::tag(&format!("{} runs", self.caption()), "", None)
+    }
+    /// Its `unit:` tag, a link to the unit's page.
+    pub fn unit_tag(&self, unit: &str) -> TrustedHtml {
+        super::ui::tag_link(
+            &format!("/projects/id/{}/units/{unit}", self.project),
+            &format!("unit: {unit}"),
+            "",
+            None,
+        )
+    }
+    /// "2 awaiting reply", gold: questions on its thread nobody has answered.
+    pub fn awaiting_tag(&self) -> TrustedHtml {
+        super::ui::tag(&format!("{} awaiting reply", self.awaiting), "attn", None)
+    }
+    /// The tab's words: its title, cut to 48 characters.
+    pub fn tab_title(&self) -> String {
+        sluice_model::naming::cut(self.heading(), 48)
     }
     pub fn href(&self) -> String {
         format!("/projects/id/{}/steps/{}", self.project, self.id)
@@ -750,22 +772,22 @@ impl StepView {
                 .unwrap_or(0);
             let seconds =
                 super::timestamp(&self.active_at).map_or(0, |at| now.saturating_sub(at)) as f64;
-            let at = super::when(&self.active_at);
+            let at = super::ui::at_text(&self.active_at);
             return Ok(TrustedHtml::owned(format!(
                 "<time data-since=\"{a}\" datetime=\"{a}\" class=\"took live\" title=\"Nothing written since {at}\"><span class=\"tk\" aria-hidden=\"true\">{shown}</span><span class=\"vh\"> for {said}</span></time>",
                 a = self.active_at,
-                shown = short_duration(seconds),
-                said = spoken_duration(seconds),
+                shown = super::ui::duration_text(seconds),
+                said = super::ui::duration_words(seconds),
             )));
         }
         let Some(t) = self.shown_timing() else {
             return Ok(TrustedHtml::owned(String::new()));
         };
         let live = t.finished.is_none();
-        let shown = short_duration(t.seconds);
+        let shown = super::ui::duration_text(t.seconds);
         // a running run's title must not move with the clock: it names the start
         let this = if live {
-            format!("started {}", super::when(&t.started))
+            format!("started {}", super::ui::at_text(&t.started))
         } else {
             format!("took {shown}")
         };
@@ -782,7 +804,7 @@ impl StepView {
             t,
             live,
             shown,
-            said: spoken_duration(t.seconds),
+            said: super::ui::duration_words(t.seconds),
             title,
         })
     }
@@ -804,10 +826,9 @@ impl StepView {
     }
     /// "7 outputs not set yet", "1 output not set yet".
     pub fn unset_words(&self) -> String {
-        let n = self.outputs_unset().len();
         format!(
-            "{n} {} not set yet",
-            if n == 1 { "output" } else { "outputs" }
+            "{} not set yet",
+            super::ui::count(self.outputs_unset().len(), "output", "outputs")
         )
     }
     /// A failed step's next move is Retry: the primary button. One the owner cancelled was
@@ -831,7 +852,7 @@ impl StepView {
             .last_run()
             .filter(|r| r.finished.is_empty())
             .and_then(|r| r.seconds)
-            .map(short_duration);
+            .map(super::ui::duration_text);
         if let Some(duration) = duration {
             format!("Its {duration} run stops; Retry starts it over.")
         } else {
@@ -906,13 +927,42 @@ impl StepTemplate<'_> {
     }
     /// A section's heading: under the page's `h1` an `h2`, in the drawer (its id an `h2`) an
     /// `h3`, so no level is skipped.
-    fn h(&self) -> &'static str {
-        if self.page { "h2" } else { "h3" }
+    fn level(&self) -> u8 {
+        if self.page { 2 } else { 3 }
     }
     /// The first heading level inside a value: one under its section's head.
     fn value_top(&self) -> u8 {
         if self.page { 3 } else { 4 }
     }
+}
+/// Its progress (`step_progress`) while the outputs have not superseded it, each field typed
+/// as its output.
+pub fn load_progress(
+    c: &rusqlite::Connection,
+    project: ProjectId,
+    step: &mut StepView,
+) -> sluice_store::Result<()> {
+    step.progress = sluice_store::attempts::read_progress(c, project, step.id.as_str())?
+        .filter(|p| !p.superseded)
+        .map(|p| ProgressView {
+            fields: p
+                .outputs
+                .iter()
+                .map(|(n, v)| {
+                    let output = step.outputs.iter().find(|f| &f.name == n);
+                    FieldView::new(
+                        n,
+                        output.map(|f| f.ty.as_str()).unwrap_or(""),
+                        output.map(|f| f.doc.as_str()).unwrap_or(""),
+                        Some(v),
+                        "",
+                    )
+                })
+                .collect(),
+            at: p.at,
+            live: p.live,
+        });
+    Ok(())
 }
 /// Run history is current-generation only; a reused step id never inherits an
 /// old declaration's runs. Frozen attempted inputs come from durable results.
@@ -1022,27 +1072,7 @@ pub fn load_detail(
             }
         }
     }
-    // Progress shows while the outputs have not superseded it, each field typed as its output.
-    step.progress = sluice_store::attempts::read_progress(c, project, step.id.as_str())?
-        .filter(|p| !p.superseded)
-        .map(|p| ProgressView {
-            fields: p
-                .outputs
-                .iter()
-                .map(|(n, v)| {
-                    let output = step.outputs.iter().find(|f| &f.name == n);
-                    FieldView::new(
-                        n,
-                        output.map(|f| f.ty.as_str()).unwrap_or(""),
-                        output.map(|f| f.doc.as_str()).unwrap_or(""),
-                        Some(v),
-                        "",
-                    )
-                })
-                .collect(),
-            at: p.at,
-            live: p.live,
-        });
+    load_progress(c, project, step)?;
     step.now = NowView::default();
     if step.status == "running" {
         let row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, NowMessage)> {
@@ -1225,7 +1255,7 @@ pub async fn step_page(
         step.page_body(&view.project.name, unit)
             .and_then(|body| {
                 super::render_layout(
-                    &format!("{id} · {}", view.project.name),
+                    &format!("{} · {}", step.tab_title(), view.project.name),
                     &body,
                     &nav,
                     &Viewer::from_headers(&headers),

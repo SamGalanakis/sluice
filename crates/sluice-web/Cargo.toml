@@ -9,6 +9,7 @@ license.workspace = true
 sluice-model.workspace = true
 sluice-runtime.workspace = true
 sluice-store.workspace = true
+indexmap.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

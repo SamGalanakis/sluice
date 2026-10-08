@@ -134,6 +134,20 @@ On the page, a Metric, Query, Chart or LatestMessage whose step is not in the pl
 has under a line in the attention colour: "Names step `tests-main`, which is not in the plan;
 this shows its last data." StepStatus and Output draw their error box instead.
 
+## A recipe's unit view
+The board is one panel for the whole project. To show each unit of a recipe the same way, give
+the recipe a `view` instead (`docs("plans")`, Recipes): a program in this same language, bound
+to one unit, which the dashboard draws in the unit's row of the recipe's lane matrix and whole
+on the unit's page, inside a frame sluice draws (the unit's title, id, status and a pill per
+stage). Its vocabulary is smaller and per unit: `Stack(children, direction?)`, `Text(text,
+tone?)`, `Markdown(text)`, `Link(label, href)`, `Param(name)`, `Output(stage, field)`,
+`StepStatus(stage)` and `LastMessage(chars?)`, where a stage is the recipe step's id without
+`{unit}-` and `{param}` fills in any string. No queries, charts or buttons: those belong on
+the board.
+
+The dashboard names steps by their titles (a step's doc's first line, its spec's heading, or
+its recipe's `title`; `docs("plans")`, Titles), so a Text that repeats a step's id adds little.
+
 ## The language
 One statement per line, `name = Component(arg, ...)`; the first statement (conventionally
 `root`) is drawn. Arguments are positional, in the order of the signatures below; pass `null`

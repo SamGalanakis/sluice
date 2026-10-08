@@ -693,20 +693,7 @@ const MARKS: [(char, &str); 10] = [
     ('–', "skipped"),
 ];
 
-fn esc(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
+use super::ui::esc;
 /// `text` escaped, each word with a hyphen inside it (a step id, a unit, `FIG-5004`) kept on
 /// one line: a narrow board breaks between ids, never inside one.
 fn prose(text: &str) -> String {
@@ -729,15 +716,7 @@ fn prose(text: &str) -> String {
 }
 /// A time the page's script reads as "2h ago": without script the UTC day and minute.
 fn ago(at: &str) -> String {
-    let shown = match (at.get(..10), at.get(11..16)) {
-        (Some(day), Some(time)) => format!("{day} {time} UTC"),
-        _ => at.to_owned(),
-    };
-    format!(
-        "<time data-ago datetime=\"{}\">{}</time>",
-        esc(at),
-        esc(&shown)
-    )
+    super::ui::ago(at).0
 }
 /// Markdown drawn through the dashboard's renderer (escaped, unsafe link schemes refused),
 /// its headings from level `top` down, each id in its text kept on one line (`keep_ids`).
@@ -1209,7 +1188,7 @@ impl Draw<'_> {
                 self.out,
                 "<tr role=\"row\"><td class=\"u-unit\" role=\"cell\"><a href=\"{base}/units/{0}\">{0}</a></td><td class=\"u-state\" role=\"cell\">{1}<span>{2}</span>{3}</td><td class=\"u-steps\" role=\"cell\">{4}</td><td class=\"u-wait\" role=\"cell\">{5}</td></tr>",
                 esc(&row.unit),
-                super::home::glyph(glyph),
+                super::ui::glyph(glyph),
                 esc(&state),
                 if age.trim().is_empty() {
                     String::new()
@@ -1242,9 +1221,9 @@ impl Draw<'_> {
         }
         if let Some((units, steps)) = data.done {
             notes.push(format!(
-                "{units} done unit{} ({steps} step{}) left out.",
-                if units == 1 { "" } else { "s" },
-                if steps == 1 { "" } else { "s" }
+                "{} ({}) left out.",
+                super::ui::count(units, "done unit", "done units"),
+                super::ui::count(steps, "step", "steps")
             ));
         }
         if !notes.is_empty() {
@@ -1279,7 +1258,7 @@ impl Draw<'_> {
             "<div class=\"board-step\"><a class=\"{} board-chip\" href=\"{}\">{}<span class=\"sid\">{}</span><span class=\"dur\">{}</span></a>",
             view.card_class(),
             view.href(),
-            super::home::glyph(view.display_mark()),
+            super::ui::glyph(view.display_mark()),
             esc(view.id.as_str()),
             esc(&caption)
         );
@@ -1324,12 +1303,9 @@ impl Draw<'_> {
             Some((at, live)) => format!(
                 "<span class=\"meta board-progress\">{}{}</span>",
                 if live {
-                    format!(
-                        "<span class=\"tag live\">{}live</span>",
-                        super::home::glyph("running")
-                    )
+                    super::ui::tag("live", "live", Some(super::ui::glyph("running")))
                 } else {
-                    "<span class=\"tag muted\">progress</span>".to_owned()
+                    super::ui::tag("progress", "muted", None)
                 },
                 ago(&at)
             ),

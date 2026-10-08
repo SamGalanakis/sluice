@@ -94,6 +94,8 @@ pub struct ThreadView {
     pub recipient: String,
     pub messages: Vec<MessageItem>,
     pub through: i64,
+    /// Its step's title, while the plan has the step and it has one.
+    pub step_title: String,
 }
 impl ThreadView {
     pub fn href(&self) -> String {
@@ -110,7 +112,11 @@ impl ThreadView {
     /// conversation's first message ("Can the lane land today?").
     pub fn name(&self) -> String {
         if let Some(step) = self.thread.strip_prefix("step-") {
-            return format!("Step {step}");
+            return if self.step_title.is_empty() {
+                format!("Step {step}")
+            } else {
+                format!("Step: {}", self.step_title)
+            };
         }
         if self.thread == sluice_store::messages::ORCHESTRATOR_STREAM {
             return "Orchestrator".into();
@@ -130,6 +136,14 @@ impl ThreadView {
         self.thread
             .strip_prefix("step-")
             .filter(|s| *s == self.recipient)
+    }
+    /// Its step as the way back names it: the title (cut to 64), else "step <id>".
+    pub fn step_label(&self) -> String {
+        match self.step() {
+            Some(step) if self.step_title.is_empty() => format!("step {step}"),
+            Some(_) => sluice_model::naming::cut(&self.step_title, 64),
+            None => String::new(),
+        }
     }
     pub fn last_at(&self) -> &str {
         self.messages
@@ -378,6 +392,21 @@ pub async fn load(
                                         .into(),
                                     messages: vec![],
                                     through: 0,
+                                    step_title: match step.filter(|_| in_plan) {
+                                        Some(step) => {
+                                            let names = sluice_runtime::naming::for_project(
+                                                sql,
+                                                &super::home_of(sql),
+                                                p.id,
+                                            )?;
+                                            names
+                                                .naming
+                                                .step(step)
+                                                .map(|n| n.title.clone())
+                                                .unwrap_or_default()
+                                        }
+                                        None => String::new(),
+                                    },
                                 },
                             );
                         }

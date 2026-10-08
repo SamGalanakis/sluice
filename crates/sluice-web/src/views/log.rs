@@ -285,6 +285,9 @@ pub async fn load(
         let mut stmt = sql.prepare(&format!("SELECT seq,at,payload,payload_version,project_id FROM records WHERE {condition} ORDER BY seq {order} LIMIT {PAGE_SIZE}"))?;
         let raw = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_,i64>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?, r.get::<_,i64>(3)?, r.get::<_,Option<String>>(4)?)))?.collect::<Result<Vec<_>,_>>()?;
         let mut rows = vec![];
+        // each project's names, read once: a sentence names a step by its title and id
+        let mut names: std::collections::HashMap<ProjectId, std::sync::Arc<sluice_runtime::naming::ProjectNaming>> = Default::default();
+        let home = super::home_of(sql);
         for (seq, at, payload, version, owner) in raw {
             if version != sluice_store::schema::RECORD_PAYLOAD_VERSION { return Err(sluice_store::StoreError::InvalidDatabase("unsupported record payload version".into())); }
             let event: Event = serde_json::from_str(&payload)?;
@@ -292,7 +295,18 @@ pub async fn load(
             let kind = json.get("kind").and_then(|v| v.as_str()).unwrap_or("").into();
             let summary = summary(&event);
             let owner: Option<ProjectId> = owner.and_then(|p| p.parse().ok());
-            let html = linked(&summary, &links(&json, owner));
+            let named = match owner {
+                Some(id) => match names.get(&id) {
+                    Some(n) => Some(n.clone()),
+                    None => {
+                        let n = sluice_runtime::naming::for_project(sql, &home, id).ok();
+                        if let Some(n) = &n { names.insert(id, n.clone()); }
+                        n
+                    }
+                },
+                None => None,
+            };
+            let html = linked(&summary, &links(&json, owner, named.as_deref()));
             // the global log names each record's project
             let place = match (project, owner) {
                 (None, Some(id)) => nav.projects.iter().find(|p| p.id == id).map(|p| (p.name.to_string(), p.href())).unwrap_or_else(|| ("a deleted project".into(), String::new())),
@@ -324,51 +338,66 @@ pub async fn load(
     }).await.map_err(|e| e.into_public(true))
 }
 /// What a record's sentence names that has a page: its step, unit and thread (in its project).
-fn links(json: &serde_json::Value, project: Option<ProjectId>) -> Vec<(String, String)> {
+/// Each is the name as the sentence says it, its page, and how the link names it (a step by its
+/// title and id, a unit by its title and id; "" for the name itself).
+fn links(
+    json: &serde_json::Value,
+    project: Option<ProjectId>,
+    names: Option<&sluice_runtime::naming::ProjectNaming>,
+) -> Vec<(String, String, String)> {
     let Some(project) = project else {
         return vec![];
     };
     let field = |name: &str| json.get(name).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let mut links = vec![];
     if let Some(thread) = field("thread") {
-        links.push((thread.to_owned(), super::threads::thread_url(project, thread)));
+        links.push((thread.to_owned(), super::threads::thread_url(project, thread), String::new()));
     }
     if let Some(step) = field("step") {
-        links.push((step.to_owned(), format!("/projects/id/{project}/steps/{step}")));
+        let named = super::ui::StepRef::new(step, names.and_then(|n| n.naming.step(step)));
+        let words = if named.titled() { named.html(48).0 } else { String::new() };
+        links.push((step.to_owned(), format!("/projects/id/{project}/steps/{step}"), words));
     }
     if let Some(unit) = field("unit") {
-        links.push((unit.to_owned(), format!("/projects/id/{project}/units/{unit}")));
+        let title = names.map(|n| n.naming.unit_title(unit)).unwrap_or(unit);
+        let words = if title != unit {
+            format!(
+                "<span class=\"sref\"><span class=\"sref-t\">{}</span> <code class=\"sref-id\">{}</code></span>",
+                super::ui::esc(&sluice_model::naming::cut(title, 48)),
+                super::ui::esc(unit)
+            )
+        } else {
+            String::new()
+        };
+        links.push((unit.to_owned(), format!("/projects/id/{project}/units/{unit}"), words));
     }
     links
 }
-/// `text`, HTML-escaped, with the first whole-word use of each name linked to its page.
-fn linked(text: &str, links: &[(String, String)]) -> TrustedHtml {
+/// `text`, HTML-escaped, with the first whole-word use of each name linked to its page (a step
+/// or unit named there by its title and id).
+fn linked(text: &str, links: &[(String, String, String)]) -> TrustedHtml {
     let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/');
-    let mut spans: Vec<(usize, usize, &str)> = vec![];
-    for (name, href) in links {
+    let mut spans: Vec<(usize, usize, &str, &str)> = vec![];
+    for (name, href, words) in links {
         let found = text.match_indices(name.as_str()).find(|(at, _)| {
             let before = text[..*at].chars().next_back();
             let after = text[at + name.len()..].chars().next();
             !before.is_some_and(word)
                 && !after.is_some_and(|c| word(c) && c != '.' && c != '/')
-                && !spans.iter().any(|(s, e, _)| at < e && at + name.len() > *s)
+                && !spans.iter().any(|(s, e, _, _)| at < e && at + name.len() > *s)
         });
         if let Some((at, _)) = found {
-            spans.push((at, at + name.len(), href));
+            spans.push((at, at + name.len(), href, words));
         }
     }
     spans.sort();
-    let esc = |s: &str| {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-    };
+    let esc = super::ui::esc;
     let mut html = String::new();
     let mut at = 0;
-    for (start, end, href) in spans {
+    for (start, end, href, words) in spans {
         html.push_str(&esc(&text[at..start]));
-        html.push_str(&format!("<a href=\"{}\">{}</a>", esc(href), esc(&text[start..end])));
+        let words = if words.is_empty() { esc(&text[start..end]) } else { words.to_owned() };
+        html.push_str(&format!("<a href=\"{}\">{words}</a>", esc(href)));
         at = end;
     }
     html.push_str(&esc(&text[at..]));
@@ -412,10 +441,9 @@ fn summary(event: &Event) -> String {
             reason,
             ops,
         } => format!(
-            "Plan rev {} by {author}, {} {}{}",
+            "Plan rev {} by {author}, {}{}",
             rev.0,
-            ops.len(),
-            if ops.len() == 1 { "change" } else { "changes" },
+            super::ui::count(ops.len(), "change", "changes"),
             because(reason)
         ),
         Event::PlanInput {
@@ -573,9 +601,8 @@ fn summary(event: &Event) -> String {
             author,
         } => format!("Run {run}'s completion action by {author}: {}", word(outcome)),
         Event::UnitSettled { unit, steps, .. } => format!(
-            "Unit {unit} settled, {} {}",
-            steps.len(),
-            if steps.len() == 1 { "step" } else { "steps" }
+            "Unit {unit} settled, {}",
+            super::ui::count(steps.len(), "step", "steps")
         ),
         // a kind this release does not know yet: its name, the JSON under it
         other => serde_json::to_value(other)

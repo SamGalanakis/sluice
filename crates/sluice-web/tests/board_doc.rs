@@ -148,7 +148,7 @@ async fn the_doc_draws_its_markdown_with_who_edited_it_and_its_fallback_before()
     );
     // When and by whom: a time the page's script reads as "12m ago".
     assert!(
-        doc.contains("<p class=\"meta board-fresh\">Edited <time data-ago datetime=\""),
+        doc.contains("<p class=\"meta board-fresh\">Edited <time data-ago=\""),
         "{doc}"
     );
     assert!(doc.contains("</time> by orchestrator</p>"), "{doc}");
@@ -214,7 +214,7 @@ async fn latest_message_shows_the_newest_from_its_sender_cut_with_a_link() {
     };
     let href = format!("/projects/id/{}/thread?thread=tests-main#message-103", f.id);
     assert!(
-        full.contains(&format!("<a href=\"{href}\"><time data-ago datetime=\"2026-10-05T10:00:00Z\">2026-10-05 10:00 UTC</time></a>")),
+        full.contains(&format!("<a href=\"{href}\"><time data-ago=\"2026-10-05T10:00:00Z\" datetime=\"2026-10-05T10:00:00Z\" title=\"2026-10-05 10:00 UTC\">2026-10-05 10:00 UTC</time></a>")),
         "{full}"
     );
     assert!(full.contains("<strong>3 red</strong>"), "{full}");
@@ -284,7 +284,7 @@ async fn settings_show_the_document_read_only_with_its_rev_and_last_edit() {
     let (_, page) = f.get(&settings).await;
     let section = between(&page, "<div id=\"board-doc\">", "<!--/board-doc-->");
     assert!(
-        section.contains("Rev 1 · edited <time data-ago datetime=\""),
+        section.contains("Rev 1 · edited <time data-ago=\""),
         "{section}"
     );
     assert!(section.contains("</time> by orch"), "{section}");
