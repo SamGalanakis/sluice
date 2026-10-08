@@ -3,7 +3,9 @@
 // with their Apply button and a Button posts the page. With script:
 // - the view switch: Plan · Both · Board from 1280px, Plan · Board below; each remembered per
 //   project (localStorage), wide and narrow apart; until one is picked a phone shows the board
-//   (its live lanes are the quick check), the window between a phone and 1280px the plan;
+//   (its live lanes are the quick check) unless the project needs attention (a failure, a
+//   cancel, a quiet run or a pause: `data-attention`), when it shows the plan, which leads
+//   with what stopped; the window between a phone and 1280px shows the plan;
 // - the splitter between plan and board: drag, arrow keys (16px, 64px with Shift), Home/End,
 //   double-click to reset; the board's width remembered per project;
 // - the description's "More", remembered per project;
@@ -12,7 +14,7 @@
 //   draw the board as filtered;
 // - a board Button's say is sent without leaving the page, the answer shown under the board.
 const WIDE = matchMedia("(min-width: 1280px)");
-const PHONE = matchMedia("(max-width: 720px)");  // a phone opens on the board, its quick check
+const PHONE = matchMedia("(max-width: 720px)");  // a phone opens on the board, unless something needs attention
 const MIN_BOARD = 320, MIN_PLAN = 560, STEP = 16, BIG_STEP = 64;
 
 const store = {
@@ -42,7 +44,8 @@ function viewOf(p) {
   const v = chosen[m] ?? store.get(viewKey(m, p.dataset.project));
   if (!(m in chosen) && planAsked()) return m === "wide" && v === "plan" ? "plan" : m === "wide" ? "both" : "plan";
   if (views.includes(v)) return v;
-  return m === "wide" ? "both" : PHONE.matches ? "board" : "plan";
+  if (m === "wide") return "both";
+  return PHONE.matches && !p.hasAttribute("data-attention") ? "board" : "plan";
 }
 
 /** Put the page in its view and the switch, splitter and description in step with it. */
@@ -211,7 +214,25 @@ function fitPane() {
   const top = Math.max(16, pane.getBoundingClientRect().top);
   const height = `${Math.max(240, Math.floor(window.innerHeight - top - 16))}px`;
   if (pane.style.getPropertyValue("--pane-max") !== height) pane.style.setProperty("--pane-max", height);
+  moreBelow();
 }
+// While the column scrolls on its own and more of it lies below, a "More below" cue sits at its
+// foot over the shade; it scrolls the column on by most of a screen, and goes at the end.
+function moreBelow() {
+  const pane = boardPane(), cue = pane?.querySelector(".more-below");
+  if (!cue) return;
+  const scrolls = getComputedStyle(pane).overflowY === "auto";
+  const hide = !scrolls || pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 24;
+  if (cue.hidden !== hide) cue.hidden = hide;
+}
+document.addEventListener("scroll", (event) => {
+  if (event.target === boardPane()) moreBelow();
+}, { capture: true, passive: true });
+document.addEventListener("click", (event) => {
+  const cue = event.target.closest?.(".more-below");
+  const pane = cue?.closest("#board-pane");
+  if (pane) pane.scrollBy({ top: pane.clientHeight * 0.8, behavior: "smooth" });
+});
 let fitting = 0;
 window.addEventListener("scroll", () => {
   if (!fitting) fitting = requestAnimationFrame(() => { fitting = 0; fitPane(); });

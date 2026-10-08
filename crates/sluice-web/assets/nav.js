@@ -182,7 +182,13 @@ function confirmations() {
       const place = document.createComment('confirmation form');
       form.replaceWith(place);
       confirming = { form, place, button, title: flow.dataset.confirmTitle };
-      document.querySelector('#confirmation-title').textContent = flow.dataset.confirmTitle;
+      // a step named by its title, its id after it in data mono: "Cancel L13: certif… fig-5193-work?"
+      const head = document.querySelector('#confirmation-title');
+      head.textContent = flow.dataset.confirmTitle;
+      if (flow.dataset.confirmId) {
+        const id = Object.assign(document.createElement('code'), { className: 'sref-id', textContent: flow.dataset.confirmId });
+        head.append(' ', id, '?');
+      }
       document.querySelector('#confirmation-body').replaceChildren(form);
       form.querySelector('.confirm-copy').id = 'confirmation-copy';
       confirmation.setAttribute('aria-describedby', 'confirmation-copy');

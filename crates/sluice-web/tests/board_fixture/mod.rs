@@ -282,7 +282,8 @@ pub fn lane_recipe() -> Value {
 }
 impl Fixture {
     /// A project `titled` whose recipe `lane` has a view: lanes l1 (running), l2 (failed) and
-    /// l3 (waiting, its fork after l2's land), a unit `report` after l1's land, a step with a
+    /// l3 (waiting, its fork after l2's land and its land after `probe`, a running step of its
+    /// own), a unit `report` after l1's land, a unit `kit` of two steps (a box), a step with a
     /// doc, one with a literal prompt and one with neither; and the recipe `rough`, whose view
     /// does not check, with its unit r1.
     pub async fn titled(&self) -> ProjectId {
@@ -307,9 +308,13 @@ impl Fixture {
                 json!({"run":"custom.open","tags":tags,"after":[format!("{unit}-fork")],
                 "in":{"ticket":{"default":ticket},"spec":{"file":spec.to_str().unwrap()}}}),
             );
+            let mut land = vec![format!("{unit}-work")];
+            if unit == "l3" {
+                land.push("probe".into());
+            }
             steps.insert(
                 format!("{unit}-land"),
-                json!({"run":"custom.open","tags":tags,"after":[format!("{unit}-work")]}),
+                json!({"run":"custom.open","tags":tags,"after":land}),
             );
         }
         steps.insert(
@@ -326,6 +331,19 @@ impl Fixture {
         );
         steps.insert("plain".into(), json!({"run":"custom.open"}));
         steps.insert(
+            "probe".into(),
+            json!({"run":"custom.open","doc":"Probes the parser under load"}),
+        );
+        // a unit of two steps that is no recipe's: a box, its line inside it drawn
+        steps.insert(
+            "kit-a".into(),
+            json!({"run":"custom.open","tags":["unit:kit"]}),
+        );
+        steps.insert(
+            "kit-b".into(),
+            json!({"run":"custom.open","tags":["unit:kit"],"after":["kit-a"]}),
+        );
+        steps.insert(
             "r1-only".into(),
             json!({"run":"custom.open","tags":["unit:r1"]}),
         );
@@ -339,6 +357,8 @@ impl Fixture {
                     ("l2-fork", "succeeded"),
                     ("l2-work", "failed"),
                     ("watch", "running"),
+                    ("probe", "running"),
+                    ("kit-a", "running"),
                 ],
             )
             .await;

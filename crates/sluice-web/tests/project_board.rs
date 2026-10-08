@@ -343,10 +343,11 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
     let (status, escaped) = f.get(&format!("/projects/id/{escaped_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(escaped.contains("data-node=\"u:build\""));
-    // the done one-step unit is its card on the shelf, naming its unit
-    assert!(escaped.contains("<section id=\"unit-finished\" class=\"box solo done\""));
+    // the done one-step unit is a row on the shelf, naming its unit before its step
+    assert!(escaped.contains("<section id=\"unit-finished\" class=\"box solo done shelf-row\""));
     assert!(
-        escaped.contains("<span class=\"uid\">finished /</span><span class=\"sid\">done</span>")
+        escaped.contains("<span class=\"uid\">finished /</span><span class=\"fb-name\"><span class=\"sref\"><span class=\"sref-t\">done</span></span></span>"),
+        "{escaped}"
     );
     assert!(escaped.contains("data-preserve-attr=\"open\""));
     assert!(!escaped.contains("<script>failure"));
@@ -365,7 +366,7 @@ async fn the_search_keeps_the_steps_whose_id_doc_or_unit_match_and_combines_with
     assert!(html.contains("1 step matches “PARSER”."));
     // A wait whose source the search left out is said in words, shown where lines are drawn.
     assert!(
-        html.contains(&format!("<p class=\"waits away\">Waits for <a href=\"{base}/steps/alpha-review\" data-opens=\"alpha-review\" data-from=\"s:alpha-review\" data-to=\"s:beta-review\">alpha-review</a>, not in this view</p>")),
+        html.contains(&format!("<p class=\"waits said\">Waits for <a href=\"{base}/steps/alpha-review\" data-opens=\"alpha-review\" data-from=\"s:alpha-review\" data-to=\"s:beta-review\">alpha-review</a>, not in this view</p>")),
         "{html}"
     );
     assert!(!page("").await.contains("not in this view"));
@@ -748,7 +749,7 @@ async fn the_plan_draws_waits_between_units_as_lines_and_one_step_units_once() {
     );
     // a finished step is never "next"
     assert!(
-        board.contains("id=\"n-k1\" class=\"node card is-succeeded\" "),
+        board.contains("id=\"n-k1\" class=\"node shelf-step is-succeeded\" "),
         "{board}"
     );
     // Live first: stopped, running, waiting by depth (k4 under k3), then one done shelf
@@ -850,6 +851,9 @@ async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
         if i > 0 {
             step["after"] = json!([format!("u{:02}", i - 1)]);
         }
+        if i == 24 {
+            step["doc"] = json!("Ship the parser fix");
+        }
         steps.insert(id.clone(), step);
         statuses.push((&*Box::leak(id.into_boxed_str()), "succeeded"));
     }
@@ -879,7 +883,7 @@ async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
     let shelf = between(&html, "class=\"done-shelf\"", "class=\"shelf-more");
     assert!(shelf.contains("25 done units · 25 steps"), "{shelf}");
     assert_eq!(
-        shelf.matches("class=\"box solo done\"").count(),
+        shelf.matches("class=\"box solo done shelf-row\"").count(),
         20,
         "{shelf}"
     );
@@ -889,6 +893,17 @@ async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
         "{shelf}"
     );
     assert!(!shelf.contains("id=\"n-u04\""), "{shelf}");
+    // a row says its title first and its id after it in mono, once
+    let row = between(shelf, "id=\"n-u24\"", "</a>");
+    assert!(
+        row.contains("<span class=\"fb-name\"><span class=\"sref\"><span class=\"sref-t\">Ship the parser fix</span> <code class=\"sref-id\">u24</code></span></span>"),
+        "{row}"
+    );
+    assert_eq!(row.matches("Ship the parser fix").count(), 1, "{row}");
+    assert!(
+        row.contains("<span class=\"vh\"> took 1 hour 24 minutes</span>"),
+        "{row}"
+    );
     assert!(
         shelf.contains("<span class=\"fb-ago\"><time data-ago=\"2026-10-06T11:24:00Z\""),
         "{shelf}"
@@ -910,7 +925,10 @@ async fn the_shelf_draws_the_latest_done_units_and_sends_only_their_edges() {
     }
     // Show: Done draws every one
     let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
-    assert_eq!(html.matches("class=\"box solo done\"").count(), 25);
+    assert_eq!(
+        html.matches("class=\"box solo done shelf-row\"").count(),
+        25
+    );
     assert_eq!(edges(&html).len(), 24);
 }
 
@@ -935,7 +953,7 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
     let (status, page) = f.get(&format!("/projects/id/{}/units/alpha", f.id)).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(
-        page.contains("<p class=\"meta unit-sum\">2 steps · 1 pending · 1 succeeded</p>"),
+        page.contains(&format!("<p class=\"meta unit-sum\">2 steps · 1 pending · 1 succeeded · <a href=\"/projects/id/{}/log?unit=alpha\">Log</a></p>", f.id)),
         "{page}"
     );
     let edges = between(&page, "<sluice-board class=\"board\" edges=\"", "\">");
@@ -948,4 +966,144 @@ async fn a_failure_is_counted_as_the_dashboard_counts_it_and_the_unit_page_draws
         "only the lines inside the unit: {edges}"
     );
     assert!(page.contains("<svg class=\"edges\""), "{page}");
+}
+
+/// A paused step has one name, "paused", and is counted as paused everywhere it is counted:
+/// the summary line and its bar, the home row, and the step page, which says who paused it
+/// (from the plan edit that did) instead of "Waits on: paused".
+#[tokio::test]
+async fn a_paused_step_is_named_and_counted_paused_on_every_surface() {
+    let f = Fixture::new().await;
+    let held = f
+        .project(
+            "held",
+            json!({"steps":{
+                "hold":{"run":"custom.open","doc":"Hold the release","paused":true},
+                "next":{"run":"custom.open","after":["hold"]},
+                "done":{"run":"custom.open"}}}),
+            &[("done", "succeeded")],
+        )
+        .await;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            let edit: sluice_model::events::Event = serde_json::from_value(json!({
+                "kind":"plan.edit","rev":2,"author":"owner","reason":"",
+                "ops":[{"op":"add","path":"/steps/hold/paused","value":true}]}))
+            .unwrap();
+            tx.append_record(Some(held), edit)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let (status, html) = f.get(&format!("/projects/id/{held}")).await;
+    assert_eq!(status, StatusCode::OK, "{html}");
+    let sum = between(&html, "class=\"sum-n", "</span>");
+    assert!(sum.contains("3 steps · 1 succeeded · 1 paused"), "{sum}");
+    assert!(
+        html.contains("<i class=\"b-paused\" style=\"flex:1\">"),
+        "{html}"
+    );
+    let reads = sluice_store::ReadPool::open(f._home.path(), 1).unwrap();
+    let snapshot = reads
+        .snapshot(|c| {
+            sluice_web::views::load_snapshot(c, sluice_web::views::FunctionCatalog::default())
+        })
+        .await
+        .unwrap();
+    let project = snapshot.projects.iter().find(|p| p.id == held).unwrap();
+    assert_eq!(
+        (
+            project.counts.paused,
+            project.counts.pending,
+            project.counts.total()
+        ),
+        (1, 1, 3)
+    );
+    let home = sluice_web::views::home::HomeView::new(&snapshot)
+        .body()
+        .unwrap();
+    let home = home.as_str();
+    let row = home
+        .split("<li class=\"proj\">")
+        .find(|row| row.contains(" held</span>"))
+        .unwrap_or_else(|| panic!("no row for held: {home}"));
+    assert!(
+        row.contains("1 of 3 · <span class=\"p-paused\">1 paused</span>"),
+        "{row}"
+    );
+    let (_, step) = f.get(&format!("/projects/id/{held}/steps/hold")).await;
+    let hold = between(&step, "<p class=\"d-hold\">", "</p>");
+    assert!(hold.contains("Paused by the owner"), "{hold}");
+    assert!(
+        !step.contains("Waits on: paused") && !step.contains(">paused</li>"),
+        "{step}"
+    );
+    // its page links its log
+    assert!(
+        step.contains(&format!(
+            "href=\"/projects/id/{held}/log?step=hold\">Log</a>"
+        )),
+        "{step}"
+    );
+}
+
+/// A unit's log is what its steps did and said and its own records; the lease bookkeeping is
+/// left out of All and kept for whoever asks for it.
+#[tokio::test]
+async fn a_units_log_keeps_to_its_steps_and_all_leaves_leases_out() {
+    let f = Fixture::new().await;
+    let id = f.id;
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            for event in [
+                json!({"kind":"step.status","step":"alpha-build","from":"running","to":"succeeded","error":null,"run_ids":[],"needs":{}}),
+                json!({"kind":"step.status","step":"beta-build","from":"running","to":"failed","error":null,"run_ids":[],"needs":{}}),
+                json!({"kind":"step.lease","step":"alpha-build","run":sluice_model::ids::RunId::new(),"lease":7,"resource":"cpu","amount":1,"state":"held","reason":null}),
+            ] {
+                let event: sluice_model::events::Event = serde_json::from_value(event).unwrap();
+                tx.append_record(Some(id), event)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let reads = sluice_store::ReadPool::open(f._home.path(), 1).unwrap();
+    let said = |raw: &'static str| {
+        let reads = reads.clone();
+        async move {
+            let page = sluice_web::views::log::load(
+                &reads,
+                Some(id),
+                sluice_web::views::log::LogQuery::parse(raw).unwrap(),
+            )
+            .await
+            .unwrap();
+            page.rows
+                .iter()
+                .map(|r| (r.kind.clone(), r.summary.clone()))
+                .collect::<Vec<_>>()
+        }
+    };
+    let alpha = said("unit=alpha").await;
+    assert!(
+        alpha.iter().any(|(_, s)| s.starts_with("alpha-build")),
+        "{alpha:?}"
+    );
+    assert!(
+        !alpha.iter().any(|(_, s)| s.contains("beta-build")),
+        "{alpha:?}"
+    );
+    assert!(!alpha.iter().any(|(k, _)| k == "step.lease"), "{alpha:?}");
+    let all = said("").await;
+    assert!(all.iter().any(|(_, s)| s.contains("beta-build")), "{all:?}");
+    assert!(!all.iter().any(|(k, _)| k == "step.lease"), "{all:?}");
+    let leases = said("unit=alpha&kind=step.lease").await;
+    assert_eq!(leases.len(), 1, "{leases:?}");
+    let (_, unit) = f.get(&format!("/projects/id/{id}/units/alpha")).await;
+    assert!(
+        unit.contains(&format!(
+            "href=\"/projects/id/{id}/log?unit=alpha\">Log</a>"
+        )),
+        "{unit}"
+    );
 }

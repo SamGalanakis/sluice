@@ -4,7 +4,9 @@ When you need a person (a decision, an approval, a value only they know), ask th
 question to them is `ask(project, to="owner", ...)`. The dashboard's Inbox (`/inbox`) shows
 every open question to the owner with a red count in its nav; the person answers there, and
 you read the answering reply. When the home's config sets a `notify` command, each new open
-question to `owner` also runs it once (a note never does).
+question to `owner` also runs it once (a note never does). A note to the owner (a `say`) waits under "Unread
+notes" until the owner marks it read there or on its thread; opening the thread does not, so
+a note is never read for having been shown.
 
 ## Asking and waiting
 - `ask(project, to="owner", body, title=..., ui=..., input=..., data=...)` → its receipt

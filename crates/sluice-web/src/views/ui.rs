@@ -49,13 +49,45 @@ pub fn quiet_glyph() -> TrustedHtml {
         icon(Icon::Hourglass, 16, "")
     ))
 }
+/// Every state a step reads as, in the order a count says them (what needs someone first), each
+/// with its one word: DESIGN.md's status ramp. Every page names a state from this table, so a
+/// paused step is "paused" everywhere, never "blocked" or "waiting".
+pub const STATES: [(&str, &str); 12] = [
+    ("failed", "failed"),
+    ("cancelled", "cancelled"),
+    ("stale", "stale"),
+    ("quiet", "quiet"),
+    ("running", "running"),
+    ("external", "outside"),
+    ("paused", "paused"),
+    ("blocked", "blocked"),
+    ("pending", "pending"),
+    ("skipped", "skipped"),
+    ("manual", "set by hand"),
+    ("succeeded", "succeeded"),
+];
 /// A status's word: the mark as the board says it ("set by hand", "outside").
 pub fn status_word(mark: &str) -> &str {
-    match mark {
-        "manual" => "set by hand",
-        "external" => "outside",
-        other => other,
+    STATES
+        .iter()
+        .find(|(m, _)| *m == mark)
+        .map_or(mark, |(_, word)| word)
+}
+/// States counted as a summary counts them: each state's number, in `STATES`' order, the
+/// states with none left out ("1 failed · 4 running · 1 paused").
+pub fn state_counts<'a>(states: impl IntoIterator<Item = &'a str>) -> Vec<(usize, &'static str)> {
+    let mut counts = [0usize; STATES.len()];
+    for state in states {
+        if let Some(i) = STATES.iter().position(|(m, _)| *m == state) {
+            counts[i] += 1;
+        }
     }
+    STATES
+        .iter()
+        .zip(counts)
+        .filter(|(_, n)| *n > 0)
+        .map(|((_, word), n)| (n, *word))
+        .collect()
 }
 /// A status as a mark and its word: the glyph, then the word (hidden from a screen reader,
 /// which hears the glyph's name).
@@ -177,6 +209,23 @@ pub fn tally(parts: &[(usize, &str)]) -> String {
         .map(|(_, (n, word))| format!("{n} {word}"))
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// Words cut to `chars` at a word, an ellipsis after them when cut.
+pub fn cut(text: &str, chars: usize) -> String {
+    sluice_model::naming::cut(text, chars)
+}
+/// A type in a few words: a JSON schema reads as its `type` ("object"), not as JSON; a type's
+/// name as itself.
+pub fn type_words(ty: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(ty) {
+        Ok(serde_json::Value::Object(schema)) => schema
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("object")
+            .to_owned(),
+        _ => ty.to_owned(),
+    }
 }
 
 // ---- structure -------------------------------------------------------------------------------

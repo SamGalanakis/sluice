@@ -891,6 +891,27 @@ fn claim_attached_answer(
     Ok(reply)
 }
 
+/// The notes to `identity` it marked read at or after `since` (RFC 3339), oldest first: what
+/// the inbox keeps under "Read today", read from the store, not from a page's memory.
+pub fn read_notes(
+    sql: &Connection,
+    project: ProjectId,
+    identity: &str,
+    since: &str,
+) -> Result<Vec<Message>> {
+    let mut stmt = sql.prepare_cached(&format!(
+        "SELECT {MESSAGE_JSON} FROM messages WHERE project_id=?1 AND \"to\"=?2 AND needs_reply=0 AND read_at>=?3 AND id<=coalesce((SELECT cursor FROM readers r WHERE r.project_id=messages.project_id AND r.identity=?2 AND r.stream='owner' AND r.thread=messages.thread),0) ORDER BY thread,id"
+    ))?;
+    let json = stmt
+        .query_map(params![project.to_string(), identity, since], |r| {
+            r.get::<_, String>(0)
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    json.into_iter()
+        .map(|s| serde_json::from_str(&s).map_err(StoreError::from))
+        .collect()
+}
+
 /// The caller's inbox: its open questions lead, followed by its unread notes grouped
 /// by thread, unread by `identity`'s read watermarks. History is every message in
 /// any conversation `identity` took part in.
@@ -1125,6 +1146,8 @@ pub fn mark_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<Messag
         |r| r.get(0),
     )?;
     tx.sql().execute("INSERT INTO readers(project_id,identity,stream,thread,cursor) VALUES (?1,?2,'owner',?3,?4) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=max(cursor,excluded.cursor)",params![read.project.to_string(),read.identity,read.thread,watermark])?;
+    // each message to the reader it takes off the unread list, stamped once with when
+    tx.sql().execute("UPDATE messages SET read_at=?5 WHERE project_id=?1 AND thread=?2 AND \"to\"=?3 AND id<=?4 AND read_at IS NULL",params![read.project.to_string(),read.thread,read.identity,watermark,now()?])?;
     changed(tx, read.project);
     Ok(MessageId(
         reader(

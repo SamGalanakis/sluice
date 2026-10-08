@@ -44,16 +44,29 @@ impl MessageItem {
     /// Its body under its title: without its first line when the title is that line whole,
     /// so a question never says its opening twice.
     pub fn shown_body(&self) -> TrustedHtml {
-        let titled = self
-            .message
-            .title
-            .as_deref()
-            .is_some_and(|t| !t.trim().is_empty());
         let body = &self.message.body;
         let mut lines = body.lines().skip_while(|l| l.trim().is_empty());
         let first = lines.next().unwrap_or("");
         let whole = crate::markdown::plain(first);
-        if titled || whole.is_empty() || headline(body, 90) != whole {
+        // its first line said again: the title it became, or a title that is that line
+        let same = |a: &str, b: &str| {
+            let key = |t: &str| {
+                t.trim()
+                    .trim_end_matches(['.', ':', '?', '!'])
+                    .to_lowercase()
+            };
+            key(a) == key(b)
+        };
+        let repeats = match self
+            .message
+            .title
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+        {
+            Some(title) => same(title, &whole),
+            None => headline(body, 90) == whole,
+        };
+        if whole.is_empty() || !repeats {
             return self.body.clone();
         }
         let rest: Vec<&str> = lines.collect();
@@ -96,6 +109,8 @@ pub struct ThreadView {
     pub through: i64,
     /// Its step's title, while the plan has the step and it has one.
     pub step_title: String,
+    /// On its own page, its notes to the owner not marked read yet.
+    pub unread: usize,
 }
 impl ThreadView {
     pub fn href(&self) -> String {
@@ -137,6 +152,10 @@ impl ThreadView {
             .strip_prefix("step-")
             .filter(|s| *s == self.recipient)
     }
+    /// Its newest message, where "Jump to latest" leads.
+    pub fn last_id(&self) -> i64 {
+        self.messages.last().map_or(0, MessageItem::id)
+    }
     /// Its step as the way back names it: the title (cut to 64), else "step <id>".
     pub fn step_label(&self) -> String {
         match self.step() {
@@ -176,6 +195,8 @@ pub struct InboxView {
     pub view: MessageView,
     pub questions: Vec<MessageItem>,
     pub threads: Vec<ThreadView>,
+    /// On the inbox, the notes the owner marked read in the last day, by thread: "Read today".
+    pub read: Vec<ThreadView>,
 }
 impl InboxView {
     pub fn title(&self) -> &str {
@@ -186,10 +207,22 @@ impl InboxView {
             MessageView::Thread => "Thread",
         }
     }
-    /// The tab's title: a thread by its name, a project's pages with the project's name.
+    /// The tab's title: a thread by what it is about ("Thread · <its step's title>"), a
+    /// project's pages with the project's name.
     pub fn page_title(&self) -> String {
         let what = match (&self.view, self.threads.first()) {
-            (MessageView::Thread, Some(thread)) => thread.name(),
+            (MessageView::Thread, Some(thread)) => format!(
+                "Thread · {}",
+                sluice_model::naming::cut(
+                    if thread.step_title.is_empty() {
+                        thread.name()
+                    } else {
+                        thread.step_title.clone()
+                    }
+                    .as_str(),
+                    48
+                )
+            ),
             _ => self.title().to_owned(),
         };
         match self
@@ -216,6 +249,10 @@ impl InboxView {
     pub fn unread_notes(&self) -> usize {
         self.threads.iter().map(|t| t.messages.len()).sum()
     }
+    /// The notes read in the last day, across their threads.
+    pub fn read_notes(&self) -> usize {
+        self.read.iter().map(|t| t.messages.len()).sum()
+    }
     /// The open questions someone waits on that are put to the owner: what the nav's Inbox
     /// counts.
     pub fn for_you(&self) -> Vec<&MessageItem> {
@@ -235,6 +272,13 @@ impl InboxView {
     pub fn stopped(&self) -> Vec<&MessageItem> {
         self.questions.iter().filter(|q| q.stopped()).collect()
     }
+    /// The project a project's page is in: its name, for the way back.
+    pub fn project_name(&self) -> &str {
+        self.project
+            .and_then(|id| self.nav.projects.iter().find(|p| p.id == id))
+            .map(|p| p.name.as_str())
+            .unwrap_or("")
+    }
     pub fn base(&self) -> String {
         self.project
             .map(|id| format!("/projects/id/{id}"))
@@ -246,10 +290,11 @@ impl InboxView {
     pub fn version(&self) -> String {
         sluice_store::artifacts::fingerprint(
             format!(
-                "{}{:?}{:?}",
+                "{}{:?}{:?}{:?}",
                 self.nav.version(),
                 self.questions,
-                self.threads
+                self.threads,
+                self.read
             )
             .as_bytes(),
         )
@@ -304,6 +349,107 @@ pub(crate) fn render_error(error: askama::Error) -> PublicError {
     }
 }
 
+/// A message as a page draws it.
+fn item(
+    sql: &rusqlite::Connection,
+    p: &super::ProjectView,
+    message: sluice_model::commands::Message,
+) -> Result<MessageItem, sluice_store::StoreError> {
+    let (state, stopped) = match message.state {
+        Some(state) => (
+            match state {
+                QuestionState::Open => "open",
+                QuestionState::Answered => "answered",
+                QuestionState::Closed => "closed",
+            }
+            .into(),
+            messages::question(sql, p.id, message.id)?
+                .stopped
+                .unwrap_or_default(),
+        ),
+        None => ("note".into(), String::new()),
+    };
+    let is_step: bool = sql.query_row(
+        "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+        (p.id.to_string(), &message.from),
+        |r| r.get(0),
+    )?;
+    Ok(MessageItem {
+        project: p.id,
+        project_name: p.name.clone(),
+        body: crate::markdown::render(&message.body),
+        state,
+        stopped,
+        sender_class: if is_step {
+            "step"
+        } else if message.from == "owner" {
+            "owner"
+        } else {
+            "lead"
+        }
+        .into(),
+        answer_json: message
+            .answer
+            .as_ref()
+            .map(serde_json::to_string_pretty)
+            .transpose()?
+            .unwrap_or_default(),
+        message,
+    })
+}
+/// Messages gathered into their threads, the thread with the newest first.
+fn group(
+    sql: &rusqlite::Connection,
+    groups: &mut BTreeMap<(String, String), ThreadView>,
+    p: &super::ProjectView,
+    item: MessageItem,
+) -> Result<(), sluice_store::StoreError> {
+    let key = (p.id.to_string(), item.message.thread.clone());
+    if !groups.contains_key(&key) {
+        let step = item.message.thread.strip_prefix("step-");
+        let in_plan: bool = sql.query_row(
+            "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
+            (p.id.to_string(), step.unwrap_or("")),
+            |r| r.get(0),
+        )?;
+        groups.insert(
+            key.clone(),
+            ThreadView {
+                project: p.id,
+                project_name: p.name.clone(),
+                thread: item.message.thread.clone(),
+                recipient: step
+                    .filter(|_| in_plan)
+                    .unwrap_or(messages::ORCHESTRATOR_STREAM)
+                    .into(),
+                messages: vec![],
+                through: 0,
+                unread: 0,
+                step_title: match step.filter(|_| in_plan) {
+                    Some(step) => {
+                        let names =
+                            sluice_runtime::naming::for_project(sql, &super::home_of(sql), p.id)?;
+                        names
+                            .naming
+                            .step(step)
+                            .map(|n| n.title.clone())
+                            .unwrap_or_default()
+                    }
+                    None => String::new(),
+                },
+            },
+        );
+    }
+    let group = groups.get_mut(&key).expect("thread group");
+    group.through = group.through.max(item.id());
+    group.messages.push(item);
+    Ok(())
+}
+fn threads_of(groups: BTreeMap<(String, String), ThreadView>) -> Vec<ThreadView> {
+    let mut threads: Vec<ThreadView> = groups.into_values().collect();
+    threads.sort_by_key(|t| std::cmp::Reverse(t.through));
+    threads
+}
 pub async fn load(
     reads: &ReadPool,
     project: Option<ProjectId>,
@@ -316,8 +462,17 @@ pub async fn load(
             if let Some(id) = project {
                 messages::resolve_project(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
             }
+            // "today": the last day, so a note read last night is still there in the morning
+            let since = super::rfc3339(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+                    .saturating_sub(86_400),
+            );
             let mut questions = vec![];
             let mut groups = BTreeMap::new();
+            let mut read = BTreeMap::new();
             for p in nav
                 .projects
                 .iter()
@@ -326,105 +481,49 @@ pub async fn load(
                 let selected =
                     messages::messages(sql, p.id, view.clone(), thread.as_deref(), None, "owner")?;
                 for message in selected {
-                    let (state, stopped) = match message.state {
-                        Some(state) => (
-                            match state {
-                                QuestionState::Open => "open",
-                                QuestionState::Answered => "answered",
-                                QuestionState::Closed => "closed",
-                            }
-                            .into(),
-                            messages::question(sql, p.id, message.id)?
-                                .stopped
-                                .unwrap_or_default(),
-                        ),
-                        None => ("note".into(), String::new()),
-                    };
-                    let is_step: bool = sql.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
-                        (p.id.to_string(), &message.from),
-                        |r| r.get(0),
-                    )?;
-                    let item = MessageItem {
-                        project: p.id,
-                        project_name: p.name.clone(),
-                        body: crate::markdown::render(&message.body),
-                        state,
-                        stopped,
-                        sender_class: if is_step {
-                            "step"
-                        } else if message.from == "owner" {
-                            "owner"
-                        } else {
-                            "lead"
-                        }
-                        .into(),
-                        answer_json: message
-                            .answer
-                            .as_ref()
-                            .map(serde_json::to_string_pretty)
-                            .transpose()?
-                            .unwrap_or_default(),
-                        message,
-                    };
+                    let item = item(sql, p, message)?;
                     if item.state == "open"
                         && matches!(view, MessageView::Inbox | MessageView::Questions)
                     {
                         questions.push(item);
                     } else {
-                        let key = (p.id.to_string(), item.message.thread.clone());
-                        if !groups.contains_key(&key) {
-                            let step = item.message.thread.strip_prefix("step-");
-                            let in_plan: bool = sql.query_row(
-                                "SELECT EXISTS(SELECT 1 FROM steps WHERE project_id=?1 AND step_id=?2)",
-                                (p.id.to_string(), step.unwrap_or("")),
-                                |r| r.get(0),
-                            )?;
-                            groups.insert(
-                                key.clone(),
-                                ThreadView {
-                                    project: p.id,
-                                    project_name: p.name.clone(),
-                                    thread: item.message.thread.clone(),
-                                    recipient: step
-                                        .filter(|_| in_plan)
-                                        .unwrap_or(messages::ORCHESTRATOR_STREAM)
-                                        .into(),
-                                    messages: vec![],
-                                    through: 0,
-                                    step_title: match step.filter(|_| in_plan) {
-                                        Some(step) => {
-                                            let names = sluice_runtime::naming::for_project(
-                                                sql,
-                                                &super::home_of(sql),
-                                                p.id,
-                                            )?;
-                                            names
-                                                .naming
-                                                .step(step)
-                                                .map(|n| n.title.clone())
-                                                .unwrap_or_default()
-                                        }
-                                        None => String::new(),
-                                    },
-                                },
-                            );
-                        }
-                        let group = groups.get_mut(&key).expect("thread group");
-                        group.through = group.through.max(item.id());
-                        group.messages.push(item);
+                        group(sql, &mut groups, p, item)?;
+                    }
+                }
+                if matches!(view, MessageView::Inbox) {
+                    for message in messages::read_notes(sql, p.id, "owner", &since)? {
+                        let item = item(sql, p, message)?;
+                        group(sql, &mut read, p, item)?;
                     }
                 }
             }
             questions.sort_by_key(MessageItem::id);
-            let mut threads: Vec<ThreadView> = groups.into_values().collect();
-            threads.sort_by_key(|t| std::cmp::Reverse(t.through));
+            let mut threads = threads_of(groups);
+            if matches!(view, MessageView::Thread) {
+                // what is still unread on it: marked read only when the owner asks
+                for thread in &mut threads {
+                    let cursor =
+                        messages::reader(sql, thread.project, "owner", "owner", &thread.thread)?
+                            .cursor
+                            .0;
+                    thread.unread = thread
+                        .messages
+                        .iter()
+                        .filter(|m| {
+                            m.state == "note"
+                                && m.message.to.as_deref() == Some("owner")
+                                && m.id() > cursor
+                        })
+                        .count();
+                }
+            }
             Ok(InboxView {
                 nav,
                 project,
                 view,
                 questions,
                 threads,
+                read: threads_of(read),
             })
         })
         .await

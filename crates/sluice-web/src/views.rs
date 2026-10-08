@@ -90,6 +90,8 @@ impl Viewer {
         self.theme.as_deref().unwrap_or("")
     }
 }
+/// A project's steps by state, each step counted once: `pending` leaves out the paused ones,
+/// which `paused` counts (a pending step held by its own pause or its project's).
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Counts {
     pub pending: usize,
@@ -106,6 +108,7 @@ pub struct Counts {
 impl Counts {
     pub fn total(&self) -> usize {
         self.pending
+            + self.paused
             + self.running
             + self.succeeded
             + self.failed
@@ -124,6 +127,9 @@ impl Counts {
             "cancelled"
         } else if self.total() > 0 && self.succeeded + self.skipped == self.total() {
             "succeeded"
+        } else if self.paused > 0 && self.pending == 0 {
+            // nothing is left but what is held
+            "paused"
         } else {
             "pending"
         }
@@ -145,6 +151,14 @@ pub struct RunningView {
     pub said: String,
 }
 
+/// A step that stopped: failed, or cancelled by the owner, with its failure's one sentence
+/// (`failure::Failure`'s headline: "Stopped at its wall-clock cap after 10h 0m.").
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoppedView {
+    pub step: String,
+    pub cancelled: bool,
+    pub headline: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectView {
     pub id: ProjectId,
@@ -157,8 +171,8 @@ pub struct ProjectView {
     pub changed: String,
     pub counts: Counts,
     pub running: Vec<RunningView>,
-    pub failed_steps: Vec<String>,
-    pub cancelled_steps: Vec<String>,
+    /// Its failed steps, then the ones the owner cancelled, in plan order.
+    pub stopped: Vec<StoppedView>,
     /// How the index names its running, failed and cancelled steps (`ui::StepRef`), by id.
     #[serde(default)]
     pub names: std::collections::BTreeMap<String, ui::StepRef>,
@@ -173,6 +187,16 @@ impl ProjectView {
     }
     pub fn href(&self) -> String {
         format!("/projects/id/{}", self.id)
+    }
+    /// How many stopped steps the index lists by name; the rest it counts.
+    pub const STOPPED_ROWS: usize = 4;
+    /// The stopped steps the index lists, failures first.
+    pub fn stopped_rows(&self) -> &[StoppedView] {
+        &self.stopped[..self.stopped.len().min(Self::STOPPED_ROWS)]
+    }
+    /// The stopped steps past `STOPPED_ROWS`.
+    pub fn stopped_more(&self) -> usize {
+        self.stopped.len().saturating_sub(Self::STOPPED_ROWS)
     }
     /// Its running steps gone quiet (`quiet_after`).
     pub fn quiet(&self) -> usize {
@@ -189,8 +213,11 @@ impl ProjectView {
         } else if self.counts.succeeded + self.counts.skipped == self.counts.total() {
             "Finished."
         } else if self.counts.failed > 0 {
-            // its failure line already says "Stopped: … failed"
+            // its stopped rows already say what failed
             ""
+        } else if self.counts.status() == "paused" {
+            // all that is left is held
+            "Paused."
         } else {
             "Nothing is running."
         }
@@ -756,8 +783,7 @@ pub fn load_snapshot(
             changed: row.get(8)?,
             counts: Counts::default(),
             running: vec![],
-            failed_steps: vec![],
-            cancelled_steps: vec![],
+            stopped: vec![],
             names: Default::default(),
         };
         let mut counts = c.prepare_cached("SELECT status,count(*),sum(paused IS NOT NULL AND paused <> 'false') FROM steps WHERE project_id=?1 GROUP BY status")?;
@@ -765,9 +791,17 @@ pub fn load_snapshot(
         while let Some(r) = count_rows.next()? {
             let status: String = r.get(0)?;
             let n = r.get::<_, i64>(1)? as usize;
-            view.counts.paused += r.get::<_, i64>(2)? as usize;
             match status.as_str() {
-                "pending" => view.counts.pending = n,
+                // a pending step held by a pause is paused, as its card says (`StepView::new`)
+                "pending" => {
+                    let held = if view.paused {
+                        n
+                    } else {
+                        r.get::<_, i64>(2)? as usize
+                    };
+                    view.counts.pending = n - held;
+                    view.counts.paused = held;
+                }
                 "running" => view.counts.running = n,
                 "succeeded" => view.counts.succeeded = n,
                 "failed" => view.counts.failed = n,
@@ -779,17 +813,23 @@ pub fn load_snapshot(
         let mut steps = c.prepare_cached("SELECT step_id,status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]'),max(coalesce(progress_at,''),coalesce((SELECT at FROM messages m WHERE m.project_id=steps.project_id AND m.thread='step-'||steps.step_id AND m.\"from\"=steps.step_id ORDER BY m.id DESC LIMIT 1),'')) FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
         // a failed step's error says whether the owner cancelled it: counted apart
         let mut step_rows = steps.query([&raw])?;
+        let mut cancels = vec![];
         while let Some(r) = step_rows.next()? {
             let status: String = r.get(1)?;
             if status == "failed" {
                 let error: Option<String> = r.get(4)?;
-                let cancelled = error.as_deref().is_some_and(failure::stored_is_cancel);
-                if cancelled {
+                let failure = failure::Failure::parse(error.as_deref().unwrap_or(""), None);
+                let stopped = StoppedView {
+                    step: r.get(0)?,
+                    cancelled: failure.cancelled,
+                    headline: failure.headline,
+                };
+                if stopped.cancelled {
                     view.counts.failed -= 1;
                     view.counts.cancelled += 1;
-                    view.cancelled_steps.push(r.get(0)?);
+                    cancels.push(stopped);
                 } else {
-                    view.failed_steps.push(r.get(0)?);
+                    view.stopped.push(stopped);
                 }
             } else {
                 view.running.push(RunningView {
@@ -806,18 +846,15 @@ pub fn load_snapshot(
                 });
             }
         }
+        view.stopped.extend(cancels);
         // the steps the index lists, named (`sluice_model::naming`)
-        if !(view.running.is_empty()
-            && view.failed_steps.is_empty()
-            && view.cancelled_steps.is_empty())
-        {
+        if !(view.running.is_empty() && view.stopped.is_empty()) {
             let names = sluice_runtime::naming::for_project(c, &home_of(c), id)?;
             for step in view
                 .running
                 .iter()
                 .map(|r| r.step.clone())
-                .chain(view.failed_steps.iter().cloned())
-                .chain(view.cancelled_steps.iter().cloned())
+                .chain(view.stopped.iter().map(|s| s.step.clone()))
                 .collect::<Vec<_>>()
             {
                 let named = ui::StepRef::new(&step, names.naming.step(&step));

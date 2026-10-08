@@ -220,6 +220,27 @@ impl Failure {
             None => (text, "", ""),
         }
     }
+    /// Its kind as plain words: "wall-clock cap" (`WallCap`), "fn failure" (`fn_failure`),
+    /// "exited without submit".
+    pub fn kind_words(&self) -> String {
+        if self.kind == "WallCap" {
+            return "wall-clock cap".into();
+        }
+        let mut words = String::new();
+        for (i, c) in self.kind.chars().enumerate() {
+            if c == '_' {
+                words.push(' ');
+            } else if c.is_uppercase() {
+                if i > 0 {
+                    words.push(' ');
+                }
+                words.extend(c.to_lowercase());
+            } else {
+                words.push(c);
+            }
+        }
+        words
+    }
     /// A cancel's sentence under its "Cancelled" head: the reason, without the word again.
     pub fn cancel_words(&self) -> &str {
         self.headline

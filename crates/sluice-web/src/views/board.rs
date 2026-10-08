@@ -188,8 +188,9 @@ impl RelationKind {
     }
 }
 /// A prerequisite in another unit that a step still waits for, said in words on its card
-/// where no line shows it: on a phone, without script, or when the view leaves its source out
-/// ("Waits for l-a1 (running) and l-d1").
+/// where no line shows it: on a phone, without script, in a lane matrix's row (a table draws no
+/// lines), past a matrix, or when the view leaves its source out ("Waits for l-a1 (running) and
+/// l-d1").
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct Wait {
     pub key: String,
@@ -199,19 +200,20 @@ pub struct Wait {
     pub opens: String,
     /// What the source is doing, when that is not just waiting itself: "running", "failed".
     pub note: String,
-    /// The board draws the line from it (else the words say it is not in this view).
-    pub drawn: bool,
+    /// Its source is on the board as shown (else the words say it is not in this view).
+    pub shown: bool,
+    /// A line draws it; else only the words say it.
+    pub line: bool,
 }
-/// The words of a step's waits: "Waits for a (running), b and c". `away` when a source is not
-/// on the board as shown, so the words stay where the lines are drawn too. A name traces the
-/// line from its source to `step`. Past three sources the rest are a count, "and 79 more",
-/// which opens the step, whose page lists every gate: the words stay a line or two at any
-/// fan-in.
+/// The words of a step's waits: "Waits for a (running), b and c". `said` when a line does not
+/// say one of them, so the words show where the lines are drawn too. A name traces its source.
+/// Past three sources the rest are a count, "and 79 more", which opens the step, whose page
+/// lists every gate: the words stay a line or two at any fan-in.
 pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama::Error> {
     const SHOWN: usize = 3;
     #[derive(Template)]
     #[template(
-        source = "<p class=\"waits{% if away %} away{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{{ w.name }}</a>{% let off = !w.drawn && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
+        source = "<p class=\"waits{% if said %} said{% endif %}\">Waits for {% for w in named %}{% if !loop.first %}{% if loop.last && more == 0 %} and {% else %}, {% endif %}{% endif %}<a href=\"{{ w.href }}\"{% if !w.opens.is_empty() %} data-opens=\"{{ w.opens }}\"{% endif %} data-from=\"{{ w.key }}\" data-to=\"{{ to }}\">{{ w.name }}</a>{% let off = !w.shown && !none %}{% if !w.note.is_empty() || off %} ({{ w.note }}{% if off %}{% if !w.note.is_empty() %}, {% endif %}not in this view{% endif %}){% endif %}{% endfor %}{% if more > 0 %} and <a href=\"{{ href }}\" data-opens=\"{{ id }}\">{{ more }} more</a>{% endif %}{% if none %}, not in this view{% endif %}</p>",
         ext = "html"
     )]
     struct Words<'a> {
@@ -220,7 +222,7 @@ pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama
         id: &'a str,
         named: &'a [Wait],
         more: usize,
-        away: bool,
+        said: bool,
         /// No source is in this view: said once, after them all.
         none: bool,
     }
@@ -234,8 +236,8 @@ pub fn waits_html(step: &StepView, waits: &[Wait]) -> Result<TrustedHtml, askama
         id: step.id.as_str(),
         named: &waits[..shown],
         more: waits.len() - shown,
-        away: waits.iter().any(|w| !w.drawn),
-        none: waits.iter().all(|w| !w.drawn),
+        said: waits.iter().any(|w| !w.line),
+        none: waits.iter().all(|w| !w.shown),
     })
 }
 #[derive(Clone, Debug, Serialize)]
@@ -258,8 +260,9 @@ pub struct UnitView {
     pub steps: Vec<StepView>,
     pub rows: Vec<Vec<StepView>>,
     pub last_message: String,
-    /// Who sent its last message.
+    /// Who sent its last message, and its thread.
     pub last_from: String,
+    pub last_thread: String,
     pub changed: String,
     /// The unit is one step in the plan: the board draws that step's card alone, no box.
     pub solo: bool,
@@ -269,9 +272,11 @@ pub struct UnitView {
     pub open: bool,
 }
 /// A part of the board under one label ("Stopped", "Running", "Waiting"; none under Plan
-/// order): its units in layers by dependency depth, so the lines between them run down.
+/// order): first its units that are rows of a recipe's lane matrix, a matrix a recipe; then the
+/// rest in layers by dependency depth, so the lines between them run down.
 pub struct Band<'a> {
     pub label: &'static str,
+    pub matrices: Vec<Matrix<'a>>,
     pub layers: Vec<Vec<&'a UnitView>>,
     /// Its units no line joins to any other: after the layers, tallest first, packed from the
     /// start of the row (centring them would leave holes and imply a wait that is not there).
@@ -279,8 +284,6 @@ pub struct Band<'a> {
 }
 /// The board as drawn: the bands of live and pending units, then the done units on one shelf.
 pub struct Layout<'a> {
-    /// Each recipe with a view: its live units as one lane matrix, before the bands.
-    pub matrices: Vec<Matrix<'a>>,
     pub bands: Vec<Band<'a>>,
     /// The done units the shelf draws, the latest finished first: all of them under Show: Done
     /// or a search, else the latest `SHELF`.
@@ -303,40 +306,7 @@ impl UnitView {
     /// Its steps counted by how each reads, the states that need someone first: a quiet
     /// running step counts as quiet, not running. Zero counts are left out.
     pub fn tally(&self) -> Vec<(usize, &'static str)> {
-        let order = [
-            "failed",
-            "cancelled",
-            "stale",
-            "quiet",
-            "running",
-            "paused",
-            "pending",
-            "skipped",
-            "succeeded",
-        ];
-        let mut counts = [0usize; 9];
-        for step in &self.steps {
-            let word = if step.is_quiet() {
-                "quiet"
-            } else if step.paused && step.status != "running" {
-                "paused"
-            } else {
-                match step.mark.as_str() {
-                    "manual" => "succeeded",
-                    "external" => "running",
-                    m => m,
-                }
-            };
-            if let Some(i) = order.iter().position(|o| *o == word) {
-                counts[i] += 1;
-            }
-        }
-        order
-            .iter()
-            .zip(counts)
-            .filter(|(_, n)| *n > 0)
-            .map(|(w, n)| (n, *w))
-            .collect()
+        super::ui::state_counts(self.steps.iter().map(StepView::state))
     }
     /// How tall its box draws, in rows of cards.
     pub fn height(&self) -> usize {
@@ -432,7 +402,18 @@ impl UnitView {
         }
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
-        TrustedHtml::from_template(&UnitTemplate { unit: self })
+        TrustedHtml::from_template(&UnitTemplate {
+            unit: self,
+            shelf: false,
+        })
+    }
+    /// Its line on the done shelf: a unit of several steps its fold, a one-step unit a row of
+    /// its own (its title, its id, when it finished), never a pill.
+    pub fn shelf_body(&self) -> Result<TrustedHtml, askama::Error> {
+        TrustedHtml::from_template(&UnitTemplate {
+            unit: self,
+            shelf: true,
+        })
     }
     /// It has a title apart from its id.
     pub fn titled(&self) -> bool {
@@ -444,6 +425,20 @@ impl UnitView {
             self.id.as_str()
         } else {
             &self.title
+        }
+    }
+    /// Its heading cut to `chars`: a link's accessible name stays short, the whole title its
+    /// description.
+    pub fn heading_cut(&self, chars: usize) -> String {
+        sluice_model::naming::cut(self.heading(), chars)
+    }
+    /// A matrix row's header as a screen reader names it: its title cut to 72 characters, then
+    /// its id.
+    pub fn row_name(&self) -> String {
+        if self.titled() {
+            format!("{} {}", self.heading_cut(72), self.id)
+        } else {
+            self.id.to_string()
         }
     }
     pub fn href(&self, project: &ProjectId) -> String {
@@ -472,21 +467,28 @@ impl UnitView {
             .find(|m| self.steps.iter().any(|s| s.display_mark() == *m))
             .unwrap_or("pending")
     }
+    /// How a lane matrix's head counts its row: by the step that most needs someone ("failed",
+    /// "quiet", "running", "paused", "blocked"), else "pending" (it says "waiting").
+    pub fn row_state(&self) -> &'static str {
+        match self.mark() {
+            "failed" => "failed",
+            "cancelled" => "cancelled",
+            "stale" => "stale",
+            "running" | "external" if self.steps.iter().any(StepView::is_quiet) => "quiet",
+            "running" | "external" => "running",
+            "paused" => "paused",
+            _ if self.steps.iter().any(|s| s.blocked) => "blocked",
+            _ => "pending",
+        }
+    }
     /// Where a lane matrix puts its row: 0 needs attention (a step failed, cancelled or stale,
-    /// or a quiet run), 1 running, 2 waiting.
+    /// or a quiet run), 1 running, 2 paused or held, 3 waiting.
     pub fn row_rank(&self) -> u8 {
-        if self.steps.iter().any(|s| {
-            s.is_quiet() || matches!(s.status.as_str(), "failed" | "stale")
-        }) {
-            0
-        } else if self
-            .steps
-            .iter()
-            .any(|s| s.status == "running" || s.mark == "external")
-        {
-            1
-        } else {
-            2
+        match self.row_state() {
+            "failed" | "cancelled" | "stale" | "quiet" => 0,
+            "running" => 1,
+            "paused" | "blocked" => 2,
+            _ => 3,
         }
     }
     /// Every wait of its steps on other units, once each, and the first step that waits.
@@ -552,6 +554,14 @@ impl UnitView {
                 .map(|root| super::unit_view::draw(root, self, false)),
             view_error: recipe.and_then(|r| r.view_error()),
         })
+    }
+    /// Its last message's thread, where the unit page's "Last message" leads.
+    pub fn last_thread_href(&self, project: &ProjectId) -> String {
+        super::threads::thread_url(*project, &self.last_thread)
+    }
+    /// Its steps' records and messages, and its own, on the project's log.
+    pub fn log_href(&self, project: &ProjectId) -> String {
+        format!("/projects/id/{project}/log?unit={}", self.id)
     }
     /// Its last message, drawn as message bodies are.
     pub fn last_message_html(&self) -> TrustedHtml {
@@ -622,29 +632,30 @@ pub struct Matrix<'a> {
     pub rows: Vec<&'a UnitView>,
     pub view: Option<&'a sluice_model::openui::Component>,
     pub view_error: Option<&'a str>,
+    /// Its head's level: an `h3` under its band's label, an `h2` where no label is drawn.
+    pub level: u8,
 }
 impl Matrix<'_> {
-    /// "14 units · 1 failed · 3 quiet · 10 running": its rows counted by how each reads.
+    /// "14 units · 1 failed · 3 quiet · 9 running · 1 paused": its rows counted by how each
+    /// reads (`UnitView::row_state`), a row with nothing else to say "waiting".
     pub fn tally(&self) -> String {
-        let mut parts = vec![(self.rows.len(), if self.rows.len() == 1 { "unit" } else { "units" })];
-        for (word, test) in [
-            ("failed", "failed"),
-            ("cancelled", "cancelled"),
-            ("stale", "stale"),
-        ] {
-            parts.push((self.rows.iter().filter(|u| u.mark() == test).count(), word));
-        }
-        let quiet = self.rows.iter().filter(|u| u.steps.iter().any(StepView::is_quiet)).count();
-        let running = self
-            .rows
-            .iter()
-            .filter(|u| u.mark() == "running" && !u.steps.iter().any(StepView::is_quiet))
-            .count();
-        parts.push((quiet, "quiet"));
-        parts.push((running, "running"));
-        let waiting = self.rows.len() - parts[1..].iter().map(|(n, _)| n).sum::<usize>();
-        parts.push((waiting, "waiting"));
+        let mut parts = vec![(
+            self.rows.len(),
+            if self.rows.len() == 1 { "unit" } else { "units" },
+        )];
+        parts.extend(
+            super::ui::state_counts(self.rows.iter().map(|u| u.row_state()))
+                .into_iter()
+                .map(|(n, w)| (n, if w == "pending" { "waiting" } else { w })),
+        );
         super::ui::tally(&parts)
+    }
+    /// The summary column's head, from what its view shows: "Ticket · last message".
+    pub fn summary_head(&self) -> String {
+        self.view
+            .map(super::unit_view::head)
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "Summary".into())
     }
     /// A row's summary: its recipe's view drawn for the unit.
     pub fn summary(&self, unit: &UnitView) -> TrustedHtml {
@@ -688,6 +699,8 @@ impl PlanFacts {
 #[template(path = "unit.html")]
 struct UnitTemplate<'a> {
     unit: &'a UnitView,
+    /// Drawn on the done shelf.
+    shelf: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ProjectView {
@@ -772,6 +785,7 @@ impl ProjectView {
                     rows: rows.into_values().collect(),
                     last_message: String::new(),
                     last_from: String::new(),
+                    last_thread: String::new(),
                     changed: project.changed.clone(),
                     solo: unit.steps.len() == 1,
                     waits: BTreeMap::new(),
@@ -886,23 +900,69 @@ impl ProjectView {
         self.names = names;
         self.settle();
     }
+    /// Where the board draws a unit not done, top down: its band's matrix (even) or the band's
+    /// layers after it (odd); a done unit is on the shelf (`None`). Live first draws Stopped,
+    /// Running, Waiting; Plan order one band.
+    fn place(&self, unit: &UnitView) -> Option<i32> {
+        if unit.done {
+            return None;
+        }
+        let band = if self.order == "live" {
+            match unit.band() {
+                1 => 0,
+                0 => 1,
+                _ => 2,
+            }
+        } else {
+            0
+        };
+        Some(band * 2 + i32::from(!unit.matrix))
+    }
     /// Mark the relations the board draws as lines, and say on each step what it still waits
     /// for in other units. Within a box every relation is a line. Between units a line is a
     /// wait: it joins a source not yet through (succeeded or skipped, or its unit done) to a
-    /// step the view shows in a unit not done. A satisfied source is neither drawn nor said:
-    /// the step's page lists every gate.
+    /// step the view shows in a unit not done, drawn above it or beside it (a line never runs
+    /// up). A lane matrix is a table, not a graph: no line leaves, enters or passes one. A wait
+    /// no line draws (to or from a matrix's row, across a matrix, or up the board) is said in
+    /// words on the step that waits. A satisfied source is neither drawn nor said: the step's
+    /// page lists every gate.
     fn settle(&mut self) {
         let facts = &self.facts;
         let project = self.project.id;
         let mut shown = BTreeSet::new();
+        let mut places = BTreeMap::new();
         for unit in &self.units {
             shown.insert(unit.key());
             shown.extend(unit.steps.iter().map(StepView::key));
+            if let Some(place) = self.place(unit) {
+                places.insert(unit.id.to_string(), place);
+            }
         }
+        // the places a matrix is drawn at
+        let matrices: BTreeSet<i32> = places.values().copied().filter(|p| p % 2 == 0).collect();
         // an end a line can reach: shown and live (a plan input or output is always drawn)
         let live = |key: &str| match facts.unit_of(key) {
             Some(unit) => shown.contains(key) && !facts.done.contains(&unit),
             None => true,
+        };
+        // where an end is drawn: its unit's place; a plan input above every band, a plan
+        // output under them
+        let at = |key: &str| match facts.unit_of(key) {
+            Some(unit) => places.get(&unit).copied(),
+            None if key.starts_with("i:") => Some(-1),
+            None => Some(i32::MAX),
+        };
+        // two ends a line may join: neither a matrix's row, the source not drawn under the
+        // step that waits for it (a line never runs up: a stopped unit waiting on a running
+        // one says so in words), and no matrix drawn between them
+        let clear = |from: &str, to: &str| match (at(from), at(to)) {
+            (Some(a), Some(b)) => {
+                a <= b
+                    && !matrices.contains(&a)
+                    && !matrices.contains(&b)
+                    && !matrices.iter().any(|m| a < *m && *m < b)
+            }
+            _ => false,
         };
         // a source already through: its step succeeded or was skipped, or its unit is done
         let through = |key: &str| match key.split_once(':') {
@@ -913,7 +973,6 @@ impl ProjectView {
             Some(("u", unit)) => facts.done.contains(unit),
             _ => false,
         };
-        // between units, a line is a wait: from a source not through yet to a step that waits
         // a matrix row's stages are its columns: the order inside it needs no line
         let rows: BTreeSet<String> = self
             .units
@@ -928,7 +987,8 @@ impl ProjectView {
                     .unit_of(&from)
                     .is_some_and(|unit| rows.contains(&unit));
             relation.line = !in_row
-                && (!relation.cross || (live(&from) && live(&to) && !through(&from)));
+                && (!relation.cross
+                    || (live(&from) && live(&to) && !through(&from) && clear(&from, &to)));
         }
         for unit in &mut self.units {
             unit.waits.clear();
@@ -940,7 +1000,8 @@ impl ProjectView {
                 let mut waits: Vec<Wait> = vec![];
                 for relation in self.relations.iter().filter(|r| r.cross && r.to.key() == key) {
                     let from = relation.from.key();
-                    if waits.iter().any(|w| w.key == from) {
+                    if let Some(wait) = waits.iter_mut().find(|w| w.key == from) {
+                        wait.line |= relation.line;
                         continue;
                     }
                     let (name, href, opens, doing) = match &relation.from {
@@ -967,7 +1028,8 @@ impl ProjectView {
                         Endpoint::Input(_) | Endpoint::Output(_) => continue,
                     };
                     waits.push(Wait {
-                        drawn: live(&from),
+                        shown: live(&from),
+                        line: relation.line,
                         key: from,
                         name,
                         href,
@@ -984,34 +1046,14 @@ impl ProjectView {
     pub fn href(&self) -> String {
         self.project.href()
     }
-    /// The board as drawn. Live first: the stopped units (a failure, or
-    /// held up by one), then the running, then the waiting; Plan order: every unit not done in one band. Each band
-    /// lays its units in layers by dependency depth among themselves, a layer ordered after the
+    /// The board as drawn. Live first: the stopped units (a failure, or held up by one), then
+    /// the running, then the waiting; Plan order: every unit not done in one band. Each band
+    /// draws its units that are rows of a recipe's lane matrix first, a matrix a recipe (rows
+    /// that need someone first under Live first, plan order under Plan order); then lays its
+    /// other units in layers by dependency depth among themselves, a layer ordered after the
     /// units it follows (so lines run down and seldom cross), ties in the view's order. Every
     /// done unit is on one shelf at the end.
     pub fn layout(&self) -> Layout<'_> {
-        let in_matrix = |u: &UnitView| u.matrix && !u.done;
-        let mut matrices: Vec<Matrix<'_>> = vec![];
-        let mut by_pos: Vec<&UnitView> = self.units.iter().filter(|u| in_matrix(u)).collect();
-        by_pos.sort_by_key(|u| u.pos);
-        for unit in by_pos {
-            match matrices.iter_mut().find(|m| m.recipe == unit.recipe) {
-                Some(m) => m.rows.push(unit),
-                None => {
-                    let recipe = self.names.recipes.get(&unit.recipe);
-                    matrices.push(Matrix {
-                        recipe: unit.recipe.clone(),
-                        stages: unit.stages.clone(),
-                        rows: vec![unit],
-                        view: recipe.and_then(|r| r.view()),
-                        view_error: recipe.and_then(|r| r.view_error()),
-                    });
-                }
-            }
-        }
-        for m in &mut matrices {
-            m.rows.sort_by_key(|u| (u.row_rank(), u.pos));
-        }
         let bands: Vec<(&'static str, Vec<&UnitView>)> = if self.order == "live" {
             [("Stopped", 1), ("Running", 0), ("Waiting", 2)]
                 .into_iter()
@@ -1019,30 +1061,29 @@ impl ProjectView {
                     let units = self
                         .units
                         .iter()
-                        .filter(|u| u.band() == band && !in_matrix(u))
+                        .filter(|u| !u.done && u.band() == band)
                         .collect();
                     (label, units)
                 })
                 .collect()
         } else {
-            vec![(
-                "",
-                self.units.iter().filter(|u| !u.done && !in_matrix(u)).collect(),
-            )]
+            vec![("", self.units.iter().filter(|u| !u.done).collect())]
         };
         let mut placed = BTreeMap::new();
         Layout {
-            matrices,
             bands: bands
                 .into_iter()
                 .filter(|(_, units)| !units.is_empty())
                 .map(|(label, units)| {
+                    let (rows, units): (Vec<&UnitView>, Vec<&UnitView>) =
+                        units.into_iter().partition(|u| u.matrix);
                     let (mut loose, joined): (Vec<&UnitView>, Vec<&UnitView>) =
                         units.into_iter().partition(|u| !self.joined(u));
                     // tallest first, so a row's boxes are near one height
                     loose.sort_by_key(|u| std::cmp::Reverse(u.height()));
                     Band {
                         label,
+                        matrices: self.matrices(rows),
                         layers: self.layers(joined, &mut placed),
                         loose,
                     }
@@ -1054,15 +1095,51 @@ impl ProjectView {
             open: self.show == "done" || !self.q.is_empty(),
         }
     }
-    /// A line joins `unit` to another unit the board draws: it waits for one not done, or one
-    /// not done waits for it.
+    /// A band's matrix rows as one lane matrix a recipe, in the plan's order of their first
+    /// rows; under Live first each matrix's rows that need someone first.
+    fn matrices<'a>(&'a self, mut rows: Vec<&'a UnitView>) -> Vec<Matrix<'a>> {
+        rows.sort_by_key(|u| u.pos);
+        let live = self.order == "live";
+        let mut matrices: Vec<Matrix<'a>> = vec![];
+        for unit in rows {
+            match matrices.iter_mut().find(|m| m.recipe == unit.recipe) {
+                Some(m) => m.rows.push(unit),
+                None => {
+                    let recipe = self.names.recipes.get(&unit.recipe);
+                    matrices.push(Matrix {
+                        recipe: unit.recipe.clone(),
+                        stages: unit.stages.clone(),
+                        rows: vec![unit],
+                        view: recipe.and_then(|r| r.view()),
+                        view_error: recipe.and_then(|r| r.view_error()),
+                        level: if live { 3 } else { 2 },
+                    });
+                }
+            }
+        }
+        if live {
+            for m in &mut matrices {
+                m.rows.sort_by_key(|u| (u.row_rank(), u.pos));
+            }
+        }
+        matrices
+    }
+    /// A line joins `unit` to another unit the board draws: a wait between them is a line
+    /// (`settle`), one way or the other.
     fn joined(&self, unit: &UnitView) -> bool {
-        let live = |id: &str| self.units.iter().any(|u| !u.done && u.id.as_str() == id);
-        let after = |id: &str| self.facts.after.get(id).into_iter().flatten();
-        after(unit.id.as_str()).any(|p| p != unit.id.as_str() && live(p))
-            || self.units.iter().any(|u| {
-                !u.done && u.id != unit.id && after(u.id.as_str()).any(|p| p == unit.id.as_str())
-            })
+        let id = unit.id.as_str();
+        self.relations.iter().any(|r| {
+            let (from, to) = (
+                self.facts.unit_of(&r.from.key()),
+                self.facts.unit_of(&r.to.key()),
+            );
+            r.cross
+                && r.line
+                && from.is_some()
+                && to.is_some()
+                && from != to
+                && (from.as_deref() == Some(id) || to.as_deref() == Some(id))
+        })
     }
     /// The done units the shelf draws: the latest finished first, all of them when the view
     /// asks for done units or searches, else the latest `SHELF`.
@@ -1179,18 +1256,16 @@ impl ProjectView {
             _ => "No units match this view.",
         }
     }
-    /// The summary line's counts: "1139 steps · 1077 succeeded · 14 running".
+    /// The summary line's counts: "1139 steps · 1077 succeeded · 14 running · 6 paused", a
+    /// count of none left out (but the steps).
     pub fn summary_counts(&self) -> String {
         let c = &self.project.counts;
-        let mut words = format!(
-            "{} · {} succeeded",
-            super::ui::count(c.total(), "step", "steps"),
-            c.succeeded
-        );
-        if c.running > 0 {
-            words.push_str(&format!(" · {} running", c.running));
-        }
-        words
+        super::ui::tally(&[
+            (c.total(), if c.total() == 1 { "step" } else { "steps" }),
+            (c.succeeded, "succeeded"),
+            (c.running, "running"),
+            (c.paused, "paused"),
+        ])
     }
     /// The summary line's tags, each leading to Show: Attention: failed, cancelled, quiet; and
     /// Paused.
@@ -1232,6 +1307,12 @@ impl ProjectView {
                 self.q
             ),
         }
+    }
+    /// Something in it needs the owner: a step failed or was cancelled, a run went quiet, or
+    /// a pause holds work back. A phone then opens on the plan, not the board.
+    pub fn needs_attention(&self) -> bool {
+        let c = &self.project.counts;
+        c.failed + c.cancelled + c.paused + self.project.quiet() > 0 || self.project.paused
     }
     /// The board's Attention view, in the order shown: where a summary's failed, cancelled and
     /// quiet tags lead.
@@ -1488,10 +1569,11 @@ pub fn load_board(
     let finishing = sluice_store::attempts::finishing(c, project)?;
     let timings = run_timings(c, project)?;
     for unit in &mut board.units {
-        if let Some((message, at, from)) = last.remove(unit.id.as_str()) {
+        if let Some((message, at, from, thread)) = last.remove(unit.id.as_str()) {
             unit.last_message = message;
             unit.changed = at;
             unit.last_from = from;
+            unit.last_thread = thread;
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
             step.finishing = finishing.get(&step.id).cloned();
@@ -1603,7 +1685,7 @@ fn last_messages(
     c: &Connection,
     project: ProjectId,
     board: &ProjectView,
-) -> sluice_store::Result<BTreeMap<String, (String, String, String)>> {
+) -> sluice_store::Result<BTreeMap<String, (String, String, String, String)>> {
     let mut unit_of = BTreeMap::new();
     let mut steps = c.prepare("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
     let mut rows = steps.query([project.to_string()])?;
@@ -1627,7 +1709,7 @@ fn last_messages(
         ];
         for unit in units.into_iter().flatten() {
             if wanted.contains(unit.as_str()) && !last.contains_key(unit) {
-                last.insert(unit.clone(), (r.get(3)?, r.get(4)?, from.clone()));
+                last.insert(unit.clone(), (r.get(3)?, r.get(4)?, from.clone(), thread.clone()));
             }
         }
     }
@@ -2002,7 +2084,7 @@ fn unit_batch(
     // a wait on another unit is said in words under its card: the page draws only the
     // lines inside the unit
     for wait in unit.waits.values_mut().flatten() {
-        wait.drawn = false;
+        wait.line = false;
     }
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
     Ok(RenderedBatch::new(vec![

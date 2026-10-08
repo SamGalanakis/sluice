@@ -10,6 +10,7 @@ mod chrome;
 use board_fixture::Fixture;
 use chrome::Chrome;
 use serde_json::Value;
+use sluice_store::RetrySafety;
 
 const GEOMETRY: &str = r#"(() => {
   const box = s => { const e = document.querySelector(s); if (!e || !e.checkVisibility()) return null;
@@ -138,10 +139,11 @@ async fn chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                     );
                     let plan = &g["plan"];
                     match (slug, width) {
-                        // a phone opens on the board, under the summary line and its switch
+                        // a phone opens on the plan while something needs attention (beta-build
+                        // failed), the switch under the summary line
                         ("board", 390) => {
-                            assert!(g["tabs"].is_object() && g["board"].is_object() && plan.is_null(), "{label}: {g}");
-                            assert_eq!(g["view"], "board", "{label}: {g}");
+                            assert!(g["tabs"].is_object() && g["board"].is_null() && plan.is_object(), "{label}: {g}");
+                            assert_eq!(g["view"], "plan", "{label}: {g}");
                             assert!(g["h1"].is_object(), "{label}: the project's title stays over its board {g}");
                             assert!(g["tabs"]["top"].as_f64().unwrap() > g["sum"]["top"].as_f64().unwrap(), "{label}: the switch after the summary {g}");
                         }
@@ -474,11 +476,17 @@ async fn chromium_the_card_the_drawer_gives_focus_back_wears_an_ink_ring_and_tra
             .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
             .unwrap();
         browser.viewport(1440, "light").unwrap();
+        // the two lines inside the boxes; alpha-review sits under beta-review (Stopped before
+        // Waiting), and a line never runs up: beta-review's words say that wait
         browser
-            .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length === 3")
+            .wait("document.querySelectorAll('svg.edges .wires path:not(.head)').length === 2")
             .unwrap();
         let edges = browser.eval(EDGES).unwrap();
-        assert!(edges.as_array().unwrap().iter().all(|e| e["lands"] == true), "{edges}");
+        assert!(edges.as_array().unwrap().iter().all(|e| e["lands"] == true && e["down"] == true), "{edges}");
+        let words = browser
+            .eval("(w => w && w.checkVisibility() ? w.textContent : null)(document.querySelector('#unit-beta .waits'))")
+            .unwrap();
+        assert_eq!(words, "Waits for alpha-review", "the upward wait in words");
         let (x, y) = hover(&mut browser, "#n-alpha-review");
         pointer(&mut browser, "mousePressed", x, y);
         pointer(&mut browser, "mouseReleased", x, y);
@@ -582,13 +590,14 @@ async fn chromium_one_path_a_pair_and_no_after_that_a_path_already_gives() {
     let _ = server.await;
 }
 
-/// A lane matrix's rows are joined by their lines through its gutter: a line leaves its row at
-/// the row's left edge and enters a row at its left edge, its arrowhead pointing into the row;
-/// a line from a row to a unit outside the matrix leaves the gutter at the matrix's foot and
-/// lands on the card that waits. Inside a row no line is drawn: the columns say the order. On a
-/// phone a row is a block, its stages a lane string, and there are no lines.
+/// Every line the board draws starts on its source's card and ends on the card that waits, and
+/// none enters a lane matrix: a matrix is a table, so a wait to or from one of its rows is said
+/// in words in the row ("Waits for l2-land (failed) and probe (running)"), never drawn through
+/// its cells or around its box. That holds at every width, with the drawer open beside the
+/// plan, and when the plan grows too narrow for the table and its rows turn into lane strings.
+/// On a phone there are no lines at all.
 #[tokio::test(flavor = "multi_thread")]
-async fn chromium_lines_reach_lane_matrix_rows_through_its_gutter() {
+async fn chromium_no_line_enters_a_lane_matrix_and_every_line_ends_on_its_cards() {
     let f = Fixture::new().await;
     let id = f.titled().await;
     let router = f.router();
@@ -600,65 +609,82 @@ async fn chromium_lines_reach_lane_matrix_rows_through_its_gutter() {
         browser
             .wait("document.readyState === 'complete' && document.querySelector('sluice-board')")
             .unwrap();
-        const ENDS: &str = r#"(() => {
-  const r = (e) => e.getBoundingClientRect();
-  const plane = r(document.querySelector('.plane'));
-  const line = (from, to) => {
-    const p = document.querySelector(`svg.edges .wires path:not(.head)[data-from="${from}"][data-to="${to}"]`);
-    const h = document.querySelector(`svg.edges .wires path.head[data-from="${from}"][data-to="${to}"]`);
-    if (!p || !h) return null;
-    const a = p.getPointAtLength(0), z = p.getPointAtLength(p.getTotalLength()), hb = h.getBBox();
-    return {x1: a.x + plane.left, y1: a.y + plane.top, x2: z.x + plane.left, y2: z.y + plane.top,
-            head: {left: hb.x + plane.left, right: hb.x + hb.width + plane.left, top: hb.y + plane.top,
-                   bottom: hb.y + hb.height + plane.top}};
-  };
-  const row = (u) => { const b = r(document.getElementById('unit-' + u)); return {left: b.left, top: b.top, bottom: b.bottom}; };
-  const card = (s) => { const b = r(document.getElementById('n-' + s)); return {left: b.left, right: b.right, top: b.top}; };
-  return {rows: line('s:l2-land', 's:l3-fork'), out: line('s:l1-land', 's:report'),
-          inside: document.querySelectorAll('svg.edges path[data-from="s:l1-fork"][data-to="s:l1-work"]').length,
-          l2: row('l2'), l3: row('l3'), l1: row('l1'), report: card('report'),
-          wrap: r(document.querySelector('[data-matrix="lane"] .mx-wrap')).bottom,
-          over: (() => { const p = document.querySelector('svg.edges .wires path:not(.head)[data-to="s:report"]');
-                         const rows = r(document.querySelector('[data-matrix="rough"] tbody'));
-                         let n = 0; for (let l = 0; l <= p.getTotalLength(); l += 4) { const q = p.getPointAtLength(l);
-                           const x = q.x + plane.left, y = q.y + plane.top;
-                           if (x > rows.left && x < rows.right && y > rows.top && y < rows.bottom) n++; } return n; })()};
+        // each line's ends against its cards, each sample of it against every matrix's box
+        const LINES: &str = r#"(() => {
+  const plane = document.querySelector('.plane').getBoundingClientRect();
+  const inside = (q, b, pad) => q.x >= b.left - pad && q.x <= b.right + pad && q.y >= b.top - pad && q.y <= b.bottom + pad;
+  const matrices = [...document.querySelectorAll('.matrix')].filter(m => m.checkVisibility()).map(m => m.getBoundingClientRect());
+  const bad = [];
+  let lines = 0;
+  for (const p of document.querySelectorAll('svg.edges .wires path:not(.head)')) {
+    lines++;
+    const [from, to] = [p.dataset.from, p.dataset.to];
+    const node = k => [...document.querySelectorAll(`.plane [data-node="${CSS.escape(k)}"]`)].find(n => n.checkVisibility());
+    const a = node(from), b = node(to);
+    if (!a || !b) { bad.push(`${from}→${to}: an end not on screen`); continue; }
+    if (a.closest('.matrix') || b.closest('.matrix')) bad.push(`${from}→${to}: drawn to a matrix row`);
+    const at = l => { const q = p.getPointAtLength(l); return {x: q.x + plane.left, y: q.y + plane.top}; };
+    const len = p.getTotalLength(), start = at(0), end = at(len);
+    if (!inside(start, a.getBoundingClientRect(), 2)) bad.push(`${from}→${to}: starts off its source ${JSON.stringify(start)}`);
+    const t = b.getBoundingClientRect();
+    if (!(end.x >= t.left - 2 && end.x <= t.right + 2 && end.y >= t.top - 12 && end.y <= t.bottom + 2))
+      bad.push(`${from}→${to}: ends off its card ${JSON.stringify(end)}`);
+    for (let l = 0; l <= len; l += 3) {
+      const q = at(l);
+      if (matrices.some(m => inside(q, m, 0))) { bad.push(`${from}→${to}: enters a matrix at ${Math.round(q.x)},${Math.round(q.y)}`); break; }
+    }
+  }
+  const words = document.querySelector('#unit-l3 .waits');
+  return {lines, bad, words: words && words.checkVisibility() ? words.textContent : null,
+          clipped: [...document.querySelectorAll('.mx-wrap')].filter(w => w.checkVisibility() && w.scrollWidth > w.clientWidth + 1).length,
+          scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          errors: window.browserErrors};
 })()"#;
-        for width in [1440, 2560] {
-            browser.viewport(width, "light").unwrap();
+        fn look(browser: &mut Chrome, label: &str) -> Value {
+            // the lines redraw a frame after a resize (running glyphs spin on, so no settle)
             browser
-                .wait("document.querySelector('svg.edges .wires path[data-from=\"s:l2-land\"]') && document.querySelector('svg.edges .wires path[data-to=\"s:report\"]')")
+                .wait("new Promise(r => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => r(true))), 400))")
                 .unwrap();
-            let g = browser.eval(ENDS).unwrap();
-            let n = |v: &Value| v.as_f64().unwrap();
-            let (rows, out) = (&g["rows"], &g["out"]);
-            // between two rows: from l2's left edge, in its height, into l3's left edge
-            assert!((n(&rows["x1"]) - n(&g["l2"]["left"])).abs() < 1.5, "{width}: {g}");
-            assert!(n(&rows["y1"]) > n(&g["l2"]["top"]) && n(&rows["y1"]) < n(&g["l2"]["bottom"]), "{width}: {g}");
-            assert!(n(&rows["y2"]) > n(&g["l3"]["top"]) && n(&rows["y2"]) < n(&g["l3"]["bottom"]), "{width}: {g}");
-            assert!((n(&rows["head"]["right"]) - n(&g["l3"]["left"])).abs() < 1.5, "{width}: the head points into the row {g}");
-            // in the gutter: left of the rows
-            assert!(n(&rows["x2"]) < n(&g["l3"]["left"]), "{width}: {g}");
-            // out of the matrix: from l1's row, past the matrix's foot, onto report's card
-            assert!((n(&out["x1"]) - n(&g["l1"]["left"])).abs() < 1.5, "{width}: {g}");
-            assert!(n(&out["y1"]) > n(&g["l1"]["top"]) && n(&out["y1"]) < n(&g["l1"]["bottom"]), "{width}: {g}");
-            let tip = n(&out["head"]["bottom"]);
-            assert!((tip - n(&g["report"]["top"])).abs() < 2.0, "{width}: lands on report {g}");
-            assert!(n(&out["head"]["left"]) >= n(&g["report"]["left"]) && n(&out["head"]["right"]) <= n(&g["report"]["right"]), "{width}: {g}");
-            assert!(tip > n(&g["wrap"]), "{width}: below the matrix {g}");
-            // past the other matrix it runs down that one's gutter, never over its rows
-            assert_eq!(g["over"], 0, "{width}: a line over a matrix's rows {g}");
-            assert_eq!(g["inside"], 0, "{width}: no line inside a row");
+            let g = browser.eval(LINES).unwrap();
+            assert_eq!(g["bad"], serde_json::json!([]), "{label}: {g}");
+            assert_eq!(g["clipped"], 0, "{label}: a matrix cut off {g}");
+            assert_eq!(g["scroll"], 0, "{label}: sideways scroll {g}");
+            assert_eq!(g["errors"], serde_json::json!([]), "{label}: {g}");
+            let words = g["words"].as_str().unwrap_or_default().to_owned();
+            assert!(
+                words.contains("l2-land") && words.contains("probe"),
+                "{label}: l3's row says its waits {g}"
+            );
             if let Some(dir) = std::env::var_os("SLUICE_BOARD_SCREENS") {
                 let dir = std::path::PathBuf::from(dir);
                 std::fs::create_dir_all(&dir).unwrap();
-                browser.screenshot(&dir.join(format!("matrix-{width}.png"))).unwrap();
+                browser.screenshot(&dir.join(format!("matrix-{label}.png"))).unwrap();
             }
-            let scroll = browser
-                .eval("document.documentElement.scrollWidth - document.documentElement.clientWidth")
-                .unwrap();
-            assert_eq!(scroll, 0, "{width}: sideways scroll");
+            g
         }
+        for width in [720, 1100, 1280, 1440, 2560] {
+            browser.viewport(width, "light").unwrap();
+            let g = look(&mut browser, &format!("{width}"));
+            // the lines between plain units are still drawn (at 720 and below none are)
+            assert_eq!(g["lines"].as_u64().unwrap() > 0, width > 720, "{width}: {g}");
+        }
+        // the drawer open beside the plan: the plan narrows, the matrix never clips; once the
+        // plan pane is too narrow for the table (a container query on the pane, not the
+        // window) its rows become lane strings
+        browser.eval("location.hash = '#step:l1-work'").unwrap();
+        browser
+            .wait("document.querySelector('#drawer:not([hidden]) #d-title')")
+            .unwrap();
+        for (width, theme) in [(1280, "light"), (1440, "dark"), (2560, "light")] {
+            browser.viewport(width, theme).unwrap();
+            look(&mut browser, &format!("{width}-drawer"));
+            let lane = browser
+                .eval("[document.querySelector('.plan-pane').getBoundingClientRect().width, document.querySelector('#unit-l1 .mx-lane').checkVisibility()]")
+                .unwrap();
+            let pane = lane[0].as_f64().unwrap();
+            assert_eq!(lane[1].as_bool().unwrap(), pane <= 720.0, "{width}-drawer: {lane}");
+        }
+        browser.eval("window.sluiceClose()").unwrap();
         browser.viewport(390, "light").unwrap();
         browser.wait("document.querySelectorAll('svg.edges path').length === 0").unwrap();
         let phone = browser
@@ -674,6 +700,69 @@ async fn chromium_lines_reach_lane_matrix_rows_through_its_gutter() {
     })
     .await
     .unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+/// A phone opens on the board, its quick check, while nothing needs attention; once a step has
+/// failed (or is cancelled, quiet or paused) it opens on the plan, which leads with what stopped.
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_a_phone_opens_on_the_plan_while_something_needs_attention() {
+    let f = Fixture::new().await;
+    let lanes = f.id;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let url = format!("http://{addr}/projects/id/{lanes}");
+    const READY: &str = "document.readyState === 'complete' && document.querySelector('#project-board')?.dataset.view";
+    let first = url.clone();
+    let view = tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&first).unwrap();
+        browser.viewport(390, "light").unwrap();
+        browser.navigate(&first).unwrap();
+        browser.wait(READY).unwrap();
+        let view = browser
+            .eval("[document.querySelector('#project-board').dataset.view, document.querySelector('#project-board').hasAttribute('data-attention')]")
+            .unwrap();
+        assert_eq!(browser.eval("window.browserErrors").unwrap(), serde_json::json!([]));
+        view
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        view,
+        serde_json::json!(["plan", true]),
+        "beta-build failed: the plan"
+    );
+    // the failure is put right: nothing needs attention, and a phone opens on the board
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='succeeded',error=NULL WHERE project_id=?1 AND step_id='beta-build'",
+                [lanes.to_string()],
+            )?;
+            tx.changed(Some(lanes), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let view = tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&url).unwrap();
+        browser.viewport(390, "light").unwrap();
+        browser.navigate(&url).unwrap();
+        browser.wait(READY).unwrap();
+        browser
+            .eval("[document.querySelector('#project-board').dataset.view, document.querySelector('#project-board').hasAttribute('data-attention')]")
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        view,
+        serde_json::json!(["board", false]),
+        "nothing needs attention: the board"
+    );
     server.abort();
     let _ = server.await;
 }

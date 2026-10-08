@@ -278,6 +278,7 @@ pub(crate) fn gather(
                 ("quiet", view.project.quiet()),
                 ("stale", c.stale),
                 ("pending", c.pending),
+                ("paused", c.paused),
                 ("succeeded", c.succeeded),
                 ("steps", c.total()),
             ])
@@ -1145,16 +1146,21 @@ impl Draw<'_> {
         let mut marks = BTreeSet::new();
         for row in &data.rows {
             let cancelled = data.cancelled.contains(&row.unit);
+            // held by a pause (a step's mark ‖) reads "paused", as the step does everywhere;
+            // held otherwise (behind a failure) "blocked"
+            let paused = row.state == UnitState::Blocked && row.steps.contains('‖');
             let glyph = match row.state {
                 UnitState::Running => "running",
                 UnitState::Failed if cancelled => "cancelled",
                 UnitState::Failed => "failed",
                 UnitState::Settled => "succeeded",
-                UnitState::Blocked => "paused",
-                UnitState::Queued | UnitState::Pending => "pending",
+                UnitState::Blocked if paused => "paused",
+                UnitState::Blocked | UnitState::Queued | UnitState::Pending => "pending",
             };
             let state = if cancelled {
                 "cancelled".to_owned()
+            } else if paused {
+                "paused".to_owned()
             } else {
                 serde_json::to_value(row.state)
                     .ok()
@@ -1247,11 +1253,11 @@ impl Draw<'_> {
         if caption.is_empty() {
             caption = view.display_mark().to_owned();
         }
-        let reason = view
-            .waits
-            .first()
-            .or(view.queued.first())
-            .cloned()
+        let hold = view.hold_words();
+        let reason = (!hold.is_empty())
+            .then_some(hold)
+            .or_else(|| view.waits.first().cloned())
+            .or_else(|| view.queued.first().cloned())
             .or_else(|| (!view.error.is_empty()).then(|| view.error.clone()));
         let _ = write!(
             self.out,

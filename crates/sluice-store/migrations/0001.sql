@@ -236,7 +236,7 @@ CREATE TABLE messages (
   reply_to INTEGER, answer TEXT CHECK (answer IS NULL OR json_type(answer) = 'object'),
   ui TEXT, input TEXT, data TEXT CHECK (data IS NULL OR json_valid(data)),
   run_id TEXT, at TEXT NOT NULL, claimed_by TEXT,
-  resolved_by INTEGER, closed_at TEXT,
+  resolved_by INTEGER, closed_at TEXT, read_at TEXT,
   FOREIGN KEY (project_id, reply_to) REFERENCES messages(project_id, id),
   FOREIGN KEY (project_id, resolved_by) REFERENCES messages(project_id, id),
   UNIQUE (project_id, id)

@@ -21,16 +21,48 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
     let id = f.titled().await;
     let (status, html) = f.get(&format!("/projects/id/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{html}");
-    let matrix = between(&html, "data-matrix=\"lane\"", "</section>");
-    // one row a unit, the failed one first, then running, then waiting
-    let rows: Vec<&str> = matrix
-        .split("<tr id=\"unit-")
-        .skip(1)
-        .map(|r| &r[..r.find('"').unwrap()])
+    // the matrix is split by band: Stopped (l2 failed, l3 held by it) above every other
+    // matrix and unit, then Running (l1); a row a unit, its head counting its rows
+    let rows_of = |m: &str| -> Vec<String> {
+        m.split("<tr id=\"unit-")
+            .skip(1)
+            .map(|r| r[..r.find('"').unwrap()].to_owned())
+            .collect()
+    };
+    let lanes: Vec<&str> = html
+        .match_indices("data-matrix=\"lane\"")
+        .map(|(at, _)| &html[at..at + html[at..].find("</section>").unwrap()])
         .collect();
-    assert_eq!(rows, ["l2", "l1", "l3"], "{matrix}");
+    assert_eq!(lanes.len(), 2, "{html}");
+    assert_eq!(rows_of(lanes[0]), ["l2", "l3"], "{}", lanes[0]);
+    assert_eq!(rows_of(lanes[1]), ["l1"], "{}", lanes[1]);
     assert!(
-        matrix.contains("3 units · 1 failed · 1 running · 1 waiting"),
+        lanes[0].contains("2 units · 1 failed · 1 blocked"),
+        "{}",
+        lanes[0]
+    );
+    assert!(lanes[1].contains("1 unit · 1 running"), "{}", lanes[1]);
+    let at = |needle: &str| {
+        html.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {html}"))
+    };
+    assert!(at(">Stopped</h2>") < at("data-matrix=\"lane\""));
+    assert!(at(">Running</h2>") > at("<tr id=\"unit-l3\""));
+    assert!(at(">Running</h2>") < at("<tr id=\"unit-l1\""));
+    let matrix = format!("{}{}", lanes[0], lanes[1]);
+    // the summary column is headed by what the view shows
+    assert!(
+        matrix.contains("<th scope=\"col\" class=\"mx-sum\">Ticket · last message</th>"),
+        "{matrix}"
+    );
+    // a stage nothing has reached is a small mark, not a card
+    assert!(
+        matrix.contains("id=\"n-l3-fork\" class=\"node mx-dot is-pending is-blocked\""),
+        "{matrix}"
+    );
+    // a wait to or from a row is said in its row, never drawn
+    assert!(
+        matrix.contains("<p class=\"waits said\">Waits for <a"),
         "{matrix}"
     );
     // the stages are columns, the frame sluice's: a pill per stage with the card's look
@@ -47,7 +79,7 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
     // its title first, its id after in mono, a link to its unit
     assert!(
         matrix.contains(&format!(
-            "href=\"/projects/id/{id}/units/l1\">FIG-1: Fix the cron driver</a>"
+            "href=\"/projects/id/{id}/units/l1\" aria-description=\"FIG-1: Fix the cron driver\">FIG-1: Fix the cron driver</a>"
         )),
         "{matrix}"
     );
@@ -77,8 +109,7 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
         "{rough}"
     );
     assert!(rough.contains("<tr id=\"unit-r1\""), "{rough}");
-    // lines: none inside a row (its columns say the order); a wait between rows, and from a
-    // row to a unit outside the matrix, still is one
+    // lines: none inside a row (its columns say the order), none to, from or across a matrix
     const EDGES: &str = "<sluice-board class=\"board\" edges=\"";
     let edges = between(&html, EDGES, "\"><div")[EDGES.len()..].to_owned();
     let edges: serde_json::Value = serde_json::from_str(&html_escape(&edges)).unwrap();
@@ -91,8 +122,11 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
             .map(|e| e["line"].as_bool().unwrap())
     };
     assert_eq!(line("l1-fork", "l1-work"), Some(false));
-    assert_eq!(line("l2-land", "l3-fork"), Some(true));
-    assert_eq!(line("l1-land", "report"), Some(true));
+    assert_eq!(line("l2-land", "l3-fork"), Some(false));
+    assert_eq!(line("l1-land", "report"), Some(false));
+    assert_eq!(line("probe", "l3-land"), Some(false));
+    // inside a plain unit's box the line is drawn
+    assert_eq!(line("kit-a", "kit-b"), Some(true));
 }
 
 fn html_escape(text: &str) -> String {
@@ -116,7 +150,7 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
         "{step}"
     );
     assert!(
-        step.contains("<title>FIG-1: Fix the cron driver · titled · sluice</title>"),
+        step.contains("<title>work · FIG-1: Fix the cron driver · titled · sluice</title>"),
         "{step}"
     );
     // a doc's first line is its title; the page says the rest of it once
@@ -153,8 +187,19 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     );
     assert!(
         unit.contains(
-            "<section class=\"unit-view\" aria-label=\"Summary\"><div class=\"uv uv-page\">"
+            "<section class=\"unit-view\" aria-labelledby=\"uv-h\"><p id=\"uv-h\" class=\"uv-h\">Summary</p><div class=\"uv uv-page\">"
         ),
+        "{unit}"
+    );
+    // its view's values are named on its page ("ticket FIG-2"), and its log is a link away
+    assert!(
+        unit.contains("<span class=\"uv-param\" title=\"ticket\"><span class=\"uv-k\">ticket</span> FIG-2</span>"),
+        "{unit}"
+    );
+    assert!(
+        unit.contains(&format!(
+            "<a href=\"/projects/id/{id}/log?unit=l2\">Log</a>"
+        )),
         "{unit}"
     );
     assert!(
@@ -208,7 +253,7 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
     .as_str()
     .to_owned();
     assert!(
-        log.contains(&format!("<a href=\"/projects/id/{id}/steps/l1-work\"><span class=\"sref\"><span class=\"sref-stage\">work ·</span> <span class=\"sref-t\">FIG-1: Fix the cron driver</span> <code class=\"sref-id\">l1-work</code></span></a> pending → running")),
+        log.contains(&format!("<a href=\"/projects/id/{id}/steps/l1-work\" title=\"FIG-1: Fix the cron driver\"><span class=\"sref\"><span class=\"sref-stage\">work ·</span> <span class=\"sref-t\">FIG-1: Fix the cron driver</span> <code class=\"sref-id\">l1-work</code></span></a> pending → running")),
         "{}",
         between(&log, "<div id=\"log-view\">", "</nav></div>")
     );
@@ -218,9 +263,9 @@ async fn every_page_names_a_step_by_its_title_and_its_id_after_it() {
 async fn the_search_finds_a_step_by_its_title() {
     let f = Fixture::new().await;
     let id = f.titled().await;
-    // "parser" is in no id or doc: only l2's title, which each of its stages carries
+    // "parser" is in no id: l2's title, which each of its stages carries, and probe's doc
     let (_, html) = f.get(&format!("/projects/id/{id}?q=parser")).await;
-    assert!(html.contains("3 steps match “parser”."), "{html}");
+    assert!(html.contains("4 steps match “parser”."), "{html}");
     let matrix = between(&html, "data-matrix=\"lane\"", "</section>");
     assert!(
         matrix.contains("<tr id=\"unit-l2\"") && !matrix.contains("<tr id=\"unit-l1\""),

@@ -698,10 +698,12 @@ fn a_failure_leads_with_its_sentence_and_folds_the_pane() {
     );
     assert!(!html.contains("\\n"));
 }
-/// The index and the project's counts tell a cancel from a failure: "a failed · b cancelled",
-/// counted apart, and a project whose only stop is a cancel is not marked failed.
+/// The index and the project's counts tell a cancel from a failure, counted apart, and a
+/// project whose only stop is a cancel is not marked failed. Each stopped step is a row: its
+/// glyph, its name and its failure's one sentence, failures before cancels, four rows at most
+/// and "and n more" after them.
 #[tokio::test]
-async fn the_index_counts_a_cancel_apart_from_a_failure() {
+async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
     let home = tempfile::tempdir().unwrap();
     let writer = Writer::open(home.path()).unwrap();
     let id = writer
@@ -727,6 +729,9 @@ async fn the_index_counts_a_cancel_apart_from_a_failure() {
             for (position, (step, error)) in [
                 ("broke", json!({"error":"fn_failure","message":"exit code 1"})),
                 ("dropped", json!({"error":"cancelled","message":"cancel requested"})),
+                ("b2", json!({"error":"agent_failure","kind":"WallCap","message":"cap"})),
+                ("b3", json!({"error":"fn_failure","message":"exit code 2"})),
+                ("b4", json!({"error":"fn_failure","message":"exit code 3"})),
                 ("pivoted", json!({"error":"agent_failure","kind":"Cancelled","message":"cancelled during transient backoff"})),
             ]
             .into_iter()
@@ -745,21 +750,65 @@ async fn the_index_counts_a_cancel_apart_from_a_failure() {
         .await
         .unwrap();
     let project = &snapshot.projects[0];
-    assert_eq!((project.counts.failed, project.counts.cancelled), (1, 2));
-    assert_eq!(project.failed_steps, ["broke"]);
-    assert_eq!(project.cancelled_steps, ["dropped", "pivoted"]);
+    assert_eq!((project.counts.failed, project.counts.cancelled), (4, 2));
+    let stopped: Vec<(&str, bool)> = project
+        .stopped
+        .iter()
+        .map(|s| (s.step.as_str(), s.cancelled))
+        .collect();
+    assert_eq!(
+        stopped,
+        [
+            ("broke", false),
+            ("b2", false),
+            ("b3", false),
+            ("b4", false),
+            ("dropped", true),
+            ("pivoted", true)
+        ]
+    );
+    assert_eq!(project.stopped[0].headline, "Its fn failed: exit code 1.");
     assert_eq!(project.counts.status(), "failed");
+    let html = views::home::HomeView::new(&snapshot).body().unwrap();
+    let rows = html
+        .as_str()
+        .split("<ul class=\"stopped-rows\"")
+        .nth(1)
+        .unwrap();
+    let rows = &rows[..rows.find("</ul>").unwrap()];
+    assert_eq!(rows.matches("<li").count(), 5, "{rows}");
+    assert!(rows.contains("<span class=\"sr-why\" title=\"Its fn failed: exit code 1.\">Its fn failed: exit code 1.</span>"), "{rows}");
+    assert!(rows.contains("Stopped at its wall-clock cap"), "{rows}");
+    assert!(rows.contains("and 2 more</a>"), "{rows}");
+    assert!(
+        !rows.contains("pivoted"),
+        "past four rows a stop is counted: {rows}"
+    );
+    for step in ["b2", "b3", "b4", "dropped"] {
+        writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                tx.sql().execute(
+                    "DELETE FROM steps WHERE project_id=?1 AND step_id=?2",
+                    (id.to_string(), step),
+                )?;
+                tx.changed(Some(id), "status");
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+    let snapshot = reads
+        .snapshot(|c| views::load_snapshot(c, views::FunctionCatalog::default()))
+        .await
+        .unwrap();
     let html = views::home::HomeView::new(&snapshot).body().unwrap();
     assert!(
         html.as_str()
-            .contains("broke</span></span></a> failed</span> · <span class=\"cancelled-words\">"),
-        "{}",
+            .contains("<li class=\"sr-cancelled\"><span class=\"g g-cancelled\""),
+        "a cancel's row: {}",
         html.as_str()
     );
-    assert!(
-        html.as_str()
-            .contains("pivoted</span></span></a> cancelled</span>")
-    );
+    assert!(!html.as_str().contains("more</a>"));
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             tx.sql().execute(

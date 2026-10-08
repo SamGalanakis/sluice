@@ -60,7 +60,6 @@ const CLEAR = 7;                 // the least space between an edge and a card i
 const TILE_CLEAR = 12;           // and the more it keeps from a unit's box: never along its border
 const SIDE = 5;                  // between edges sharing a gap
 const LEFT = 40;                 // how much nearer a gap on the left must be: bypasses keep right
-const GUTTER = 26;               // a lane matrix's gutter, left of its rows (its --mx-gutter)
 
 function svgEl(name, attrs) {
   const el = document.createElementNS(SVG, name);
@@ -120,30 +119,25 @@ function drawEdges(host, data) {
                        span: [r.left - box.left, r.right - box.left] });
   // the units laid out on the board (a box, or a one-step unit's card): a line between units
   // passes them, not just their cards
-  const tileEls = $$(".layer > .box, .matrix > .mx-wrap", plane).filter(shown);
-  // a lane matrix spans the plan: a line passing it runs down its gutter, the strip left of its
-  // rows, as the lines to and from its rows do
-  const tiles = tileEls.map((t) => {
-    const r = at(t.getBoundingClientRect());
-    if (t.matches(".mx-wrap")) r.span = [r.left + GUTTER, r.right];
-    return r;
-  });
+  const tileEls = $$(".layer > .box", plane).filter(shown);
+  const tiles = tileEls.map((t) => at(t.getBoundingClientRect()));
+  // A lane matrix is a table: the server draws no line to, from or past one (its waits are words
+  // in its rows). Should the page and the server ever disagree (a patch on its way), a line that
+  // would touch a matrix is left out rather than drawn through its cells.
+  const matrices = $$(".matrix", plane).filter(shown).map((m) => at(m.getBoundingClientRect()));
   // a box's label ("fig-5193") is passed like a card: a line into the box never strikes it
   const labels = $$(".layer > .box > .box-label", plane).filter(shown)
     .map((l) => ({ ...at(l.getBoundingClientRect()), tile: tileEls.indexOf(l.parentElement) }));
   for (const n of $$("[data-node]", plane)) {
-    if (!shown(n)) continue;
-    const wrap = n.closest(".matrix > .mx-wrap");
+    if (!shown(n) || n.closest(".matrix")) continue;
     const r = at(n.getBoundingClientRect());
     // a one-step unit's title over its card is the card's: a line into it ends above the title
     const title = n.parentElement?.matches(".box.solo.titled") && $(":scope > .solo-title", n.parentElement);
     if (title && shown(title)) r.top = Math.min(r.top, at(title.getBoundingClientRect()).top);
+    if (r.width === 0 && r.height === 0) continue;
     rect.set(n.dataset.node, { ...r,
                                box: boxes.indexOf(n.closest(".box")),
-                               tile: tileEls.indexOf(wrap || n.closest(".layer > .box")),
-                               // a lane matrix's row: its lines run in the matrix's gutter
-                               row: wrap ? { mx: tileEls.indexOf(wrap), wrap: at(wrap.getBoundingClientRect()),
-                                             at: at(n.closest("tr.mx-row").getBoundingClientRect()) } : null });
+                               tile: tileEls.indexOf(n.closest(".layer > .box")) });
   }
   // Route within a unit's box past its cards; between units past every card and every other
   // unit, through the gaps of each row they make between the two ends (see the loop below).
@@ -153,7 +147,7 @@ function drawEdges(host, data) {
     const inBox = ra.box === rb.box && ra.box >= 0;
     const key = inBox ? `box:${ra.box}` : `tiles:${ra.tile}:${rb.tile}`;
     if (!rowsOf.has(key)) {
-      const cards = [...rect.entries()].filter(([k, r]) => !k.startsWith("u:") && !r.virtual
+      const cards = [...rect.entries()].filter(([k, r]) => !k.startsWith("u:")
         && (!inBox || r.box === ra.box)).map(([, r]) => r);
       const others = inBox ? [] : tiles.filter((_, i) => i !== ra.tile && i !== rb.tile)
         .map((t) => ({ ...t, span: [t.span[0] - TILE_CLEAR, t.span[1] + TILE_CLEAR] }));
@@ -169,44 +163,23 @@ function drawEdges(host, data) {
     }
     return rowsOf.get(key);
   };
-  // of the cards shown (a search may leave a step out), one path a pair (see merge)
-  const ends = merge((Array.isArray(data) ? data : []).filter(([a, b]) => rect.has(a) && rect.has(b)));
-  // A line to or from a lane matrix's row runs in the matrix's gutter, a strip left of its rows,
-  // each line its own lane: it leaves its row at the row's left edge and the matrix at its foot,
-  // or enters the matrix at its top and its row at the row's left edge, its arrowhead pointing
-  // into the row. Between two rows of one matrix it stays in the gutter. Past the matrix it is
-  // routed as any line between units, from or to the point where it leaves the gutter.
-  const gutter = new Map(), laneOf = new Map();
-  const laneX = (row) => {
-    const n = laneOf.get(row.mx) || 0;
-    laneOf.set(row.mx, n + 1);
-    const room = Math.max(row.at.left - row.wrap.left - 12, SIDE);
-    return row.wrap.left + 6 + (n * SIDE) % room;
+  // Of the cards shown (a search may leave a step out), one path a pair (see merge). A line
+  // runs down, from the foot of its source to the top of the card that waits, and never past a
+  // lane matrix: one that would run up or through a matrix is not drawn, and its words under
+  // the waiting card say it instead (the server leaves such a wait to words already; this
+  // keeps a page caught between two patches honest).
+  const down = (a, b) => {
+    const [ra, rb] = [rect.get(a), rect.get(b)];
+    return rb.top - 1 > ra.bottom && !matrices.some((m) => m.top < rb.top && m.bottom > ra.bottom);
   };
-  const point = (x, y, tile) => ({ left: x, right: x, top: y, bottom: y, width: 0, box: -1, tile,
-                                   span: [x, x], virtual: true });
-  for (const [index, end] of ends.entries()) {
-    const [a, b] = end, ra = rect.get(a).row, rb = rect.get(b).row;
-    if (!ra && !rb) continue;
-    const g = { from: null, to: null };
-    if (ra) {
-      g.from = { x: laneX(ra), y: (ra.at.top + ra.at.bottom) / 2, left: ra.at.left, row: ra };
-    }
-    if (rb) {
-      g.to = { x: laneX(rb), y: (rb.at.top + rb.at.bottom) / 2, left: rb.at.left, row: rb };
-    }
-    g.inside = ra && rb && ra.mx === rb.mx;
-    if (ra && !g.inside) {
-      end[0] = `mx:out:${index}`;
-      rect.set(end[0], point(g.from.x, ra.wrap.bottom, ra.mx));
-    }
-    if (rb && !g.inside) {
-      end[1] = `mx:in:${index}`;
-      rect.set(end[1], point(g.to.x, rb.wrap.top + 1, rb.mx));
-    }
-    g.keys = [a, b];
-    gutter.set(index, g);
+  const listed = (Array.isArray(data) ? data : []).filter(([a, b]) => rect.has(a) && rect.has(b));
+  const kept = new Set(listed.filter(([a, b]) => !down(a, b)).map(([a, b]) =>
+    $(`.waits a[data-from="${CSS.escape(a)}"][data-to="${CSS.escape(b)}"]`, plane)?.parentElement));
+  for (const words of $$(".waits", plane)) {
+    // only a change is written: the board redraws on a class that moves its layout
+    if (words.classList.contains("kept") !== kept.has(words)) words.classList.toggle("kept");
   }
+  const ends = merge(listed.filter(([a, b]) => down(a, b)));
   const cx = (key) => rect.get(key).left + rect.get(key).width / 2;
   // Where each line passes the rows between its ends, routed once from card centre to card
   // centre on a scratch board: its first pass and its last, so the lines leaving a card are
@@ -246,16 +219,6 @@ function drawEdges(host, data) {
   const wires = svgEl("g", { class: "wires" }), names = svgEl("g", { class: "names" });
   const f = (n) => n.toFixed(1);
   for (const [index, [a, b, label, kinds]] of ends.entries()) {
-    const g = gutter.get(index);
-    if (g?.inside) {
-      // two rows of one matrix: down (or up) the gutter, into the row
-      const { from, to } = g, x = from.x;
-      const d = `M${f(from.left)} ${f(from.y)}H${f(x)}V${f(to.y)}H${f(to.left - HEAD_H)}`;
-      wires.append(edgeWire(g.keys[0], g.keys[1], d, label, kinds));
-      wires.append(svgEl("path", { "data-from": g.keys[0], "data-to": g.keys[1], class: "head",
-                                   d: rightHead(to.left, to.y) }));
-      continue;
-    }
     const x1 = outX.get(a).get(index), y1 = rect.get(a).bottom;
     const end = inX.get(b).get(index), x2 = end.x;
     const tip = rect.get(b).top - 1;
@@ -271,11 +234,7 @@ function drawEdges(host, data) {
     });
     pts.push([x2, y2]);
     let d = `M${f(x1)} ${f(y1)}`;
-    if (tip <= y1) {
-      const side = Math.max(8, Math.min(box.width, hi) - 8);
-      d += `C${f(side)} ${f(y1 + 16)} ${f(side)} ${f(y2 - 16)} ${f(x2)} ${f(y2)}`;
-    }
-    for (let i = 1; tip > y1 && i < pts.length; i++) {
+    for (let i = 1; i < pts.length; i++) {
       const [xa, ya] = pts[i - 1], [xb, yb] = pts[i];
       if (i % 2 === 0) {  // down through a row's gap
         d += `L${f(xb)} ${f(yb)}`;
@@ -284,14 +243,10 @@ function drawEdges(host, data) {
         d += `C${f(xa)} ${f(ya + dy)} ${f(xb)} ${f(yb - dy)} ${f(xb)} ${f(yb)}`;
       }
     }
-    // a line from or to a matrix row: its gutter part before or after the routed part
-    const [ka, kb] = g ? g.keys : [a, b];
-    if (g?.from) d = `M${f(g.from.left)} ${f(g.from.y)}H${f(g.from.x)}L` + d.slice(1);
-    if (g?.to) d += `V${f(g.to.y)}H${f(g.to.left - HEAD_H)}`;
+    const [ka, kb] = [a, b];
     wires.append(edgeWire(ka, kb, d, label, kinds));
     wires.append(svgEl("path", { "data-from": ka, "data-to": kb, class: "head",
-                                 d: g?.to ? rightHead(g.to.left, g.to.y)
-                                   : `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(end.y)}`
+                                 d: `M${f(x2 - HEAD_W)} ${f(y2)}L${f(x2)} ${f(end.y)}`
                                    + `L${f(x2 + HEAD_W)} ${f(y2)}z` }));
     // its names twice: by the far end from whichever card is traced, so the names of a card's
     // edges spread out over the cards around it instead of piling up on it. Plain order has
@@ -320,11 +275,6 @@ function edgeWire(a, b, d, label, kinds) {
   title.textContent = label || "after";
   wire.append(title);
   return wire;
-}
-// An arrowhead pointing right, its tip at (x, y): into a matrix row's left edge.
-function rightHead(x, y) {
-  const f = (n) => n.toFixed(1);
-  return `M${f(x - HEAD_H)} ${f(y - HEAD_W)}L${f(x)} ${f(y)}L${f(x - HEAD_H)} ${f(y + HEAD_W)}z`;
 }
 
 function trace(host, key) {

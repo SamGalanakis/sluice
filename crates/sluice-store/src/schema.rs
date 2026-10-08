@@ -56,6 +56,8 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
         "prune_keep",
         "TEXT CHECK (prune_keep IS NULL OR json_type(prune_keep) = 'array')",
     ),
+    // When the owner marked a message read (`mark_read`): what the inbox's "Read today" lists.
+    ("messages", "read_at", "TEXT"),
 ];
 /// Views added after homes existed, as `(name, definition)`: the writer creates the missing
 /// ones with the columns. A view is no table, so a release that counts the home's tables

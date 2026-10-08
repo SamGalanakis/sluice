@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use sluice_model::{
     commands::StepStatus,
     error::PublicError,
-    gates::{GateDecision, StateSnapshot, ValueRef, evaluate_step, resolve_reference},
+    gates::{
+        GateDecision, StateSnapshot, ValueRef, evaluate_step, resolve_reference, wait_reasons,
+    },
     ids::{ProjectId, RunId, StepId},
-    plan::{Binding, Plan},
+    plan::{Binding, Pause, Plan},
     types::BoundValue,
 };
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
@@ -94,14 +96,7 @@ impl FieldView {
     }
     /// Its type in a few words: a JSON schema reads as its `type` ("object"), not as JSON.
     pub fn ty_words(&self) -> String {
-        match serde_json::from_str::<serde_json::Value>(&self.ty) {
-            Ok(serde_json::Value::Object(schema)) => schema
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("object")
-                .to_owned(),
-            _ => self.ty.clone(),
-        }
+        super::ui::type_words(&self.ty)
     }
     /// Its source is worth a line: a reference, a file, a plan input, a submission so far. A
     /// default, or the value its run received, is what an input usually is: said once, under
@@ -259,7 +254,11 @@ pub struct StepView {
     pub blocked: bool,
     /// Running and quiet past its `quiet_after`.
     pub quiet: bool,
+    /// What it waits on besides a pause (`hold` says that): its gates and handoffs not ready.
     pub waits: Vec<String>,
+    /// A pending step's pause: its own (and who paused it, once its page has read the record)
+    /// or its project's.
+    pub hold: Option<Hold>,
     /// What it runs after (`after`), each with where it leads and how it stands.
     pub gates: Vec<GateView>,
     pub queued: Vec<String>,
@@ -306,6 +305,27 @@ pub struct RunTiming {
     /// it is no part of the step's version.
     #[serde(skip)]
     pub seconds: f64,
+}
+/// What holds a pending step back: its own pause or its project's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Hold {
+    /// Its project is paused (else the step itself is).
+    pub project: bool,
+    /// The reason the pause gives ("" when none).
+    pub reason: String,
+    /// Who paused it and when, as the plan edit that paused it records ("" when not read or
+    /// not found).
+    pub by: String,
+    pub at: String,
+}
+impl Hold {
+    /// Who paused it, in words: "the owner", "cli", "" when unknown.
+    pub fn who(&self) -> String {
+        match self.by.as_str() {
+            "owner" => "the owner".into(),
+            by => by.into(),
+        }
+    }
 }
 /// One entry of a step's `after`: a step (linked, with its status), a unit (linked) or a
 /// condition.
@@ -370,6 +390,34 @@ pub fn status_name(status: &StepStatus) -> &'static str {
     }
 }
 impl StepView {
+    /// What its page lists under "Waits on": its waits, less those the After row says (each
+    /// gate there carries its status).
+    pub fn page_waits(&self) -> Vec<&str> {
+        self.waits
+            .iter()
+            .filter(|w| self.gates.is_empty() || !w.starts_with("after "))
+            .map(String::as_str)
+            .collect()
+    }
+    /// Its pause in words, for a line that has no room for its time: "Paused by cli: the
+    /// reason.", "Its project is paused."; "" when nothing holds it.
+    pub fn hold_words(&self) -> String {
+        let Some(hold) = &self.hold else {
+            return String::new();
+        };
+        if hold.project {
+            return "Its project is paused.".into();
+        }
+        let mut words = "Paused".to_owned();
+        if !hold.who().is_empty() {
+            words.push_str(&format!(" by {}", hold.who()));
+        }
+        if !hold.reason.is_empty() {
+            words.push_str(&format!(": {}", hold.reason));
+        }
+        words.push('.');
+        words
+    }
     /// Its `after` in a few words: "98 steps, all done", "3 steps: 2 done, 1 running", with
     /// any units and conditions counted after.
     pub fn gates_words(&self) -> String {
@@ -418,13 +466,23 @@ impl StepView {
         let entry = state.steps.get(id).cloned().unwrap_or_default();
         let decision = evaluate_step(plan, state, step);
         let ready = decision == GateDecision::Ready;
-        let waits = match decision {
-            GateDecision::Wait(w) => w,
+        let paused = step.paused.is_paused();
+        let held = paused || state.paused.is_paused();
+        // every reason it waits, its gates too while a pause holds it; the pause apart
+        let mut waits = match decision {
+            GateDecision::Wait(_) => wait_reasons(plan, state, step),
             GateDecision::Invalid(e) => e.into_iter().map(|e| e.to_string()).collect(),
             _ => vec![],
         };
-        let paused = step.paused.is_paused();
-        let held = paused || state.paused.is_paused();
+        waits.retain(|w| w != "paused" && !w.starts_with("paused: ") && w != "project paused");
+        let hold = (held && entry.status == StepStatus::Pending).then(|| Hold {
+            project: !paused,
+            reason: match &step.paused {
+                Pause::Reason(reason) => reason.clone(),
+                _ => String::new(),
+            },
+            ..Hold::default()
+        });
         // next to start: pending with its gates met (a finished step's gates are met too)
         let next = ready && entry.status == StepStatus::Pending;
         let status = status_name(&entry.status).to_owned();
@@ -531,6 +589,7 @@ impl StepView {
             blocked: false,
             quiet: false,
             waits,
+            hold,
             gates: {
                 let mut gates: Vec<GateView> = step
                     .after
@@ -650,10 +709,6 @@ impl StepView {
     pub fn awaiting_tag(&self) -> TrustedHtml {
         super::ui::tag(&format!("{} awaiting reply", self.awaiting), "attn", None)
     }
-    /// The tab's words: its title, cut to 48 characters.
-    pub fn tab_title(&self) -> String {
-        sluice_model::naming::cut(self.heading(), 48)
-    }
     pub fn href(&self) -> String {
         format!("/projects/id/{}/steps/{}", self.project, self.id)
     }
@@ -662,6 +717,10 @@ impl StepView {
             "/projects/id/{}/thread?thread=step-{}",
             self.project, self.id
         )
+    }
+    /// Its records and its thread's messages on the project's log.
+    pub fn log_href(&self) -> String {
+        format!("/projects/id/{}/log?step={}", self.project, self.id)
     }
     pub fn key(&self) -> String {
         format!("s:{}", self.id)
@@ -685,6 +744,24 @@ impl StepView {
             if self.blocked { " is-blocked" } else { "" },
             if self.ready { " is-next" } else { "" },
         ) + if self.is_quiet() { " is-quiet" } else { "" }
+    }
+    /// The state a count counts it under (`ui::STATES`): a quiet run as quiet, a step set by
+    /// hand as succeeded, one outside sluice as running, else its mark.
+    pub fn state(&self) -> &str {
+        if self.is_quiet() {
+            return "quiet";
+        }
+        match self.mark.as_str() {
+            "manual" => "succeeded",
+            "external" => "running",
+            "pending" if self.blocked => "blocked",
+            mark => mark,
+        }
+    }
+    /// Nothing has reached it yet: pending (or paused) and not about to start. A lane matrix
+    /// draws it as a small mark, not a card.
+    pub fn unreached(&self) -> bool {
+        matches!(self.mark.as_str(), "pending" | "paused") && self.queued.is_empty()
     }
     /// Running, and its run has written nothing for its `quiet_after`: its card says so.
     pub fn is_quiet(&self) -> bool {
@@ -808,6 +885,24 @@ impl StepView {
             title,
         })
     }
+    /// While it runs, the earlier run its outputs came from: its number and when it ended.
+    pub fn outputs_from(&self) -> Option<(usize, &str)> {
+        if self.status != "running"
+            || self
+                .outputs_set()
+                .iter()
+                .all(|f| f.source == "Submitted so far")
+        {
+            return None;
+        }
+        let current = self.runs.len().saturating_sub(1);
+        self.runs[..current]
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, r)| !r.outputs.is_empty() && !r.finished.is_empty())
+            .map(|(i, r)| (i + 1, r.finished.as_str()))
+    }
     /// The inputs drawn as fields: all but the undocumented switches (`switches`).
     pub fn input_rows(&self) -> Vec<&FieldView> {
         self.inputs.iter().filter(|f| !f.is_switch()).collect()
@@ -847,6 +942,16 @@ impl StepView {
     pub fn last_run(&self) -> Option<&RunView> {
         self.runs.last()
     }
+    /// While it runs, when its current run started: its status tag carries the time.
+    pub fn running_since(&self) -> Option<&str> {
+        self.last_run()
+            .filter(|r| r.finished.is_empty() && self.status == "running")
+            .map(|r| r.started.as_str())
+    }
+    /// The tab's words: its stage and title ("work · Ship the cron fix"), cut to 48 characters.
+    pub fn tab_title(&self) -> String {
+        self.name().text(48)
+    }
     pub fn cancel_prompt(&self) -> String {
         let duration = self
             .last_run()
@@ -877,20 +982,21 @@ impl StepView {
         })
     }
     /// Its own page: a way back to the plan (and its unit), then the step.
+    /// `unit`: its unit's id and title ("" when it has none), named in the way back.
     pub fn page_body(
         &self,
         project: &str,
-        unit: Option<&str>,
+        unit: Option<(&str, &str)>,
     ) -> Result<TrustedHtml, askama::Error> {
         #[derive(Template)]
         #[template(
-            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit }}\">unit {{ unit }}</a>{% endif %}</nav>{{ body|safe }}<script type=\"module\" src=\"{{ js_url }}\"></script>",
+            source = "<nav class=\"crumbs\" aria-label=\"Breadcrumb\"><a href=\"/projects/id/{{ step.project }}\">{{ crate::views::icons::icon(crate::views::icons::Icon::ArrowLeft, 16, \"\")|safe }}{{ project }} plan</a>{% if let Some(unit) = unit %}<span aria-hidden=\"true\">/</span><a href=\"/projects/id/{{ step.project }}/units/{{ unit.0 }}\"{% if !unit.1.is_empty() %} title=\"{{ unit.1 }}\"{% endif %}>{% if unit.1.is_empty() %}unit {{ unit.0 }}{% else %}{{ crate::views::ui::cut(unit.1, 64) }}{% endif %}</a>{% endif %}</nav>{{ body|safe }}<script type=\"module\" src=\"{{ js_url }}\"></script>",
             ext = "html"
         )]
         struct Page<'a> {
             step: &'a StepView,
             project: &'a str,
-            unit: Option<&'a str>,
+            unit: Option<(&'a str, &'a str)>,
             body: TrustedHtml,
             js_url: String,
         }
@@ -1073,8 +1179,22 @@ pub fn load_detail(
         }
     }
     load_progress(c, project, step)?;
+    // who paused it: the latest plan edit that set its pause
+    if let Some(hold) = step.hold.as_mut().filter(|h| !h.project)
+        && let Some((by, at)) = c
+            .prepare_cached("SELECT coalesce(json_extract(payload,'$.author'),''),at FROM records WHERE project_id=?1 AND kind='plan.edit' AND instr(payload,?2)>0 ORDER BY seq DESC LIMIT 1")?
+            .query_row(
+                (project.to_string(), format!("\"/steps/{}/paused\"", step.id)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?
+    {
+        hold.by = by;
+        hold.at = at;
+    }
     step.now = NowView::default();
-    if step.status == "running" {
+    // a running step's Now, and a failed one's last words
+    if matches!(step.status.as_str(), "running" | "failed") {
         let row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, NowMessage)> {
             let body: String = r.get(4)?;
             Ok((
@@ -1093,7 +1213,8 @@ pub fn load_detail(
             .query_row((project.to_string(), step.id.as_str()), row)
             .optional()?;
         let after = own.as_ref().map_or(0, |(id, _)| *id);
-        let inbound = c
+        let inbound = (step.status == "running")
+            .then(|| c
             .prepare_cached("SELECT id,thread,\"from\",\"to\",body,at FROM messages WHERE project_id=?1 AND (\"to\"=?2 OR thread=?3) AND \"from\"<>?2 AND id>?4 ORDER BY id DESC LIMIT 1")?
             .query_row(
                 (
@@ -1104,7 +1225,9 @@ pub fn load_detail(
                 ),
                 row,
             )
-            .optional()?;
+            .optional())
+            .transpose()?
+            .flatten();
         step.now = NowView {
             own: own.map(|(_, m)| m),
             inbound: inbound.map(|(_, m)| m),
@@ -1251,7 +1374,12 @@ pub async fn step_page(
             .units
             .iter()
             .find(|u| u.tagged && u.steps.iter().any(|s| s.id == id))
-            .map(|u| u.id.as_str());
+            .map(|u| {
+                (
+                    u.id.as_str(),
+                    if u.titled() { u.title.as_str() } else { "" },
+                )
+            });
         step.page_body(&view.project.name, unit)
             .and_then(|body| {
                 super::render_layout(
@@ -1320,9 +1448,15 @@ pub async fn step_stream(
 /// only from its own directory, never through a link; a large file's last 2 MiB.
 pub async fn run_file_page(
     State(state): State<DashboardState>,
-    Path((project, run, name)): Path<(ProjectId, RunId, String)>,
+    Path((project, run, name)): Path<(ProjectId, String, String)>,
 ) -> Response {
     const MOST: u64 = 2 * 1024 * 1024;
+    // an address with no run id in it names no run: the calm 404, never the parser's words
+    let Ok(run) = run.parse::<RunId>() else {
+        return board::error_response(PublicError::NotFound {
+            message: format!("No run is named {run}."),
+        });
+    };
     let home = state.reads.home().to_owned();
     let owned = state
         .reads

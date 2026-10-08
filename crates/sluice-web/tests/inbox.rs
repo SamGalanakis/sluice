@@ -586,7 +586,11 @@ async fn questions_are_titled_folded_when_nobody_waits_and_closed_together() {
     assert!(html.contains("<summary>Close all 3</summary>"));
     assert!(html.contains("data-confirm-title=\"Close all 3 questions?\""));
     assert!(html.contains("data-keep>Keep them</button>"));
-    assert!(html.contains("Close these 3 questions?"));
+    // its body does not say its title again
+    assert!(!html.contains("Close these 3 questions?"));
+    assert!(html.contains(
+        "<p class=\"confirm-copy\">Closed, they leave this list and no one can answer them.</p>"
+    ));
     // the nav's Inbox counts what the page lists as yours: not the ones nobody waits on
     assert_eq!(page.nav.inbox, page.for_you().len());
     // a question one agent put to another is listed apart, quieter, answerable as the owner

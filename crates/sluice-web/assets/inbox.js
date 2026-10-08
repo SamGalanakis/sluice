@@ -7,22 +7,20 @@ function answers(root) {
   if (!openui && root.querySelector?.(".answer[data-url]")) openui = import("/static/openui.js");
 }
 
-// ---- read marks: a note is read once it has been on screen for 2 s, or on "Mark all read" ----
-// A watermark describes only this rendered thread, never the whole inbox. A note marked read
-// on the inbox moves under "Read just now" (kept on the page, out of the stream's patches),
-// since the stream takes it off the unread list.
-const SEEN = 2000;
-const sent = new Map();
-const timers = new Map();
+// ---- read marks: only when the owner asks ---------------------------------------------------
+// A note stays unread until its card's "Mark read" (or the thread page's) or "Mark all read" is
+// pressed: scrolling past never marks one, so nothing drops out of the inbox unseen. A mark
+// sends the watermark of what the page drew of that thread, never more; the page's stream then
+// moves the notes under "Read today", which the server draws from the stored read marks.
 // a request that never reached sluice reads in our words, not the browser's ("Failed to fetch")
 const unreached = (error) =>
   error instanceof TypeError ? "Sluice did not answer: is it running? Try again in a moment." : error.message;
 // read marks that did not go through: one quiet line at the top of the notes, not one under
-// every note (the mark is the page's own bookkeeping, not something the owner asked for)
+// every note
 const unsent = new Set();
 function readFailed(node) {
   unsent.add(node);
-  const group = node.closest("section.notes, #thread-view, main") ?? document.body;
+  const group = node.closest("section.notes, #messages-view, main") ?? document.body;
   let status = group.querySelector(":scope .read-status");
   if (!status) {
     status = Object.assign(document.createElement("p"), { className: "meta read-status", role: "status" });
@@ -41,56 +39,28 @@ function readFailed(node) {
   status.firstChild.textContent = `${unsent.size === 1 ? "A note was" : `${unsent.size} notes were`} not marked read: sluice did not take it.`;
 }
 async function markRead(node) {
-  if (!node.isConnected) return;
-  const key = node.dataset.readUrl + "/" + node.dataset.thread;
-  const through = Number(node.dataset.through);
-  if ((sent.get(key) ?? 0) >= through) return;
-  sent.set(key, through);
+  if (!node.isConnected || node.disabled) return;
+  node.disabled = true;
   try {
     const response = await fetch(node.dataset.readUrl, { method: "POST", headers: { "content-type": "application/json" },
-                                                         body: JSON.stringify({ thread: node.dataset.thread, through }) });
+                                                         body: JSON.stringify({ thread: node.dataset.thread, through: Number(node.dataset.through) }) });
     if (!response.ok) throw new Error("Could not mark this note read.");
-    keepRead(node);
+    node.textContent = "Marked read";
   } catch {
-    sent.delete(key);
+    node.disabled = false;
     readFailed(node);
   }
 }
-function keepRead(node) {
-  const fold = document.querySelector("#read-now");
-  if (!fold || !node.matches("article.note")) return;
-  const copy = node.cloneNode(true);
-  copy.removeAttribute("data-read-url");
-  copy.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
-  fold.querySelector(".threads").append(copy);
-  fold.hidden = false;
-  fold.querySelector(".n").textContent = String(fold.querySelectorAll("article").length);
-}
-const seen = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    const node = entry.target;
-    // half of it in view, or a screenful of a tall one
-    const visible = entry.isIntersecting && (entry.intersectionRatio >= 0.5 || entry.intersectionRect.height >= innerHeight * 0.5);
-    if (visible && !timers.has(node)) {
-      timers.set(node, setTimeout(() => { timers.delete(node); markRead(node); }, SEEN));
-    } else if (!visible && timers.has(node)) {
-      clearTimeout(timers.get(node)); timers.delete(node);
-    }
+document.addEventListener("click", (event) => {
+  const one = event.target.closest?.("button.mark-read");
+  if (one) { markRead(one); return; }
+  if (event.target.closest?.("button.mark-all")) {
+    document.querySelectorAll("section.notes button.mark-read").forEach(markRead);
   }
-}, { threshold: [0, 0.25, 0.5, 0.75, 1] });
-const watched = new WeakSet();
-function watch(root) {
-  root.querySelectorAll?.("[data-read-url]").forEach((node) => {
-    if (watched.has(node)) return;
-    watched.add(node);
-    seen.observe(node);
-  });
-  const all = document.querySelector(".mark-all");
-  if (all && !all.dataset.bound) {
-    all.dataset.bound = "1";
-    all.hidden = false;
-    all.addEventListener("click", () => document.querySelectorAll("article.note[data-read-url]").forEach(markRead));
-  }
+});
+function marks() {
+  // the buttons need script: without it they stay hidden
+  document.querySelectorAll("button.mark-read[hidden], button.mark-all[hidden]").forEach((b) => { b.hidden = false; });
 }
 
 // ---- Answer: opens the box under the buttons, which keep their places --------------------------
@@ -147,8 +117,12 @@ function replies(root) {
 
 function bind(root) {
   answers(root);
-  watch(root);
+  marks();
   replies(root);
 }
 bind(document);
 new MutationObserver(() => bind(document)).observe(document.body, { childList: true, subtree: true });
+
+// ---- a thread opened without an anchor starts at its end: its newest message and the box ----
+const replyBox = document.querySelector("#messages-view .thread-reply");
+if (replyBox && !location.hash) requestAnimationFrame(() => replyBox.scrollIntoView({ block: "end" }));

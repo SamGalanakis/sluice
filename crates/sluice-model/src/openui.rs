@@ -849,6 +849,7 @@ pub const COUNT_STATES: &[&str] = &[
     "running",
     "quiet",
     "stale",
+    "paused",
     "pending",
     "succeeded",
     "steps",

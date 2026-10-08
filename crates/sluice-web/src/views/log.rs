@@ -26,6 +26,8 @@ pub struct LogQuery {
     pub threads: Vec<String>,
     /// Only what one step did and said: its records and its thread's messages.
     pub step: String,
+    /// Only what one unit's steps did and said, and the unit's own records.
+    pub unit: String,
     /// Only failures: steps that failed, failed calls and orphaned runs.
     pub errors: bool,
     pub before: Option<i64>,
@@ -39,6 +41,7 @@ impl LogQuery {
                 "kind" | "kinds" => split(&value, &mut result.kinds),
                 "thread" => split(&value, &mut result.threads),
                 "step" => result.step = value.trim().chars().take(200).collect(),
+                "unit" => result.unit = value.trim().chars().take(200).collect(),
                 "errors" => result.errors = value == "1",
                 "before" | "after" => {
                     if value.is_empty() || value == "0" {
@@ -74,6 +77,9 @@ impl LogQuery {
         if !self.step.is_empty() {
             query.append_pair("step", &self.step);
         }
+        if !self.unit.is_empty() {
+            query.append_pair("unit", &self.unit);
+        }
         if self.errors {
             query.append_pair("errors", "1");
         }
@@ -107,6 +113,7 @@ impl LogQuery {
             kinds: vec![],
             threads: self.threads.clone(),
             step: self.step.clone(),
+            unit: self.unit.clone(),
             errors: preset == "errors",
             before: None,
             after: None,
@@ -195,6 +202,16 @@ impl LogView {
     pub fn selected(&self, kind: &str) -> bool {
         self.query.kinds.iter().any(|k| k == kind)
     }
+    /// The log as it is, without its unit filter: the unit line's way back.
+    pub fn every_unit(&self) -> String {
+        let query = LogQuery {
+            unit: String::new(),
+            before: None,
+            after: None,
+            ..self.query.clone()
+        };
+        format!("{}?{}", self.base(), query.query(None, None))
+    }
     pub fn base(&self) -> String {
         self.project
             .map(|id| format!("/projects/id/{id}/log"))
@@ -216,8 +233,16 @@ impl LogView {
         } else {
             String::new()
         };
+        // the tab: "Log · lash" on a project's log
+        let title = match self
+            .project
+            .and_then(|id| self.nav.projects.iter().find(|p| p.id == id))
+        {
+            Some(project) => format!("Log · {}", project.name),
+            None => "Log".into(),
+        };
         super::render_layout(
-            "Log",
+            &title,
             &self.body()?,
             &nav,
             viewer,
@@ -273,6 +298,13 @@ pub async fn load(
             args.push(Value::Text(query.step.clone()));
             args.push(Value::Text(format!("step-{}", query.step)));
         }
+        if !query.unit.is_empty() {
+            // its steps' records and threads (a step on its own is its own unit), and its own
+            condition.push_str(" AND (step_id IN (SELECT step_id FROM steps s WHERE s.project_id=records.project_id AND coalesce(s.unit,s.step_id)=?) OR thread IN (SELECT 'step-'||step_id FROM steps s WHERE s.project_id=records.project_id AND coalesce(s.unit,s.step_id)=?) OR (kind='unit.settled' AND json_extract(payload,'$.unit')=?))");
+            args.extend(std::iter::repeat_n(Value::Text(query.unit.clone()), 3));
+        }
+        // a lease held or let go is the scheduler's bookkeeping: left out unless asked for
+        if !query.kinds.iter().any(|k| k == "step.lease") { condition.push_str(" AND kind!='step.lease'"); }
         if query.errors {
             // a cancel is the owner's choice, not an error (views::failure::is_cancel, in SQL)
             condition.push_str(" AND ((kind='step.status' AND json_extract(payload,'$.to')='failed' AND NOT coalesce(json_extract(payload,'$.error.error')='cancelled' OR (json_extract(payload,'$.error.error')='agent_failure' AND json_extract(payload,'$.error.kind')='Cancelled') OR (json_extract(payload,'$.error.error')='fn_failure' AND (json_extract(payload,'$.error.message')='cancelled' OR json_extract(payload,'$.error.message') LIKE 'cancelled: %')),0)) OR (kind='call' AND json_extract(payload,'$.status')='failed') OR kind='run.orphan')");
@@ -344,22 +376,23 @@ fn links(
     json: &serde_json::Value,
     project: Option<ProjectId>,
     names: Option<&sluice_runtime::naming::ProjectNaming>,
-) -> Vec<(String, String, String)> {
+) -> Vec<(String, String, String, String)> {
     let Some(project) = project else {
         return vec![];
     };
     let field = |name: &str| json.get(name).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let mut links = vec![];
     if let Some(thread) = field("thread") {
-        links.push((thread.to_owned(), super::threads::thread_url(project, thread), String::new()));
+        links.push((thread.to_owned(), super::threads::thread_url(project, thread), String::new(), String::new()));
     }
     if let Some(step) = field("step") {
         let named = super::ui::StepRef::new(step, names.and_then(|n| n.naming.step(step)));
-        let words = if named.titled() { named.html(48).0 } else { String::new() };
-        links.push((step.to_owned(), format!("/projects/id/{project}/steps/{step}"), words));
+        let (words, full) = if named.titled() { (named.html(48).0, named.title.clone()) } else { Default::default() };
+        links.push((step.to_owned(), format!("/projects/id/{project}/steps/{step}"), words, full));
     }
     if let Some(unit) = field("unit") {
         let title = names.map(|n| n.naming.unit_title(unit)).unwrap_or(unit);
+        let full = if title != unit { title.to_owned() } else { String::new() };
         let words = if title != unit {
             format!(
                 "<span class=\"sref\"><span class=\"sref-t\">{}</span> <code class=\"sref-id\">{}</code></span>",
@@ -369,35 +402,37 @@ fn links(
         } else {
             String::new()
         };
-        links.push((unit.to_owned(), format!("/projects/id/{project}/units/{unit}"), words));
+        links.push((unit.to_owned(), format!("/projects/id/{project}/units/{unit}"), words, full));
     }
     links
 }
 /// `text`, HTML-escaped, with the first whole-word use of each name linked to its page (a step
 /// or unit named there by its title and id).
-fn linked(text: &str, links: &[(String, String, String)]) -> TrustedHtml {
+/// A link whose title is cut carries the whole title as its `title`.
+fn linked(text: &str, links: &[(String, String, String, String)]) -> TrustedHtml {
     let word = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/');
-    let mut spans: Vec<(usize, usize, &str, &str)> = vec![];
-    for (name, href, words) in links {
+    let mut spans: Vec<(usize, usize, &str, &str, &str)> = vec![];
+    for (name, href, words, full) in links {
         let found = text.match_indices(name.as_str()).find(|(at, _)| {
             let before = text[..*at].chars().next_back();
             let after = text[at + name.len()..].chars().next();
             !before.is_some_and(word)
                 && !after.is_some_and(|c| word(c) && c != '.' && c != '/')
-                && !spans.iter().any(|(s, e, _, _)| at < e && at + name.len() > *s)
+                && !spans.iter().any(|(s, e, _, _, _)| at < e && at + name.len() > *s)
         });
         if let Some((at, _)) = found {
-            spans.push((at, at + name.len(), href, words));
+            spans.push((at, at + name.len(), href, words, full));
         }
     }
     spans.sort();
     let esc = super::ui::esc;
     let mut html = String::new();
     let mut at = 0;
-    for (start, end, href, words) in spans {
+    for (start, end, href, words, full) in spans {
         html.push_str(&esc(&text[at..start]));
         let words = if words.is_empty() { esc(&text[start..end]) } else { words.to_owned() };
-        html.push_str(&format!("<a href=\"{}\">{words}</a>", esc(href)));
+        let title = if full.is_empty() { String::new() } else { format!(" title=\"{}\"", esc(full)) };
+        html.push_str(&format!("<a href=\"{}\"{title}>{words}</a>", esc(href)));
         at = end;
     }
     html.push_str(&esc(&text[at..]));

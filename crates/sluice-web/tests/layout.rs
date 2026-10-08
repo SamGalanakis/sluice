@@ -20,8 +20,11 @@ fn fixture() -> DashboardSnapshot {
                 ..Counts::default()
             },
             running: vec![],
-            failed_steps: vec!["broken".into()],
-            cancelled_steps: vec![],
+            stopped: vec![sluice_web::views::StoppedView {
+                step: "broken".into(),
+                cancelled: false,
+                headline: "Its fn failed: exit code 1.".into(),
+            }],
             names: Default::default(),
         }],
         inbox: 2,

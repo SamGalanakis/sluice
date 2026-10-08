@@ -33,6 +33,18 @@ impl Draw<'_> {
     fn chars(&self) -> usize {
         if self.row { ROW_CHARS } else { 600 }
     }
+    /// On the unit page a value is named ("engine opus"): the matrix's column head names them
+    /// there.
+    fn label(&self, name: &str) -> String {
+        if self.row {
+            String::new()
+        } else {
+            format!(
+                "<span class=\"uv-k\">{}</span> ",
+                esc(&name.replace(['_', '-'], " "))
+            )
+        }
+    }
     fn component(&self, c: &Component, out: &mut String) {
         match c.name.as_str() {
             "Stack" => {
@@ -85,8 +97,9 @@ impl Draw<'_> {
                 if let Some(value) = self.unit.params.get(name).filter(|v| !v.is_empty()) {
                     let _ = write!(
                         out,
-                        "<span class=\"uv-param\" title=\"{}\">{}</span>",
+                        "<span class=\"uv-param\" title=\"{}\">{}{}</span>",
                         esc(name),
+                        self.label(name),
                         esc(&sluice_model::naming::cut(value, self.chars()))
                     );
                 }
@@ -96,7 +109,8 @@ impl Draw<'_> {
                 if let Some(step) = self.unit.stage_step(c.str_arg(0).unwrap_or("")) {
                     let _ = write!(
                         out,
-                        "<span class=\"uv-status\">{}<span>{}</span></span>",
+                        "<span class=\"uv-status\">{}{}<span>{}</span></span>",
+                        self.label(c.str_arg(0).unwrap_or("")),
                         ui::status(step.display_mark()),
                         esc(&step.caption())
                     );
@@ -152,11 +166,12 @@ impl Draw<'_> {
             .unwrap_or("");
         let _ = write!(
             out,
-            "<span class=\"uv-out{}\" title=\"{} {}{}\">{}{}</span>",
+            "<span class=\"uv-out{}\" title=\"{} {}{}\">{}{}{}</span>",
             if live { " live" } else { "" },
             esc(stage),
             esc(field),
             if live { " (live progress)" } else { "" },
+            self.label(field),
             if live {
                 ui::glyph("running").0
             } else {
@@ -165,6 +180,38 @@ impl Draw<'_> {
             esc(&sluice_model::naming::cut(first.trim(), self.chars()))
         );
     }
+}
+/// What a view shows, named for a column's head: each param, output and stage status by its
+/// name and the last message as "last message", in the view's order, the first word
+/// capitalised ("Engine · last message"); "" when it names nothing (only text and links).
+pub fn head(root: &Component) -> String {
+    fn walk(c: &Component, out: &mut Vec<String>) {
+        let named = match c.name.as_str() {
+            "Stack" => {
+                for child in c.components_arg(0) {
+                    walk(child, out);
+                }
+                None
+            }
+            "Param" | "StepStatus" => c.str_arg(0).map(|n| n.replace(['_', '-'], " ")),
+            "Output" => c.str_arg(1).map(|n| n.replace(['_', '-'], " ")),
+            "LastMessage" => Some("last message".into()),
+            _ => None,
+        };
+        if let Some(name) = named.filter(|n| !n.trim().is_empty())
+            && !out.contains(&name)
+        {
+            out.push(name);
+        }
+    }
+    let mut names = vec![];
+    walk(root, &mut names);
+    let words = names.join(" · ");
+    let mut chars = words.chars();
+    chars
+        .next()
+        .map(|f| f.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 /// The note a broken view leaves where it would draw: "This recipe's view does not check: …".
 pub fn broken(error: &str) -> TrustedHtml {
