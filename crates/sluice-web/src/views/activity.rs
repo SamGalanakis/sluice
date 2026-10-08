@@ -437,11 +437,11 @@ pub async fn attach(state: &DashboardState, step: &mut StepView, all: bool) {
             (
                 r.id.to_string(),
                 super::timestamp(&r.started).map(|s| s * 1000),
-                r.outcome == "running",
+                r.outcome == super::step::Outcome::Running,
             )
         })
         .collect();
-    let fail = step.status == "failed" && !step.cancelled();
+    let fail = step.shown() == super::ui::Shown::Failed;
     let href = step.href();
     let read = tokio::task::spawn_blocking(move || {
         let mut profiles = vec![];

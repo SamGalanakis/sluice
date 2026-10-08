@@ -14,6 +14,7 @@ pub mod openui;
 pub mod plan;
 pub mod recipe;
 pub mod rpc;
+pub mod shown;
 pub mod status;
 pub mod types;
 pub mod units;

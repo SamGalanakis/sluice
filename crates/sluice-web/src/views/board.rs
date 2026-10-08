@@ -1,5 +1,6 @@
 //! The v2 board. Relations retain their gate form and unit endpoints.
 use super::step::{FieldView, RunTiming, StepView};
+use super::ui::{Shown, Tally};
 use super::{DashboardSnapshot, DashboardState, FunctionCatalog, NavView, TrustedHtml, Viewer};
 use crate::streams::{self, PatchRegion, RenderedBatch, StreamQuery, VersionSignal};
 use askama::Template;
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sluice_model::{
     commands::StepStatus,
     error::PublicError,
+    shown::Band as Placed,
     gates::{Gate, GateDecision, StateSnapshot, evaluate_step},
     ids::{ProjectId, StepId, UnitName},
     plan::{FnSignature, Plan, SignatureProvider},
@@ -299,35 +301,52 @@ impl Layout<'_> {
     pub fn more(&self) -> usize {
         self.total - self.done.len()
     }
+    /// How the shelf reads: its units' first state (set by hand before succeeded before
+    /// skipped).
+    pub fn shown(&self) -> Shown {
+        self.done
+            .iter()
+            .map(|u| u.shown())
+            .min()
+            .unwrap_or(Shown::Succeeded)
+    }
 }
 /// How many done units the shelf draws unless every one is asked for: the latest finished.
 pub const SHELF: usize = 20;
 impl UnitView {
-    /// Its steps counted by how each reads, the states that need someone first: a quiet
-    /// running step counts as quiet, not running. Zero counts are left out.
-    pub fn tally(&self) -> Vec<(usize, &'static str)> {
-        super::ui::state_counts(self.steps.iter().map(StepView::state))
+    /// Its steps counted by how each reads (`shown`).
+    pub fn tally(&self) -> Tally {
+        self.steps.iter().map(StepView::shown).collect()
+    }
+    /// How the whole unit reads: its steps' first state in the table's order (a failed step
+    /// before a running one), pending when it has none.
+    pub fn shown(&self) -> Shown {
+        self.steps
+            .iter()
+            .map(StepView::shown)
+            .min()
+            .unwrap_or(Shown::Pending)
     }
     /// How tall its box draws, in rows of cards.
     pub fn height(&self) -> usize {
         if self.solo { 1 } else { self.rows.len() + 1 }
     }
-    /// "1 running · 4 pending": every state it has, in `tally`'s order.
+    /// "1 running · 4 pending": every state it has, in priority order.
     pub fn tally_words(&self) -> String {
-        self.tally()
-            .iter()
-            .map(|(n, w)| format!("{n} {w}"))
-            .collect::<Vec<_>>()
-            .join(" · ")
+        super::ui::states_words(&self.tally())
     }
     /// What in it needs someone, for its label: "1 failed", "1 quiet"; "" when nothing does.
     pub fn alarm(&self) -> String {
         self.tally()
             .iter()
-            .filter(|(_, w)| ["failed", "cancelled", "stale", "quiet"].contains(w))
-            .map(|(n, w)| format!("{n} {w}"))
+            .filter(|(s, _)| s.spec().attention)
+            .map(|(s, n)| format!("{n} {}", s.word()))
             .collect::<Vec<_>>()
             .join(" · ")
+    }
+    /// A step in it needs someone (Show: Attention).
+    pub fn needs_attention(&self) -> bool {
+        self.steps.iter().any(|s| s.shown().spec().attention)
     }
     pub fn key(&self) -> String {
         format!("u:{}", self.id)
@@ -356,7 +375,7 @@ impl UnitView {
         self.solo && !step.id.as_str().starts_with(self.id.as_str())
     }
     /// The unit's steps as the board's lane strings write them: each step's id without the
-    /// unit's prefix and its mark, `fork✓ work✓ land✓` (✓ succeeded, – skipped).
+    /// unit's prefix and its state's lane mark (`shown`), `fork✓ work✓ land✓`.
     pub fn lane(&self) -> String {
         let prefix = format!("{}-", self.id);
         self.steps
@@ -368,7 +387,7 @@ impl UnitView {
                 } else {
                     s.id.as_str().strip_prefix(&prefix).unwrap_or(s.id.as_str())
                 };
-                format!("{short}{}", lane_mark(s))
+                format!("{short}{}", s.shown().spec().lane)
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -393,7 +412,7 @@ impl UnitView {
     }
     /// The one line's words for a screen reader: "6 steps done" ("…, 1 skipped").
     pub fn done_words(&self) -> String {
-        let skipped = self.steps.iter().filter(|s| s.status == "skipped").count();
+        let skipped = self.tally().get(Shown::Skipped);
         let steps = super::ui::count(self.steps.len(), "step", "steps");
         if skipped > 0 {
             format!("{steps} done, {skipped} skipped")
@@ -472,49 +491,6 @@ impl UnitView {
             .map_or(0.0, |d| d.as_secs_f64());
         super::timeline::Timeline::new(&lanes, now)
     }
-    /// The mark that stands for the whole unit: its step that most needs someone.
-    pub fn mark(&self) -> &str {
-        let order = [
-            "failed",
-            "cancelled",
-            "stale",
-            "running",
-            "external",
-            "paused",
-            "pending",
-            "skipped",
-            "manual",
-            "succeeded",
-        ];
-        order
-            .into_iter()
-            .find(|m| self.steps.iter().any(|s| s.display_mark() == *m))
-            .unwrap_or("pending")
-    }
-    /// How a lane matrix's head counts its row: by the step that most needs someone ("failed",
-    /// "quiet", "running", "paused", "blocked"), else "pending" (it says "waiting").
-    pub fn row_state(&self) -> &'static str {
-        match self.mark() {
-            "failed" => "failed",
-            "cancelled" => "cancelled",
-            "stale" => "stale",
-            "running" | "external" if self.steps.iter().any(StepView::is_quiet) => "quiet",
-            "running" | "external" => "running",
-            "paused" => "paused",
-            _ if self.steps.iter().any(|s| s.blocked) => "blocked",
-            _ => "pending",
-        }
-    }
-    /// Where a lane matrix puts its row: 0 needs attention (a step failed, cancelled or stale,
-    /// or a quiet run), 1 running, 2 paused or held, 3 waiting.
-    pub fn row_rank(&self) -> u8 {
-        match self.row_state() {
-            "failed" | "cancelled" | "stale" | "quiet" => 0,
-            "running" => 1,
-            "paused" | "blocked" => 2,
-            _ => 3,
-        }
-    }
     /// Every wait of its steps on other units, once each, and the first step that waits.
     pub fn all_waits(&self) -> Option<(&StepView, Vec<Wait>)> {
         let mut out: Vec<Wait> = vec![];
@@ -540,9 +516,9 @@ impl UnitView {
                     s.href(),
                     s.id,
                     s.id,
-                    super::ui::status_word(s.display_mark()),
+                    s.shown().word(),
                     super::ui::esc(if s.stage.is_empty() { s.id.as_str() } else { &s.stage }),
-                    lane_mark(s)
+                    s.shown().spec().lane
                 )
             })
             .collect::<Vec<_>>()
@@ -591,61 +567,13 @@ impl UnitView {
     pub fn last_message_html(&self) -> TrustedHtml {
         crate::markdown::render(&self.last_message)
     }
-    pub fn rank(&self) -> u8 {
-        if self
-            .steps
-            .iter()
-            .any(|s| matches!(s.status.as_str(), "failed" | "stale"))
-        {
-            0
-        } else if self
-            .steps
-            .iter()
-            .any(|s| s.status == "running" || s.mark == "external")
-        {
-            1
-        } else if self.steps.iter().any(|s| s.ready && !s.paused) {
-            2
-        } else if self.done {
-            4
-        } else {
-            3
-        }
-    }
-    /// The band Live first draws the unit in: 0 running (a step running or outside), 1 stopped
-    /// (a step failed or stale, or held up by one), 2 waiting, 3 done (the shelf).
-    pub fn band(&self) -> u8 {
+    /// The band Live first draws it in (`Band`): its first state's; a done unit is on the shelf.
+    pub fn band(&self) -> Placed {
         if self.done {
-            3
-        } else if self
-            .steps
-            .iter()
-            .any(|s| s.status == "running" || s.mark == "external")
-        {
-            0
-        } else if self
-            .steps
-            .iter()
-            .any(|s| s.blocked || matches!(s.status.as_str(), "failed" | "stale"))
-        {
-            1
+            Placed::Done
         } else {
-            2
+            self.shown().spec().band
         }
-    }
-}
-/// A step's mark in a lane string: ✓ succeeded, ▶ running, ✗ failed, ■ cancelled, ~ stale,
-/// – skipped, ‖ paused, · anything else.
-fn lane_mark(s: &StepView) -> char {
-    match s.status.as_str() {
-        "succeeded" => '✓',
-        "running" => '▶',
-        "failed" if s.cancelled() => '■',
-        "failed" => '✗',
-        "stale" => '~',
-        "skipped" => '–',
-        _ if s.paused => '‖',
-        _ => '·',
     }
 }
 /// One recipe's live units as a lane matrix: a row a unit, a column a stage; its rows the ones
@@ -661,17 +589,15 @@ pub struct Matrix<'a> {
 }
 impl Matrix<'_> {
     /// "14 units · 1 failed · 3 quiet · 9 running · 1 paused": its rows counted by how each
-    /// reads (`UnitView::row_state`), a row with nothing else to say "waiting".
+    /// reads (`UnitView::shown`), each row once.
     pub fn tally(&self) -> String {
         let mut parts = vec![(
             self.rows.len(),
             if self.rows.len() == 1 { "unit" } else { "units" },
         )];
-        parts.extend(
-            super::ui::state_counts(self.rows.iter().map(|u| u.row_state()))
-                .into_iter()
-                .map(|(n, w)| (n, if w == "pending" { "waiting" } else { w })),
-        );
+        parts.extend(super::ui::states(
+            &self.rows.iter().map(|u| u.shown()).collect(),
+        ));
         super::ui::tally(&parts)
     }
     /// Every unit its recipe made, done ones too: where its head leads (the matrix itself
@@ -705,12 +631,12 @@ impl Matrix<'_> {
         TrustedHtml::from_template(&MatrixTemplate { m: self, project })
     }
 }
-/// What the board needs of the whole plan, whatever the view shows: each step's unit and
-/// status, which units are done, and which units each unit comes after.
+/// What the board needs of the whole plan, whatever the view shows: each step's unit and how
+/// it reads, which units are done, and which units each unit comes after.
 #[derive(Clone, Debug, Default)]
 struct PlanFacts {
-    /// By step key (`s:<id>`): its unit and status.
-    steps: BTreeMap<String, (String, String)>,
+    /// By step key (`s:<id>`): its unit and how it reads.
+    steps: BTreeMap<String, (String, Shown)>,
     done: BTreeSet<String>,
     /// By unit: the units a relation into one of its steps comes from, while its source has
     /// not succeeded or been skipped.
@@ -778,7 +704,6 @@ impl ProjectView {
         revision: u64,
     ) -> Self {
         let mut depth = BTreeMap::new();
-        let mut blocked = BTreeSet::new();
         for id in plan.topological_order() {
             let d = plan
                 .dependencies(id)
@@ -788,13 +713,8 @@ impl ProjectView {
                 .copied()
                 .map_or(0, |d: usize| d + 1);
             depth.insert(id.clone(), d);
-            if matches!(state.status(id), StepStatus::Failed | StepStatus::Stale)
-                || (state.status(id) == StepStatus::Pending
-                    && plan.dependencies(id).iter().any(|d| blocked.contains(d)))
-            {
-                blocked.insert(id.clone());
-            }
         }
+        let blocked = sluice_model::status::blocked(plan, state);
         let relations = relations(plan);
         let units = plan
             .units()
@@ -805,9 +725,7 @@ impl ProjectView {
                     .iter()
                     .map(|id| {
                         let mut view = StepView::new(project.id, plan, state, id);
-                        view.blocked = view.status == "pending"
-                            && view.mark != "paused"
-                            && blocked.contains(id);
+                        view.blocked = blocked.contains(id);
                         view
                     })
                     .collect();
@@ -856,7 +774,7 @@ impl ProjectView {
             for step in &unit.steps {
                 facts
                     .steps
-                    .insert(step.key(), (unit.id.to_string(), step.mark.clone()));
+                    .insert(step.key(), (unit.id.to_string(), step.shown()));
             }
         }
         // what each unit still waits for: a satisfied source puts no unit above another
@@ -864,7 +782,7 @@ impl ProjectView {
             facts
                 .steps
                 .get(key)
-                .is_some_and(|(_, mark)| matches!(mark.as_str(), "succeeded" | "skipped"))
+                .is_some_and(|(_, shown)| shown.spec().band == Placed::Done)
         };
         let waits: Vec<_> = relations
             .iter()
@@ -965,11 +883,7 @@ impl ProjectView {
             return None;
         }
         let band = if self.order == "live" {
-            match unit.band() {
-                1 => 0,
-                0 => 1,
-                _ => 2,
-            }
+            unit.band() as i32
         } else {
             0
         };
@@ -1026,7 +940,7 @@ impl ProjectView {
             Some(("s", _)) => facts
                 .steps
                 .get(key)
-                .is_some_and(|(_, mark)| matches!(mark.as_str(), "succeeded" | "skipped")),
+                .is_some_and(|(_, shown)| shown.spec().band == Placed::Done),
             Some(("u", unit)) => facts.done.contains(unit),
             _ => false,
         };
@@ -1063,14 +977,14 @@ impl ProjectView {
                     }
                     let (name, href, opens, doing) = match &relation.from {
                         Endpoint::Step(id) => {
-                            let mark = facts.steps.get(&from).map_or("", |(_, m)| m.as_str());
-                            if matches!(mark, "succeeded" | "skipped") {
+                            let shown = facts.steps.get(&from).map(|(_, s)| *s);
+                            if shown.is_some_and(|s| s.spec().band == Placed::Done) {
                                 continue;
                             }
-                            let doing = match mark {
-                                "running" | "failed" | "cancelled" | "stale" | "paused" => mark,
-                                "external" => "outside",
-                                _ => "",
+                            // what it is doing, unless it only waits itself
+                            let doing = match shown {
+                                Some(Shown::Pending) | None => "",
+                                Some(shown) => shown.word(),
                             };
                             let href = format!("/projects/id/{project}/steps/{id}");
                             (id.to_string(), href, id.to_string(), doing)
@@ -1100,6 +1014,34 @@ impl ProjectView {
             }
         }
     }
+    /// Once every fact of every step is read (its failure, its run's quiet, a cancel asked
+    /// for): how each step reads, for the whole plan's facts, its waits' words (a wait on a
+    /// cancelled step says "cancelled"), the project's counts and the board's lines.
+    fn known(&mut self, plan: &Plan, state: &StateSnapshot) {
+        let shown: BTreeMap<StepId, Shown> = self
+            .units
+            .iter()
+            .flat_map(|u| &u.steps)
+            .map(|s| (s.id.clone(), s.shown()))
+            .collect();
+        for (key, fact) in &mut self.facts.steps {
+            if let Some(now) = key
+                .strip_prefix("s:")
+                .and_then(|id| id.parse::<StepId>().ok())
+                .and_then(|id| shown.get(&id))
+            {
+                fact.1 = *now;
+            }
+        }
+        let name = |id: &StepId| shown.get(id).copied();
+        for unit in &mut self.units {
+            for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
+                step.name_waits(plan, state, &name);
+            }
+        }
+        self.project.counts = shown.values().copied().collect();
+        self.settle();
+    }
     pub fn href(&self) -> String {
         self.project.href()
     }
@@ -1112,15 +1054,11 @@ impl ProjectView {
     /// done unit is on one shelf at the end.
     pub fn layout(&self) -> Layout<'_> {
         let bands: Vec<(&'static str, Vec<&UnitView>)> = if self.order == "live" {
-            [("Stopped", 1), ("Running", 0), ("Waiting", 2)]
+            [Placed::Stopped, Placed::Running, Placed::Waiting]
                 .into_iter()
-                .map(|(label, band)| {
-                    let units = self
-                        .units
-                        .iter()
-                        .filter(|u| !u.done && u.band() == band)
-                        .collect();
-                    (label, units)
+                .map(|band| {
+                    let units = self.units.iter().filter(|u| u.band() == band).collect();
+                    (band.label(), units)
                 })
                 .collect()
         } else {
@@ -1176,7 +1114,7 @@ impl ProjectView {
         }
         if live {
             for m in &mut matrices {
-                m.rows.sort_by_key(|u| (u.row_rank(), u.pos));
+                m.rows.sort_by_key(|u| (u.shown(), u.pos));
             }
         }
         matrices
@@ -1270,24 +1208,19 @@ impl ProjectView {
         use super::ui::esc;
         let mut out = String::new();
         if !self.recipe.is_empty() {
-            let mut live = vec![];
-            let mut done = 0;
-            for unit in &self.units {
-                if unit.done {
-                    done += 1;
-                } else {
-                    live.push(unit.row_state());
-                }
-            }
+            // the live units each once under the state it reads as (`UnitView::shown`)
+            let live: Tally = self
+                .units
+                .iter()
+                .filter(|u| !u.done)
+                .map(UnitView::shown)
+                .collect();
+            let done = self.units.iter().filter(|u| u.done).count();
             let mut parts = vec![(
                 self.units.len(),
                 if self.units.len() == 1 { "unit" } else { "units" },
             )];
-            parts.extend(
-                super::ui::state_counts(live)
-                    .into_iter()
-                    .map(|(n, w)| (n, if w == "pending" { "waiting" } else { w })),
-            );
+            parts.extend(super::ui::states(&live));
             parts.push((done, "done"));
             out.push_str(&format!(
                 "Every unit of recipe <code>{}</code>: {}.",
@@ -1478,46 +1411,60 @@ impl ProjectView {
             _ => "No units match this view.",
         }
     }
-    /// The summary line's counts: "1139 steps · 1077 succeeded · 14 running · 6 paused", a
-    /// count of none left out (but the steps).
+    /// The summary line's counts: its steps, then every state that needs no attention, as its
+    /// bar orders them ("1139 steps · 1077 succeeded · 14 running · 6 paused · 40 pending"); the
+    /// states that do are its tags.
     pub fn summary_counts(&self) -> String {
         let c = &self.project.counts;
-        super::ui::tally(&[
-            (c.total(), if c.total() == 1 { "step" } else { "steps" }),
-            (c.succeeded, "succeeded"),
-            (c.running, "running"),
-            (c.paused, "paused"),
-        ])
+        let mut parts = vec![(c.total(), if c.total() == 1 { "step" } else { "steps" })];
+        parts.extend(
+            super::ui::progress(c)
+                .into_iter()
+                .filter(|(s, _)| !s.spec().attention)
+                .map(|(s, n)| (n, s.word())),
+        );
+        super::ui::tally(&parts)
     }
-    /// The summary line's tags, each leading to Show: Attention: failed, cancelled, quiet; and
-    /// Paused.
+    /// The summary line's tags: each state that needs attention (failed, cancelled, stale,
+    /// quiet), its glyph and count, leading to Show: Attention; and Paused for a paused project.
     pub fn summary_tags(&self) -> TrustedHtml {
-        use super::ui::{glyph, quiet_glyph, tag, tag_link};
-        let c = &self.project.counts;
+        use super::ui::{glyph, mark, tag, tag_link};
         let href = self.attention_href();
         let mut out = String::new();
-        if c.failed > 0 {
-            out.push_str(&tag_link(&href, &format!("{} failed", c.failed), "failed", Some(glyph("failed"))).0);
-        }
-        if c.cancelled > 0 {
-            out.push_str(&tag_link(&href, &format!("{} cancelled", c.cancelled), "", Some(glyph("cancelled"))).0);
-        }
-        let quiet = self.project.quiet();
-        if quiet > 0 {
+        for (shown, n) in self.project.counts.iter().filter(|(s, _)| s.spec().attention) {
+            let tone = match shown.spec().tone {
+                sluice_model::shown::Tone::Ink => "failed",
+                sluice_model::shown::Tone::Attention => "attn",
+                sluice_model::shown::Tone::Muted
+                | sluice_model::shown::Tone::Active
+                | sluice_model::shown::Tone::Paused
+                | sluice_model::shown::Tone::Idle
+                | sluice_model::shown::Tone::Success => "",
+            };
             out.push_str(
-                &tag_link(&href, &format!("{quiet} quiet"), "attn", Some(quiet_glyph()))
+                &tag_link(&href, &format!("{n} {}", shown.word()), tone, Some(mark(shown)))
                     .0
                     .replacen(
                         "<a ",
-                        "<a title=\"Running, and nothing written for 2 hours (or past its cadence)\" ",
+                        &format!("<a title=\"{}\" ", super::ui::esc(shown.spec().help)),
                         1,
                     ),
             );
         }
         if self.project.paused {
-            out.push_str(&tag("Paused", "", Some(glyph("paused"))).0);
+            out.push_str(&tag("Paused", "", Some(glyph(Shown::Paused))).0);
         }
         TrustedHtml::owned(out)
+    }
+    /// Something is left that a pause keeps from starting: a step pending (in any of its
+    /// readings) or stale.
+    pub fn left_to_start(&self) -> bool {
+        let c = &self.project.counts;
+        c.stored(&StepStatus::Pending) + c.stored(&StepStatus::Stale) > 0
+    }
+    /// The summary line has tags to draw.
+    pub fn has_tags(&self) -> bool {
+        self.project.counts.attention() > 0 || self.project.paused
     }
     /// What the search found: "12 steps match “land”", "No step matches “x”."
     pub fn match_words(&self) -> String {
@@ -1530,11 +1477,11 @@ impl ProjectView {
             ),
         }
     }
-    /// Something in it needs the owner: a step failed or was cancelled, a run went quiet, or
-    /// a pause holds work back. A phone then opens on the plan, not the board.
+    /// Something in it needs the owner: a step needs attention (failed, cancelled, stale, a
+    /// quiet run), or a pause holds work back. A phone then opens on the plan, not the board.
     pub fn needs_attention(&self) -> bool {
         let c = &self.project.counts;
-        c.failed + c.cancelled + c.paused + self.project.quiet() > 0 || self.project.paused
+        c.attention() + c.get(Shown::Paused) > 0 || self.project.paused
     }
     /// The board's Attention view, in the order shown: where a summary's failed, cancelled and
     /// quiet tags lead.
@@ -1792,6 +1739,7 @@ pub fn load_board(
         cards.insert(r.get::<_, String>(0)?, card);
     }
     let finishing = sluice_store::attempts::finishing(c, project)?;
+    let stopping = sluice_store::attempts::stopping(c, project)?;
     let timings = run_timings(c, project)?;
     for unit in &mut board.units {
         if let Some((message, at, from, thread)) = last.remove(unit.id.as_str()) {
@@ -1802,7 +1750,15 @@ pub fn load_board(
         }
         for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
             step.finishing = finishing.get(&step.id).cloned();
+            step.stopping = stopping.contains(&step.id);
             step.timing = timings.get(step.id.as_str()).cloned();
+            // its run as observed with the store's snapshot: quiet, and when it last wrote
+            let run = summary.running.iter().find(|r| r.step == step.id.as_str());
+            step.quiet = run.is_some_and(|r| r.quiet);
+            step.active_at = run
+                .and_then(|r| r.activity)
+                .map(super::rfc3339)
+                .unwrap_or_default();
             if let Some((manual, total, done, error)) = cards.get(step.id.as_str()) {
                 step.manual = *manual;
                 step.total = total.map(|n| n as usize);
@@ -1813,15 +1769,10 @@ pub fn load_board(
                 }
             }
             step.revision = revision as u64;
-            if step.cancelled()
-                && let Some(fact) = board.facts.steps.get_mut(&step.key())
-            {
-                fact.1 = "cancelled".into();
-            }
         }
         // a lane's view reads its stages' live progress
         if unit.matrix && !unit.done {
-            for step in unit.steps.iter_mut().filter(|s| s.status == "running") {
+            for step in unit.steps.iter_mut().filter(|s| s.running()) {
                 super::step::load_progress(c, project, step)?;
             }
         }
@@ -1844,9 +1795,8 @@ pub fn load_board(
         }
     }
     board.usual = usual;
-    // a wait on a cancelled step says so
-    board.settle();
-    Ok((board, plan))
+    // every fact read: how each step reads, its waits' words, the counts and the lines
+    board.known(&plan, &state);    Ok((board, plan))
 }
 /// How long each recipe's stage usually takes: the median, over the recipe's done units in
 /// the plan, of how long the stage's step took when it succeeded (its last run, a scatter's last
@@ -1857,7 +1807,7 @@ pub fn usual_durations(units: &[UnitView]) -> BTreeMap<(String, String), f64> {
         for step in &unit.steps {
             if let Some(t) = &step.timing
                 && t.finished.is_some()
-                && step.status == "succeeded"
+                && step.status == StepStatus::Succeeded
                 && !step.manual
                 && !step.stage.is_empty()
             {
@@ -1890,15 +1840,19 @@ fn run_timings(
         let finished: Option<String> = r.get(4)?;
         let status: Option<String> = r.get(8)?;
         let error: Option<String> = r.get(9)?;
-        // how it ended, as its glyph names it (the step page's Runs read it the same way)
-        let outcome = match (&finished, status.as_deref()) {
-            (None, _) => "running",
-            (Some(_), Some("succeeded")) => "succeeded",
-            (Some(_), Some(_)) if error.as_deref().is_some_and(super::failure::stored_is_cancel) => {
-                "cancelled"
-            }
-            (Some(_), Some(_)) => "failed",
-            (Some(_), None) => "",
+        // how it ended, as the status table reads its result (the step page's Runs read it
+        // the same way); none without a result
+        let outcome = match (&finished, status.map(|s| s.parse::<StepStatus>())) {
+            (None, _) => Some(Shown::Running),
+            (Some(_), Some(Ok(status))) => Some(sluice_model::shown::classify(
+                &sluice_model::shown::Facts {
+                    cancelled: error
+                        .as_deref()
+                        .is_some_and(sluice_model::shown::stored_is_cancel),
+                    ..sluice_model::shown::Facts::of(status)
+                },
+            )),
+            (Some(_), Some(Err(_)) | None) => None,
         };
         runs.entry(r.get(0)?).or_default().push(Run {
             item: r.get(1)?,
@@ -1908,7 +1862,7 @@ fn run_timings(
             from: r.get(5)?,
             to: r.get(6)?,
             ended: r.get(7)?,
-            outcome: outcome.into(),
+            outcome,
         });
     }
     Ok(runs
@@ -1959,7 +1913,7 @@ struct Run {
     from: Option<f64>,
     to: Option<f64>,
     ended: Option<f64>,
-    outcome: String,
+    outcome: Option<Shown>,
 }
 /// A step's runs as its timeline draws them, oldest first: a run a span, a scatter's round of
 /// item runs one span from its first start to its last end (running while any item is).
@@ -1984,14 +1938,12 @@ fn spans(all: &[Run]) -> Vec<super::timeline::RunSpan> {
             } else if run.finished > span.finished {
                 span.finished = run.finished.clone();
             }
-            // a round reads as its worst item: running, then failed, then cancelled
-            let rank = |o: &str| ["running", "failed", "cancelled", "", "succeeded"]
-                .iter()
-                .position(|x| *x == o)
-                .unwrap_or(4);
-            if rank(&run.outcome) < rank(&span.outcome) {
-                span.outcome = run.outcome.clone();
-            }
+            // a round reads as the first state among its items (`shown`); an item with no
+            // result says nothing of it
+            span.outcome = match (span.outcome, run.outcome) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
             continue;
         }
         out.push((
@@ -1999,7 +1951,7 @@ fn spans(all: &[Run]) -> Vec<super::timeline::RunSpan> {
             RunSpan {
                 started: run.started.clone(),
                 finished: run.finished.clone(),
-                outcome: run.outcome.clone(),
+                outcome: run.outcome,
                 items: usize::from(round.is_some()),
                 from,
                 to,
@@ -2065,7 +2017,7 @@ pub trait RegistrySource: Send + Sync {
 #[derive(Clone)]
 pub struct Registry(pub std::sync::Arc<dyn RegistrySource>);
 /// The shared nav and the project's board from one store snapshot, with the runs' activity
-/// observed once after it. Nothing that moves while the page renders can fail it.
+/// observed once inside it. Nothing that moves while the page renders can fail it.
 pub async fn snapshot(
     state: &DashboardState,
     project: ProjectId,
@@ -2082,10 +2034,7 @@ pub async fn page_snapshot(
     registry: Option<&Registry>,
     cache: Option<&super::panel::QueryCache>,
 ) -> Result<(DashboardSnapshot, ProjectView), PublicError> {
-    let (shared, mut view, mut panel) = load(state, project, registry, None, true).await?;
-    if let Some(panel) = panel.as_mut() {
-        panel.set_quiet(view.project.quiet());
-    }
+    let (shared, mut view, panel) = load(state, project, registry, None, true).await?;
     view.panel = super::panel::draw(state, project, panel, cache).await?;
     Ok((shared, view))
 }
@@ -2134,7 +2083,7 @@ async fn load(
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
     let catalog = state.catalog.catalog(Some(project))?;
     let plans = state.plans.clone();
-    let (shared, mut board, loaded) = state
+    let (shared, board, loaded) = state
         .reads
         .snapshot(move |c| {
             let shared = super::load_snapshot(c, catalog)?;
@@ -2156,25 +2105,6 @@ async fn load(
         })
         .await
         .map_err(|e| e.into_public(true))?;
-    let shared = state.observe(shared).await?;
-    let running = shared
-        .projects
-        .iter()
-        .find(|p| p.id == project)
-        .map(|p| p.running.as_slice())
-        .unwrap_or_default();
-    // the summary's quiet counts read the runs as observed, not as the store had them
-    board.project.running = running.to_vec();
-    for unit in &mut board.units {
-        for step in unit.steps.iter_mut().chain(unit.rows.iter_mut().flatten()) {
-            let run = running.iter().find(|r| r.step == step.id.as_str());
-            step.quiet = run.is_some_and(|r| r.quiet);
-            step.active_at = run
-                .and_then(|r| r.activity)
-                .map(super::rfc3339)
-                .unwrap_or_default();
-        }
-    }
     Ok((shared, board, loaded))
 }
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -2215,8 +2145,8 @@ impl BoardQuery {
         view.units.retain(|u| {
             (match show {
                 "active" => !u.done,
-                // what needs a look: a failed or stale step, or one running quiet for 2h+
-                "attention" => u.rank() == 0 || u.steps.iter().any(|s| s.quiet),
+                // what needs a look: a step whose state needs attention (`shown`)
+                "attention" => u.needs_attention(),
                 "done" => u.done,
                 _ => true,
             }) && self.tag.as_deref().is_none_or(|tag| {
@@ -2264,7 +2194,7 @@ impl BoardQuery {
         }
         view.query = query.finish();
         if order == "live" {
-            view.units.sort_by_key(UnitView::rank);
+            view.units.sort_by_key(UnitView::shown);
         }
         if !q.is_empty() {
             view.matched = search(&mut view.units, &q);

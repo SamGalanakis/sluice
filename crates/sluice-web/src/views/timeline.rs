@@ -7,7 +7,7 @@
 //! is a `<time data-since>` the page ticks. Drawn on the server with percentages; no legend, the
 //! bars carry their glyphs and their words.
 use super::TrustedHtml;
-use super::ui::{duration_text, duration_words, esc};
+use super::ui::{Shown, duration_text, duration_words, esc};
 use askama::Template;
 use serde::Serialize;
 
@@ -18,9 +18,9 @@ pub struct RunSpan {
     /// RFC 3339 UTC.
     pub started: String,
     pub finished: Option<String>,
-    /// As a status glyph names it: running (not ended), succeeded, failed, cancelled; "" when
-    /// its result is not recorded.
-    pub outcome: String,
+    /// How it reads in the status table (`sluice_model::shown`): running (not ended), else as its
+    /// result says (succeeded, failed, cancelled, …); none when no result is recorded.
+    pub outcome: Option<Shown>,
     /// A scatter round's item runs; 0 for a plain run.
     pub items: usize,
     /// Its start and end in seconds since the epoch (no end while it runs).
@@ -84,8 +84,8 @@ pub struct Row {
     pub href: String,
     pub current: bool,
     pub marks: Vec<Mark>,
-    /// How its last run stands, for its glyph in the phone's line ("" without a run).
-    pub last: String,
+    /// How its last run stands, for its glyph in the phone's line (none without a run).
+    pub last: Option<Shown>,
     /// "3 runs · 52m · waited 6h 12m", its running time a ticking `<time data-since>`.
     pub words: String,
     /// The runs in words for a screen reader: the track's name.
@@ -93,7 +93,8 @@ pub struct Row {
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Mark {
-    pub outcome: String,
+    /// How it reads; a run with no result recorded draws pending's glyph and bar.
+    pub outcome: Shown,
     /// CSS `left` and `width` of its bar (the part known to have run, for a run still going).
     pub left: String,
     pub width: String,
@@ -104,6 +105,19 @@ pub struct Mark {
     /// CSS `left` of its glyph's centre: where it ended (the axis's end while it runs).
     pub end: String,
     pub title: String,
+}
+impl Row {
+    /// Its last run's glyph; nothing without a run.
+    pub fn last_glyph(&self) -> TrustedHtml {
+        self.last
+            .map(super::ui::glyph)
+            .unwrap_or_else(|| TrustedHtml::owned(String::new()))
+    }
+}
+impl Mark {
+    pub fn glyph(&self) -> TrustedHtml {
+        super::ui::glyph(self.outcome)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Break {
@@ -352,15 +366,10 @@ impl Timeline {
         for (n, span) in lane.spans.iter().enumerate() {
             let from = axis.at(span.from);
             let to = axis.at(span.to.unwrap_or(known_end).max(span.from));
-            let outcome = if span.outcome.is_empty() {
-                "pending"
-            } else {
-                span.outcome.as_str()
-            };
-            let what = match outcome {
-                "running" => "running".to_owned(),
-                "pending" => "no result recorded".to_owned(),
-                o => super::ui::status_word(o).to_owned(),
+            let outcome = span.outcome.unwrap_or(Shown::Pending);
+            let what = match span.outcome {
+                Some(shown) => shown.word(),
+                None => "no result recorded",
             };
             let items = if span.items > 0 {
                 format!(", {}", super::ui::count(span.items, "item", "items"))
@@ -385,7 +394,7 @@ impl Timeline {
             said.push(words);
             let dot = !span.open() && axis.px(to) - axis.px(from) < DOT;
             marks.push(Mark {
-                outcome: outcome.into(),
+                outcome,
                 left: axis.css(from),
                 width: axis.css_width(from, to),
                 dot,
@@ -400,13 +409,10 @@ impl Timeline {
             href: lane.href.clone(),
             current: lane.current,
             marks,
-            last: lane.spans.last().map_or(String::new(), |s| {
-                if s.outcome.is_empty() {
-                    "pending".into()
-                } else {
-                    s.outcome.clone()
-                }
-            }),
+            last: lane
+                .spans
+                .last()
+                .map(|s| s.outcome.unwrap_or(Shown::Pending)),
             words: words(lane.spans, all),
             said: if said.is_empty() {
                 "No run yet".into()
@@ -500,7 +506,7 @@ mod tests {
         RunSpan {
             started: format!("2026-10-07T{:02}:00:00Z", (from / 3600.0) as u32),
             finished: to.map(|_| "x".into()),
-            outcome: outcome.into(),
+            outcome: Shown::from_key(outcome),
             items: 0,
             from,
             to,
@@ -553,7 +559,7 @@ mod tests {
         );
         // retries are successive bars, each ending in its glyph
         assert_eq!(t.rows[1].marks.len(), 2);
-        assert_eq!(t.rows[1].marks[0].outcome, "failed");
+        assert_eq!(t.rows[1].marks[0].outcome, Shown::Failed);
         assert_eq!(t.rows[1].words, "2 runs · 1h 0m");
         assert_eq!(t.rows[2].words, "1 run · 10m · waited 6h 0m");
         assert_eq!(

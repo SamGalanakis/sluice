@@ -1,5 +1,6 @@
 //! Step detail and owner actions. P6-02 injects the command service adapter.
 use super::board::{self, render_error};
+use super::ui::Shown;
 use super::{DashboardState, NavView, TrustedHtml, Viewer};
 use crate::streams::{self, PatchRegion, RenderedBatch, StreamQuery, VersionSignal};
 use askama::Template;
@@ -15,10 +16,12 @@ use sluice_model::{
     commands::StepStatus,
     error::PublicError,
     gates::{
-        GateDecision, StateSnapshot, ValueRef, evaluate_step, resolve_reference, wait_reasons,
+        GateDecision, StateSnapshot, ValueRef, evaluate_step, resolve_reference,
+        wait_reasons_worded,
     },
     ids::{ProjectId, RunId, StepId},
     plan::{Binding, Pause, Plan},
+    shown::Facts,
     types::BoundValue,
 };
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
@@ -173,9 +176,8 @@ pub struct RunView {
     pub session: String,
     pub engine: String,
     pub inputs: Vec<FieldView>,
-    /// How it ended, as a status glyph names it: running (not ended), succeeded, failed,
-    /// cancelled; empty when its result is not recorded.
-    pub outcome: String,
+    /// How it ended, read from its result.
+    pub outcome: Outcome,
     /// Its result's error, read for a person.
     pub failure: Option<super::failure::Failure>,
     /// The outputs its result carried, by name.
@@ -246,6 +248,49 @@ pub fn run_file(home: &std::path::Path, run: &RunId, name: &str) -> Option<std::
     let path = dir.join(name);
     plain(&path).then_some(path)
 }
+/// How a run ended, as its result says it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    /// It has not ended.
+    Running,
+    /// It ended: its result's status, as the step would read with it (a cancel as cancelled).
+    Ended(Shown),
+    /// It ended with no result recorded.
+    Unrecorded,
+    /// Its result names a status sluice does not know: said, never guessed.
+    Unknown(String),
+}
+impl Outcome {
+    /// Its glyph's state, when it has one.
+    pub fn shown(&self) -> Option<Shown> {
+        match self {
+            Outcome::Running => Some(Shown::Running),
+            Outcome::Ended(shown) => Some(*shown),
+            Outcome::Unrecorded | Outcome::Unknown(_) => None,
+        }
+    }
+    /// Its glyph; nothing when no result says how it ended.
+    pub fn glyph(&self) -> TrustedHtml {
+        self.shown()
+            .map(super::ui::glyph)
+            .unwrap_or_else(|| TrustedHtml::owned(String::new()))
+    }
+    /// In words: "Running", "Failed", "No result recorded".
+    pub fn words(&self) -> String {
+        match self {
+            Outcome::Running => "Running".into(),
+            Outcome::Ended(shown) => {
+                let word = shown.word();
+                word[..1].to_uppercase() + &word[1..]
+            }
+            Outcome::Unrecorded => "No result recorded".into(),
+            Outcome::Unknown(status) => {
+                format!("Its result says “{status}”, a status sluice does not know")
+            }
+        }
+    }
+}
 impl RunView {
     pub fn file_href(&self, project: &ProjectId, name: &str) -> String {
         format!("/projects/id/{project}/runs/{}/files/{name}", self.id)
@@ -268,15 +313,23 @@ pub struct StepView {
     pub stage: String,
     pub function: String,
     pub doc: String,
-    pub status: String,
-    pub mark: String,
+    /// Its stored status; how it reads is `shown()`.
+    pub status: StepStatus,
     pub tags: Vec<String>,
+    /// Paused by its own pause (Unpause applies).
     pub paused: bool,
     /// Pending with its gates met: the next to start (`is-next`). A finished step is never.
     pub ready: bool,
+    /// Pending behind a step that failed or went stale (`sluice_model::status::blocked`).
     pub blocked: bool,
+    /// Pending, ready and done outside sluice (`core.external`).
+    pub external: bool,
+    /// Pending and reading a plan input with no value.
+    pub held: bool,
     /// Running and quiet past its `quiet_after`.
     pub quiet: bool,
+    /// Running, and a cancel was asked for: its run is stopping.
+    pub stopping: bool,
     /// What it waits on besides a pause (`hold` says that): its gates and handoffs not ready.
     pub waits: Vec<String>,
     /// A pending step's pause: its own (and who paused it, once its page has read the record)
@@ -365,18 +418,27 @@ impl Hold {
         }
     }
 }
-/// One entry of a step's `after`: a step (linked, with its status), a unit (linked) or a
+/// One entry of a step's `after`: a step (linked, with how it reads), a unit (linked) or a
 /// condition.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct GateView {
     pub entry: String,
     pub href: String,
-    /// A step's status ("succeeded", "running", …); "" for a unit or a condition.
-    pub mark: String,
+    /// How its step reads; none for a unit or a condition.
+    pub shown: Option<Shown>,
+    #[serde(skip)]
+    pub step: Option<StepId>,
 }
 impl GateView {
+    /// Its step's glyph; nothing for a unit or a condition.
+    pub fn glyph(&self) -> TrustedHtml {
+        self.shown
+            .map(super::ui::glyph)
+            .unwrap_or_else(|| TrustedHtml::owned(String::new()))
+    }
     pub fn done(&self) -> bool {
-        matches!(self.mark.as_str(), "succeeded" | "skipped")
+        self.shown
+            .is_some_and(|s| s.spec().band == sluice_model::shown::Band::Done)
     }
 }
 /// What a running step is doing now: its own latest message (to anyone), and the latest
@@ -417,16 +479,6 @@ pub struct ProgressView {
     pub at: String,
     pub live: bool,
 }
-pub fn status_name(status: &StepStatus) -> &'static str {
-    match status {
-        StepStatus::Pending => "pending",
-        StepStatus::Running => "running",
-        StepStatus::Succeeded => "succeeded",
-        StepStatus::Failed => "failed",
-        StepStatus::Stale => "stale",
-        StepStatus::Skipped => "skipped",
-    }
-}
 impl StepView {
     /// What its page lists under "Waits on": its waits, less those the After row says (each
     /// gate there carries its status).
@@ -459,7 +511,7 @@ impl StepView {
     /// Its `after` in a few words: "98 steps, all done", "3 steps: 2 done, 1 running", with
     /// any units and conditions counted after.
     pub fn gates_words(&self) -> String {
-        let steps: Vec<&GateView> = self.gates.iter().filter(|g| !g.mark.is_empty()).collect();
+        let steps: Vec<&GateView> = self.gates.iter().filter(|g| g.shown.is_some()).collect();
         let others = self.gates.len() - steps.len();
         let noun = super::ui::count;
         let mut words = String::new();
@@ -469,18 +521,16 @@ impl StepView {
             if done == steps.len() {
                 words.push_str(if done == 1 { ", done" } else { ", all done" });
             } else {
-                let mut by: Vec<(String, usize)> = vec![];
-                for g in steps.iter().filter(|g| !g.done()) {
-                    match by.iter_mut().find(|(m, _)| *m == g.mark) {
-                        Some((_, n)) => *n += 1,
-                        None => by.push((g.mark.clone(), 1)),
-                    }
-                }
+                let by: super::ui::Tally = steps
+                    .iter()
+                    .filter(|g| !g.done())
+                    .filter_map(|g| g.shown)
+                    .collect();
                 let mut parts = vec![];
                 if done > 0 {
                     parts.push(format!("{done} done"));
                 }
-                parts.extend(by.into_iter().map(|(m, n)| format!("{n} {m}")));
+                parts.extend(by.iter().map(|(s, n)| format!("{n} {}", s.word())));
                 words.push_str(&format!(": {}", parts.join(", ")));
             }
         }
@@ -506,14 +556,8 @@ impl StepView {
         let ready = decision == GateDecision::Ready;
         let paused = step.paused.is_paused();
         let held = paused || state.paused.is_paused();
-        // every reason it waits, its gates too while a pause holds it; the pause apart
-        let mut waits = match decision {
-            GateDecision::Wait(_) => wait_reasons(plan, state, step),
-            GateDecision::Invalid(e) => e.into_iter().map(|e| e.to_string()).collect(),
-            _ => vec![],
-        };
-        waits.retain(|w| w != "paused" && !w.starts_with("paused: ") && w != "project paused");
-        let hold = (held && entry.status == StepStatus::Pending).then(|| Hold {
+        let pending = entry.status == StepStatus::Pending;
+        let hold = (held && pending).then(|| Hold {
             project: !paused,
             reason: match &step.paused {
                 Pause::Reason(reason) => reason.clone(),
@@ -522,16 +566,7 @@ impl StepView {
             ..Hold::default()
         });
         // next to start: pending with its gates met (a finished step's gates are met too)
-        let next = ready && entry.status == StepStatus::Pending;
-        let status = status_name(&entry.status).to_owned();
-        let mark = if entry.status == StepStatus::Pending && held {
-            "paused"
-        } else if entry.status == StepStatus::Pending && ready && step.is_external() {
-            "external"
-        } else {
-            &status
-        }
-        .to_owned();
+        let next = ready && pending;
         let inputs = step
             .bindings
             .iter()
@@ -619,14 +654,16 @@ impl StepView {
             stage: String::new(),
             function: step.run.clone(),
             doc: step.doc.clone().unwrap_or_default(),
-            status,
-            mark,
+            status: entry.status.clone(),
             tags: step.tags.clone(),
             paused,
             ready: next,
             blocked: false,
+            external: pending && ready && step.is_external(),
+            held: pending && sluice_model::status::missing_input(plan, state, step).is_some(),
             quiet: false,
-            waits,
+            stopping: false,
+            waits: vec![],
             hold,
             gates: {
                 let mut gates: Vec<GateView> = step
@@ -636,21 +673,20 @@ impl StepView {
                         sluice_model::gates::Gate::Step { id, .. } => GateView {
                             entry: g.entry(),
                             href: format!("/projects/id/{project}/steps/{id}"),
-                            mark: state
-                                .steps
-                                .get(id)
-                                .map(|e| status_name(&e.status).to_owned())
-                                .unwrap_or_default(),
+                            shown: None,
+                            step: Some(id.clone()),
                         },
                         sluice_model::gates::Gate::Unit { name, .. } => GateView {
                             entry: g.entry(),
                             href: format!("/projects/id/{project}/units/{name}"),
-                            mark: String::new(),
+                            shown: None,
+                            step: None,
                         },
-                        _ => GateView {
+                        sluice_model::gates::Gate::Bool { .. } => GateView {
                             entry: g.entry(),
                             href: String::new(),
-                            mark: String::new(),
+                            shown: None,
+                            step: None,
                         },
                     })
                     .collect();
@@ -684,23 +720,116 @@ impl StepView {
         if let Some(failure) = failure {
             view.set_failure(failure);
         }
+        // what it waits on, each step named as the store has it until the board knows more
+        view.name_waits(plan, state, &|id: &StepId| {
+            let status = state.status(id);
+            Some(sluice_model::shown::classify(&Facts::of(status)))
+        });
         view
     }
-    /// Its stored error, read: a failed step the owner cancelled is marked `cancelled`, a state of
+    /// What it waits on (`waits`) and how each step of its `after` reads, each step named by
+    /// `shown` (the board's own reading: a cancel "cancelled", a quiet run "quiet"), so its
+    /// card, page and the board's StepStatus say a cancel as one. A pause is said apart
+    /// (`hold`).
+    pub fn name_waits(
+        &mut self,
+        plan: &Plan,
+        state: &StateSnapshot,
+        shown: &dyn Fn(&StepId) -> Option<Shown>,
+    ) {
+        let step = &plan.steps()[&self.id];
+        let word = |id: &StepId| shown(id).map_or(state.status(id).as_str(), Shown::word);
+        self.waits = match evaluate_step(plan, state, step) {
+            GateDecision::Wait(_) => wait_reasons_worded(plan, state, step, &word),
+            GateDecision::Invalid(e) => e.into_iter().map(|e| e.to_string()).collect(),
+            GateDecision::Ready | GateDecision::Skip(_) => vec![],
+        };
+        self.waits
+            .retain(|w| w != "paused" && !w.starts_with("paused: ") && w != "project paused");
+        for gate in &mut self.gates {
+            gate.shown = gate.step.as_ref().and_then(shown);
+        }
+    }
+    /// Its stored error, read: a failed step the owner cancelled reads `cancelled`, a state of
     /// its own on every page (its glyph, caption and counts), though the store keeps it failed.
     pub fn set_failure(&mut self, failure: super::failure::Failure) {
-        if self.status == "failed" {
-            self.mark = if failure.cancelled {
-                "cancelled"
-            } else {
-                "failed"
-            }
-            .into();
-        }
         self.failure = Some(failure);
     }
+    /// How it reads (`sluice_model::shown`): its stored status named from the facts beside it.
+    /// Derived each time, so a fact set late (its run's quiet, observed after the store) is
+    /// never missed by a copy taken early.
+    pub fn shown(&self) -> Shown {
+        sluice_model::shown::classify(&Facts {
+            cancelled: self.failure.as_ref().is_some_and(|f| f.cancelled),
+            paused: self.hold.is_some(),
+            external: self.external,
+            blocked: self.blocked,
+            held: self.held,
+            queued: !self.queued.is_empty(),
+            quiet: self.quiet && !self.active_at.is_empty(),
+            finishing: self.finishing.is_some(),
+            stopping: self.stopping,
+            manual: self.manual,
+            ..Facts::of(self.status.clone())
+        })
+    }
     pub fn cancelled(&self) -> bool {
-        self.mark == "cancelled"
+        self.shown() == Shown::Cancelled
+    }
+    /// Its stored status is failed (a cancel too).
+    pub fn failed(&self) -> bool {
+        self.status == StepStatus::Failed
+    }
+    /// Its stored status is running (quiet, finishing and stopping too).
+    pub fn running(&self) -> bool {
+        self.status == StepStatus::Running
+    }
+    pub fn pending(&self) -> bool {
+        self.status == StepStatus::Pending
+    }
+    pub fn succeeded(&self) -> bool {
+        self.status == StepStatus::Succeeded
+    }
+    /// Its run has written nothing past its cadence.
+    pub fn is_quiet(&self) -> bool {
+        self.shown() == Shown::Quiet
+    }
+    /// A running step's badge, before "running for 2h": its state's word when it is more than
+    /// running ("quiet · ", "stopping · ").
+    pub fn badge_lead(&self) -> String {
+        match self.shown() {
+            Shown::Running => String::new(),
+            shown => format!("{} · ", shown.word()),
+        }
+    }
+    /// Its badge's tone: gold when its state needs a look but is no failure.
+    pub fn badge_tone(&self) -> &'static str {
+        match self.shown().spec().tone {
+            sluice_model::shown::Tone::Attention => " attn",
+            sluice_model::shown::Tone::Ink
+            | sluice_model::shown::Tone::Muted
+            | sluice_model::shown::Tone::Active
+            | sluice_model::shown::Tone::Paused
+            | sluice_model::shown::Tone::Idle
+            | sluice_model::shown::Tone::Success => "",
+        }
+    }
+    /// How its result says it ended, for a step with no run kept: "Cancelled", "Failed",
+    /// "Ended".
+    pub fn ended_word(&self) -> &'static str {
+        match self.shown() {
+            Shown::Cancelled => "Cancelled",
+            Shown::Failed => "Failed",
+            _ => "Ended",
+        }
+    }
+    /// A lane matrix's mark for a stage nothing has reached: its state's glyph, or none for
+    /// plain pending (the cell's dot).
+    pub fn dot(&self) -> TrustedHtml {
+        match self.shown() {
+            Shown::Pending => TrustedHtml::owned(String::new()),
+            shown => super::ui::mark(shown),
+        }
     }
     /// How a page names it: its title (and stage), its id after it.
     pub fn name(&self) -> super::ui::StepRef {
@@ -775,66 +904,42 @@ impl StepView {
     pub fn key(&self) -> String {
         format!("s:{}", self.id)
     }
-    pub fn display_mark(&self) -> &str {
-        if self.manual && self.status == "succeeded" {
-            "manual"
-        } else {
-            &self.mark
-        }
-    }
     pub fn card_class(&self) -> String {
         format!(
-            "node {} is-{}{}{}",
+            "node {} is-{}{}",
             if self.function.starts_with("core.") && self.function != "core.external" {
                 "chip"
             } else {
                 "card"
             },
-            self.mark,
-            if self.blocked { " is-blocked" } else { "" },
+            self.shown().key(),
             if self.ready { " is-next" } else { "" },
-        ) + if self.is_quiet() { " is-quiet" } else { "" }
+        )
     }
-    /// The state a count counts it under (`ui::STATES`): a quiet run as quiet, a step set by
-    /// hand as succeeded, one outside sluice as running, else its mark.
-    pub fn state(&self) -> &str {
-        if self.is_quiet() {
-            return "quiet";
-        }
-        match self.mark.as_str() {
-            "manual" => "succeeded",
-            "external" => "running",
-            "pending" if self.blocked => "blocked",
-            mark => mark,
-        }
-    }
-    /// Nothing has reached it yet: pending (or paused) and not about to start. A lane matrix
-    /// draws it as a small mark, not a card.
+    /// Nothing has reached it yet: a lane matrix draws it as a small mark, not a card.
     pub fn unreached(&self) -> bool {
-        matches!(self.mark.as_str(), "pending" | "paused") && self.queued.is_empty()
+        match self.shown() {
+            Shown::Pending | Shown::Paused | Shown::Blocked | Shown::Held => true,
+            Shown::Failed
+            | Shown::Cancelled
+            | Shown::Stale
+            | Shown::Quiet
+            | Shown::Stopping
+            | Shown::Finishing
+            | Shown::Running
+            | Shown::External
+            | Shown::Queued
+            | Shown::Manual
+            | Shown::Succeeded
+            | Shown::Skipped => false,
+        }
     }
-    /// Running, and its run has written nothing for its `quiet_after`: its card says so.
-    pub fn is_quiet(&self) -> bool {
-        self.quiet && self.status == "running" && !self.active_at.is_empty()
-    }
+    /// Its card's caption: its state's word when the table says a card says it ("failed",
+    /// "quiet", "outside"), else a scatter's items done ("3/5").
     pub fn caption(&self) -> String {
-        if self.status == "failed" {
-            if self.cancelled() {
-                "cancelled"
-            } else {
-                "failed"
-            }
-            .into()
-        } else if self.blocked {
-            "blocked".into()
-        } else if !self.queued.is_empty() {
-            "queued".into()
-        } else if self.mark == "external" {
-            "outside".into()
-        } else if self.finishing.is_some() && self.status == "running" {
-            "finishing".into()
-        } else if self.is_quiet() {
-            "quiet".into()
+        let shown = self.shown();
+        if shown.spec().caption {
+            shown.word().into()
         } else if let Some(total) = self.total {
             format!("{}/{total}", self.done)
         } else {
@@ -843,22 +948,13 @@ impl StepView {
     }
     /// What its caption means, for the caption's title (no legend: each says itself).
     pub fn caption_help(&self) -> String {
-        match self.caption().as_str() {
-            "failed" => "Its last run failed; Retry runs it again".into(),
-            "cancelled" => "Cancelled by its owner; Retry runs it again".into(),
-            "blocked" => "Waits on a step that failed or went stale".into(),
-            "queued" => "Ready, waiting for a resource to free up".into(),
-            "outside" => "Done outside sluice: set its outputs when the work lands".into(),
-            "finishing" => "Its agent submitted; its run is ending".into(),
-            "quiet" => {
-                "Running, but its run has written nothing for a while: the time since it last did"
-                    .into()
-            }
-            "" => String::new(),
-            _ => self
-                .total
+        let shown = self.shown();
+        if shown.spec().caption {
+            shown.spec().help.into()
+        } else {
+            self.total
                 .map(|total| format!("{} of its {total} items done", self.done))
-                .unwrap_or_default(),
+                .unwrap_or_default()
         }
     }
     /// The run times its card shows: a running step's current run, ticking; how long a
@@ -866,11 +962,15 @@ impl StepView {
     pub fn shown_timing(&self) -> Option<&RunTiming> {
         let timing = self.timing.as_ref()?;
         let finished = timing.finished.is_some();
-        match self.status.as_str() {
-            "running" => Some(timing),
-            "succeeded" if finished && !self.manual => Some(timing),
-            "failed" if finished => Some(timing),
-            _ => None,
+        match self.status {
+            StepStatus::Running => Some(timing),
+            StepStatus::Succeeded if finished && !self.manual => Some(timing),
+            StepStatus::Failed if finished => Some(timing),
+            StepStatus::Succeeded
+            | StepStatus::Failed
+            | StepStatus::Pending
+            | StepStatus::Stale
+            | StepStatus::Skipped => None,
         }
     }
     /// The card's timer, after its caption: a running run's a `<time data-since>` that
@@ -895,7 +995,7 @@ impl StepView {
             usually: Option<u64>,
             usual_said: String,
         }
-        if self.is_quiet() {
+        if self.shown() == Shown::Quiet {
             // how long it has written nothing, ticking, in place of its run's time
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -958,7 +1058,7 @@ impl StepView {
     }
     /// While it runs, the earlier run its outputs came from: its number and when it ended.
     pub fn outputs_from(&self) -> Option<(usize, &str)> {
-        if self.status != "running"
+        if !self.running()
             || self
                 .outputs_set()
                 .iter()
@@ -1000,15 +1100,18 @@ impl StepView {
     /// A failed step's next move is Retry: the primary button. One the owner cancelled was
     /// stopped on purpose, so Retry stays a plain button.
     pub fn retry_first(&self) -> bool {
-        self.status == "failed" && !self.cancelled()
+        self.shown() == Shown::Failed
     }
     pub fn retryable(&self) -> bool {
-        matches!(self.status.as_str(), "succeeded" | "failed" | "stale")
+        matches!(
+            self.status,
+            StepStatus::Succeeded | StepStatus::Failed | StepStatus::Stale
+        )
     }
     /// Pause holds a step that would start: a pending or stale one (a failed one starts only
     /// when retried, so pausing it would mean nothing).
     pub fn pausable(&self) -> bool {
-        self.paused || matches!(self.status.as_str(), "pending" | "stale")
+        self.paused || matches!(self.status, StepStatus::Pending | StepStatus::Stale)
     }
     pub fn last_run(&self) -> Option<&RunView> {
         self.runs.last()
@@ -1016,7 +1119,7 @@ impl StepView {
     /// While it runs, when its current run started: its status tag carries the time.
     pub fn running_since(&self) -> Option<&str> {
         self.last_run()
-            .filter(|r| r.finished.is_empty() && self.status == "running")
+            .filter(|r| r.finished.is_empty() && self.running())
             .map(|r| r.started.as_str())
     }
     /// The tab's words: its stage and title ("work · Ship the cron fix"), cut to 48 characters.
@@ -1035,8 +1138,17 @@ impl StepView {
             "It stops; Retry starts it over.".to_owned()
         }
     }
+    /// Cancel applies: running and not already stopping (a cancel asked for is not offered
+    /// again), or pending work outside sluice (`step_cancel` takes no other).
     pub fn cancellable(&self) -> bool {
-        matches!(self.status.as_str(), "pending" | "running")
+        match self.status {
+            StepStatus::Running => self.shown() != Shown::Stopping,
+            StepStatus::Pending => self.function == "core.external",
+            StepStatus::Succeeded
+            | StepStatus::Failed
+            | StepStatus::Stale
+            | StepStatus::Skipped => false,
+        }
     }
     /// The step as the drawer draws it: its id a second-level heading under the page's.
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
@@ -1212,11 +1324,15 @@ pub fn load_detail(
             finished.is_empty(),
             result.get("status").and_then(|s| s.as_str()),
         ) {
-            (true, _) => "running",
-            (false, Some("succeeded")) => "succeeded",
-            (false, Some(_)) if failure.as_ref().is_some_and(|f| f.cancelled) => "cancelled",
-            (false, Some(_)) => "failed",
-            (false, None) => "",
+            (true, _) => Outcome::Running,
+            (false, None) => Outcome::Unrecorded,
+            (false, Some(word)) => match word.parse::<StepStatus>() {
+                Ok(status) => Outcome::Ended(sluice_model::shown::classify(&Facts {
+                    cancelled: failure.as_ref().is_some_and(|f| f.cancelled),
+                    ..Facts::of(status)
+                })),
+                Err(_) => Outcome::Unknown(word.to_owned()),
+            },
         };
         let files = match &home {
             Some(home) => RUN_FILES
@@ -1233,7 +1349,7 @@ pub fn load_detail(
             session: r.get(4)?,
             engine: r.get(5)?,
             inputs,
-            outcome: outcome.into(),
+            outcome,
             failure,
             outputs: result
                 .get("outputs")
@@ -1273,7 +1389,7 @@ pub fn load_detail(
     }
     step.now = NowView::default();
     // a running step's Now, and a failed one's last words
-    if matches!(step.status.as_str(), "running" | "failed") {
+    if step.running() || step.failed() {
         let row = |r: &rusqlite::Row<'_>| -> rusqlite::Result<(i64, NowMessage)> {
             let body: String = r.get(4)?;
             Ok((
@@ -1292,7 +1408,7 @@ pub fn load_detail(
             .query_row((project.to_string(), step.id.as_str()), row)
             .optional()?;
         let after = own.as_ref().map_or(0, |(id, _)| *id);
-        let inbound = (step.status == "running")
+        let inbound = step.running()
             .then(|| c
             .prepare_cached("SELECT id,thread,\"from\",\"to\",body,at FROM messages WHERE project_id=?1 AND (\"to\"=?2 OR thread=?3) AND \"from\"<>?2 AND id>?4 ORDER BY id DESC LIMIT 1")?
             .query_row(

@@ -110,8 +110,9 @@ type QueryOutcome = Result<QueryTable, String>;
 struct UnitsData {
     rows: Vec<UnitRow>,
     done: Option<(usize, usize)>,
-    /// The units stopped only by cancels (`views::failure`): "cancelled", not "failed".
-    cancelled: BTreeSet<String>,
+    /// How each unit reads on the board (`board::UnitView::shown`) and each of its steps' short
+    /// name and state: the table draws them as the plan does, a cancel and a quiet run too.
+    looks: BTreeMap<String, (super::ui::Shown, Vec<(String, super::ui::Shown)>)>,
 }
 /// An Output's value: the step's output, or its progress when that is fresher (`step_progress`).
 #[derive(Clone, Debug)]
@@ -140,15 +141,17 @@ pub(crate) struct Loaded {
     doc: Option<sluice_store::projects::BoardDoc>,
     /// Each LatestMessage sender's newest message in the project, if any.
     latest: BTreeMap<String, Option<LatestMessage>>,
-    /// What each `Count` counts, as the summary line counts it (`set_quiet` adds the quiet
-    /// runs once their activity is observed).
-    counts: BTreeMap<&'static str, usize>,
+    /// What each `Count` counts: the board's own count of the project's steps by state.
+    counts: super::ui::Tally,
     token: String,
 }
 impl Loaded {
-    /// The running steps gone quiet, observed after the store's snapshot.
-    pub(crate) fn set_quiet(&mut self, quiet: usize) {
-        self.counts.insert("quiet", quiet);
+    /// What `Count(of)` says: the steps in the state keyed `of`, or every step.
+    fn count(&self, of: &str) -> Option<usize> {
+        match of {
+            "steps" => Some(self.counts.total()),
+            key => super::ui::Shown::from_key(key).map(|s| self.counts.get(s)),
+        }
     }
 }
 impl openui::StepLookup for Loaded {
@@ -269,20 +272,7 @@ pub(crate) fn gather(
         once: BTreeSet::new(),
         doc: None,
         latest: BTreeMap::new(),
-        counts: {
-            let c = &view.project.counts;
-            BTreeMap::from([
-                ("failed", c.failed),
-                ("cancelled", c.cancelled),
-                ("running", c.running),
-                ("quiet", view.project.quiet()),
-                ("stale", c.stale),
-                ("pending", c.pending),
-                ("paused", c.paused),
-                ("succeeded", c.succeeded),
-                ("steps", c.total()),
-            ])
-        },
+        counts: view.project.counts.clone(),
         token: String::new(),
         board,
     };
@@ -378,10 +368,27 @@ pub(crate) fn gather(
                 let wanted = (!filter.is_empty()).then_some(wanted.as_slice());
                 sluice_runtime::status::unit_rows(c, project, plan, wanted)
                     .map_err(|e| e.into_public(true).to_string())
-                    .and_then(|v| {
-                        let stopped = super::failure::stopped_steps(c, &project.to_string())
-                            .map_err(|e| e.to_string())?;
-                        Ok(cancels(plan, v, &stopped))
+                    .map(|v| UnitsData {
+                        looks: v
+                            .rows
+                            .iter()
+                            .filter_map(|row| view.units.iter().find(|u| u.id.as_str() == row.unit))
+                            .map(|unit| {
+                                let prefix = format!("{}-", unit.id);
+                                let steps = unit
+                                    .steps
+                                    .iter()
+                                    .map(|s| {
+                                        let id = s.id.as_str();
+                                        let short = id.strip_prefix(&prefix).unwrap_or(id);
+                                        (short.to_owned(), s.shown())
+                                    })
+                                    .collect();
+                                (unit.id.to_string(), (unit.shown(), steps))
+                            })
+                            .collect(),
+                        rows: v.rows,
+                        done: v.done,
                     })
             }
         };
@@ -615,46 +622,6 @@ fn placeholders(sql: &str) -> Result<usize, String> {
     Ok(highest)
 }
 
-/// The units view with each cancelled step marked as one (`■`, not `✗`) and the units whose
-/// every stopped step was cancelled named apart: a cancel is not a failure of the work.
-fn cancels(
-    plan: &sluice_model::Plan,
-    view: sluice_model::status::UnitsView,
-    stopped: &BTreeMap<String, bool>,
-) -> UnitsData {
-    let mut cancelled = BTreeSet::new();
-    let mut rows = view.rows;
-    for row in &mut rows {
-        let Some(unit) = plan.units().iter().find(|(n, _)| n.as_str() == row.unit).map(|(_, u)| u) else {
-            continue;
-        };
-        // the marks are the unit's steps in order, one word each
-        let marks: Vec<String> = row
-            .steps
-            .split(' ')
-            .zip(&unit.steps)
-            .map(|(word, id)| match stopped.get(id.as_str()) {
-                Some(true) => format!("{}■", word.trim_end_matches('✗')),
-                _ => word.to_owned(),
-            })
-            .collect();
-        row.steps = marks.join(" ");
-        let stops: Vec<bool> = unit
-            .steps
-            .iter()
-            .filter_map(|id| stopped.get(id.as_str()).copied())
-            .collect();
-        if row.state == UnitState::Failed && !stops.is_empty() && stops.iter().all(|c| *c) {
-            cancelled.insert(row.unit.clone());
-        }
-    }
-    UnitsData {
-        rows,
-        done: view.done,
-        cancelled,
-    }
-}
-
 /// A rendered document's first section and the rest: it splits before its second heading
 /// (a heading in code is escaped, so never matches); a document with one section or none is
 /// all first.
@@ -679,20 +646,6 @@ fn first_section(html: &str) -> (&str, &str) {
 }
 
 // ---- drawing -------------------------------------------------------------------------------
-
-/// The units tool's step marks (`sluice_model::status`), in the order the key lists them.
-const MARKS: [(char, &str); 10] = [
-    ('✓', "succeeded"),
-    ('▶', "running"),
-    ('▷', "finishing"),
-    ('·', "pending"),
-    ('≡', "queued"),
-    ('‖', "paused"),
-    ('✗', "failed"),
-    ('■', "cancelled"),
-    ('~', "stale"),
-    ('–', "skipped"),
-];
 
 use super::ui::esc;
 /// `text` escaped, each word with a hyphen inside it (a step id, a unit, `FIG-5004`) kept on
@@ -992,7 +945,7 @@ impl Draw<'_> {
             "Metric" | "Query" | "Chart" => self.warned(c, Self::query_component),
             "Count" => {
                 let of = c.str_arg(1).unwrap_or("");
-                match self.loaded.counts.get(of) {
+                match self.loaded.count(of) {
                     Some(n) => {
                         let _ = write!(
                             self.out,
@@ -1145,27 +1098,11 @@ impl Draw<'_> {
         self.out.push_str("<div class=\"scroll ou-table-wrap\"><table class=\"ou-table board-units\" role=\"table\"><thead role=\"rowgroup\"><tr role=\"row\"><th scope=\"col\" role=\"columnheader\">Unit</th><th scope=\"col\" role=\"columnheader\">State</th><th scope=\"col\" role=\"columnheader\">Steps</th><th scope=\"col\" role=\"columnheader\">Waiting on</th></tr></thead><tbody role=\"rowgroup\">");
         let mut marks = BTreeSet::new();
         for row in &data.rows {
-            let cancelled = data.cancelled.contains(&row.unit);
-            // held by a pause (a step's mark ‖) reads "paused", as the step does everywhere;
-            // held otherwise (behind a failure) "blocked"
-            let paused = row.state == UnitState::Blocked && row.steps.contains('‖');
-            let glyph = match row.state {
-                UnitState::Running => "running",
-                UnitState::Failed if cancelled => "cancelled",
-                UnitState::Failed => "failed",
-                UnitState::Settled => "succeeded",
-                UnitState::Blocked if paused => "paused",
-                UnitState::Blocked | UnitState::Queued | UnitState::Pending => "pending",
-            };
-            let state = if cancelled {
-                "cancelled".to_owned()
-            } else if paused {
-                "paused".to_owned()
-            } else {
-                serde_json::to_value(row.state)
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_owned))
-                    .unwrap_or_default()
+            // the unit and its steps as the plan reads them; the tool's own reading if the
+            // board lacks the unit
+            let (shown, steps) = match data.looks.get(&row.unit) {
+                Some((shown, steps)) => (*shown, steps.clone()),
+                None => (row.shown, vec![]),
             };
             let age = row
                 .age
@@ -1178,15 +1115,16 @@ impl Draw<'_> {
                 .collect::<Vec<_>>()
                 .join(" · ");
             // each step's short id and mark kept whole; the marks wrap between steps
-            let steps = row
-                .steps
-                .split(' ')
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    if let Some(mark) = s.chars().last() {
-                        marks.insert(mark);
-                    }
-                    format!("<span class=\"u-mark\">{}</span>", esc(s))
+            let steps = steps
+                .iter()
+                .map(|(short, step)| {
+                    marks.insert(*step);
+                    format!(
+                        "<span class=\"u-mark\" title=\"{}\">{}{}</span>",
+                        esc(step.word()),
+                        esc(short),
+                        step.spec().lane
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -1194,8 +1132,8 @@ impl Draw<'_> {
                 self.out,
                 "<tr role=\"row\"><td class=\"u-unit\" role=\"cell\"><a href=\"{base}/units/{0}\">{0}</a></td><td class=\"u-state\" role=\"cell\">{1}<span>{2}</span>{3}</td><td class=\"u-steps\" role=\"cell\">{4}</td><td class=\"u-wait\" role=\"cell\">{5}</td></tr>",
                 esc(&row.unit),
-                super::ui::glyph(glyph),
-                esc(&state),
+                super::ui::mark(shown),
+                esc(shown.word()),
                 if age.trim().is_empty() {
                     String::new()
                 } else {
@@ -1206,12 +1144,15 @@ impl Draw<'_> {
             );
         }
         self.out.push_str("</tbody></table></div>");
-        // the key to the marks the table shows, in one line
-        let key: Vec<String> = MARKS
+        // the key to the marks the table shows, in one line, in the table's order
+        let key: Vec<String> = marks
             .iter()
-            .filter(|(mark, _)| marks.contains(mark))
-            .map(|(mark, word)| {
-                format!("<span class=\"u-k\"><span class=\"u-km\" aria-hidden=\"true\">{mark}</span> {word}</span>")
+            .map(|step| {
+                format!(
+                    "<span class=\"u-k\"><span class=\"u-km\" aria-hidden=\"true\">{}</span> {}</span>",
+                    step.spec().lane,
+                    esc(step.word())
+                )
             })
             .collect();
         if !key.is_empty() {
@@ -1251,7 +1192,7 @@ impl Draw<'_> {
         };
         let mut caption = view.caption();
         if caption.is_empty() {
-            caption = view.display_mark().to_owned();
+            caption = view.shown().word().to_owned();
         }
         let hold = view.hold_words();
         let reason = (!hold.is_empty())
@@ -1264,7 +1205,7 @@ impl Draw<'_> {
             "<div class=\"board-step\"><a class=\"{} board-chip\" href=\"{}\">{}<span class=\"sid\">{}</span><span class=\"dur\">{}</span></a>",
             view.card_class(),
             view.href(),
-            super::ui::glyph(view.display_mark()),
+            super::ui::glyph(view.shown()),
             esc(view.id.as_str()),
             esc(&caption)
         );
@@ -1309,7 +1250,7 @@ impl Draw<'_> {
             Some((at, live)) => format!(
                 "<span class=\"meta board-progress\">{}{}</span>",
                 if live {
-                    super::ui::tag("live", "live", Some(super::ui::glyph("running")))
+                    super::ui::tag("live", "live", Some(super::ui::mark(super::ui::Shown::Running)))
                 } else {
                     super::ui::tag("progress", "muted", None)
                 },

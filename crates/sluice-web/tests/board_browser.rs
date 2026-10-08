@@ -766,3 +766,52 @@ async fn chromium_a_phone_opens_on_the_plan_while_something_needs_attention() {
     server.abort();
     let _ = server.await;
 }
+
+/// A card whose state the live board moves on is said once to a screen reader, politely: its
+/// id and the state's word, read from its glyph's name (the status table's word).
+#[tokio::test(flavor = "multi_thread")]
+async fn chromium_says_a_cards_new_state_to_a_screen_reader() {
+    let f = Fixture::new().await;
+    let router = f.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let lanes = f.id;
+    let mut browser = tokio::task::spawn_blocking(move || {
+        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{lanes}")).unwrap();
+        browser
+            .wait("document.readyState === 'complete' && document.querySelector('#n-alpha-review.is-pending')")
+            .unwrap();
+        assert_eq!(
+            browser
+                .eval("document.getElementById('announce').getAttribute('aria-live')")
+                .unwrap(),
+            "polite"
+        );
+        // let the page's stream open before the change
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        browser
+    })
+    .await
+    .unwrap();
+    f.writer
+        .write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute(
+                "UPDATE steps SET status='skipped' WHERE project_id=?1 AND step_id='alpha-review'",
+                [lanes.to_string()],
+            )?;
+            tx.changed(Some(lanes), "status");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let said = tokio::task::spawn_blocking(move || {
+        browser
+            .wait("document.querySelector('#n-alpha-review.is-skipped') && document.getElementById('announce').textContent")
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(said, "alpha-review skipped");
+    server.abort();
+}

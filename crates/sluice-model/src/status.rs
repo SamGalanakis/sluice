@@ -3,9 +3,12 @@
 
 use crate::{
     commands::{StepStatus, UnitState},
-    gates::{Gate, Reference, StateSnapshot, ValueRef, resolve_reference},
+    gates::{
+        Gate, GateDecision, Reference, StateSnapshot, ValueRef, evaluate_step, resolve_reference,
+    },
     ids::StepId,
     plan::{Binding, Plan, Step},
+    shown::{self, Facts, Shown},
     types::BoundValue,
     units::Unit,
 };
@@ -32,6 +35,8 @@ pub struct StepFacts {
     pub changed_ago: Option<f64>,
     /// A running step whose run has submitted: it is only finishing.
     pub finishing: Option<crate::attempt::Finishing>,
+    /// A running step whose cancel was asked for: its run is stopping.
+    pub stopping: bool,
 }
 
 /// A unit row's finishing step (SPEC §12.4).
@@ -54,6 +59,9 @@ pub struct LastMessage {
 pub struct UnitRow {
     pub unit: String,
     pub state: UnitState,
+    /// The state its steps read as first (`shown`): its mark in `line`. Not on the wire.
+    #[serde(skip)]
+    pub shown: Shown,
     pub age: Option<i64>,
     pub engine: String,
     pub steps: String,
@@ -150,7 +158,31 @@ pub fn held(plan: &Plan, state: &StateSnapshot) -> IndexMap<StepId, bool> {
     held
 }
 
-fn missing_input(plan: &Plan, state: &StateSnapshot, step: &Step) -> Option<String> {
+/// The pending steps behind a step that failed or went stale, directly or through other
+/// pending steps: `blocked` (`shown::Shown::Blocked`).
+pub fn blocked(plan: &Plan, state: &StateSnapshot) -> IndexSet<StepId> {
+    let mut stopped = IndexSet::new();
+    let mut blocked = IndexSet::new();
+    for id in plan.topological_order() {
+        match state.status(id) {
+            StepStatus::Failed | StepStatus::Stale => {
+                stopped.insert(id.clone());
+            }
+            StepStatus::Pending if plan.dependencies(id).iter().any(|d| stopped.contains(d)) => {
+                stopped.insert(id.clone());
+                blocked.insert(id.clone());
+            }
+            StepStatus::Pending
+            | StepStatus::Running
+            | StepStatus::Succeeded
+            | StepStatus::Skipped => {}
+        }
+    }
+    blocked
+}
+
+/// The plan input a pending step reads that has no value yet (it is `held`), if any.
+pub fn missing_input(plan: &Plan, state: &StateSnapshot, step: &Step) -> Option<String> {
     let gates = step.after.iter().filter_map(|gate| match gate {
         Gate::Bool { reference, .. } => Some(reference),
         _ => None,
@@ -171,39 +203,6 @@ fn missing_input(plan: &Plan, state: &StateSnapshot, step: &Step) -> Option<Stri
             }
             _ => None,
         })
-}
-
-fn status_name(status: &StepStatus) -> &'static str {
-    match status {
-        StepStatus::Pending => "pending",
-        StepStatus::Running => "running",
-        StepStatus::Succeeded => "succeeded",
-        StepStatus::Failed => "failed",
-        StepStatus::Stale => "stale",
-        StepStatus::Skipped => "skipped",
-    }
-}
-
-fn step_mark(status: &StepStatus) -> char {
-    match status {
-        StepStatus::Succeeded => '✓',
-        StepStatus::Running => '▶',
-        StepStatus::Pending => '·',
-        StepStatus::Failed => '✗',
-        StepStatus::Stale => '~',
-        StepStatus::Skipped => '–',
-    }
-}
-
-fn state_mark(state: UnitState) -> char {
-    match state {
-        UnitState::Running => '▶',
-        UnitState::Failed => '✗',
-        UnitState::Blocked => '‖',
-        UnitState::Queued => '≡',
-        UnitState::Settled => '✓',
-        UnitState::Pending => '·',
-    }
 }
 
 /// `text` in at most `width` characters, cut with "…".
@@ -246,7 +245,7 @@ fn blocking_wait(
         if is_held && plan.steps().get(w).is_some_and(|s| s.paused.is_paused()) {
             "paused".into()
         } else {
-            status_name(&status).into()
+            status.as_str().into()
         },
     )
 }
@@ -377,7 +376,7 @@ pub fn line(row: &UnitRow) -> String {
     let mut head = format!(
         "{:<10}  {} {:>3}",
         cut(&row.unit, 18),
-        state_mark(row.state),
+        row.shown.spec().lane,
         age_text(row.age)
     );
     if !row.engine.is_empty() {
@@ -460,6 +459,7 @@ pub fn units_view(
     wanted: Option<&[UnitState]>,
 ) -> UnitsView {
     let held = held(plan, state);
+    let blocked = blocked(plan, state);
     let none = StepFacts::default();
     let fact = |id: &StepId| facts.get(id).unwrap_or(&none);
     let mut view = UnitsView::default();
@@ -478,13 +478,15 @@ pub fn units_view(
         let statuses: Vec<_> = unit.steps.iter().map(|id| state.status(id)).collect();
         let is_held = |id: &StepId| held.get(id).copied().unwrap_or(false);
         let queued = unit.steps.iter().find_map(|id| fact(id).queued.clone());
-        let unit_state = if statuses.contains(&StepStatus::Running) {
-            UnitState::Running
-        } else if statuses
+        // a stopped step first, as every status reads (`shown`): a unit with a failed step and a
+        // running one is failed
+        let unit_state = if statuses
             .iter()
             .any(|s| matches!(s, StepStatus::Failed | StepStatus::Stale))
         {
             UnitState::Failed
+        } else if statuses.contains(&StepStatus::Running) {
+            UnitState::Running
         } else if statuses
             .iter()
             .all(|s| matches!(s, StepStatus::Succeeded | StepStatus::Skipped))
@@ -523,23 +525,35 @@ pub fn units_view(
         };
         let age = exact.map(|secs| secs as i64);
         let prefix = format!("{name}-");
-        let steps = unit
+        // each step as the tools know it: a cancel stays failed, a quiet run running
+        let shown: Vec<Shown> = unit
             .steps
             .iter()
             .zip(&statuses)
             .map(|(id, status)| {
+                let step = &plan.steps()[id];
+                let pending = *status == StepStatus::Pending;
+                shown::classify(&Facts {
+                    paused: state.paused.is_paused() || step.paused.is_paused(),
+                    external: pending
+                        && step.is_external()
+                        && evaluate_step(plan, state, step) == GateDecision::Ready,
+                    blocked: blocked.contains(id),
+                    held: pending && missing_input(plan, state, step).is_some(),
+                    queued: fact(id).queued.is_some(),
+                    finishing: fact(id).finishing.is_some(),
+                    stopping: fact(id).stopping,
+                    ..Facts::of(status.clone())
+                })
+            })
+            .collect();
+        let steps = unit
+            .steps
+            .iter()
+            .zip(&shown)
+            .map(|(id, shown)| {
                 let short = id.as_str().strip_prefix(&prefix).unwrap_or(id.as_str());
-                let mark = if *status == StepStatus::Pending && plan.steps()[id].paused.is_paused()
-                {
-                    '‖'
-                } else if *status == StepStatus::Pending && fact(id).queued.is_some() {
-                    '≡'
-                } else if *status == StepStatus::Running && fact(id).finishing.is_some() {
-                    '▷'
-                } else {
-                    step_mark(status)
-                };
-                format!("{short}{mark}")
+                format!("{short}{}", shown.spec().lane)
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -574,6 +588,7 @@ pub fn units_view(
         let mut row = UnitRow {
             unit: name.to_string(),
             state: unit_state,
+            shown: shown.iter().copied().min().unwrap_or(Shown::Pending),
             age,
             engine: engine(plan, state, unit),
             steps,

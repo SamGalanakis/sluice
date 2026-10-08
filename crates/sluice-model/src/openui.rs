@@ -840,20 +840,19 @@ pub fn components(root: &Component) -> Vec<&Component> {
     go(root, &mut out);
     out
 }
-/// What a `Count` counts, as the dashboard's own summary line counts it: steps by state (a
-/// cancel is "cancelled", never "failed"; "quiet" is running and quiet past its threshold;
-/// "running" counts the quiet ones too), or every step.
-pub const COUNT_STATES: &[&str] = &[
-    "failed",
-    "cancelled",
-    "running",
-    "quiet",
-    "stale",
-    "paused",
-    "pending",
-    "succeeded",
-    "steps",
-];
+/// What a `Count` counts, as the dashboard's own summary line counts it: the steps in one state
+/// of the status table (`shown`, each by its key: "failed" never counts a cancel, "running" never
+/// a quiet, stopping or finishing run, "pending" never a paused one), or every step.
+pub const COUNT_STATES: &[&str] = &{
+    let mut out = [""; crate::shown::Shown::ALL.len() + 1];
+    let mut i = 0;
+    while i < crate::shown::Shown::ALL.len() {
+        out[i] = crate::shown::Shown::ALL[i].key();
+        i += 1;
+    }
+    out[i] = "steps";
+    out
+};
 /// The most bytes of a board's document (`board_doc_write`, `board_doc_edit`).
 pub const MAX_DOC_BYTES: usize = 64 * 1024;
 /// The most characters a LatestMessage shows; its default.

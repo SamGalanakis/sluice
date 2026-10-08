@@ -424,10 +424,7 @@ async fn a_running_step_that_has_submitted_reads_finishing_on_its_card_and_drawe
         .unwrap();
     let html = step.body().unwrap();
     let html = html.as_str();
-    assert!(
-        html.contains("<span class=\"tag\">finishing</span>"),
-        "{html}"
-    );
+    assert!(html.contains("finishing · running for <time"), "{html}");
     assert!(html.contains("<h3>Finishing</h3>"), "{html}");
     assert!(html.contains("datetime=\"2026-10-05T09:30:00Z\""), "{html}");
     assert!(
@@ -591,8 +588,8 @@ fn a_cancelled_step_reads_as_cancelled_not_failed() {
         },
     );
     let view = StepView::new(ProjectId::new(), &plan, &state, &"w".parse().unwrap());
-    assert_eq!(view.mark, "cancelled");
-    assert_eq!(view.status, "failed");
+    assert_eq!(view.shown(), sluice_web::views::ui::Shown::Cancelled);
+    assert_eq!(view.status, StepStatus::Failed);
     assert!(view.retryable() && !view.retry_first());
     let html = view.body().unwrap();
     let html = html.as_str();
@@ -681,7 +678,7 @@ fn a_failure_leads_with_its_sentence_and_folds_the_pane() {
         r#"{"error":"agent_failure","kind":"WallCap","message":"engine operation deadline exceeded\npane at failure (last rows; whole screen: /h/runs/r/invocations/i/pane-at-failure.txt):\n  > still thinking","session":"s"}"#,
         Some(36_000.0),
     ));
-    assert_eq!(view.mark, "failed");
+    assert_eq!(view.shown(), sluice_web::views::ui::Shown::Failed);
     assert!(view.retry_first());
     let html = view.body().unwrap();
     let html = html.as_str();
@@ -750,7 +747,13 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
         .await
         .unwrap();
     let project = &snapshot.projects[0];
-    assert_eq!((project.counts.failed, project.counts.cancelled), (4, 2));
+    assert_eq!(
+        (
+            project.counts.get(sluice_web::views::ui::Shown::Failed),
+            project.counts.get(sluice_web::views::ui::Shown::Cancelled)
+        ),
+        (4, 2)
+    );
     let stopped: Vec<(&str, bool)> = project
         .stopped
         .iter()
@@ -768,7 +771,7 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
         ]
     );
     assert_eq!(project.stopped[0].headline, "Its fn failed: exit code 1.");
-    assert_eq!(project.counts.status(), "failed");
+    assert_eq!(project.shown(), sluice_web::views::ui::Shown::Failed);
     let html = views::home::HomeView::new(&snapshot).body().unwrap();
     let rows = html
         .as_str()
@@ -824,7 +827,10 @@ async fn the_index_lists_each_stopped_step_as_a_row_with_its_failure() {
         .snapshot(|c| views::load_snapshot(c, views::FunctionCatalog::default()))
         .await
         .unwrap();
-    assert_eq!(snapshot.projects[0].counts.status(), "cancelled");
+    assert_eq!(
+        snapshot.projects[0].shown(),
+        sluice_web::views::ui::Shown::Cancelled
+    );
     writer.shutdown().await.unwrap();
 }
 

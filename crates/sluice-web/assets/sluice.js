@@ -341,6 +341,9 @@ function nearestCard(here, evt, edges) {
   return (joined.length ? joined : row).sort(by)[0].n;
 }
 
+// A card's state: its one `is-<state>` class (the status table's key; `is-next` is no state).
+const stateOf = (classes) => /\bis-(?!next\b)\w+/.exec(classes || "")?.[0];
+
 // A status the live board moved on, said once to a screen reader: "a failed".
 function announce(text) {
   const live = document.getElementById("announce");
@@ -471,12 +474,13 @@ rocket("sluice-board", {
         board = true;
         const el = r.target;
         if (r.type === "attributes" && el.classList?.contains("node")
-            && /\bis-\w+/.exec(el.className)?.[0] !== /\bis-\w+/.exec(r.oldValue || "")?.[0]) {
+            && stateOf(el.className) !== stateOf(r.oldValue)) {
           const g = $(".g", el);
           g?.classList.remove("flip");
           void g?.offsetWidth;
           g?.classList.add("flip");
-          const word = $(".g .vh", el)?.textContent.replace(/,\s*$/, "");
+          // the glyph's name is the state's word ("quiet", "stopping"): said once, politely
+          const word = $(".g[aria-label]", el)?.getAttribute("aria-label");
           if (word) said.add(`${el.dataset.node.slice(2)} ${word}`);
         }
       }

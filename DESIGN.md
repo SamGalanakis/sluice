@@ -242,33 +242,72 @@ oklch: in oklch navy and cream meet by way of teal.
   Hairlines are ink at 11% (24% when stronger).
 
 ### Status ramp
-Each status keeps its drawn glyph; colour repeats it.
-- **Running**: the logo's blue (a spinning ring).
-- **External** (a ready `core.external` step): live work outside sluice, so running's blue,
-  told apart by its glyph (an arrow leaving a box) and the caption "outside".
-- **Finishing** (a running step whose run has submitted): still running, so running's blue and
-  spinning ring, told apart by the caption "finishing" and, in the drawer, a "finishing" badge.
-- **Succeeded** and set by hand (`manual`, a ring and dot): kelly green.
-- **Stale**, a question awaiting a reply and a running step gone quiet: harvest gold, the
-  attention voice (0.5 lightness in light, so its words hold 4.5:1 on every surface). A quiet
-  running card wears a gold border and the caption "quiet" (gold, 600) with how long its run
-  has written nothing, ticking, in place of its run's time; the quiet tag everywhere carries an
-  hourglass (Lucide `hourglass`).
-- **Paused**: plum, a hold someone chose.
-- **Pending** and skipped: idle, a grey navy.
+One table names every state a step reads as (`sluice_model::shown::Shown`): the six stored
+statuses, each named more closely from the facts beside it. Each state has one row: its glyph,
+its word, its lane mark, its tone and its band, and whether it needs attention. Every surface
+reads that row (the card, its caption and title, the matrix pill and dot, the lane strings,
+the board's Units, StepStatus and Count, the summary line and its bar, the unit and step pages,
+the index, the tab title and the screen-reader announcer); no page names a state by hand, and a
+state added to the table and not drawn fails the build. The order of the rows is the one
+priority: the state that most needs someone first. A unit, a project, a matrix row, the
+index's order, Live first's band and every count read in it; what stands for several steps is
+the first state among them.
+
+| state | glyph (Lucide) | word | lane | tone | band | attention |
+|---|---|---|---|---|---|---|
+| failed | `circle-x`, solid | failed | ✗ | ink | Stopped | yes |
+| cancelled | `circle-stop` | cancelled | ■ | muted ink | Stopped | yes |
+| stale | `rotate-cw` | stale | ~ | gold | Stopped | yes |
+| quiet | `hourglass` | quiet | ◔ | gold | Running | yes |
+| blocked | `circle-minus` | blocked | ⊖ | ink | Stopped | no |
+| stopping | `circle-stop`, turning | stopping | □ | muted ink | Running | no |
+| finishing | `loader-circle`, turning | finishing | ▷ | blue | Running | no |
+| running | `loader-circle`, turning | running | ▶ | blue | Running | no |
+| external | `square-arrow-out-up-right` | outside | ↗ | blue | Running | no |
+| paused | `circle-pause` | paused | ‖ | plum | Waiting | no |
+| held | `circle-dot-dashed` | held | ∅ | grey navy | Waiting | no |
+| queued | `circle-ellipsis` | queued | ≡ | grey navy | Waiting | no |
+| pending | `circle-dashed` | pending | · | grey navy | Waiting | no |
+| manual | `circle-dot` | set by hand | ⊙ | green | Done | no |
+| succeeded | `circle-check`, solid | succeeded | ✓ | green | Done | no |
+| skipped | `circle-slash` | skipped | – | grey navy | Done | no |
+
 - **Failed**: ink, never coral, and the loudest state on the board: the cross in a disc; a
   card is a solid ink pill, its id, caption ("failed", 700) and timer in the card colour, its
   glyph a card-coloured disc cut in ink (`--glyph-cut`). The open step's ring stands 2px apart
-  from it, so it never reads as chosen. Succeeded, the common case, steps back: its check at
-  78% opacity. A unit's label (the box head) adds "· 1 failed" at 600 in ink, so a phone reads
-  the failure before reaching the card at the bottom of its stack.
+  from it, so it never reads as chosen. A unit's label (the box head) adds "· 1 failed" at 600
+  in ink, so a phone reads the failure before reaching the card at the bottom of its stack.
 - **Cancelled** (a failed step the owner cancelled, read from its stored error by
-  `views::failure`): a stop on purpose, not a fault, so muted ink: a ring with a square in it,
+  `shown::is_cancel`): a stop on purpose, not a fault, so muted ink: a ring with a square in it,
   the word "cancelled" (the card's caption too, its border the strong hairline), counted apart
   ("n cancelled", after any failure and quieter than it), and Retry a plain button, never the
-  primary.
-- **Blocked**: a pending step behind a failed or stale one: a dashed border and the caption
-  "blocked".
+  primary. A step waiting on it says so ("after up (cancelled)", "step up is cancelled").
+- **Stale**: harvest gold, the attention voice (0.5 lightness in light, so its words hold
+  4.5:1 on every surface); a gold-tinted border. It has its own tag on the summary line and its
+  own bar segment.
+- **Quiet** (a running step whose run has written nothing past its cadence): gold. Its glyph is
+  the hourglass in place of the turning ring; its card wears a gold border and the caption
+  "quiet" (gold, 600) with how long its run has written nothing, ticking, in place of its run's
+  time.
+- **Blocked** (a pending step behind a step that failed, was cancelled or went stale): a ring
+  with a bar, in ink; a dashed card and the caption "blocked". Never a pause: that is paused.
+- **Stopping** (a running step whose cancel was asked for, its run not ended yet): the
+  cancelled sign, still turning, in muted ink; a dashed muted card and the caption "stopping".
+  Cancel is not offered again.
+- **Finishing** (a running step whose run has submitted): running's turning ring and blue,
+  told apart by the caption "finishing" and the drawer's "finishing · running for" badge.
+- **Running**: the logo's blue (a turning ring).
+- **Outside** (`external`, a ready `core.external` step): live work outside sluice, so
+  running's blue, told apart by its glyph (an arrow leaving a box).
+- **Paused** (held by its own pause or its project's): plum, a hold someone chose; a dashed
+  plum card.
+- **Held** (pending on a plan input with no value): a dashed ring with a dot, grey navy, the
+  caption "held".
+- **Queued** (ready, short of a resource): a ring of three dots, grey navy, the caption
+  "queued".
+- **Pending** and **Skipped**: idle, a grey navy.
+- **Succeeded** and **Set by hand** (`manual`, a ring and dot): kelly green; succeeded, the
+  common case, steps back (its check at 78% opacity).
 
 ### Named Rules
 **The One Coral Rule.** Coral (`badge`) is the nav's count of open questions to the owner and
@@ -318,13 +357,12 @@ Every preset keeps these, measured when it is added:
 menu) and a block `[data-theme="<id>"] { color-scheme: light|dark; … }` in `style.css` that sets
 every token above. Then measure it.
 
-**The Shape Carries It Rule.** Every status has its own glyph, a Lucide icon at 16px (dashed
-ring `circle-dashed` pending, the turning arc `loader-circle` running, a check in a filled disc
-`circle-check` succeeded, ring and dot `circle-dot` set by hand, circular arrow `rotate-cw`
-stale, a cross in a filled disc `circle-x` failed, ring and square `circle-stop` cancelled, ring with two bars `circle-pause` paused,
-ring with a slash `circle-slash` skipped, an arrow leaving a box `square-arrow-out-up-right`
-external) plus a visually hidden word; colour only repeats what the shape says. Succeeded and
-failed fill Lucide's ring with the status colour and cut the mark in the card colour.
+**The Shape Carries It Rule.** Every state has its own glyph, a Lucide icon at 16px (the
+status ramp's table), named for a screen reader by its word; colour only repeats what the shape
+says. Three pairs share a shape and part by motion and word: stopping is cancelled's sign still
+turning, finishing is running's ring with the caption "finishing", and a turning glyph is work
+in motion. Succeeded and failed fill Lucide's ring with the status colour and cut the mark in
+the card colour.
 
 ## Typography
 
@@ -377,8 +415,8 @@ whole.
   switcher**; in a project, the **project settings** gear; the sections; **Inbox**; and the
   **display preferences** sliders at the right edge. Every page links `/static/favicon.svg`, the
   same mark.
-- **Project switcher** (its projects in the index's order: failed, quiet, running, idle, then
-  those with no steps): a `<details>` whose summary is the chosen project's name ("All
+- **Project switcher** (its projects in the index's order: by the state each reads as, the
+  status ramp's order, then those with no steps): a `<details>` whose summary is the chosen project's name ("All
   projects" when none) and a chevron, its label clipping at what the band leaves after the
   rest (120 to 260px), so a long name gives way before a section does; its menu lists All projects, then every live project with
   its status glyph and icon, then the archived ones under "Archived". `nav.js` closes it on a
@@ -411,15 +449,17 @@ whole.
   sideways scroll; the first row is the switcher, the gear, Inbox and display preferences.
 
 ### Projects (`/`)
-One list of the live projects, most urgent first: a failed step, then a quiet run, then
-running, then idle (by name within each). Each is a row: its status glyph, icon and name (a
-link), when it last changed (the paused glyph when all that is left of it is held); for one
+One list of the live projects, most urgent first: by the state each reads as, its steps' first
+in the status ramp's order (a failure, a cancel, a stale step, a quiet run, then running, then
+waiting; by name within each). Each is a row: its status glyph, icon and name (a link), when it
+last changed; for one
 with failures or cancels a list of its stopped steps, a row each: the step's glyph (failed, or
 cancelled in muted ink), the step named as every page names it (title, then its id in data
 mono; a link that opens it in the drawer) and its failure's headline cut with an ellipsis in
 meta, the failures first and at most four rows, then "and n more" (a link to Show: Attention);
-its description's opening; a progress bar (a plum segment for the paused) with "n of m" and "·
-n paused" in plum when some are; then either its running steps (glyph, the step named as every page names it,
+its description's opening; a progress bar (a segment a state, as the board's) with "n of m"
+and "· n paused" in plum when some are; then either its running steps (the glyph of how each
+reads: running, quiet, finishing, stopping, with a muted "stopping" or "finishing" tag; the step named as every page names it,
 its stage, title and id, the title cut at 96 characters, its live time and a gold "quiet" tag once a run has written
 nothing for its cadence (its plan's `cadence:` tag, else 2 hours; one threshold for every page):
 "quiet 2h 42m", or "quiet" alone when it has written nothing since it started; on a narrow row
@@ -435,15 +475,17 @@ gold, "**Runner stopped.** No step starts until `sluice loop` runs; running step
 Top down:
 0. **Title**: the project's status glyph (22px), icon and name, the page's `h1` (28/34).
 1. **Summary line**: two rows, the switch beside both at the right (on a phone, under them):
-   the progress bar (succeeded, running, failed, cancelled, paused in plum, the rest; a
-   segment only for a count above zero; it grows with the line, 200 to 480px, so a few
-   failures among hundreds still read), "N steps · n succeeded" and "· n running" and "· n
-   paused" when some are (a paused step is counted as paused, never as pending: one name and
-   one count on every surface, the summary line, the home row, a matrix's head, the board's
-   Count and Units, a unit's sum), then, only when there are some, weighted tags that lead to Show: Attention: "n failed"
-   (the failed glyph, ink border, 600), "n cancelled" (the cancelled glyph, muted) and "n
-   quiet" (gold, the hourglass: running and silent past its cadence), on one baseline, kept
-   together as a group so a phone wraps them as one line under the counts; and a Paused tag.
+   the progress bar (a segment a state: the done states first, then the rest in the status
+   ramp's order; a segment only for a count above zero; it grows with the line, 200 to 480px,
+   so a few failures among hundreds still read; named for a screen reader by every count),
+   "N steps" then every state that needs no attention, counted in the bar's order ("· 1077
+   succeeded · 14 running · 6 paused · 40 pending"; each step counted once, under its state:
+   one name and one count on every surface, the summary line, the home row, a matrix's head,
+   the board's Count and Units, a unit's sum), then, only when there are some, weighted tags
+   for the states that need attention, each leading to Show: Attention with its title saying
+   what it means: "n failed" (the failed glyph, ink border, 600), "n cancelled" (the cancelled
+   glyph, muted), "n stale" and "n quiet" (gold), on one baseline, kept together as a group so
+   a phone wraps them as one line under the counts; and a Paused tag.
    A plan with no steps has no bar and no counts, only "The plan has no steps yet." The title stays over
    the board when the board is shown alone, on a phone too; then "Paused: no step starts." or "Archived: listed
    apart from other projects." when so; then, 12px below, the project's description as
@@ -476,17 +518,17 @@ Top down:
    lane is under "Stopped", above the running lanes' matrix, never below a table of healthy
    rows), on the box fill with the 14px corner, headed like a band label with the recipe's
    name in ink at 600 (a link, underlined on hover, to every unit the recipe made, done ones too:
-   the board under `?recipe=`, its shelf open) and its units counted ("3 units · 1 failed · 1 running"; waiting reads
-   "waiting", a paused unit "paused"). A row a unit: the first column its status glyph, its title (600, ink, a link to
+   the board under `?recipe=`, its shelf open) and its units counted, each row once under the
+   state it reads as ("3 units · 1 failed · 1 running · 1 pending"). A row a unit: the first column its status glyph, its title (600, ink, a link to
    its unit page, two lines at most), its id in data mono and any alarm under it; then the
    view's summary in 13/18 (its parts in a line: a param at 500 in ink, an output in data mono,
    a message clamped to two lines), its column headed by what the view shows ("Ticket · last
    message"); then a column per stage, headed by the stage in 12.5px meta, each cell that
    stage's card as a compact pill (28px, glyph, caption and timer, no id: the column says it),
-   centred; a stage nothing has reached yet (pending or paused, not queued) is a 10px dot in
-   its state's colour instead of a pill, so a row's live work stands out from its tail. Rows
-   that need someone come first (a failed, cancelled, stale or quiet step), then running, then
-   paused or blocked, then waiting; rows part by a hairline. A matrix is a table and draws no
+   centred; a stage nothing has reached yet (pending, paused, blocked or held) is a 24px mark
+   instead of a pill (pending a small dot, the others their glyph at 14px), so a row's live
+   work stands out from its tail. Rows go in the status ramp's order of the state each unit
+   reads as, the plan's order where they tie; rows part by a hairline. A matrix is a table and draws no
    lines: what a row waits for is said in words under its title ("Waits for l2-land
    (failed)"), and no line from elsewhere crosses its cells (a line to or from a row would have
    to). A view that does not check is one line above the table in the attention colour with
@@ -500,8 +542,10 @@ Top down:
 4. **The board**: the plan as a graph that reads top down with no key. Every mark explains
    itself: a card is a step (its glyph and id), a box is a unit of several steps, a line with
    an arrowhead is "this, then that", a quiet label names each band.
-   - **Bands**: under Live first, "Stopped" (a step failed or stale, or held up by one), then "Running" (a unit with a step running or outside), then "Waiting" (the rest not
-     done), each band its recipes' matrices first and its graph under them, each label an `h2` under the page's `h1`, set in meta (13px, 500, muted ink) at the
+   - **Bands**: under Live first, each unit under its first state's band (the status ramp):
+     "Stopped" (failed, cancelled, stale or blocked first: a unit with a failure and running
+     work is stopped), then "Running" (quiet, stopping, finishing, running or outside), then
+     "Waiting" (the rest not done), each band its recipes' matrices first and its graph under them, each label an `h2` under the page's `h1`, set in meta (13px, 500, muted ink) at the
      column's left edge, 32px after
      the band before. Under Plan order there is one band and no label. Show and the search
      only leave units out; the bands keep their order.
@@ -566,7 +610,8 @@ Top down:
    - **Waits in words**: under a card that waits on another unit, one sentence in meta (13px,
      muted ink), "Waits for l-a1 (running) and l-d1": each source a link in ink to its step
      (the drawer with script), what it is doing in brackets when it is not merely waiting
-     itself (running, failed, stale, paused, outside); past four sources the first three, then
+     itself (its state's word: running, failed, cancelled, stale, quiet, paused, outside, …);
+     past four sources the first three, then
      "and 79 more", a link to the waiting step, whose page lists them all. Each link is a 24px
      target. The sentence shows where no line says it: on a phone, on a page without script,
      and where the view leaves a source out ("…, not in this view"). Hovering or focusing a
@@ -575,8 +620,8 @@ Top down:
    band, or a later layer) is said in words under the card instead ("Waits for alpha-review"),
    and so is a wait into or out of a matrix's row or one that would cross a matrix between its
    ends. Such a sentence shows at every width, not only where lines are off.
-   On a phone the page opens on the plan while something needs the owner (a failed, cancelled,
-   quiet or paused step), else on the board when the project has one.
+   On a phone the page opens on the plan while something needs the owner (a state that needs
+   attention, or a paused step), else on the board when the project has one.
    Below 720px there are no lines: the layers stack in one column, a one-step unit's card at
    the left with its waits under it (under its glyph's column), a box across the width
    stacking its lanes, each reading straight down.
@@ -639,10 +684,10 @@ project's live data. It is the owner's instrument for that project, never a seco
   size container named `board`. Units is a table of unit (a link), state (the status glyph and
   word, then its age in meta), the steps' marks in data mono (on one line; the table scrolls
   sideways in its own wrap before a lane breaks) and what it waits on in muted ink (breaking
-  anywhere, so a long path never widens the table); under it a one-line key to the marks it shows
-  (✓ succeeded, ▶ running, ▷ finishing, · pending, ≡ queued, ‖ paused, ✗ failed, ■ cancelled,
-  ~ stale, – skipped); a unit whose every stopped step was cancelled reads "cancelled" with the
-  cancelled glyph, never "failed". In a board under 600px each row is a block: the unit, its state and its marks on
+  anywhere, so a long path never widens the table); under it a one-line key to the marks it shows,
+  in the status ramp's order. The state, its glyph and every mark are the plan's own reading of
+  the unit and its steps (a stale unit "stale", a cancel ■, a quiet run ◔, a project pause ‖),
+  never the units filter's word: the filter (`Units(["failed"])`) only chooses the rows. In a board under 600px each row is a block: the unit, its state and its marks on
   one line where they fit (the marks take the next line whole when they do not, breaking
   between steps only past the board's width), then what it waits on. StepStatus is the step's own card (pill, glyph, id, caption) with the reason
   under it in meta. Output is its name in meta over the value; a value from the step's progress
@@ -690,17 +735,18 @@ The step reads top down:
   the drawer its id a 22px `h2` and each head an `h3` (one look either way: 15/22 at 600), so
   no level is skipped; the tab reads "<stage> · <title> · <project> · sluice" (the title cut at
 48 characters);
-- its id with badges: the status glyph and word, "running for 2h 14m" in the running tag
-  itself (no second line repeating it), "usually 24m" in meta after the tags while pending or
-  running (how long its stage usually takes; " · usually 24m" after "took …" once ended), "finishing", "blocked", "quiet", "done/total runs"
-  when scattered; its doc; "Ended 3h ago · took 10h 0m" once it has ended; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
+- its id with badges: the state's glyph and word, one tag ("blocked", "set by hand"); while
+  it runs "running for 2h 14m" in that tag, led by its state when it is more than running
+  ("quiet · running for 2h 14m", "stopping · …", gold when it needs a look), no second line
+  repeating it; "usually 24m" in meta after the tags while pending or running (how long its
+  stage usually takes; " · usually 24m" after "took …" once ended); "done/total runs" when scattered; its doc; "Ended 3h ago · took 10h 0m" once it has ended; a meta line of the fn in mono and its tags as badges (a `unit:` tag a link to its
   unit's page);
 - the actions, one POST form carrying the plan revision: Pause or Unpause (where pausing acts:
   pending, stale, or any paused step; never a failed or cancelled one, which starts only when
   retried), Retry with a folded "Feedback for retry" textarea
   (succeeded, failed, stale; on a failed step Retry is the primary button and comes first; on
   a cancelled one it stays a plain button),
-  Cancel (pending or running), 14px apart; it opens the shared confirmation dialog, titled by the step's title with its id in data mono ("Cancel Fix the parser `l1-work`?"), names the run and its duration, says Retry starts it over, and offers an optional reason, "Cancel the run" and "Keep running"; then a link "Thread · n messages" ("Thread · no
+  Cancel (running, not already stopping; or pending work outside sluice), 14px apart; it opens the shared confirmation dialog, titled by the step's title with its id in data mono ("Cancel Fix the parser `l1-work`?"), names the run and its duration, says Retry starts it over, and offers an optional reason, "Cancel the run" and "Keep running"; then a link "Thread · n messages" ("Thread · no
   messages yet"), "Log" (the log of its records, filtered to the step) and a gold "n
   awaiting reply" tag on the same line, the feedback's fold on a line of its own under them;
   a failure that says how to resume ("To resume it, bind the step's session input…") under
@@ -946,9 +992,10 @@ are ends, not work. The done shelf's lines and a done unit's line are rows of a 
 ## Components
 
 - **Step card**: a pill with the status glyph, the step id (14.5px, 600) and, in 12px meta, a
-  caption: "failed", "cancelled", "quiet", "blocked", "queued", "outside", "finishing" or
-  `done/total`, each with a title that says what it means ("Waits on a step that failed or
-  went stale"), so the board needs no legend. After the caption, a
+  caption: its state's word where the status ramp says a card says it ("failed", "cancelled",
+  "quiet", "blocked", "stopping", "finishing", "outside", "held", "queued") or `done/total`,
+  each with a title from the same table that says what it means ("Waits on a step that
+  failed, was cancelled or went stale"), so the board needs no legend. After the caption, a
   timer in the board's two-unit durations ("45s", "12m", "2h 14m", "1d 3h"), tabular figures:
   a running step's says how long its current run (the latest, a retry's own) has gone, in ink,
   ticking, and holds the width of "2h 14m" with its figures at the pill's end so a tick never
@@ -958,7 +1005,8 @@ are ends, not work. The done shelf's lines and a done unit's line are rows of a 
   reader hears "running fig-5240-work for 2 hours 14 minutes" or "… took 12 minutes" (no
 comma: the card's parts are flex items, which the name already parts with a space). On a
   phone the card keeps one line: the id gives way before the timer. Running cards take a blue border,
-  failed a solid ink pill, quiet a gold border, stale a gold one, paused plum; blocked a dashed border; a step next in
+  failed a solid ink pill, quiet a gold border, stale a gold one, paused plum; blocked and
+  stopping a dashed border; a step next in
   line (ready) keeps a strong hairline. Every card's boundary (`--card-edge`, a pending card's
   too) holds 1.5:1 or more against the page and a unit box, in both themes. A solo card's title
   above it wraps balanced (`text-wrap: balance`). Inline `core.*` steps are chips: dashed and muted. Its
@@ -971,9 +1019,9 @@ comma: the card's parts are flex items, which the name already parts with a spac
   screen reader), a count (`count`, `tally`: "6 steps · 1 running", a zero part left out), a
   section head (`head`), a facts row (`field`), a step's name (`StepRef`), a tag (`tag`,
   `tag_link`), text cut at a word (`cut`) and a type in words (`type_words`: a JSON schema as
-  its type) through one function each, and every state's word from one table (`STATES`:
-  failed, cancelled, stale, quiet, running, outside, paused, blocked, pending, skipped, set by
-  hand, succeeded, in that order of need; `state_counts` counts by it), so a change to one reads everywhere. A template never
+  its type) through one function each, and every state from one table (the status ramp:
+  `glyph`, `mark` for a glyph beside its own word, `status`, `states` and `bar` over a
+  `Tally`), so a change to one reads everywhere. A template never
   hand-builds these.
 - **Timeline** (`views::timeline`, `templates/timeline.html`): a unit's runs on one axis, no
   legend. A grid: a 76px column of stage names (13px, muted; the current step's in ink at 650,

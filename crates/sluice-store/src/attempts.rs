@@ -1271,7 +1271,7 @@ pub fn complete_frozen(
     }
     let mut result = None;
     if step_status != StepStatus::Running {
-        tx.sql().execute("UPDATE steps SET status=?3,outputs=?4,error=?5,manual=0,result_id=NULL WHERE project_id=?1 AND step_id=?2",params![id.project.to_string(),id.step.as_str(),plans::status_text(&step_status),serde_json::to_string(&step_outputs)?,step_error.as_ref().map(serde_json::to_string).transpose()?])?;
+        tx.sql().execute("UPDATE steps SET status=?3,outputs=?4,error=?5,manual=0,result_id=NULL WHERE project_id=?1 AND step_id=?2",params![id.project.to_string(),id.step.as_str(),step_status.as_str(),serde_json::to_string(&step_outputs)?,step_error.as_ref().map(serde_json::to_string).transpose()?])?;
         let effective: JsonMap = serde_json::from_value(frozen["effective_inputs"].clone())?;
         result = Some(plans::snapshot_result(
             tx,
@@ -1445,6 +1445,28 @@ pub fn lost(
         hooks,
     )?;
     Ok(result)
+}
+
+/// Each running step of the project whose cancel was asked for (`step_cancel`) and whose run
+/// has not ended: it is stopping. A settle also asks its run to stop, but settles it on its
+/// submission, so it is not one.
+pub fn stopping(
+    sql: &rusqlite::Connection,
+    project: ProjectId,
+) -> Result<std::collections::BTreeSet<StepId>> {
+    let mut q = sql.prepare_cached(
+        "SELECT DISTINCT s.step_id FROM steps s JOIN attempts a ON a.project_id=s.project_id AND a.step_id=s.step_id AND a.generation=s.generation
+         WHERE s.project_id=?1 AND s.status='running' AND a.phase<>'terminal' AND a.cancel_requested AND json_type(a.request,'$.settle') IS NULL",
+    )?;
+    let rows = q
+        .query_map([project.to_string()], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|step| {
+            step.parse()
+                .map_err(|e| StoreError::InvalidDatabase(format!("{e}")))
+        })
+        .collect()
 }
 
 /// Each running step of the project whose current runs have all stored a valid submission

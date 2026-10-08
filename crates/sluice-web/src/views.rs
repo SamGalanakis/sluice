@@ -92,51 +92,6 @@ impl Viewer {
         self.theme.as_deref().unwrap_or("")
     }
 }
-/// A project's steps by state, each step counted once: `pending` leaves out the paused ones,
-/// which `paused` counts (a pending step held by its own pause or its project's).
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct Counts {
-    pub pending: usize,
-    pub running: usize,
-    pub succeeded: usize,
-    /// Failed, not counting the ones the owner cancelled.
-    pub failed: usize,
-    /// Failed because the owner cancelled them (`failure::is_cancel`).
-    pub cancelled: usize,
-    pub stale: usize,
-    pub skipped: usize,
-    pub paused: usize,
-}
-impl Counts {
-    pub fn total(&self) -> usize {
-        self.pending
-            + self.paused
-            + self.running
-            + self.succeeded
-            + self.failed
-            + self.cancelled
-            + self.stale
-            + self.skipped
-    }
-    pub fn status(&self) -> &str {
-        if self.failed > 0 {
-            "failed"
-        } else if self.running > 0 {
-            "running"
-        } else if self.stale > 0 {
-            "stale"
-        } else if self.cancelled > 0 {
-            "cancelled"
-        } else if self.total() > 0 && self.succeeded + self.skipped == self.total() {
-            "succeeded"
-        } else if self.paused > 0 && self.pending == 0 {
-            // nothing is left but what is held
-            "paused"
-        } else {
-            "pending"
-        }
-    }
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunningView {
     pub step: String,
@@ -151,6 +106,23 @@ pub struct RunningView {
     /// RFC 3339; "" when it has not. Activity counts it with its run's files.
     #[serde(default)]
     pub said: String,
+    /// A cancel was asked for and its run has not ended.
+    #[serde(default)]
+    pub stopping: bool,
+    /// Its run has submitted: it is only finishing.
+    #[serde(default)]
+    pub finishing: bool,
+}
+impl RunningView {
+    /// How the running step reads (`shown`).
+    pub fn shown(&self) -> ui::Shown {
+        sluice_model::shown::classify(&sluice_model::shown::Facts {
+            quiet: self.quiet,
+            stopping: self.stopping,
+            finishing: self.finishing,
+            ..sluice_model::shown::Facts::of(sluice_model::commands::StepStatus::Running)
+        })
+    }
 }
 
 /// A step that stopped: failed, or cancelled by the owner, with its failure's one sentence
@@ -160,6 +132,15 @@ pub struct StoppedView {
     pub step: String,
     pub cancelled: bool,
     pub headline: String,
+}
+impl StoppedView {
+    pub fn shown(&self) -> ui::Shown {
+        if self.cancelled {
+            ui::Shown::Cancelled
+        } else {
+            ui::Shown::Failed
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectView {
@@ -171,7 +152,9 @@ pub struct ProjectView {
     pub paused: bool,
     pub archived: bool,
     pub changed: String,
-    pub counts: Counts,
+    /// Its steps by how each reads (`shown`), from what the store says of them: on the board,
+    /// which also evaluates the plan, the board's own count (`board::load_board`).
+    pub counts: ui::Tally,
     pub running: Vec<RunningView>,
     /// Its failed steps, then the ones the owner cancelled, in plan order.
     pub stopped: Vec<StoppedView>,
@@ -200,24 +183,30 @@ impl ProjectView {
     pub fn stopped_more(&self) -> usize {
         self.stopped.len().saturating_sub(Self::STOPPED_ROWS)
     }
-    /// Its running steps gone quiet (`quiet_after`).
-    pub fn quiet(&self) -> usize {
-        self.running.iter().filter(|r| r.quiet).count()
+    /// How the whole project reads: its first state (`Tally::first`), pending with no steps.
+    pub fn shown(&self) -> ui::Shown {
+        self.counts.first().unwrap_or(ui::Shown::Pending)
     }
     pub fn summary(&self) -> &str {
         self.description.split("\n\n").next().unwrap_or("")
     }
     pub fn now(&self) -> &str {
+        use sluice_model::shown::Band;
+        let any = |band: Band| self.counts.iter().any(|(s, _)| s.spec().band == band);
         if self.paused {
             "Paused."
         } else if self.counts.total() == 0 {
             "No steps yet."
-        } else if self.counts.succeeded + self.counts.skipped == self.counts.total() {
+        } else if self.shown().spec().band == Band::Done {
             "Finished."
-        } else if self.counts.failed > 0 {
-            // its stopped rows already say what failed
+        } else if !self.stopped.is_empty() || any(Band::Running) {
+            // its stopped and running rows say it
             ""
-        } else if self.counts.status() == "paused" {
+        } else if self
+            .counts
+            .iter()
+            .all(|(s, _)| s == ui::Shown::Paused || s.spec().band == Band::Done)
+        {
             // all that is left is held
             "Paused."
         } else {
@@ -303,27 +292,10 @@ impl DashboardState {
         project: Option<ProjectId>,
     ) -> Result<DashboardSnapshot, PublicError> {
         let functions = self.catalog.catalog(project)?;
-        let snapshot = self
-            .reads
+        self.reads
             .snapshot(move |c| load_snapshot(c, functions))
             .await
-            .map_err(|e| e.into_public(true))?;
-        self.observe(snapshot).await
-    }
-    /// Observe each running run's activity from its run files, once.
-    pub async fn observe(
-        &self,
-        mut snapshot: DashboardSnapshot,
-    ) -> Result<DashboardSnapshot, PublicError> {
-        let home = self.reads.home().to_owned();
-        tokio::task::spawn_blocking(move || {
-            observe_activity(&home, &mut snapshot);
-            snapshot
-        })
-        .await
-        .map_err(|e| PublicError::Storage {
-            message: e.to_string(),
-        })
+            .map_err(|e| e.into_public(true))
     }
 }
 #[derive(Clone, Debug)]
@@ -366,7 +338,7 @@ impl NavView {
         sections.sort_by_key(|entry| entry.order);
         // the switcher lists projects as the index does: most urgent first
         let mut projects = snapshot.projects.clone();
-        projects.sort_by_key(|p| (p.counts.total() == 0, home::urgency(p)));
+        projects.sort_by_key(|p| (p.counts.total() == 0, p.shown()));
         Ok(Self {
             projects,
             label: chosen
@@ -723,14 +695,15 @@ pub fn quiet_after(tags: &[String]) -> u64 {
         .unwrap_or(QUIET_AFTER)
 }
 /// Each running run's activity: the newest of its start and its run files' modification times,
-/// in seconds; quiet once none is newer than its `quiet_after`.
-pub fn observe_activity(home: &std::path::Path, snapshot: &mut DashboardSnapshot) {
+/// in seconds; quiet once none is newer than its `quiet_after`. Read once, with the store's
+/// snapshot, before any page counts or draws a step, so every surface sees the same quiet.
+pub fn observe_activity(home: &std::path::Path, running: &mut [RunningView]) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    for run in snapshot.projects.iter_mut().flat_map(|p| &mut p.running) {
+    for run in running {
         // what it said (progress, its own messages) counts as much as what its run wrote
         let mut newest = [timestamp(&run.started), timestamp(&run.said)]
             .into_iter()
@@ -787,59 +760,36 @@ pub fn load_snapshot(
             paused: row.get(6)?,
             archived: row.get(7)?,
             changed: row.get(8)?,
-            counts: Counts::default(),
+            counts: ui::Tally::default(),
             running: vec![],
             stopped: vec![],
             names: Default::default(),
         };
-        let mut counts = c.prepare_cached("SELECT status,count(*),sum(paused IS NOT NULL AND paused <> 'false') FROM steps WHERE project_id=?1 GROUP BY status")?;
-        let mut count_rows = counts.query([&raw])?;
-        while let Some(r) = count_rows.next()? {
-            let status: String = r.get(0)?;
-            let n = r.get::<_, i64>(1)? as usize;
-            match status.as_str() {
-                // a pending step held by a pause is paused, as its card says (`StepView::new`)
-                "pending" => {
-                    let held = if view.paused {
-                        n
-                    } else {
-                        r.get::<_, i64>(2)? as usize
-                    };
-                    view.counts.pending = n - held;
-                    view.counts.paused = held;
-                }
-                "running" => view.counts.running = n,
-                "succeeded" => view.counts.succeeded = n,
-                "failed" => view.counts.failed = n,
-                "stale" => view.counts.stale = n,
-                "skipped" => view.counts.skipped = n,
-                _ => {}
-            }
-        }
         let mut steps = c.prepare_cached("SELECT step_id,status,coalesce((SELECT started_at FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),coalesce((SELECT run_id FROM runs WHERE runs.project_id=steps.project_id AND runs.step_id=steps.step_id AND runs.generation=steps.generation AND finished_at IS NULL ORDER BY created_at DESC LIMIT 1),''),error,coalesce(json_extract(declaration,'$.tags'),'[]'),max(coalesce(progress_at,''),coalesce((SELECT at FROM messages m WHERE m.project_id=steps.project_id AND m.thread='step-'||steps.step_id AND m.\"from\"=steps.step_id ORDER BY m.id DESC LIMIT 1),'')) FROM steps WHERE project_id=?1 AND status IN ('running','failed') ORDER BY position")?;
-        // a failed step's error says whether the owner cancelled it: counted apart
+        // a failed step's error says whether the owner cancelled it: listed apart
         let mut step_rows = steps.query([&raw])?;
         let mut cancels = vec![];
+        let stopping = sluice_store::attempts::stopping(c, id)?;
+        let finishing = sluice_store::attempts::finishing(c, id)?;
         while let Some(r) = step_rows.next()? {
             let status: String = r.get(1)?;
+            let step: String = r.get(0)?;
             if status == "failed" {
                 let error: Option<String> = r.get(4)?;
                 let failure = failure::Failure::parse(error.as_deref().unwrap_or(""), None);
                 let stopped = StoppedView {
-                    step: r.get(0)?,
+                    step,
                     cancelled: failure.cancelled,
                     headline: failure.headline,
                 };
                 if stopped.cancelled {
-                    view.counts.failed -= 1;
-                    view.counts.cancelled += 1;
                     cancels.push(stopped);
                 } else {
                     view.stopped.push(stopped);
                 }
             } else {
+                let sid = step.parse::<sluice_model::ids::StepId>().ok();
                 view.running.push(RunningView {
-                    step: r.get(0)?,
                     started: r.get(2)?,
                     quiet: false,
                     quiet_after: quiet_after(
@@ -849,10 +799,38 @@ pub fn load_snapshot(
                     run_id: r.get(3)?,
                     activity: None,
                     said: r.get(6)?,
+                    stopping: sid.as_ref().is_some_and(|s| stopping.contains(s)),
+                    finishing: sid.as_ref().is_some_and(|s| finishing.contains_key(s)),
+                    step,
                 });
             }
         }
         view.stopped.extend(cancels);
+        // its runs' activity, read once: whether each is quiet
+        observe_activity(&home_of(c), &mut view.running);
+        // every step by how it reads from what the store says (the board evaluates the plan
+        // too: blocked, held, queued and outside work count as pending here)
+        let mut rows = c.prepare_cached("SELECT step_id,status,paused IS NOT NULL AND paused <> 'false',manual,error FROM steps WHERE project_id=?1")?;
+        let mut found = rows.query([&raw])?;
+        while let Some(r) = found.next()? {
+            let step: String = r.get(0)?;
+            let status: sluice_model::commands::StepStatus =
+                r.get::<_, String>(1)?.parse().map_err(|e| {
+                    sluice_store::StoreError::InvalidDatabase(format!("step {step}: {e}"))
+                })?;
+            let shown = match view.running.iter().find(|run| run.step == step) {
+                Some(run) if status == sluice_model::commands::StepStatus::Running => run.shown(),
+                _ => sluice_model::shown::classify(&sluice_model::shown::Facts {
+                    cancelled: r
+                        .get::<_, Option<String>>(4)?
+                        .is_some_and(|e| sluice_model::shown::stored_is_cancel(&e)),
+                    paused: view.paused || r.get::<_, bool>(2)?,
+                    manual: r.get(3)?,
+                    ..sluice_model::shown::Facts::of(status)
+                }),
+            };
+            view.counts.add(shown);
+        }
         // the steps the index lists, named (`sluice_model::naming`)
         if !(view.running.is_empty() && view.stopped.is_empty()) {
             let names = sluice_runtime::naming::for_project(c, &home_of(c), id)?;

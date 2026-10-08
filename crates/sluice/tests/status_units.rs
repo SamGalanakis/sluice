@@ -297,12 +297,12 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     assert_eq!(row("later")["steps"], "work≡ land· rm·");
     assert_eq!(row("later")["blocked"], "queued: needs lane 1 (1/1 held)");
     assert_eq!(row("broke")["state"], "failed");
-    assert_eq!(row("broke")["steps"], "work✓ land✗ rm·");
+    assert_eq!(row("broke")["steps"], "work✓ land✗ rm⊖");
     assert_eq!(row("held")["state"], "blocked");
     assert_eq!(row("held")["steps"], "work‖ land‖ rm‖");
     assert_eq!(row("held")["blocked"], "paused");
     assert_eq!(row("wait")["state"], "blocked");
-    assert_eq!(row("wait")["steps"], "work· land· rm·");
+    assert_eq!(row("wait")["steps"], "work⊖ land⊖ rm⊖");
     assert_eq!(
         row("wait")["blocked"],
         "after unit:broke (exit broke-land failed)"
@@ -320,7 +320,7 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
         "{flow_line}"
     );
     assert!(
-        row("wait")["line"].as_str().unwrap().contains(" ‖ "),
+        row("wait")["line"].as_str().unwrap().contains(" ⊖ "),
         "{}",
         row("wait")["line"]
     );

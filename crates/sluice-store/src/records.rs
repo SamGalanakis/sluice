@@ -193,7 +193,7 @@ pub fn read_records(
             filter
                 .statuses
                 .iter()
-                .map(|status| crate::plans::status_text(status).to_owned())
+                .map(|status| status.as_str().to_owned())
                 .collect::<Vec<_>>(),
         ),
         ("message", filter.recipients.clone()),

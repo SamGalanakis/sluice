@@ -194,16 +194,6 @@ pub(crate) fn now() -> Result<String> {
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|e| StoreError::InvalidDatabase(e.to_string()))
 }
-pub(crate) fn status_text(status: &StepStatus) -> &'static str {
-    match status {
-        StepStatus::Pending => "pending",
-        StepStatus::Running => "running",
-        StepStatus::Succeeded => "succeeded",
-        StepStatus::Failed => "failed",
-        StepStatus::Stale => "stale",
-        StepStatus::Skipped => "skipped",
-    }
-}
 pub(crate) fn identity(c: &Connection, project: ProjectId) -> Result<ProjectIdentity> {
     let name: Option<String> = c
         .query_row(
@@ -1108,7 +1098,7 @@ fn write_status_changes(
             params![
                 project.to_string(),
                 id.as_str(),
-                status_text(&entry.status),
+                entry.status.as_str(),
                 if entry.skipped.is_empty() {
                     None
                 } else {

@@ -1,10 +1,10 @@
-//! What a failed step's stored error says, read for a person: whether the owner cancelled it,
-//! one plain sentence from its failure kind, what it said, and the pane its agent left. The
-//! shared status helper the plan, the index and the step page all read "cancelled" from: a
-//! cancel is a failed step to the store (no record kind or failure variant of its own), told
-//! apart here by its stored error.
+//! What a failed step's stored error says, read for a person: whether the owner cancelled it
+//! (`sluice_model::shown::is_cancel`: a cancel is a failed step to the store, no record kind or
+//! failure variant of its own), one plain sentence from its failure kind, what it said, and the
+//! pane its agent left.
 use serde::Serialize;
 use sluice_model::error::PublicError;
+use sluice_model::shown::{cancel_reason, is_cancel};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Failure {
@@ -25,49 +25,6 @@ pub struct Failure {
     pub trace: String,
     /// How to resume its agent's session, as the failure says it ("To resume it, …").
     pub resume: String,
-}
-
-/// A stored error (the step's or a run's `error` JSON) is a cancel: its kind `cancelled`, an
-/// agent's `Cancelled`, or a fn's message in the cancel's own words (`cancelled: <reason>`,
-/// which `step_cancel` documents).
-pub fn is_cancel(error: &PublicError) -> bool {
-    match error {
-        PublicError::Cancelled { .. } => true,
-        PublicError::AgentFailure { kind, .. } => kind == "Cancelled",
-        PublicError::FnFailure { message } => cancel_reason(message).is_some(),
-        _ => false,
-    }
-}
-/// A stored error (JSON, or a bare message from an older release) is a cancel.
-pub fn stored_is_cancel(stored: &str) -> bool {
-    match serde_json::from_str::<PublicError>(stored) {
-        Ok(error) => is_cancel(&error),
-        Err(_) => cancel_reason(stored).is_some(),
-    }
-}
-/// The project's steps that have stopped (failed or stale), each with whether it was a cancel:
-/// what the Units table and anything else naming a step's state reads "cancelled" from.
-pub fn stopped_steps(
-    sql: &rusqlite::Connection,
-    project: &str,
-) -> rusqlite::Result<std::collections::BTreeMap<String, bool>> {
-    let mut q = sql.prepare_cached(
-        "SELECT step_id,status,error FROM steps WHERE project_id=?1 AND status IN ('failed','stale')",
-    )?;
-    let rows = q.query_map([project], |r| {
-        let status: String = r.get(1)?;
-        let error: Option<String> = r.get(2)?;
-        Ok((
-            r.get::<_, String>(0)?,
-            status == "failed" && error.as_deref().is_some_and(stored_is_cancel),
-        ))
-    })?;
-    rows.collect()
-}
-fn cancel_reason(message: &str) -> Option<&str> {
-    message
-        .strip_prefix("cancelled: ")
-        .or_else(|| (message == "cancelled").then_some(""))
 }
 
 impl Failure {

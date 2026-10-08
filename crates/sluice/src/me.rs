@@ -299,7 +299,7 @@ fn build(
             let dep_state = state.steps.get(dep);
             let mut row = json!({
                 "step": dep.as_str(),
-                "status": dep_state.map(|s| status_name(&s.status)).unwrap_or("pending"),
+                "status": dep_state.map(|s| s.status.as_str()).unwrap_or("pending"),
             });
             if let Some(dep_step) = plan.steps().get(dep) {
                 row["fn"] = json!(dep_step.run);
@@ -374,7 +374,7 @@ fn build(
         "step": step.as_str(),
         "fn": declaration.run,
         "doc": declaration.doc,
-        "status": status_name(&status),
+        "status": status.as_str(),
         "started": started,
         "finished": finished,
         "elapsed": elapsed,
@@ -419,16 +419,6 @@ fn storage_error(e: serde_json::Error) -> sluice_store::StoreError {
     sluice_store::StoreError::from(PublicError::Storage {
         message: e.to_string(),
     })
-}
-fn status_name(status: &StepStatus) -> &'static str {
-    match status {
-        StepStatus::Pending => "pending",
-        StepStatus::Running => "running",
-        StepStatus::Succeeded => "succeeded",
-        StepStatus::Failed => "failed",
-        StepStatus::Stale => "stale",
-        StepStatus::Skipped => "skipped",
-    }
 }
 fn type_text(ty: &Type) -> String {
     match ty.form() {

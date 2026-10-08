@@ -2,7 +2,7 @@
 //! a section head, a field row, a step reference and a tag through these, so they read one way
 //! everywhere (DESIGN.md, Components). Each returns escaped HTML (or plain text for words).
 use super::TrustedHtml;
-use super::icons::{Icon, icon, solid};
+use super::icons::{Icon, solid};
 
 /// Text escaped for HTML content and attribute values.
 pub fn esc(text: &str) -> String {
@@ -22,81 +22,89 @@ pub fn esc(text: &str) -> String {
 
 // ---- status ----------------------------------------------------------------------------------
 
-/// A status's glyph (the Shape Carries It Rule): its Lucide icon, named for a screen reader by
-/// the status word.
-pub fn glyph(status: &str) -> TrustedHtml {
-    let (status, shape, class) = match status {
-        "running" => ("running", Icon::LoaderCircle, "spin"),
-        "succeeded" => ("succeeded", Icon::CircleCheck, ""),
-        "manual" => ("manual", Icon::CircleDot, ""),
-        "stale" => ("stale", Icon::RotateCw, ""),
-        "failed" => ("failed", Icon::CircleX, ""),
-        "cancelled" => ("cancelled", Icon::CircleStop, ""),
-        "paused" => ("paused", Icon::CirclePause, ""),
-        "skipped" => ("skipped", Icon::CircleSlash, ""),
-        "external" => ("external", Icon::SquareArrowOutUpRight, ""),
-        _ => ("pending", Icon::CircleDashed, ""),
-    };
+pub use sluice_model::shown::{Shown, Tally};
+/// The stored status a done count counts (`Tally::stored`), for a template.
+pub const SUCCEEDED: &sluice_model::commands::StepStatus =
+    &sluice_model::commands::StepStatus::Succeeded;
+
+/// A state's glyph (the Shape Carries It Rule): its Lucide icon from the status table, named for
+/// a screen reader by the state's word.
+pub fn glyph(shown: Shown) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<span class=\"g g-{status}\" role=\"img\" aria-label=\"{status}\">{}</span>",
-        solid(shape, 16, class)
+        "<span class=\"g g-{}\" role=\"img\" aria-label=\"{}\">{}</span>",
+        shown.key(),
+        esc(shown.word()),
+        shape(shown)
     ))
 }
-/// A quiet run's mark: an hourglass in the attention colour, beside the status glyphs.
-pub fn quiet_glyph() -> TrustedHtml {
+/// A state's glyph beside words that already say it: hidden from a screen reader.
+pub fn mark(shown: Shown) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<span class=\"g g-quiet\" aria-hidden=\"true\">{}</span>",
-        icon(Icon::Hourglass, 16, "")
+        "<span class=\"g g-{}\" aria-hidden=\"true\">{}</span>",
+        shown.key(),
+        shape(shown)
     ))
 }
-/// Every state a step reads as, in the order a count says them (what needs someone first), each
-/// with its one word: DESIGN.md's status ramp. Every page names a state from this table, so a
-/// paused step is "paused" everywhere, never "blocked" or "waiting".
-pub const STATES: [(&str, &str); 12] = [
-    ("failed", "failed"),
-    ("cancelled", "cancelled"),
-    ("stale", "stale"),
-    ("quiet", "quiet"),
-    ("running", "running"),
-    ("external", "outside"),
-    ("paused", "paused"),
-    ("blocked", "blocked"),
-    ("pending", "pending"),
-    ("skipped", "skipped"),
-    ("manual", "set by hand"),
-    ("succeeded", "succeeded"),
-];
-/// A status's word: the mark as the board says it ("set by hand", "outside").
-pub fn status_word(mark: &str) -> &str {
-    STATES
-        .iter()
-        .find(|(m, _)| *m == mark)
-        .map_or(mark, |(_, word)| word)
+fn shape(shown: Shown) -> TrustedHtml {
+    let spec = shown.spec();
+    let icon = Icon::named(spec.icon).expect("every state's icon is in the sprite");
+    solid(icon, 16, if spec.turns { "spin" } else { "" })
 }
-/// States counted as a summary counts them: each state's number, in `STATES`' order, the
-/// states with none left out ("1 failed · 4 running · 1 paused").
-pub fn state_counts<'a>(states: impl IntoIterator<Item = &'a str>) -> Vec<(usize, &'static str)> {
-    let mut counts = [0usize; STATES.len()];
-    for state in states {
-        if let Some(i) = STATES.iter().position(|(m, _)| *m == state) {
-            counts[i] += 1;
-        }
-    }
-    STATES
-        .iter()
-        .zip(counts)
-        .filter(|(_, n)| *n > 0)
-        .map(|((_, word), n)| (n, *word))
-        .collect()
+/// A state's word ("set by hand", "outside").
+pub fn word(shown: Shown) -> &'static str {
+    shown.word()
 }
-/// A status as a mark and its word: the glyph, then the word (hidden from a screen reader,
-/// which hears the glyph's name).
-pub fn status(mark: &str) -> TrustedHtml {
+/// A state as its glyph and its word (the word hidden from a screen reader, which hears the
+/// glyph's name).
+pub fn status(shown: Shown) -> TrustedHtml {
     TrustedHtml::owned(format!(
-        "<span class=\"st st-{m}\">{}<span class=\"st-w\" aria-hidden=\"true\">{}</span></span>",
-        glyph(mark),
-        esc(status_word(mark)),
-        m = esc(mark)
+        "<span class=\"st st-{}\">{}<span class=\"st-w\" aria-hidden=\"true\">{}</span></span>",
+        shown.key(),
+        glyph(shown),
+        esc(shown.word())
+    ))
+}
+/// Each state counted and its word, in priority order, the states with none left out
+/// ("1 failed · 4 running · 1 paused" once joined by `tally`).
+pub fn states(tally: &Tally) -> Vec<(usize, &'static str)> {
+    tally.iter().map(|(s, n)| (n, s.word())).collect()
+}
+/// "1 running · 4 pending": every state counted, in priority order.
+pub fn states_words(tally: &Tally) -> String {
+    states(tally)
+        .iter()
+        .map(|(n, w)| format!("{n} {w}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+/// Each state counted as a summary reads them: the done states first (the work so far), then
+/// the rest in priority order.
+pub fn progress(tally: &Tally) -> Vec<(Shown, usize)> {
+    let mut order: Vec<(Shown, usize)> = tally.iter().collect();
+    order.sort_by_key(|(s, _)| (s.spec().band != sluice_model::shown::Band::Done, s.rank()));
+    order
+}
+/// Steps counted as a bar, one segment a state, in `progress` order; named for a screen reader
+/// by every count.
+pub fn bar(tally: &Tally, class: &str) -> TrustedHtml {
+    let order = progress(tally);
+    let said = order
+        .iter()
+        .map(|(s, n)| format!("{n} {}", s.word()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let segments: String = order
+        .iter()
+        .map(|(s, n)| format!("<i class=\"b-{}\" style=\"flex:{n}\"></i>", s.key()))
+        .collect();
+    TrustedHtml::owned(format!(
+        "<span class=\"bar{}\" role=\"img\" aria-label=\"{}: {said}\">{segments}</span>",
+        if class.is_empty() {
+            String::new()
+        } else {
+            format!(" {class}")
+        },
+        esc(&count(tally.total(), "step", "steps"))
     ))
 }
 

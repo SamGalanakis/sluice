@@ -493,15 +493,18 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
 /* ---- the status glyph ---------------------------------------------------------------- */
 .g { display: inline-flex; flex: none; width: 16px; height: 16px; margin-top: 2px; }
 .g svg { display: block; }
-.g-pending, .g-skipped { color: var(--status-idle); }
-/* work going on outside sluice (a ready core.external step) is live work: running's blue */
-.g-running, .g-external { color: var(--status-active); }
+/* every state's tone, from the status table (`sluice_model::shown`, its `Tone`): one rule a
+   state, so a state added there and not here fails the table's test */
+.g-pending, .g-skipped, .g-held, .g-queued { color: var(--status-idle); }
+/* work going on (outside sluice too: a ready core.external step): running's blue */
+.g-running, .g-finishing, .g-external { color: var(--status-active); }
 .g-succeeded, .g-manual { color: var(--status-success); }
-.g-stale { color: var(--status-attention); }
+.g-stale, .g-quiet { color: var(--status-attention); }
 .g-paused { color: var(--status-paused); }
-.g-failed { color: var(--foreground); }
-/* cancelled: the owner stopped it on purpose, so a calm stop sign in muted ink, never failure's ink */
-.g-cancelled { color: var(--muted-foreground); }
+.g-failed, .g-blocked { color: var(--foreground); }
+/* cancelled: the owner stopped it on purpose, so a calm stop sign in muted ink, never failure's
+   ink; stopping is the same sign still turning, its run not ended yet */
+.g-cancelled, .g-stopping { color: var(--muted-foreground); }
 /* succeeded and failed are settled: Lucide's ring filled to a disc, its mark cut in the card */
 .spin { animation: spin 1.1s linear infinite; }  /* the whole icon turns, about its centre */
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -521,7 +524,6 @@ details.settings .menu { position: absolute; top: calc(100% + 6px); right: 12px;
 .sum { margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center;
        gap: 4px 10px; }
 .sum-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
-.g-quiet { color: var(--status-attention); }
 .attn-note { font-size: 13px; color: var(--status-attention); }
 /* a paused project says so in the pause's plum, its glyph before the words, as its tag does */
 .attn-note.paused-note { display: flex; align-items: center; gap: 6px; color: var(--status-paused); }
@@ -680,12 +682,14 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 .node .sep { font-size: 0; line-height: 0; vertical-align: top; }  /* read, not seen */
 .node .tag { margin-left: -2px; }
 /* two colours mix in sRGB: in oklch, navy and cream meet by way of teal */
-.is-pending .sid, .is-skipped .sid { color: color-mix(in srgb, var(--foreground) 72%, var(--card)); }
-.node.is-pending { border-color: var(--card-edge); background: var(--card); }
+.is-pending .sid, .is-skipped .sid, .is-held .sid, .is-queued .sid, .is-blocked .sid {
+  color: color-mix(in srgb, var(--foreground) 72%, var(--card)); }
+.node.is-pending, .node.is-held, .node.is-queued { border-color: var(--card-edge);
+                                                     background: var(--card); }
 .node.is-pending.is-next { border-color: var(--border-strong); background: var(--card); }
 .node.is-pending.is-next .sid { color: var(--foreground); }
 .node.is-skipped { border-style: dashed; }
-.node.is-running, .node.is-external {
+.node.is-running, .node.is-finishing, .node.is-external {
   border-color: color-mix(in srgb, var(--accent-ink) 78%, var(--card)); }
 /* a failed card is the loudest state on the board without coral: a solid ink pill, its id,
    caption and glyph in the card's colour (the glyph's cut in ink); the open step's ring stands
@@ -697,8 +701,11 @@ a.node:hover { border-color: var(--border-strong); background: var(--secondary);
 a.node.is-failed:hover { background: color-mix(in srgb, var(--foreground) 86%, var(--card));
                          border-color: var(--foreground); }
 /* succeeded is the common case: its check a shade quieter, so failed and running lead */
-.node.is-succeeded .g { opacity: .78; }
+.node.is-succeeded .g, .node.is-manual .g { opacity: .78; }
 .node.is-cancelled { border-color: color-mix(in srgb, var(--foreground) 40%, transparent); }
+/* a cancel asked for and its run not ended: the stop sign turning, the card dashed in muted ink */
+.node.is-stopping { border: 1px dashed color-mix(in srgb, var(--foreground) 40%, transparent); }
+.node.is-stopping .dur { color: var(--muted-foreground); font-weight: 600; }
 /* a running step that has written nothing past its quiet threshold: a gold border, and
    "quiet" with how long in place of its run's time */
 .node.is-quiet { border-color: var(--status-attention); }
@@ -1001,11 +1008,12 @@ td.num, th.num { text-align: right; }
 .bar { display: flex; width: 200px; height: 8px; border-radius: 999px; overflow: hidden; gap: 2px;
        background: var(--secondary); }
 .bar i { display: block; min-width: 3px; }
-.b-succeeded { background: var(--status-success); }
-.b-running { background: var(--status-active); }
-.b-stale { background: var(--status-attention); }
+.b-succeeded, .b-manual { background: var(--status-success); }
+.b-running, .b-finishing, .b-external { background: var(--status-active); }
+.b-stale, .b-quiet { background: var(--status-attention); }
 .b-failed { background: var(--foreground); }
-.b-pending { background: var(--secondary); }
+.b-blocked { background: color-mix(in srgb, var(--foreground) 40%, var(--secondary)); }
+.b-pending, .b-held, .b-queued { background: var(--secondary); }
 .b-paused { background: var(--status-paused); }
 .b-skipped { background: color-mix(in srgb, var(--status-idle) 45%, var(--secondary)); }
 ul.now { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px;
@@ -1440,7 +1448,7 @@ pre.act-out { margin: 0; padding: 8px 10px; font: 12px/18px var(--font-mono); wh
               background: color-mix(in oklch, var(--status-attention) 9%, var(--background)); }
 .runner-off strong { color: var(--status-attention); }
 .runner-off .ro-icon { flex: none; margin-top: 1px; color: var(--status-attention); }
-.b-cancelled { background: color-mix(in srgb, var(--muted-foreground) 55%, var(--secondary)); }
+.b-cancelled, .b-stopping { background: color-mix(in srgb, var(--muted-foreground) 55%, var(--secondary)); }
 
 /* ---- messages: questions, the ones nobody waits on, notes read on sight ---------------------- */
 /* Answer and Close keep their places; the answer box opens under them */
@@ -2194,15 +2202,17 @@ td.mx-sum { width: 30%; min-width: 9rem; padding-right: 14px; font-size: 13px; l
 td.mx-cell { text-align: center; white-space: nowrap; }
 .node.mx-pill { padding: 3px 8px; gap: 5px; min-height: 28px; box-sizing: border-box; }
 .node.mx-pill .took.live { min-width: 0; }
-/* a stage nothing has reached yet: a small muted dot, not a card (a paused one its pause
-   glyph in plum), still a 24px link to its step */
+/* a stage nothing has reached yet: a small muted dot, not a card (a paused, blocked or held one
+   its state's glyph), still a 24px link to its step */
 .node.mx-dot { display: inline-flex; align-items: center; justify-content: center; gap: 0;
                width: 24px; height: 24px; padding: 0; border: 0; background: none;
                color: var(--status-paused); vertical-align: middle; }
-.node.mx-dot:not(.is-paused)::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
+.node.mx-dot .g { margin: 0; width: 14px; height: 14px; }
+.node.mx-dot.is-pending::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
   background: color-mix(in srgb, var(--status-idle) 70%, transparent); }
-.node.mx-dot.is-blocked::before { background: none; width: 5px; height: 5px;
-  border: 1.5px solid color-mix(in srgb, var(--foreground) 55%, transparent); }
+/* a reached-for state with its own glyph (paused, blocked, held) draws it, in its own tone */
+.node.mx-dot.is-blocked { color: var(--foreground); }
+.node.mx-dot.is-held { color: var(--status-idle); }
 a.node.mx-dot:hover { background: var(--secondary); }
 .node.mx-dot svg { width: 14px; height: 14px; }
 .plane.tracing .node.mx-dot:not(.near) { opacity: .5; }

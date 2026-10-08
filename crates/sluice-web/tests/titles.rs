@@ -57,7 +57,7 @@ async fn a_recipe_with_a_view_draws_its_live_units_as_a_lane_matrix_attention_fi
     );
     // a stage nothing has reached is a small mark, not a card
     assert!(
-        matrix.contains("id=\"n-l3-fork\" class=\"node mx-dot is-pending is-blocked\""),
+        matrix.contains("id=\"n-l3-fork\" class=\"node mx-dot is-blocked\""),
         "{matrix}"
     );
     // a wait to or from a row is said in its row, never drawn

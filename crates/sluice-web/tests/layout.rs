@@ -14,11 +14,9 @@ fn fixture() -> DashboardSnapshot {
             paused: false,
             archived: false,
             changed: "2026-10-03T12:00:00Z".into(),
-            counts: Counts {
-                failed: 1,
-                pending: 2,
-                ..Counts::default()
-            },
+            counts: [ui::Shown::Failed, ui::Shown::Pending, ui::Shown::Pending]
+                .into_iter()
+                .collect(),
             running: vec![],
             stopped: vec![sluice_web::views::StoppedView {
                 step: "broken".into(),
@@ -190,6 +188,8 @@ fn home_running_link_has_a_short_name_and_the_full_title_as_description() {
         run_id: String::new(),
         activity: None,
         said: String::new(),
+        stopping: false,
+        finishing: false,
     });
     snapshot.projects[0].names.insert(
         "watch-main-tests".into(),

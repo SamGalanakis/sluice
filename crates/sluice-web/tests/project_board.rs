@@ -1013,8 +1013,8 @@ async fn a_paused_step_is_named_and_counted_paused_on_every_surface() {
     let project = snapshot.projects.iter().find(|p| p.id == held).unwrap();
     assert_eq!(
         (
-            project.counts.paused,
-            project.counts.pending,
+            project.counts.get(sluice_web::views::ui::Shown::Paused),
+            project.counts.get(sluice_web::views::ui::Shown::Pending),
             project.counts.total()
         ),
         (1, 1, 3)

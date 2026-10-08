@@ -274,6 +274,9 @@ fn facts(
     for (step, finishing) in finishing {
         facts.entry(step).or_default().finishing = Some(finishing);
     }
+    for step in sluice_store::attempts::stopping(sql, id)? {
+        facts.entry(step).or_default().stopping = true;
+    }
     let ago = |sql: &Connection, query: &str| -> sluice_store::Result<Vec<(StepId, f64)>> {
         let mut q = sql.prepare(query)?;
         let rows = q

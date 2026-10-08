@@ -228,15 +228,11 @@ impl GateDecision {
         }
     }
 }
-fn status_name(status: &StepStatus) -> &'static str {
-    match status {
-        StepStatus::Pending => "pending",
-        StepStatus::Running => "running",
-        StepStatus::Succeeded => "succeeded",
-        StepStatus::Failed => "failed",
-        StepStatus::Stale => "stale",
-        StepStatus::Skipped => "skipped",
-    }
+/// How a wait names the state of the step it waits on: the stored word in every tool
+/// (`stored_word`); the dashboard passes its own (`shown`), so a cancel there reads "cancelled".
+pub type StatusWord<'a> = &'a dyn Fn(&StepId) -> &'static str;
+fn stored_word(state: &StateSnapshot) -> impl Fn(&StepId) -> &'static str + '_ {
+    |id| state.status(id).as_str()
 }
 
 /// Resolve root availability before navigation. An absent required root waits;
@@ -281,10 +277,10 @@ pub fn resolve_reference(plan: &Plan, state: &StateSnapshot, reference: &ValueRe
         None => null(),
     }
 }
-fn wait_reference(reference: &ValueRef, state: &StateSnapshot) -> String {
+fn wait_reference(reference: &ValueRef, state: &StateSnapshot, word: StatusWord) -> String {
     match reference.parts() {
         Ok(Reference { step: Some(id), .. }) if state.status(&id) != StepStatus::Succeeded => {
-            format!("step {id} is {}", status_name(&state.status(&id)))
+            format!("step {id} is {}", word(&id))
         }
         Ok(Reference { step: Some(_), .. }) => format!("{reference} has no value"),
         Ok(Reference { name, .. }) => format!("plan input {name} has no value"),
@@ -292,6 +288,14 @@ fn wait_reference(reference: &ValueRef, state: &StateSnapshot) -> String {
     }
 }
 pub fn evaluate_gate(plan: &Plan, state: &StateSnapshot, gate: &Gate) -> GateDecision {
+    evaluate_gate_worded(plan, state, gate, &stored_word(state))
+}
+fn evaluate_gate_worded(
+    plan: &Plan,
+    state: &StateSnapshot,
+    gate: &Gate,
+    word: StatusWord,
+) -> GateDecision {
     match gate {
         Gate::Step { id, .. } if !plan.steps().contains_key(id) => {
             return GateDecision::Invalid(vec![diagnostic("after", format!("no step {id}"))]);
@@ -323,25 +327,19 @@ pub fn evaluate_gate(plan: &Plan, state: &StateSnapshot, gate: &Gate) -> GateDec
                 StepStatus::Skipped => {
                     GateDecision::Skip(vec![SkipReason::Step { step: id.clone() }])
                 }
-                _ => GateDecision::Wait(vec![format!(
-                    "after {} ({})",
-                    gate.entry(),
-                    status_name(&status)
-                )]),
+                _ => GateDecision::Wait(vec![format!("after {} ({})", gate.entry(), word(id))]),
             }
         }
         Gate::Bool { reference, negate } => match resolve_reference(plan, state, reference) {
             BoundValue::Waiting => {
                 let reason = match reference.parts() {
-                    Ok(Reference { step: Some(id), .. }) => format!(
-                        "after {} ({})",
-                        gate.entry(),
-                        status_name(&state.status(&id))
-                    ),
+                    Ok(Reference { step: Some(id), .. }) => {
+                        format!("after {} ({})", gate.entry(), word(&id))
+                    }
                     _ => format!(
                         "after {} ({})",
                         gate.entry(),
-                        wait_reference(reference, state)
+                        wait_reference(reference, state, word)
                     ),
                 };
                 GateDecision::Wait(vec![reason])
@@ -381,7 +379,7 @@ pub fn evaluate_gate(plan: &Plan, state: &StateSnapshot, gate: &Gate) -> GateDec
                     _ => GateDecision::Wait(vec![format!(
                         "after {} (exit {id} {})",
                         gate.entry(),
-                        status_name(&status)
+                        word(id)
                     )]),
                 }
             }))
@@ -403,11 +401,20 @@ pub fn evaluate_step(plan: &Plan, state: &StateSnapshot, step: &Step) -> GateDec
 /// Why a pending step has not started, resources aside: its own pause, its project's,
 /// then every handoff and gate entry still waiting, in order.
 pub fn wait_reasons(plan: &Plan, state: &StateSnapshot, step: &Step) -> Vec<String> {
+    wait_reasons_worded(plan, state, step, &stored_word(state))
+}
+/// `wait_reasons`, each step it waits on named by `word`.
+pub fn wait_reasons_worded(
+    plan: &Plan,
+    state: &StateSnapshot,
+    step: &Step,
+    word: StatusWord,
+) -> Vec<String> {
     let mut reasons: Vec<String> = step.paused.waiting_reason().into_iter().collect();
     if state.paused.is_paused() {
         reasons.push("project paused".into());
     }
-    if let GateDecision::Wait(waiting) = evaluate_inputs(plan, state, step) {
+    if let GateDecision::Wait(waiting) = evaluate_inputs_worded(plan, state, step, word) {
         reasons.extend(waiting);
     }
     reasons
@@ -416,19 +423,29 @@ pub fn wait_reasons(plan: &Plan, state: &StateSnapshot, step: &Step) -> Vec<Stri
 /// The step's handoffs and gate entries alone, ignoring its own and its project's pause:
 /// a pause holds back a launch, not a result recorded by hand.
 pub fn evaluate_inputs(plan: &Plan, state: &StateSnapshot, step: &Step) -> GateDecision {
+    evaluate_inputs_worded(plan, state, step, &stored_word(state))
+}
+fn evaluate_inputs_worded(
+    plan: &Plan,
+    state: &StateSnapshot,
+    step: &Step,
+    word: StatusWord,
+) -> GateDecision {
     let handoffs =
         step.bindings.values().flat_map(Binding::references).map(
             |reference| match resolve_reference(plan, state, reference) {
                 BoundValue::Ready(_) => GateDecision::Ready,
                 BoundValue::Skipped(reason) => GateDecision::Skip(vec![reason]),
-                BoundValue::Waiting => GateDecision::Wait(vec![wait_reference(reference, state)]),
+                BoundValue::Waiting => {
+                    GateDecision::Wait(vec![wait_reference(reference, state, word)])
+                }
             },
         );
     GateDecision::combine(
         handoffs.chain(
             step.after
                 .iter()
-                .map(|gate| evaluate_gate(plan, state, gate)),
+                .map(|gate| evaluate_gate_worded(plan, state, gate, word)),
         ),
     )
 }

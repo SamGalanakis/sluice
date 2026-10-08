@@ -638,8 +638,8 @@ pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, Pub
                 .unwrap_or_default();
             format!(
                 "STEP {step} {} -> {}{tail}",
-                status_text(from.as_ref().unwrap_or(&StepStatus::Pending)),
-                status_text(to)
+                from.as_ref().unwrap_or(&StepStatus::Pending).as_str(),
+                to.as_str()
             )
         }
         Event::UnitSettled { unit, steps, .. } => {
@@ -656,7 +656,7 @@ pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, Pub
                     format!(
                         "{} {}{}",
                         name(&s.id),
-                        status_text(&s.status),
+                        s.status.as_str(),
                         if s.held { " (held)" } else { "" }
                     )
                 })
@@ -746,16 +746,6 @@ pub fn line(record: &Record, settles: Settles, cut: usize) -> Result<String, Pub
             format!("{kind} {}", one(&value, 300))
         }
     })
-}
-fn status_text(s: &StepStatus) -> &'static str {
-    match s {
-        StepStatus::Pending => "pending",
-        StepStatus::Running => "running",
-        StepStatus::Succeeded => "succeeded",
-        StepStatus::Failed => "failed",
-        StepStatus::Stale => "stale",
-        StepStatus::Skipped => "skipped",
-    }
 }
 pub fn render(
     result: &NextResult,

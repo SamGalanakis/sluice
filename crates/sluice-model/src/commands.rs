@@ -695,9 +695,9 @@ impl StatusView {
     }
 }
 
-/// A unit's state in the units view, checked in this order: a step running, a step failed
-/// or stale, every step succeeded or skipped, nothing startable and something held, a step
-/// queued on resources, else pending.
+/// A unit's state in the units view, checked in this order (the status table's, `shown`: a
+/// stopped step first): a step failed or stale, a step running, every step succeeded or
+/// skipped, nothing startable and something held, a step queued on resources, else pending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UnitState {
@@ -1001,6 +1001,44 @@ pub enum StepStatus {
     Failed,
     Stale,
     Skipped,
+}
+impl StepStatus {
+    /// Its stored word, as the store and every tool write it.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            StepStatus::Pending => "pending",
+            StepStatus::Running => "running",
+            StepStatus::Succeeded => "succeeded",
+            StepStatus::Failed => "failed",
+            StepStatus::Stale => "stale",
+            StepStatus::Skipped => "skipped",
+        }
+    }
+}
+impl std::fmt::Display for StepStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+/// A stored word that is no step status: said, never read as pending.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} is not a step status (pending, running, succeeded, failed, stale or skipped)")]
+pub struct UnknownStatus(pub String);
+impl std::str::FromStr for StepStatus {
+    type Err = UnknownStatus;
+    fn from_str(word: &str) -> Result<Self, UnknownStatus> {
+        [
+            StepStatus::Pending,
+            StepStatus::Running,
+            StepStatus::Succeeded,
+            StepStatus::Failed,
+            StepStatus::Stale,
+            StepStatus::Skipped,
+        ]
+        .into_iter()
+        .find(|s| s.as_str() == word)
+        .ok_or_else(|| UnknownStatus(word.to_owned()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

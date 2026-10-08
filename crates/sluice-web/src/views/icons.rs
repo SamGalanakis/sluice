@@ -12,6 +12,10 @@ macro_rules! icons {
         pub enum Icon { $($variant),* }
         impl Icon {
             const ALL: &[Icon] = &[$(Icon::$variant),*];
+            /// The icon Lucide names `name`, if the sprite carries it.
+            pub fn named(name: &str) -> Option<Icon> {
+                Icon::ALL.iter().copied().find(|icon| icon.name() == name)
+            }
             fn name(self) -> &'static str {
                 match self {
                     $(Icon::$variant => $file,)*
@@ -40,6 +44,9 @@ icons! {
     CirclePause => "circle-pause",
     CircleSlash => "circle-slash",
     CircleStop => "circle-stop",
+    CircleMinus => "circle-minus",
+    CircleEllipsis => "circle-ellipsis",
+    CircleDotDashed => "circle-dot-dashed",
     SquareArrowOutUpRight => "square-arrow-out-up-right",
     TriangleAlert => "triangle-alert",
     LayoutDashboard => "layout-dashboard",

@@ -111,7 +111,7 @@ impl Draw<'_> {
                         out,
                         "<span class=\"uv-status\">{}{}<span>{}</span></span>",
                         self.label(c.str_arg(0).unwrap_or("")),
-                        ui::status(step.display_mark()),
+                        ui::status(step.shown()),
                         esc(&step.caption())
                     );
                 }
@@ -173,7 +173,7 @@ impl Draw<'_> {
             if live { " (live progress)" } else { "" },
             self.label(field),
             if live {
-                ui::glyph("running").0
+                ui::mark(ui::Shown::Running).0
             } else {
                 String::new()
             },

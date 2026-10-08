@@ -7,32 +7,20 @@ use axum::{
 };
 #[derive(Clone, Debug)]
 pub struct HomeView {
-    /// The live projects with steps, most urgent first: failed, quiet, running, idle.
+    /// The live projects with steps, most urgent first: by how each reads (`ProjectView::shown`,
+    /// the status table's order), by name within each.
     pub active: Vec<ProjectView>,
     /// The live projects with no steps yet, folded under the rest.
     pub empty: Vec<ProjectView>,
     pub archived: Vec<ProjectView>,
     pub runner_stopped: bool,
 }
-/// How urgent a project is on the index: a failure stops its work, a quiet run may be stuck,
-/// running work moves, the rest waits.
-pub fn urgency(project: &ProjectView) -> u8 {
-    if project.counts.failed > 0 {
-        0
-    } else if project.running.iter().any(|r| r.quiet) {
-        1
-    } else if !project.running.is_empty() {
-        2
-    } else {
-        3
-    }
-}
 impl HomeView {
     pub fn new(snapshot: &DashboardSnapshot) -> Self {
         let live = snapshot.projects.iter().filter(|p| !p.archived);
         let mut active: Vec<ProjectView> =
             live.clone().filter(|p| p.counts.total() > 0).cloned().collect();
-        active.sort_by_key(urgency);  // stable: by name within each
+        active.sort_by_key(ProjectView::shown); // stable: by name within each
         Self {
             active,
             empty: live.filter(|p| p.counts.total() == 0).cloned().collect(),
@@ -45,27 +33,20 @@ impl HomeView {
             runner_stopped: snapshot.runner_stopped,
         }
     }
+    /// The tab's words: what needs attention across the projects, counted ("2 failed · 1 quiet ·
+    /// Projects").
     pub fn title(&self) -> String {
-        let failed: usize = self.active.iter().map(|p| p.counts.failed).sum();
-        let quiet: usize = self
-            .active
+        let mut all = ui::Tally::default();
+        for project in &self.active {
+            all += &project.counts;
+        }
+        let mut words: Vec<String> = all
             .iter()
-            .flat_map(|p| &p.running)
-            .filter(|r| r.quiet)
-            .count();
-        format!(
-            "{}{}Projects",
-            if failed > 0 {
-                format!("{failed} failed · ")
-            } else {
-                String::new()
-            },
-            if quiet > 0 {
-                format!("{quiet} quiet · ")
-            } else {
-                String::new()
-            }
-        )
+            .filter(|(s, _)| s.spec().attention)
+            .map(|(s, n)| format!("{n} {}", s.word()))
+            .collect();
+        words.push("Projects".into());
+        words.join(" · ")
     }
     pub fn body(&self) -> Result<TrustedHtml, askama::Error> {
         TrustedHtml::from_template(&HomeTemplate { view: self })

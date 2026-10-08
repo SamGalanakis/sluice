@@ -306,8 +306,8 @@ pub async fn load(
         // a lease held or let go is the scheduler's bookkeeping: left out unless asked for
         if !query.kinds.iter().any(|k| k == "step.lease") { condition.push_str(" AND kind!='step.lease'"); }
         if query.errors {
-            // a cancel is the owner's choice, not an error (views::failure::is_cancel, in SQL)
-            condition.push_str(" AND ((kind='step.status' AND json_extract(payload,'$.to')='failed' AND NOT coalesce(json_extract(payload,'$.error.error')='cancelled' OR (json_extract(payload,'$.error.error')='agent_failure' AND json_extract(payload,'$.error.kind')='Cancelled') OR (json_extract(payload,'$.error.error')='fn_failure' AND (json_extract(payload,'$.error.message')='cancelled' OR json_extract(payload,'$.error.message') LIKE 'cancelled: %')),0)) OR (kind='call' AND json_extract(payload,'$.status')='failed') OR kind='run.orphan')");
+            // a cancel is the owner's choice, not an error: `shown::is_cancel`, as SQL
+            condition.push_str(&format!(" AND ((kind='step.status' AND json_extract(payload,'$.to')='failed' AND NOT {}) OR (kind='call' AND json_extract(payload,'$.status')='failed') OR kind='run.orphan')", sluice_model::shown::cancel_sql("payload", "$.error")));
         }
         let base_args = args.clone();
         let base_condition = condition.clone();
@@ -466,8 +466,8 @@ fn summary(event: &Event) -> String {
                 format!("{step}: {}", super::failure::Failure::new(error, None).headline)
             }
             _ => match from {
-                Some(from) => format!("{step} {} → {}", word(from), word(to)),
-                None => format!("{step} added, {}", word(to)),
+                Some(from) => format!("{step} {} → {}", stored_word(from), stored_word(to)),
+                None => format!("{step} added, {}", stored_word(to)),
             },
         },
         Event::PlanEdit {
@@ -544,7 +544,7 @@ fn summary(event: &Event) -> String {
             Some(error) if *status == sluice_model::commands::StepStatus::Failed => {
                 format!("{name}: {}", super::failure::Failure::new(error, None).headline)
             }
-            _ => format!("{name} {}", word(status)),
+            _ => format!("{name} {}", stored_word(status)),
         },
         Event::ProjectPause {
             paused,
@@ -646,6 +646,11 @@ fn summary(event: &Event) -> String {
             .map(|kind| format!("A {kind} record"))
             .unwrap_or_else(|| "A record".into()),
     }
+}
+/// A stored status in the status table's words (`shown`): what the step read as with nothing
+/// more known of it.
+fn stored_word(status: &sluice_model::commands::StepStatus) -> &'static str {
+    sluice_model::shown::classify(&sluice_model::shown::Facts::of(status.clone())).word()
 }
 /// A status, state or outcome as its wire name, in words: `not_found` reads "not found"; a
 /// tagged outcome (`{"outcome": "applied", …}`) by its tag.
